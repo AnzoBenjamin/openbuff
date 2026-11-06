@@ -1,0 +1,472 @@
+
+agent-browser - fast browser automation CLI for AI agents
+
+Usage: agent-browser <command> [args] [options]
+
+Start here (for AI agents):
+  agent-browser skills get core
+
+  Skills ship with the CLI (always version-matched) and include workflow
+  patterns, ref/selector usage, and copy-paste examples. Prefer this over
+  guessing commands from flag docs alone. The core guide routes to its
+  references for detail; --full prints all of them at once. Specialized
+  skills cover Electron apps, Slack, exploratory testing, protected Vercel
+  deployments, and cloud browser providers.
+
+  skills [list]                List available skills
+  skills get core              Core usage guide (overview + common patterns)
+  skills get core --full       Include full command reference and templates
+  skills get core --ref <ref>  Load one reference, e.g. --ref commands
+  skills get <name>            Load a specialized skill (electron, slack, ...)
+  skills path [name]           Print skill directory path
+
+Core Commands:
+  open <url>                 Navigate to URL
+  read [url]                 Fetch agent-readable text
+  click <sel>                Click element (or @ref)
+  dblclick <sel>             Double-click element
+  type <sel> <text>          Type into element
+  fill <sel> <text>          Clear and fill
+  press <key>                Press key (Enter, Tab, Control+a)
+  keyboard type <text>       Type text with real keystrokes (no selector)
+  keyboard inserttext <text> Insert text without key events
+  hover <sel>                Hover element
+  focus <sel>                Focus element
+  check <sel>                Check checkbox
+  uncheck <sel>              Uncheck checkbox
+  select <sel> <val...>      Select dropdown by value or visible label
+  drag <src> <dst>           Drag and drop
+  upload <sel> <files...>    Upload files
+  download <sel> <path>      Download file by clicking element
+  scroll <dir> [px]          Scroll (up/down/left/right)
+  scrollintoview <sel>       Scroll element into view
+  wait <sel|ms>              Wait for element or time
+  screenshot [path]          Take screenshot
+  pdf <path>                 Save as PDF
+  snapshot                   Accessibility tree with refs (for AI)
+  eval <js>                  Run JavaScript
+  connect <port|url>         Connect to browser via CDP
+  close [--all]              Close browser (--all closes every session)
+
+Navigation:
+  back                       Go back
+  forward                    Go forward
+  reload                     Reload page
+
+Get Info:  agent-browser get <what> [selector]
+  text, html, value, attr <name>, title, url, count, box, styles, cdp-url
+
+Check State:  agent-browser is <what> <selector>
+  visible, enabled, checked
+
+Find Elements:  agent-browser find <locator> <value> <action> [text]
+  role, text, label, placeholder, alt, title, testid, first, last, nth
+
+Mouse:  agent-browser mouse <action> [args]
+  move <x> <y>, down [btn], up [btn], wheel <dy> [dx]
+
+Browser Settings:  agent-browser set <setting> [value]
+  viewport <w> <h>, device <name>, geo <lat> <lng>
+  offline [on|off], headers <json>, credentials <user> <pass>
+  media [dark|light] [reduced-motion]
+
+Network:  agent-browser network <action>
+  route <url> [--abort|--body <json> [--allow-origin <origin>]] [--resource-type <csv>]
+  unroute [url]
+  requests [--clear] [--filter <pattern>]
+  har <start|stop> [path]
+
+Storage:
+  cookies [get|set|clear]    Manage cookies (set supports --url, --domain, --path, --http-only, --secure, --same-site, --expires)
+                             Or:  cookies set --curl <file> [--domain <host>] (auto-detects JSON/cURL/Cookie-header files)
+  storage <local|session>    Manage web storage
+
+Tabs:
+  tab [new|list|close|<n>]   Manage tabs
+
+Diff:
+  diff snapshot              Compare current vs last snapshot
+  diff screenshot --baseline Compare current vs baseline image
+  diff url <u1> <u2>         Compare two pages
+
+Debug:
+  trace start                Start Chrome DevTools trace
+  trace stop [path]          Stop and save Chrome DevTools trace
+  profiler start|stop [path] Record Chrome DevTools profile
+  record start <path> [url]  Start video recording (.webm/.mp4; supports cursor and contact sheets)
+  record stop                Stop and save video
+  console [--clear]          View console logs
+  errors [--clear]           View page errors
+  highlight <sel>            Highlight element
+  inspect                    Open Chrome DevTools for the active page
+  clipboard <op> [text]      Read/write clipboard (read, write, copy, paste)
+
+Streaming:
+  stream enable [--port <n>] Start runtime WebSocket streaming for this session
+  stream disable             Stop runtime WebSocket streaming
+  stream status              Show streaming status and active port
+
+WebMCP (experimental):
+  webmcp list [tool]         Full metadata; optional --frame <frame-id>
+  webmcp invoke <tool>       Invoke a page tool; accepts --params <json|@file>,
+                             --frame <frame-id>, --detach, and --timeout <ms>
+  webmcp result <id>         Wait for a detached invocation result
+  webmcp cancel <id>         Cancel an active invocation
+  Brief untrusted summaries appear only on discovery or change; no schemas
+
+React (requires `open --enable react-devtools`):
+  react tree                 Full React component tree (enable with open --enable react-devtools)
+  react inspect <id>         Inspect one fiber (props, hooks, state, source)
+  react renders start        Start recording re-renders via onCommitFiberRoot
+  react renders stop [--json] Stop and print render profile
+  react suspense [--only-dynamic] [--json]
+                             Walk Suspense boundaries + classifier report
+                             --only-dynamic hides the "static" list
+
+Performance:
+  vitals [url] [--json]      Core Web Vitals (LCP/CLS/TTFB/FCP/INP) +
+                             React hydration summary; --json returns full data
+
+Accessibility:
+  a11y [url] [--tags <t1,t2>] [--selector <css>] [--json]
+                             Run an axe-core accessibility audit on the current
+                             page (or url); reports WCAG violations with
+                             selectors and fix guidance
+
+SPA:
+  pushstate <url>            SPA client-side nav. Auto-detects window.next.router.push
+                             (triggers RSC fetch on Next.js); falls back to
+                             history.pushState + popstate/navigate events for other frameworks
+
+Init scripts:
+  removeinitscript <id>      Remove a registered script from every tab in the session
+
+Batch:
+  batch [options] ["cmd" ...] Execute multiple commands sequentially (args or stdin)
+                              --bail stops on first error (default: continue all)
+                              --omit-command uses a zero-based `index` field with --json
+
+Auth Vault:
+  auth save <name> [opts]    Save auth profile (--url, --username, --password/--password-stdin)
+  auth login <name>          Login using saved credentials (waits for form fields)
+  auth login <name> --no-navigate
+                             Use active page after verifying credential URL origin
+  auth login <name> --credential-provider <plugin> [--item <ref>] [--url <url>]
+                             Resolve credentials from a configured plugin
+  auth login <name> --username-selector <s> --password-selector <s>
+                             Override selectors for one login
+  auth list                  List saved auth profiles
+  auth show <name>           Show auth profile metadata
+  auth delete <name>         Delete auth profile
+
+Plugins:
+  plugin add <ref>           Add a plugin from npm or GitHub
+  plugin [list]              List configured plugins
+  plugin show <name>         Show one configured plugin
+  plugin run <name> <type>   Run a command.run or custom plugin request
+
+Confirmation:
+  confirm <id>               Approve a pending action
+  deny <id>                  Deny a pending action
+
+Sessions:
+  session                    Show current session name
+  session list               List active sessions
+
+MCP:
+  mcp                        Start an MCP stdio server exposing agent-browser tools
+
+Chat (AI):
+  chat <message>             Send a natural language instruction (single-shot)
+  chat                       Start interactive chat (REPL mode when stdin is a TTY)
+  Options: --model <name>, -v/--verbose, -q/--quiet
+
+Dashboard:
+  dashboard [start]          Start the dashboard server (default port: 4848)
+  dashboard start --port <n> Start on a specific port
+  dashboard start --allowed-origins <origins>
+                            Allow exact HTTPS reverse-proxied origins
+  dashboard stop             Stop the dashboard server
+
+Setup:
+  install                    Install browser binaries
+  install --with-deps        Also install system dependencies (Linux)
+  upgrade                    Upgrade to the latest version
+  doctor [--fix]             Diagnose install; auto-clean stale files
+  dashboard start            Start the observability dashboard
+  profiles                   List available Chrome profiles
+
+Snapshot Options:
+  -i, --interactive          Only interactive elements
+  -c, --compact              Remove empty structural elements
+  -d, --depth <n>            Limit tree depth
+  -s, --selector <sel>       Scope to CSS selector
+
+Authentication:
+  --profile <name|path>      Chrome profile name (e.g., Default) to reuse login state,
+                             or a directory path for a persistent custom profile
+                             (or AGENT_BROWSER_PROFILE env)
+  --restore [name]           Auto-save/restore cookies and localStorage.
+                             Without a name, uses --session as the restore key
+                             (or AGENT_BROWSER_RESTORE env). Session and restore names
+                             accept Unicode letters and numbers, hyphens, and underscores
+                             only; spaces such as "my session" are rejected.
+  --restore-save <policy>    Restore auto-save policy: auto, always, never (default: auto)
+  --restore-check-url <glob> Validate restored state against current URL pattern
+  --restore-check-text <txt> Validate restored state against visible page text
+  --restore-check-fn <js>    Validate restored state against a truthy JS expression
+  --session-name <name>      Legacy alias for restore persistence key
+                             (or AGENT_BROWSER_SESSION_NAME env)
+  --state <path>             Load saved auth state (cookies + storage) from JSON file
+                             (or AGENT_BROWSER_STATE env)
+  --auto-connect             Connect to a running Chrome to reuse its auth state
+                             Tip: agent-browser --auto-connect state save ./auth.json
+  --headers <json>           HTTP headers scoped to URL's origin (e.g., Authorization bearer token)
+
+Options:
+  --session <name>           Isolated session: Unicode letters/numbers, hyphens, and underscores only (or AGENT_BROWSER_SESSION env)
+  --namespace <name>         Isolate daemon sockets and restore-state directories
+                             (or AGENT_BROWSER_NAMESPACE env)
+  --executable-path <path>   Custom browser executable (or AGENT_BROWSER_EXECUTABLE_PATH)
+  --extension <path>         Load browser extensions (repeatable)
+  --init-script <path>       Register a page init script before the first navigation (repeatable)
+                             (or AGENT_BROWSER_INIT_SCRIPTS env, comma-separated)
+  --enable <feature>         Built-in init scripts: react-devtools (repeatable or comma-separated)
+                             (or AGENT_BROWSER_ENABLE env)
+  --args <args>              Browser launch args, newline separated, or comma separated before another flag
+                             (or AGENT_BROWSER_ARGS). Commas inside a value are kept.
+                             e.g., --args "--no-sandbox,--disable-features=Translate,HttpsUpgrades"
+  --user-agent <ua>          Custom User-Agent (or AGENT_BROWSER_USER_AGENT)
+  --proxy <server>           Proxy server URL (or AGENT_BROWSER_PROXY, HTTP_PROXY, HTTPS_PROXY, ALL_PROXY)
+                             When launching Chrome, agent-browser accepts a proxy URL with a trailing slash.
+                             Supports authenticated proxies: --proxy "http://user:pass@127.0.0.1:7890"
+  --proxy-bypass <hosts>     Bypass proxy for these hosts (or AGENT_BROWSER_PROXY_BYPASS, NO_PROXY)
+                             e.g., --proxy-bypass "localhost,*.internal.com"
+  --ignore-https-errors      Ignore HTTPS certificate errors
+  --ca-cert <path>           Trust a specific CA certificate for HTTPS interception proxies
+                             (or AGENT_BROWSER_CA_CERT; CLI requests everywhere, local Chromium on Linux;
+                             install --with-deps provides certutil)
+  --no-ca-cert               Clear CA trust retained by the running browser session
+  --use-system-ca            Use the OS trust store for CLI requests (read, install, upgrade, doctor)
+                             (or AGENT_BROWSER_USE_SYSTEM_CA)
+  --allow-file-access        Allow file:// URLs to access local files (Chromium only)
+  --hide-scrollbars <bool>   Hide native scrollbars in headless Chromium screenshots (default: true)
+                             Use --hide-scrollbars false to keep scrollbars visible
+  -p, --provider <name>      Browser provider: ios, browserbase, kernel, browseruse, browserless, agentcore, or plugin name
+  --device <name>            iOS device name (e.g., "iPhone 15 Pro")
+  --json                     JSON output
+  --annotate                 Annotated screenshot with numbered labels and legend
+  --screenshot-dir <path>    Default screenshot output directory (or AGENT_BROWSER_SCREENSHOT_DIR)
+  --screenshot-quality <n>   JPEG quality 0-100; ignored for PNG (or AGENT_BROWSER_SCREENSHOT_QUALITY)
+  --screenshot-format <fmt>  Screenshot format: png, jpeg (or AGENT_BROWSER_SCREENSHOT_FORMAT)
+  --input-mode <mode>        Session pointer movement: instant (default), smooth, human
+  --headed                   Show browser window (not headless) (or AGENT_BROWSER_HEADED env)
+  --webgpu                   Enable WebGPU; uses SwiftShader software Vulkan on Linux, no GPU required (or AGENT_BROWSER_WEBGPU env)
+  --no-webmcp                Disable default experimental WebMCP support for locally launched Chrome
+                             (or AGENT_BROWSER_NO_WEBMCP env)
+  --cdp <port|url>           Connect via CDP; root WebSocket query slash is optional
+  --cdp-headers <json>       Headers for --cdp discovery and handshake, e.g. Authorization
+                             (or AGENT_BROWSER_CDP_HEADERS env)
+  --pin-tab                  Pin the session to its bound tab (or AGENT_BROWSER_PIN_TAB env)
+                             Commands fail with a tab_gone error instead of falling back
+                             to another tab when the bound tab is closed. JSON includes
+                             data.targetId and optional sanitized data.lastUrl. Sticky per session.
+  --no-pin-tab               Disable a sticky pin previously enabled with --pin-tab
+  --color-scheme <scheme>    Color scheme: dark, light, no-preference (or AGENT_BROWSER_COLOR_SCHEME)
+  --download-path <path>     Default download directory (or AGENT_BROWSER_DOWNLOAD_PATH)
+  --content-boundaries       Wrap page output in boundary markers (or AGENT_BROWSER_CONTENT_BOUNDARIES)
+  --max-output <chars>       Truncate page output to N chars (or AGENT_BROWSER_MAX_OUTPUT)
+                             Invalid values warn and leave the existing output limit unchanged.
+  --allowed-domains <list>   Restrict network domains; rejects CDP, auto-connect, profiles, restore/state replay, direct-page providers, unsafe startup args, iOS/Safari (or AGENT_BROWSER_ALLOWED_DOMAINS)
+  --action-policy <path>     Action policy JSON file (or AGENT_BROWSER_ACTION_POLICY)
+  --confirm-actions <list>   Categories requiring confirmation (or AGENT_BROWSER_CONFIRM_ACTIONS)
+  --confirm-interactive      Interactive confirmation prompts; auto-denies if stdin is not a TTY (or AGENT_BROWSER_CONFIRM_INTERACTIVE)
+  --idle-timeout <time>      Shut down daemon after inactivity: 10s, 3m, 1h, or raw ms
+                             (default: 1h; 0 disables; dashboard input resets the timer)
+                             Values too large to convert to milliseconds produce a warning and are ignored
+  --engine <name>            Browser engine: chrome (default), lightpanda, obscura (experimental)
+                             (or AGENT_BROWSER_ENGINE); Obscura rejects --proxy-bypass,
+                             proxyBypass config, AGENT_BROWSER_PROXY_BYPASS, NO_PROXY/no_proxy,
+                             --webgpu, --ca-cert, --args, profiles, state, extensions,
+                             headed mode, and file access. Discovery and CDP initialization
+                             each have a 10s deadline plus bounded failure cleanup.
+                             Explicit Obscura launches validate this invocation's resolved
+                             bypass settings, even with an existing daemon; stale daemon
+                             environment values are not reused when bypass is cleared.
+                             Obscura has accessibility, iframe, and screenshot fidelity gaps.
+  --no-auto-dialog           Disable automatic dismissal of alert/beforeunload dialogs (or AGENT_BROWSER_NO_AUTO_DIALOG)
+  --model <name>             AI model for chat (or AI_GATEWAY_MODEL env)
+  -v, --verbose              Show tool commands and their raw output
+  -q, --quiet                Show only AI text responses (hide tool calls)
+  --config <path>            Use a custom config file (or AGENT_BROWSER_CONFIG env)
+  --debug                    Debug output
+  --version, -V              Show version
+
+Configuration:
+  Default discovery loads config from these locations (lowest to highest priority):
+    1. ~/.agent-browser/config.json      User-level defaults
+    2. ./agent-browser.json              Allowlisted project defaults
+    3. Environment variables             Override config file values
+    4. CLI flags                         Override everything
+
+  Use --config <path> to load only that config file instead of default discovery.
+  AGENT_BROWSER_CONFIG has the same effect. Environment variables and CLI flags
+  still override values from the selected config file.
+  If --config points to a missing or invalid file, agent-browser exits with an error.
+  The auto-discovered ./agent-browser.json accepts only:
+    headed, json, debug, userAgent,
+    hideScrollbars, annotate, colorScheme, maxOutput,
+    screenshotQuality, screenshotFormat, idleTimeout.
+  Other runtime keys, including extensions, initScripts, state, trust, policy,
+  session, connection, and path settings, are ignored with a warning.
+  The $schema metadata key is ignored silently.
+  Put advanced settings in ~/.agent-browser/config.json or load a trusted file
+  with --config or AGENT_BROWSER_CONFIG.
+
+  Boolean flags accept an optional true/false value to override config:
+    --headed           (same as --headed true)
+    --headed false     (disables "headed": true from config)
+    --hide-scrollbars false (keeps native scrollbars visible in headless Chromium screenshots)
+
+  The auto-discovered project config ignores extensions. Use the user config, an
+  explicitly loaded config file, AGENT_BROWSER_EXTENSIONS, or --extension.
+
+  On Windows, headless Chrome runs on a private desktop to prevent stray desktop
+  rectangles. Owned Chrome processes close with their daemon, even if it is killed.
+  Headed browsers use the interactive desktop; externally connected browsers are not owned.
+
+  Example auto-discovered agent-browser.json:
+    {"headed": true, "hideScrollbars": false, "userAgent": "my-agent/1.0", "colorScheme": "dark"}
+
+  Trusted config example (user config or a file loaded with --config):
+    {"plugins":[{"name":"vault","command":"agent-browser-plugin-vault","capabilities":["credential.read"]},{"name":"stealth","command":"agent-browser-plugin-stealth","capabilities":["launch.mutate"]}]}
+
+Environment:
+  AGENT_BROWSER_CONFIG           Path to config file (or use --config)
+  AGENT_BROWSER_SESSION          Session name (default: "default")
+  AGENT_BROWSER_NAMESPACE        Namespace for daemon sockets and restore state
+  AGENT_BROWSER_RESTORE          Auto-save/restore persistence key
+  AGENT_BROWSER_RESTORE_SAVE     Restore save policy: auto, always, never
+  AGENT_BROWSER_AUTOSAVE_INTERVAL_MS Min ms between periodic session autosaves (default: 30000, 0 disables)
+  AGENT_BROWSER_RESTORE_CHECK_URL URL pattern restored state must match
+  AGENT_BROWSER_RESTORE_CHECK_TEXT Page text restored state must contain
+  AGENT_BROWSER_RESTORE_CHECK_FN JS expression restored state must satisfy
+  AGENT_BROWSER_SESSION_NAME     Legacy auto-save/restore state persistence name
+  AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM state encryption
+  AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete states older than N days (default: 30)
+  AGENT_BROWSER_EXECUTABLE_PATH  Custom browser executable path
+  AGENT_BROWSER_EXTENSIONS       Comma-separated browser extension paths
+  AGENT_BROWSER_INIT_SCRIPTS     Comma-separated paths to page init scripts
+  AGENT_BROWSER_ENABLE           Comma-separated built-in init script features (e.g. react-devtools)
+  AGENT_BROWSER_HEADED           Show browser window (not headless)
+  AGENT_BROWSER_NO_XVFB          Disable automatic Xvfb for headed mode on displayless Linux hosts
+  AGENT_BROWSER_NO_VERSION_CHECK Skip the outdated-Chrome CVE check (it fetches chromereleases.googleblog.com)
+  AGENT_BROWSER_WEBGPU           Enable WebGPU (SwiftShader software Vulkan on Linux)
+  AGENT_BROWSER_JSON             JSON output
+  AGENT_BROWSER_ANNOTATE         Annotated screenshot with numbered labels and legend
+  AGENT_BROWSER_DEBUG            Debug output
+  AGENT_BROWSER_IGNORE_HTTPS_ERRORS Ignore HTTPS certificate errors
+  AGENT_BROWSER_CA_CERT          Path to CA certificate to trust (HTTPS interception proxies)
+  AGENT_BROWSER_CLEAR_CA_CERT    Clear CA trust retained by the running browser session
+  AGENT_BROWSER_USE_SYSTEM_CA    Use the OS trust store for CLI requests
+  AGENT_BROWSER_PROVIDER         Browser provider (ios, browserbase, kernel, browseruse, browserless, agentcore, or plugin name)
+  BROWSER_USE_API_KEY            Browser Use Cloud API key
+  BROWSER_USE_PROFILE_ID         Browser Use profile UUID
+  BROWSER_USE_PROXY_COUNTRY      Managed proxy country; none/direct disables proxy
+  BROWSER_USE_ENABLE_RECORDING   Record the Browser Use Cloud session
+                                 Browser Use setup: 18s total, plus up to 4s timeout cleanup.
+                                 close fails and stays retryable until the Cloud session confirms it
+                                 stopped. After daemon exit, inspect and stop the browser in Cloud.
+  AGENT_BROWSER_AUTO_CONNECT     Auto-discover and connect to running Chrome
+  AGENT_BROWSER_PIN_TAB          Pin the session to its bound tab (strict tab binding)
+  AGENT_BROWSER_ALLOW_FILE_ACCESS Allow file:// URLs to access local files
+  AGENT_BROWSER_HIDE_SCROLLBARS  Hide scrollbars in headless Chromium screenshots (default: true)
+  AGENT_BROWSER_COLOR_SCHEME     Color scheme preference (dark, light, no-preference)
+  AGENT_BROWSER_DOWNLOAD_PATH    Default download directory for browser downloads
+  AGENT_BROWSER_DEFAULT_TIMEOUT  Default action timeout in ms (default: 25000)
+  AGENT_BROWSER_SESSION_NAME     Legacy auto-save/load state persistence name
+  AGENT_BROWSER_STATE_EXPIRE_DAYS Auto-delete saved states older than N days (default: 30)
+  AGENT_BROWSER_ENCRYPTION_KEY   64-char hex key for AES-256-GCM session encryption
+  AGENT_BROWSER_STREAM_PORT      Override WebSocket streaming port (default: OS-assigned)
+  AGENT_BROWSER_STREAM_QUALITY   JPEG quality 0-100 (default: 80)
+  AGENT_BROWSER_STREAM_MAX_WIDTH  Cap frame width in pixels (default: the viewport)
+  AGENT_BROWSER_STREAM_MAX_HEIGHT Cap frame height in pixels (default: the viewport)
+  AGENT_BROWSER_DASHBOARD_ALLOWED_ORIGINS
+                                 Comma-separated exact HTTPS origins allowed for a reverse-proxied dashboard
+  AGENT_BROWSER_IDLE_TIMEOUT_MS  Auto-shutdown daemon after N ms of inactivity (default: 3600000 = 1h; 0 disables)
+                                 Dashboard input resets the timer; headed, Safari/iOS WebDriver, and user-attached browsers are exempt from the default
+                                 Provider-owned cloud browsers remain eligible for default cleanup
+  AGENT_BROWSER_IOS_DEVICE       Default iOS device name
+  AGENT_BROWSER_IOS_UDID         Default iOS device UDID
+  AGENT_BROWSER_CONTENT_BOUNDARIES Wrap page output in boundary markers
+  AGENT_BROWSER_MAX_OUTPUT       Max characters for page output
+  AGENT_BROWSER_ALLOWED_DOMAINS  Comma-separated allowed domain patterns; requires a fresh controllable browser context without profile/session startup args, restore/state replay, or direct-page provider plugins
+  AGENT_BROWSER_ACTION_POLICY    Path to action policy JSON file
+  AGENT_BROWSER_CONFIRM_ACTIONS  Action categories requiring confirmation
+  AGENT_BROWSER_CONFIRM_INTERACTIVE Enable interactive confirmation prompts
+  AGENT_BROWSER_NO_AUTO_DIALOG   Disable automatic dismissal of alert/beforeunload dialogs
+  AGENT_BROWSER_PLUGINS          JSON plugin registry override
+  AGENT_BROWSER_ENGINE           Browser engine: chrome (default), lightpanda, obscura (experimental)
+  OBSCURA_BIN                   Source E2E tests only: required executable path when explicitly
+                                running cargo test e2e_obscura -- --ignored --test-threads=1
+                                Tests clear AGENT_BROWSER_CDP, AGENT_BROWSER_AUTO_CONNECT,
+                                and AGENT_BROWSER_PROVIDER and require an owned Obscura process.
+  OBSCURA_ALLOW_PRIVATE_NETWORK Allow Obscura to access local/private pages (set before launch)
+  AGENT_BROWSER_OBSCURA_STEALTH  Run the Obscura engine in stealth mode (consistent fingerprint, tracker blocking)
+  HTTP_PROXY / HTTPS_PROXY       Standard proxy env vars (fallback if AGENT_BROWSER_PROXY not set)
+  ALL_PROXY                      SOCKS proxy (fallback for proxy)
+  NO_PROXY                       Bypass proxy for hosts (fallback for proxy-bypass)
+  AGENT_BROWSER_SCREENSHOT_DIR   Default screenshot output directory
+  AGENT_BROWSER_SCREENSHOT_QUALITY JPEG quality 0-100
+  AGENT_BROWSER_SCREENSHOT_FORMAT Screenshot format: png, jpeg
+  AI_GATEWAY_URL                 Vercel AI Gateway base URL (default: https://ai-gateway.vercel.sh)
+  AI_GATEWAY_API_KEY             API key for the AI Gateway (enables chat command and dashboard AI chat)
+  AI_GATEWAY_MODEL               Default AI model (default: anthropic/claude-sonnet-4.6, or --model flag)
+
+Install:
+  npm install -g agent-browser           # npm
+  brew install agent-browser             # Homebrew
+  cargo install agent-browser            # Cargo
+  agent-browser install                  # Download Chrome (first time)
+
+Examples:
+  agent-browser open example.com
+  agent-browser --engine obscura --executable-path /path/to/obscura open example.com
+  agent-browser snapshot -i              # Interactive elements only
+  agent-browser click @e2                # Click by ref from snapshot
+  agent-browser fill @e3 "test@example.com"
+  agent-browser find role button click --name Submit
+  agent-browser get text @e1
+  agent-browser screenshot --full
+  agent-browser screenshot --annotate    # Labeled screenshot for vision models
+  agent-browser wait 2000               # Wait for slow pages to settle
+  agent-browser --cdp 9222 snapshot      # Connect via CDP port
+  agent-browser --cdp 9222 --pin-tab open example.com  # Pin session to its own tab
+  agent-browser --auto-connect snapshot  # Auto-discover running Chrome
+  agent-browser stream enable            # Start runtime streaming on an auto-selected port
+  agent-browser stream status            # Inspect runtime streaming state
+  agent-browser --color-scheme dark open example.com  # Dark mode
+  agent-browser --profile Default open gmail.com        # Reuse Chrome login state
+  agent-browser --profile ~/.myapp open example.com    # Persistent custom profile
+  agent-browser profiles                               # List available Chrome profiles
+  SESSION="$(agent-browser session id --scope worktree --prefix myapp)"
+  agent-browser --session "$SESSION" --restore open example.com  # Auto-save/restore state
+  agent-browser session info --json                    # Inspect daemon and restore status
+  agent-browser chat "open google.com and search for cats"  # AI chat (single-shot)
+  agent-browser chat                                        # AI chat (interactive REPL)
+  agent-browser -q chat "summarize this page"               # Quiet mode (text only)
+
+Command Chaining:
+  Chain commands with && in a single shell call (browser persists via daemon):
+
+  agent-browser open example.com && agent-browser snapshot -i
+  agent-browser fill @e1 "user@example.com" && agent-browser fill @e2 "pass" && agent-browser click @e3
+  agent-browser open example.com && agent-browser screenshot
+
+iOS Simulator (requires Xcode and Appium):
+  agent-browser -p ios open example.com                    # Use default iPhone
+  agent-browser -p ios --device "iPhone 15 Pro" open url   # Specific device
+  agent-browser -p ios device list                         # List simulators
+  agent-browser -p ios swipe up                            # Swipe gesture
+  agent-browser -p ios tap @e1                             # Touch element
+

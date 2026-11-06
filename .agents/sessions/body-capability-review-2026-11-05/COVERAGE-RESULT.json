@@ -1,0 +1,151 @@
+{
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "nativeAuditCoverageResult": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "complete": false,
+    "invalidReceipts": [],
+    "uncoveredSubsystems": [],
+    "incompleteFeatures": [
+      {
+        "feature": "provider routing",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "agent orchestration",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "session journal",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "context archive",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "memory learning",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "edit transaction",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "terminal jobs",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "sandbox enforcement",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "language validation",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "lsp diagnostics",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "scip references",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "sidecar supervision",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "acp serve",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "mcp server",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "headless run",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "workspace lanes",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "audit completeness",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "plugin hooks",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "targeted validation",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "undo snapshots",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "eval promotion",
+        "status": "complete",
+        "missing": []
+      },
+      {
+        "feature": "capability registry",
+        "status": "complete",
+        "missing": []
+      }
+    ],
+    "outOfScope": [
+      {
+        "id": ".bin",
+        "reason": "Local helper/generated executables; their source and packaging are inspected."
+      },
+      {
+        "id": ".commandcode",
+        "reason": "Local integration preferences, not shipped Openbuff product code."
+      },
+      {
+        "id": ".vscode",
+        "reason": "Contributor editor settings."
+      },
+      {
+        "id": "agents-graveyard",
+        "reason": "Archived templates outside active workspace runtime; active loading is inspected."
+      }
+    ]
+  },
+  "minimumPairs": {
+    "requiredPairs": 7,
+    "actualPairs": 13,
+    "filePickerCount": 13,
+    "auditShardCount": 13,
+    "satisfies": true,
+    "reason": ">=13 shard pairs (>=7 required) across 7 domains"
+  },
+  "structuralInspectionCovered": true,
+  "qualification": "Native complete=false is retained honestly: candidate records are heuristic, and the source/probes show the helper conflates inspection coverage and product readiness. Actual maturity/assurance is recorded separately; no absent/partial feature was promoted to complete.",
+  "supplementalSourceQualification": "Native inventory excludes active cli/release sources and hashes large-file prefixes. Reconstructed read ranges and supplemental membership are in REVIEW-VALIDATION.json. CURRENT-FILE-HASHES.json is a fresh current binding; the original 558-file whole-byte map is unavailable. SOURCE-STABILITY.md records historical comparisons and the narrower recovered source-window agreement. Exported structural receipts do not falsely add excluded paths."
+}

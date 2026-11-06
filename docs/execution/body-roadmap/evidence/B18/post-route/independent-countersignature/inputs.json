@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "nodeId": "B18",
+  "originalReviewManifest": {
+    "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-review/manifest.json",
+    "sha256": "bee8346e4a2b3318967775ee1d5b87ffce739b2d1b12ee5e1bc33d0d2b835f93"
+  },
+  "supportingNormalization": {
+    "path": "docs/execution/body-roadmap/evidence/B18/post-route/acceptance-proof/review.json",
+    "sha256": "62d0ede239e99bfd6e735f26d62eb2a877280e0b87218cb6019d55848f6ddbfa"
+  },
+  "implementationOwners": [
+    "/root"
+  ],
+  "scope": "B18 current-source exact command/approval identity reattestation after leader-authored B08 route delta within prior cooperative TypeScript scanner/harness and actual source SDK/terminal/ACP consumers with harmless local effects. No independent approval of reviewer-authored B02/B08 prerequisites, shipped-base2/B01 integration, complete shell AST/effect-ordering guarantee, OS isolation/cross-process fencing, remote Git/live provider/billing/native-parser/installed-package claim.",
+  "scopeLimits": [
+    "independent approval of reviewer-authored B02/B08 prerequisites, shipped-base2/B01 integration, complete shell AST/effect-ordering guarantee, OS isolation/cross-process fencing, remote Git/live provider/billing/native-parser/installed-package claim."
+  ],
+  "independenceDisclosure": "Reviewer made no implementation/test changes in this exactly reviewed scope. Reviewer authored separate earlier B02 cancellation and B08 provider prerequisites; these receive no independent implementation approval here. Current narrow B08 route delta and regression were leader-authored. ",
+  "historicalFailedAttemptDisclosures": [
+    "Initial declined-result and native malformed_result cancellation failures remain preserved and are not passing acceptance commands.",
+    "Initial post-route in-checkout TMPDIR changed Git/owned-temp fixture semantics: 177 tests passed and three failed. Corrected same-source run with accepted /tmp semantics passes 180/0; initial artifacts remain sealed.",
+    "Earlier B02 cancellation-followup and B08 prerequisite manifests preserve stale internal verification.log seals. Both unchanged manifests and actual current closed logs are bound as explicitly uncredited historical context; neither receives new implementation/prerequisite approval."
+  ],
+  "uncreditedHistoricalContext": [
+    {
+      "manifest": {
+        "path": "docs/execution/body-roadmap/evidence/B02/cancellation-followup/manifest.json",
+        "sha256": "c54a2785d8f77c74c0322abdc4d665753feabff99ff89173cf066c0886d72595"
+      },
+      "actualClosedLog": {
+        "path": "docs/execution/body-roadmap/evidence/B02/cancellation-followup/verification.log",
+        "sha256": "9213b0cabec9798ac81e6c0edbf4fb5ee5121b29a5a5fd876d985d18b062638a"
+      },
+      "legacyDeclaredLogSha256": "8bda0a2a9f8595342773eaf9b2cbac1c8f23e6f5e03e4ab135def3ddff164cae",
+      "credited": false,
+      "reason": "Historical reviewer-authored prerequisite archive is contextual only. Its runner verification log closed after the legacy internal hash was captured; preserved stale internal seal is not acceptance-command or prerequisite approval credit."
+    },
+    {
+      "manifest": {
+        "path": "docs/execution/body-roadmap/evidence/B08/manifest.json",
+        "sha256": "41176dfe3e363eb30e2b44e2774eac8ff17f4ed09491792c53b8329e978bab56"
+      },
+      "actualClosedLog": {
+        "path": "docs/execution/body-roadmap/evidence/B08/verification.log",
+        "sha256": "88f5a2c66ed254ffe798209e694e827ec6280e4c85c810cdcb70163dea2e0a55"
+      },
+      "legacyDeclaredLogSha256": "dc9d6eb5a1b081dffacd83ffb13b40558cab05a87efd0d02cd2f24cb0090d520",
+      "credited": false,
+      "reason": "Historical reviewer-authored prerequisite archive is contextual only. Its runner verification log closed after the legacy internal hash was captured; preserved stale internal seal is not acceptance-command or prerequisite approval credit."
+    }
+  ],
+  "commands": [
+    {
+      "name": "leader-vision-route-regression",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-review/leader-vision-route-regression.command.json",
+        "sha256": "f01f4220de94247eacd81d424fbc5364ad65992bce57007171d33e8ec92c03e0"
+      }
+    },
+    {
+      "name": "affected-identity-approval-terminal-store-tests",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-review/affected-identity-approval-terminal-store-tests.command.json",
+        "sha256": "62cbde5a9c2a5a243b9d2fbef2b95c47d741bdf0c5f82ab90312091bcbc3e8dc"
+      }
+    },
+    {
+      "name": "actual-launcher-parser-consumers",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-review/actual-launcher-parser-consumers.command.json",
+        "sha256": "d10d980dee0777b41b03ffe30dda9947768d3e0a7f574fefdf3a59f02c55fa89"
+      }
+    },
+    {
+      "name": "actual-sdk-approval-cancellation-consumers",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-review/actual-sdk-approval-cancellation-consumers.command.json",
+        "sha256": "ca1fdcffe23f0e1f65eca53a9303e5ed1413c4b829a64590b239a4839e5b4f66"
+      }
+    },
+    {
+      "name": "independent-corrupt-approval-consumer",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-review/independent-corrupt-approval-consumer.command.json",
+        "sha256": "73a5b49afe637612cff1cf84dcf95dd112fec6e2c3641f26f92baf17be87abc0"
+      }
+    },
+    {
+      "name": "independent-observation-replay",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-review/independent-observation-replay.command.json",
+        "sha256": "9f29706f413e32f149bfe856d1c858701d4faa285b9d2b4ba1bc2d72e3451707"
+      }
+    },
+    {
+      "name": "sdk-typecheck",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-review/sdk-typecheck.command.json",
+        "sha256": "bf3a41502e318a70d0b41516ddce4b7e853977c3e25b5f30d637c08ba8189b73"
+      }
+    },
+    {
+      "name": "source-diff-check",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-review/source-diff-check.command.json",
+        "sha256": "26c005ad4ce2c407cc1f5e1fc0b8c5a3feafacc7b06cfa62d090f2d1755ec2ce"
+      }
+    }
+  ]
+}

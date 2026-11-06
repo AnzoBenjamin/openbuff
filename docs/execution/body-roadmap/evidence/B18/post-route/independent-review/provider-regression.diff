@@ -1,0 +1,126 @@
+--- /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/source-snapshot/sdk/src/__tests__/provider-contract-regressions.test.ts.txt	2026-11-06 18:51:23.903410490 +0300
++++ /home/ben/Code/CLI/openbuff/sdk/src/__tests__/provider-contract-regressions.test.ts	2026-11-06 20:00:33.219628344 +0300
+@@ -307,6 +307,123 @@
+     ).toBe('vision/model')
+   })
+ 
++  test('vision failover retains the actual route in status and analytics', async () => {
++    const provider = (host: string, image: boolean) => ({
++      type: 'openai-compatible',
++      baseURL: `https://${host}.b08.invalid/v1`,
++      models: ['model'],
++      defaultCapabilities: { input: { image } },
++    })
++    configure({
++      defaultModel: 'primary/model',
++      visionModel: 'vision/model',
++      failoverModels: ['backup/model'],
++      providers: {
++        primary: provider('primary', false),
++        vision: provider('vision', true),
++        backup: provider('backup', true),
++      },
++    })
++    const previous = globalThis.fetch
++    const requests: string[] = []
++    globalThis.fetch = Object.assign(async (input: unknown) => {
++      const host = new URL(String(input)).hostname
++      expect(['vision.b08.invalid', 'backup.b08.invalid']).toContain(host)
++      requests.push(host)
++      return host === 'vision.b08.invalid'
++        ? new Response(JSON.stringify({ error: { message: 'unavailable' } }), {
++            status: 503,
++            headers: { 'content-type': 'application/json' },
++          })
++        : sse([
++            {
++              choices: [
++                { delta: { content: 'healthy' }, finish_reason: 'stop' },
++              ],
++            },
++          ])
++    }, previous)
++    cleanup.push(() => {
++      globalThis.fetch = previous
++    })
++    const statuses: Array<{
++      action: {
++        chunk: { status?: string; model?: string; nextModel?: string }
++      }
++    }> = []
++    const events: Array<{
++      properties?: { fromModel?: string; toModel?: string }
++    }> = []
++    const waits: number[] = []
++    const text: string[] = []
++    for await (const chunk of promptAiSdkStream({
++      apiKey: '',
++      runId: 'b08',
++      clientSessionId: 'b08',
++      fingerprintId: 'b08',
++      userInputId: 'b08',
++      userId: undefined,
++      agentId: 'fixture',
++      messages: [
++        {
++          role: 'user',
++          content: [
++            { type: 'text', text: 'Inspect image' },
++            {
++              type: 'image',
++              image: new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]),
++              mediaType: 'image/png',
++            },
++          ],
++        },
++      ],
++      signal: new AbortController().signal,
++      logger,
++      trackEvent(event: (typeof events)[number]) {
++        events.push(event)
++      },
++      sendAction(action: (typeof statuses)[number]) {
++        statuses.push(action)
++      },
++      onError() {},
++      retrySleep: async (delayMs: number) => {
++        waits.push(delayMs)
++      },
++      retryPolicy: {
++        maxRetries: 2,
++        backupMaxRetries: 0,
++        maxTotalAttempts: 4,
++        baseDelayMs: 100,
++        maxDelayMs: 200,
++        maxTotalDelayMs: 600,
++        jitterFraction: 0,
++      },
++    } as never)) {
++      if (chunk.type === 'text') text.push(chunk.text)
++    }
++    expect(requests).toEqual([
++      'vision.b08.invalid',
++      'vision.b08.invalid',
++      'vision.b08.invalid',
++      'backup.b08.invalid',
++    ])
++    expect(waits).toEqual([100, 200])
++    expect(text.join('')).toBe('healthy')
++    expect(
++      statuses
++        .filter((row) => row.action.chunk.status === 'retrying')
++        .map((row) => row.action.chunk.model),
++    ).toEqual(['vision/model', 'vision/model'])
++    expect(
++      statuses.find((row) => row.action.chunk.status === 'failover')?.action
++        .chunk,
++    ).toMatchObject({ model: 'vision/model', nextModel: 'backup/model' })
++    expect(
++      events.find((event) => event.properties?.fromModel !== undefined)
++        ?.properties,
++    ).toMatchObject({ fromModel: 'vision/model', toModel: 'backup/model' })
++  })
++
+   test('recursive OAuth refresh cannot reset the total attempt allowance', async () => {
+     configure({
+       defaultModel: 'codex/gpt-5.5',

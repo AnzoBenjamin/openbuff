@@ -1,0 +1,32 @@
+# Recorded evidence and recovery limits
+
+These artifacts preserve observations from the source review at HEAD `e65c06c0ae783130998bd9ab18c8d35320e40ea8`. A passing diagnostic can assert a defect. It does not prove the proposed repair works.
+
+The original 558-file whole-byte hash map did not survive recovery. Four captured prior validator results reported 558 source hashes with `changedSource=[]`; the missing map prevents a new comparison to those original bytes. [Source assurance](../SOURCE-STABILITY.md) separates those historical results, recovered source-line comparisons, and the root validator's fresh `CURRENT-FILE-HASHES.json`. Recovered numbered output binds 258 contiguous windows across 173 files and 38,692 unique lines; every admitted window matches present source after the stated line normalization. The user's three modified knowledge files are excluded from that comparison.
+
+| Artifact | Recovered observation and completeness |
+|---|---|
+| [CLI help](cli-help.log) | Actual 30-line help tail. The original review checkpoints record entrypoint exit 0; the complete original help log is unavailable. |
+| [Indexer tests](indexer-tests.log) | Actual tail and footer: 413 pass, 0 fail, 25 files. The complete original suite log is unavailable. |
+| [Audit tests](audit-tests.log) | Actual 15-line tail and footer: 28 pass, 0 fail, three files. The complete original suite log is unavailable. |
+| [Rust workspace tests](rust-tests.log) | All 70 recorded log lines recovered from numbered output: 18 native tests plus one workspace-harness test pass, none fail. Original whole-log byte hash is unavailable. The recorded run was locked, offline and used a disposable target directory. |
+| [Parser suite](code-map-tests.log), [isolated structure suite](code-map-structure-alone.log) | Actual footer/failure excerpts: 154 pass/four fail, then 17 pass/three fail. The complete original logs are unavailable. |
+| [Explicit asset observations](07-assets.json), [captured stdout](07-assets-probe.log) | Complete observations: pinned PHP, Swift, Kotlin and GDScript assets parse and compile queries with explicit paths. This narrows the development failures to resource discovery and publication; it is component evidence, with no installed release acceptance claim. |
+| [CLI behavioral probes](01-cli-probes.log) | Complete captured stdout: eight current-behavior assertions pass and reproduce the CLI findings. |
+| [Provider observations](02-providers-probes.json), [orchestration observations](03-orchestration-probes.json) | Complete captured JSON. The real AI SDK adapters used injected HTTP/SSE; orchestration used injected dependencies. No external provider requests were made. |
+| [Durability probes](05-durability-probes.log) | Complete latest captured stdout: eight current-behavior assertions pass. Selected pure probes used Bun 1.3.14 as recorded. |
+| [Extension observations](10-probe-results.json) | Complete original artifact, 3,345 bytes. Its recovered bytes match the independently recorded original SHA256; [provenance](10-probe-results-PROVENANCE.json) retains both captures. |
+| [Evaluation observations](11-offline-probe-results.json), [comparison CLI](11-comparison-cli.log), [execution aggregate](11-execution-capture.log) | Complete captured observations. Synthetic task comparison, cancelled work continuing, smoke exit 2, and 58 safe unit-test passes remain baseline results. |
+| [Source-binding probe](12-source-binding-probe.json), [review-bundle probe](12-review-bundle-probe.json) | Complete captured diagnostic JSON reproducing source-binding and review-bundle truth defects. |
+
+Other numbered JSON captures preserve mutation, memory, language, indexing, execution and native observations. Their fixture paths and PIDs describe the historical runs; the disposable fixtures no longer exist. Probe source files preserve their original reproduction code and may require their recorded toolchain, explicit environment and rebuilt isolated fixtures before reuse.
+
+[Artifact provenance](RECOVERED-ARTIFACTS-PROVENANCE.json) states the capture, call, session, recorded time, transformation and completeness for each recovered diagnostic or log. A complete captured JSON observation is not automatically a byte-for-byte recovery of its original file. The extension artifact has that additional original-hash check. [The recovery manifest](../EVIDENCE-RECOVERY-MANIFEST.json) also records the read-receipt reconstruction and remaining gaps. Recorded helper arguments were retained where stdout was absent, and endpoint clamps using present source line counts are explicitly qualified in the numbered read-range provenance files.
+
+The original validation capture records 555 inspected source/test/doc files and 147,721 unique read-window lines. The mechanically checked reconstructed reports retain all 13 pairs, 555 receipt files and 558 source/supplemental range-file paths, with 147,555 unique read-window lines. The 166-line difference is unresolved; ranges were not padded to reproduce the historical total. These are bounded inspection counts, separate from the smaller recovered source-line equality check and from product readiness.
+
+The review made no external provider/model requests or production fixes. Live model task success, installed multilingual tasks, real Chrome/Blender tasks, killed live CLI continuation and enforcement outside Linux were not established. Rust Landlock was exercised standalone on Linux; adoption by the CLI remains future work. Cached Bun 1.3.5 was used for CLI/runtime-sensitive checks. Its known OpenTUI FFI mismatch under other versions is not counted as a product defect.
+
+Publication appends `.txt` to executable capture suffixes such as `.ts`, `.mts`, `.cjs` and `.py`. The current SDK loader can import executable modules under `.agents/sessions`; data suffixes keep evidence publication from executing them. Synthetic fixture directories and compiled Rust targets are excluded. The final [publication manifest](../PUBLICATION-MANIFEST.json) maps staged capture names and hashes to delivered paths and hashes.
+
+Recovery helpers and review validators inspect stored data, source bindings, graph/lineage consistency and local links. Recovery did not rerun probes or recorded commands. The wholesale evaluation suite must remain unexecuted until its hardcoded persistent lesson sink is repaired and an isolation sentinel passes; the replacement plan preserves that prerequisite.

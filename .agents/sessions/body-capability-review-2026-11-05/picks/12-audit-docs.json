@@ -1,0 +1,860 @@
+{
+  "shardId": "12-audit-docs",
+  "question": "Where do macro capability/audit inventories, feature completeness/coverage gates, harness/task/review control-plane evidence, canonical tool/agent registries and documentation/plan fidelity work?",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "subsystemIds": [
+    ".",
+    "sdk",
+    "common",
+    "agents",
+    "evals",
+    "docs",
+    "packages",
+    "cli",
+    "scripts",
+    "openbuff.d.example"
+  ],
+  "selectedFiles": [
+    {
+      "path": "sdk/src/services/audit-intelligence.ts",
+      "from": 1,
+      "to": 457,
+      "reason": "Complete native inventory, snapshot/ignore rules, feature candidate discovery, maturity classification, evidence promotion and structural/feature coverage evaluator. Reuse the parent's saved completeness and snapshot probes; assess what the gate actually proves and how its categories support capability truth."
+    },
+    {
+      "path": "sdk/src/tools/audit-intelligence.ts",
+      "from": 1,
+      "to": 165,
+      "reason": "Real SDK entrypoints and snapshot cache/root binding; producer of heuristic feature coverage receipts and consumer of caller-supplied structural/feature evidence. Trace stale snapshots, scoped inventories, explicit verification and error shapes through the current tool contract."
+    },
+    {
+      "path": "sdk/src/tools/write-audit-findings.ts",
+      "from": 1,
+      "to": 403,
+      "reason": "Runtime-derived report path, Markdown rendering, compact structural receipt, exact-byte idempotent collision handling and exclusive mutation-backed persistence. Trace whether report acceptance binds the actual durable bytes, snapshot and payload rather than only the caller's declarations."
+    },
+    {
+      "path": "common/src/tools/params/tool/write-audit-findings.ts",
+      "from": 1,
+      "to": 432,
+      "reason": "Canonical structured finding and audit coverage input schemas: severity/domain normalization, identifiers, uniqueness/hygiene, noIssuesFound consistency, snapshot-bound completeness and normalized legacy input. Output receipt schemas are a bounded secondary reference."
+    },
+    {
+      "path": "sdk/src/__tests__/audit-intelligence.test.ts",
+      "from": 1,
+      "to": 278,
+      "reason": "Existing inventory/completeness tests and schema/SDK coverage-gate tests, including nested receipt identity and verified evidence. Distinguish tested category membership/attestation from executable producer-to-consumer behavior; later snapshot/promotion tests and the parent's existing counterexamples are references."
+    },
+    {
+      "path": "evals/buffbench/plan-sharding-signals.ts",
+      "from": 579,
+      "to": 941,
+      "reason": "Minimum complete shard-pair gate, structural coverage matrix, planner output coverage, every-subsystem enumeration and integrated sharding verdict. Inspect what is machine-checked from traces/output and what remains merely self-reported; breadth classifier and regression cases are secondary."
+    },
+    {
+      "path": "common/src/tools/list.ts",
+      "from": 1,
+      "to": 160,
+      "reason": "Canonical native tool descriptor registry and alias projection: visible capability names and audit/harness/review/task definitions. Follow constants, provider schemas, runtime handler and SDK dispatch references to separate published membership from usable production wiring."
+    },
+    {
+      "path": "agents/reviewer/code-reviewer.ts",
+      "from": 1,
+      "to": 259,
+      "reason": "Complete reviewer definition: grants, read-only evidence gathering, structured attested output, dimensions, requirement coverage, test-quality/compatibility/security rules and native set_output contract. Compare this declared review assurance with the actual gate parser, credit rules and public docs."
+    },
+    {
+      "path": "common/src/constants/prompt-sections.ts",
+      "from": 1,
+      "to": 248,
+      "reason": "Dependency-safe canonical quality/security/decision/specialist and broad-audit instructions consumed by bundled agents/runtime. Trace native snapshot/feature/coverage requirements and canonical documentation references through re-exports and real orchestrator consumers."
+    },
+    {
+      "path": "sdk/src/tools/get-change-review-bundle.ts",
+      "from": 462,
+      "to": 930,
+      "reason": "Worktree identity builder and real review-bundle entrypoint: full versus capped Git evidence, committed delivery handling, snapshot identity, task/workspace state, ownership/validation/open-finding filtering and security scan packet. Earlier byte hashing/baseline helpers and targeted validation are references."
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 1851,
+      "to": 2287,
+      "reason": "Test-impact and build-target production assembly: convention/graph/build-tool tiers, confidence/confirmation, owning workspace, discovered manifest scripts and async consumers. Examine whether capability/readiness/test targeting claims accurately represent the evidence and actual target-project language/toolchain support."
+    },
+    {
+      "path": "sdk/src/services/local-harness-store.ts",
+      "from": 1,
+      "to": 396,
+      "reason": "Complete typed local control-plane record store: repository/workspace/run/snapshot/revision identities, per-kind records, filesystem locks, atomic write/CAS behavior, reads, corruption quarantine and diagnostic retention. Pair05 owns its already-probed lease/snapshot continuation issues; focus how evidence producers and review consumers compose."
+    },
+    {
+      "path": "README.md",
+      "from": 1,
+      "to": 250,
+      "reason": "Root public product and SDK contract: local/BYOK operation, coordinated agents, natural-language coding, installation/setup, custom generators, SDK examples and model/provider configuration. Compare advertised entrypoints/behaviors with audited production consumers and separate measured assurance from claims."
+    },
+    {
+      "path": "DESIGN.md",
+      "from": 1,
+      "to": 157,
+      "reason": "Current whole-product design source of truth, implementation/acceptance status, coverage versus live evidence limits, information/evidence hierarchy, recovery/approval/session states and product flow contract. Treat documented open acceptance as open; compare current claims with actual supported body abilities."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 82,
+      "to": 121,
+      "reason": "Public harness-control-plane and specialist-intelligence capability contract: task/review evidence, environment/workspace/test/build/context/ownership/readiness roles. Check default/optional/unwired distinctions through selected SDK implementations and bounded consumers."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 579,
+      "to": 696,
+      "reason": "Public reviewer verdict/coverage/requirement/failure contract, parent-owned process scope and structured/text fallback claims. Compare the current code-reviewer schema and gate helpers rather than treating documentation or a model verdict as independent implementation assurance."
+    },
+    {
+      "path": "docs/audits/feature-switch-inventory-2026-11-02.md",
+      "from": 1,
+      "to": 116,
+      "reason": "Current switch/default/optional/deprecated/availability inventory and explicit inference limits. Use as a discovery/contract map for macro capabilities; do not infer that every option is a disabled feature or that an inventory entry proves user reachability."
+    },
+    {
+      "path": "package.json",
+      "from": 1,
+      "to": 80,
+      "reason": "Root public workspaces, runtime/tooling versions, package manager and documented development/validation/generation entrypoints. Assess architecture and doc fidelity; pair11 owns CI, benchmark execution and release/packaging correctness."
+    }
+  ],
+  "secondaryFiles": [
+    {
+      "path": "common/src/tools/params/tool/audit-intelligence.ts",
+      "from": 1,
+      "to": 155,
+      "reason": "Canonical audit tool schemas, strict receipt shapes, alias normalization and explicit heuristic-versus-verified boundary."
+    },
+    {
+      "path": "common/src/tools/params/tool/write-audit-findings.ts",
+      "from": 433,
+      "to": 512,
+      "reason": "Canonical durable collision marker, success/structural receipt and error output schemas omitted from the primary input-schema range."
+    },
+    {
+      "path": "common/src/tools/constants.ts",
+      "from": 1,
+      "to": 190,
+      "reason": "Canonical ToolName/PublishedToolName roster, programmatic versus exposed tool classification and shared params contract."
+    },
+    {
+      "path": "common/src/tools/list.ts",
+      "from": 161,
+      "to": 410,
+      "reason": "Typed native/programmatic call unions and output/argument helper projection downstream of the primary descriptor registry."
+    },
+    {
+      "path": "common/src/tools/compile-tool-definitions.ts",
+      "from": 1,
+      "to": 304,
+      "reason": "Canonical generated JSON-Schema and TypeScript tool artifacts; pair10 owns schema interoperability, this shard follows registry/documentation fidelity."
+    },
+    {
+      "path": "scripts/generate-tool-definitions.ts",
+      "from": 1,
+      "to": 78,
+      "reason": "Real generator consumers of the canonical tool descriptors and published agent/tool type mirrors; inspect source only."
+    },
+    {
+      "path": "agents/base2/spawn-contract.ts",
+      "from": 1,
+      "to": 298,
+      "reason": "Derived spawn clauses, declared programmatic tool names and canonical specialist definition consumers; compare roster/catalog promises with current grants."
+    },
+    {
+      "path": "agents/base2/tool-tiers.ts",
+      "from": 1,
+      "to": 201,
+      "reason": "Declared visible/programmatic tool tiers and guided surface; explicit inspection versus mutation/review/audit tool exposure."
+    },
+    {
+      "path": "agents/base2/quality-prompt-section.ts",
+      "from": 1,
+      "to": 108,
+      "reason": "Canonical prompt re-export and current automated-gate awareness; current advisory wording is distinct from the runtime authority."
+    },
+    {
+      "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+      "from": 1,
+      "to": 218,
+      "reason": "Actual agent-template validation/registry retrieval, provenance and fallback consumers; pair10 owns executable agent loading/trust."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/audit-intelligence.ts",
+      "from": 1,
+      "to": 46,
+      "reason": "Runtime handlers delegate all three audit inspection/evaluation tools to the client boundary."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/write-audit-findings.ts",
+      "from": 1,
+      "to": 29,
+      "reason": "Runtime audit sink client dispatch and dedicated artifact-tool identity."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/get-change-review-bundle.ts",
+      "from": 1,
+      "to": 28,
+      "reason": "Actual runtime review-bundle client dispatch."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2545,
+      "to": 2599,
+      "reason": "SDK write_audit_findings consumer and mutation/evidence bookkeeping seam."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2953,
+      "to": 3015,
+      "reason": "SDK review-bundle and targeted-validation dispatch, workspace state and effective hook environment/policy inputs."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 3077,
+      "to": 3133,
+      "reason": "SDK task/environment/build/test/audit native dispatch and state directory/abort consumer wiring."
+    },
+    {
+      "path": "sdk/src/tools/get-task.ts",
+      "from": 1,
+      "to": 67,
+      "reason": "Real current task read surface: compact active-work projection and associated harness record lookup. Pair05 owns task-memory restoration; compare control-plane evidence reachability."
+    },
+    {
+      "path": "sdk/src/tools/inspect-workspace.ts",
+      "from": 1,
+      "to": 84,
+      "reason": "Real workspace detection, policy/stateDir input and task/workspace context packet consumer."
+    },
+    {
+      "path": "sdk/src/tools/inspect-environment.ts",
+      "from": 1,
+      "to": 10,
+      "reason": "Environment readiness tool delegates to the async harness probe; readiness is separate from executable feature completion."
+    },
+    {
+      "path": "sdk/src/tools/get-affected-tests.ts",
+      "from": 1,
+      "to": 47,
+      "reason": "Native test-impact tool consumer with source file inputs, graph callback and cancellation."
+    },
+    {
+      "path": "sdk/src/tools/get-build-targets.ts",
+      "from": 1,
+      "to": 34,
+      "reason": "Native build-target consumer and target-project workspace routing."
+    },
+    {
+      "path": "sdk/src/tools/run-targeted-validation.ts",
+      "from": 1,
+      "to": 148,
+      "reason": "Actual pre/post worktree snapshot re-attestation around configured hooks, drift/error refusal and returned evidence. Generic process policy and hook execution are other shards."
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 1233,
+      "to": 1392,
+      "reason": "Async discovery/environment capability packet, phase tracking and availability semantics; parent/pair09 own probe-process enforcement mechanics."
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 2288,
+      "to": 2371,
+      "reason": "Context packet and verified knowledge record representation/eligibility; pair04 owns measured memory/learning behavior."
+    },
+    {
+      "path": "agents/base2/gate-reviewer.ts",
+      "from": 570,
+      "to": 736,
+      "reason": "Gate consumer of coverage, per-dimension findings and requirement coverage, plus crash detection. Pair03 owns general orchestration lifecycle."
+    },
+    {
+      "path": "agents/base2/gate-reviewer.ts",
+      "from": 830,
+      "to": 935,
+      "reason": "Pre-credit reviewer blocking checks and incomplete in-scope requirement treatment."
+    },
+    {
+      "path": "agents/base2/gate-reviewer.ts",
+      "from": 1862,
+      "to": 2040,
+      "reason": "Current parent supplied attestation/review prompt, complete versus additive review shapes and credit scope; assess evidence adequacy without duplicating journal/supervision review."
+    },
+    {
+      "path": "sdk/src/__tests__/audit-intelligence.test.ts",
+      "from": 279,
+      "to": 438,
+      "reason": "Existing live-state churn/cache/snapshot/promotion tests. Reuse saved parent's tail/source exclusion and false-completeness counterexamples instead of rerunning."
+    },
+    {
+      "path": "common/src/tools/params/__tests__/write-audit-findings.test.ts",
+      "from": 1,
+      "to": 323,
+      "reason": "Canonical validation regression tests for findings/coverage hygiene and structured receipt requirements."
+    },
+    {
+      "path": "sdk/src/__tests__/write-audit-findings.test.ts",
+      "from": 173,
+      "to": 334,
+      "reason": "Existing mutation-backed exclusive persistence, compact receipt, legacy shape and domain declaration tests."
+    },
+    {
+      "path": "sdk/src/__tests__/write-audit-findings.test.ts",
+      "from": 1135,
+      "to": 1351,
+      "reason": "Existing exact-byte collision and snapshot marker binding tests for durable evidence idempotency."
+    },
+    {
+      "path": "sdk/src/__tests__/get-change-review-bundle.test.ts",
+      "from": 1,
+      "to": 224,
+      "reason": "Review-bundle baseline fixture/runner and initial scope/identity/receipt tests. Expand within this large test file only to resolve a source hypothesis."
+    },
+    {
+      "path": "sdk/src/__tests__/get-change-review-bundle.test.ts",
+      "from": 900,
+      "to": 1321,
+      "reason": "Later worktree snapshot, committed delivery and security/bounded-evidence regression section; inspect test names/fixtures to select exact necessary cases."
+    },
+    {
+      "path": "sdk/src/__tests__/local-harness-store.test.ts",
+      "from": 1,
+      "to": 342,
+      "reason": "Control-plane record persistence, revision/CAS/lock diagnostics and corruption/quarantine tests."
+    },
+    {
+      "path": "sdk/src/__tests__/harness-intelligence.test.ts",
+      "from": 1080,
+      "to": 1553,
+      "reason": "Later async/targeting/build-tool capability regression section; select exact cases using current test names rather than assuming whole-feature assurance."
+    },
+    {
+      "path": "agents/__tests__/code-reviewer.test.ts",
+      "from": 1,
+      "to": 409,
+      "reason": "Reviewer declared schema/grant/coverage and output contract tests."
+    },
+    {
+      "path": "agents/__tests__/review-rubric-parity.test.ts",
+      "from": 1,
+      "to": 376,
+      "reason": "Shared reviewer/security/quality rubric parity contract tests; prose parity alone is not execution evidence."
+    },
+    {
+      "path": "agents/__tests__/spawn-contract.test.ts",
+      "from": 1,
+      "to": 197,
+      "reason": "Derived roster/spawn contract coverage and canonical tool-name tests."
+    },
+    {
+      "path": "agents/__tests__/quality-prompt-snapshot.test.ts",
+      "from": 1,
+      "to": 400,
+      "reason": "Broad audit/quality prompt wiring and snapshots; compare selected canonical instructions to actual consumers."
+    },
+    {
+      "path": "evals/buffbench/plan-sharding-signals.ts",
+      "from": 275,
+      "to": 374,
+      "reason": "Breadth/subsystem classifier preceding the primary structural sharding gate."
+    },
+    {
+      "path": "evals/buffbench/__tests__/plan-sharding-signals.test.ts",
+      "from": 155,
+      "to": 283,
+      "reason": "Current breadth marker/explicit file target/subsystem conceptual matching tests."
+    },
+    {
+      "path": "evals/buffbench/__tests__/plan-sharding-signals.test.ts",
+      "from": 624,
+      "to": 1068,
+      "reason": "Minimum complete pair rule and every-top-level-subsystem/planner coverage regression tests."
+    },
+    {
+      "path": "agents/patterns/audit-codebase.md",
+      "from": 1,
+      "to": 296,
+      "reason": "Canonical scope-then-shard/eight-domain/snapshot-bound native inventory and feature completeness workflow; review human procedure against actual runtime gates."
+    },
+    {
+      "path": "cli/src/components/tools/harness-intelligence-tools.tsx",
+      "from": 1,
+      "to": 240,
+      "reason": "Actual CLI rendering consumer for workspace/environment/task and review/evidence packets; UI internals belong to pair01."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 1,
+      "to": 81,
+      "reason": "Public local orchestrator/agent roster, generic versus direct tool surface and current permission/plan-only qualifications."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 509,
+      "to": 578,
+      "reason": "Documented automated hooks/reviewer phase gate, pending/owned files and concurrent review scope."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 697,
+      "to": 725,
+      "reason": "Canonical tool availability/unavailable-tool behavior claim and current runtime versus SDK distinction."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 1227,
+      "to": 1263,
+      "reason": "Dedicated audit sink, decision evidence and plan/status user-facing control-plane contracts."
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 1,
+      "to": 265,
+      "reason": "Documented dependency graph, runtime/SDK/CLI roles, architecture patterns and generator lifecycle. Compare authored TS/Rust responsibilities and actual consumer boundaries."
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 1,
+      "to": 394,
+      "reason": "Public local/BYOK execution chain, provider/tool/stream/error lifecycle and callback claims; follow concrete current consumers from adjacent shards."
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 1,
+      "to": 262,
+      "reason": "Documented DI-over-mocking validation, CLI/tmux acceptance and what existing test receipts can substantiate."
+    },
+    {
+      "path": "docs/development.md",
+      "from": 1,
+      "to": 164,
+      "reason": "Public development/package/build/validation instructions and root manifest fidelity."
+    },
+    {
+      "path": "docs/environment-variables.md",
+      "from": 1,
+      "to": 90,
+      "reason": "Public environment configuration/loading and compatibility policy; inspect docs/source, not actual credentials or private env values."
+    },
+    {
+      "path": "docs/local-mode.md",
+      "from": 1,
+      "to": 154,
+      "reason": "User-facing BYOK/default/optional configuration and support surface; remaining provider details belong to pair02."
+    },
+    {
+      "path": "docs/README.md",
+      "from": 1,
+      "to": 49,
+      "reason": "Documentation discovery map and active versus historical source-of-truth pointers."
+    },
+    {
+      "path": "docs/design/cli-overhaul/README.md",
+      "from": 1,
+      "to": 46,
+      "reason": "Current design implementation/validation status and still-open whole-product acceptance; do not turn item review/source coverage into live certification."
+    },
+    {
+      "path": "docs/design/cli-overhaul/HUMAN-TESTING.md",
+      "from": 1,
+      "to": 53,
+      "reason": "Explicit human/emulator acceptance evidence requirements behind DESIGN.md."
+    },
+    {
+      "path": "docs/design/cli-overhaul/PLAN.md",
+      "from": 1,
+      "to": 203,
+      "reason": "Current CLI design plan and implementation versus certification distinctions; parent requested macro plan fidelity, pair01 owns UI behavior."
+    },
+    {
+      "path": "openbuff.d.example/hooks.json",
+      "from": 1,
+      "to": 52,
+      "reason": "Public checked-in hook examples and exact validation scope/timeout claims; no private openbuff.d config is read."
+    },
+    {
+      "path": "openbuff.d.example/indexing.json",
+      "from": 1,
+      "to": 30,
+      "reason": "Public indexing/readiness/semantic configuration defaults and support promises; pair08 owns implementation quality."
+    },
+    {
+      "path": "openbuff.d.example/routes.json",
+      "from": 1,
+      "to": 86,
+      "reason": "Public default model and canonical per-agent route/reasoning catalog, including optional specialist/wrapper entries."
+    },
+    {
+      "path": "openbuff.d.example/providers.json",
+      "from": 1,
+      "to": 103,
+      "reason": "Public provider template/context/tool compatibility declaration examples; declaration/availability is separate from verified provider behavior."
+    },
+    {
+      "path": "tsconfig.base.json",
+      "from": 1,
+      "to": 18,
+      "reason": "Root TypeScript compiler constraints and public authored-language/toolchain assumptions."
+    },
+    {
+      "path": "tsconfig.json",
+      "from": 1,
+      "to": 26,
+      "reason": "Root package project references and dependency/source ownership map."
+    }
+  ],
+  "capabilityCandidates": [
+    {
+      "id": "snapshot-bound-structural-inventory",
+      "name": "Native codebase structural inventory and source identity",
+      "trace": [
+        "common/src/tools/list.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/audit-intelligence.ts",
+        "sdk/src/run.ts",
+        "sdk/src/tools/audit-intelligence.ts",
+        "sdk/src/services/audit-intelligence.ts"
+      ],
+      "inspect": [
+        "inventory breadth, scoped/empty roots and live-state exclusions",
+        "exact snapshot identity versus capped-file evidence",
+        "entrypoint/public API/manifest/test discovery versus actual capability"
+      ],
+      "tests": [
+        "sdk/src/__tests__/audit-intelligence.test.ts"
+      ]
+    },
+    {
+      "id": "feature-completeness-and-assurance",
+      "name": "Feature completeness claims and machine coverage gates",
+      "trace": [
+        "sdk/src/services/audit-intelligence.ts",
+        "sdk/src/tools/audit-intelligence.ts",
+        "common/src/tools/params/tool/audit-intelligence.ts",
+        "common/src/constants/prompt-sections.ts"
+      ],
+      "inspect": [
+        "producer-to-consumer executable evidence versus file category attestation",
+        "maturity versus assurance and all observable failure states",
+        "stale/mismatched receipts, false complete claims and out-of-scope reasons"
+      ],
+      "tests": [
+        "sdk/src/__tests__/audit-intelligence.test.ts"
+      ],
+      "existingEvidence": [
+        "/tmp/openbuff-body-review-2026-11-05/evidence/completeness-probe.json",
+        "/tmp/openbuff-body-review-2026-11-05/evidence/snapshot-probes.json"
+      ]
+    },
+    {
+      "id": "durable-audit-findings",
+      "name": "Structured shard findings, durable artifacts and compact receipts",
+      "trace": [
+        "common/src/tools/params/tool/write-audit-findings.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/write-audit-findings.ts",
+        "sdk/src/run.ts",
+        "sdk/src/tools/write-audit-findings.ts"
+      ],
+      "inspect": [
+        "input hygiene, domain coverage and snapshot binding",
+        "exclusive persistence, identical retry, changed payload collision and returned actual-byte identity",
+        "mutation/error/cancellation evidence and renderer versus control-plane role"
+      ],
+      "tests": [
+        "common/src/tools/params/__tests__/write-audit-findings.test.ts",
+        "sdk/src/__tests__/write-audit-findings.test.ts"
+      ]
+    },
+    {
+      "id": "broad-review-coverage",
+      "name": "Breadth classification, complete shard pairs and subsystem coverage",
+      "trace": [
+        "agents/patterns/audit-codebase.md",
+        "common/src/constants/prompt-sections.ts",
+        "evals/buffbench/plan-sharding-signals.ts"
+      ],
+      "inspect": [
+        "open-ended body review maps to every subsystem",
+        "trace pair counts versus actual inspected work",
+        "every top-level root and feature covered or justified out-of-scope"
+      ],
+      "tests": [
+        "evals/buffbench/__tests__/plan-sharding-signals.test.ts",
+        "agents/__tests__/quality-prompt-snapshot.test.ts"
+      ]
+    },
+    {
+      "id": "review-evidence-and-requirements",
+      "name": "Attested reviewer evidence, requirements and coverage adequacy",
+      "trace": [
+        "agents/reviewer/code-reviewer.ts",
+        "agents/base2/gate-reviewer.ts",
+        "sdk/src/tools/get-change-review-bundle.ts",
+        "docs/agents-and-tools.md"
+      ],
+      "inspect": [
+        "actual read files and snapshot fingerprint versus declared read roster",
+        "coverage/dimension/incomplete requirement blockers and additive review scope",
+        "real evidence, stale records, truncated diff and unavailable review/error states"
+      ],
+      "tests": [
+        "agents/__tests__/code-reviewer.test.ts",
+        "agents/__tests__/review-rubric-parity.test.ts",
+        "sdk/src/__tests__/get-change-review-bundle.test.ts"
+      ]
+    },
+    {
+      "id": "task-and-harness-evidence",
+      "name": "Task/workspace/ownership/validation/finding control-plane evidence",
+      "trace": [
+        "sdk/src/tools/get-task.ts",
+        "sdk/src/tools/inspect-workspace.ts",
+        "sdk/src/services/local-harness-store.ts",
+        "sdk/src/tools/get-change-review-bundle.ts",
+        "sdk/src/run.ts"
+      ],
+      "inspect": [
+        "repository/workspace/run/snapshot/revision identity composition",
+        "empty/stale/corrupt/missing record states and diagnostic propagation",
+        "whether artifact-only records have actual producers and consuming task/review affordances"
+      ],
+      "tests": [
+        "sdk/src/__tests__/local-harness-store.test.ts",
+        "sdk/src/__tests__/get-change-review-bundle.test.ts"
+      ]
+    },
+    {
+      "id": "environment-test-build-intelligence",
+      "name": "Readiness and target-project test/build discovery",
+      "trace": [
+        "sdk/src/services/harness-intelligence.ts",
+        "sdk/src/tools/inspect-environment.ts",
+        "sdk/src/tools/get-affected-tests.ts",
+        "sdk/src/tools/get-build-targets.ts",
+        "cli/src/components/tools/harness-intelligence-tools.tsx"
+      ],
+      "inspect": [
+        "convention/graph/build-tool confidence and provenance",
+        "available binaries and discovered scripts versus working language capability",
+        "empty/unknown/degraded/no-manifest/cancellation states and cross-language ownership"
+      ],
+      "tests": [
+        "sdk/src/__tests__/harness-intelligence.test.ts"
+      ]
+    },
+    {
+      "id": "targeted-validation-evidence",
+      "name": "Scoped validation with before/after source attestation",
+      "trace": [
+        "sdk/src/tools/run-targeted-validation.ts",
+        "sdk/src/tools/get-change-review-bundle.ts",
+        "sdk/src/run.ts",
+        "docs/agents-and-tools.md"
+      ],
+      "inspect": [
+        "pre/post identity equality and failure rejection",
+        "validation as evidence versus actual automated reviewer gate",
+        "configured hooks versus arbitrary target-project tests and partial coverage"
+      ],
+      "tests": [
+        "sdk/src/__tests__/get-change-review-bundle.test.ts"
+      ]
+    },
+    {
+      "id": "canonical-capability-catalog",
+      "name": "Native tool, agent and published contract discovery",
+      "trace": [
+        "common/src/tools/constants.ts",
+        "common/src/tools/list.ts",
+        "common/src/tools/compile-tool-definitions.ts",
+        "agents/base2/spawn-contract.ts",
+        "agents/base2/tool-tiers.ts",
+        "packages/agent-runtime/src/templates/agent-registry.ts"
+      ],
+      "inspect": [
+        "published catalog -> grant -> runtime handler -> SDK/CLI consumer",
+        "generated type/schema mirrors and alias compatibility",
+        "optional/deprecated/runtime-only/unwired capabilities stated accurately"
+      ],
+      "tests": [
+        "agents/__tests__/spawn-contract.test.ts",
+        "agents/__tests__/quality-prompt-snapshot.test.ts"
+      ]
+    },
+    {
+      "id": "documentation-product-fidelity",
+      "name": "Public product, SDK, configuration and design contract fidelity",
+      "trace": [
+        "README.md",
+        "package.json",
+        "DESIGN.md",
+        "docs/architecture.md",
+        "docs/request-flow.md",
+        "docs/agents-and-tools.md",
+        "docs/audits/feature-switch-inventory-2026-11-02.md",
+        "openbuff.d.example/routes.json"
+      ],
+      "inspect": [
+        "macro body capabilities versus real user/client paths",
+        "public examples, defaults and compatibility versus current contracts",
+        "source/test coverage, live acceptance and known limits stated separately"
+      ],
+      "tests": [
+        "agents/__tests__/review-rubric-parity.test.ts"
+      ]
+    },
+    {
+      "id": "macro-body-and-polyglot-readiness",
+      "name": "Body capability sufficiency and executable polyglot plan fidelity",
+      "trace": [
+        "README.md",
+        "docs/architecture.md",
+        "docs/agents-and-tools.md",
+        "DESIGN.md",
+        "sdk/src/services/harness-intelligence.ts"
+      ],
+      "inspect": [
+        "observe/act/continue/coordinate/remember/learn/govern/connect coverage using other audited producers",
+        "missing body abilities versus optional product choices",
+        "authored-language rationale and target-project cooperation based on current capability/consumer evidence",
+        "historical roadmap checkmarks and amended decisions as context rather than current readiness proof"
+      ],
+      "tests": []
+    }
+  ],
+  "searchCoverage": {
+    "method": "Pinned native INVENTORY.json and saved RETRIEVAL.json, followed by rg file/symbol/consumer/test/doc-header searches and exact bounded source/documentation reads. Native query_index/read_files tools are not exposed in this Codex session. Only the assigned picker JSON is written; no findings, source fixes, tests/probes, model/API calls, private configs, credentials, or previous private logs.",
+    "roots": [
+      "README.md",
+      "DESIGN.md",
+      "package.json",
+      "tsconfig.base.json",
+      "tsconfig.json",
+      "docs",
+      "openbuff.d.example",
+      "sdk/src/services",
+      "sdk/src/tools",
+      "sdk/src/run.ts",
+      "common/src/tools",
+      "common/src/constants",
+      "agents/base2",
+      "agents/reviewer",
+      "agents/patterns",
+      "evals/buffbench",
+      "packages/agent-runtime/src/tools/handlers/tool",
+      "packages/agent-runtime/src/templates",
+      "cli/src/components/tools",
+      "scripts/generate-tool-definitions.ts"
+    ],
+    "queryIndexQueries": [
+      "language capabilities validation diagnostics",
+      "commands build test typecheck smoke release"
+    ],
+    "sourceFamiliesSearched": [
+      "native audit inventory/snapshot/feature/evidence-promotion/evaluation service and SDK wrappers",
+      "audit tool schemas, runtime client dispatch, sink persistence and receipt contracts",
+      "canonical tool descriptors/names, generated mirrors, agent roster/spawn clauses and actual reviewer definition",
+      "breadth classifier, minimum complete pairs, structural matrix and subsystem enumeration",
+      "review snapshot/changed files/ownership/validation/open findings and security packet",
+      "harness task/store/context/environment/test-impact/build-target consumers and target-language confidence",
+      "public product/SDK/architecture/request/testing/design/default configuration/switch claims",
+      "current audit/reviewer/sharding contract tests and parent's already-recorded probes"
+    ],
+    "entrypointConsumerTraces": [
+      "common tool descriptors -> runtime audit handler -> sdk run native dispatch -> SDK audit wrapper/cache -> inventory/completeness/coverage service",
+      "common write_audit_findings input schema -> runtime handler -> sdk run -> mutation-backed exclusive artifact writer -> compact structural receipt -> audit coverage wrapper",
+      "code-reviewer output schema/prompt -> set_output -> gate-reviewer coverage/requirement/attestation checks -> parent review gate",
+      "SDK get_change_review_bundle -> worktree identity -> LocalHarnessStore scoped ownership/validation/open findings -> reviewer/CLI evidence packet",
+      "SDK get_task/inspect_workspace -> active-work/context projection and LocalHarnessStore records -> CLI harness rendering",
+      "harness workspace/manifest discovery -> convention/graph/build-tool test impact and build commands -> SDK native get_affected_tests/get_build_targets -> CLI rendering",
+      "canonical prompt-sections -> base2 quality re-export/agent prompt consumers -> native audit process; eval trace/output -> minimum-pair/subsystem-enumeration verdict"
+    ],
+    "selectedRangeCount": 18,
+    "selectedDistinctFileCount": 17,
+    "selectedLineCount": 4828,
+    "secondaryPolicy": "Bounded expansion references do not claim full-line inspection. Primary ranges are the requested review digest. Follow current consumers/tests/contract examples only to resolve a hypothesis; receipt must name actual current files read.",
+    "testSurfacesDiscovered": [
+      "native inventory/completeness/nested snapshot/verified evidence gates",
+      "audit sink schema hygiene, exact creation and byte-identical versus changed collision behavior",
+      "review-bundle identity, committed delivery, scoped stored evidence and bounded scan inputs",
+      "reviewer structured output and shared rubric parity",
+      "harness storage CAS/lock/corruption diagnostics and async targeting/build confidence",
+      "breadth marker/file-target classification, complete pair count and every-root enumeration"
+    ],
+    "failureStatesToVerify": [
+      "unreadable/empty/scoped inventories and stale/root-mismatched snapshots",
+      "heuristic evidence, incomplete categories, unsupported/unwired feature and forged/mismatched declared coverage",
+      "unwritable findings directory, cancelled/unconfirmed mutation, identical retry and changed-content collision",
+      "missing/corrupt/stale/mis-scoped harness records and absent actual producer",
+      "truncated/missing/error Git evidence, committed delivery, file/HEAD drift and unavailable security scan",
+      "review crash/no structured verdict, missing/uncertain requirements, coverage missing and attestation mismatch",
+      "unknown target language/toolchain, no manifest/tests/build scripts, unconfirmed confidence and cancellation",
+      "advertised catalog member with no grant/runtime/SDK/client consumer",
+      "documented optional/default/compatibility/acceptance behavior versus actual supported body"
+    ],
+    "scopeBoundaries": [
+      "Parent already proved false completeness promotion and capped-prefix/active-release source exclusion; reuse evidence/completeness-probe.{ts,json} and snapshot-probes.{ts,json}, do not rediscover.",
+      "Pair05 owns workflow injection name mismatch and already-probed continuation/lease/snapshot issues; this shard follows task/control-plane review evidence semantics.",
+      "Pair03 owns generic orchestration/generator/gate lifecycle; this shard assesses reviewer evidence adequacy and documented/canonical assurance.",
+      "Pair11 owns CI/evals/packaging/release gates and actual benchmark claims; root manifests/testing docs are capability/architecture context here.",
+      "Pairs01/02/04/07/08/09/10 own UI/provider/memory/language/retrieval/effect enforcement/extension internals; follow their canonical producer/consumer seams only for macro capability truth.",
+      "Old task inventory and latest D29-D56 notes are context, not assumed present defects or readiness proof. Do not re-open superseded heap-snapshot, isolation, packaging or authored-language decisions.",
+      "A capability declaration, source roster, fixture pass or green category gate is assessed separately from useful production wiring and live assurance."
+    ]
+  },
+  "contextFiles": [
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/AUDIT-CONTRACT.md",
+      "reason": "Pinned objective, eight domains, maturity/assurance and read-only report/receipt boundaries."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/INVENTORY.json",
+      "reason": "Authoritative current source paths, subsystem enumeration and pinned snapshot."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/RETRIEVAL.json",
+      "reason": "Saved retrieval seeds; unavailable native tools are not claimed as called."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/CAPABILITY-RUBRIC.md",
+      "reason": "Body capability maturity and assurance rubric for macro assessment; source evidence remains independent."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/OLD-TASK-INVENTORY.json",
+      "reason": "All old roadmap declarations/checkmarks as historical task context; no assumed current defects.",
+      "inventoryStatus": "historical plan context excluded from structural receipt"
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/PLAN-NOTES.md",
+      "reason": "Parent-mapped latest D29-D56 amendments and replacement-plan constraints; use later active decisions, not superseded first drafts.",
+      "inventoryStatus": "planning context excluded from structural receipt"
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/evidence/completeness-probe.ts",
+      "reason": "Parent's existing reproducible false-completeness fixture; reuse without rerunning.",
+      "inventoryStatus": "review evidence excluded from structural receipt"
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/evidence/completeness-probe.json",
+      "reason": "Recorded executable counterexample to interpreting native attestation as feature completeness; reuse as an existing root finding.",
+      "inventoryStatus": "review evidence excluded from structural receipt"
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/evidence/snapshot-probes.ts",
+      "reason": "Parent's existing capped-prefix/active-release source exclusion fixture; reuse without rediscovery.",
+      "inventoryStatus": "review evidence excluded from structural receipt"
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/evidence/snapshot-probes.json",
+      "reason": "Recorded snapshot/source-coverage counterexample; use exact source anchors and avoid duplicate findings.",
+      "inventoryStatus": "review evidence excluded from structural receipt"
+    }
+  ]
+}
+

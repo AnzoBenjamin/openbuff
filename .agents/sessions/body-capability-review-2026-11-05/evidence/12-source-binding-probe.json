@@ -1,0 +1,86 @@
+{
+  "nestedFeatureSchemaAccepted": true,
+  "nestedFeatureResult": {
+    "schemaVersion": 1,
+    "snapshotId": "8c9105399e0e09b9382d4d04c36543fc8fabc1f3e049299e097b6ed25067a69c",
+    "complete": true,
+    "invalidReceipts": [],
+    "uncoveredSubsystems": [],
+    "incompleteFeatures": [],
+    "outOfScope": []
+  },
+  "sourceChanged": true,
+  "cachedSourceResult": {
+    "schemaVersion": 1,
+    "snapshotId": "8c9105399e0e09b9382d4d04c36543fc8fabc1f3e049299e097b6ed25067a69c",
+    "complete": true,
+    "invalidReceipts": [],
+    "uncoveredSubsystems": [],
+    "incompleteFeatures": [],
+    "outOfScope": []
+  },
+  "foreignReviewer": {
+    "expectedFingerprint": "v3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "foreignFingerprint": "v3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "pendingFiles": [
+      "common/src/types/contracts/api-schema.ts"
+    ],
+    "attestationIssues": [],
+    "blockers": [],
+    "finalizationVerdict": "LOOKS_GOOD",
+    "telemetryDrift": "v3:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "omittedReviewer": {
+    "receipt": {
+      "schemaVersion": 1,
+      "family": "reviewer",
+      "verdict": "LOOKS_GOOD",
+      "snapshotFingerprint": "v3:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "reviewedFiles": [
+        "common/src/types/contracts/api-schema.ts"
+      ],
+      "coverage": "covered",
+      "dimensions": {}
+    },
+    "lightweightEligible": false,
+    "missingRequiredTopLevelFields": [],
+    "dimensionRequiredKeys": [],
+    "requirementsRequired": false,
+    "runtimeVerdictIssue": null,
+    "attestationIssues": [],
+    "blockers": [],
+    "finalizationVerdict": "LOOKS_GOOD"
+  },
+  "assessedAbsence": {
+    "everyInventoriedFileAndDomainDeclared": true,
+    "assessedFeatureMaturity": "absent",
+    "negativeEvidenceRecorded": true,
+    "result": {
+      "schemaVersion": 1,
+      "snapshotId": "8c9105399e0e09b9382d4d04c36543fc8fabc1f3e049299e097b6ed25067a69c",
+      "complete": false,
+      "invalidReceipts": [],
+      "uncoveredSubsystems": [],
+      "incompleteFeatures": [
+        {
+          "feature": "known absent action",
+          "status": "partial",
+          "missing": [
+            "entrypoints",
+            "implementation",
+            "consumers",
+            "tests",
+            "failureStates"
+          ]
+        }
+      ],
+      "outOfScope": [
+        {
+          "id": "known absent action",
+          "reason": "Every fixture source was inspected; this action is not implemented."
+        }
+      ]
+    },
+    "interpretation": "The API has no assessed-absence coverage state: it requires populated implementation/consumer/test categories even when absence is the correct audit conclusion; feature out-of-scope is not applied to this check."
+  }
+}

@@ -1,0 +1,308 @@
+{
+  "card": "B04",
+  "reviewer": "/root/b02_runtime_outcomes",
+  "status": "verification_complete",
+  "independence": "No B03/B04/B30 production or test implementation edits by this reviewer. Reviewer authored consumed B08 provider and B02 cancellation prerequisite fixes; this reattestation grants no independent approval to those prerequisite changes.",
+  "producerManifest": "docs/execution/body-roadmap/evidence/B04/manifest.json",
+  "producerManifestHash": "b2e30ea9367623fe89695d1426d2688eefe16c31113b3909f2bb2db0387d336f",
+  "priorReviewManifest": "docs/execution/body-roadmap/evidence/B04/independent-review/manifest.json",
+  "priorReviewManifestHash": "e668ee9630413edd867adc5131d6353344c2038ad928f1a5a8a0940b7ff3f7cb",
+  "ownedSources": [
+    {
+      "file": "sdk/src/services/workspace-mutation-broker.ts",
+      "historicalHash": "af865e30f270622c8adbfa2911f8a0f008d172676fe6484cf6a5e7c95034c083",
+      "currentHash": "af865e30f270622c8adbfa2911f8a0f008d172676fe6484cf6a5e7c95034c083",
+      "changed": false
+    },
+    {
+      "file": "sdk/src/__tests__/workspace-mutation-broker.test.ts",
+      "historicalHash": "9a2a138c10065035f3e3e2a0b060c6492db0340ab76c3d365bda88afba0b1592",
+      "currentHash": "9a2a138c10065035f3e3e2a0b060c6492db0340ab76c3d365bda88afba0b1592",
+      "changed": false
+    },
+    {
+      "file": "packages/indexer/src/index-store.ts",
+      "historicalHash": "773242747855e16e0e296934ec1d4d482c0666ccbb2c884d4b0f9eb106308b6f",
+      "currentHash": "773242747855e16e0e296934ec1d4d482c0666ccbb2c884d4b0f9eb106308b6f",
+      "changed": false
+    },
+    {
+      "file": "packages/indexer/src/index-store.test.ts",
+      "historicalHash": "145bf6492f4b1b2f8495d14b5c1a549b1de6f7cb633cb63221e8cc7b42fab123",
+      "currentHash": "145bf6492f4b1b2f8495d14b5c1a549b1de6f7cb633cb63221e8cc7b42fab123",
+      "changed": false
+    },
+    {
+      "file": "packages/indexer/src/index-manager.ts",
+      "historicalHash": "46cda46b4c09180fa51328a24c934214db1cc99c406e6c861f0b40940dbe1bc1",
+      "currentHash": "46cda46b4c09180fa51328a24c934214db1cc99c406e6c861f0b40940dbe1bc1",
+      "changed": false
+    },
+    {
+      "file": "packages/indexer/src/index-manager.test.ts",
+      "historicalHash": "d0ec0dd05db32e71b7d60de1547a4b93dd8f05b4d4658df9ed16e17a524a2cf0",
+      "currentHash": "d0ec0dd05db32e71b7d60de1547a4b93dd8f05b4d4658df9ed16e17a524a2cf0",
+      "changed": false
+    },
+    {
+      "file": "cli/src/utils/turn-snapshots.ts",
+      "historicalHash": "2729f329316f138dd1c213b1e02a641c25854c5b22f452355ea4821e37683e43",
+      "currentHash": "2729f329316f138dd1c213b1e02a641c25854c5b22f452355ea4821e37683e43",
+      "changed": false
+    },
+    {
+      "file": "cli/src/utils/__tests__/turn-snapshots.test.ts",
+      "historicalHash": "1b32d756e592b62b224250ea0dee30e15154af8229cad4d9e0fd41b4737bbb8a",
+      "currentHash": "1b32d756e592b62b224250ea0dee30e15154af8229cad4d9e0fd41b4737bbb8a",
+      "changed": false
+    },
+    {
+      "file": "packages/indexer/src/index-manager-semantic.test.ts",
+      "historicalHash": "e5df842eafbc9c1bb18335a814b81abeb5391be764892b860274de77f4101fab",
+      "currentHash": "e5df842eafbc9c1bb18335a814b81abeb5391be764892b860274de77f4101fab",
+      "changed": false
+    }
+  ],
+  "currentSources": [
+    {
+      "file": ".agents/sessions/body-capability-review-2026-11-05/PLAN.md",
+      "sha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241"
+    },
+    {
+      "file": ".agents/sessions/body-capability-review-2026-11-05/SPEC.md",
+      "sha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31"
+    },
+    {
+      "file": "bun.lock",
+      "sha256": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6"
+    },
+    {
+      "file": "cli/src/project-files.ts",
+      "sha256": "0fd152870a583e4df147cc928d9be7adde06819cbaf91795f8a9edae55ed035c"
+    },
+    {
+      "file": "cli/src/utils/__tests__/turn-snapshots.test.ts",
+      "sha256": "1b32d756e592b62b224250ea0dee30e15154af8229cad4d9e0fd41b4737bbb8a"
+    },
+    {
+      "file": "cli/src/utils/env.ts",
+      "sha256": "029b7c4d309803b7cfc867d835808e7478fd297ab949e8659f26ee756952d4c5"
+    },
+    {
+      "file": "cli/src/utils/logger.ts",
+      "sha256": "8f695de8fd69a87d8f234a9e90891fb64157c79bf727a9c4d54179c26e7d4297"
+    },
+    {
+      "file": "cli/src/utils/turn-snapshots.ts",
+      "sha256": "2729f329316f138dd1c213b1e02a641c25854c5b22f452355ea4821e37683e43"
+    },
+    {
+      "file": "common/package.json",
+      "sha256": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c"
+    },
+    {
+      "file": "common/tsconfig.json",
+      "sha256": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20"
+    },
+    {
+      "file": "package.json",
+      "sha256": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8"
+    },
+    {
+      "file": "packages/agent-runtime/package.json",
+      "sha256": "0ecb330281d325d02c339c86fb2f52a2875b0d957abdd0b097b1ab959d281d3d"
+    },
+    {
+      "file": "packages/agent-runtime/tsconfig.json",
+      "sha256": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4"
+    },
+    {
+      "file": "packages/indexer/src/index-manager-semantic.test.ts",
+      "sha256": "e5df842eafbc9c1bb18335a814b81abeb5391be764892b860274de77f4101fab"
+    },
+    {
+      "file": "packages/indexer/src/index-manager.test.ts",
+      "sha256": "d0ec0dd05db32e71b7d60de1547a4b93dd8f05b4d4658df9ed16e17a524a2cf0"
+    },
+    {
+      "file": "packages/indexer/src/index-manager.ts",
+      "sha256": "46cda46b4c09180fa51328a24c934214db1cc99c406e6c861f0b40940dbe1bc1"
+    },
+    {
+      "file": "packages/indexer/src/index-store.test.ts",
+      "sha256": "145bf6492f4b1b2f8495d14b5c1a549b1de6f7cb633cb63221e8cc7b42fab123"
+    },
+    {
+      "file": "packages/indexer/src/index-store.ts",
+      "sha256": "773242747855e16e0e296934ec1d4d482c0666ccbb2c884d4b0f9eb106308b6f"
+    },
+    {
+      "file": "sdk/package.json",
+      "sha256": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d"
+    },
+    {
+      "file": "sdk/src/__tests__/workspace-mutation-broker.test.ts",
+      "sha256": "9a2a138c10065035f3e3e2a0b060c6492db0340ab76c3d365bda88afba0b1592"
+    },
+    {
+      "file": "sdk/src/services/repository-identity.ts",
+      "sha256": "9f678dc1977c8b5a472652b234fd954e05e5239549f2fdb14d4537df4aad9657"
+    },
+    {
+      "file": "sdk/src/services/workspace-mutation-broker.ts",
+      "sha256": "af865e30f270622c8adbfa2911f8a0f008d172676fe6484cf6a5e7c95034c083"
+    },
+    {
+      "file": "sdk/tsconfig.json",
+      "sha256": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21"
+    },
+    {
+      "file": "tsconfig.base.json",
+      "sha256": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+    }
+  ],
+  "bunPath": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+  "bunHash": "a56093cbdd2efc7290a744ccc39971dcc4be52c5732be15c7fb1465cc119c8de",
+  "base2Scope": "No selected consumer loads the shipped base2 implementation. B01 is excluded; the leader owns the broader integration binding.",
+  "verdict": "approve current-source reattestation of B04 within its prior declared tier only",
+  "commands": [
+    {
+      "name": "cooperative-cas-tests",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "test",
+        "--isolate",
+        "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/workspace-mutation-broker.test.ts",
+        "/home/ben/Code/CLI/openbuff/packages/indexer/src/index-store.test.ts",
+        "/home/ben/Code/CLI/openbuff/packages/indexer/src/index-manager.test.ts",
+        "/home/ben/Code/CLI/openbuff/cli/src/utils/__tests__/turn-snapshots.test.ts",
+        "/home/ben/Code/CLI/openbuff/packages/indexer/src/index-manager-semantic.test.ts"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exit": 0,
+      "log": "cooperative-cas-tests.log",
+      "envKeys": [
+        "DO_NOT_TRACK",
+        "HOME",
+        "NEXT_PUBLIC_CB_ENVIRONMENT",
+        "NEXT_PUBLIC_CODEBUFF_APP_URL",
+        "OPENBUFF_PROVIDER_CONFIG",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "USER"
+      ],
+      "finishedUtc": "2026-11-06T16:09:38.794235+00:00"
+    },
+    {
+      "name": "cooperative-cas-replay",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/assess.py"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exit": 0,
+      "log": "cooperative-cas-replay.log",
+      "envKeys": [
+        "DO_NOT_TRACK",
+        "HOME",
+        "NEXT_PUBLIC_CB_ENVIRONMENT",
+        "NEXT_PUBLIC_CODEBUFF_APP_URL",
+        "OPENBUFF_PROVIDER_CONFIG",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "USER"
+      ],
+      "finishedUtc": "2026-11-06T16:09:38.859967+00:00"
+    }
+  ],
+  "copiedReviewProbes": [],
+  "requiredChecksPass": true,
+  "evidence": [
+    {
+      "file": "REVIEW.md",
+      "sha256": "3f16ed768b113bb2e328e5613b28a3ba85ff148489f0393ccdf610e910494b9b"
+    },
+    {
+      "file": "assess.py",
+      "sha256": "6350bc95872b3f24e36f05b98ac288203ee373a37416d052b21b99129e1f704f"
+    },
+    {
+      "file": "assessment.json",
+      "sha256": "835e70ba770176b93767492d184ecf2a6826c50dbbb45ff45d93ad198ab825b5"
+    },
+    {
+      "file": "commands.json",
+      "sha256": "c67c47369c689000dace5fa1dedb311bc87401bf6b4f715e16e13fccbb688d9b"
+    },
+    {
+      "file": "cooperative-cas-replay.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "file": "cooperative-cas-replay.log",
+      "sha256": "835e70ba770176b93767492d184ecf2a6826c50dbbb45ff45d93ad198ab825b5"
+    },
+    {
+      "file": "cooperative-cas-tests.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "file": "cooperative-cas-tests.log",
+      "sha256": "71dc5fb57f0d8a9dfbdb2b061e300299bd4f3811557684435c3554da9dca9fa2"
+    },
+    {
+      "file": "fixture-config.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "file": "historical-integrity.json",
+      "sha256": "8975a1a7008a163e6e20e0bbf416472e7d14d2e0e7ae704650adbb562b7f801d"
+    },
+    {
+      "file": "home/.bun/install/cache/@t@/31fc912722ffdcfb.pile",
+      "sha256": "70bb984efabd421161e0238ff768becfbae5c24f1fad8f2dfe0aaa651219ec95"
+    },
+    {
+      "file": "home/.bun/install/cache/@t@/5048e7ee3f83a507.pile",
+      "sha256": "48bc2409e7ad85fdbd8c7f641f08a0c8fd942a7aab56637d8512aed485c93d44"
+    },
+    {
+      "file": "home/.bun/install/cache/@t@/600a323c1c9631d1.pile",
+      "sha256": "60788413a8067f36ab0ac94480cb17294fb4e4ec0f9fea1e6bbdccd28c6c0e6d"
+    },
+    {
+      "file": "home/.bun/install/cache/@t@/7b39a518f92f0f3f.pile",
+      "sha256": "89a55df66eff878e618dc4a1f60b32d33e76ddd2b44b06e8926e2ff9efe7b5d8"
+    },
+    {
+      "file": "home/.bun/install/cache/@t@/c8ac29009f8e5c48.pile",
+      "sha256": "7a7c20bd15d14b53f14f427c7e4b88d74f35599d080e1ea17e81fb013b832b2c"
+    },
+    {
+      "file": "home/.bun/install/cache/@t@/f2b2aecadd16faf9.pile",
+      "sha256": "8fad594bedd630a1c317db21bdd4bd4a2f071ecf1eb4265a2de4c9fbdb5064f9"
+    },
+    {
+      "file": "runtime-observations.json",
+      "sha256": "c4fd8f8b6d85e911c66cec39ec004fb3ad996c5c32580efefbe9fe9526e32ceb"
+    },
+    {
+      "file": "source-stability.json",
+      "sha256": "8cf63cd9039b1508f62d36b7f466fed30f284d982b3f4963946d8b4a18900313"
+    },
+    {
+      "file": "verification-start.json",
+      "sha256": "a46577b69d7eb3e1be91a946ac7e7a30ef0394b00d940f4c77d89831b97fa1ff"
+    },
+    {
+      "file": "verification.log",
+      "sha256": "923755e68a553049c2ff3bde3fa80266ff3b9011add8681fe8696461ca0c204a"
+    }
+  ],
+  "review": "REVIEW.md",
+  "runner": {
+    "file": "docs/execution/body-roadmap/evidence/B03/final-binding/independent-review/verify.py",
+    "sha256": "31d7df85649229ed0ec1851dd0dd33493c4f892eb9cd735e3bc63a52dd9ea21e"
+  }
+}

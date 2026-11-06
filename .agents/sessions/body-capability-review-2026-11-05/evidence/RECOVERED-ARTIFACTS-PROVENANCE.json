@@ -1,0 +1,694 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-11-06T06:04:43.992249+00:00",
+  "artifacts": [
+    {
+      "path": "evidence/02-providers-probes.json",
+      "sha256": "9abc397a9bc7ed2f412467de6651eee7336b4da1e457fb9f82299e8a8fdcd160",
+      "bytes": 3638,
+      "provenance": {
+        "capture": "9abc397a9bc7ed2f412467de6651eee7336b4da1e457fb9f82299e8a8fdcd160.json",
+        "sha256": "9abc397a9bc7ed2f412467de6651eee7336b4da1e457fb9f82299e8a8fdcd160",
+        "bytes": 3638,
+        "timestamp": "2026-11-05T21:12:24.087Z",
+        "session": "rollout-2026-11-05T23-58-55-01a1ad81-edbe-7f52-a218-cacd99170781.jsonl",
+        "callId": "call_nyj2XK86yN6vo3aTSkzIXn6v",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/03-orchestration-probes.json",
+      "sha256": "346e303d7807f673e1fc9a7bba9a692313d60d046c2f8bb92eae8f17d885de87",
+      "bytes": 1090,
+      "provenance": {
+        "capture": "346e303d7807f673e1fc9a7bba9a692313d60d046c2f8bb92eae8f17d885de87.json",
+        "sha256": "346e303d7807f673e1fc9a7bba9a692313d60d046c2f8bb92eae8f17d885de87",
+        "bytes": 1090,
+        "timestamp": "2026-11-05T21:06:09.859Z",
+        "session": "rollout-2026-11-05T23-59-29-01a1ad82-714d-76e3-ae69-8c80613b6f84.jsonl",
+        "callId": "call_NkB80GtllMgj1tVqec6Oq0jd",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/04-memory-fixture-result.json",
+      "sha256": "6a3582f5490c555f5530eafe2fc533567e8cdf95d82cbadde7830e4ff0d2be93",
+      "bytes": 2713,
+      "provenance": {
+        "capture": "6a3582f5490c555f5530eafe2fc533567e8cdf95d82cbadde7830e4ff0d2be93.json",
+        "sha256": "6a3582f5490c555f5530eafe2fc533567e8cdf95d82cbadde7830e4ff0d2be93",
+        "bytes": 2713,
+        "timestamp": "2026-11-05T21:39:14.413Z",
+        "session": "rollout-2026-11-06T00-20-48-01a1ad95-f665-7e01-83b7-ebb497d2b9a1.jsonl",
+        "callId": "call_p6DutAPON6MbYQdIyfvT1oS2",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-edit-probes.json",
+      "sha256": "9d560a2f85352124b83a134f7a8c8bcfeaa88d51e31d1adc8550fb44e4a31cc0",
+      "bytes": 10008,
+      "provenance": {
+        "capture": "9d560a2f85352124b83a134f7a8c8bcfeaa88d51e31d1adc8550fb44e4a31cc0.json",
+        "sha256": "9d560a2f85352124b83a134f7a8c8bcfeaa88d51e31d1adc8550fb44e4a31cc0",
+        "bytes": 10008,
+        "timestamp": "2026-11-05T21:32:32.393Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_IDBJ0swjnBeO5PpAUnF7725B",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-workspace-edit-probe.json",
+      "sha256": "a159353155c7878dc147f5be6b5cebdb9fe9e67e3bb4c4d9afc3e3ff5b7a39f5",
+      "bytes": 4250,
+      "provenance": {
+        "capture": "a159353155c7878dc147f5be6b5cebdb9fe9e67e3bb4c4d9afc3e3ff5b7a39f5.json",
+        "sha256": "a159353155c7878dc147f5be6b5cebdb9fe9e67e3bb4c4d9afc3e3ff5b7a39f5",
+        "bytes": 4250,
+        "timestamp": "2026-11-05T21:34:11.411Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_uRKlrXAnmIvkfBvJds8YkLfO",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-mutation-truth-probe.json",
+      "sha256": "1596aa3f475080792df5457b678333715ed5a6eb87481045ab0fcddefa790799",
+      "bytes": 4821,
+      "provenance": {
+        "capture": "1596aa3f475080792df5457b678333715ed5a6eb87481045ab0fcddefa790799.json",
+        "sha256": "1596aa3f475080792df5457b678333715ed5a6eb87481045ab0fcddefa790799",
+        "bytes": 4821,
+        "timestamp": "2026-11-05T21:35:34.423Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_VDCZpK0jMknjDYN5KtqQ2Osm",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-text-preservation-probe.json",
+      "sha256": "35ad4b3d5093203c12b7c630ac980d5fe0dedb925648fbc3f5e530ffb6b81971",
+      "bytes": 855,
+      "provenance": {
+        "capture": "35ad4b3d5093203c12b7c630ac980d5fe0dedb925648fbc3f5e530ffb6b81971.json",
+        "sha256": "35ad4b3d5093203c12b7c630ac980d5fe0dedb925648fbc3f5e530ffb6b81971",
+        "bytes": 855,
+        "timestamp": "2026-11-05T21:53:00.545Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_GBcX9C9mNZnJx2ksfaAUTYRR",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-broker-lock-probe.json",
+      "sha256": "ad2fadc1cb928e1c72705708b064fcfd3777c4b5193f39f0791cbb38609705f6",
+      "bytes": 740,
+      "provenance": {
+        "capture": "ad2fadc1cb928e1c72705708b064fcfd3777c4b5193f39f0791cbb38609705f6.json",
+        "sha256": "ad2fadc1cb928e1c72705708b064fcfd3777c4b5193f39f0791cbb38609705f6",
+        "bytes": 740,
+        "timestamp": "2026-11-05T21:39:22.953Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_8ezug4SADQ2ZzZHexTMS3DsW",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/06-broker-recovery-containment-probe.json",
+      "sha256": "64c5d1857c67b08100f59b1e911c41c663919eede0bd26e2f030167927525f9b",
+      "bytes": 1384,
+      "provenance": {
+        "capture": "64c5d1857c67b08100f59b1e911c41c663919eede0bd26e2f030167927525f9b.json",
+        "sha256": "64c5d1857c67b08100f59b1e911c41c663919eede0bd26e2f030167927525f9b",
+        "bytes": 1384,
+        "timestamp": "2026-11-05T21:42:06.189Z",
+        "session": "rollout-2026-11-06T00-27-10-01a1ad9b-cb7e-7c21-ba8e-ca57eacfb2af.jsonl",
+        "callId": "call_OY1L0h7DmhB9oEPnPGbIBZul",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/07-probes.json",
+      "sha256": "12540784a2ab324cbe7ac85727d1f12383d4546e06f17188b7ddb22d2514268e",
+      "bytes": 4518,
+      "provenance": {
+        "capture": "12540784a2ab324cbe7ac85727d1f12383d4546e06f17188b7ddb22d2514268e.json",
+        "sha256": "12540784a2ab324cbe7ac85727d1f12383d4546e06f17188b7ddb22d2514268e",
+        "bytes": 4518,
+        "timestamp": "2026-11-05T22:06:17.787Z",
+        "session": "rollout-2026-11-06T00-57-53-01a1adb7-e778-7970-b090-4ee5e53c3144.jsonl",
+        "callId": "call_9PWcGsxJ04irRAlY2MBumf2O",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/07-assets.json",
+      "sha256": "4af31f9914c34cd413da88c8f25a71d17323eeaa1b9c5928d7e14d2abc1147b0",
+      "bytes": 5048,
+      "provenance": {
+        "capture": "4af31f9914c34cd413da88c8f25a71d17323eeaa1b9c5928d7e14d2abc1147b0.json",
+        "sha256": "4af31f9914c34cd413da88c8f25a71d17323eeaa1b9c5928d7e14d2abc1147b0",
+        "bytes": 5048,
+        "timestamp": "2026-11-05T22:07:39.824Z",
+        "session": "rollout-2026-11-06T00-57-53-01a1adb7-e778-7970-b090-4ee5e53c3144.jsonl",
+        "callId": "call_SZhRQ4WlsNRviJTmPNVKce6K",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/08-freshness-lock-probes.json",
+      "sha256": "15d1c019a78a12b9429f7f813a7c2439f777d1e068bcb4eef5b549a595be1a54",
+      "bytes": 1086,
+      "provenance": {
+        "capture": "15d1c019a78a12b9429f7f813a7c2439f777d1e068bcb4eef5b549a595be1a54.json",
+        "sha256": "15d1c019a78a12b9429f7f813a7c2439f777d1e068bcb4eef5b549a595be1a54",
+        "bytes": 1086,
+        "timestamp": "2026-11-05T22:13:26.085Z",
+        "session": "rollout-2026-11-06T01-03-08-01a1adbc-b7fe-7c11-9030-296196281c4c.jsonl",
+        "callId": "call_v9UdAldC2QmqYzR53VBksykZ",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/08-safety-sweep-probe.json",
+      "sha256": "0f5aff06a4aa2dc58f46bb08b0ccfadb668be7803f5f8e45683a4e24490c2793",
+      "bytes": 1220,
+      "provenance": {
+        "capture": "0f5aff06a4aa2dc58f46bb08b0ccfadb668be7803f5f8e45683a4e24490c2793.json",
+        "sha256": "0f5aff06a4aa2dc58f46bb08b0ccfadb668be7803f5f8e45683a4e24490c2793",
+        "bytes": 1220,
+        "timestamp": "2026-11-05T22:15:22.621Z",
+        "session": "rollout-2026-11-06T01-03-08-01a1adbc-b7fe-7c11-9030-296196281c4c.jsonl",
+        "callId": "call_By6Ph9hA4DlIubh9e1F19X4M",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/09-policy-probe.json",
+      "sha256": "0386b8dbb5c90e1bbf553634ed53135273c3e3623fa2f049a12f71e755fb236b",
+      "bytes": 3926,
+      "provenance": {
+        "capture": "0386b8dbb5c90e1bbf553634ed53135273c3e3623fa2f049a12f71e755fb236b.json",
+        "sha256": "0386b8dbb5c90e1bbf553634ed53135273c3e3623fa2f049a12f71e755fb236b",
+        "bytes": 3926,
+        "timestamp": "2026-11-05T22:17:16.328Z",
+        "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+        "callId": "call_VYqrCJRHLD74sWZWHbNYYycb",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/09-supervisor-probe.json",
+      "sha256": "33f06cf9de9ba386696eeca451b4f051718b2fb4ff301fc80f4f7edd27c63d52",
+      "bytes": 1791,
+      "provenance": {
+        "capture": "33f06cf9de9ba386696eeca451b4f051718b2fb4ff301fc80f4f7edd27c63d52.json",
+        "sha256": "33f06cf9de9ba386696eeca451b4f051718b2fb4ff301fc80f4f7edd27c63d52",
+        "bytes": 1791,
+        "timestamp": "2026-11-05T22:20:08.417Z",
+        "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+        "callId": "call_iTdl37rMznlhwVRCVZBMOxKs",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/09-mcp-hooks-probe.json",
+      "sha256": "e7fb95d6bf182645d7d20e68be67a19280a868660084e854af75a427695bd2aa",
+      "bytes": 975,
+      "provenance": {
+        "capture": "e7fb95d6bf182645d7d20e68be67a19280a868660084e854af75a427695bd2aa.json",
+        "sha256": "e7fb95d6bf182645d7d20e68be67a19280a868660084e854af75a427695bd2aa",
+        "bytes": 975,
+        "timestamp": "2026-11-05T22:22:53.889Z",
+        "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+        "callId": "call_Ks5XzMQjEe4WZClXU7A2wYeM",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/12-source-binding-probe.json",
+      "sha256": "d31ce084ea48bf017e5e0a7fad8c71a7a5b2835220aaa6242fdb9dbdf4bae40e",
+      "bytes": 2831,
+      "provenance": {
+        "capture": "d31ce084ea48bf017e5e0a7fad8c71a7a5b2835220aaa6242fdb9dbdf4bae40e.json",
+        "sha256": "d31ce084ea48bf017e5e0a7fad8c71a7a5b2835220aaa6242fdb9dbdf4bae40e",
+        "bytes": 2831,
+        "timestamp": "2026-11-05T22:54:53.537Z",
+        "session": "rollout-2026-11-06T01-42-44-01a1ade0-f933-7411-86fd-70bd20786633.jsonl",
+        "callId": "call_51OLtWTE6YqUnL7Pdm5cbDOX",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/12-review-bundle-probe.json",
+      "sha256": "67c8e45b774054b23ceaa54b0487db7cb9c98fd3da1a9d6e234c4fdd450e5ae4",
+      "bytes": 1699,
+      "provenance": {
+        "capture": "67c8e45b774054b23ceaa54b0487db7cb9c98fd3da1a9d6e234c4fdd450e5ae4.json",
+        "sha256": "67c8e45b774054b23ceaa54b0487db7cb9c98fd3da1a9d6e234c4fdd450e5ae4",
+        "bytes": 1699,
+        "timestamp": "2026-11-05T22:51:31.940Z",
+        "session": "rollout-2026-11-06T01-42-44-01a1ade0-f933-7411-86fd-70bd20786633.jsonl",
+        "callId": "call_wqVU6pLUWxy7WI0O3AUsWbpB",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/historical-REVIEW-VALIDATION.json",
+      "sha256": "432d6189eb1fae3ad24c7abbfa04dc5c9e1726d0cbf82c7f966dbff8760c92bd",
+      "bytes": 10291,
+      "provenance": {
+        "capture": "432d6189eb1fae3ad24c7abbfa04dc5c9e1726d0cbf82c7f966dbff8760c92bd.json",
+        "sha256": "432d6189eb1fae3ad24c7abbfa04dc5c9e1726d0cbf82c7f966dbff8760c92bd",
+        "bytes": 10291,
+        "timestamp": "2026-11-06T00:06:31.795Z",
+        "session": "rollout-2026-11-06T02-08-44-01a1adf8-c4f8-7f60-8efd-a4619c4f5157.jsonl",
+        "callId": "call_6MlAo67jpWYsNSbx5sG4ohWO",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete captured JSON observation; original artifact byte hash unavailable",
+      "transformation": "Copy verified capture bytes without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/08-indexer-probes.json",
+      "sha256": "bc5dcaf316327009b2a0220b7c6165b6239d057743e1f031e03603b50ed1d641",
+      "bytes": 2700,
+      "provenance": {
+        "capture": {
+          "capture": "0d7d4498e8f570ef5e931ea6bcfe49bf55701afdc840e6fb57065e6792328bcf.json",
+          "sha256": "0d7d4498e8f570ef5e931ea6bcfe49bf55701afdc840e6fb57065e6792328bcf",
+          "bytes": 4122,
+          "timestamp": "2026-11-05T22:10:23.000Z",
+          "session": "rollout-2026-11-06T01-03-08-01a1adbc-b7fe-7c11-9030-296196281c4c.jsonl",
+          "callId": "call_NWAIKtX5th62IZrDA73tgJ5W",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        },
+        "command": {
+          "timestamp": "2026-11-05T22:10:22.041Z",
+          "session": "rollout-2026-11-06T01-03-08-01a1adbc-b7fe-7c11-9030-296196281c4c.jsonl",
+          "callId": "call_NWAIKtX5th62IZrDA73tgJ5W"
+        },
+        "commandFilename": "0236-call_NWAIKtX5th62IZrDA73tgJ5W.txt"
+      },
+      "completeness": "complete captured JSON payload; original artifact byte hash unavailable",
+      "transformation": "Extract the complete observed JSON block from captured stdout; add one LF. No execution.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/09-native-probe.json",
+      "sha256": "a3590a2c22745528194ccb0fa1166240a6c2a7804de184c60f0ebac23df33b5a",
+      "bytes": 1206,
+      "provenance": {
+        "capture": {
+          "capture": "c7aa798e495802c7278105e23847724709c73611e8a1ea6c6c91b2ebe3b68dd5.json",
+          "sha256": "c7aa798e495802c7278105e23847724709c73611e8a1ea6c6c91b2ebe3b68dd5",
+          "bytes": 1499,
+          "timestamp": "2026-11-05T22:20:08.417Z",
+          "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+          "callId": "call_iTdl37rMznlhwVRCVZBMOxKs",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        },
+        "command": {
+          "timestamp": "2026-11-05T22:20:07.612Z",
+          "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+          "callId": "call_iTdl37rMznlhwVRCVZBMOxKs"
+        },
+        "commandFilename": "0273-call_iTdl37rMznlhwVRCVZBMOxKs.txt"
+      },
+      "completeness": "complete captured JSON payload; original artifact byte hash unavailable",
+      "transformation": "Extract the complete observed JSON block from captured stdout; add one LF. No execution.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/snapshot-probes.json",
+      "sha256": "7bc1d9dee7b8fd8d3d378fe459044777508bfd15ca7d8c41083e5be36344a5b5",
+      "bytes": 576,
+      "provenance": {
+        "capture": {
+          "capture": "9fc189c4a594684449fae2d0de4abd44d33470134dc05b3d5940baf599d3a51c.json",
+          "sha256": "9fc189c4a594684449fae2d0de4abd44d33470134dc05b3d5940baf599d3a51c",
+          "bytes": 736,
+          "timestamp": "2026-11-05T22:26:12.373Z",
+          "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+          "callId": "call_OGLJdwCi6RAL2602LbMw3vlW",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        },
+        "command": {
+          "timestamp": "2026-11-05T22:26:11.334Z",
+          "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+          "callId": "call_OGLJdwCi6RAL2602LbMw3vlW"
+        },
+        "commandFilename": "0305-call_OGLJdwCi6RAL2602LbMw3vlW.txt"
+      },
+      "completeness": "complete captured JSON payload; original artifact byte hash unavailable",
+      "transformation": "Extract the complete observed JSON block from captured stdout; add one LF. No execution.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/10-probe-results.json",
+      "bytes": 3345,
+      "sha256": "8912f3e0486e73a9c189bebcb125b2c8ba86a29de1dfb485dfb7e1832ab160bf",
+      "provenance": {
+        "capture": "3a6c03c28e530eedc281a1ea4a707c0cf72fdeff30b0ca2b7b436f1cf017014d.json",
+        "sha256": "3a6c03c28e530eedc281a1ea4a707c0cf72fdeff30b0ca2b7b436f1cf017014d",
+        "bytes": 3872,
+        "title": null,
+        "keys": [
+          "chunk_id",
+          "wall_time_seconds",
+          "exit_code",
+          "original_token_count",
+          "output"
+        ],
+        "items": null,
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_FdXPEDUviNlj81JH8lm75rdh",
+        "timestamp": "2026-11-05T22:44:38.757Z",
+        "transformation": "exact recorded output"
+      },
+      "transformation": "Remove non-JSON Using environment: dev stdout prefix and retain exactly one trailing newline; resulting bytes match independently recorded original artifact SHA256.",
+      "originalSha256": "8912f3e0486e73a9c189bebcb125b2c8ba86a29de1dfb485dfb7e1832ab160bf",
+      "originalHashReceipt": {
+        "capture": "b1b9d27ad5791303a81963d92f7e9330f1e30f6cc0b1b258e033a87a72f1e326.json",
+        "sha256": "b1b9d27ad5791303a81963d92f7e9330f1e30f6cc0b1b258e033a87a72f1e326",
+        "bytes": 977,
+        "title": null,
+        "keys": [
+          "json",
+          "markdown",
+          "findings",
+          "capabilities",
+          "currentFiles",
+          "readRanges",
+          "wordCount",
+          "domains",
+          "snapshotId",
+          "artifactValidation"
+        ],
+        "items": null,
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KvIUk5AwIlidJF3OO0E1KxZS",
+        "timestamp": "2026-11-05T22:54:02.756Z",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete original artifact; independently recorded byte hash matches"
+    },
+    {
+      "path": "evidence/cli-help.log",
+      "sha256": "63b3dcc0e457c140443633ed29f78b449c9771f0f9d585c45f35dfbeacbfef87",
+      "bytes": 1868,
+      "provenance": {
+        "capture": "00259f70621e461b9debc388dd9bf7597a2a97f1956db4c52b34576045141170.json",
+        "sha256": "00259f70621e461b9debc388dd9bf7597a2a97f1956db4c52b34576045141170",
+        "bytes": 2006,
+        "timestamp": "2026-11-05T21:02:08.480Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_i7BWhpSgvGAvz8kjig7la1Tp",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "original help tail (30 lines); original full log unavailable",
+      "transformation": "Copy the exact recorded tail. The original entrypoint exit=0 is separately recorded in the review checkpoints.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/code-map-tests.log",
+      "sha256": "e7bd4dff703896e78f1a9689dcf8c2c13e02c644437e5feba990b27ff5b7b20e",
+      "bytes": 1180,
+      "provenance": {
+        "capture": "536ae3a99e67ba797fc30f83900a2153e1b3782cfdee70898768178aee78b664.json",
+        "sha256": "536ae3a99e67ba797fc30f83900a2153e1b3782cfdee70898768178aee78b664",
+        "bytes": 2041,
+        "timestamp": "2026-11-05T21:06:39.147Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_Vm61T5H47uWFW6mjJSj4B0T7",
+        "transformation": "exact recorded output",
+        "location": "$.value"
+      },
+      "completeness": "captured parser test footer plus enumerated failure lines; original full log unavailable",
+      "transformation": "Extract the code-map section of the recorded summary command output.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/indexer-tests.log",
+      "sha256": "460810adc2c0e435845398f58d862484fba805f1128a2dc80f8ec6e15d55a947",
+      "bytes": 643,
+      "provenance": {
+        "capture": "536ae3a99e67ba797fc30f83900a2153e1b3782cfdee70898768178aee78b664.json",
+        "sha256": "536ae3a99e67ba797fc30f83900a2153e1b3782cfdee70898768178aee78b664",
+        "bytes": 2041,
+        "timestamp": "2026-11-05T21:06:39.147Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_Vm61T5H47uWFW6mjJSj4B0T7",
+        "transformation": "exact recorded output",
+        "location": "$.value"
+      },
+      "completeness": "captured indexer test tail and footer; original full log unavailable",
+      "transformation": "Extract the indexer section of the recorded summary command output.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/audit-tests.log",
+      "sha256": "fe3e18cf450a7253fd7573697af1744a3da92519206e0bb9a1072c2e6ecf9f1a",
+      "bytes": 1268,
+      "provenance": {
+        "storeFile": "stores.json",
+        "storeSha256": "eac9c279d27f7e9f9e8a00d164619ca9747cc7eee88191815c6f8f8713620aff",
+        "storeKey": "auditprobe-0",
+        "location": "$.value.output[decoded-json-line:5].value",
+        "recordedTailCommand": {
+          "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0022-call_qA8RxsGNtQR4wjIH8aoTkMpF.txt",
+          "timestamp": "2026-11-05T21:01:11.294Z",
+          "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+          "callId": "call_qA8RxsGNtQR4wjIH8aoTkMpF"
+        },
+        "timestampMeaning": "Command timestamp, not an independently recorded stdout timestamp."
+      },
+      "completeness": "captured 15-line audit test tail and footer; original full log unavailable",
+      "transformation": "Decode the complete nested JSON record retained inside the truncated aggregate store output; retain its exact output string.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/code-map-structure-alone.log",
+      "sha256": "68cd0b0149bc17fa505a9675983a8b4d1c610c1488c7a9ac2b19ce648a97055f",
+      "bytes": 1909,
+      "provenance": {
+        "capture": "4bdd2f0f684d4ea54dd9f432f80806da3762def842b5d51e62c2d8213b2c6364.json",
+        "sha256": "4bdd2f0f684d4ea54dd9f432f80806da3762def842b5d51e62c2d8213b2c6364",
+        "bytes": 6262,
+        "timestamp": "2026-11-05T21:08:04.290Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_5qQR3FIxwXLIN2VsagwUe2Pz",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "captured isolated structure test tail and footer; original full log unavailable",
+      "transformation": "Take the recorded test section before the subsequent languages.ts source read.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/rust-tests.log",
+      "sha256": "0666112405d3cd89a84f0d73ecf48e106be0428a570038000ac3082781827f1f",
+      "bytes": 3025,
+      "provenance": {
+        "capture": "c0a4f9ea7b33e5366604b80012fcd1c125272b455a5d80f47f782397058ad0ea.json",
+        "sha256": "c0a4f9ea7b33e5366604b80012fcd1c125272b455a5d80f47f782397058ad0ea",
+        "bytes": 3589,
+        "timestamp": "2026-11-05T22:23:52.565Z",
+        "session": "rollout-2026-11-06T01-07-38-01a1adc0-d4d6-7250-b04e-327298624fcf.jsonl",
+        "callId": "call_MYAjIpESyre15H8ZsLjkEO4v",
+        "transformation": "exact recorded output",
+        "location": "$.r.value"
+      },
+      "completeness": "all 70 original log lines recovered; original byte hash unavailable",
+      "transformation": "Remove the exact numbered-reader prefixes and join with LF. Contains locked/offline 18+1 passing workspace tests.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/historical-COVERAGE-RESULT.json",
+      "sha256": "02f8bf299f565783c0226290f61bfe11738d4b0a9cd02c567f93917aa6c117cd",
+      "bytes": 4082,
+      "provenance": {
+        "capture": "83e3e653a12f1f2bf94a65c1c2cf3c8ffdd109d97c9481cf46c8bb103718b1b0.md",
+        "sha256": "83e3e653a12f1f2bf94a65c1c2cf3c8ffdd109d97c9481cf46c8bb103718b1b0",
+        "bytes": 7629,
+        "timestamp": "2026-11-05T23:43:58.808Z",
+        "session": "rollout-2026-11-06T02-42-36-01a1ae17-c970-78e2-bd15-0dad07a9a0b0.jsonl",
+        "callId": "call_WGKmLhlAtkANdh2SZaHC4Ofc",
+        "transformation": "exact recorded output"
+      },
+      "completeness": "complete earlier captured coverage payload; later metadata-only revision unavailable",
+      "transformation": "Extract the complete JSON following the captured COVERAGE.md output; preserve native complete=false.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/01-cli-probes.log",
+      "sha256": "d150acbe5c09eb4fad2894689c08f123fa73dbae46706981bd8969e1cdc13f01",
+      "bytes": 2041,
+      "provenance": {
+        "capture": "ceda532a91308c78584c1e3cd1304280ae04bf0154ef3f7588c73240c84305b5.json",
+        "sha256": "ceda532a91308c78584c1e3cd1304280ae04bf0154ef3f7588c73240c84305b5",
+        "bytes": 2284,
+        "timestamp": "2026-11-05T21:06:53.865Z",
+        "session": "rollout-2026-11-05T23-58-42-01a1ad81-ba12-7d00-9220-9c1ac8a570fc.jsonl",
+        "callId": "call_pqELPXuoXJHIz5h2IXqCUYEi",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete recorded stdout capture; original artifact byte hash unavailable",
+      "transformation": "Copy exact recorded output string without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/05-durability-probes.log",
+      "sha256": "1e145d7d61bf8ae51857910c6c7b6887ea3d4f822b656d356d6f0c0664a16be4",
+      "bytes": 2884,
+      "provenance": {
+        "capture": "6d885ada901cab454ce9868c775372df18718cc3795a00f6fb7eac9f617a0271.json",
+        "sha256": "6d885ada901cab454ce9868c775372df18718cc3795a00f6fb7eac9f617a0271",
+        "bytes": 3115,
+        "timestamp": "2026-11-05T21:43:11.245Z",
+        "session": "rollout-2026-11-06T00-27-41-01a1ad9c-43cf-7812-a29c-a6fe0744b316.jsonl",
+        "callId": "call_8x0Te9hnujQ3TFcWAVSpvPi1",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete recorded stdout capture; original artifact byte hash unavailable",
+      "transformation": "Copy exact recorded output string without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/07-assets-probe.log",
+      "sha256": "4af31f9914c34cd413da88c8f25a71d17323eeaa1b9c5928d7e14d2abc1147b0",
+      "bytes": 5048,
+      "provenance": {
+        "capture": "96cb6183001b3538625ef5ae5ce9e64547a8ac9c3744f84671725dba7106b1f7.json",
+        "sha256": "96cb6183001b3538625ef5ae5ce9e64547a8ac9c3744f84671725dba7106b1f7",
+        "bytes": 5736,
+        "timestamp": "2026-11-05T22:07:39.824Z",
+        "session": "rollout-2026-11-06T00-57-53-01a1adb7-e778-7970-b090-4ee5e53c3144.jsonl",
+        "callId": "call_SZhRQ4WlsNRviJTmPNVKce6K",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete recorded stdout capture; original artifact byte hash unavailable",
+      "transformation": "Copy exact recorded output string without rerunning the probe.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/11-comparison-cli.log",
+      "sha256": "65379437ffae2c0b96edaa06a77cbb0c9ccdd6b8600fe0fb0d96b88d5160197e",
+      "bytes": 534,
+      "provenance": {
+        "capture": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8.json",
+        "sha256": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8",
+        "bytes": 4267,
+        "timestamp": "2026-11-05T22:51:26.778Z",
+        "session": "rollout-2026-11-06T01-38-18-01a1addc-eaba-7da2-b2ef-06c214db2eee.jsonl",
+        "callId": "call_qlMey1hAin7Z72dBJNBJ72O4",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete captured comparison CLI stdout; original artifact byte hash unavailable",
+      "transformation": "Extract the printed comparison CLI stdout between its run header and the next recorded command receipt, restoring one final LF.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/11-offline-probe-results.json",
+      "sha256": "7c8166e0de21ae1604953e49cc82c21da642d3abb7b5dcf5a3aec3e9bd9d3071",
+      "bytes": 1782,
+      "provenance": {
+        "capture": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8.json",
+        "sha256": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8",
+        "bytes": 4267,
+        "timestamp": "2026-11-05T22:51:26.778Z",
+        "session": "rollout-2026-11-06T01-38-18-01a1addc-eaba-7da2-b2ef-06c214db2eee.jsonl",
+        "callId": "call_qlMey1hAin7Z72dBJNBJ72O4",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete recorded JSON observation; original artifact byte hash unavailable",
+      "transformation": "Extract the complete OFFLINE_RESULTS JSON and retain one trailing LF.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    },
+    {
+      "path": "evidence/11-execution-capture.log",
+      "sha256": "e4f20b77adf140c4d7c7b64622b08709607eaf761c169398a1483077a8674a36",
+      "bytes": 3896,
+      "provenance": {
+        "capture": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8.json",
+        "sha256": "93ecf9b8603e912d6aff301a406b3b84df4d86a318eade2915f17b21fbccbed8",
+        "bytes": 4267,
+        "timestamp": "2026-11-05T22:51:26.778Z",
+        "session": "rollout-2026-11-06T01-38-18-01a1addc-eaba-7da2-b2ef-06c214db2eee.jsonl",
+        "callId": "call_qlMey1hAin7Z72dBJNBJ72O4",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "completeness": "complete recorded aggregate of five execution receipts, comparison/smoke output, safe-test footer, and final diagnostic JSON",
+      "transformation": "Copy exact recorded aggregate stdout. Smoke exit2 and 58safe-test passes are baseline observations, not release acceptance.",
+      "observationMeaning": "Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair."
+    }
+  ],
+  "noProbesRerun": true,
+  "noCapturedCommandsExecuted": true
+}

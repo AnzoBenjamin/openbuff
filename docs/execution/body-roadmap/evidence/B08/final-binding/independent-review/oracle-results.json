@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "independentlyEnumeratedProducerControlCount": 44,
+  "producerControlFailures": [],
+  "producerControlsPass": true,
+  "additionalIndependentControlCount": 1,
+  "additionalRouteControlPass": true,
+  "blockingCounterexamples": [],
+  "allRequiredOraclesPass": true
+}

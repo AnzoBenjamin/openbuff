@@ -1,0 +1,149 @@
+{
+  "schemaVersion": 1,
+  "type": "researcher-browser-local-feasibility-probe",
+  "startedAt": "2026-11-06T22:26:33.341462+00:00",
+  "elapsedSeconds": 4.566574846001458,
+  "argv": [
+    "/tmp/openbuff-rweb-toolchain-ml81t51k/package/bin/agent-browser-linux-x64",
+    "--session",
+    "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+    "--config",
+    "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/mcp-config.json",
+    "mcp",
+    "--tools",
+    "core"
+  ],
+  "cwd": "/tmp/openbuff-rweb-toolchain-ml81t51k/mcp",
+  "environment": {
+    "replacement": true,
+    "keys": [
+      "AGENT_BROWSER_CONFIG",
+      "AGENT_BROWSER_NO_VERSION_CHECK",
+      "AGENT_BROWSER_NO_WEBMCP",
+      "AGENT_BROWSER_SESSION",
+      "AGENT_BROWSER_SOCKET_DIR",
+      "HOME",
+      "LANG",
+      "PATH",
+      "TERM",
+      "TMPDIR",
+      "XDG_CACHE_HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_RUNTIME_DIR"
+    ],
+    "providerCalls": 0
+  },
+  "toolchain": {
+    "version": "0.41.2",
+    "nativeSha256": "c4351f3802ffa5254d8c69f20a52e2fcf56925c6016fcf4203db25a07d811379",
+    "browser": "Google Chrome 157.0.8103.38",
+    "browserSha256": "fa67e06a5bcd0525739996fb8e3ecff449039e6165c15ea7968d3935e59e829e"
+  },
+  "sessions": [
+    "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+    "openbuff-rweb-52f0c3b3c119-b-b8cb3b4a"
+  ],
+  "checks": {
+    "blockedThenKnownDocument": true,
+    "staticBaselineDoesNotObserveRenderedArticle": true,
+    "renderedArticleObserved": true,
+    "screenshotBytesDelivered": {
+      "sha256": "e560da0d4a061839e007e03e3698ca97855489d9702e4701e5591cd8f67365e5",
+      "bytes": 13575,
+      "width": 1280,
+      "height": 633
+    },
+    "FreshReferenceNavigationAndRead": true,
+    "ClosingOneSessionPreservesOther": true
+  },
+  "error": {
+    "type": "AssertionError",
+    "message": "",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/run-local-probes.py\", line 273, in <module>\n    assert 'profile' in (denial.stdout + denial.stderr).decode().lower()\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+  },
+  "socketDirectory": "/tmp/rw-b8cb3b4a",
+  "probeScriptSha256": "79f23e95dd00913e230d088797db8ac6c842e48055336e221b2150b4689618dc",
+  "remainingOwnedProcesses": [],
+  "passed": false,
+  "artifacts": [
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/article.png",
+      "sha256": "e560da0d4a061839e007e03e3698ca97855489d9702e4701e5591cd8f67365e5"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/blocked-result.json",
+      "sha256": "31aebaf987e240fce9fd42cd3c13c9474eaf2774f28d12c4a5fce2f66be69df7"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/both-sessions-processes.json",
+      "sha256": "8da9fde71a9ddfa1967d7478e8c40981e6e7b535ecd779ebe90f4972c0164fce"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/cleanup.json",
+      "sha256": "3f0eb4ca5d2e9626c0c1e9646f63bdd8e681701953abec521e834b41a45a788f"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/fixture.json",
+      "sha256": "b2e52bd0c116b4f02012c26805093669af9be744c735d5cf33166e53a2fb6cb2"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/fresh-navigation-snapshot-result.json",
+      "sha256": "647a00eccb1e628085f9de69f6f824032f65bbbbcc068a305b385461e82a3c8b"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/full-snapshot-result.json",
+      "sha256": "8204b8ff7b5f0f8fe1376ea934151f0392c652287ebec3ca1bd92ca4699094c1"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/interactive-snapshot-result.json",
+      "sha256": "2b49e1fff13168a03bee1691ce24595b50d90a7fe54f0cbd3b452be8f1a03f0e"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/known-document-result.json",
+      "sha256": "4a28aa8a111745f119fbca79a518113e9aa51da18bca6765b785c36560cc5aab"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/mcp.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/open-a-result.json",
+      "sha256": "fd165ab608d04aa852100d4aec7023b0362154eefaa0a6831e1e71d9b8d426fb"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/profile-egress-incompatibility.json",
+      "sha256": "b647da90473ec6cf5276f9ac2fcb4b00aa1cb15aad52a85b7f41136890338326"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/rendered-result.json",
+      "sha256": "47f2af7440993464c0e7cfad73fd0aeb0731cfdd9617ece0ad38a0c2125b1a51"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/requests.json",
+      "sha256": "9ece7d7c960e236921531ebb3b77a12a70edec27c55ca8c2a6715b1b0dfb4eec"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/screenshot-result.json",
+      "sha256": "eb94b29ddd36213fa6ff068561382a91ec0901927c39c09dc6ad4a7441ad3d77"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/second-chapter-result.json",
+      "sha256": "4a253de04ff5ea099aa28d47011c1cab3d248accfffe42d2ade619c2d34346d6"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/static-baseline-result.json",
+      "sha256": "b5a845522debbbfddf4e787d91a3dacd55dd23daef72ea1aae476fd06cdef8d9"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/surviving-session-result.json",
+      "sha256": "c0e5ed1ba6522a989320997d91b72789c6e04fb7419fcfbe1b9a1fc54b0dd431"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/transcript.json",
+      "sha256": "a0b5399e7ef213754f238c62ed6086c99fdc9eeb1cea65ca49939cfc1154c7a7"
+    }
+  ],
+  "scope": "Actual upstream MCP/native/Chrome local fixture feasibility only. Openbuff researcher strategy, SDK/installed CLI delivery, host authority and deadline cleanup remain future RWEB/B19/B20/B28/B33 work.",
+  "researcherImplementationAccepted": false
+}

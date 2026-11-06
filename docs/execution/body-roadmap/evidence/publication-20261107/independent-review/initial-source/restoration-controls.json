@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "type": "sealed-evidence-restoration-controls",
+  "startedAt": "2026-11-06T22:39:51.220165+00:00",
+  "elapsedSeconds": 0.9069540759992378,
+  "scratchDirectory": "/tmp/openbuff-evidence-restore-l6qqser2",
+  "controls": [
+    {
+      "name": "fresh-and-idempotent-restoration",
+      "restored": 186,
+      "allHashesMatch": true,
+      "repeatWrites": 0
+    },
+    {
+      "name": "foreign-existing-file",
+      "rejected": true,
+      "reason": "('existing bytes differ', 'cli/src/agents/bundled-agents.generated.ts')",
+      "pathsUnchanged": true
+    },
+    {
+      "name": "symlink-destination",
+      "rejected": true,
+      "reason": "('path escapes destination', 'cli/src/agents/bundled-agents.generated.ts')",
+      "pathsUnchanged": true
+    },
+    {
+      "name": "archive-hash-mismatch",
+      "rejected": true,
+      "reason": "archive hash mismatch",
+      "pathsUnchanged": true
+    },
+    {
+      "name": "non-inventoried-traversal-path",
+      "rejected": true,
+      "reason": "",
+      "pathsUnchanged": true
+    }
+  ],
+  "rehydratorSha256": "cb58e42a82b4007f2d8987480949f45ae225317ae7c2e6f073dd1b1566c344af",
+  "archiveManifestSha256": "fa8227cf8c8e295d80ae4aa2cf1b5a89e61c522a36fc7c4ac51a54dfb8107210",
+  "archiveSha256": "301f2e8ef2e17a1b0416b54b907328b186947fd5f76f261ee7457ddcc66e4271",
+  "passed": true,
+  "scope": "Exact missing-byte restoration and bounded refusal controls; no original evidence, source files or task acceptance changed."
+}

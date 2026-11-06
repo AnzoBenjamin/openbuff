@@ -1,0 +1,37 @@
+{
+  "attemptId": "42634782-5067-4d04-a35a-7d0c70ed6ce3",
+  "event": {
+    "type": "finish",
+    "agentId": "judge-gemini",
+    "totalCost": 0,
+    "runOutcome": {
+      "termination": "completed"
+    },
+    "taskAcceptance": {
+      "status": "unknown"
+    },
+    "actionOutcomes": [
+      {
+        "actionId": "ee8e8f8b-0cbe-43f1-a1ab-a3c60b2dbfca",
+        "attemptId": "stM9LbPSCxI",
+        "runId": "local-run-35117b3e-a123-46fa-82cf-79b633826bdd",
+        "toolName": "set_output",
+        "basis": {
+          "inputHash": "sha256:f875004eea5024f35848464b2f25ada0c98b58e39daa9d91492c2084594114e2",
+          "workspaceRevision": 0
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "unobserved",
+          "receiptIds": [],
+          "confirmedPaths": []
+        }
+      }
+    ]
+  },
+  "costUsd": 0,
+  "costEvidence": {
+    "status": "reported",
+    "source": "finish.totalCost"
+  }
+}

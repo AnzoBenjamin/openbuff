@@ -1,0 +1,1210 @@
+[
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "initialize",
+      "id": 1,
+      "params": {
+        "protocolVersion": "2025-11-25",
+        "capabilities": {},
+        "clientInfo": {
+          "name": "openbuff-rweb-local-probe",
+          "version": "0"
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "result": {
+        "capabilities": {
+          "tools": {}
+        },
+        "instructions": "Use the typed agent_browser_* tools to control a browser. Active MCP tools profile(s): core. Prefer agent_browser_snapshot after navigation to obtain stable element refs before clicking or typing. Use agent_browser_tools_profiles to see available startup profiles.",
+        "protocolVersion": "2025-11-25",
+        "serverInfo": {
+          "name": "agent-browser",
+          "title": "agent-browser",
+          "version": "0.41.2"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "notifications/initialized"
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 2,
+      "params": {
+        "name": "agent_browser_read",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "url": "http://127.0.0.1:33085/blocked",
+          "readTimeoutMs": 2000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 2,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "Read failed with HTTP 429",
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "exitCode": 1,
+          "response": {
+            "data": null,
+            "error": "Read failed with HTTP 429",
+            "success": false
+          },
+          "stderr": "",
+          "stdout": "{\"success\":false,\"data\":null,\"error\":\"Read failed with HTTP 429\"}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 3,
+      "params": {
+        "name": "agent_browser_read",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "url": "http://127.0.0.1:33085/doc",
+          "readTimeoutMs": 2000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 3,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "# Fixture guide\n\nA known document remains usable while another source is throttled.\n",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "content": "# Fixture guide\n\nA known document remains usable while another source is throttled.\n",
+              "contentType": "text/markdown; charset=utf-8",
+              "finalUrl": "http://127.0.0.1:33085/doc",
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": false,
+                "saveStatus": "not_attempted"
+              },
+              "source": "accept-markdown",
+              "status": 200,
+              "truncated": false,
+              "url": "http://127.0.0.1:33085/doc"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"content\":\"# Fixture guide\\n\\nA known document remains usable while another source is throttled.\\n\",\"contentType\":\"text/markdown; charset=utf-8\",\"finalUrl\":\"http://127.0.0.1:33085/doc\",\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":false,\"saveStatus\":\"not_attempted\"},\"source\":\"accept-markdown\",\"status\":200,\"truncated\":false,\"url\":\"http://127.0.0.1:33085/doc\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 4,
+      "params": {
+        "name": "agent_browser_read",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "url": "http://127.0.0.1:33085/dynamic",
+          "readTimeoutMs": 2000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 4,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "# Delayed article\n\nLoading article\n\nSecond chapter",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "content": "# Delayed article\n\nLoading article\n\nSecond chapter",
+              "contentType": "text/html; charset=utf-8",
+              "finalUrl": "http://127.0.0.1:33085/dynamic",
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": false,
+                "saveStatus": "not_attempted"
+              },
+              "source": "html-fallback",
+              "status": 200,
+              "truncated": false,
+              "url": "http://127.0.0.1:33085/dynamic"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"content\":\"# Delayed article\\n\\nLoading article\\n\\nSecond chapter\",\"contentType\":\"text/html; charset=utf-8\",\"finalUrl\":\"http://127.0.0.1:33085/dynamic\",\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":false,\"saveStatus\":\"not_attempted\"},\"source\":\"html-fallback\",\"status\":200,\"truncated\":false,\"url\":\"http://127.0.0.1:33085/dynamic\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 5,
+      "params": {
+        "name": "agent_browser_open",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "url": "http://127.0.0.1:33085/dynamic",
+          "webmcp": false
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 5,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "Local research fixture",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": true,
+                "saveStatus": "not_attempted"
+              },
+              "targetId": "C38E47F935644D634B45FADE65920FC2",
+              "title": "Local research fixture",
+              "url": "http://127.0.0.1:33085/dynamic"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"},\"targetId\":\"C38E47F935644D634B45FADE65920FC2\",\"title\":\"Local research fixture\",\"url\":\"http://127.0.0.1:33085/dynamic\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 6,
+      "params": {
+        "name": "agent_browser_wait_for_text",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "text": "The Kestrel fixture release preserves exactly 42 source observations.",
+          "waitTimeoutMs": 5000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 6,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "The Kestrel fixture release preserves exactly 42 source observations.",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": true,
+                "saveStatus": "not_attempted"
+              },
+              "text": "The Kestrel fixture release preserves exactly 42 source observations.",
+              "waited": "text"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"},\"text\":\"The Kestrel fixture release preserves exactly 42 source observations.\",\"waited\":\"text\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 7,
+      "params": {
+        "name": "agent_browser_read",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 7,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "# Delayed article\n\nThe Kestrel fixture release preserves exactly 42 source observations.\n\nSecond chapter",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "content": "# Delayed article\n\nThe Kestrel fixture release preserves exactly 42 source observations.\n\nSecond chapter",
+              "contentType": "text/html",
+              "finalUrl": "http://127.0.0.1:33085/dynamic",
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": false,
+                "saveStatus": "not_attempted"
+              },
+              "source": "active-tab-html",
+              "truncated": false,
+              "url": "http://127.0.0.1:33085/dynamic"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"content\":\"# Delayed article\\n\\nThe Kestrel fixture release preserves exactly 42 source observations.\\n\\nSecond chapter\",\"contentType\":\"text/html\",\"finalUrl\":\"http://127.0.0.1:33085/dynamic\",\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":false,\"saveStatus\":\"not_attempted\"},\"source\":\"active-tab-html\",\"truncated\":false,\"url\":\"http://127.0.0.1:33085/dynamic\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 8,
+      "params": {
+        "name": "agent_browser_snapshot",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "interactive": false,
+          "includeUrls": true
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 8,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "- main\n  - heading \"Delayed article\" [level=1, ref=e1]\n  - article\n    - StaticText \"The Kestrel fixture release preserves exactly 42 source observations.\"\n  - link \"Second chapter\" [ref=e2, url=http://127.0.0.1:33085/second]",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": true,
+                "saveStatus": "not_attempted"
+              },
+              "origin": "http://127.0.0.1:33085/dynamic",
+              "refs": {
+                "e1": {
+                  "name": "Delayed article",
+                  "role": "heading"
+                },
+                "e2": {
+                  "name": "Second chapter",
+                  "role": "link"
+                }
+              },
+              "removedRefs": [],
+              "snapshot": "- main\n  - heading \"Delayed article\" [level=1, ref=e1]\n  - article\n    - StaticText \"The Kestrel fixture release preserves exactly 42 source observations.\"\n  - link \"Second chapter\" [ref=e2, url=http://127.0.0.1:33085/second]"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"},\"origin\":\"http://127.0.0.1:33085/dynamic\",\"refs\":{\"e1\":{\"name\":\"Delayed article\",\"role\":\"heading\"},\"e2\":{\"name\":\"Second chapter\",\"role\":\"link\"}},\"removedRefs\":[],\"snapshot\":\"- main\\n  - heading \\\"Delayed article\\\" [level=1, ref=e1]\\n  - article\\n    - StaticText \\\"The Kestrel fixture release preserves exactly 42 source observations.\\\"\\n  - link \\\"Second chapter\\\" [ref=e2, url=http://127.0.0.1:33085/second]\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 9,
+      "params": {
+        "name": "agent_browser_snapshot",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "interactive": true,
+          "includeUrls": true
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 9,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "- heading \"Delayed article\" [level=1, ref=e1]\n- link \"Second chapter\" [ref=e2, url=http://127.0.0.1:33085/second]",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": true,
+                "saveStatus": "not_attempted"
+              },
+              "origin": "http://127.0.0.1:33085/dynamic",
+              "refs": {
+                "e1": {
+                  "name": "Delayed article",
+                  "role": "heading"
+                },
+                "e2": {
+                  "name": "Second chapter",
+                  "role": "link"
+                }
+              },
+              "removedRefs": [],
+              "snapshot": "- heading \"Delayed article\" [level=1, ref=e1]\n- link \"Second chapter\" [ref=e2, url=http://127.0.0.1:33085/second]"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"},\"origin\":\"http://127.0.0.1:33085/dynamic\",\"refs\":{\"e1\":{\"name\":\"Delayed article\",\"role\":\"heading\"},\"e2\":{\"name\":\"Second chapter\",\"role\":\"link\"}},\"removedRefs\":[],\"snapshot\":\"- heading \\\"Delayed article\\\" [level=1, ref=e1]\\n- link \\\"Second chapter\\\" [ref=e2, url=http://127.0.0.1:33085/second]\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 10,
+      "params": {
+        "name": "agent_browser_screenshot",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/article.png",
+          "format": "png"
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 10,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/article.png",
+            "type": "text"
+          },
+          {
+            "data": "iVBORw0KGgoAAAANSUhEUgAABQAAAAJ5CAIAAAB+DAonAAAQAElEQVR4nOzdd5xU5d3w4bP0ItijRLEA9g6ICCpiV1REUWLsXVExxB71sScqRBNRI0bsXVGjYoOIxBortti7FAsivcP72z0+886zjQU2CXBf1x98Zs6cOXPKLJ/5zj1zpt68efMyAAAAWNrVyQAAACABAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSsLgE8PTp00v+rwYNGmRLlP3337/cJgwePDhbjP3000+HHXbYSiut1LNnz2+//TZbQEvBIQMAAJJSZQBfffXVJVWrW7fu6quv3qFDhwMPPPDKK6987bXXskXTqFGjt956a/fdd8+WWAMHDrzkkkuyJccZZ5xx2223jRs3LkK9T58+2QJaCg4ZAACQlCoDuEePHvfee29k8DrrrFM8vXPnztttt13z5s1HjRr16quv3nPPPaeeeuqWW27Zvn37O+64I1sEm2666RZbbJEtsVZYYYVu3bplS46RI0cWLi/cWxhL+iEDAACSUmUAt2zZ8oADDjj55JPXXHPN4uk33njjiBEjxo8fP2bMmEceeaRNmzb59Ndff/2QQw7p3r37jBkzMpYE8V5G4XKnTp0yAACApdrCfwd41VVX3Wuvvd54443o3sLESOITTzwxY7ERQ7t169YtKSm58sory90UUwYOHLjffvv96U9/uummmzIAAICl2qKeBKtZs2YxJvyLX/yiMGXQoEHDhw/PklSnzuJ1Vu158+adcsopc+fOrfTWqOJjjz32gQceiHnq16+fAQAALNVqIdgaNGhw0kknFU/54x//mCVpccvIGOB98cUXMwAAAGrrZ5DKnQr4qaeemjRpUrl5HnrooWOOOaZz587LLbfcJptscsghh9x5550xRJnV2Pnnn9+rV68OHTo0bNgwPxn1qquu2q5du+OPP/5f//pXYbaqzl/9ww8/5DNsuOGGhYkrr7xy8UPEcn7729/uvPPOLVq0WGuttXr06NGvX78pU6ZUuj433XTTwQcf3L59+xgG33jjjbt37z5gwIBswdVwu0KrVq3KbdRjjz2W3xShe+ihh8Ydd9hhh7gab0m0bdu2+OPop556an6XM88887XXXiu3nHj0iisWBzG2aMcdd1xjjTWaNGmy3nrr7bTTTrHJp5122tSpU7OaWfTjDgAAUCtqJ4ALp8LKzZ49+/nnny9cHTNmzN57773vvvveeOONo0ePjgQaO3bsHXfcESnVqVOnQpfO15///Of77rvvww8/jN4+44wzunTp8u23377xxhsDBw7caKONHn744Xy2o446KiK2+I7xQO+8885KK62UXx06dOiFF16YlZ0FKqbnE2fNmhWJuNlmm1111VUvv/xyz549I/limfFAG2ywwUsvvVS8wHHjxkXuxgNFy73++uuRyrvtttvMmTMfeOCBbMHVcLuysm/tRkwW33fy5Mlz5syJNY9tuf322ws/5xsBH0sr/vDzHnvscVGZiNio63/84x+bbrppNWv1yCOPrL/++n369HnmmWeihKOut99++2+++SY2OUb4axLAtXXcAQAAakXtBHAM7q2yyirFUz7++OPC5RgwfPTRR/PLkYgxqBipll+N1IzgzGosMuy7776LJrz88sufffbZo48+unDTkUcemfde06ZNL7744hVXXLFwU2RhjNAWrq622mr5nFGwMWSaTxw0aFDkZaR7XI5KjJWMhl9mmWXi6tdffx2jpsWrEXkcfZhfjnV4++23+/fv/8QTTzz99NPZQqnJdoV99tnnhhtuaNCgQeHWCOAjjjii+ARXMZwb/55zzjmnn3568UPEQO55ZWJ8O+bZdtttYzy5qvWJrYvCj2qNy61bt37zzTevv/76CPIYkd5///2zmqnF4w4AALDoau2kTeUGgSdOnJhfiJHMu+66K7+87rrrxthjXOjatWthzmuvvTbGTrOaiRps2LBh4WrxcsaPH//WW2/ll2PwNpKycFMM+X766aeFq/Pmzbv11luXXXbZX//61/mUadOm/f73vy/MEH2blf2ub7624bnnnit8mTbiMBo1v9ysWbP8E9fZoqnhdhXWv3C5X79+UZUbbrjhgQceGJUe70Qs+qeLf/rpp+ICv/TSS2OIO79cp06dPffcsyYLqd3jDgAAsOhqLYALjZQrtM1DDz1UmLjGGmvkFyL2CiO0EyZM+Oqr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YkizpKQkAwAAID218zNIi7kbbrghGvi4445TvwAAAMlaOkeAI3S/+eab/EeGpk+f3rp167lz537yySdNmzbNAAAASNJSOwI8ePDg+De69+yzzx49enT8q34BAABSttSOADdp0qRTp06jRo16//33u3fv/uCDD9apk8TnvQEAAKjU0hnAm2666TvvvJOV/fDviSee+Ic//CH/eVsAAACSlcrPIAEAAJA4nwoGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIwsIE8OTJky+++OKSkpIhQ4ZkS5T+/ftvvvnmRx99dKW3jho16oILLjjggANGjBiRLd5eeeWVPn36xCH44osvMhYDjkixZ599tnv37uuuu24GAACLkyoDuEePHssuu+z666+/ww47NG3adPXVV9+5TMeOHfv163feeedlC+XJJ5/cZZddohM6d+5855135hP/+te/rrTSSl27dn344Yezf6fTTjttgw02qPSmefPm7bXXXrFuffv2/eGHH7766qu111770UcfzRZLHTp0OPbYYzMWG4t4REaOHNmkbgDmdwAAEABJREFUSZN44sXlTz75pF27dnvvvXeXLl223377u+++O1vSxGrvuuuu2WIj/rc599xzMwAAklevqhsaNmw4YcKE/HKM5HTq1OmWW27Jyl6d33777dnC2m233VZdddUtttjijDPOiDGifGKdOnVi3PXaa6+NMF6QhWUvvvhimzZtfvGLX2SLLIr3zTffjOBfYYUV4ur48eM32WSTWNXsP7UCLIlq5QkwefLkww8/fNq0aYWr22233VVXXZUvP+It3h6K954yFkS8m7bPPvvkl+M/nHg/KwMAIHlVjgAfddRRlU5fY401YmAqv7ygvVqpQYMGvfvuu9ddd92CLm3u3LknnHDCd999l9WGMWPGZGUpnl9dfvnlH3nkkS233DL7T60AS5zaegKccsop+Z9b/icQb7scdthh+U3xxtOGG2744IMPZkug+vXrZ/8l99xzz7333lu4es0111T1HxoAAEmpMoCrGnFq0KDBDjvskF8eNmxYt27dYsh0p512+vjjj/OJzzzzzNZbb73NNttsv/32w4cPz6qV128+2FXs6quvbtu2bYcOHXr27PnZZ5/FlLfffnvfffeNh44o/cMf/hCjZL169YqJxx133JFHHvnCCy9suummO+644//8z//EaE+83q10IVUZOnRo/gnJeIjY8Dlz5lx22WXLLbfcTTfdFBOvv/76li1bxqKeffbZGJGLJunTp8+nn35avAJ///vfY3qPHj1i/tiiY489NmImVrLSFat+F/Xt2zfu269fv7322mudddaJKV988cWee+7ZsWPHrbbaKlam0k2odGMPOuigGD+MNyxiUfkBmjRp0hFHHNG1a9eYHnPms1W//H/+858xML755psfcsghsah27do99dRTMb2G+7zcgcuXWXEPxK5eZZVVTj755BgLbdWq1cUXXxzvQcQq3X///XHr888/HwuMlYxVnTp16kknndS+fftYk5g/rsYMgwcP3m233eJRYvqTTz5Zk/1T6WEdO3ZspfstP6y77757TIzVjm156623ip8AxY81c+bM3r17x0GM59LIkSPjamzOWmutVZxkBbfddtvGG28clZuVfQ4/Kwvg2NuFGWbPnt2kSZNy96r0OI4ePTpWKabEcTnwwAPzbYkd26JFiyuvvDIuDxkyZNddd40trbjDYz3jgS699NLYtDim8e/vfve7qnZdObGoWGYcynj+3HHHHcX74cQTT4xH3GijjQp/4zV8PpT7K7j11lurej7EfeOgx39BMWzev3//uPW+++6LlR8xYkTs/7j17rvvjvWPzSys1VlnnRWPvu2228ZqvPbaazHx1Vdf3WyzzWIb446x9375y1/+8Y9/zOef71MLAIAlyCKdBXrNNde85ZZb4hXtJ598EimblY2j7rPPPn/5y1/iFWpUQbwcL3yws6Jrr732tNNOO//888tNf/jhh2MJ8To40isqNF4Kx8SorMiPeDn7yiuvTJkyZZlllokXxzF94MCB8fo7XvTvv//+EaXrrbde/gntShdSlXihfMEFF8SFGGqLGK5bt268RG7WrFl+6/HHHx89/OGHH6677rrxyjhezUcStG7dungFohniRXY+f/TMoYceml+uuGLz3UV5KnzwwQdRTVHUEUWxhHgJ/vLLL8dL+Yi02AM12WNZWUpFpkYJNG7cOE+g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FserqsNa6X6L0dFYsXismB47LQYwI5yKnwBxsIqPSP64sZNjA/MTjNVc7N4I71//+tdd/1fhvaGCiscxKzvVVoyIdujQIfZM1Frh14NjhtjtcZe4EM/q+FONvVFxh8cOiRli87faaqtYeIwtV3VMi8VTol+/fj179owtjfQdOHDgbrvtFtPj6bTBBhucfPLJ8W7pUPYAABAASURBVLSJf2+66aYI/po/H8r9FVTzfIhojySOKfGeRYzuRq/Ghejk+DfeVhg0aFC8WRALib/x/APnsS2xJttuu22sQxzZv//97zEsHLsinkLxZI64jTbOd11kf4R0xadWrF7s5wX9eDkAAIuDEi/jmK9TTz01kqz4W7jUUIw3xphn/nvOAADAf1ftnwSLpVI+xssCiXHmGFRUvwAAsJio5e8AA1nZGZ7j3/79+5988skZAACweBDAzMewYcOGDBnyxhtv9O7du9KzClHR/fffv/POO5eUlORfiAUAABYHvgMMAABAEowAAwAAkITFN4D/9rdZ++03uWXLn2oy85Ahs3beeVKnTpMyAAAAqEx1ATxzZnblldM7dpzYpcuk9dabsMUWE4cN+8+dCrh79/rdujWo4czdutXfbrv6GQAAAFShup9BOu20qR98MOfRR5utvHLJnDnZVVdN//bbpf8cSA8/PGuffbQ0AADA0qa6EeBhw2btvXeDqN+4XLdudvDBDTfZpG62GCspyRbRPffMvPfemRkAAABLneoCuGHDkkGDZnz22c+jvquuWrLppj8H8BdfzN1zz8kdO07caquJ118/I584bty8I4+csuWWE7t2ndS+/cT77y8tydGj5/XqNaVz50mbbjrxwAOnjB1betLp22+fucoqPx1yyJSjj57SsuVP7dpNfPrpnz9c/fXXc/fbb/Jmm5XO/MgjlbdopQ8UpkyZd+aZ0zbffOIvf/nTH/4wPZ/4zDOzY56ddpq03XaT+vcvnfjPf85Zf/0JMVusQJcuk+LRn3pqVky/776Zv/vdtBEjSr9OHPfK77v11hO32WbS9ttPGj68dErfvlNLSsb36zd9r70mr7POhAwAAIAlRHUBfM45jT/6aM4mm0w48cSpDz00q/B7SXFh//0n77Zb/Zdfbn733cv06TP1lVfmxPSePSfHvzFx+PBm11zTZMyY0jvsu++kFi1KXnih2VtvNV9mmZKI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AACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJK6wJUlAAAEmElEQVQggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABsgAAEiBAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAkCGAAAgCQIYAAAAJIggAEAAEiCAAYAACAJAhgAAIAkCGAAAACSIIABAABIggAGAAAgCQIYAACAJAhgAAAAkiCAAQAASIIABgAAIAn/DwAA//9H+8yhAAAABklEQVQDAAxsGa2OHpDfAAAAAElFTkSuQmCC",
+            "mimeType": "image/png",
+            "type": "image"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": true,
+                "saveStatus": "not_attempted"
+              },
+              "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/article.png"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"},\"path\":\"/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222633Z-b8cb3b4a/article.png\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 11,
+      "params": {
+        "name": "agent_browser_click",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "selector": "@e2"
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 11,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"data\": {\n    \"clicked\": \"@e2\",\n    \"lifecycle\": {\n      \"effectiveLaunch\": {\n        \"browserLaunched\": true,\n        \"engine\": \"chrome\",\n        \"launchHash\": 14350354030887980356\n      },\n      \"launched\": false,\n      \"relaunchedBrowser\": false,\n      \"restartedBackground\": false,\n      \"restoreStatus\": \"not_configured\",\n      \"reused\": true,\n      \"saveStatus\": \"not_attempted\"\n    }\n  },\n  \"error\": null,\n  \"success\": true\n}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "clicked": "@e2",
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": true,
+                "saveStatus": "not_attempted"
+              }
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"clicked\":\"@e2\",\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"}},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 12,
+      "params": {
+        "name": "agent_browser_wait_for_text",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "text": "The second chapter requires fresh navigation observations.",
+          "waitTimeoutMs": 5000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 12,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "The second chapter requires fresh navigation observations.",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": true,
+                "saveStatus": "not_attempted"
+              },
+              "text": "The second chapter requires fresh navigation observations.",
+              "waited": "text"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"},\"text\":\"The second chapter requires fresh navigation observations.\",\"waited\":\"text\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 13,
+      "params": {
+        "name": "agent_browser_snapshot",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "interactive": false
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 13,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "- main\n  - heading \"Second chapter\" [level=1, ref=e3]\n  - paragraph\n    - StaticText \"The second chapter requires fresh navigation observations.\"",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": true,
+                "saveStatus": "not_attempted"
+              },
+              "origin": "http://127.0.0.1:33085/second",
+              "refs": {
+                "e3": {
+                  "name": "Second chapter",
+                  "role": "heading"
+                }
+              },
+              "removedRefs": [
+                "@e1",
+                "@e2"
+              ],
+              "snapshot": "- main\n  - heading \"Second chapter\" [level=1, ref=e3]\n  - paragraph\n    - StaticText \"The second chapter requires fresh navigation observations.\""
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"},\"origin\":\"http://127.0.0.1:33085/second\",\"refs\":{\"e3\":{\"name\":\"Second chapter\",\"role\":\"heading\"}},\"removedRefs\":[\"@e1\",\"@e2\"],\"snapshot\":\"- main\\n  - heading \\\"Second chapter\\\" [level=1, ref=e3]\\n  - paragraph\\n    - StaticText \\\"The second chapter requires fresh navigation observations.\\\"\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 14,
+      "params": {
+        "name": "agent_browser_read",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 14,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "# Second chapter\n\nThe second chapter requires fresh navigation observations.",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "content": "# Second chapter\n\nThe second chapter requires fresh navigation observations.",
+              "contentType": "text/html",
+              "finalUrl": "http://127.0.0.1:33085/second",
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": false,
+                "saveStatus": "not_attempted"
+              },
+              "source": "active-tab-html",
+              "truncated": false,
+              "url": "http://127.0.0.1:33085/second"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"content\":\"# Second chapter\\n\\nThe second chapter requires fresh navigation observations.\",\"contentType\":\"text/html\",\"finalUrl\":\"http://127.0.0.1:33085/second\",\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":false,\"saveStatus\":\"not_attempted\"},\"source\":\"active-tab-html\",\"truncated\":false,\"url\":\"http://127.0.0.1:33085/second\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 15,
+      "params": {
+        "name": "agent_browser_open",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-b-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "url": "http://127.0.0.1:33085/doc",
+          "webmcp": false
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 15,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "(no output)",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": true,
+                "saveStatus": "not_attempted"
+              },
+              "targetId": "58FFE000BAC42CC6A875BA50F47D9368",
+              "title": "",
+              "url": "http://127.0.0.1:33085/doc"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"},\"targetId\":\"58FFE000BAC42CC6A875BA50F47D9368\",\"title\":\"\",\"url\":\"http://127.0.0.1:33085/doc\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 16,
+      "params": {
+        "name": "agent_browser_close",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 16,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"data\": {\n    \"closed\": true,\n    \"lifecycle\": {\n      \"effectiveLaunch\": {\n        \"browserLaunched\": false,\n        \"engine\": \"chrome\",\n        \"launchHash\": null\n      },\n      \"launched\": false,\n      \"relaunchedBrowser\": false,\n      \"restartedBackground\": false,\n      \"restoreStatus\": \"not_configured\",\n      \"reused\": false,\n      \"saveStatus\": \"not_configured\"\n    },\n    \"restoreStatus\": \"not_configured\",\n    \"saveStatus\": \"not_configured\"\n  },\n  \"error\": null,\n  \"success\": true\n}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "closed": true,
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": false,
+                  "engine": "chrome",
+                  "launchHash": null
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": false,
+                "saveStatus": "not_configured"
+              },
+              "restoreStatus": "not_configured",
+              "saveStatus": "not_configured"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"closed\":true,\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":false,\"engine\":\"chrome\",\"launchHash\":null},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":false,\"saveStatus\":\"not_configured\"},\"restoreStatus\":\"not_configured\",\"saveStatus\":\"not_configured\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 17,
+      "params": {
+        "name": "agent_browser_get_url",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-b-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 17,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "http://127.0.0.1:33085/doc",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": true,
+                  "engine": "chrome",
+                  "launchHash": 14350354030887980356
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": true,
+                "saveStatus": "not_attempted"
+              },
+              "url": "http://127.0.0.1:33085/doc"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"},\"url\":\"http://127.0.0.1:33085/doc\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 18,
+      "params": {
+        "name": "agent_browser_close",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-b-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 18,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"data\": {\n    \"closed\": true,\n    \"lifecycle\": {\n      \"effectiveLaunch\": {\n        \"browserLaunched\": false,\n        \"engine\": \"chrome\",\n        \"launchHash\": null\n      },\n      \"launched\": false,\n      \"relaunchedBrowser\": false,\n      \"restartedBackground\": false,\n      \"restoreStatus\": \"not_configured\",\n      \"reused\": false,\n      \"saveStatus\": \"not_configured\"\n    },\n    \"restoreStatus\": \"not_configured\",\n    \"saveStatus\": \"not_configured\"\n  },\n  \"error\": null,\n  \"success\": true\n}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "closed": true,
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": false,
+                  "engine": "chrome",
+                  "launchHash": null
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": false,
+                "saveStatus": "not_configured"
+              },
+              "restoreStatus": "not_configured",
+              "saveStatus": "not_configured"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"closed\":true,\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":false,\"engine\":\"chrome\",\"launchHash\":null},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":false,\"saveStatus\":\"not_configured\"},\"restoreStatus\":\"not_configured\",\"saveStatus\":\"not_configured\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 19,
+      "params": {
+        "name": "agent_browser_close",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 19,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"data\": {\n    \"closed\": true,\n    \"lifecycle\": {\n      \"effectiveLaunch\": {\n        \"browserLaunched\": false,\n        \"engine\": \"chrome\",\n        \"launchHash\": null\n      },\n      \"launched\": false,\n      \"relaunchedBrowser\": false,\n      \"restartedBackground\": false,\n      \"restoreStatus\": \"not_configured\",\n      \"reused\": false,\n      \"saveStatus\": \"not_configured\"\n    },\n    \"restoreStatus\": \"not_configured\",\n    \"saveStatus\": \"not_configured\"\n  },\n  \"error\": null,\n  \"success\": true\n}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "closed": true,
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": false,
+                  "engine": "chrome",
+                  "launchHash": null
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": false,
+                "saveStatus": "not_configured"
+              },
+              "restoreStatus": "not_configured",
+              "saveStatus": "not_configured"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"closed\":true,\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":false,\"engine\":\"chrome\",\"launchHash\":null},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":false,\"saveStatus\":\"not_configured\"},\"restoreStatus\":\"not_configured\",\"saveStatus\":\"not_configured\"},\"error\":null}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 20,
+      "params": {
+        "name": "agent_browser_close",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-b-b8cb3b4a",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 20,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"data\": {\n    \"closed\": true,\n    \"lifecycle\": {\n      \"effectiveLaunch\": {\n        \"browserLaunched\": false,\n        \"engine\": \"chrome\",\n        \"launchHash\": null\n      },\n      \"launched\": false,\n      \"relaunchedBrowser\": false,\n      \"restartedBackground\": false,\n      \"restoreStatus\": \"not_configured\",\n      \"reused\": false,\n      \"saveStatus\": \"not_configured\"\n    },\n    \"restoreStatus\": \"not_configured\",\n    \"saveStatus\": \"not_configured\"\n  },\n  \"error\": null,\n  \"success\": true\n}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "closed": true,
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": false,
+                  "engine": "chrome",
+                  "launchHash": null
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": false,
+                "saveStatus": "not_configured"
+              },
+              "restoreStatus": "not_configured",
+              "saveStatus": "not_configured"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"closed\":true,\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":false,\"engine\":\"chrome\",\"launchHash\":null},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":false,\"saveStatus\":\"not_configured\"},\"restoreStatus\":\"not_configured\",\"saveStatus\":\"not_configured\"},\"error\":null}\n"
+        }
+      }
+    }
+  }
+]

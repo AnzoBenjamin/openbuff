@@ -1,0 +1,1066 @@
+{
+  "schemaVersion": 1,
+  "plan": ".agents/sessions/body-capability-review-2026-11-05/PLAN.md",
+  "specification": ".agents/sessions/body-capability-review-2026-11-05/SPEC.md",
+  "planSha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+  "specificationSha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+  "baselineHead": "03a1c562717b1794c898510c694db6d6f5b485d9",
+  "startedAt": "2026-11-06T10:29:53Z",
+  "evidenceDirectory": "/tmp/openbuff-body-execution-20261106",
+  "completionGraph": {
+    "schemaVersion": 2,
+    "cardCount": 36,
+    "nodeCount": 39,
+    "dependencySemantics": "all-of",
+    "initialDispatchQueue": [
+      "B02",
+      "B03",
+      "B04"
+    ],
+    "readyRotationQueue": [
+      "B36",
+      "B30"
+    ],
+    "rollups": {
+      "B22": [
+        "M22-CORE",
+        "M22-TXN",
+        "M22-CHILD"
+      ]
+    },
+    "ledgerRequiredFields": [
+      "nodeId",
+      "parentCardId",
+      "acceptedPrerequisites",
+      "sourceContractHashes",
+      "repositoryId",
+      "backend",
+      "epoch",
+      "coverageTier",
+      "evidenceManifest"
+    ],
+    "nodes": [
+      {
+        "id": "B01",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B02",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B03",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B04",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B05",
+        "kind": "card",
+        "prerequisites": [
+          "B03"
+        ]
+      },
+      {
+        "id": "B06",
+        "kind": "card",
+        "prerequisites": [
+          "B03",
+          "B04",
+          "B05",
+          "B07"
+        ]
+      },
+      {
+        "id": "B07",
+        "kind": "card",
+        "prerequisites": [
+          "B03",
+          "B04",
+          "B05"
+        ]
+      },
+      {
+        "id": "B08",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B09",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B08"
+        ]
+      },
+      {
+        "id": "B10",
+        "kind": "card",
+        "prerequisites": [
+          "B02"
+        ]
+      },
+      {
+        "id": "B11",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B12",
+        "kind": "card",
+        "prerequisites": [
+          "B02"
+        ]
+      },
+      {
+        "id": "B13",
+        "kind": "card",
+        "prerequisites": [
+          "B12"
+        ]
+      },
+      {
+        "id": "B14",
+        "kind": "card",
+        "prerequisites": [
+          "B12"
+        ]
+      },
+      {
+        "id": "B15",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B03",
+          "B04"
+        ]
+      },
+      {
+        "id": "B16",
+        "kind": "card",
+        "prerequisites": [
+          "B04",
+          "B15"
+        ]
+      },
+      {
+        "id": "B17",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B15"
+        ]
+      },
+      {
+        "id": "B18",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B19",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B18"
+        ]
+      },
+      {
+        "id": "B20",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B19"
+        ]
+      },
+      {
+        "id": "B21",
+        "kind": "card",
+        "prerequisites": [
+          "B19",
+          "B20"
+        ]
+      },
+      {
+        "id": "B22",
+        "kind": "card",
+        "prerequisites": [
+          "M22-CORE",
+          "M22-TXN",
+          "M22-CHILD"
+        ]
+      },
+      {
+        "id": "B23",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B24",
+        "kind": "card",
+        "prerequisites": [
+          "B23"
+        ]
+      },
+      {
+        "id": "B25",
+        "kind": "card",
+        "prerequisites": [
+          "B05",
+          "B19",
+          "B20",
+          "B23"
+        ]
+      },
+      {
+        "id": "B26",
+        "kind": "card",
+        "prerequisites": [
+          "B04",
+          "B23"
+        ]
+      },
+      {
+        "id": "B27",
+        "kind": "card",
+        "prerequisites": [
+          "B06",
+          "B19",
+          "B23",
+          "B24",
+          "B25",
+          "B26",
+          "B36"
+        ]
+      },
+      {
+        "id": "B28",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B29",
+        "kind": "card",
+        "prerequisites": [
+          "B15",
+          "B19",
+          "B28"
+        ]
+      },
+      {
+        "id": "B30",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B31",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B09",
+          "B12",
+          "B13",
+          "B14",
+          "B27",
+          "B30"
+        ]
+      },
+      {
+        "id": "B32",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B33",
+        "kind": "card",
+        "prerequisites": [
+          "B03",
+          "B05",
+          "B19",
+          "B20",
+          "B28"
+        ]
+      },
+      {
+        "id": "B34",
+        "kind": "card",
+        "prerequisites": [
+          "B06",
+          "B07",
+          "B16",
+          "B17",
+          "B22",
+          "B27"
+        ]
+      },
+      {
+        "id": "B35",
+        "kind": "card",
+        "prerequisites": [
+          "B03",
+          "B05",
+          "B19",
+          "B20"
+        ]
+      },
+      {
+        "id": "B36",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "M22-CORE",
+        "kind": "milestone",
+        "prerequisites": [
+          "B04",
+          "B15",
+          "B21"
+        ],
+        "parentCardId": "B22"
+      },
+      {
+        "id": "M22-TXN",
+        "kind": "milestone",
+        "prerequisites": [
+          "M22-CORE",
+          "B05",
+          "B07"
+        ],
+        "parentCardId": "B22"
+      },
+      {
+        "id": "M22-CHILD",
+        "kind": "milestone",
+        "prerequisites": [
+          "M22-CORE",
+          "M22-TXN",
+          "B16"
+        ],
+        "parentCardId": "B22"
+      }
+    ]
+  },
+  "status": "executing",
+  "nodes": [
+    {
+      "nodeId": "B01",
+      "parentCardId": null,
+      "status": "in_progress",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B02",
+      "parentCardId": null,
+      "status": "in_progress",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B03",
+      "parentCardId": null,
+      "status": "in_progress",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B04",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {
+        "sdk/src/services/workspace-mutation-broker.ts": "af865e30f270622c8adbfa2911f8a0f008d172676fe6484cf6a5e7c95034c083",
+        "sdk/src/__tests__/workspace-mutation-broker.test.ts": "9a2a138c10065035f3e3e2a0b060c6492db0340ab76c3d365bda88afba0b1592",
+        "packages/indexer/src/index-store.ts": "773242747855e16e0e296934ec1d4d482c0666ccbb2c884d4b0f9eb106308b6f",
+        "packages/indexer/src/index-store.test.ts": "145bf6492f4b1b2f8495d14b5c1a549b1de6f7cb633cb63221e8cc7b42fab123",
+        "packages/indexer/src/index-manager.ts": "46cda46b4c09180fa51328a24c934214db1cc99c406e6c861f0b40940dbe1bc1",
+        "cli/src/utils/turn-snapshots.ts": "2729f329316f138dd1c213b1e02a641c25854c5b22f452355ea4821e37683e43",
+        "cli/src/utils/__tests__/turn-snapshots.test.ts": "1b32d756e592b62b224250ea0dee30e15154af8229cad4d9e0fd41b4737bbb8a",
+        "packages/indexer/src/index-manager.test.ts": "d0ec0dd05db32e71b7d60de1547a4b93dd8f05b4d4658df9ed16e17a524a2cf0"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+      "coverageTier": "cooperative TypeScript; no native fencing or automatic crash reclamation",
+      "evidenceManifest": "/tmp/openbuff-body-execution-20261106/B04/manifest.json",
+      "verification": {
+        "independentTests": {
+          "pass": 147,
+          "fail": 0,
+          "exitCode": 0
+        },
+        "independentReviewer": "b03_mutation_evidence",
+        "review": "/tmp/openbuff-body-execution-20261106/B04/independent-review.md"
+      },
+      "risks": [
+        "Cooperative upgraded TypeScript writers only; no kernel/native fencing or mixed-version exclusion.",
+        "Ambiguous or crashed owners remain recovery-needed; automatic reclamation and resource enforcement belong to later nodes."
+      ],
+      "acceptedAt": "2026-11-06T13:10:35.284708+00:00",
+      "acceptanceReceipt": {
+        "path": "/tmp/openbuff-body-execution-20261106/B04/acceptance.json",
+        "sha256": "b865b610d742933cabeb5b0e096b6a315a8984658cd87d3a4dafa343d9f88f0b"
+      }
+    },
+    {
+      "nodeId": "B05",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B03"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B06",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B03",
+        "B04",
+        "B05",
+        "B07"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B07",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B03",
+        "B04",
+        "B05"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B08",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B09",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02",
+        "B08"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B10",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B11",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B12",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B13",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B12"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B14",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B12"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B15",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02",
+        "B03",
+        "B04"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B16",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B04",
+        "B15"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B17",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02",
+        "B15"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B18",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B19",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02",
+        "B18"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B20",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02",
+        "B19"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B21",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B19",
+        "B20"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B22",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "M22-CORE",
+        "M22-TXN",
+        "M22-CHILD"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B23",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B24",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B23"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B25",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B05",
+        "B19",
+        "B20",
+        "B23"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B26",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B04",
+        "B23"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B27",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B06",
+        "B19",
+        "B23",
+        "B24",
+        "B25",
+        "B26",
+        "B36"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B28",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B29",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B15",
+        "B19",
+        "B28"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B30",
+      "parentCardId": null,
+      "status": "in_progress",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B31",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02",
+        "B09",
+        "B12",
+        "B13",
+        "B14",
+        "B27",
+        "B30"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B32",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B33",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B03",
+        "B05",
+        "B19",
+        "B20",
+        "B28"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B34",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B06",
+        "B07",
+        "B16",
+        "B17",
+        "B22",
+        "B27"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B35",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B03",
+        "B05",
+        "B19",
+        "B20"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B36",
+      "parentCardId": null,
+      "status": "in_progress",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "M22-CORE",
+      "parentCardId": "B22",
+      "status": "pending",
+      "prerequisites": [
+        "B04",
+        "B15",
+        "B21"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "M22-TXN",
+      "parentCardId": "B22",
+      "status": "pending",
+      "prerequisites": [
+        "M22-CORE",
+        "B05",
+        "B07"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "M22-CHILD",
+      "parentCardId": "B22",
+      "status": "pending",
+      "prerequisites": [
+        "M22-CORE",
+        "M22-TXN",
+        "B16"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    }
+  ]
+}

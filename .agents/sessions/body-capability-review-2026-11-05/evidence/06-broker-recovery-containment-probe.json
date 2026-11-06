@@ -1,0 +1,29 @@
+{
+  "fixtureRoot": "/tmp/openbuff-body-review-2026-11-05/evidence/06-recovery-containment-fixture-WK1bk9",
+  "firstError": "Delete 053d3986-4110-4d02-8c5f-adff7e3bd781 requires recovery after a partial mutation.",
+  "persistedAction": "delete",
+  "persistedStagingPath": "src/.openbuff-mutation-2-3e0a7448-a19f-46c4-b06b-4db7d337cb8e.delete",
+  "outsideDir": "/tmp/openbuff-body-review-2026-11-05/evidence/06-recovery-containment-fixture-WK1bk9/outside-original-src",
+  "tombstoneExistedOutsideBeforeRecovery": true,
+  "tombstoneExistsOutsideAfterRecovery": false,
+  "finalReceipts": [
+    {
+      "schemaVersion": 1,
+      "receiptId": "053d3986-4110-4d02-8c5f-adff7e3bd781",
+      "brokerRevision": 1,
+      "authorityKind": "cooperative_cas",
+      "repositoryId": "0630533cadb23ba38c8cb759",
+      "workspaceId": "0630533cadb23ba38c8cb759",
+      "state": "recovered_committed",
+      "createdAt": "2026-11-05T21:42:06.019Z",
+      "updatedAt": "2026-11-05T21:42:06.025Z",
+      "action": "delete",
+      "path": "src/victim.txt",
+      "expectedHash": "sha256:eef0d2959fd65311d1e981320f3b1e73cbf1fbfaed866d8edd1265ab0ba0f946",
+      "beforeHash": "sha256:eef0d2959fd65311d1e981320f3b1e73cbf1fbfaed866d8edd1265ab0ba0f946",
+      "afterHash": null,
+      "stagingPath": "src/.openbuff-mutation-2-3e0a7448-a19f-46c4-b06b-4db7d337cb8e.delete",
+      "errorCode": "Error"
+    }
+  ]
+}

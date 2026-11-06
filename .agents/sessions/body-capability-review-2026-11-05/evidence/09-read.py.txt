@@ -1,0 +1,27 @@
+import json
+import pathlib
+import sys
+
+ROOT = pathlib.Path('/home/ben/Code/CLI/openbuff')
+BASE = pathlib.Path('/tmp/openbuff-body-review-2026-11-05')
+PICKS = json.loads((BASE / 'picks/09-execution.json').read_text())
+RECEIPT = BASE / 'evidence/09-read-ranges.jsonl'
+
+def read(path, first=1, last=None):
+    full = pathlib.Path(path) if path.startswith('/') else ROOT / path
+    rows = full.read_text().splitlines()
+    last = min(last if last is not None else len(rows), len(rows))
+    first = int(first)
+    with RECEIPT.open('a') as out:
+        out.write(json.dumps({'path': path, 'from': first, 'to': last}) + '\n')
+    print(f'FILE {path} L{first}-L{last}')
+    for line in range(first, last + 1):
+        print(f'{line}: {rows[line - 1]}')
+
+if sys.argv[1] in ['selectedFiles', 'secondaryFiles', 'contextFiles']:
+    for index in sys.argv[2:]:
+        entry = PICKS[sys.argv[1]][int(index)]
+        read(entry['path'], entry.get('from', 1), entry.get('to'))
+else:
+    read(sys.argv[1], int(sys.argv[2]) if len(sys.argv) > 2 else 1,
+         int(sys.argv[3]) if len(sys.argv) > 3 else None)

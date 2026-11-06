@@ -1,0 +1,27 @@
+{
+  "commitSha": "same-sha",
+  "results": [
+    {
+      "agentId": "repeat-agent",
+      "repeat": 0,
+      "taskId": "repeat-agent",
+      "languages": [
+        "typescript"
+      ],
+      "providerRoute": "offline/provider",
+      "experimentId": "comparison-fixture",
+      "overallScore": 1e999,
+      "completionScore": null,
+      "codeQualityScore": null,
+      "cost": 1,
+      "durationMs": 10,
+      "scoringStatus": "scored",
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "costEvidence": {
+        "status": "reported"
+      }
+    }
+  ]
+}

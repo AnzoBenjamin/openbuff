@@ -1,0 +1,58 @@
+import json
+from pathlib import Path
+
+review = Path(__file__).resolve().parent
+digests = review / 'digests'
+digests.mkdir(exist_ok=True)
+catalog = []
+findings = []
+receipts = []
+for source in sorted((review / 'findings').glob('*.json')):
+    if not source.with_suffix('.md').exists():
+        continue
+    report = json.loads(source.read_text())
+    shard = report['shardId']
+    lines = [f'# {shard}', '', f'Source reports: findings/{shard}.json and findings/{shard}.md', '', '## Capabilities', '']
+    for capability in report.get('capabilities', []):
+        catalog.append({'shardId': shard, **capability})
+        lines.append(f"- {capability['id']}: {capability['maturity']}; assurance: {capability.get('assurance', 'unknown')}")
+        for key in ['gaps', 'strengths']:
+            value = capability.get(key, [])
+            if isinstance(value, str):
+                value = [value]
+            for item in value:
+                lines.append(f'  - {key}: {item}')
+        for item in capability.get('evidence', []):
+            if isinstance(item, dict):
+                lines.append(f"  - evidence: {item.get('path')}:{item.get('line')} — {item.get('detail', '')}")
+            else:
+                lines.append(f'  - evidence: {item}')
+    lines.extend(['', '## Findings', ''])
+    for finding in report.get('findings', []):
+        findings.append({'shardId': shard, **finding})
+        lines.extend([f"### {finding['id']} {finding['severity']} — {finding['title']}", ''])
+        for key in ['domains', 'confidence', 'basis', 'trigger', 'consequence', 'suggestedFix', 'acceptanceProbe']:
+            if key in finding:
+                value = finding[key]
+                if isinstance(value, list):
+                    value = ', '.join(str(x) for x in value)
+                lines.append(f'{key}: {value}')
+        lines.append('Evidence:')
+        for item in finding.get('evidence', []):
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('path')}:{item.get('line')} — {item.get('detail', '')}")
+            else:
+                lines.append(f'- {item}')
+        lines.append('')
+    lines.extend(['## Coverage limits', ''])
+    for item in report.get('coverageLimits', []):
+        lines.append(f'- {item}')
+    lines.extend(['', '## Recommended plan work', ''])
+    for item in report.get('recommendedPlanWork', []):
+        lines.append(f'- {item if isinstance(item, str) else json.dumps(item)}')
+    (digests / f'{shard}.md').write_text('\n'.join(lines) + '\n')
+    receipts.append(report['structuralReceipt'])
+(review / 'CAPABILITY-RECORDS.json').write_text(json.dumps(catalog, indent=2) + '\n')
+(review / 'FINDINGS-INDEX.json').write_text(json.dumps(findings, indent=2) + '\n')
+(review / 'STRUCTURAL-RECEIPTS.json').write_text(json.dumps(receipts, indent=2) + '\n')
+print(json.dumps({'shards': len(receipts), 'capabilityRecords': len(catalog), 'findings': len(findings), 'digestBytes': sum(p.stat().st_size for p in digests.glob('*.md'))}))

@@ -1,0 +1,18 @@
+{
+  "argv": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspect-candidate.py"
+  ],
+  "cwd": "/home/ben/Code/CLI/openbuff",
+  "startedAt": "2026-11-06T21:56:13.376177+00:00",
+  "finishedAt": "2026-11-06T21:56:42.944014+00:00",
+  "exitCode": 0,
+  "replacementEnvironment": {
+    "PATH": "/usr/bin:/bin",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "scriptSha256": "36be5193685e527a30f1aaf815a7135e2a6edf38641b0b4c6953b1341a025084",
+  "stdoutSha256": "0bab6c688a4ae3cfdc08edcd3b1349f7d185866c8372615e2d9b938ce965a11b",
+  "stderrSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

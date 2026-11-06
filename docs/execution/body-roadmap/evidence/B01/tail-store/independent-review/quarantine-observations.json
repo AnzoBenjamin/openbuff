@@ -1,0 +1,71 @@
+{
+  "fetchCalls": 0,
+  "observations": [
+    {
+      "id": "ordinary-finding",
+      "first": {
+        "records": [],
+        "diagnostics": [
+          {
+            "filePath": "/tmp/b01-independent-quarantine-d0HJ0M/ordinary-finding/48e2a3674cba2aa24a261533/findings/ordinary-finding.json",
+            "message": "JSON Parse error: Expected '}'",
+            "quarantinedPath": "/tmp/b01-independent-quarantine-d0HJ0M/ordinary-finding/48e2a3674cba2aa24a261533/findings/.corrupt/ordinary-finding.json.1793982029130.65f90d27-ce0f-4d2e-8467-a035250ce9eb"
+          }
+        ]
+      },
+      "after": {
+        "records": [],
+        "diagnostics": [
+          {
+            "filePath": "/tmp/b01-independent-quarantine-d0HJ0M/ordinary-finding/48e2a3674cba2aa24a261533/findings/ordinary-finding.json",
+            "quarantinedPath": "/tmp/b01-independent-quarantine-d0HJ0M/ordinary-finding/48e2a3674cba2aa24a261533/findings/.corrupt/ordinary-finding.json.1793982029130.65f90d27-ce0f-4d2e-8467-a035250ce9eb",
+            "message": "Quarantined harness record; original diagnostic unavailable."
+          }
+        ]
+      },
+      "directRead": {
+        "error": "Error: Quarantined harness record at /tmp/b01-independent-quarantine-d0HJ0M/ordinary-finding/48e2a3674cba2aa24a261533/findings/ordinary-finding.json: Quarantined harness record; original diagnostic unavailable."
+      },
+      "bundle": {
+        "type": "json",
+        "value": {
+          "errorMessage": "Finding evidence unavailable: 1 corrupt or quarantined finding record(s) require repair."
+        }
+      },
+      "rawBytes": "{broken"
+    },
+    {
+      "id": "finding.tmp.tail",
+      "first": {
+        "records": [],
+        "diagnostics": [
+          {
+            "filePath": "/tmp/b01-independent-quarantine-d0HJ0M/finding.tmp.tail/48e2a3674cba2aa24a261533/findings/finding.tmp.tail.json",
+            "message": "JSON Parse error: Expected '}'",
+            "quarantinedPath": "/tmp/b01-independent-quarantine-d0HJ0M/finding.tmp.tail/48e2a3674cba2aa24a261533/findings/.corrupt/finding.tmp.tail.json.1793982029158.828db826-e85d-4a4a-9f27-a842aa8c2493"
+          }
+        ]
+      },
+      "after": {
+        "records": [],
+        "diagnostics": [
+          {
+            "filePath": "/tmp/b01-independent-quarantine-d0HJ0M/finding.tmp.tail/48e2a3674cba2aa24a261533/findings/finding.tmp.tail.json",
+            "quarantinedPath": "/tmp/b01-independent-quarantine-d0HJ0M/finding.tmp.tail/48e2a3674cba2aa24a261533/findings/.corrupt/finding.tmp.tail.json.1793982029158.828db826-e85d-4a4a-9f27-a842aa8c2493",
+            "message": "Quarantined harness record; original diagnostic unavailable."
+          }
+        ]
+      },
+      "directRead": {
+        "error": "Error: Quarantined harness record at /tmp/b01-independent-quarantine-d0HJ0M/finding.tmp.tail/48e2a3674cba2aa24a261533/findings/finding.tmp.tail.json: Quarantined harness record; original diagnostic unavailable."
+      },
+      "bundle": {
+        "type": "json",
+        "value": {
+          "errorMessage": "Finding evidence unavailable: 1 corrupt or quarantined finding record(s) require repair."
+        }
+      },
+      "rawBytes": "{broken"
+    }
+  ]
+}

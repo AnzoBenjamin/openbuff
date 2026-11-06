@@ -1,0 +1,28 @@
+{
+  "attemptId": "034dfee0-469b-4f73-99de-ad102338bef0",
+  "event": {
+    "type": "tool_call",
+    "toolCallId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+    "toolName": "set_output",
+    "input": {
+      "controller": null,
+      "providerConfig": null,
+      "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home",
+      "terminal": {
+        "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+        "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-2bh8pO/repo",
+        "stdout": "sentinel=\nhome=/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home\n",
+        "exitCode": 0
+      },
+      "init": {
+        "sentinel": null,
+        "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-xnWzTe/home"
+      }
+    },
+    "agentId": "main-agent"
+  },
+  "costUsd": null,
+  "costEvidence": {
+    "status": "unknown"
+  }
+}

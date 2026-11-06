@@ -1,0 +1,37 @@
+{
+  "sourceExcerpts": [
+    {
+      "file": "DECISION-EXCERPT.md",
+      "bytes": 3292,
+      "sha256": "bdda846c29f6d4f70fc51615dd320e159a61f1e5f5438183891a5d13073ab6ae",
+      "basis": "Recorded pure source-excerpt recipe; result matches exact recorded capture and current quoted historical source bytes."
+    },
+    {
+      "file": "NESTED-TASK-EXCERPT.md",
+      "bytes": 2060,
+      "sha256": "e3be08c0c1c2ec4da1b220febe8c2402bf54f7f5999f1d2513c7ce4c7181a0c0",
+      "basis": "Recorded pure source-excerpt recipe; result matches exact recorded capture and current quoted historical source bytes."
+    }
+  ],
+  "qualification": "Source quotation recovery only; no original inspected-file hash map is regenerated.",
+  "metricCorrections": [
+    {
+      "file": "PLAN-DRAFT.md",
+      "beforeSha256": "1d075409324612e39c3753e757356465e8264642ab8079f07a35edf5f09771b6",
+      "afterSha256": "8ffbb2268dc0b5641ded1201bdd6b15964630d08575f73369512c9798ab7b368",
+      "correction": "Replace unreverified historical window count with current validated reconstructed count; original147721 remains in source/recovery history."
+    },
+    {
+      "file": "SPEC.md",
+      "beforeSha256": "90f3f015b63e885c94eb5e52db9aef68627994497d9220eb9d436d8f0927076a",
+      "afterSha256": "3bf9585bc801bc718c4f8e5fa8816d1b0d1b922fa8ff66e359a94ab18c6bddf6",
+      "correction": "Replace unreverified historical window count with current validated reconstructed count; original147721 remains in source/recovery history."
+    },
+    {
+      "file": "README.md",
+      "beforeSha256": "8529dbaec4a4816d21b6cfb25392a97bdd7db20c3bfdd65f18b624bcec5509d7",
+      "afterSha256": "0363db59d55275a680758d0d9b146453e2d819d1beacf6434d5ab48ee34b84c5",
+      "correction": "Replace unreverified historical window count with current validated reconstructed count; original147721 remains in source/recovery history."
+    }
+  ]
+}

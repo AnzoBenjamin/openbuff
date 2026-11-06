@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "integrationReport": {
+    "path": "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/INTEGRATION.md",
+    "sha256": "c492405f2506ad037ce0aff33e2758d96169dfc5938984bcfd3925b066000d3f"
+  },
+  "installationReceipt": {
+    "path": "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installation.json",
+    "sha256": "b2d7051ee66eb73360b773ac4cbfcc845f927d3b345dd49ae9c7cd9bfe63ae3c"
+  },
+  "verifiedInstalledFileCount": 33,
+  "files": [
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/openbuff",
+      "target": "/home/ben/.local/share/openbuff-test/openbuff-branch",
+      "sha256": "5597a243d8676c345ba7cece90565705adb2a384d621436482084937a42d6241",
+      "mode": 493
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/rg",
+      "target": "/home/ben/.local/share/openbuff-test/rg",
+      "sha256": "f401154e2393f9002ac77e419f9ee5521c18f4f8cd3e32293972f493ba06fce7",
+      "mode": 493
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-manifest.json",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-manifest.json",
+      "sha256": "2b42c108d151b8f263da49007b43130b9c64f204686a420979090a45ba09b6ae",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter.wasm",
+      "sha256": "f38dcc4b43b818f9a0785bc1c6d5611a75ac4cdd428ff3f02757c34ca4e46d7f",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-c.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-c.wasm",
+      "sha256": "056b25072382f72deee2c64ec238ffc4bb8cf42844ef21502c0e70f03a8a0d66",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-c-sharp.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-c-sharp.wasm",
+      "sha256": "6266a7e32d68a3459104d994dc848df15d5672b0ea8e86d327274b694f8e6991",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-cpp.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-cpp.wasm",
+      "sha256": "f6afdf53bfd6de76557bb7edb624a3a3869e14d9a83b78433f93617ecee42527",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-go.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-go.wasm",
+      "sha256": "9963ca89b616eaf04b08a43bc1fb0f07b85395bec313330851f1f1ead2f755b6",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-java.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-java.wasm",
+      "sha256": "637aac4415fb39a211a4f4292d63c66b5ce9c32fa2cd35464af4f681d91b9a1f",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-javascript.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-javascript.wasm",
+      "sha256": "63812b9e275d26851264734868d27a1656bd44a2ef6eb3e85e6b03728c595ab5",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-python.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-python.wasm",
+      "sha256": "9056d0fb0c337810d019fae350e8167786119da98f0f282aceae7ab89ee8253b",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-ruby.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-ruby.wasm",
+      "sha256": "93a5022855314cdb45458c7bb026a24a0ebc3a5ff6439e542e881f14dfa13a39",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-rust.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-rust.wasm",
+      "sha256": "4409921a70d0aa5bec7d1d7ce809a557a8ee1cf6ace901e3ac6a76e62cfea903",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-tsx.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-tsx.wasm",
+      "sha256": "6aa3b2c70e76f5d48eafef1093e9c4de383e13f2fdde2f4e9b98a378f6a8f1b6",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-typescript.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-typescript.wasm",
+      "sha256": "8515404dceed38e1ed86aa34b09fcf3379fff1b4ff9dd3967bcd6d1eb5ac3d8f",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-kotlin.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-kotlin.wasm",
+      "sha256": "b5cb00c8d06ed0f10f1dbe497205b437809d7e87db1f638721a8cfb30e044449",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-php.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-php.wasm",
+      "sha256": "55bb617b6f01e14bab997861f0b20a2420cf6ba3199ffeb295b9ec398966d8a3",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-swift.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-swift.wasm",
+      "sha256": "41c4fdb2249a3aa6d87eed0d383081ff09725c2248b4977043a43825980ffcc7",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-gdscript.wasm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-gdscript.wasm",
+      "sha256": "42eb46aa698cb82d4bc2f0d61c8a57cdae9ec29e42c8f632430744f890879f90",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-c-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-c-tags.scm",
+      "sha256": "c36dc1e26d8b0755e153bb8ea9f95e0f581a2dca568e3e1f913b57cc1cf088c6",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-c_sharp-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-c_sharp-tags.scm",
+      "sha256": "6697ac805759757e1374ad9b1dafe10b69a691d225abe6024f7d672f571c02e2",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-cpp-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-cpp-tags.scm",
+      "sha256": "6532e5e613cbff8e8c1c1cc9780cb116910732ce14c51d24c90b0ccc9ea123c1",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-gdscript-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-gdscript-tags.scm",
+      "sha256": "70d92060c1a81afa27667b9fc9bb8eafecc43baa8725eec65792e93d9cbcb19d",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-go-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-go-tags.scm",
+      "sha256": "55aaf2c9de2dc90b86726a0009ed4f14a892539de0f25ea86b174cfd8c43a158",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-java-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-java-tags.scm",
+      "sha256": "eff6e953beea4695f0c50d027499ee5834312c3a293edad49c434b623da71fd8",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-javascript-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-javascript-tags.scm",
+      "sha256": "cfe62dec4c797bf3cd32ca85925adeef93f40ee592ecce95ee90d375a11c6ce6",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-kotlin-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-kotlin-tags.scm",
+      "sha256": "408d43d16a0883ecbf104122e3dc919e0edeb420c90d033995dec979974efb6d",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-php-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-php-tags.scm",
+      "sha256": "1b3ddb6e8e429fa3c4f30c511c9f1f42eeed4cb278aa4f7faf0ec2e901400d64",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-python-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-python-tags.scm",
+      "sha256": "bd9f343fc88ee32fe0bed591162759940b3fc4e220f67ce1aa9aa35e3e2625ca",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-ruby-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-ruby-tags.scm",
+      "sha256": "24e73ccbdc13c61f72d8f77b6599f3794a17e619941063341aa6d75bcaaf1ada",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-rust-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-rust-tags.scm",
+      "sha256": "ea54df0ceeb5601402034b14aab6697ba3a63896336df63e7dac17c3bb4b2be5",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-swift-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-swift-tags.scm",
+      "sha256": "e65c96df2c1e6953c0d33b3d10093b0d3733ea97bfbd043daaf826394bbeb707",
+      "mode": 420
+    },
+    {
+      "source": "/home/ben/Code/CLI/openbuff/cli/bin/tree-sitter-queries/tree-sitter-typescript-tags.scm",
+      "target": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-typescript-tags.scm",
+      "sha256": "320134237c7b41ecca916c5fd79c69a0bd1ce6f406f0281d9294a27ccd4155b3",
+      "mode": 420
+    }
+  ],
+  "interpretation": "Byte/mode equality for installed build files and observed limited smoke probes; no full language or B24/B32/B35 acceptance."
+}

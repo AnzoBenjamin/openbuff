@@ -1,0 +1,392 @@
+{
+  "schemaVersion": 1,
+  "invocationDir": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/sdk-consumers/d9f61dd7-3d11-467b-acbf-d44bdecd9c44",
+  "providerCalls": 0,
+  "observations": [
+    {
+      "name": "compound_declined",
+      "command": "git commit -m 'a  b'; rm -rf fixture",
+      "approvalMode": "balanced",
+      "approve": false,
+      "allowed": false,
+      "approvalCalls": 1,
+      "elapsedMs": 209.107124,
+      "approvals": [
+        {
+          "action": "commit",
+          "target": "git commit -m 'a  b'",
+          "effects": [
+            {
+              "action": "commit",
+              "target": "git commit -m 'a  b'"
+            },
+            {
+              "action": "workspace-delete",
+              "target": "fixture"
+            }
+          ],
+          "parseStatus": "complete",
+          "commandHash": "968f16d4d0f96a46f112bab7f45ed2fb9665ab74a277f81a7994408f96ebf41f",
+          "rawCommand": "git commit -m 'a  b'; rm -rf fixture",
+          "executionContextHash": "0d8a63eb5428dcaaee7c909a1da49f479d3aa4d984357ca5e4f7999cd7d5e369",
+          "risk": "high",
+          "reason": "Action 'workspace-delete' requires a snapshot-scoped user approval for 'fixture'."
+        }
+      ],
+      "trace": "",
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "terminal": [
+            [
+              {
+                "type": "json",
+                "value": {
+                  "command": "git commit -m 'a  b'; rm -rf fixture",
+                  "errorMessage": "Command denied by harness approval policy: The user declined this operation.",
+                  "permissionDenied": true,
+                  "approvalRequired": true,
+                  "harnessAction": "commit",
+                  "harnessTarget": "git commit -m 'a  b'",
+                  "harnessEffects": [
+                    {
+                      "action": "commit",
+                      "target": "git commit -m 'a  b'"
+                    },
+                    {
+                      "action": "workspace-delete",
+                      "target": "fixture"
+                    }
+                  ],
+                  "harnessParseStatus": "complete",
+                  "executionContextHash": "0d8a63eb5428dcaaee7c909a1da49f479d3aa4d984357ca5e4f7999cd7d5e369",
+                  "permissionProfile": "full-access"
+                }
+              }
+            ]
+          ]
+        }
+      },
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "actionOutcomes": [
+        {
+          "actionId": "3a6d68df-7cb7-46f7-b4e2-b68b81db5c91",
+          "attemptId": "sXqIzBXGsZs",
+          "runId": "local-run-63d572ed-ee90-4981-93a4-58b133a73400",
+          "toolName": "run_terminal_command",
+          "basis": {
+            "inputHash": "sha256:ac4b6a059f11e260b6053884ccae46cb9309d2cfd6ed28b6a1f2f68c884fb212",
+            "workspaceRevision": 0
+          },
+          "outcome": "refused",
+          "cause": {
+            "code": "permission_denied",
+            "message": "Command denied by harness approval policy: The user declined this operation."
+          },
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      ],
+      "approvalRecords": []
+    },
+    {
+      "name": "compound_approved",
+      "command": "git commit -m 'a  b'; rm -rf fixture",
+      "approvalMode": "balanced",
+      "approve": true,
+      "allowed": true,
+      "approvalCalls": 1,
+      "elapsedMs": 133.79045700000006,
+      "approvals": [
+        {
+          "action": "commit",
+          "target": "git commit -m 'a  b'",
+          "effects": [
+            {
+              "action": "commit",
+              "target": "git commit -m 'a  b'"
+            },
+            {
+              "action": "workspace-delete",
+              "target": "fixture"
+            }
+          ],
+          "parseStatus": "complete",
+          "commandHash": "968f16d4d0f96a46f112bab7f45ed2fb9665ab74a277f81a7994408f96ebf41f",
+          "rawCommand": "git commit -m 'a  b'; rm -rf fixture",
+          "executionContextHash": "ab404a077b4711368b90581024856e1ea64ebe58bb4e1bc9158c88333d0c0ff6",
+          "risk": "high",
+          "reason": "Action 'workspace-delete' requires a snapshot-scoped user approval for 'fixture'."
+        }
+      ],
+      "trace": "git:commit -m a  b\nrm:-rf fixture\n",
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "terminal": [
+            [
+              {
+                "type": "json",
+                "value": {
+                  "command": "git commit -m 'a  b'; rm -rf fixture",
+                  "startingCwd": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/sdk-consumers/d9f61dd7-3d11-467b-acbf-d44bdecd9c44/compound_approved",
+                  "stdout": "",
+                  "exitCode": 0,
+                  "approvalReceiptId": "approval-6054879a-999f-47c5-9b63-c332b1695fb7",
+                  "harnessAction": "commit",
+                  "harnessTarget": "git commit -m 'a  b'",
+                  "harnessEffects": [
+                    {
+                      "action": "commit",
+                      "target": "git commit -m 'a  b'"
+                    },
+                    {
+                      "action": "workspace-delete",
+                      "target": "fixture"
+                    }
+                  ],
+                  "harnessParseStatus": "complete",
+                  "executionContextHash": "ab404a077b4711368b90581024856e1ea64ebe58bb4e1bc9158c88333d0c0ff6"
+                }
+              }
+            ]
+          ]
+        }
+      },
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "actionOutcomes": [
+        {
+          "actionId": "fd2496f2-6e28-4cca-9464-fb492366de5f",
+          "attemptId": "sXqJVwiJm8I",
+          "runId": "local-run-aadc09d7-18bd-440b-874d-95aaaa9e9030",
+          "toolName": "run_terminal_command",
+          "basis": {
+            "inputHash": "sha256:ac4b6a059f11e260b6053884ccae46cb9309d2cfd6ed28b6a1f2f68c884fb212",
+            "workspaceRevision": 0
+          },
+          "outcome": "succeeded",
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      ],
+      "approvalRecords": [
+        {
+          "schemaVersion": 1,
+          "id": "approval-6054879a-999f-47c5-9b63-c332b1695fb7",
+          "revision": 1,
+          "repositoryId": "b8b6a5d3af0283a6c13cc172",
+          "workspaceId": "52f0c3b3c1190c0ec2f13fe9",
+          "runId": "main-agent",
+          "snapshotId": "workspace.v1.0.00000000",
+          "createdAt": "2026-11-06T15:29:20.218Z",
+          "updatedAt": "2026-11-06T15:29:20.220Z",
+          "action": "commit",
+          "target": "git commit -m 'a  b'",
+          "commandHash": "968f16d4d0f96a46f112bab7f45ed2fb9665ab74a277f81a7994408f96ebf41f",
+          "executionContextHash": "ab404a077b4711368b90581024856e1ea64ebe58bb4e1bc9158c88333d0c0ff6",
+          "grantedBy": "user",
+          "consumedAt": "2026-11-06T15:29:20.220Z"
+        }
+      ]
+    },
+    {
+      "name": "force_declined",
+      "command": "git push --force origin feature",
+      "approvalMode": "balanced",
+      "approve": false,
+      "allowed": false,
+      "approvalCalls": 1,
+      "elapsedMs": 105.23695799999996,
+      "approvals": [
+        {
+          "action": "push",
+          "target": "git push --force origin feature",
+          "branch": "feature",
+          "pushRisks": [
+            "force"
+          ],
+          "effects": [
+            {
+              "action": "push",
+              "target": "git push --force origin feature",
+              "branch": "feature",
+              "pushRisks": [
+                "force"
+              ]
+            }
+          ],
+          "parseStatus": "complete",
+          "commandHash": "7cf7abba379abe493f1e4eae5f615e5a8b295a0e9791c431a4be2f9b42cb40ed",
+          "rawCommand": "git push --force origin feature",
+          "executionContextHash": "66dc21a8da68e35b7852c8b30065864cc457ebb9e081b8de74f720b29b516a5d",
+          "risk": "high",
+          "reason": "Push risks (force) require explicit approval for 'git push --force origin feature'."
+        }
+      ],
+      "trace": "",
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "terminal": [
+            [
+              {
+                "type": "json",
+                "value": {
+                  "command": "git push --force origin feature",
+                  "errorMessage": "Command denied by harness approval policy: The user declined this operation.",
+                  "permissionDenied": true,
+                  "approvalRequired": true,
+                  "harnessAction": "push",
+                  "harnessTarget": "git push --force origin feature",
+                  "harnessEffects": [
+                    {
+                      "action": "push",
+                      "target": "git push --force origin feature",
+                      "branch": "feature",
+                      "pushRisks": [
+                        "force"
+                      ]
+                    }
+                  ],
+                  "harnessParseStatus": "complete",
+                  "executionContextHash": "66dc21a8da68e35b7852c8b30065864cc457ebb9e081b8de74f720b29b516a5d",
+                  "permissionProfile": "full-access"
+                }
+              }
+            ]
+          ]
+        }
+      },
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "actionOutcomes": [
+        {
+          "actionId": "086ce987-e906-466f-b59e-4a49ef9d9d08",
+          "attemptId": "sXqJyfvBoEU",
+          "runId": "local-run-34c61984-f1c8-4a7b-b546-223b494d8f17",
+          "toolName": "run_terminal_command",
+          "basis": {
+            "inputHash": "sha256:778ff3399e47433e13b3f24328dd26a8b14c066d38ed71dc58d76521172afb18",
+            "workspaceRevision": 0
+          },
+          "outcome": "refused",
+          "cause": {
+            "code": "permission_denied",
+            "message": "Command denied by harness approval policy: The user declined this operation."
+          },
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      ],
+      "approvalRecords": []
+    },
+    {
+      "name": "approval_cancelled",
+      "command": "git push --force origin feature",
+      "approvalMode": "balanced",
+      "approve": true,
+      "cancel": true,
+      "allowed": false,
+      "approvalCalls": 1,
+      "elapsedMs": 114.58262599999989,
+      "approvals": [
+        {
+          "action": "push",
+          "target": "git push --force origin feature",
+          "branch": "feature",
+          "pushRisks": [
+            "force"
+          ],
+          "effects": [
+            {
+              "action": "push",
+              "target": "git push --force origin feature",
+              "branch": "feature",
+              "pushRisks": [
+                "force"
+              ]
+            }
+          ],
+          "parseStatus": "complete",
+          "commandHash": "7cf7abba379abe493f1e4eae5f615e5a8b295a0e9791c431a4be2f9b42cb40ed",
+          "rawCommand": "git push --force origin feature",
+          "executionContextHash": "d1f3a754e9adaee594d7f95fe56669110ce11c863f5d9ec0c790bd88fbebb7c4",
+          "risk": "high",
+          "reason": "Push risks (force) require explicit approval for 'git push --force origin feature'."
+        }
+      ],
+      "trace": "",
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "terminal": [
+            [
+              {
+                "type": "json",
+                "value": {
+                  "kind": "native_tool_result_error",
+                  "version": 1,
+                  "toolName": "run_terminal_command",
+                  "lifecycle": {
+                    "kind": "tool_lifecycle",
+                    "version": 1,
+                    "callId": "9278b5d6-1e15-45cf-98d7-a63357c6dfec",
+                    "sequence": 0,
+                    "state": "failed"
+                  },
+                  "error": {
+                    "code": "malformed_result",
+                    "message": "The run_terminal_command handler failed after the tool call started: fixture cancellation during approval. No successful result is confirmed.",
+                    "retryable": false,
+                    "recovery": "fix_result"
+                  },
+                  "issueCount": 1
+                }
+              }
+            ]
+          ]
+        }
+      },
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "actionOutcomes": [
+        {
+          "actionId": "9278b5d6-1e15-45cf-98d7-a63357c6dfec",
+          "attemptId": "sXqKNYoJ6mA",
+          "runId": "local-run-49c8e5e1-2b27-45e1-863f-fb579caeee8d",
+          "toolName": "run_terminal_command",
+          "basis": {
+            "inputHash": "sha256:778ff3399e47433e13b3f24328dd26a8b14c066d38ed71dc58d76521172afb18",
+            "workspaceRevision": 0
+          },
+          "outcome": "failed",
+          "cause": {
+            "code": "malformed_result",
+            "message": "The run_terminal_command handler failed after the tool call started: fixture cancellation during approval. No successful result is confirmed."
+          },
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      ],
+      "approvalRecords": []
+    }
+  ]
+}

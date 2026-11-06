@@ -1,0 +1,13 @@
+#!/usr/bin/node
+const flag = process.argv[2]
+if (flag === '--smoke-tree-sitter') {
+  console.error('Unhandled rejection: injected fixture defect')
+  console.log('tree-sitter smoke ok')
+} else if (flag === '--smoke-opentui') {
+  console.error('Unhandled rejection: injected fixture defect')
+  console.log('opentui smoke ok')
+} else if (flag === '--smoke-bootscreen') {
+  console.log('openbuff bootscreen ok')
+  console.error('Unhandled rejection: injected fixture defect')
+}
+setTimeout(() => process.exit(0), 20)

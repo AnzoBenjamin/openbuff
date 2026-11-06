@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "inspectedAt": "2026-11-06T22:02:57.923177+00:00",
+  "type": "researcher-browser-planning-source-inspection",
+  "implementationAccepted": false,
+  "localSourceHashes": {
+    "agents/researcher/researcher-web.ts": "dcc73afe107a8eaebb7aa46fc32377c38e9df2939f32eeea4de9b5f4d3e40975",
+    "agents/__tests__/researcher-web.test.ts": "c0ea0161ccc8284718b9e2fabb8c69a1f675e4ac08f84e7456e1c77e01d80ff7",
+    "agents/browser-use/browser-use.ts": "248c66b528eb5ba97c170bc1e283fcf3439387bc93b1c3deb76f395fef01207d",
+    "common/src/tools/params/tool/web-search.ts": "ffd97d34cc831f1cdad344c2b7a9bde2289c6ab45c2ff0bd39c29118b5d555d2",
+    "common/src/tools/browser-policy.ts": "6ed62ee8eaf78cfc64ddf7d1d657f48d8aa2b9916eea8d5e87009fce72279dca",
+    "packages/agent-runtime/src/tools/handlers/tool/web-search.ts": "9aa6d1d761f39b7e4c18d98b51b5c485882712edddd4245876728e4ce3fae558",
+    "packages/agent-runtime/src/tools/handlers/tool/web-search-utils.ts": "3db8fa766c08dbf005a855fcc85dd6fae3f6e305b92e1b37fc3eeccda9c4f345"
+  },
+  "upstream": [
+    {
+      "url": "https://github.com/vercel-labs/agent-browser",
+      "basis": "README: Rust/CDP CLI, named sessions, element snapshots, MCP, Apache-2.0"
+    },
+    {
+      "url": "https://agent-browser.dev/commands",
+      "basis": "direct URL read versus rendered DOM, MCP/machine-readable results, output/domain/content-boundary controls"
+    },
+    {
+      "url": "https://raw.githubusercontent.com/vercel-labs/agent-browser/main/package.json",
+      "basis": "observed main version 0.41.2, Node>=22 wrapper/postinstall and Apache-2.0; not registry-verified or installed"
+    }
+  ],
+  "installedAgentBrowser": false,
+  "liveRateLimitCause": "user-reported; no live causal reproduction in this planning task",
+  "prototypeStatus": "not executed"
+}

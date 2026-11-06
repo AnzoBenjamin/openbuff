@@ -1,0 +1,14 @@
+{
+  "type": "staged-source-materialization-representation-failure",
+  "sourceSnapshot": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/selection/materialize-index.initial.py",
+    "sha256": "37e35da4471a855b128d88a90fc2fab9fd2b1e92c8f4a4e3274c7bcd144b721b"
+  },
+  "failureLogs": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/selection/checkouts/76e411831b1e/ledger-validation.stdout.log",
+      "sha256": "ba28d1dac5947c2919a78fe34d8787c7787a3c5415090b2ee0b37f84a84d0494"
+    }
+  ],
+  "scope": "Git stored the sealed B30 nested fixture as a gitlink; its metadata/README bytes need archival restoration. No product or original evidence changed."
+}

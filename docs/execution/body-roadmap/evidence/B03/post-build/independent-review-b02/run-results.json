@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "reviewer": "/root/b02_runtime_outcomes",
+  "commands": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/affected-runtime-acp-tests.command.json",
+      "sha256": "c0df257c24488b912fdc69c01557c1a0b5bbf1b8f6ce23d6293766d6a00d5215"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/leader-vision-route-regression.command.json",
+      "sha256": "254ae0dcdb70ab4aff8d84123ee18edebf9f537bf7e671c4a02566ff302fd3df"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/actual-sdk-fixture.command.json",
+      "sha256": "4ab01a15f1383bcaaf90e9da9bd53f3d9a950058134361c14ede5e30074b88e9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/consumer-probe.command.json",
+      "sha256": "8c7aeda02bca24a445e6183b120da3a8fdbbde1969235736c822fb6e9099ca14"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/node-broker-probe.command.json",
+      "sha256": "a05a4954e993835efcd4427e7271109c909fbdaac65744ba56e73fb17dc6d36a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/byte-observer-replay.command.json",
+      "sha256": "a90a0997b68d0dc62ea4eac8c24e99eb7abb7d76bb72d8096a3948390c8f594d"
+    }
+  ],
+  "sourceStable": true,
+  "sharedLessonsUnchanged": true,
+  "allControlsPassed": true
+}

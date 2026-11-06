@@ -1,0 +1,354 @@
+{
+  "shardId": "04-memory",
+  "question": "Where do context compaction, full-result archives/recall, persisted memory/lessons/decision injection, retention budgets, semantic ranking/expansion and learning feedback actually flow from a run through CLI/SDK storage and back into the model?",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "subsystemIds": [
+    "cli",
+    "sdk",
+    "packages",
+    "evals",
+    "docs"
+  ],
+  "selectedFiles": [
+    {
+      "path": "cli/src/services/memory-v2/provider.ts",
+      "from": 69,
+      "to": 337,
+      "reason": "CLI storage composition: provider authority, optional configured semantic expander, project identity, leases, open/reset failure and fallback behavior."
+    },
+    {
+      "path": "cli/src/utils/codebuff-client.ts",
+      "from": 53,
+      "to": 224,
+      "reason": "Actual CLI consumer converts the provider into SDK memoryV2 options; inspect default/shadow/opt-in configuration, managed lease lifetime, attach-mode branch, and client reset."
+    },
+    {
+      "path": "sdk/src/run-state.ts",
+      "from": 790,
+      "to": 862,
+      "reason": "Fresh SDK session loads project/home knowledge and skills, hydrates durable V1 task memory through injected filesystem, and reconciles evidence before use."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1888,
+      "to": 1965,
+      "reason": "Real terminal consumer finishes V2 state and persists committed V1 memory even for error/cancellation results; outcome reporter binds playbook feedback to the configured repository."
+    },
+    {
+      "path": "sdk/src/services/memory-v2/coordinator.ts",
+      "from": 837,
+      "to": 1319,
+      "reason": "V2 prepare-turn transaction: abort/generation staging, authority choice, finishing-turn replay, V1 migration, lifecycle append, correlated query validation, injection, and active playbook load."
+    },
+    {
+      "path": "sdk/src/services/memory-v2/coordinator.ts",
+      "from": 1378,
+      "to": 1640,
+      "reason": "Hot observation-capture path samples error filtering, decisions/facts/discovery classification, provenance, safe artifact/evidence construction, explicit record_decision DTOs and claim dedup integration."
+    },
+    {
+      "path": "sdk/src/services/memory-v2/coordinator.ts",
+      "from": 1930,
+      "to": 2165,
+      "reason": "Terminal replay protocol and usage feedback: persisted finishing state, pendingTerminal validation, cancellation status, query terminal events, memory shown/reused counters and serialized append."
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 2507,
+      "to": 2712,
+      "reason": "Real model-request consumer compiles correlated V2 memory, V1 task memory and active playbooks into protected per-step messages; stale-tool eviction archives full results before replacing bodies."
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 2730,
+      "to": 3202,
+      "reason": "Runtime compaction hot path: governor/anti-thrash state, pre-compaction archive, programmatic and prompt-template semantic branches, post-prune rebuild, mechanical emergency trim and recovery telemetry."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/context-archive.ts",
+      "from": 23,
+      "to": 556,
+      "reason": "Bounded archive and recall implementation: separate semantic/eviction retention caps, per-message clipping, pre-compaction and full-tool-result snapshots, pointer construction, keyword and toolCallId recall, provenance and empty-result behavior."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/recall-context.ts",
+      "from": 1,
+      "to": 91,
+      "reason": "Model-visible recall tool consumer: direct toolCallId lookup, indexed verbatim search, optional consolidation search, additive receipts, empty/error fallback and archived-content staleness."
+    },
+    {
+      "path": "cli/src/services/memory-v2/context-archive-sync.ts",
+      "from": 1,
+      "to": 344,
+      "reason": "Durable archive round trip: optional repository binding, best-effort flush, bounded load, provider lease cleanup, archive hydration marker, dedup and independent per-kind merge budgets."
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 1262,
+      "to": 1585,
+      "reason": "Sampled SQLite archive hot path only: validation, transactional replacement keyed by run, TTL/count pruning, bounded load and FTS/LIKE recall with failure envelopes."
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 4922,
+      "to": 5254,
+      "reason": "Sampled SQLite retrieval hot path only: deterministic reference clock, evidence freshness, lexical ranking, explicit/derived usefulness tiers, pinned/workspace ordering and category eligibility."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/memory-v2-context.ts",
+      "from": 95,
+      "to": 399,
+      "reason": "Actual prompt compiler budgets and trust categories: authoritative metadata, verified vs reread/historical knowledge, warnings and ranking reasons, root/child caps, and concept advisory receipt counting."
+    },
+    {
+      "path": "cli/src/services/memory-v2/__tests__/two-session-cold-start.test.ts",
+      "from": 1,
+      "to": 382,
+      "reason": "Real SQLite close/reopen probes for fresh verified reuse, digest mismatch requiring reread, and forgotten claims retaining history; inspect assurance limits of store-level cold-start tests."
+    },
+    {
+      "path": "evals/memory-retention/scenario.test.ts",
+      "from": 373,
+      "to": 560,
+      "reason": "V2 deterministic evaluation consumer builds warm/cold contexts and simulates evidence/exploration costs, budgets and metric thresholds; distinguishes compiler retention assertions from live model reuse."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 1625,
+      "to": 1833,
+      "reason": "Current documented contracts for durable archive/recall, consolidation, provenance, compaction correlation/cancellation, typed task memory, child isolation and atomic transcript-memory commit."
+    }
+  ],
+  "secondaryFiles": [
+    "cli/src/hooks/use-send-message.ts",
+    "cli/src/utils/run-state-storage.ts",
+    "cli/src/utils/env.ts",
+    "sdk/src/run.ts",
+    "sdk/src/services/task-memory-store.ts",
+    "sdk/src/services/memory-v2/usage-observer.ts",
+    "sdk/src/services/memory-v2/types.ts",
+    "sdk/src/services/memory-v2/coordinator.ts",
+    "packages/agent-runtime/src/util/task-memory.ts",
+    "packages/agent-runtime/src/util/context-pruning.ts",
+    "packages/agent-runtime/src/util/runtime-semantic-compaction.ts",
+    "packages/agent-runtime/src/util/archive-recall-index.ts",
+    "packages/agent-runtime/src/util/context-consolidation-runner.ts",
+    "packages/agent-runtime/src/tools/handlers/tool/record-decision.ts",
+    "packages/agent-runtime/src/memory/playbook-context.ts",
+    "packages/agent-runtime/src/memory/playbook-gate.ts",
+    "cli/src/services/memory-v2/concept-index.ts",
+    "cli/src/services/memory-v2/playbook-proposal.ts",
+    "cli/src/services/memory-v2/playbook-lifecycle.ts",
+    "cli/src/commands/memory-command.ts",
+    "common/src/types/memory-v2.ts",
+    "common/src/types/task-memory.ts",
+    "common/src/types/context-archive.ts",
+    "common/src/util/usefulness-scorer.ts",
+    "agents/context-pruner.ts",
+    "agents/base2/base-deep.ts",
+    "sdk/src/services/memory-v2/__tests__/coordinator.test.ts",
+    "cli/src/services/memory-v2/__tests__/context-archive-sync.test.ts",
+    "cli/src/services/memory-v2/__tests__/bun-sqlite-memory-repository.test.ts",
+    "cli/src/services/memory-v2/__tests__/concept-firewall.test.ts",
+    "packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts",
+    "packages/agent-runtime/src/util/__tests__/context-archive.test.ts",
+    "packages/agent-runtime/src/util/__tests__/archive-recall-index.test.ts",
+    "evals/compaction-retention/scenario.test.ts",
+    "evals/compaction-fidelity/scenario.test.ts",
+    "evals/memory-retention/README.md",
+    "evals/compaction-retention/README.md",
+    "docs/memory-v1-removal-readiness.md",
+    "evals/package.json",
+    "scripts/memory-drift-guard.ts",
+    ".github/workflows/ci.yml"
+  ],
+  "capabilityCandidates": [
+    {
+      "id": "context-compaction",
+      "description": "Model-window-aware semantic compaction, mechanical emergency trim, protected memory/control state, full-result eviction and cancellation/checkpoint recovery."
+    },
+    {
+      "id": "archive-recall",
+      "description": "Pre-compaction and evicted-tool-result archives, call-ID/keyword recall, FTS acceleration, bounded provenance-bearing receipts, CLI durable flush/hydration and restart semantics."
+    },
+    {
+      "id": "persisted-task-memory-v1",
+      "description": "SDK durable task-memory hydration/reconciliation, runtime relevance-budgeted compilation and terminal merge persistence; project/home knowledge and skills form an adjacent injection path."
+    },
+    {
+      "id": "memory-v2-roundtrip",
+      "description": "Opt-in or shadow event-backed memory: observed decisions/discoveries/evidence -> canonical SQLite projections -> correlated turn query -> protected runtime prompt context -> usage/terminal events."
+    },
+    {
+      "id": "memory-retention-and-relevance",
+      "description": "Archive snapshot/body caps and TTL, prompt budgets, lexical freshness/usefulness ranking, bounded semantic concept expansion, and actual retention/reuse evaluation coverage."
+    },
+    {
+      "id": "procedural-learning-feedback",
+      "description": "Active playbook loading and prompt/gate consumers, gate-outcome persistence, operator proposal/promotion/retirement, explicit decision supersession and prose lessons-to-skills workflow."
+    },
+    {
+      "id": "bounded-consolidation",
+      "description": "Optional background summarization of archived snapshots and consolidation recall receipts, traced separately from the verbatim archive."
+    }
+  ],
+  "searchCoverage": {
+    "nativeToolsAvailable": false,
+    "retrievalBasis": "Read pinned RETRIEVAL.json query 'context archive memory learning' (8 results plus related files); repository-native query_index/read_files tools are not exposed in this session.",
+    "inventoryBasis": "Read pinned inventory subsystem IDs and filtered memory/pruning/archive/retention/recall paths; every selected/secondary path is checked against the pinned file list.",
+    "primarySectionCount": 18,
+    "primaryLineCount": 4963,
+    "searchedRoots": [
+      "cli/src",
+      "sdk/src",
+      "packages/agent-runtime/src",
+      "packages/indexer/src",
+      "packages/internal/src",
+      "common/src",
+      "agents",
+      "evals",
+      "docs",
+      ".github/workflows",
+      "scripts"
+    ],
+    "searchTerms": [
+      "memoryV2",
+      "memoryAuthority",
+      "memoryV2Context",
+      "compactionArchive",
+      "compileMemoryV2Context",
+      "compileTaskMemoryContext",
+      "archivePreCompaction",
+      "archiveEvictedToolResults",
+      "recall_context",
+      "flushContextArchiveSnapshots",
+      "hydrateContextArchiveSnapshots",
+      "loadPersistedTaskMemory",
+      "saveMergedTaskMemory",
+      "record_decision",
+      "rerank",
+      "learning",
+      "LESSONS",
+      "playbook",
+      "recallExpander",
+      "expandConceptRecall",
+      "usefulness"
+    ],
+    "discoveredConsumerEdges": [
+      "cli/src/utils/codebuff-client.ts:53-74,207-224 -> getProjectMemoryV2Provider -> OpenbuffClient(memoryV2)",
+      "sdk/src/run.ts:1260-1281 -> MemoryV2Coordinator.prepareTurn -> memoryV2Context -> packages/agent-runtime/src/run-agent-step.ts:2520-2577 -> provider-facing request messages",
+      "sdk/src/run.ts:1556 -> MemoryV2Coordinator.recordToolObservation -> event append/projections -> prepareConfiguredTurn repository.query",
+      "sdk/src/run-state.ts:827-846 -> loadPersistedTaskMemory/reconcileTaskMemoryEvidence -> AgentState.taskMemory -> compileTaskMemoryContext; sdk/src/run.ts:1906 -> persistRunTaskMemory/saveMergedTaskMemory",
+      "packages/agent-runtime/src/run-agent-step.ts:2676,2806,3130 -> context archive; cli/src/utils/run-state-storage.ts:823,913 -> flushContextArchiveSnapshots; cli/src/hooks/use-send-message.ts:216-284 -> hydrateContextArchiveSnapshots -> AgentState.compactionArchive -> recall_context",
+      "cli/src/services/memory-v2/provider.ts:80-116 -> configured embedder -> expandConceptRecall; BunSQLiteMemoryRepository.query -> buildLexicalResult -> recallExpander tail",
+      "MemoryV2Coordinator.prepareConfiguredTurn -> ensureSeedPlaybooks/listPlaybooks -> AgentState.playbookContext -> compileActivePlaybooksContext and playbook-gate; sdk/src/run.ts:1384-1387,1943-1965 -> repository.recordPlaybookGateOutcome",
+      "agents/base2/base-deep.ts:269-305 -> LESSONS.md/skill writing instructions; sdk/src/run-state.ts:791-804 -> knowledge/skill loading"
+    ],
+    "boundedFollowups": [
+      {
+        "path": "cli/src/hooks/use-send-message.ts",
+        "from": 216,
+        "to": 315,
+        "reason": "Actual asynchronous archive hydration consumer, identity guard and interrupted checkpoint loading; later 720-758 selects resumed turn state."
+      },
+      {
+        "path": "cli/src/utils/run-state-storage.ts",
+        "from": 780,
+        "to": 927,
+        "reason": "Real save consumer, sanitization boundary, queued snapshot persistence and archive flush callers; 1002-1167 owns checkpoint write/load/clear."
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "from": 662,
+        "to": 709,
+        "reason": "V1 save wrapper; 1254-1285 prepares V2, 1542-1587 observes tools, 1743-1805 covers cancelled/error terminal finish paths."
+      },
+      {
+        "path": "sdk/src/services/task-memory-store.ts",
+        "from": 186,
+        "to": 251,
+        "reason": "V1 load; 542-702 samples merged serialized save, 738-890 samples evidence reconciliation instead of reading all 1090 lines."
+      },
+      {
+        "path": "sdk/src/services/memory-v2/coordinator.ts",
+        "from": 1641,
+        "to": 1883,
+        "reason": "Complete the sampled capture path through decision reinforcement/supersession, canonical verification and appended observations."
+      },
+      {
+        "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+        "from": 1897,
+        "to": 1927,
+        "reason": "Query façade; 4688-4921 builds bounded query corpus, 5255-5645 classifies output/contradictions, appends semantic advisory tail and returns budgets. No full-file read."
+      },
+      {
+        "path": "cli/src/services/memory-v2/concept-index.ts",
+        "from": 197,
+        "to": 447,
+        "reason": "Bounded semantic cache/vector validation, expansion timeout and fail-open cleanup; provider wiring is primary."
+      },
+      {
+        "path": "packages/agent-runtime/src/util/task-memory.ts",
+        "from": 880,
+        "to": 1261,
+        "reason": "Relevant V1 budget/relevance compiler and transactional commit tail; use symbol search to refine before read."
+      },
+      {
+        "path": "packages/agent-runtime/src/util/context-pruning.ts",
+        "from": 127,
+        "to": 322,
+        "reason": "Resolved context limits, model-aware semantic budgets and governor parameters."
+      },
+      {
+        "path": "packages/agent-runtime/src/util/runtime-semantic-compaction.ts",
+        "from": 1,
+        "to": 228,
+        "reason": "Prompt-template runtime compactor, cancellation, transcript replacement and post-pass verification; generator compactor is agents/context-pruner.ts, sampled by symbol."
+      },
+      {
+        "path": "packages/agent-runtime/src/util/archive-recall-index.ts",
+        "from": 179,
+        "to": 311,
+        "reason": "Actual indexed recall consumer and portable scanner fallback; archive source/caps are primary."
+      },
+      {
+        "path": "cli/src/services/memory-v2/__tests__/context-archive-sync.test.ts",
+        "from": 192,
+        "to": 369,
+        "reason": "Missing optional storage methods, rejecting persist/load, bound prototype methods, flush skips and hydration seam."
+      },
+      {
+        "path": "evals/compaction-retention/scenario.test.ts",
+        "from": 1058,
+        "to": 1156,
+        "reason": "Repeated compaction retention and eviction-pointer probes; fixture construction must be inspected separately before interpreting assurance."
+      },
+      {
+        "path": "agents/base2/base-deep.ts",
+        "from": 269,
+        "to": 305,
+        "reason": "Lessons and skill update workflow; distinguish instructed model behavior from runtime-owned learning."
+      }
+    ],
+    "testAndEvalEntrypoints": [
+      "cli/src/services/memory-v2/__tests__/two-session-cold-start.test.ts:118",
+      "sdk/src/services/memory-v2/__tests__/coordinator.test.ts",
+      "cli/src/services/memory-v2/__tests__/context-archive-sync.test.ts:192",
+      "cli/src/services/memory-v2/__tests__/concept-firewall.test.ts",
+      "packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts",
+      "packages/agent-runtime/src/util/__tests__/context-archive.test.ts",
+      "packages/agent-runtime/src/util/__tests__/archive-recall-index.test.ts",
+      "evals/memory-retention/scenario.test.ts:140,373; evals/package.json:16 test:memory-retention",
+      "evals/compaction-retention/README.md:54; evals/compaction-retention/scenario.test.ts:561",
+      "evals/compaction-fidelity/scenario.test.ts",
+      ".github/workflows/ci.yml:89 guard:memory-drift"
+    ],
+    "samplingLimits": [
+      "Primary selections are 18 bounded sections totaling 4963 lines, including source, real SQLite cold-reopen tests, a deterministic evaluation scenario and current docs.",
+      "The 5908-line SQLite repository is intentionally sampled only around archive storage/search and retrieval ranking. Schema migrations, full append/projection replay, operator GC and filesystem-security helpers remain adjacent follow-ups.",
+      "The 3349-line serialized agents/context-pruner.ts and generated bundled-agent source were located by bounded searches; long generated matching lines were suppressed rather than read indiscriminately.",
+      "Semantic concept expansion, procedural playbook promotion/retirement, V1 low-level storage and consolidation internals are secondary follow-ups; their production consumer edges were discovered without classifying maturity.",
+      "No source edits, test execution, API/model calls, credentials or private configuration values were used."
+    ]
+  }
+}

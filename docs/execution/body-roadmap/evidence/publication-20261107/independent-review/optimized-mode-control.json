@@ -1,0 +1,38 @@
+{
+  "scope": "Independent archive helper control, not product acceptance",
+  "scratch": "/tmp/openbuff-archive-independent-uq8yruq6",
+  "helperSha256": "cb58e42a82b4007f2d8987480949f45ae225317ae7c2e6f073dd1b1566c344af",
+  "archiveSha256": "301f2e8ef2e17a1b0416b54b907328b186947fd5f76f261ee7457ddcc66e4271",
+  "baseline": {
+    "argv": [
+      "/usr/bin/python3",
+      "-B",
+      "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/publication-20261107/archive/rehydrate.py",
+      "--destination",
+      "/tmp/openbuff-archive-independent-uq8yruq6"
+    ],
+    "exitCode": 0,
+    "stdout": "{\"verified\": true, \"paths\": 186, \"restored\": 186, \"alreadyPresent\": 0, \"destination\": \"/tmp/openbuff-archive-independent-uq8yruq6\", \"scope\": \"Evidence/context byte restoration only; no code execution or product acceptance.\"}\n",
+    "stderr": "",
+    "all186HashesMatch": true
+  },
+  "optimizedForeignBytes": {
+    "argv": [
+      "/usr/bin/python3",
+      "-O",
+      "-B",
+      "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/publication-20261107/archive/rehydrate.py",
+      "--destination",
+      "/tmp/openbuff-archive-independent-uq8yruq6"
+    ],
+    "exitCode": 0,
+    "stdout": "{\"verified\": true, \"paths\": 186, \"restored\": 0, \"alreadyPresent\": 186, \"destination\": \"/tmp/openbuff-archive-independent-uq8yruq6\", \"scope\": \"Evidence/context byte restoration only; no code execution or product acceptance.\"}\n",
+    "stderr": "",
+    "target": "cli/src/agents/bundled-agents.generated.ts",
+    "expectedSha256": "2f58ed011e3a15ac5d24a99e2b7141137b734ff94f00e81908be934304f75097",
+    "foreignBeforeSha256": "a975a6185686aeb490fb1fef561a25828f6ced1fcf0c3b5726acf568be7031cf",
+    "foreignAfterSha256": "a975a6185686aeb490fb1fef561a25828f6ced1fcf0c3b5726acf568be7031cf",
+    "foreignBytesUnchanged": true
+  },
+  "sourceUnchanged": true
+}

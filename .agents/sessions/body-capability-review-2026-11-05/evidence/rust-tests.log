@@ -1,0 +1,70 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling libc v0.2.190
+   Compiling thiserror v2.0.21
+   Compiling zmij v1.0.23
+   Compiling serde v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling memchr v2.8.3
+   Compiling itoa v1.0.18
+   Compiling openbuff-workspace-harness v0.1.0 (/home/ben/Code/CLI/openbuff/rust/crates/openbuff-workspace-harness)
+   Compiling syn v3.0.6
+   Compiling syn v2.0.119
+   Compiling thiserror-impl v2.0.21
+   Compiling serde_derive v1.0.229
+   Compiling enumflags2_derive v0.7.12
+   Compiling enumflags2 v0.7.12
+   Compiling landlock v0.4.7
+   Compiling openbuff-native v0.1.0 (/home/ben/Code/CLI/openbuff/rust/crates/openbuff-native)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 6.99s
+     Running unittests src/lib.rs (/tmp/openbuff-body-review-2026-11-05/evidence/rust-target/debug/deps/openbuff_native-43f41f3b297a828e)
+
+running 18 tests
+test exec::plan::tests::minimal_plan_uses_defaults ... ok
+test exec::plan::tests::representative_plan_deserializes ... ok
+test exec::tests::malformed_json_is_error ... ok
+test exec::runner::tests::status_line_unenforced_is_degraded ... ok
+test exec::runner::tests::status_line_enforced_is_not_degraded ... ok
+test exec::tests::response_line_carries_harness_protocol_version ... ok
+test exec::tests::valid_handshake_is_ok ... ok
+test exec::tests::error_line_is_jsonrpc_error_object ... ok
+test exec::tests::missing_protocol_version_is_error ... ok
+test exec::landlock_fs::tests::apply_over_tmpdir_returns_ok_regardless_of_kernel_support ... ok
+test exec::tests::wrong_method_is_error ... ok
+test tests::every_role_outcome_is_structured_not_implemented ... ok
+test exec::tests::version_mismatch_is_error ... ok
+test tests::not_implemented_line_is_valid_json_shape ... ok
+test tests::role_names_round_trip_through_parse ... ok
+test tests::unknown_and_empty_roles_return_none ... ok
+test tests::every_known_role_parses ... ok
+test tests::version_line_cross_checks_harness_protocol_version ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/tmp/openbuff-body-review-2026-11-05/evidence/rust-target/debug/deps/openbuff_native-c170c8d0deb958a0)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/tmp/openbuff-body-review-2026-11-05/evidence/rust-target/debug/deps/openbuff_workspace_harness-984124b97ffdb6ea)
+
+running 1 test
+test tests::protocol_version_is_1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests openbuff_native
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests openbuff_workspace_harness
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

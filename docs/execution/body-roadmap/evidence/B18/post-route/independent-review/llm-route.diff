@@ -1,0 +1,83 @@
+--- /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/source-snapshot/sdk/src/impl/llm.ts.txt	2026-11-06 18:51:23.903955652 +0300
++++ /home/ben/Code/CLI/openbuff/sdk/src/impl/llm.ts	2026-11-06 19:54:49.912027258 +0300
+@@ -1241,6 +1241,9 @@
+     failoverIndex++
+   ) {
+     const failoverModel = modelsToTry[failoverIndex]
++    // Image routing may select a different model. Keep the resolved route
++    // available when this retry loop exits into the failover handler.
++    let attemptModel = failoverModel
+     let promptTooLongRetried = false
+     let providerMessageLimitOverride: number | undefined
+     try {
+@@ -1262,7 +1265,6 @@
+         let response: ReturnType<typeof streamText>
+         let aiSDKModel: LanguageModel
+         let isChatGptOAuth: boolean
+-        let attemptModel = failoverModel
+         let compatibility: {
+           supportsTools: boolean
+           stripProviderMetadata: boolean
+@@ -1821,7 +1823,7 @@
+           // check must precede the flush, which drains the pending buffer.
+           if (finishReason !== 'length' && pendingToolCallChunks.length > 0) {
+             const configured = resolveConfiguredProviderModel({
+-              model: failoverModel,
++              model: attemptModel,
+               loadedConfig,
+             })
+             if (configured) {
+@@ -1830,7 +1832,7 @@
+               // capability-key candidates resolveModelCapabilities uses.
+               const band = getMaxOutputBytesForModel(
+                 configured.provider,
+-                failoverModel,
++                attemptModel,
+                 configured.providerId,
+               )
+               // Serialized UTF-8 byte count, matching the byte-band semantics
+@@ -1851,7 +1853,7 @@
+               )
+               if (serializedBytes > band) {
+                 logger.warn(
+-                  { model: failoverModel, band, serializedBytes },
++                  { model: attemptModel, band, serializedBytes },
+                   'Tool-call payloads exceeded the configured maxOutputBytes transport band without a provider length report; the configured band for this model looks stale.',
+                 )
+               }
+@@ -1865,7 +1867,7 @@
+           yield* flushPendingToolCallChunks(finishReason === 'length')
+           const contentPolicyError = getProviderContentPolicyFinishError({
+             finishReason,
+-            model: failoverModel,
++            model: attemptModel,
+           })
+           if (contentPolicyError) throw contentPolicyError
+ 
+@@ -2105,7 +2107,7 @@
+         event: AnalyticsEvent.PROVIDER_FAILOVER,
+         userId: userId ?? '',
+         properties: {
+-          fromModel: failoverModel,
++          fromModel: attemptModel,
+           toModel: modelsToTry[failoverIndex + 1],
+           statusCode,
+           userInputId,
+@@ -2114,7 +2116,7 @@
+       })
+       logger.warn(
+         {
+-          fromModel: failoverModel,
++          fromModel: attemptModel,
+           toModel: modelsToTry[failoverIndex + 1],
+           statusCode,
+           failoverIndex,
+@@ -2123,7 +2125,7 @@
+       )
+       emitProviderStatus({
+         status: 'failover',
+-        model: failoverModel,
++        model: attemptModel,
+         nextModel: modelsToTry[failoverIndex + 1],
+         ...(statusCode !== undefined ? { statusCode } : {}),
+       })

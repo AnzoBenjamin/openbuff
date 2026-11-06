@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "approval-fadb5258-f4dd-4a3d-a1c2-a9eab3a8fb16",
+  "revision": 1,
+  "repositoryId": "b8b6a5d3af0283a6c13cc172",
+  "workspaceId": "52f0c3b3c1190c0ec2f13fe9",
+  "runId": "main-agent",
+  "snapshotId": "workspace.v1.0.00000000",
+  "createdAt": "2026-11-06T15:25:37.514Z",
+  "updatedAt": "2026-11-06T15:25:37.518Z",
+  "action": "commit",
+  "target": "git commit -m 'a  b'",
+  "commandHash": "968f16d4d0f96a46f112bab7f45ed2fb9665ab74a277f81a7994408f96ebf41f",
+  "executionContextHash": "dac450ce38a8a5e8f77d882705bf9b836187adf6cf1e7e7f89dd043831822dd4",
+  "grantedBy": "user",
+  "consumedAt": "2026-11-06T15:25:37.518Z"
+}

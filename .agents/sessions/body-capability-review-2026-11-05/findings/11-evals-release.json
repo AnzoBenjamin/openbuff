@@ -1,0 +1,1899 @@
+{
+  "shardId": "11-evals-release",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "11-evals-release",
+    "subsystemIds": [
+      ".",
+      ".github",
+      "agents",
+      "cli",
+      "common",
+      "docs",
+      "evals",
+      "packages",
+      "scripts",
+      "sdk",
+      "test"
+    ],
+    "files": [
+      ".github/actions/setup-project/action.yml",
+      ".github/workflows/buffbench.yml",
+      ".github/workflows/ci.yml",
+      ".github/workflows/cli-release-build.yml",
+      ".github/workflows/nightly-evals.yml",
+      ".github/workflows/rust-workspace.yml",
+      ".github/workflows/sdk-release.yml",
+      "agents/base2/base-deep.ts",
+      "bunfig.toml",
+      "cli/package.json",
+      "cli/scripts/build-binary.ts",
+      "cli/scripts/run-cli-tests.ts",
+      "cli/scripts/smoke-binary.ts",
+      "cli/src/__tests__/release-wrapper.test.ts",
+      "cli/src/__tests__/run-cli-tests.test.ts",
+      "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "common/src/util/router.ts",
+      "docs/testing.md",
+      "evals/buffbench/README.md",
+      "evals/buffbench/__tests__/agent-runner.test.ts",
+      "evals/buffbench/__tests__/fixtures/judge-gold-set.json",
+      "evals/buffbench/__tests__/judge-calibration.test.ts",
+      "evals/buffbench/__tests__/proposals.test.ts",
+      "evals/buffbench/__tests__/run-buffbench.test.ts",
+      "evals/buffbench/__tests__/statistics.test.ts",
+      "evals/buffbench/agent-runner.ts",
+      "evals/buffbench/compare-runs.ts",
+      "evals/buffbench/deterministic-signals.ts",
+      "evals/buffbench/judge.ts",
+      "evals/buffbench/lessons-extractor.ts",
+      "evals/buffbench/main-nightly.ts",
+      "evals/buffbench/main-openbuff.ts",
+      "evals/buffbench/main.ts",
+      "evals/buffbench/meta-analyzer.ts",
+      "evals/buffbench/proposals.ts",
+      "evals/buffbench/run-buffbench.ts",
+      "evals/buffbench/run-coding-harness-ablation.ts",
+      "evals/buffbench/run-cross-model-experiment.ts",
+      "evals/buffbench/runners/codebuff.ts",
+      "evals/buffbench/runners/runner.ts",
+      "evals/buffbench/statistics.ts",
+      "evals/buffbench/trace-analyzer.ts",
+      "evals/buffbench/trace-utils.ts",
+      "evals/buffbench/types.ts",
+      "evals/compaction-fidelity/scenario.test.ts",
+      "evals/compaction-retention/scenario.test.ts",
+      "evals/edit-blocks/scenario.test.ts",
+      "evals/logger.ts",
+      "evals/package.json",
+      "evals/subagents/test-repo-utils.ts",
+      "package.json",
+      "packages/agent-runtime/src/memory/playbook-outcome-reporter.ts",
+      "packages/agent-runtime/src/templates/agent-registry.ts",
+      "packages/agent-runtime/src/tools/tool-executor.ts",
+      "packages/agent-runtime/src/util/compaction-verification.ts",
+      "packages/build-tools/executors.json",
+      "packages/build-tools/executors/infisical-run/executor.ts",
+      "packages/build-tools/package.json",
+      "packages/build-tools/project.json",
+      "scripts/__tests__/ci-workflow.test.ts",
+      "scripts/__tests__/measure-perf-guards-baseline.test.ts",
+      "scripts/__tests__/release-workflow.test.ts",
+      "scripts/check-ci-local.ts",
+      "scripts/compare-buffbench-runs.ts",
+      "scripts/dependency-provenance-guard.ts",
+      "scripts/measure-perf-guards-baseline.ts",
+      "scripts/package.json",
+      "scripts/run-mutation-gate.ts",
+      "sdk/PUBLISHING.md",
+      "sdk/package.json",
+      "sdk/scripts/build.ts",
+      "sdk/scripts/esm-export-fixup.ts",
+      "sdk/scripts/publish.ts",
+      "sdk/scripts/verify.ts",
+      "sdk/smoke-test-dist.ts",
+      "sdk/src/__tests__/agent-runtime-impl-playbook-outcome.test.ts",
+      "sdk/src/__tests__/build-esm-fixup.test.ts",
+      "sdk/src/agents/load-agents.ts",
+      "sdk/src/provider-config.ts",
+      "sdk/src/run.ts",
+      "sdk/test/cjs-compatibility/package.json",
+      "sdk/test/cjs-compatibility/test-imports.js",
+      "sdk/test/cjs-compatibility/test-types.ts",
+      "sdk/test/esm-compatibility/package.json",
+      "sdk/test/esm-compatibility/test-imports.js",
+      "sdk/test/esm-compatibility/test-types.ts",
+      "sdk/test/setup-env.ts",
+      "test/setup-scm-loader.ts"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 135,
+      "to": 554
+    },
+    {
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 717,
+      "to": 1112
+    },
+    {
+      "path": "evals/buffbench/agent-runner.ts",
+      "from": 1,
+      "to": 471
+    },
+    {
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 1,
+      "to": 134
+    },
+    {
+      "path": "evals/buffbench/run-buffbench.ts",
+      "from": 551,
+      "to": 710
+    },
+    {
+      "path": "evals/buffbench/types.ts",
+      "from": 1,
+      "to": 218
+    },
+    {
+      "path": "scripts/compare-buffbench-runs.ts",
+      "from": 1,
+      "to": 328
+    },
+    {
+      "path": "evals/buffbench/compare-runs.ts",
+      "from": 1,
+      "to": 255
+    },
+    {
+      "path": "evals/buffbench/statistics.ts",
+      "from": 1,
+      "to": 274
+    },
+    {
+      "path": "evals/buffbench/proposals.ts",
+      "from": 1,
+      "to": 490
+    },
+    {
+      "path": "evals/buffbench/lessons-extractor.ts",
+      "from": 172,
+      "to": 341
+    },
+    {
+      "path": "evals/buffbench/trace-utils.ts",
+      "from": 1,
+      "to": 58
+    },
+    {
+      "path": "evals/buffbench/judge.ts",
+      "from": 1,
+      "to": 507
+    },
+    {
+      "path": "evals/buffbench/deterministic-signals.ts",
+      "from": 1,
+      "to": 268
+    },
+    {
+      "path": "evals/buffbench/main.ts",
+      "from": 1,
+      "to": 27
+    },
+    {
+      "path": "evals/buffbench/main-nightly.ts",
+      "from": 1,
+      "to": 113
+    },
+    {
+      "path": "evals/buffbench/main-openbuff.ts",
+      "from": 1,
+      "to": 110
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "from": 1,
+      "to": 414
+    },
+    {
+      "path": ".github/workflows/rust-workspace.yml",
+      "from": 1,
+      "to": 148
+    },
+    {
+      "path": "scripts/__tests__/ci-workflow.test.ts",
+      "from": 1,
+      "to": 272
+    },
+    {
+      "path": "scripts/__tests__/measure-perf-guards-baseline.test.ts",
+      "from": 1,
+      "to": 61
+    },
+    {
+      "path": "sdk/scripts/build.ts",
+      "from": 1,
+      "to": 240
+    },
+    {
+      "path": "sdk/scripts/verify.ts",
+      "from": 1,
+      "to": 204
+    },
+    {
+      "path": "sdk/smoke-test-dist.ts",
+      "from": 1,
+      "to": 248
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 93
+    },
+    {
+      "path": "sdk/PUBLISHING.md",
+      "from": 1,
+      "to": 55
+    },
+    {
+      "path": ".github/workflows/sdk-release.yml",
+      "from": 1,
+      "to": 109
+    },
+    {
+      "path": "sdk/test/cjs-compatibility/package.json",
+      "from": 1,
+      "to": 21
+    },
+    {
+      "path": "sdk/test/cjs-compatibility/test-imports.js",
+      "from": 1,
+      "to": 77
+    },
+    {
+      "path": "sdk/test/esm-compatibility/package.json",
+      "from": 1,
+      "to": 21
+    },
+    {
+      "path": "sdk/test/esm-compatibility/test-imports.js",
+      "from": 1,
+      "to": 83
+    },
+    {
+      "path": "sdk/scripts/publish.ts",
+      "from": 1,
+      "to": 51
+    },
+    {
+      "path": "sdk/scripts/esm-export-fixup.ts",
+      "from": 1,
+      "to": 132
+    },
+    {
+      "path": "sdk/src/__tests__/build-esm-fixup.test.ts",
+      "from": 1,
+      "to": 55
+    },
+    {
+      "path": "bunfig.toml",
+      "from": 1,
+      "to": 14
+    },
+    {
+      "path": "test/setup-scm-loader.ts",
+      "from": 1,
+      "to": 15
+    },
+    {
+      "path": "sdk/test/setup-env.ts",
+      "from": 1,
+      "to": 47
+    },
+    {
+      "path": "package.json",
+      "from": 1,
+      "to": 80
+    },
+    {
+      "path": "evals/package.json",
+      "from": 1,
+      "to": 55
+    },
+    {
+      "path": "scripts/package.json",
+      "from": 1,
+      "to": 39
+    },
+    {
+      "path": "cli/package.json",
+      "from": 1,
+      "to": 64
+    },
+    {
+      "path": "packages/build-tools/executors/infisical-run/executor.ts",
+      "from": 1,
+      "to": 61
+    },
+    {
+      "path": "packages/build-tools/executors.json",
+      "from": 1,
+      "to": 9
+    },
+    {
+      "path": "packages/build-tools/package.json",
+      "from": 1,
+      "to": 15
+    },
+    {
+      "path": "packages/build-tools/project.json",
+      "from": 1,
+      "to": 23
+    },
+    {
+      "path": "scripts/dependency-provenance-guard.ts",
+      "from": 624,
+      "to": 1045
+    },
+    {
+      "path": "scripts/measure-perf-guards-baseline.ts",
+      "from": 1874,
+      "to": 2243
+    },
+    {
+      "path": "scripts/check-ci-local.ts",
+      "from": 355,
+      "to": 526
+    },
+    {
+      "path": "cli/scripts/build-binary.ts",
+      "from": 465,
+      "to": 706
+    },
+    {
+      "path": "cli/scripts/smoke-binary.ts",
+      "from": 109,
+      "to": 466
+    },
+    {
+      "path": ".github/workflows/cli-release-build.yml",
+      "from": 395,
+      "to": 475
+    },
+    {
+      "path": ".github/workflows/cli-release-build.yml",
+      "from": 593,
+      "to": 655
+    },
+    {
+      "path": "cli/scripts/run-cli-tests.ts",
+      "from": 1,
+      "to": 184
+    },
+    {
+      "path": "cli/src/__tests__/run-cli-tests.test.ts",
+      "from": 83,
+      "to": 131
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1380,
+      "to": 1401
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1920,
+      "to": 1972
+    },
+    {
+      "path": "packages/agent-runtime/src/memory/playbook-outcome-reporter.ts",
+      "from": 1,
+      "to": 49
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 3090,
+      "to": 3177
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "from": 1755,
+      "to": 1809
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "from": 1934,
+      "to": 1998
+    },
+    {
+      "path": "common/src/util/router.ts",
+      "from": 133,
+      "to": 191
+    },
+    {
+      "path": "agents/base2/base-deep.ts",
+      "from": 275,
+      "to": 335
+    },
+    {
+      "path": "sdk/src/agents/load-agents.ts",
+      "from": 166,
+      "to": 240
+    },
+    {
+      "path": "evals/compaction-fidelity/scenario.test.ts",
+      "from": 1,
+      "to": 292
+    },
+    {
+      "path": "evals/compaction-retention/scenario.test.ts",
+      "from": 920,
+      "to": 1156
+    },
+    {
+      "path": "evals/edit-blocks/scenario.test.ts",
+      "from": 388,
+      "to": 529
+    },
+    {
+      "path": "scripts/run-mutation-gate.ts",
+      "from": 1,
+      "to": 18
+    },
+    {
+      "path": "evals/buffbench/__tests__/judge-calibration.test.ts",
+      "from": 175,
+      "to": 253
+    },
+    {
+      "path": "evals/buffbench/__tests__/fixtures/judge-gold-set.json",
+      "from": 1,
+      "to": 45
+    },
+    {
+      "path": "evals/buffbench/judge.ts",
+      "from": 492,
+      "to": 507
+    },
+    {
+      "path": "evals/buffbench/__tests__/run-buffbench.test.ts",
+      "from": 900,
+      "to": 1110
+    },
+    {
+      "path": "evals/buffbench/__tests__/run-buffbench.test.ts",
+      "from": 1217,
+      "to": 1502
+    },
+    {
+      "path": "evals/buffbench/__tests__/agent-runner.test.ts",
+      "from": 253,
+      "to": 333
+    },
+    {
+      "path": "evals/buffbench/__tests__/proposals.test.ts",
+      "from": 38,
+      "to": 255
+    },
+    {
+      "path": "evals/buffbench/__tests__/statistics.test.ts",
+      "from": 75,
+      "to": 213
+    },
+    {
+      "path": "evals/buffbench/runners/codebuff.ts",
+      "from": 1,
+      "to": 207
+    },
+    {
+      "path": "evals/buffbench/trace-analyzer.ts",
+      "from": 1,
+      "to": 120
+    },
+    {
+      "path": "evals/buffbench/meta-analyzer.ts",
+      "from": 150,
+      "to": 265
+    },
+    {
+      "path": ".github/workflows/buffbench.yml",
+      "from": 1,
+      "to": 50
+    },
+    {
+      "path": ".github/workflows/nightly-evals.yml",
+      "from": 1,
+      "to": 53
+    },
+    {
+      "path": "cli/scripts/smoke-binary.ts",
+      "from": 1,
+      "to": 108
+    },
+    {
+      "path": "scripts/__tests__/release-workflow.test.ts",
+      "from": 1,
+      "to": 78
+    },
+    {
+      "path": "sdk/src/__tests__/agent-runtime-impl-playbook-outcome.test.ts",
+      "from": 1,
+      "to": 195
+    },
+    {
+      "path": "evals/logger.ts",
+      "from": 1,
+      "to": 68
+    },
+    {
+      "path": "evals/buffbench/runners/runner.ts",
+      "from": 1,
+      "to": 33
+    },
+    {
+      "path": "evals/subagents/test-repo-utils.ts",
+      "from": 1,
+      "to": 164
+    },
+    {
+      "path": "packages/agent-runtime/src/util/compaction-verification.ts",
+      "from": 1,
+      "to": 103
+    },
+    {
+      "path": "evals/buffbench/README.md",
+      "from": 335,
+      "to": 416
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 1,
+      "to": 95
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 176,
+      "to": 194
+    },
+    {
+      "path": "cli/release/index.js",
+      "from": 890,
+      "to": 1065
+    },
+    {
+      "path": "cli/release/index.js",
+      "from": 1124,
+      "to": 1279
+    },
+    {
+      "path": "cli/release/index.js",
+      "from": 1630,
+      "to": 1757
+    },
+    {
+      "path": "cli/release/package.json",
+      "from": 1,
+      "to": 55
+    },
+    {
+      "path": "cli/src/__tests__/release-wrapper.test.ts",
+      "from": 1320,
+      "to": 1385
+    },
+    {
+      "path": "sdk/test/cjs-compatibility/test-types.ts",
+      "from": 1,
+      "to": 54
+    },
+    {
+      "path": "sdk/test/esm-compatibility/test-types.ts",
+      "from": 1,
+      "to": 76
+    },
+    {
+      "path": ".github/actions/setup-project/action.yml",
+      "from": 1,
+      "to": 31
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 150,
+      "to": 173
+    },
+    {
+      "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+      "from": 1,
+      "to": 218
+    },
+    {
+      "path": "evals/buffbench/run-cross-model-experiment.ts",
+      "from": 1,
+      "to": 39
+    },
+    {
+      "path": "evals/buffbench/run-coding-harness-ablation.ts",
+      "from": 1,
+      "to": 30
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "evaluation-orchestration-and-oracles",
+      "maturity": "partial",
+      "assurance": "integration (offline injected SDK->runner->runTask) plus static trace",
+      "entrypoint": "evals/package.json run-buffbench -> main.ts/main-nightly.ts -> runBuffBench",
+      "implementation": "Temporary repo checkout -> configured Runner -> parent context/diff -> final checks -> two structured judges -> score clamping -> artifacts",
+      "consumer": "Live runTask and final result aggregation; main/nightly invoke it",
+      "tests": [
+        "evals/buffbench/__tests__/agent-runner.test.ts",
+        "evals/buffbench/__tests__/run-buffbench.test.ts",
+        "evals/buffbench/__tests__/judge-calibration.test.ts"
+      ],
+      "docs": [
+        "docs/architecture.md:144",
+        "evals/buffbench/README.md:364"
+      ],
+      "evidence": [
+        {
+          "path": "evals/buffbench/agent-runner.ts",
+          "line": 95,
+          "detail": "One-hour task wrapper with abort propagation."
+        },
+        {
+          "path": "evals/buffbench/agent-runner.ts",
+          "line": 274,
+          "detail": "Bounded independent check concurrency and declared dependencies."
+        },
+        {
+          "path": "evals/buffbench/judge.ts",
+          "line": 310,
+          "detail": "Structured judge output validates 0-10 score schema."
+        },
+        {
+          "path": "evals/buffbench/judge.ts",
+          "line": 495,
+          "detail": "Actual deterministic clamp consumer."
+        }
+      ],
+      "strengths": [
+        "Named checks preserve input order and expose configuration_error/skipped/timed_out/cancelled rather than only exit codes.",
+        "Measured 0-1 scores and synthetic judge failures are distinguished in current summarizeAgentRuns.",
+        "Per-judge raw scores and partial failure status survive averaging; prompt fence is a model instruction, not an enforced injection boundary."
+      ],
+      "gaps": [
+        "SDK error output is lost at runner boundary (11-F1).",
+        "Setup command errors are logged and execution continues at test-repo-utils.ts:75-82 without setup status.",
+        "Checks are agent-visible repository commands, not held-out correctness tests; they may be modified by the agent and remain optional.",
+        "No reviewed live model-backed task was executed; correctness without final checks stays subjective."
+      ],
+      "states": {
+        "loading": "Repo clone/fetch/init must finish before the agent; no typed setup-ready receipt",
+        "empty": "An empty final-check set is explicitly no deterministic signal; empty measured population still averages 0",
+        "failure": "Judge failures are typed; runner SDK errors and setup failures need repair",
+        "cancellation": "Task timeout is wired, but final-check descendants can survive cancellation",
+        "retry": "No judge/check retry policy in these entrypoints; CI retries entire test suites",
+        "permission": "Normal body has intentional full host access; eval-task trust/isolation is not separately enforced"
+      }
+    },
+    {
+      "id": "paired-polyglot-evidence",
+      "maturity": "partial",
+      "assurance": "unit test (58 combined safe tests) and real comparison CLI with fresh fixtures",
+      "entrypoint": "repeats/seed in runBuffBench; scripts/compare-buffbench-runs.ts; compareRuns and promotion helpers",
+      "implementation": "Per-agent means/SE, seeded paired bootstrap, tie/continuity-corrected Wilcoxon with n>=10 applicability",
+      "consumer": "standardError is used live; significance helpers are called by proposal policy; old comparison CLI uses its own incompatible filtering",
+      "tests": [
+        "evals/buffbench/__tests__/statistics.test.ts",
+        "evals/buffbench/__tests__/proposals.test.ts"
+      ],
+      "docs": [
+        "evals/buffbench/compare-runs.ts:1",
+        "evals/buffbench/README.md:342"
+      ],
+      "evidence": [
+        {
+          "path": "evals/buffbench/statistics.ts",
+          "line": 147,
+          "detail": "Underpowered Wilcoxon approximation is not applicable, p=1."
+        },
+        {
+          "path": "evals/buffbench/proposals.ts",
+          "line": 418,
+          "detail": "Missing required pairs reject."
+        }
+      ],
+      "strengths": [
+        "Seeded bootstrap is reproducible; zero and tied differences and underpowered comparisons have meaningful unit assertions.",
+        "The live runner preserves genuine low scores and records measured count/SE."
+      ],
+      "gaps": [
+        "The executable comparison reverses populations and loses repeats (11-F4).",
+        "Language/task/model/repeat identities are not emitted and capability aggregation is unwired (11-F5).",
+        "Non-finite numeric evidence can pass significance (11-F6).",
+        "No language-stratified held-out benchmark, model/router adoption test or comparable end-to-end efficiency envelope was verified."
+      ],
+      "states": {
+        "loading": "Input files parse before evaluation side effects",
+        "empty": "Helpers return neutral empty/underpowered statistics; promotion blocks missing pairs only when required",
+        "failure": "Comparison CLI lacks schema/provenance validation and finite guards",
+        "cancellation": "Pure helpers are synchronous; comparison cancellation is process termination only",
+        "retry": "Re-run input-order/seed semantics need stable identities",
+        "permission": "No external effect in pure statistics; live population credibility is a separate prerequisite"
+      }
+    },
+    {
+      "id": "learning-proposal-promotion",
+      "maturity": "unwired",
+      "assurance": "static consumer trace plus pure policy unit tests; no measured adoption trial",
+      "entrypoint": "Optional runBuffBench extractLessons -> extractor -> applyProposals -> decision record",
+      "implementation": "Closed proposal schema; pure copied agent definitions; append guidance/tool/model/budget changes; single-run gate comparison has deliberately zero deltas",
+      "consumer": "runTask records rejected decision and appends Markdown lessons; SDK separately records memory playbook outcomes; config model routing remains user-selected",
+      "tests": [
+        "evals/buffbench/__tests__/proposals.test.ts",
+        "evals/buffbench/__tests__/run-buffbench.test.ts:1366",
+        "sdk/src/__tests__/agent-runtime-impl-playbook-outcome.test.ts"
+      ],
+      "docs": [
+        "evals/buffbench/proposals.ts:31",
+        "docs/architecture.md:144"
+      ],
+      "evidence": [
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 723,
+          "detail": "extractLessons defaults false."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 263,
+          "detail": "Live promotion checks zero-delta/no-baseline evidence and records rejection."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1384,
+          "detail": "Actual repository-bound playbook outcome reporter reaches runtime."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+          "line": 3161,
+          "detail": "Warned/blocked/compliedAfterBlock observations report to the repository."
+        },
+        {
+          "path": "sdk/src/provider-config.ts",
+          "line": 1964,
+          "detail": "Mode/agent/defaultModel routing is configured, not learned."
+        }
+      ],
+      "strengths": [
+        "Dry runs never persist definitions; live single-run promotion does not invent before/after improvement.",
+        "Production playbook counters are actually wired, with report failures isolated from tool dispatch.",
+        "Prompt-level lesson/skill writing exists in base-deep and can help later retrieval."
+      ],
+      "gaps": [
+        "Default/manual/nightly callers do not enable extraction.",
+        "No candidate execution, held-out before/after comparison, adopted config pointer, rollback or learned routing consumer was found.",
+        "Accumulated lessons, task knowledge routing and fired/complied counters are evidence/memory mechanisms; they do not prove improved behavior or model selection.",
+        "Pure applyProposals uses structuredClone and legal function-bearing AgentDefinition inputs require separate handling; default loadLocalAgents serializes handleSteps so a default-live clone failure was not established."
+      ],
+      "states": {
+        "loading": "Optional extractor waits for provider output, with timeout wrapper",
+        "empty": "Empty/invalid proposal arrays are skipped, no candidate launched",
+        "failure": "Extractor errors return empty lessons/proposals; lesson write errors warn",
+        "cancellation": "Extractor/judge withTimeout wrappers do not pass an abort signal in inspected code",
+        "retry": "No automatic candidate retries/rollback because adoption is absent",
+        "permission": "Human-review staging is documented; no source change or model call was performed here"
+      }
+    },
+    {
+      "id": "retention-and-mutation-oracles",
+      "maturity": "partial",
+      "assurance": "unit test: real compaction helper fidelity fixture passed; sampled retention/edit schema scenarios static",
+      "entrypoint": "evals/compaction-fidelity/scenario.test.ts; compaction-retention; edit-blocks; opt-in mutation launcher",
+      "implementation": "Planted identifiers/values -> eviction/archive/verification/consolidation helpers; deterministic edit transport/schema equivalence",
+      "consumer": "CI evals discovery includes scenario.test.ts; external mutation framework only runs when explicitly passed to harness:mutation",
+      "tests": [
+        "evals/compaction-fidelity/scenario.test.ts",
+        "evals/compaction-retention/scenario.test.ts:1058",
+        "evals/edit-blocks/scenario.test.ts:388"
+      ],
+      "docs": [
+        "docs/testing.md:159"
+      ],
+      "evidence": [
+        {
+          "path": "evals/compaction-fidelity/scenario.test.ts",
+          "line": 164,
+          "detail": "Archive recovery checks exact planted fact in snippets."
+        },
+        {
+          "path": "evals/compaction-retention/scenario.test.ts",
+          "line": 1058,
+          "detail": "Multiple real pruner output passes retain blocker/receipt floors in deterministic fixtures."
+        },
+        {
+          "path": "evals/edit-blocks/scenario.test.ts",
+          "line": 480,
+          "detail": "Marker collisions, mixed JSON/blocks and external prose reject at both schemas."
+        },
+        {
+          "path": "scripts/run-mutation-gate.ts",
+          "line": 9,
+          "detail": "Only forwards an explicitly supplied external mutator with gate marker."
+        }
+      ],
+      "strengths": [
+        "F1 asserts nonzero eviction so protection is not vacuous; F3 independently checks verbatim fact recovery.",
+        "Retention scenarios protect real blocker/receipt/path metadata under small-window ceilings.",
+        "Edit schema equivalence/injection tests are useful transport oracles."
+      ],
+      "gaps": [
+        "F2/F4/F5 path coverage cannot establish semantic value fidelity (11-F7).",
+        "Consolidation summary is hand-authored in F5, not a measured real summary response.",
+        "Mutation launcher itself supplies no mutator, mutation score, failing-oracle prerequisite or CI gate.",
+        "Sampled edit scenarios do not validate committed filesystem bytes or native target toolchains; those runtime responsibilities are pair06/pair07 boundaries."
+      ],
+      "states": {
+        "loading": "Fixtures synthesize transcripts and calls to shipped helpers",
+        "empty": "Empty/no archive coverage is asserted in helper suites, not a live continuation trial",
+        "failure": "Adversarial schema failures are explicit; independent held-out task oracles remain missing",
+        "cancellation": "These are deterministic fixtures, not proof of killed-run recovery or live process cancellation",
+        "retry": "Repeat compaction cycles are tested, not stochastic judge reliability",
+        "permission": "Source-only/public/new fixtures; no model or private transcript used"
+      }
+    },
+    {
+      "id": "trace-artifact-hygiene",
+      "maturity": "partial",
+      "assurance": "static trace and new runTask artifact integration fixture",
+      "entrypoint": "runTask trace/ANALYSIS writes -> runBuffBench FINAL_RESULTS -> lessons/debug artifacts",
+      "implementation": "Sanitized normal trace filenames, local bound trace entry, optional extra trace folder, final listing and rejected decision records",
+      "consumer": "formatTaskResults, meta-analyzer directory scan, comparison CLI and lesson Markdown append",
+      "tests": [
+        "evals/buffbench/__tests__/run-buffbench.test.ts:962",
+        "evals/buffbench/__tests__/run-buffbench.test.ts:1366"
+      ],
+      "docs": [
+        "evals/buffbench/README.md:384"
+      ],
+      "evidence": [
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 364,
+          "detail": "Bound per-agent trace entry avoids concurrent array-last serialization race."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 421,
+          "detail": "Crash path writes an actual trace artifact."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 1027,
+          "detail": "Final file listing is taken immediately before FINAL_RESULTS is written."
+        }
+      ],
+      "strengths": [
+        "Normal/crash trace files and real proposal rejection decisions are persisted, and reserved final keys are namespaced.",
+        "Bounded trace excerpts reduce read_files/stdout prompt payloads."
+      ],
+      "gaps": [
+        "Unsafe test lesson cleanup (11-F3), raw runner error paths (11-F9), minute log collision (11-F10).",
+        "No immutable run manifest/hash chain, source/config/resolved model provenance, atomic artifact commit or retention/redaction policy was established.",
+        "saveTraces=false still writes a main trace containing raw events; evaluator errors can additionally create debug files outside the run logs.",
+        "Metadata listing is not a recursive content-integrity receipt and analyzer summaries omit scoringStatus when mapping judge results at meta-analyzer.ts:187-197."
+      ],
+      "states": {
+        "loading": "Logs directory is made before task execution",
+        "empty": "Crash traces exist; a missing ANALYSIS set produces a textual no-data analysis",
+        "failure": "Write failures can cause outer task rejection and dropped aggregation; durability is not journaled",
+        "cancellation": "Abort does not certify artifact completion or downstream process reaping",
+        "retry": "Synchronous writes have no transaction/retry protocol",
+        "permission": "Paths have partial containment controls; complete traces remain controller-local, with no redaction proof in this slice"
+      }
+    },
+    {
+      "id": "ci-guards-and-performance",
+      "maturity": "partial",
+      "assurance": "static workflows/guard trace; sampled guard contract tests; no GitHub execution",
+      "entrypoint": ".github/workflows/ci.yml build-and-check/test/test-integration; check-ci-local; provenance guard; benchmark smoke",
+      "implementation": "Pinned Bun/frozen install, generated tool/gate drift, memory/config/project-root/BYOK/types/provenance checks, positive test discovery, retries with flake artifacts",
+      "consumer": "Blocking CI steps and matrix tests; local guard adds determinism/mock-module and runs agents/common suites",
+      "tests": [
+        "scripts/__tests__/ci-workflow.test.ts",
+        "scripts/__tests__/measure-perf-guards-baseline.test.ts",
+        "scripts/__tests__/release-workflow.test.ts"
+      ],
+      "docs": [
+        "docs/testing.md:21"
+      ],
+      "evidence": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 81,
+          "detail": "Generated source drift fails actual build step."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 268,
+          "detail": "Non-integration discovery scans full packages, includes tsx, and fails on empty sets."
+        },
+        {
+          "path": "scripts/dependency-provenance-guard.ts",
+          "line": 994,
+          "detail": "Scope includes exact pins and range-resolved versions; integrity/origin/license/deprecation reconciliation is offline."
+        },
+        {
+          "path": "scripts/measure-perf-guards-baseline.ts",
+          "line": 1894,
+          "detail": "Driver runs real boundedness/parity seams and returns measurements."
+        },
+        {
+          "path": "scripts/__tests__/measure-perf-guards-baseline.test.ts",
+          "line": 53,
+          "detail": "Scaled CI smoke checks positive timings, not a general regression envelope."
+        }
+      ],
+      "strengths": [
+        "CI does more than typecheck: blocking guards, real test discovery, no-empty unit suites and retry attempt artifacts exist.",
+        "Provenance scope reconciles declared exact/range resolutions and licenses/deprecations; it is explicitly not upstream identity attestation.",
+        "Performance script separates comparable timing rows from structural contracts and noise envelopes, and has specific pathological boundedness/child-reap checks."
+      ],
+      "gaps": [
+        "Reviewed provenance updates have no passing path (11-F11).",
+        "Scaled numeric smoke is behavior/positive-time assurance, not proof of latency/cost/heap/task efficiency budgets.",
+        "Local/remote guard and test schedules are not identical; integration discovery permits an empty suite and omits per-file isolation.",
+        "packages/code-map is absent from the inspected main matrix/root default test filter; package-specific parser assurance is pair07.",
+        "Nightly still requests base2-free at main-nightly.ts:17; bounded current .ts roster searches found no shipped definition. It unconditionally announces success and exits 0 after runBuffBench, even if the measured population is empty. Actual scheduled run was not observed."
+      ],
+      "states": {
+        "loading": "build-and-check gates test matrices",
+        "empty": "Unit empty discovery fails; integration empty discovery prints and succeeds",
+        "failure": "Most guard nonzero exits block; ledger defaults missing attempt output to 1 and does not enforce flake elimination",
+        "cancellation": "Retry action has total per-attempt timeout; benchmark fixtures are bounded",
+        "retry": "Test suites retry up to 3 and persist attempts; mutable action tags remain in several non-main workflows",
+        "permission": "Workflow secret-name wiring was read as source only; no actual values or external CI state accessed"
+      }
+    },
+    {
+      "id": "sdk-node-packaged-consumer",
+      "maturity": "partial",
+      "assurance": "static build/release/compatibility trace; export-fixup fixtures inspected; no artifact build/install executed",
+      "entrypoint": "sdk/package.json build/verify/prepack -> build.ts -> dual Node bundles -> Node import checks -> verify compatibility projects -> publish",
+      "implementation": "External runtime deps from public manifest; env inlining disabled; bundled declarations; repair emitted exports; copy vendor/WASM; Node CJS/ESM exports smoke",
+      "consumer": "SDK release invokes verify before publish; package export conditions and compatibility projects use @openbuff/sdk",
+      "tests": [
+        "sdk/src/__tests__/build-esm-fixup.test.ts",
+        "sdk/test/cjs-compatibility/test-imports.js",
+        "sdk/test/esm-compatibility/test-imports.js",
+        "sdk/test/esm-compatibility/test-types.ts"
+      ],
+      "docs": [
+        "sdk/PUBLISHING.md"
+      ],
+      "evidence": [
+        {
+          "path": "sdk/scripts/build.ts",
+          "line": 75,
+          "detail": "Environment lookup stays runtime-based; build values are not inlined."
+        },
+        {
+          "path": "sdk/scripts/build.ts",
+          "line": 176,
+          "detail": "Both Node formats check required exports and fail nonzero import/missing-export cases."
+        },
+        {
+          "path": "sdk/scripts/verify.ts",
+          "line": 102,
+          "detail": "Compatibility projects npm install then copy dist and run commands."
+        },
+        {
+          "path": "sdk/test/esm-compatibility/package.json",
+          "line": 8,
+          "detail": "Copies dist/manifest into node_modules inside the repository."
+        },
+        {
+          "path": "sdk/smoke-test-dist.ts",
+          "line": 117,
+          "detail": "Smoke imports ../dist from a workspace-local scratch project."
+        },
+        {
+          "path": ".github/workflows/sdk-release.yml",
+          "line": 94,
+          "detail": "Release really invokes verify; Node 24 setup happens afterward at line 96."
+        }
+      ],
+      "strengths": [
+        "Explicit dual-format entrypoints and post-repair Node checks catch malformed/missing selected exports.",
+        "Public runtime dependency declaration drives externals; types/dev deps are separated.",
+        "Compatibility projects execute actual Node import and ESM compiled constructor/type examples."
+      ],
+      "gaps": [
+        "No fresh npm tarball consumer outside workspace ancestry, with only production dependencies, was verified.",
+        "Dist copy/direct file reference and forced WASM path can hide package-resolution or omitted-asset failures; pair07 owns concrete query/grammar omissions.",
+        "Tests mostly import/construct, not a deterministic packaged SDK observe/edit/validate/cancel/resume task.",
+        "No Node engine-minimum/OS matrix for declared >=20.3.0 or strict declaration validation without skipLibCheck was found in inspected release path.",
+        "PUBLISHING.md still describes tsc/query-copy/file shapes that differ from current build; docs are not artifact proof."
+      ],
+      "states": {
+        "loading": "Build cleans dist, bundles, emits types/assets and verifies selected exports",
+        "empty": "Required export absence fails; skip-build checks only directory existence before downstream steps",
+        "failure": "Declaration/build/import failures block; optional repair warnings do not certify every API export",
+        "cancellation": "Node export checks have 30s timeout; some npm/install/basic smoke subprocesses have no explicit timeout",
+        "retry": "No installed-consumer retry/rollback contract beyond workflow failure",
+        "permission": "Build env disable is a concrete safeguard; no publishing, install, network or real client provider call performed"
+      }
+    },
+    {
+      "id": "cli-and-native-installed-validation",
+      "maturity": "partial",
+      "assurance": "static build/wrapper/workflow trace and adversarial fake binary probes; no current installed binary task",
+      "entrypoint": "cli build-binary -> release archive -> npm wrapper download/repair/launch; smoke-binary; rust-workspace CI",
+      "implementation": "Bundled agent/SDK prebuild, compiler/native loader lock, sibling assets, optional built-binary smoke; release temp smoke dirs; native Rust multi-target build/test",
+      "consumer": "CLI release invokes actual --version and native/boot probes on host runnable targets; wrapper checksum-verifies then installs and launches",
+      "tests": [
+        "cli/src/__tests__/release-wrapper.test.ts:1320",
+        "scripts/__tests__/release-workflow.test.ts"
+      ],
+      "docs": [
+        "docs/testing.md:21",
+        "cli/scripts/smoke-binary.ts:1"
+      ],
+      "evidence": [
+        {
+          "path": "cli/scripts/build-binary.ts",
+          "line": 570,
+          "detail": "Shared OpenTUI patch/restore/compile cycle is locked and restored in finally."
+        },
+        {
+          "path": ".github/workflows/cli-release-build.yml",
+          "line": 400,
+          "detail": "Release smoke copies built executable and siblings to a temporary cwd."
+        },
+        {
+          "path": "cli/scripts/smoke-binary.ts",
+          "line": 442,
+          "detail": "Full smoke requires known boot signal and rejects known fatal output."
+        },
+        {
+          "path": ".github/workflows/rust-workspace.yml",
+          "line": 58,
+          "detail": "Unconditional host cargo build/test job exists."
+        },
+        {
+          "path": ".github/workflows/rust-workspace.yml",
+          "line": 129,
+          "detail": "Matrix bool-valued flags are compared with string true; actual GitHub evaluation unobserved."
+        }
+      ],
+      "strengths": [
+        "Native loader patch cycle has explicit mutual exclusion and release smoke goes beyond synchronous version output.",
+        "Supplemental npm wrapper validates archive checksum/extracted files, rolls back file installation failures, keeps working binaries on failed staged update and avoids persisting an unverified offline version.",
+        "Rust host build/tests are statically unconditional; cross-target builds/uploads are explicitly configured."
+      ],
+      "gaps": [
+        "Probe-only fatal bypass (11-F12).",
+        "Source built-binary smoke is opt-in; ARM64 emulated release lane uses version/help rather than native/full boot probes.",
+        "Wrapper tests use injected probes/downloads and an existing text file, not a real installed executable; no provider-free installed end-to-end task demonstrated here.",
+        "Query/grammar archive defects belong pair07; stale native exec-stub expectation and bool/string matrix guard issue belong pair09. Neither historical comments nor static workflow predicates prove actual successful native GitHub execution.",
+        "Rust workflow path filter covers rust/workflow changes only; inspected CI does not prove TS-host/native integration on SDK-only changes."
+      ],
+      "states": {
+        "loading": "Build/prebuild must complete before compile; runtime wrapper can download/repair before launch",
+        "empty": "Absent or corrupt required assets fail/repair; missing binary can invoke update resolution",
+        "failure": "Wrapper has checksum/error/rollback/backoff paths; smoke has timeout/spawn/fatal/positive markers",
+        "cancellation": "Full TUI smoke kills its owned child at deadline; installed native protocol cancellation remains pair09",
+        "retry": "Staged update failure backs off 24h; background checks are bounded/unref timers",
+        "permission": "Supplemental cli/release sources are context only and excluded from the pinned structural receipt; no release install/network occurred"
+      }
+    },
+    {
+      "id": "repo-test-loading-and-legacy-build-tools",
+      "maturity": "partial",
+      "assurance": "static current configuration; narrow 58-test invocation; no Infisical/Nx execution",
+      "entrypoint": "Root/package test scripts and bunfig preload; build-tools Nx executor registration",
+      "implementation": "Root preload provides test-only env defaults; scm plugin remains unused because query loading uses fs; CLI in-process discovery/preload pins native asset resolution",
+      "consumer": "CLI test command is wired to real CI script; build-tools infisical executor has registration but no active consumer found in inspected Bun commands/current .ts/.yml/public manifest search",
+      "tests": [
+        "cli/src/__tests__/run-cli-tests.test.ts",
+        "scripts/__tests__/ci-workflow.test.ts"
+      ],
+      "docs": [
+        "docs/testing.md:36",
+        "docs/architecture.md"
+      ],
+      "evidence": [
+        {
+          "path": "bunfig.toml",
+          "line": 10,
+          "detail": "SCM preload removal is intentional and current source search found no active .scm module import."
+        },
+        {
+          "path": "cli/scripts/run-cli-tests.ts",
+          "line": 68,
+          "detail": "Discovery throws on unreadable tree, prunes outputs and sorts paths."
+        },
+        {
+          "path": "cli/scripts/run-cli-tests.ts",
+          "line": 145,
+          "detail": "Spawns current pinned test runtime with OpenTUI preload/isolation and parent asset root."
+        },
+        {
+          "path": "packages/build-tools/executors/infisical-run/executor.ts",
+          "line": 27,
+          "detail": "Legacy executor returns failure if Infisical absent; validates env/logLevel/cwd and uses argv wrapper plus deliberate shell command."
+        },
+        {
+          "path": "packages/build-tools/project.json",
+          "line": 8,
+          "detail": "Nx target registration remains but root active commands use Bun workspaces."
+        }
+      ],
+      "strengths": [
+        "The root test loader is not a missing-SCM-import bug in current source; its comment matches active filesystem query loading.",
+        "CLI discovery makes empty/unreadable trees fail and avoids an undeclared POSIX find dependency.",
+        "Legacy executor bounds cwd and env/logLevel input; @nx/devkit is a type-only import, so dev declaration alone is not a shipped runtime dependency defect."
+      ],
+      "gaps": [
+        "Shared lesson cleanup must be isolated before broad eval test execution.",
+        "build-tools has no demonstrated production consumer, own tests, or timeout/cancellation contract; classify the executor as unwired maintenance surface rather than a usable body capability.",
+        "Whole CI schedule, OpenTUI target behavior and installed SDK/native artifacts were not run."
+      ],
+      "states": {
+        "loading": "CLI preloads installed native assets before test module mocks",
+        "empty": "Default CLI discovery rejects empty/unreadable tree; legacy missing Infisical returns false",
+        "failure": "Bun workers share a pool per current docs, so isolate does not prove per-file process isolation",
+        "cancellation": "Legacy synchronous spawn has no explicit timeout; inactive consumer limits current impact",
+        "retry": "No new broad suites needed after safe tests passed",
+        "permission": "Tests were launched with an explicit fake environment, temporary HOME, no env-file loading or auto install"
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "11-F1",
+      "title": "SDK error outputs lose failure status before measured scoring",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "evals/buffbench/runners/codebuff.ts",
+          "line": 125,
+          "detail": "Logs output.type=error and writes a debug artifact, then continues."
+        },
+        {
+          "path": "evals/buffbench/runners/codebuff.ts",
+          "line": 198,
+          "detail": "Returns a normal RunnerResult without an error/outcome field."
+        },
+        {
+          "path": "evals/buffbench/runners/runner.ts",
+          "line": 5,
+          "detail": "RunnerResult cannot represent failure or incomplete completion."
+        },
+        {
+          "path": "evals/buffbench/agent-runner.ts",
+          "line": 196,
+          "detail": "The outer error field is set only when an exception is thrown."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 88,
+          "detail": "Measured filtering treats any run without error as valid, subject only to judge synthetic status."
+        }
+      ],
+      "trigger": "OpenbuffClient.run resolves with output.type=error instead of rejecting; a judge still returns structured scores.",
+      "consequence": "Provider/runtime failure can be classified as a measured, error-free task. In the new fake-client probe, an injected SDK provider failure became scored 9/10 with measuredRunCount=1 and retained $0.25 cost.",
+      "suggestedFix": "Add a typed runner outcome carrying SDK error/incomplete/cancelled states; propagate it to EvalRun and keep task outcome separate from judge availability. Preserve partial diff, duration and cost instead of converting unavailable outcomes to success or free failure.",
+      "acceptanceProbe": "Inject SDK error output, step-limit exhaustion, and cancellation into the real CodebuffRunner->runTask seam; assert task outcome remains failed/incomplete, that measured-success metrics exclude it, and that partial effects/cost persist.",
+      "verificationArtifact": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-offline-probe-results.json"
+    },
+    {
+      "id": "11-F2",
+      "title": "Final-check cancellation settles before descendant work stops",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "evals/buffbench/agent-runner.ts",
+          "line": 408,
+          "detail": "A check creates an AbortController and aborts the child_process.exec shell."
+        },
+        {
+          "path": "evals/buffbench/agent-runner.ts",
+          "line": 422,
+          "detail": "Checks use exec without a process group or descendant reaping."
+        },
+        {
+          "path": "evals/buffbench/agent-runner.ts",
+          "line": 440,
+          "detail": "Abort is returned immediately as cancelled/timed_out; finally only clears timer/listener."
+        },
+        {
+          "path": "evals/buffbench/__tests__/agent-runner.test.ts",
+          "line": 254,
+          "detail": "Cancellation coverage asserts result shape, not descendant termination."
+        },
+        {
+          "path": "evals/subagents/test-repo-utils.ts",
+          "line": 87,
+          "detail": "Repository cleanup follows evaluator callback settlement."
+        }
+      ],
+      "trigger": "A final check starts a background compiler/test child, then the task is cancelled or its check deadline expires.",
+      "consequence": "A cancelled receipt can be emitted while test/build processes continue mutating files, consuming resources, or holding pipes. A safe fixture child wrote an owned marker after the check returned cancelled/130; the probe killed that child in finally.",
+      "suggestedFix": "Use supervised process-tree execution for final checks, with TERM/grace/KILL and drain/reap settlement; separate requested cancellation from proven process termination. Reuse the canonical existing supervisor when available.",
+      "acceptanceProbe": "Run a fixture shell with a TERM-ignoring/background child that writes a marker after the deadline. Require cancelled/timed_out output only after the entire owned tree is reaped, no late marker, bounded grace, and readable captured diagnostics.",
+      "verificationArtifact": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-offline-probe-results.json"
+    },
+    {
+      "id": "11-F3",
+      "title": "Lesson tests recursively remove the real persistent lesson directory",
+      "severity": "HIGH",
+      "domains": [
+        "state-mutation",
+        "test-coverage",
+        "correctness"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 314,
+          "detail": "Live runTask hardcodes agent-lessons under the evaluator source directory."
+        },
+        {
+          "path": "evals/buffbench/__tests__/run-buffbench.test.ts",
+          "line": 1080,
+          "detail": "The fixture reads the shared evaluator agent-lessons/agent-a.md."
+        },
+        {
+          "path": "evals/buffbench/__tests__/run-buffbench.test.ts",
+          "line": 1091,
+          "detail": "finally recursively removes the whole shared agent-lessons directory."
+        },
+        {
+          "path": "evals/buffbench/__tests__/run-buffbench.test.ts",
+          "line": 1495,
+          "detail": "The promotion fixture repeats that shared recursive deletion."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 268,
+          "detail": "CI discovers this evaluator test file."
+        }
+      ],
+      "trigger": "A maintainer runs run-buffbench.test.ts or the evals package suite with accumulated evaluator lessons present.",
+      "consequence": "Test cleanup can delete lessons from prior real runs and concurrent work. A trace temp directory does not isolate the separate persistent lesson sink. The unsafe file was not executed in this review.",
+      "suggestedFix": "Inject lessonsDir into runTask/runBuffBench, default it only in production, and make each test supply its own temporary directory. Test cleanup must only remove paths created by that fixture.",
+      "acceptanceProbe": "In a temporary evaluator root, seed an unrelated persistent sentinel lesson, execute both proposal fixtures with a separate lessonsDir, and prove the sentinel and parallel fixture outputs survive. Do not run the existing destructive tests against maintainer data.",
+      "verification": "static trace; deliberately not executed"
+    },
+    {
+      "id": "11-F4",
+      "title": "The executable comparison discards repeats and measured low scores",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "scripts/compare-buffbench-runs.ts",
+          "line": 35,
+          "detail": "One Map entry per commitSha overwrites repeated observations in filesystem enumeration order."
+        },
+        {
+          "path": "scripts/compare-buffbench-runs.ts",
+          "line": 66,
+          "detail": "Any agent overallScore<=1.0 excludes the entire common task."
+        },
+        {
+          "path": "scripts/compare-buffbench-runs.ts",
+          "line": 196,
+          "detail": "Means and dispersion are computed only from surviving Map entries."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 881,
+          "detail": "The live runner supports repeated tasks."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 950,
+          "detail": "Live aggregation explicitly preserves genuine low measured scores."
+        }
+      ],
+      "trigger": "Compare repeated BuffBench runs, runs containing genuine 0-1 measured scores, or a task with one failing unrelated agent.",
+      "consequence": "The comparison population differs from the executed population and can reverse a regression. Fresh public-schema fixtures had repeat means 8.00->4.75 (delta -3.25), while the real comparison printed 8.00->9.00 (+1.00), N=1, after overwriting a repeat and excluding another measured 0.5 task.",
+      "suggestedFix": "Compare typed result artifacts with stable task/repo/repeat/agent identities; retain every measured score including zero. Report agent failures, judge-unavailable results and missing pairs as separate populations, with explicit denominators and matched-task/repeat bootstrap design.",
+      "acceptanceProbe": "Feed the new fixture into the real comparison CLI and require -3.25 for its repeat mean, both repeats retained, genuine 0.5 retained, per-agent exclusions only, and input-order-invariant results.",
+      "verificationArtifact": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-comparison-cli.log"
+    },
+    {
+      "id": "11-F5",
+      "title": "Run artifacts drop language strata and resolved experiment identity",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "evals/buffbench/types.ts",
+          "line": 38,
+          "detail": "Tasks accept languages/frameworks/taskType/difficulty metadata."
+        },
+        {
+          "path": "evals/buffbench/types.ts",
+          "line": 65,
+          "detail": "Capability aggregation groups model/language/taskType/role, but source search found no production caller."
+        },
+        {
+          "path": "evals/buffbench/types.ts",
+          "line": 181,
+          "detail": "EvalRun stores commitSha and prompt but no task/repo/repeat/language/model identity."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 333,
+          "detail": "The real run object never copies the task stratum fields."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 461,
+          "detail": "ANALYSIS artifacts likewise store SHA/prompt and metrics, omitting strata and resolved routing."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 1030,
+          "detail": "FINAL metadata lists input paths/repos and seed/repeats, without content/config/model-version digests."
+        }
+      ],
+      "trigger": "A polyglot or cross-model experiment uses task language labels, repeated tasks, or provider routing overrides.",
+      "consequence": "The measurement output does not carry the data needed to reconstruct language-specific sample sizes, verify comparable task populations, or prove which model/config caused an improvement. A typed aggregation helper is not a wired stratum report; seed records scheduling metadata, not stochastic model determinism.",
+      "suggestedFix": "Create an immutable experiment manifest and result identity carrying task/repo/content hashes, repeat ID, language/task strata, agent-definition hash, resolved provider/model/settings and validation tool versions. Wire the existing aggregator into emitted comparisons with missing-stratum disclosure.",
+      "acceptanceProbe": "Run a two-language, two-repeat fake-client experiment with identical SHAs across different repos and explicit route overrides; reconstruct all four observations and per-language counts from artifacts alone, and reject incompatible manifests.",
+      "verification": "static trace plus bounded .ts consumer search; no private datasets opened"
+    },
+    {
+      "id": "11-F6",
+      "title": "The significance gate accepts non-finite paired measurements",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "evals/buffbench/statistics.ts",
+          "line": 188,
+          "detail": "NaN differences survive d!==0 filtering and count toward applicability."
+        },
+        {
+          "path": "evals/buffbench/statistics.ts",
+          "line": 83,
+          "detail": "Bootstrap accepts non-finite differences without validation."
+        },
+        {
+          "path": "evals/buffbench/proposals.ts",
+          "line": 437,
+          "detail": "NaN CI lower bounds evade <=0; a small computed p-value can therefore accept promotion."
+        },
+        {
+          "path": "evals/buffbench/proposals.ts",
+          "line": 401,
+          "detail": "Aggregate score thresholds also use comparisons without finite-value validation."
+        }
+      ],
+      "trigger": "A manual/future comparison caller supplies NaN/Infinity score data or invalid aggregate/policy values to the exported helper.",
+      "consequence": "An evidence gate fails open on invalid numbers. Twelve NaN after-values produced applicable n=12, p=0.002526, NaN confidence bounds and accepted=true in the new offline probe. Current live single-run promotion remains rejected for independent zero-delta/missing-pair reasons, so this is a blocker for future adoption, not an observed automatic promotion.",
+      "suggestedFix": "Validate finite bounded scores, finite aggregates and valid confidence/iteration/threshold parameters before computation. Invalid evidence must produce an explicit not-applicable/rejected decision.",
+      "acceptanceProbe": "Probe NaN, Infinity, null-derived data, zero/negative/fractional iterations and invalid policy thresholds; every invalid dataset must reject with a typed reason and no NaN/undefined result. Retain current empty/underpowered/tie regression tests.",
+      "verificationArtifact": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-offline-probe-results.json"
+    },
+    {
+      "id": "11-F7",
+      "title": "Fidelity scoring treats retained identifiers as retained factual values",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "evals/compaction-fidelity/scenario.test.ts",
+          "line": 140,
+          "detail": "F2 presents path extraction coverage as dropped planted-fact detection."
+        },
+        {
+          "path": "evals/compaction-fidelity/scenario.test.ts",
+          "line": 153,
+          "detail": "A memory containing only read:path strings is treated as faithful extraction."
+        },
+        {
+          "path": "evals/compaction-fidelity/scenario.test.ts",
+          "line": 200,
+          "detail": "F4 counts paths as retained/recallable instead of independently checking planted values."
+        },
+        {
+          "path": "evals/compaction-fidelity/scenario.test.ts",
+          "line": 268,
+          "detail": "F5 checks that path queries match an injected summary, not that the summary preserves correct values."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/compaction-verification.ts",
+          "line": 45,
+          "detail": "The shipped helper intentionally derives paths/command prefixes from tool-call inputs."
+        }
+      ],
+      "trigger": "A summary retains the right source path but drops or contradicts the planted backoff value, requirement, blocker state or outcome.",
+      "consequence": "The advertised aggregate can remain perfect despite semantic information loss. The fixture probe replaced 1500ms with 0ms while keeping the path and received expected=1, missing=[]; citing read:path with all history dropped also returned complete coverage. This does not prove the underlying memory runtime fails, only that this oracle cannot establish value fidelity.",
+      "suggestedFix": "Name identifier coverage accurately and add independent planted-value/constraint/negation/blocker-state oracles. Drive actual compaction/consolidation seams with faithful and adversarial injected summaries across archive aging and restart; keep useful archive/path tests.",
+      "acceptanceProbe": "Require the right path with a wrong value, omitted negation, resolved-versus-open blocker inversion and aged archive to lower the value-fidelity score. A faithful summary must preserve both identity and factual content over several passes.",
+      "verificationArtifact": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-offline-probe-results.json"
+    },
+    {
+      "id": "11-F8",
+      "title": "Benchmark task execution shares the controller key environment and home",
+      "severity": "MEDIUM",
+      "domains": [
+        "security",
+        "dependency-hygiene",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "evals/subagents/test-repo-utils.ts",
+          "line": 76,
+          "detail": "Repository setup shell receives the complete process.env plus task overrides."
+        },
+        {
+          "path": "evals/buffbench/agent-runner.ts",
+          "line": 426,
+          "detail": "Final checks likewise inherit the complete controller process environment."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 664,
+          "detail": "Restricted install env still uses the real controller HOME."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 682,
+          "detail": "npm/bun package lifecycle code runs directly on the host in a temporary cwd."
+        },
+        {
+          "path": ".github/workflows/nightly-evals.yml",
+          "line": 36,
+          "detail": "Nightly workflow exports named repository secrets to subsequent evaluator steps."
+        }
+      ],
+      "trigger": "A third-party benchmark setup/check/package lifecycle script runs while provider or other service keys remain available to the controller.",
+      "consequence": "A temporary repository cwd is not OS isolation or a separate key lifecycle. An artificial controller token was readable by a check and written into the owned fixture file. No real credentials, home configuration or exfiltration endpoint were read or used. Normal intentional full-access coding-body behavior is not being classified as an authorization defect.",
+      "suggestedFix": "For untrusted evaluation code, isolate repo/check/install execution with a key-free environment and ephemeral home, leaving provider access in the controller through a defined channel. Alternatively require an explicit trusted-task execution mode and record that weaker assurance. Do not silently change the body runtime full-access contract.",
+      "acceptanceProbe": "Use dummy environment and home-file canaries only: third-party setup/check/install code must not see controller canaries under the isolated mode, while fake provider calls still work and the receipt states the actual isolation boundary.",
+      "verificationArtifact": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-offline-probe-results.json"
+    },
+    {
+      "id": "11-F9",
+      "title": "Runner debug errors bypass artifact path sanitization",
+      "severity": "MEDIUM",
+      "domains": [
+        "security",
+        "state-mutation",
+        "correctness"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "evals/buffbench/runners/codebuff.ts",
+          "line": 99,
+          "detail": "Error-event debug filename interpolates raw commitId and agentId."
+        },
+        {
+          "path": "evals/buffbench/runners/codebuff.ts",
+          "line": 132,
+          "detail": "Output-error debug filename repeats raw identifiers under a fixed source directory."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 532,
+          "detail": "Task id/sha validation imposes no path/hex restriction."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 353,
+          "detail": "The normal trace path separately sanitizes identifiers, which does not protect the earlier runner write."
+        }
+      ],
+      "trigger": "An eval task or supplied runner agent identifier contains traversal components, and an SDK error occurs.",
+      "consequence": "The debug artifact can escape the intended evaluator/log root and fail or write into another directory. The error-output fixture used a relative traversal ID and the real runner created its debug file in this shard's explicitly owned /tmp fixture directory. Random suffixes limit exact-file overwrite targeting but do not provide containment.",
+      "suggestedFix": "Route all debug artifacts through the run-owned artifact writer; sanitize filenames and enforce resolved containment. Keep raw identifiers as data fields inside the artifact.",
+      "acceptanceProbe": "Inject ../ and absolute-looking IDs on both event-error and output-error paths; every artifact must stay within an injected run directory, with no writes to source/home or unrelated fixture paths.",
+      "verificationArtifact": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-offline-probes.ts"
+    },
+    {
+      "id": "11-F10",
+      "title": "Minute-resolution log directories mix independent run evidence",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 859,
+          "detail": "Log key truncates the timestamp to YYYY-MM-DDTHH-MM and adds only sanitized agent names."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 865,
+          "detail": "An existing same-key directory is reused."
+        },
+        {
+          "path": "evals/buffbench/meta-analyzer.ts",
+          "line": 160,
+          "detail": "Meta-analysis scans every ANALYSIS filename found in that directory."
+        },
+        {
+          "path": "evals/buffbench/run-buffbench.ts",
+          "line": 1054,
+          "detail": "FINAL_RESULTS.json overwrites the same filename."
+        }
+      ],
+      "trigger": "Two evaluator invocations with the same agent list begin in the same minute, including retries or parallel variants.",
+      "consequence": "Task traces/FINAL_RESULTS can overwrite, stale ANALYSIS rows can enter the new meta-analysis, and the final file listing can attribute another invocation's artifacts to this run. No existing log directory was opened or live run executed to demonstrate this deterministic naming collision.",
+      "suggestedFix": "Allocate a unique run ID and create the directory exclusively; write atomic artifact manifests bound to that run and input digests, and have analyzers consume manifest entries instead of a directory-wide name scan.",
+      "acceptanceProbe": "With a fixed clock, launch two fake-client runs using the same agent names but different tasks/configs and assert disjoint directories/manifests, no overwrite, no cross-run analysis rows and explicit failed-write states.",
+      "verification": "static trace; no private log records accessed"
+    },
+    {
+      "id": "11-F11",
+      "title": "The reviewed-provenance update instruction has no passing CI path",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 100,
+          "detail": "Comment promises an already-approved identity change can arrive in a separate reviewed commit."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 125,
+          "detail": "Actual policy compares whole provenance file name-status against the PR base or last parent."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 129,
+          "detail": "Any status other than A fails; there is no reviewed-update exception."
+        },
+        {
+          "path": "scripts/dependency-provenance-guard.ts",
+          "line": 632,
+          "detail": "New resolved releases require a refreshed record."
+        },
+        {
+          "path": "scripts/__tests__/ci-workflow.test.ts",
+          "line": 186,
+          "detail": "Tests assert strings/presence, not an approved-update versus unreviewed-update scenario."
+        }
+      ],
+      "trigger": "A legitimate dependency upgrade adds a reviewed release entry to the existing provenance JSON, even in its own reviewed commit.",
+      "consequence": "The offline reconciliation demands new evidence, but the CI file-diff gate rejects every modification of that evidence file. The error's prescribed separate reviewed commit still yields M against the PR base. For batched direct pushes, comparing only HEAD~1 also does not cover the entire pushed range. GitHub execution was not observed.",
+      "suggestedFix": "Define a reviewable update channel or per-release append/identity policy whose approved new entries can pass while unauthorized changes to existing identities fail. Compare the correct event base/range; keep the useful offline reconciliation and state explicitly that it is not upstream attestation.",
+      "acceptanceProbe": "Exercise initial addition, unchanged record, approved new release entry, unauthorized existing identity rewrite, deletion and multi-commit push fixtures with the actual guard logic. Approved updates pass and existing-record tampering fails for both PR and push event bases.",
+      "verification": "static workflow and guard trace; actual GitHub execution unknown"
+    },
+    {
+      "id": "11-F12",
+      "title": "Probe-only binary smoke accepts known fatal output",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "cli/scripts/smoke-binary.ts",
+          "line": 147,
+          "detail": "Capture records fatal patterns on probe stdout/stderr."
+        },
+        {
+          "path": "cli/scripts/smoke-binary.ts",
+          "line": 273,
+          "detail": "requireProbe returns success for code=0 and markerHit without checking fatalHit."
+        },
+        {
+          "path": "cli/scripts/smoke-binary.ts",
+          "line": 339,
+          "detail": "Probe-only mode returns before the full TUI negative fatal gate."
+        },
+        {
+          "path": ".github/workflows/cli-release-build.yml",
+          "line": 425,
+          "detail": "Legacy macOS release validation explicitly selects probe-only mode."
+        }
+      ],
+      "trigger": "A packaged native probe reports the expected success marker and exits zero while also printing a known fatal/unhandled rejection.",
+      "consequence": "The legacy/probe-only release gate can accept contradictory startup evidence. The safe shell fixture emitted Unhandled rejection plus both success markers: probe-only exited 0, whereas the same fixture's full smoke exited 1 after detecting the fatal. These are adversarial harness probes, not evidence about a current installed release binary.",
+      "suggestedFix": "Require absence of captured fatal markers on every successful probe; settle after stdout/stderr drain and preserve timeout/spawn/error distinctions. Keep full-boot positive checks and bounded capture.",
+      "acceptanceProbe": "Run a fake binary emitting success+fatal, success-only, missing marker, nonzero exit and late/split fatal output. Both probe-only and full modes must reject every fatal case.",
+      "verificationArtifacts": [
+        "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-smoke-shell-probe-only.log",
+        "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-smoke-shell-full.log"
+      ]
+    }
+  ],
+  "domainAssessment": {
+    "security": "Benchmark setup/final checks inherit the controller environment and home; dummy canary confirmed inheritance, without reading real keys. Install argv and normal/judge filename sanitization are useful but not OS isolation or a prompt-injection proof. Raw runner debug paths still escape. Full-access body behavior is intentional and preserved; eval-task trust is a distinct boundary.",
+    "correctness": "Highest concern is outcome truth: resolved SDK error can score as measured success; final-check descendants outlive cancellation. Comparison overwrites repeat populations, finite gates fail open, identifier fidelity is overclaimed, and installed-probe success can contradict fatal output. Typed judge validation, synthetic status and hard score caps are existing strengths.",
+    "state-mutation": "Shared persistent lesson test cleanup is destructive; raw debug artifacts and minute-run directories have ownership/containment defects. The normal trace entry is correctly bound per agent and build native loader patch cycles are locked. Test isolation must protect filesystem sinks, not only module state.",
+    "error-handling": "Some task/judge/check states are explicit, but SDK output errors, setup failures, aborted process trees and artifact write failures are not consistently settled. Extractor/judge timeouts do not pass abort signals in inspected calls. CI test retries and wrapper staged-update/backoff paths are real; they do not replace typed evaluator status.",
+    "performance": "Bounded check concurrency, batched context reads and real benchmark parity/cap/child-reap contracts are useful. CI scaled perf test is mostly completion/positive-time assurance, with selected pathological absolute guards. No comparable end-to-end success/latency/cost/heap or per-language efficiency envelope was established; unknown cost still enters numeric aggregates as 0 at runner warning boundary.",
+    "dependency-hygiene": "Bun 1.3.5 and main action SHAs/frozen installs are pinned. Provenance reconciles declared exact and range-resolved upstream record identities, integrity, license and deprecation offline, but is not independent upstream attestation and its update gate is self-blocking. Several release/Rust action tags float. Public SDK externals are manifest-driven; legacy Nx dependency is type-only and executor is unwired, not a proven runtime undeclared-dependency defect.",
+    "test-coverage": "58 safe statistics/proposal/fidelity tests passed; new fake-client, cancellation, NaN, identifier, comparison and smoke probes exposed gaps they do not assert. Destructive lesson tests were not run. Golden calibration replays canned scores into fake clients, so it proves plumbing/clamping, not live judge agreement/injection resistance. Real packed SDK/CLI/native installed tasks and actual GitHub predicate execution remain unknown.",
+    "api-contract": "RunnerResult lacks error/outcome; task language fields disappear at output; model/cost units and resolved route/version provenance are insufficient for trustworthy comparisons. SDK dual ESM/CJS/type conditions and selected Node exports are explicit and wired. Root SCM preload removal matches current filesystem query loading; no current import break was found. Supplemental CLI npm wrapper manifest is context-only outside pinned inventory."
+  },
+  "coverageLimits": [
+    "All 18 required bounded picker sections were read exactly; secondary/adjacent sections are explicitly recorded in readRanges. No whole-file audit or untouched-source correctness guarantee is implied.",
+    "Structural receipt includes only current pinned inventory members actually read; supplemental cli/release/index.js/package.json remain excluded.",
+    "No provider/model call, network action, installer, build, publish, real credentials, private home config, old eval logs/traces or private dataset was intentionally inspected or executed. One broad JSON consumer search accidentally matched historical error text; it was discarded, unarchived and unused, and all subsequent searches were restricted to source/YAML/exact public fixtures/manifests.",
+    "The safe injected runner intentionally redirected its otherwise unsafe debug path to this shard's owned temporary fixture; no source fixes or unrelated writes were made.",
+    "Initial Node fake-binary output capture was empty in this environment; the fatal-gate conclusion uses the successful independently captured shell fixture. This is not a finding about the installed Node/CLI runtime.",
+    "No real package/tarball/native artifact or complete GitHub run was executed. Matrix booleans versus string guards and stale Rust exec-stub smoke are pair09-owned; static workflow reads alone do not establish whether GitHub ran those predicates.",
+    "Runtime mutation safety is pair06; memory store/retention behavior is pair04; concrete query/grammar packaging omissions are pair07. This shard evaluates their oracle/learning/installed-assurance boundaries and avoids duplicate defects.",
+    "Unsafe run-buffbench.test.ts was deliberately not executed because its cleanup deletes shared persistent lessons. The root agent was notified before any broad eval package run.",
+    "No inferred advantage or completeness claim is made for implementation-language migration or generic polyglot grammars. The ready queue repairs deterministic TS outcomes first and requires target-language/cross-language task evidence before adoption."
+  ],
+  "recommendedPlanWork": [
+    {
+      "id": "11-P1",
+      "title": "Make evaluator outcomes trustworthy before any adoption",
+      "currentProblem": "11-F1/F2/F3 allow false success, late work and destructive test cleanup.",
+      "sourceAnchors": [
+        "evals/buffbench/runners/runner.ts:5",
+        "evals/buffbench/runners/codebuff.ts:125",
+        "evals/buffbench/agent-runner.ts:396",
+        "evals/buffbench/run-buffbench.ts:314"
+      ],
+      "smallestScope": "Typed task/setup/runner outcomes, supervised final-check lifecycle and injected lesson/artifact roots inside current evaluator TS files.",
+      "prerequisites": [],
+      "languageDecision": "Repair in TypeScript; reuse current runtime supervisor rather than awaiting a Python/Rust rewrite.",
+      "behavioralAcceptanceProbes": [
+        "SDK error/incomplete/cancelled retains failed outcome with partial cost/diff.",
+        "Entire check process tree reaped before result settlement.",
+        "Seeded unrelated lesson sentinel survives each proposal test."
+      ],
+      "regressionChecks": [
+        "Existing graph order/skipped/configuration/timeouts and synthetic-versus-measured score assertions."
+      ],
+      "observableCompletionEvidence": "Key-free integration receipts for each failure state; shared-data tests are safe to run.",
+      "stopOrDeferRule": "Do not launch broad eval suites or candidate learning while shared sinks/process settlement remain unsafe."
+    },
+    {
+      "id": "11-P2",
+      "title": "Emit immutable repeat- and language-aware comparison evidence",
+      "currentProblem": "11-F4/F5/F6/F9/F10 undermine populations, provenance, valid statistics and run ownership.",
+      "sourceAnchors": [
+        "scripts/compare-buffbench-runs.ts:35",
+        "evals/buffbench/types.ts:181",
+        "evals/buffbench/run-buffbench.ts:859",
+        "evals/buffbench/proposals.ts:437"
+      ],
+      "smallestScope": "One experiment/run/artifact identity schema, exclusive artifact writer, actual resolved model/settings capture, common finite/statistical filtering and wired strata output.",
+      "prerequisites": [
+        "11-P1"
+      ],
+      "languageDecision": "TypeScript contracts and current statistical helpers; no ML service needed.",
+      "behavioralAcceptanceProbes": [
+        "Input-order-invariant repeats preserve measured zero/low scores and per-agent failures.",
+        "Cross-repo identical SHAs never pair accidentally.",
+        "NaN/Infinity/policy-invalid evidence rejects.",
+        "Manifest-only reconstruction yields exact per-language/repeat counts and model config provenance."
+      ],
+      "regressionChecks": [
+        "Bootstrap determinism/ties/underpowered cases; crash trace and reserved-key protections."
+      ],
+      "observableCompletionEvidence": "Fresh-fixture comparison shows -3.25 rather than +1.00, plus immutable compatible manifest and stratum receipts.",
+      "stopOrDeferRule": "Reject incompatible/underpowered manifests; do not infer missing model/language labels or count repeats as independent task strata."
+    },
+    {
+      "id": "11-P3",
+      "title": "Graduate correctness and continuation oracles",
+      "currentProblem": "11-F7 identifier fidelity, optional mutable check commands and injected-only summaries cannot prove task or memory correctness.",
+      "sourceAnchors": [
+        "evals/compaction-fidelity/scenario.test.ts:140",
+        "evals/compaction-retention/scenario.test.ts:1058",
+        "evals/edit-blocks/scenario.test.ts:388",
+        "scripts/run-mutation-gate.ts:9"
+      ],
+      "smallestScope": "Independent value/constraint/blocker truth oracles and protected held-out validation; deterministic real SDK mutation/continuation integration over public polyglot fixtures.",
+      "prerequisites": [
+        "11-P1",
+        "11-P2"
+      ],
+      "languageDecision": "Keep TS evaluator; use existing target-language compilers/tests and existing Rust protocol, not another language host.",
+      "behavioralAcceptanceProbes": [
+        "Wrong value with right path fails; aged/restarted continuation retains required facts.",
+        "An intentionally wrong implementation is rejected by an immutable oracle even if it edits visible tests.",
+        "One task changes an interface and validates TS/Python/Rust consumers with versions, byte/position encoding, cancellation and effect receipts."
+      ],
+      "regressionChecks": [
+        "Keep F1 non-vacuous eviction, F3 exact recall, retention floors and edit transport injection assertions."
+      ],
+      "observableCompletionEvidence": "Held-out fixture manifest with independent failure controls and per-language/cross-boundary validation receipts.",
+      "stopOrDeferRule": "Do not call summary quality, grammar count or generic shell coverage semantic polyglot competence; defer unsupported ecosystems explicitly."
+    },
+    {
+      "id": "11-P4",
+      "title": "Wire a reviewed candidate learning channel",
+      "currentProblem": "Current extraction is optional and adoption/routing is absent; playbook counters and lessons are not held-out improvement.",
+      "sourceAnchors": [
+        "evals/buffbench/run-buffbench.ts:230",
+        "evals/buffbench/run-buffbench.ts:263",
+        "evals/buffbench/proposals.ts:31",
+        "sdk/src/provider-config.ts:1964"
+      ],
+      "smallestScope": "Candidate definition artifact in a separate worktree/channel, controlled baseline/candidate held-out runs, validated decisions, explicit adoption pointer and rollback record; keep default route human-configured until evidence passes.",
+      "prerequisites": [
+        "11-P1",
+        "11-P2",
+        "11-P3"
+      ],
+      "languageDecision": "TS orchestration first. Consider Python ML only after sufficient trustworthy independent observations demonstrate a concrete estimator/routing advantage.",
+      "behavioralAcceptanceProbes": [
+        "No candidate may pass without independent paired held-out evidence and correctness/resource budgets.",
+        "Non-applied/skipped/unsafe proposals are typed; model/tool/budget changes validate against actual runtime contracts.",
+        "Accepted candidate changes one explicit consumer; rejected candidate leaves active pointer unchanged; rollback restores prior pointer."
+      ],
+      "regressionChecks": [
+        "Zero-delta/missing-pair live rejection, no implicit apply, legal handleSteps clone/serialization fixtures and playbook reporter isolation."
+      ],
+      "observableCompletionEvidence": "Before/after artifact manifests, stratum confidence intervals, efficiency/success tradeoff report, adopted consumer and rollback receipts.",
+      "stopOrDeferRule": "If evidence is underpowered, contaminated or worse in required strata, reject/defer; never graduate a dry run or unconsumed helper."
+    },
+    {
+      "id": "11-P5",
+      "title": "Verify what is packed and installed",
+      "currentProblem": "Repository-local dist imports and injected wrapper tests do not prove external SDK/CLI/native consumer behavior.",
+      "sourceAnchors": [
+        "sdk/scripts/verify.ts:89",
+        "sdk/test/esm-compatibility/package.json:8",
+        ".github/workflows/cli-release-build.yml:395",
+        "cli/scripts/smoke-binary.ts:273",
+        ".github/workflows/rust-workspace.yml:129"
+      ],
+      "smallestScope": "Install the exact produced SDK tarball/CLI archive plus wrapper into fresh temporary consumers outside workspace ancestry; provider-free task probes on declared engine/platform lanes; verify native host protocol consumer in CI.",
+      "prerequisites": [
+        "Pair07 query/grammar packaging fixes",
+        "Pair09 native smoke/predicate corrections",
+        "11-P1"
+      ],
+      "languageDecision": "Keep Node/Bun TS host and existing Rust sidecar; use native OS runners for executable ABI proof.",
+      "behavioralAcceptanceProbes": [
+        "Import both SDK conditions at declared Node minimum and current supported Node; deterministic read/edit/validate/cancel task succeeds with production deps only.",
+        "CLI wrapper installs exact checksummed archive, boots and executes a native/grammar task without source-tree fallback.",
+        "Success+fatal fake probes fail in every mode; native tests and smoke execute on intended lanes."
+      ],
+      "regressionChecks": [
+        "ESM fixup selected/all public export coverage, strict declaration checks, offline wrapper healing/rollback and release commit/tag provenance."
+      ],
+      "observableCompletionEvidence": "Tarball/archive hashes, dependency graph, runtime versions and real installed task/protocol receipts attached to exact release commit.",
+      "stopOrDeferRule": "No release completion on only --version, copied dist, injected probe or skipped native lane; unsupported targets must be explicit."
+    },
+    {
+      "id": "11-P6",
+      "title": "Align release governance and efficiency gates with actual guarantees",
+      "currentProblem": "11-F11 blocks legitimate provenance updates; perf smoke has no general task/latency/cost regression envelope; local/remote schedules differ.",
+      "sourceAnchors": [
+        ".github/workflows/ci.yml:125",
+        "scripts/dependency-provenance-guard.ts:624",
+        "scripts/__tests__/measure-perf-guards-baseline.test.ts:21",
+        "scripts/check-ci-local.ts:412"
+      ],
+      "smallestScope": "Approved provenance update policy and event-base fixture tests; explicit guard/test schedule coverage; stable baseline resource budgets with noise-aware regression decisions and artifact provenance.",
+      "prerequisites": [
+        "11-P2",
+        "11-P5"
+      ],
+      "languageDecision": "TS guard changes and current CI; no additional executor ecosystem unless measured need exists.",
+      "behavioralAcceptanceProbes": [
+        "Approved new release entries pass while unauthorized existing identities fail across PR/push ranges.",
+        "An intentional after-path slowdown outside the declared budget fails the numeric gate.",
+        "Zero discovery, skipped native steps and retries are visible in a coverage/failure receipt."
+      ],
+      "regressionChecks": [
+        "Retain frozen Bun pins, exact/range provenance integrity/license/deprecation checks and structural performance contracts."
+      ],
+      "observableCompletionEvidence": "Executed guard policy fixture matrix and budgeted comparable workload results with dispersion; actual CI receipts when authorized.",
+      "stopOrDeferRule": "Defer broad performance claims without stable workload/baseline. Retire/defer unused build-tools surfaces until a real consumer justifies tests/maintenance."
+    }
+  ],
+  "verification": {
+    "runtime": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+    "safeUnitTests": {
+      "passes": 58,
+      "failures": 0,
+      "assertions": 364,
+      "files": [
+        "evals/buffbench/__tests__/statistics.test.ts",
+        "evals/buffbench/__tests__/proposals.test.ts",
+        "evals/compaction-fidelity/scenario.test.ts"
+      ],
+      "log": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-safe-unit-tests.log"
+    },
+    "integrationEvidence": [
+      "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-offline-probe-results.json",
+      "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-comparison-cli.log",
+      "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-smoke-shell-probe-only.log",
+      "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-smoke-shell-full.log"
+    ],
+    "executionReceipts": [
+      "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-execution-receipts.json",
+      "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/11-additional-probe-receipts.json"
+    ],
+    "privateFixturesUsed": false,
+    "actualGithubExecution": "unknown",
+    "installedRuntimeExecution": "unknown"
+  }
+}

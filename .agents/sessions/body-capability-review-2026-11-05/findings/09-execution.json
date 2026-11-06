@@ -1,0 +1,1659 @@
+{
+  "shardId": "09-execution",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "09-execution",
+    "subsystemIds": [
+      "sdk",
+      "packages",
+      "common",
+      "rust",
+      "agents",
+      "docs",
+      ".github"
+    ],
+    "files": [
+      ".github/workflows/rust-workspace.yml",
+      "agents/basher.ts",
+      "common/package.json",
+      "common/src/mcp/client.ts",
+      "common/src/protocol/acp-ext-v1.ts",
+      "common/src/tools/params/tool/run-terminal-command.ts",
+      "common/src/util/job-registry.ts",
+      "common/src/util/redact-secrets.ts",
+      "docs/agents-and-tools.md",
+      "docs/architecture.md",
+      "docs/request-flow.md",
+      "packages/agent-runtime/src/run-agent-step.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/__tests__/run-terminal-command.test.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts",
+      "packages/indexer/src/scip-runner.ts",
+      "rust/README.md",
+      "rust/crates/openbuff-native/Cargo.toml",
+      "rust/crates/openbuff-native/src/exec/landlock_fs.rs",
+      "rust/crates/openbuff-native/src/exec/mod.rs",
+      "rust/crates/openbuff-native/src/exec/plan.rs",
+      "rust/crates/openbuff-native/src/exec/runner.rs",
+      "rust/crates/openbuff-native/src/lib.rs",
+      "rust/crates/openbuff-native/src/main.rs",
+      "rust/rust-toolchain.toml",
+      "rust/scripts/smoke-test-sidecar.sh",
+      "sdk/package.json",
+      "sdk/src/__tests__/browser-logs-sandbox.test.ts",
+      "sdk/src/__tests__/env.test.ts",
+      "sdk/src/__tests__/kill-job.test.ts",
+      "sdk/src/__tests__/run-terminal-command.test.ts",
+      "sdk/src/__tests__/sidecar-supervisor.test.ts",
+      "sdk/src/credential-env-keys.ts",
+      "sdk/src/env.ts",
+      "sdk/src/run.ts",
+      "sdk/src/services/diagnostic-delta-runner.ts",
+      "sdk/src/services/harness-enforcement.ts",
+      "sdk/src/services/harness-intelligence.ts",
+      "sdk/src/services/language-intelligence.ts",
+      "sdk/src/services/lsp-multiplexer.ts",
+      "sdk/src/services/sidecar-artifact.ts",
+      "sdk/src/services/sidecar-supervisor.ts",
+      "sdk/src/tools/3d-assets.ts",
+      "sdk/src/tools/background-jobs.ts",
+      "sdk/src/tools/browser-logs.ts",
+      "sdk/src/tools/file-change-hooks.ts",
+      "sdk/src/tools/kill-job.ts",
+      "sdk/src/tools/run-targeted-validation.ts",
+      "sdk/src/tools/run-terminal-command.ts",
+      "sdk/src/tools/terminal-command-policy.ts",
+      "sdk/src/tools/terminal-output-spool.ts"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": ".github/workflows/rust-workspace.yml",
+      "from": 1,
+      "to": 106
+    },
+    {
+      "path": ".github/workflows/rust-workspace.yml",
+      "from": 120,
+      "to": 148
+    },
+    {
+      "path": "agents/basher.ts",
+      "from": 1,
+      "to": 300
+    },
+    {
+      "path": "common/package.json",
+      "from": 26,
+      "to": 47
+    },
+    {
+      "path": "common/src/mcp/client.ts",
+      "from": 1,
+      "to": 78
+    },
+    {
+      "path": "common/src/mcp/client.ts",
+      "from": 540,
+      "to": 615
+    },
+    {
+      "path": "common/src/mcp/client.ts",
+      "from": 638,
+      "to": 812
+    },
+    {
+      "path": "common/src/mcp/client.ts",
+      "from": 854,
+      "to": 903
+    },
+    {
+      "path": "common/src/protocol/acp-ext-v1.ts",
+      "from": 280,
+      "to": 318
+    },
+    {
+      "path": "common/src/tools/params/tool/run-terminal-command.ts",
+      "from": 1,
+      "to": 201
+    },
+    {
+      "path": "common/src/util/job-registry.ts",
+      "from": 24,
+      "to": 303
+    },
+    {
+      "path": "common/src/util/job-registry.ts",
+      "from": 519,
+      "to": 695
+    },
+    {
+      "path": "common/src/util/redact-secrets.ts",
+      "from": 1,
+      "to": 68
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 53,
+      "to": 81
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 103,
+      "to": 114
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 751,
+      "to": 810
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 46,
+      "to": 66
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 198,
+      "to": 217
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 176,
+      "to": 202
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 842,
+      "to": 886
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 1030,
+      "to": 1075
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 3698,
+      "to": 3776
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/__tests__/run-terminal-command.test.ts",
+      "from": 1,
+      "to": 128
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts",
+      "from": 1,
+      "to": 62
+    },
+    {
+      "path": "packages/indexer/src/scip-runner.ts",
+      "from": 318,
+      "to": 379
+    },
+    {
+      "path": "rust/README.md",
+      "from": 1,
+      "to": 46
+    },
+    {
+      "path": "rust/crates/openbuff-native/Cargo.toml",
+      "from": 1,
+      "to": 26
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/landlock_fs.rs",
+      "from": 1,
+      "to": 116
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/mod.rs",
+      "from": 1,
+      "to": 243
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/plan.rs",
+      "from": 1,
+      "to": 70
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/runner.rs",
+      "from": 1,
+      "to": 101
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/lib.rs",
+      "from": 1,
+      "to": 115
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/main.rs",
+      "from": 1,
+      "to": 36
+    },
+    {
+      "path": "rust/rust-toolchain.toml",
+      "from": 1,
+      "to": 12
+    },
+    {
+      "path": "rust/scripts/smoke-test-sidecar.sh",
+      "from": 1,
+      "to": 56
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 55,
+      "to": 75
+    },
+    {
+      "path": "sdk/src/__tests__/browser-logs-sandbox.test.ts",
+      "from": 1,
+      "to": 151
+    },
+    {
+      "path": "sdk/src/__tests__/env.test.ts",
+      "from": 221,
+      "to": 450
+    },
+    {
+      "path": "sdk/src/__tests__/kill-job.test.ts",
+      "from": 73,
+      "to": 203
+    },
+    {
+      "path": "sdk/src/__tests__/run-terminal-command.test.ts",
+      "from": 1,
+      "to": 320
+    },
+    {
+      "path": "sdk/src/__tests__/run-terminal-command.test.ts",
+      "from": 1016,
+      "to": 1114
+    },
+    {
+      "path": "sdk/src/__tests__/sidecar-supervisor.test.ts",
+      "from": 107,
+      "to": 295
+    },
+    {
+      "path": "sdk/src/credential-env-keys.ts",
+      "from": 1,
+      "to": 54
+    },
+    {
+      "path": "sdk/src/env.ts",
+      "from": 57,
+      "to": 149
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 980,
+      "to": 1003
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1117,
+      "to": 1138
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1843,
+      "to": 1866
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2290,
+      "to": 2365
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2624,
+      "to": 2778
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2838,
+      "to": 3030
+    },
+    {
+      "path": "sdk/src/services/diagnostic-delta-runner.ts",
+      "from": 1,
+      "to": 256
+    },
+    {
+      "path": "sdk/src/services/harness-enforcement.ts",
+      "from": 42,
+      "to": 165
+    },
+    {
+      "path": "sdk/src/services/harness-enforcement.ts",
+      "from": 170,
+      "to": 658
+    },
+    {
+      "path": "sdk/src/services/harness-enforcement.ts",
+      "from": 697,
+      "to": 742
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 525,
+      "to": 654
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 541,
+      "to": 647
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 263,
+      "to": 337
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 586,
+      "to": 611
+    },
+    {
+      "path": "sdk/src/services/sidecar-artifact.ts",
+      "from": 1,
+      "to": 369
+    },
+    {
+      "path": "sdk/src/services/sidecar-supervisor.ts",
+      "from": 1,
+      "to": 66
+    },
+    {
+      "path": "sdk/src/services/sidecar-supervisor.ts",
+      "from": 139,
+      "to": 560
+    },
+    {
+      "path": "sdk/src/tools/3d-assets.ts",
+      "from": 328,
+      "to": 434
+    },
+    {
+      "path": "sdk/src/tools/background-jobs.ts",
+      "from": 1,
+      "to": 76
+    },
+    {
+      "path": "sdk/src/tools/background-jobs.ts",
+      "from": 160,
+      "to": 192
+    },
+    {
+      "path": "sdk/src/tools/background-jobs.ts",
+      "from": 487,
+      "to": 574
+    },
+    {
+      "path": "sdk/src/tools/background-jobs.ts",
+      "from": 674,
+      "to": 879
+    },
+    {
+      "path": "sdk/src/tools/background-jobs.ts",
+      "from": 1115,
+      "to": 1345
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 623,
+      "to": 764
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1223,
+      "to": 1275
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1462,
+      "to": 1656
+    },
+    {
+      "path": "sdk/src/tools/browser-logs.ts",
+      "from": 1837,
+      "to": 1975
+    },
+    {
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 1513,
+      "to": 1740
+    },
+    {
+      "path": "sdk/src/tools/kill-job.ts",
+      "from": 1,
+      "to": 55
+    },
+    {
+      "path": "sdk/src/tools/run-targeted-validation.ts",
+      "from": 1,
+      "to": 148
+    },
+    {
+      "path": "sdk/src/tools/run-terminal-command.ts",
+      "from": 1,
+      "to": 60
+    },
+    {
+      "path": "sdk/src/tools/run-terminal-command.ts",
+      "from": 1149,
+      "to": 1816
+    },
+    {
+      "path": "sdk/src/tools/terminal-command-policy.ts",
+      "from": 2095,
+      "to": 2454
+    },
+    {
+      "path": "sdk/src/tools/terminal-output-spool.ts",
+      "from": 1,
+      "to": 126
+    }
+  ],
+  "supplementalReadRanges": [
+    {
+      "path": ".agents/sessions/polyglot-roadmap-v2/SPEC.md",
+      "from": 234,
+      "to": 251
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js",
+      "from": 1,
+      "to": 165
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js",
+      "from": 58,
+      "to": 102
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/node_modules/@modelcontextprotocol/sdk/package.json",
+      "from": 1,
+      "to": 16
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/evidence/rust-tests.log",
+      "from": 1,
+      "to": 70
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "terminal-authority",
+      "name": "Intentional bundled full-access dispatch and optional SDK lexical profiles",
+      "maturity": "usable",
+      "assurance": "static trace and harmless helper integration",
+      "entrypoint": "agents/basher.ts -> runtime terminal handler",
+      "implementation": [
+        "sdk/src/tools/run-terminal-command.ts",
+        "sdk/src/tools/terminal-command-policy.ts"
+      ],
+      "realConsumers": [
+        "sdk/src/run.ts"
+      ],
+      "tests": {
+        "paths": [
+          "packages/agent-runtime/src/tools/handlers/tool/__tests__/run-terminal-command.test.ts"
+        ],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "docs/agents-and-tools.md:53-81",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts",
+          "line": 38,
+          "detail": "Bundled agents deliberately receive full-access."
+        }
+      ],
+      "gaps": [
+        "SDK consumer comment at run.ts:2624 still claims template clamping; basher template commentary also describes profiles now overridden. Lexical helper is not an OS boundary."
+      ],
+      "strengths": [
+        "Trusted mode/profile/owner producer and realpath-aware cwd guard. User preference is preserved."
+      ],
+      "states": {
+        "permission": "Bundled full-access is intentional; restrictive helper profiles are explicit SDK choices.",
+        "failure": "Invalid cwd and profile denial are distinct outputs.",
+        "empty": "Command schema rejects empty input.",
+        "retry": "Approved rerun preserves mode/profile.",
+        "cancellation": "See process lifetime findings."
+      }
+    },
+    {
+      "id": "high-impact-approvals",
+      "name": "Snapshot-bound high-impact approval and rerun",
+      "maturity": "partial",
+      "assurance": "static trace and production-function/helper probes",
+      "entrypoint": "sdk/src/run.ts",
+      "implementation": [
+        "sdk/src/services/harness-enforcement.ts",
+        "sdk/src/tools/run-terminal-command.ts"
+      ],
+      "realConsumers": [
+        "sdk/src/run.ts"
+      ],
+      "tests": {
+        "paths": [
+          "sdk/src/__tests__/run-terminal-command.test.ts"
+        ],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "docs/agents-and-tools.md:57-66",
+      "evidence": [
+        {
+          "path": "sdk/src/services/harness-enforcement.ts",
+          "line": 86,
+          "detail": "Receipt consume is locked and validates identity, scope, expiry and single use."
+        }
+      ],
+      "gaps": [
+        "09-F1, F2, F3 compromise classification or exact identity."
+      ],
+      "strengths": [
+        "Workspace/repository/root-run/snapshot binding and profile-preserving one-shot rerun are real."
+      ],
+      "states": {
+        "permission": "Balanced/strict/allow-all outcomes exist; unavailable context and user denial are explicit.",
+        "retry": "Receipt is consumed once; rerun rechecks cwd and profile.",
+        "failure": "Malformed expiry fails closed.",
+        "loading": "Awaited host approval.",
+        "cancellation": "Signal is threaded to the execution path."
+      }
+    },
+    {
+      "id": "sync-process-lifetime",
+      "name": "Piped synchronous shell execution, finite options and output recovery",
+      "maturity": "partial",
+      "assurance": "harmless Linux integration",
+      "entrypoint": "sdk/src/tools/run-terminal-command.ts",
+      "implementation": [
+        "sdk/src/tools/run-terminal-command.ts",
+        "sdk/src/tools/terminal-output-spool.ts"
+      ],
+      "realConsumers": [
+        "sdk/src/run.ts"
+      ],
+      "tests": {
+        "paths": [
+          "sdk/src/__tests__/run-terminal-command.test.ts"
+        ],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "docs/agents-and-tools.md:113",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/run-terminal-command.ts",
+          "line": 1552,
+          "detail": "Actual Bash spawn with pipes and Unix process group."
+        }
+      ],
+      "gaps": [
+        "09-F5; Windows helper kills direct child only. Full-output spool has no inspected aggregate quota/expiry, unlike background logs."
+      ],
+      "strengths": [
+        "Finite timeout results retain partial output; inline head/tail and disk backpressure prevent unbounded host memory capture."
+      ],
+      "states": {
+        "permission": "Cwd is contained and environment re-scrubbed.",
+        "empty": "No-output exit is valid.",
+        "failure": "Spawn failure versus timeout versus exit code is reported.",
+        "cancellation": "Abort waits for leader close and rejects; descendant guarantee is incomplete.",
+        "retry": "Retry is caller-controlled; raw output can be read from fullLogPath."
+      }
+    },
+    {
+      "id": "owned-background-jobs",
+      "name": "Owned detached process jobs and live output",
+      "maturity": "partial",
+      "assurance": "harmless Linux integration and static ownership trace",
+      "entrypoint": "sdk/src/tools/run-terminal-command.ts",
+      "implementation": [
+        "sdk/src/tools/background-jobs.ts",
+        "common/src/util/job-registry.ts",
+        "sdk/src/tools/kill-job.ts"
+      ],
+      "realConsumers": [
+        "sdk/src/run.ts"
+      ],
+      "tests": {
+        "paths": [
+          "sdk/src/__tests__/kill-job.test.ts",
+          "sdk/src/__tests__/run-terminal-command.test.ts"
+        ],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "docs/agents-and-tools.md:751-806",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/kill-job.ts",
+          "line": 36,
+          "detail": "Owner assertion precedes any OS kill."
+        }
+      ],
+      "gaps": [
+        "09-F5/F6; PID-only recovery portability and durable authority are pair06 scope."
+      ],
+      "strengths": [
+        "Trusted ownership, running/stopping separation, sequenced bounded events, incremental UTF-8 log draining and TTL exist."
+      ],
+      "states": {
+        "permission": "Foreign-owner kills are generic not-found.",
+        "loading": "BACKGROUND returns job ID immediately.",
+        "empty": "No new output is ordinary.",
+        "failure": "Lost/error/stopped/completed states exist.",
+        "cancellation": "Owned jobs cancel unless detach was explicitly selected.",
+        "retry": "Settled jobs remain observable, but kill authority currently disappears too soon."
+      }
+    },
+    {
+      "id": "child-env-and-output",
+      "name": "Credential environment and output boundaries",
+      "maturity": "partial",
+      "assurance": "harmless sentinel integration",
+      "entrypoint": "sdk/src/env.ts",
+      "implementation": [
+        "sdk/src/credential-env-keys.ts",
+        "common/src/util/redact-secrets.ts",
+        "sdk/src/tools/run-terminal-command.ts",
+        "sdk/src/services/diagnostic-delta-runner.ts"
+      ],
+      "realConsumers": [
+        "sdk/src/run.ts",
+        "packages/agent-runtime/src/run-agent-step.ts"
+      ],
+      "tests": {
+        "paths": [
+          "sdk/src/__tests__/env.test.ts"
+        ],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "sdk/src/env.ts:67-84",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/run-terminal-command.ts",
+          "line": 1525,
+          "detail": "Terminal scrubs after override merge."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 854,
+          "detail": "Redacted message copies are for logging."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 1038,
+          "detail": "Provider request receives raw message history at this boundary."
+        }
+      ],
+      "gaps": [
+        "09-F4; custom apiKeyEnv names outside the exact list are explicitly documented as retained. Sidecar/Blender override merges can reintroduce keys. Raw tool/spool/job output is not generally redacted."
+      ],
+      "strengths": [
+        "Leaf denylist avoids provider-config cycles; Windows case-insensitive credential matching and input-copy semantics are tested. MCP stdio uses dependency safe-default env plus explicitly configured server env, not wholesale host inheritance."
+      ],
+      "states": {
+        "permission": "Implicit inheritance and explicit credential delegation need different contracts.",
+        "failure": "No universal secrecy guarantee for raw text or unknown token shapes.",
+        "retry": "Merged terminal overrides are re-scrubbed on rerun.",
+        "cancellation": "Environment has no independent lifecycle."
+      }
+    },
+    {
+      "id": "validation-effects",
+      "name": "Configured hooks, targeted validation and compiler argv launch",
+      "maturity": "partial",
+      "assurance": "harmless hook/sentinel probes",
+      "entrypoint": "run_file_change_hooks / run_targeted_validation",
+      "implementation": [
+        "sdk/src/tools/file-change-hooks.ts",
+        "sdk/src/tools/run-targeted-validation.ts",
+        "sdk/src/services/diagnostic-delta-runner.ts"
+      ],
+      "realConsumers": [
+        "sdk/src/run.ts"
+      ],
+      "tests": {
+        "paths": [
+          "sdk/src/__tests__/run-terminal-command.test.ts"
+        ],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "docs/agents-and-tools.md:103-114",
+      "evidence": [
+        {
+          "path": "sdk/src/run.ts",
+          "line": 995,
+          "detail": "Production constructs the compiler runner and injector."
+        },
+        {
+          "path": "sdk/src/tools/file-change-hooks.ts",
+          "line": 1651,
+          "detail": "Abort is rethrown after hook settlement."
+        }
+      ],
+      "gaps": [
+        "09-F4/F8; diagnostic capture uses a separate policy/env/lifetime path and intentionally fails open. No common effect receipt/supervisor across shell and argv launchers."
+      ],
+      "strengths": [
+        "Configured/inferred trust opt-in, no-hooks/skipped outcomes, deterministic concurrent hook ordering, direct argv and byte-bounded UTF-8 compiler output."
+      ],
+      "states": {
+        "empty": "no_hooks_configured and hooks_skipped are explicit.",
+        "failure": "Infrastructure failure versus diagnostics is represented; optional delta can fail open.",
+        "permission": "Hook approval context unavailable for classified commands.",
+        "cancellation": "Hook signal is threaded and rethrown; compiler native signal kills only direct child.",
+        "retry": "Caller owns retry; no automatic risky replay."
+      }
+    },
+    {
+      "id": "lsp-process-effects",
+      "name": "Lazy language-server process lifecycle",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "entrypoint": "language intelligence tools",
+      "implementation": [
+        "sdk/src/services/language-intelligence.ts",
+        "sdk/src/services/lsp-multiplexer.ts"
+      ],
+      "realConsumers": [
+        "sdk/src/run.ts"
+      ],
+      "tests": {
+        "paths": [
+          "sdk/src/__tests__/sidecar-supervisor.test.ts (adjacent generic transport tests only)"
+        ],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "docs/architecture.md:47-66",
+      "evidence": [
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 615,
+          "detail": "Real argv server launcher is built lazily."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 586,
+          "detail": "Disposal ends stdin and kills direct child without observed tree settlement."
+        }
+      ],
+      "gaps": [
+        "09-F4; no run signal in startup factory, direct TERM without KILL/exit join, stderr pipe is not exposed/drained by the adapter (pipe-backpressure risk is an inference). Query/root/rename quality belongs to pair07."
+      ],
+      "strengths": [
+        "Warm per-run instance, bounded requests/frames and honest unavailable outcomes exist; run teardown calls dispose."
+      ],
+      "states": {
+        "loading": "Lazy initialize is bounded.",
+        "failure": "Unavailable and protocol/spawn errors are structured.",
+        "cancellation": "Request API does not receive run signal at this producer; dispose is best-effort.",
+        "retry": "Crash restart exists in multiplexer; effect cleanup differs from terminal."
+      }
+    },
+    {
+      "id": "mcp-process-effects",
+      "name": "MCP subprocess/transport cache and cancellation",
+      "maturity": "partial",
+      "assurance": "static trace plus fake-connect integration",
+      "entrypoint": "SDK MCP dispatch",
+      "implementation": [
+        "common/src/mcp/client.ts"
+      ],
+      "realConsumers": [
+        "sdk/src/run.ts"
+      ],
+      "tests": {
+        "paths": [],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "docs/request-flow.md:198-216",
+      "evidence": [
+        {
+          "path": "sdk/src/run.ts",
+          "line": 2353,
+          "detail": "Connection precedes callTool; signal reaches callTool."
+        },
+        {
+          "path": "common/src/mcp/client.ts",
+          "line": 753,
+          "detail": "Client-origin remote transport uses DNS pinning."
+        }
+      ],
+      "gaps": [
+        "09-F7; run signal is not passed to getMCPClient/connect. Installed SDK supplies a 60-second request default and closes failed initialize; no absence-of-timeout or failed-init-leak claim is made. Origin/descriptor trust is pair10."
+      ],
+      "strengths": [
+        "Single-flight connects, credential-hashed cache identity, safe argv stdio, explicit server env and client-origin pinned transport are real."
+      ],
+      "states": {
+        "loading": "Shared connect promise.",
+        "failure": "Rejected connect memo is removed; SDK initialize failure closes transport.",
+        "permission": "Transport SSRF policy is origin-dependent; process network egress is not a firewall.",
+        "cancellation": "callTool receives signal; connection does not.",
+        "retry": "Subsequent connection attempt can retry."
+      }
+    },
+    {
+      "id": "browser-process-effects",
+      "name": "Owned Chrome startup, transport fallback and teardown",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "entrypoint": "browser_logs",
+      "implementation": [
+        "sdk/src/tools/browser-logs.ts"
+      ],
+      "realConsumers": [
+        "sdk/src/run.ts"
+      ],
+      "tests": {
+        "paths": [
+          "sdk/src/__tests__/browser-logs-sandbox.test.ts"
+        ],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "sdk/src/tools/browser-logs.ts:668-691",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 1623,
+          "detail": "Stop during spawn is guarded before registration."
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 1904,
+          "detail": "Teardown signals direct child and ignores the bounded exit observation result."
+        }
+      ],
+      "gaps": [
+        "09-F4; no common run signal/effect policy at launcher, no tree KILL escalation, and no browser-specific enforcement receipt. Local port fallback is broader than the private pipe. Browser interaction quality belongs to pair13."
+      ],
+      "strengths": [
+        "Private temp profiles, pipe-first CDP, bounded probe, rollback, owner stamps and stop/start race handling are substantial. Linux no-sandbox fallback is deliberate and documented, not a newly alleged default bypass."
+      ],
+      "states": {
+        "loading": "Pipe support probe then bounded startup.",
+        "failure": "Rollback cleans transport/profile and exit handler removes registry entry.",
+        "permission": "Chrome sandbox fallback differs from host sandbox policy.",
+        "cancellation": "Owner teardown and spawn-stop guard; direct kill is not confirmed scope exit.",
+        "retry": "Transient negative probe is not permanently cached."
+      }
+    },
+    {
+      "id": "generic-sidecar-supervision",
+      "name": "Generic JSON-RPC sidecar supervisor",
+      "maturity": "unwired",
+      "assurance": "static trace; existing fake tests inspected",
+      "entrypoint": "SidecarSupervisor class",
+      "implementation": [
+        "sdk/src/services/sidecar-supervisor.ts",
+        "sdk/src/services/sidecar-artifact.ts"
+      ],
+      "realConsumers": [],
+      "tests": {
+        "paths": [
+          "sdk/src/__tests__/sidecar-supervisor.test.ts"
+        ],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "rust/README.md",
+      "evidence": [
+        {
+          "path": "sdk/src/services/sidecar-supervisor.ts",
+          "line": 139,
+          "detail": "A real bounded supervisor implementation exists."
+        }
+      ],
+      "gaps": [
+        "09-F10; no default production constructor found in SDK/CLI/runtime/common search. Generic request framing is incompatible with native exec. Download resolver produces 0600 readable bytes and has no inspected deadline/cancellation contract."
+      ],
+      "strengths": [
+        "Version handshake, correlation, typed errors, capped pending/output, stderr tail, exponential restart/backoff and give-up state. SHA-256 artifact verification and atomic cache publication."
+      ],
+      "states": {
+        "loading": "Starting/restarting are explicit.",
+        "failure": "Protocol mismatch/timeout/give-up are typed.",
+        "permission": "Host injects path/env; no unified effect scope.",
+        "cancellation": "stop rejects pending requests; requests have no AbortSignal.",
+        "retry": "New-process restart exists; repeated explicit stop/start is defective."
+      }
+    },
+    {
+      "id": "native-exec-standalone",
+      "name": "Standalone Rust exec and Linux Landlock filesystem restriction",
+      "maturity": "partial",
+      "assurance": "fresh locked/offline build, supplied 19 Rust unit tests, harmless Linux integration",
+      "entrypoint": "openbuff-native exec",
+      "implementation": [
+        "rust/crates/openbuff-native/src/exec/mod.rs",
+        "rust/crates/openbuff-native/src/exec/plan.rs",
+        "rust/crates/openbuff-native/src/exec/runner.rs",
+        "rust/crates/openbuff-native/src/exec/landlock_fs.rs"
+      ],
+      "realConsumers": [
+        "rust/crates/openbuff-native/src/main.rs -> direct built-binary probe"
+      ],
+      "tests": {
+        "paths": [
+          "rust/crates/openbuff-native/src/exec/mod.rs",
+          "rust/crates/openbuff-native/src/exec/runner.rs",
+          "rust/crates/openbuff-native/src/exec/landlock_fs.rs"
+        ],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "rust/README.md",
+      "evidence": [
+        {
+          "path": "rust/crates/openbuff-native/src/exec/runner.rs",
+          "line": 22,
+          "detail": "Linux restricts this process before exec."
+        },
+        {
+          "path": "rust/crates/openbuff-native/src/exec/landlock_fs.rs",
+          "line": 85,
+          "detail": "Fully/partially enforced collapse to one boolean."
+        }
+      ],
+      "gaps": [
+        "09-F9; ABI V1 filesystem-only, no network/Unix-socket isolation, no current D48 bubblewrap/seccomp/Seatbelt/Windows token implementation. No cwd/deadline/process-kind fields in plan; input line framing is unbounded."
+      ],
+      "strengths": [
+        "Actual kernel probe allowed own read/write and denied excluded fixtures with errno13. Explicit no_landlock produced degraded:true; Unix exec forwards target lifetime directly."
+      ],
+      "states": {
+        "permission": "Explicit allow paths/no_landlock; env can clear and set exact pairs.",
+        "failure": "Malformed/EOF/config failures exit1 with envelopes.",
+        "loading": "Versioned initialize handshake.",
+        "cancellation": "No native controller protocol after process replacement.",
+        "retry": "Host must own retry and uncertainty."
+      }
+    },
+    {
+      "id": "native-host-adoption",
+      "name": "CLI/SDK native execution adapter and actual tier advertisement",
+      "maturity": "unwired",
+      "assurance": "static producer-consumer search plus native receiver probe",
+      "entrypoint": "sdk/src/run.ts",
+      "implementation": [
+        "sdk/src/services/sidecar-supervisor.ts",
+        "sdk/src/services/sidecar-artifact.ts",
+        "common/src/protocol/acp-ext-v1.ts"
+      ],
+      "realConsumers": [],
+      "tests": {
+        "paths": [],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "rust/README.md and historical SPEC D40/D48/D49",
+      "evidence": [
+        {
+          "path": "common/src/protocol/acp-ext-v1.ts",
+          "line": 293,
+          "detail": "Current default honestly advertises lexical, enforced:false, network:unrestricted and no sidecars."
+        },
+        {
+          "path": "sdk/src/services/sidecar-supervisor.ts",
+          "line": 247,
+          "detail": "Host helper sends JSON-RPC params envelope."
+        },
+        {
+          "path": "rust/crates/openbuff-native/src/exec/mod.rs",
+          "line": 156,
+          "detail": "Rust receiver expects raw ExecPlan at top level."
+        }
+      ],
+      "gaps": [
+        "No ExecPlan producer, exec-role launcher, status consumer or artifact adoption was found. Native envelope probe fails missing cmd after handshake. Standalone success is not installed/runtime integration."
+      ],
+      "strengths": [
+        "Existing default map avoids claiming a kernel sandbox or installed sidecar."
+      ],
+      "states": {
+        "permission": "Current default network remains intentionally unrestricted.",
+        "failure": "Optional native availability cannot be presented as success without a real adapter.",
+        "loading": "No consumer loading path found.",
+        "cancellation": "No hosted native lifecycle found.",
+        "retry": "No hosted fallback negotiation found."
+      }
+    },
+    {
+      "id": "interactive-pty",
+      "name": "Interactive PTY jobs, stdin, resize and attach",
+      "maturity": "absent",
+      "assurance": "static tool-schema/role inventory",
+      "entrypoint": "run_terminal_command / native roles",
+      "implementation": [
+        "common/src/tools/params/tool/run-terminal-command.ts",
+        "rust/crates/openbuff-native/src/lib.rs"
+      ],
+      "realConsumers": [],
+      "tests": {
+        "paths": [],
+        "status": "inspected; no whole Bun suites executed"
+      },
+      "docs": "rust/README.md:9-12",
+      "evidence": [
+        {
+          "path": "common/src/tools/params/tool/run-terminal-command.ts",
+          "line": 109,
+          "detail": "Only SYNC/BACKGROUND process modes exist."
+        },
+        {
+          "path": "rust/crates/openbuff-native/src/lib.rs",
+          "line": 78,
+          "detail": "Daemon and other remaining roles explicitly return not_implemented."
+        }
+      ],
+      "gaps": [
+        "No task PTY host, input/resize/attach tool contract, or persistent daemon consumer in searched execution sources. CLI terminal color-detection PTY is unrelated."
+      ],
+      "strengths": [
+        "Noninteractive Bash plus jobs is broad across target languages and does not pretend to implement a PTY."
+      ],
+      "states": {
+        "loading": "No capability available.",
+        "permission": "Must be negotiated before adding a new persistent effect path.",
+        "failure": "Known unimplemented native roles fail loudly.",
+        "cancellation": "No PTY lifetime to claim."
+      }
+    }
+  ],
+  "findings": [
+    {
+      "id": "09-F1",
+      "title": "Whitespace normalization erases executable newlines and exact approval identity",
+      "severity": "HIGH",
+      "domains": [
+        "security",
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/harness-enforcement.ts",
+          "line": 153,
+          "detail": "normalizeCommand collapses all whitespace, including quoted text and newlines."
+        },
+        {
+          "path": "sdk/src/services/harness-enforcement.ts",
+          "line": 162,
+          "detail": "hashCommand hashes the collapsed string while claiming exact command binding."
+        },
+        {
+          "path": "sdk/src/services/harness-enforcement.ts",
+          "line": 649,
+          "detail": "Classification normalizes before the newline-aware scanner."
+        },
+        {
+          "path": "sdk/src/tools/run-terminal-command.ts",
+          "line": 1260,
+          "detail": "Only a nonempty classification enters high-impact authorization."
+        },
+        {
+          "path": "agents/basher.ts",
+          "line": 196,
+          "detail": "Full-log basher execution itself constructs a multiline shell wrapper."
+        }
+      ],
+      "trigger": "Use a newline-separated assistant command such as printf safe followed by a Python -c one-liner; alternatively change internal whitespace in an approved quoted payload.",
+      "consequence": "A real full-access terminal probe executed both harmless statements with zero authorization calls. Two distinct quoted Node payloads produced identical action, target, and command hash, so the receipt comparison cannot distinguish their bytes.",
+      "suggestedFix": "Hash the exact executable bytes; parse the original command without flattening shell separators or quoted operands. Keep any display normalization separate from authority.",
+      "acceptanceProbe": "A newline-separated high-impact second command reaches authorization in balanced and strict modes; approvals for quoted payloads differing by a space or newline are rejected as mismatches.",
+      "probeEvidence": [
+        "evidence/09-policy-probe.json"
+      ]
+    },
+    {
+      "id": "09-F2",
+      "title": "The first classified effect masks later high-impact effects in a compound command",
+      "severity": "HIGH",
+      "domains": [
+        "security",
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/harness-enforcement.ts",
+          "line": 425,
+          "detail": "Compound classification returns immediately on the first recognized segment."
+        },
+        {
+          "path": "sdk/src/services/harness-enforcement.ts",
+          "line": 731,
+          "detail": "Balanced mode only examines the single action handed to it."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 2656,
+          "detail": "Production authorization evaluates that single classification."
+        }
+      ],
+      "trigger": "Put a routine recognized action before a risky effect, for example npm install fixture && rm -rf fixture, or git push origin feature && terraform apply.",
+      "consequence": "Pure production-function probes classified only dependency-install or push and returned allowed with approvalRequired:false; later deletion/deployment is never evaluated. The defect also applies inside recursively inspected shell payloads.",
+      "suggestedFix": "Represent and evaluate every executable effect, including substitutions and wrappers, then authorize the entire immutable plan against all relevant action/target pairs.",
+      "acceptanceProbe": "Vary the ordering of routine, destructive, remote, and deployment segments: every risky effect requires the expected decision, and no earlier routine command suppresses it.",
+      "probeEvidence": [
+        "evidence/09-policy-probe.json"
+      ]
+    },
+    {
+      "id": "09-F3",
+      "title": "Balanced mode allows force and delete pushes to feature branches",
+      "severity": "HIGH",
+      "domains": [
+        "security",
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/harness-enforcement.ts",
+          "line": 174,
+          "detail": "Push parsing retains only action push, branch and target; destructive flags are not risk attributes."
+        },
+        {
+          "path": "sdk/src/services/harness-enforcement.ts",
+          "line": 710,
+          "detail": "The balanced high-impact set excludes push."
+        },
+        {
+          "path": "sdk/src/services/harness-enforcement.ts",
+          "line": 719,
+          "detail": "Push approval is conditional only on a known default-branch match."
+        },
+        {
+          "path": "docs/agents-and-tools.md",
+          "line": 66,
+          "detail": "Product policy explicitly retains force/delete/default-branch push gating."
+        }
+      ],
+      "trigger": "Under balanced mode issue git push --force origin feature or git push --delete origin feature.",
+      "consequence": "Both production policy probes return allowed without approval. The bundled full-access producer intentionally leaves these decisions to the separate harness gate, so the optional git-commit profile is not a fallback protection here. No remote command was executed.",
+      "suggestedFix": "Carry force, delete, refspec, and ambiguous target information into push risk evaluation; preserve routine feature pushes and the explicit allow-all choice.",
+      "acceptanceProbe": "Probe -f, --force-with-lease, --delete, plus-prefixed and deletion refspecs, default-branch destinations, and ambiguous upstream pushes in all three modes.",
+      "probeEvidence": [
+        "evidence/09-policy-probe.json"
+      ]
+    },
+    {
+      "id": "09-F4",
+      "title": "Canonical provider credentials are stripped for terminal commands but inherited by adjacent launchers",
+      "severity": "HIGH",
+      "domains": [
+        "security",
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/env.ts",
+          "line": 57,
+          "detail": "Raw system environment must not be handed to child processes."
+        },
+        {
+          "path": "sdk/src/services/diagnostic-delta-runner.ts",
+          "line": 122,
+          "detail": "Compiler runner inherits by omission or merges raw host environment with overrides."
+        },
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 615,
+          "detail": "LSP spawns with cwd alone, implicitly inheriting the host environment."
+        },
+        {
+          "path": "sdk/src/tools/browser-logs.ts",
+          "line": 1484,
+          "detail": "Chrome pipe launcher omits an explicit child environment."
+        },
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 552,
+          "detail": "Tool version probes inherit the host environment."
+        },
+        {
+          "path": "packages/indexer/src/scip-runner.ts",
+          "line": 322,
+          "detail": "SCIP launcher also omits an explicit child environment."
+        }
+      ],
+      "trigger": "The host has a canonical BYOK key and runs a diagnostic/compiler, language server, browser, or discovery/index subprocess.",
+      "consequence": "A harmless Python child saw the synthetic OPENAI_API_KEY under both diagnostic inheritance and override paths; the terminal child saw neither sentinel. These launchers can disclose credentials that the terminal helper and credential denylist promise to withhold.",
+      "suggestedFix": "Use a shared environment constructor on implicit host-environment launch paths, scrub after merges, and make intentional credential delegation explicit. Preserve ordinary project variables and MCP server credentials deliberately configured by the host.",
+      "acceptanceProbe": "For every launcher test canonical host keys and attempted reinjection with harmless sentinels, while verifying PATH/project variables and explicit authorized server credentials still behave correctly.",
+      "probeEvidence": [
+        "evidence/09-policy-probe.json"
+      ]
+    },
+    {
+      "id": "09-F5",
+      "title": "Shell leader exit cancels escalation while descendants remain alive",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "security",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/run-terminal-command.ts",
+          "line": 1595,
+          "detail": "Timeout/abort begins group TERM with a five-second KILL timer."
+        },
+        {
+          "path": "sdk/src/tools/run-terminal-command.ts",
+          "line": 1663,
+          "detail": "Shell close settles the operation and clears the escalation timer."
+        },
+        {
+          "path": "sdk/src/tools/background-jobs.ts",
+          "line": 497,
+          "detail": "Any background settlement clears its pending escalation."
+        },
+        {
+          "path": "sdk/src/tools/background-jobs.ts",
+          "line": 830,
+          "detail": "Leader exit settles the background job stopped."
+        },
+        {
+          "path": "sdk/src/tools/background-jobs.ts",
+          "line": 1257,
+          "detail": "A settled job refuses subsequent kill attempts."
+        }
+      ],
+      "trigger": "A command creates a TERM-ignoring child with redirected output, then waits; cancellation or a finite timeout kills the shell leader first.",
+      "consequence": "After 5.5 seconds the SYNC result was timedOut while its child remained sleeping. BACKGROUND reported stopped while its child remained sleeping, and a later SIGKILL request returned killed:false. These were ordinary process-group descendants, not escaped sessions.",
+      "suggestedFix": "Keep process-scope termination supervision independent of leader close and registry settlement; confirm the owned scope is empty before claiming completion, or report an explicit uncertain/live-descendant state.",
+      "acceptanceProbe": "For timeout, abort, and kill use redirected-output children that ignore TERM; verify group KILL still happens after leader exit and no child remains after the grace period. Add platform-specific guarantees without changing unbounded defaults.",
+      "probeEvidence": [
+        "evidence/09-lifecycle-probe.json",
+        "evidence/09-cleanup-receipt.json"
+      ]
+    },
+    {
+      "id": "09-F6",
+      "title": "Output-quota failure makes a live background process unkillable through its job",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "performance",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/background-jobs.ts",
+          "line": 798,
+          "detail": "Quota breach settles the job as terminal error before signaling."
+        },
+        {
+          "path": "sdk/src/tools/background-jobs.ts",
+          "line": 804,
+          "detail": "Quota path sends TERM without scheduling KILL escalation."
+        },
+        {
+          "path": "sdk/src/tools/background-jobs.ts",
+          "line": 1257,
+          "detail": "killBackgroundJob refuses every state except running."
+        },
+        {
+          "path": "sdk/src/__tests__/run-terminal-command.test.ts",
+          "line": 290,
+          "detail": "Existing quota test checks registry error and log size, not OS process death."
+        }
+      ],
+      "trigger": "A background process exceeds the 10 MiB log quota and ignores TERM.",
+      "consequence": "The probe log was bounded at 10,485,760 bytes, but after 5.5 seconds its process was still sleeping. A SIGKILL request through the job returned killed:false because status was already error.",
+      "suggestedFix": "Record quota failure separately from process liveness, retain kill authority while the process is alive, and run bounded TERM/KILL cleanup before dropping the handle.",
+      "acceptanceProbe": "A TERM-ignoring output flood becomes an error with bounded logs and confirmed dead process scope; a user kill remains effective while quota cleanup is pending.",
+      "probeEvidence": [
+        "evidence/09-lifecycle-probe.json",
+        "evidence/09-cleanup-receipt.json"
+      ]
+    },
+    {
+      "id": "09-F7",
+      "title": "MCP client eviction drops registry entries without closing their transports",
+      "severity": "MEDIUM",
+      "domains": [
+        "state-mutation",
+        "error-handling",
+        "performance",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "common/src/mcp/client.ts",
+          "line": 32,
+          "detail": "The stated 64-client cap is intended to bound open processes/transports."
+        },
+        {
+          "path": "common/src/mcp/client.ts",
+          "line": 51,
+          "detail": "Eviction deletes keys and caches without invoking close."
+        },
+        {
+          "path": "common/src/mcp/client.ts",
+          "line": 809,
+          "detail": "Connected clients are registered after transport initialization."
+        }
+      ],
+      "trigger": "More than 64 distinct MCP server configurations are connected over the host process lifetime.",
+      "consequence": "A fake-connect probe registered 65 real Client objects and observed zero close calls at eviction. Real transports remain open after their registry entry disappears; this is an inference from the same path and the dependency transport lifecycle, not a measurement of 65 live subprocesses.",
+      "suggestedFix": "Give cached clients explicit leases and disposal; close idle evicted clients and refuse or defer eviction of active clients rather than abandoning live transports.",
+      "acceptanceProbe": "At the client cap, observe exactly one appropriate idle transport close while leased requests continue; verify stdio children/sockets terminate and no lost handle remains.",
+      "probeEvidence": [
+        "evidence/09-mcp-hooks-probe.json"
+      ]
+    },
+    {
+      "id": "09-F8",
+      "title": "Configured hook effects have no production approval context",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/file-change-hooks.ts",
+          "line": 1585,
+          "detail": "Default hook executor is runTerminalCommand."
+        },
+        {
+          "path": "sdk/src/tools/file-change-hooks.ts",
+          "line": 1600,
+          "detail": "Hook calls do not supply a host profile or high-impact authorizer."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 2908,
+          "detail": "Production hook dispatch supplies environment/signal/fs but no approval seam."
+        },
+        {
+          "path": "sdk/src/tools/run-targeted-validation.ts",
+          "line": 68,
+          "detail": "Targeted validation delegates to this same hook path."
+        }
+      ],
+      "trigger": "A user-configured hook uses a classified harmless one-liner or another action needing authorization.",
+      "consequence": "The injected Python print hook returned approvalRequired and permissionDenied with workspace-write, even though the runtime terminal path has an approval service. That validation route cannot consume a receipt or present an approval request; the model can only see an unavailable gate.",
+      "suggestedFix": "Give hooks an explicit host execution policy and the run approval context. Preserve configured versus inferred trust, cancellation, and profile-preserving reruns instead of switching to user mode.",
+      "acceptanceProbe": "Exercise configured harmless one-liners under balanced/strict/allow-all, denial, unavailable context, and existing matching receipt; every result explains whether the hook ran and which authorization applied.",
+      "probeEvidence": [
+        "evidence/09-mcp-hooks-probe.json"
+      ]
+    },
+    {
+      "id": "09-F9",
+      "title": "Native smoke still requires exec to be an unimplemented stub",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "rust/scripts/smoke-test-sidecar.sh",
+          "line": 45,
+          "detail": "Smoke invokes exec with EOF and expects exit 2/not_implemented."
+        },
+        {
+          "path": "rust/crates/openbuff-native/src/lib.rs",
+          "line": 77,
+          "detail": "Exec now delegates to the implemented runner."
+        },
+        {
+          "path": "rust/crates/openbuff-native/src/exec/mod.rs",
+          "line": 138,
+          "detail": "EOF at the real handshake exits 1."
+        },
+        {
+          "path": ".github/workflows/rust-workspace.yml",
+          "line": 74,
+          "detail": "Linux matrix smoke flag is a YAML boolean."
+        },
+        {
+          "path": ".github/workflows/rust-workspace.yml",
+          "line": 134,
+          "detail": "CI references the stale script, but compares the boolean flag to string true."
+        }
+      ],
+      "trigger": "Run the native smoke against a fresh current openbuff-native binary.",
+      "consequence": "The built binary passes version and unknown-role probes, then the local script exits 1 with exec exited 1, expected 2 despite 19 passing Rust unit tests. The workflow references this incompatible check; its boolean/string condition mismatch makes actual CI execution potentially skipped, not established by this audit.",
+      "suggestedFix": "Test the real initialize/ExecPlan/payload/error contract, correct typed matrix guards, and retain explicit stub checks only for still-unimplemented roles; update the README role inventory.",
+      "acceptanceProbe": "Fresh locked/offline builds pass a smoke that executes a harmless target, handles EOF/malformed plans, and verifies honest enforced/degraded status. A host-runnable CI receipt confirms that the smoke/test steps actually ran rather than skipped.",
+      "probeEvidence": [
+        "evidence/09-native-probe.json"
+      ]
+    },
+    {
+      "id": "09-F10",
+      "title": "A reusable sidecar supervisor keeps the previous stop promise",
+      "severity": "LOW",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/sidecar-supervisor.ts",
+          "line": 147,
+          "detail": "stopPromise is retained for the supervisor lifetime."
+        },
+        {
+          "path": "sdk/src/services/sidecar-supervisor.ts",
+          "line": 190,
+          "detail": "start permits stopped state."
+        },
+        {
+          "path": "sdk/src/services/sidecar-supervisor.ts",
+          "line": 255,
+          "detail": "stop only runs performStop when stopPromise is null."
+        },
+        {
+          "path": "sdk/src/services/sidecar-supervisor.ts",
+          "line": 281,
+          "detail": "New child resets stopRequested but never resets stopPromise."
+        }
+      ],
+      "trigger": "Call start, await stop, then start and stop again on the same supervisor.",
+      "consequence": "The second stop awaits the already-resolved prior promise and never stops the new child or changes its running state. This is a direct state-flow defect in an otherwise real helper; no default production constructor was found, so current product exposure is limited.",
+      "suggestedFix": "Make stop memoization belong to one process lifecycle, or explicitly prohibit restarting a stopped instance with a typed error.",
+      "acceptanceProbe": "With the existing fake-sidecar harness, repeat start/stop and assert each child exits and pending requests reject; race a stop during the second handshake.",
+      "probeEvidence": [],
+      "assuranceLimit": "A local Bun/Python fake handshake timed out; that attempt is excluded from behavioral assurance. This finding rests on inspected control flow."
+    }
+  ],
+  "domainAssessment": {
+    "security": "Confirmed approval-classification/exact-identity defects and canonical credential inheritance (F1-F4). Intentional full-access and unrestricted network defaults are not treated as vulnerabilities. MCP explicit credential delegation and origin DNS policy are distinguished from implicit host inheritance.",
+    "correctness": "Leader settlement is not process-scope death (F5/F6); hooks lack the terminal approval seam (F8), native smoke contradicts implementation (F9), and supervisor stop memoization has a lifecycle defect (F10).",
+    "state-mutation": "Owner gates and one-shot receipt locking are strengths. Premature settlement removes kill authority; MCP eviction abandons transport resources. Durable broker/recovery integrity is outside this shard.",
+    "error-handling": "Terminal timeout/abort/spawn and hooks skipped/no-hooks have useful distinct states. Native malformed plans fail loudly and optional diagnostics fail open by design. Lifecycle errors often settle before the actual resource is gone; LSP/browser/generic adapters do not share terminal cleanup guarantees.",
+    "performance": "Inline output, UTF-8 capture, job rings/log quota, lazy LSP and sidecar frame/pending caps are concrete bounds. MCP eviction does not bound live resources, quota cleanup can leave work running, and successful SYNC spools lack an inspected total quota/expiry. LSP unconsumed stderr is a static backpressure hypothesis, not a measured throughput claim.",
+    "dependency-hygiene": "SDK/common declare MCP ^1.18.2; the inspected installation is 1.20.2, whose default stdio environment and 60-second request timeout matter to the trace. Rust pins toolchain 1.87.0, declares Linux-only Landlock, and builds locked/offline. No advisory/network vulnerability scan was performed and no CVE claim is made.",
+    "test-coverage": "Existing tests verify profile-preserving reruns, ownership, timeout output, abort windows, quota byte bounds, generic fake-sidecar failures and Chrome sandbox choices. They miss the concrete negative cases in F1-F10. Root-supplied 19 Rust tests plus fresh native probes establish a working standalone slice; stale smoke disproves current native CI compatibility.",
+    "api-contract": "Bundled runtime intentionally ignores template terminal profiles while a consumer comment still claims clamping. Exact-command approval hash claims are false for semantic whitespace. Hook approval context, process stopped/error meaning, generic versus native wire framing and reusable supervisor lifetime require explicit contracts. Default capability advertisement is honestly lexical/unrestricted/unwired."
+  },
+  "coverageLimits": [
+    "All 18 primary selections and 46 secondary selections were read; merged exact ranges are supplied. Large run.ts, run-agent-step.ts, terminal-command-policy.ts, browser-logs.ts and basher.ts were sampled at the recorded ranges, not audited line-for-line.",
+    "Native query_index/read_files tools are unavailable in this Codex session. Cached RETRIEVAL.json and picker searches were used only as navigation; current source was verified with line-numbered filesystem reads and bounded rg searches.",
+    "No source fixes, credentials/private configuration values, external requests, or real-user process effects. Python child sentinels and resistant processes lived under owned evidence fixtures; TMPDIR isolated background log creation and sweeps. Cleanup receipt confirms no known fixture child remains running.",
+    "Harmless integration probes were Linux-local, using pinned Bun 1.3.5 and direct Rust/Python. No Windows/macOS process-tree, real Chrome, language-server, live remote MCP, recovery PID-reuse behavior, or live GitHub workflow was exercised. Matrix booleans compared to string true are a static execution-guard concern; no actual GitHub step execution is claimed.",
+    "A Bun/Node26 child-output anomaly and a Bun/Python fake-sidecar handshake timeout were not diagnosed or treated as product findings. The failed supervisor probe contributes no successful behavioral assurance; F10 is static control-flow evidence.",
+    "MCP eviction probe replaced ESM connect before import and never started transports; live resource leakage is supported by source and dependency lifecycle, not by creating 65 real processes. Installed MCP 1.20.2 source is supplemental and excluded from the pinned structural receipt.",
+    "Mutation broker/receipts/recovery integrity belongs to pair06, language query/root/rename semantics to pair07, plugin/origin/descriptors to pair10, overall packaging to pair11, browser/3D interaction quality to pair13, and subagent supervision to pair03.",
+    "Historical SPEC D40/D48/D49 was read as plan context and excluded from structural files. Linux Landlock probe proves fixture access restriction only, not network, Unix-socket, syscall, installed-host or cross-platform isolation. No best-possible, latency, memory benchmark or CVE claims are made."
+  ],
+  "recommendedPlanWork": [
+    {
+      "id": "09-W1",
+      "priority": "ready",
+      "problem": "F1-F3 undermine the retained approval gate despite intentionally unrestricted terminal profiles.",
+      "sourceAnchors": [
+        "sdk/src/services/harness-enforcement.ts:153",
+        "sdk/src/services/harness-enforcement.ts:425",
+        "sdk/src/services/harness-enforcement.ts:701",
+        "sdk/src/run.ts:2643"
+      ],
+      "intendedBehavior": "All actual effects are evaluated against exact executable bytes; force/delete/default/ambiguous pushes receive the selected mode decision.",
+      "smallestScope": "Repair hash/classification/risk aggregation and producer/consumer comments in TS first; parsed AST adoption can follow without delaying the control fix.",
+      "prerequisites": [],
+      "languageDecision": "Keep run policy/receipts in TS. Treat current D40 brush-parser/sh-syntax plan as future implementation, not already shipped authority.",
+      "acceptanceProbes": [
+        "A newline-separated high-impact second command reaches authorization in balanced and strict modes; approvals for quoted payloads differing by a space or newline are rejected as mismatches.",
+        "Vary the ordering of routine, destructive, remote, and deployment segments: every risky effect requires the expected decision, and no earlier routine command suppresses it.",
+        "Probe -f, --force-with-lease, --delete, plus-prefixed and deletion refspecs, default-branch destinations, and ambiguous upstream pushes in all three modes."
+      ],
+      "regressionChecks": [
+        "Existing approval-rerun and runtime full-access contract tests; ordinary feature push and explicit allow-all remain supported."
+      ],
+      "completionEvidence": "Production dispatch observes every harmless compound/newline fixture and rejects semantic hash collisions.",
+      "stopOrDefer": "Do not call classification complete from regex unit counts or change the user-selected default profile."
+    },
+    {
+      "id": "09-W2",
+      "priority": "ready",
+      "problem": "F4-F6/F8 and inconsistent adjacent launcher lifetimes make environment and cancellation guarantees nonuniform.",
+      "sourceAnchors": [
+        "sdk/src/tools/run-terminal-command.ts:1595",
+        "sdk/src/tools/background-jobs.ts:798",
+        "sdk/src/services/diagnostic-delta-runner.ts:122",
+        "sdk/src/tools/file-change-hooks.ts:1600"
+      ],
+      "intendedBehavior": "Owned process scope, environment delegation, signal/deadline choice and observed settlement are shared across effect launchers, while productive defaults remain unbounded.",
+      "smallestScope": "Fix terminal/background group supervision and quota kill authority; reuse a scrubbed environment constructor and thread hook approval context. Then adapt compiler/LSP/browser/SCIP launchers without changing semantic query logic.",
+      "prerequisites": [
+        "09-W1 for shared approval context"
+      ],
+      "languageDecision": "TS can repair current process groups/env/dispatch immediately; native Windows/macOS process-scope primitives need measured platform-specific work, not a generic Rust rewrite.",
+      "acceptanceProbes": [
+        "For every launcher test canonical host keys and attempted reinjection with harmless sentinels, while verifying PATH/project variables and explicit authorized server credentials still behave correctly.",
+        "For timeout, abort, and kill use redirected-output children that ignore TERM; verify group KILL still happens after leader exit and no child remains after the grace period. Add platform-specific guarantees without changing unbounded defaults.",
+        "A TERM-ignoring output flood becomes an error with bounded logs and confirmed dead process scope; a user kill remains effective while quota cleanup is pending.",
+        "Exercise configured harmless one-liners under balanced/strict/allow-all, denial, unavailable context, and existing matching receipt; every result explains whether the hook ran and which authorization applied."
+      ],
+      "regressionChecks": [
+        "Owned jobs, detach semantics, output retention, skipped hooks and existing abort-window tests."
+      ],
+      "completionEvidence": "No fixture survives configured grace; liveness remains observable until termination; sentinel matrix proves launch policy.",
+      "stopOrDefer": "Keep unknown/unsupported process-tree guarantees explicit; do not impose wall-clock limits merely to hide lifecycle bugs."
+    },
+    {
+      "id": "09-W3",
+      "priority": "ready",
+      "problem": "F7/F10 leave resource reuse and eviction lifecycle incomplete.",
+      "sourceAnchors": [
+        "common/src/mcp/client.ts:51",
+        "sdk/src/services/sidecar-supervisor.ts:255"
+      ],
+      "intendedBehavior": "Cached transports have leases/disposal and sidecar stop is scoped to one child generation.",
+      "smallestScope": "Close eligible MCP evictions and repair or forbid sidecar explicit reuse; add connect signal ownership without killing shared active clients.",
+      "prerequisites": [
+        "09-W2 process ownership contract"
+      ],
+      "languageDecision": "Reuse existing TS/dependency clients; a daemon is justified only by real persistence/PTY consumers.",
+      "acceptanceProbes": [
+        "At the client cap, observe exactly one appropriate idle transport close while leased requests continue; verify stdio children/sockets terminate and no lost handle remains.",
+        "With the existing fake-sidecar harness, repeat start/stop and assert each child exits and pending requests reject; race a stop during the second handshake."
+      ],
+      "regressionChecks": [
+        "Single-flight connection, cache-identity segregation, sidecar crash/backoff/give-up tests."
+      ],
+      "completionEvidence": "Instrumented fake and real harmless transports close exactly once and every stop joins its own child.",
+      "stopOrDefer": "Avoid calling map-size bounds process limits; do not advertise an unconsumed supervisor as a body capability."
+    },
+    {
+      "id": "09-W4",
+      "priority": "ready-small / integration gated",
+      "problem": "F9 plus missing native producer/consumer and incompatible wire formats block native graduation.",
+      "sourceAnchors": [
+        "rust/scripts/smoke-test-sidecar.sh:45",
+        "rust/crates/openbuff-native/src/exec/mod.rs:149",
+        "sdk/src/services/sidecar-supervisor.ts:247",
+        "common/src/protocol/acp-ext-v1.ts:293"
+      ],
+      "intendedBehavior": "Real smoke validates the implemented role; an optional installed host adapter negotiates actual sandbox/enforcement and accurately reports fallback.",
+      "smallestScope": "Repair current smoke/role docs now. Design one versioned exec adapter with cwd/env/owned lifecycle, bounded framing, raw output channel, typed failures and enforcement receipt; materialize an executable verified artifact and consume it in an actual CLI/SDK path.",
+      "prerequisites": [
+        "09-W1",
+        "09-W2; shared policy/lifecycle authority before adding a second execution path"
+      ],
+      "languageDecision": "Rust is justified by the demonstrated Linux OS boundary. Latest D48 requires Linux bubblewrap+seccomp with BestEffort Landlock, macOS Seatbelt and Windows token/user/ACL/firewall paths; none is supplied by current Landlock-only exec. D49 multi-call artifact exists; daemon/PTY remain unimplemented.",
+      "acceptanceProbes": [
+        "Fresh locked/offline builds pass a smoke that executes a harmless target, handles EOF/malformed plans, and verifies honest enforced/degraded status. A host-runnable CI receipt confirms that the smoke/test steps actually ran rather than skipped.",
+        "Run an installed host-selected native command on own allow/deny fixtures, assert cwd/env/deadline/ownership and actual status, and test unsupported-kernel/platform fallback. Add local Unix-socket isolation probe only when implementing D48."
+      ],
+      "regressionChecks": [
+        "Keep 19 Rust unit tests; run actual compiled role through host and CI artifact path, not a fake generic sidecar."
+      ],
+      "completionEvidence": "A real producer launches the verified installed binary, receives compatible operation/output/status frames and publishes the negotiated tier.",
+      "stopOrDefer": "Retain honest lexical/unrestricted default and label standalone native experimental until producer-to-consumer tests pass; do not mark absent D48 or PTY work complete."
+    }
+  ],
+  "probeArtifacts": [
+    "evidence/09-policy-probe.json",
+    "evidence/09-lifecycle-probe.json",
+    "evidence/09-cleanup-receipt.json",
+    "evidence/09-mcp-hooks-probe.json",
+    "evidence/09-native-probe.json",
+    "evidence/09-native-envelope-probe.json"
+  ],
+  "testEvidence": {
+    "rustUnitTests": "Root-supplied rust-tests.log: 19 passed; not rerun here.",
+    "nativeBuild": "Fresh cargo build --workspace --locked --offline --target-dir evidence/rust-target passed.",
+    "nativeSmoke": "Expected contract regression observed: script exits1, exec expected2.",
+    "wholeBunSuites": "Not run; selected tests inspected."
+  }
+}

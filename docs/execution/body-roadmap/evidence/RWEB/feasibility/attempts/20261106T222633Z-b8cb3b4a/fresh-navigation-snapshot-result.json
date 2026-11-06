@@ -1,0 +1,45 @@
+{
+  "content": [
+    {
+      "text": "- main\n  - heading \"Second chapter\" [level=1, ref=e3]\n  - paragraph\n    - StaticText \"The second chapter requires fresh navigation observations.\"",
+      "type": "text"
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "exitCode": 0,
+    "response": {
+      "data": {
+        "lifecycle": {
+          "effectiveLaunch": {
+            "browserLaunched": true,
+            "engine": "chrome",
+            "launchHash": 14350354030887980356
+          },
+          "launched": false,
+          "relaunchedBrowser": false,
+          "restartedBackground": false,
+          "restoreStatus": "not_configured",
+          "reused": true,
+          "saveStatus": "not_attempted"
+        },
+        "origin": "http://127.0.0.1:33085/second",
+        "refs": {
+          "e3": {
+            "name": "Second chapter",
+            "role": "heading"
+          }
+        },
+        "removedRefs": [
+          "@e1",
+          "@e2"
+        ],
+        "snapshot": "- main\n  - heading \"Second chapter\" [level=1, ref=e3]\n  - paragraph\n    - StaticText \"The second chapter requires fresh navigation observations.\""
+      },
+      "error": null,
+      "success": true
+    },
+    "stderr": "",
+    "stdout": "{\"success\":true,\"data\":{\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"},\"origin\":\"http://127.0.0.1:33085/second\",\"refs\":{\"e3\":{\"name\":\"Second chapter\",\"role\":\"heading\"}},\"removedRefs\":[\"@e1\",\"@e2\"],\"snapshot\":\"- main\\n  - heading \\\"Second chapter\\\" [level=1, ref=e3]\\n  - paragraph\\n    - StaticText \\\"The second chapter requires fresh navigation observations.\\\"\"},\"error\":null}\n"
+  }
+}

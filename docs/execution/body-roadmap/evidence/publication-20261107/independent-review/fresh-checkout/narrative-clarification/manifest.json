@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "type": "documentary-clarification-seal",
+  "createdAt": "2026-11-06T23:11:43.478819+00:00",
+  "scope": "Clarifies unsupported historical Gitlink causation only; preserves original reviews, their scope and validation outcomes.",
+  "files": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/narrative-clarification/CLARIFICATION.md",
+      "sha256": "3e33195db3be336785e0501ad4f1aac31f22300394628dcfa835191338bf3ec5",
+      "bytes": 1631
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/narrative-clarification/observations.json",
+      "sha256": "a75d925cbf98c0901d473591c382f26898af1b9ce6e1625a89f7f46eaeafdc7b",
+      "bytes": 6104
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "argv": [
+    "python3",
+    "docs/execution/body-roadmap/evidence/RWEB/feasibility-independent-review/inspect.py"
+  ],
+  "cwd": "/home/ben/Code/CLI/openbuff",
+  "exitCode": 0,
+  "elapsedSeconds": 7.820696107999538,
+  "recordedAt": "2026-11-06T22:42:48.389563+00:00",
+  "stderr": ""
+}

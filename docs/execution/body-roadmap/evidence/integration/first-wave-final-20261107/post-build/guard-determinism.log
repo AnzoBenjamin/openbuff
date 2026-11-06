@@ -1,0 +1,2 @@
+$ bun run determinism-guard.ts
+Determinism guard passed: 0 findings.

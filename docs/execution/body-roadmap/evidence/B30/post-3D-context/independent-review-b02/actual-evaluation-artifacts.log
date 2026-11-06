@@ -1,0 +1,878 @@
+Using environment: test
+Loaded 1 eval file(s) with 2 total tasks
+  - fixture-eval.json: 2 tasks
+Loaded 1 eval file(s) with 2 total tasks
+  - fixture-eval.json: 2 tasks
+Repeats: 2 (seed 11)
+Repeats: 2 (seed 11)
+
+=== Task 1/4: typescript (typescr) ===
+
+=== Task 2/4: typescript (typescr) ===
+
+=== Task 1/4: typescript (typescr) ===
+
+=== Task 2/4: typescript (typescr) ===
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+
+================================================================================
+RESULTS FOR TASK 1/4: typescript (typescr)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+offline fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/2: [agent-a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-GJuEXp/1-typescript-agent-a-typescr-443125b3-a947-46dc-8c5d-09f2fb9c4363.json
+
+
+--------------------------------------------------------------------------------
+AGENT 2/2: [agent-b]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run failed
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $2.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-GJuEXp/1-typescript-agent-b-typescr-5fdb8f01-4230-44dd-830a-c51f64aa9c19.json
+
+
+================================================================================
+RESULTS FOR TASK 2/4: typescript (typescr)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+offline fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/2: [agent-a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-GJuEXp/2-typescript-agent-a-typescr-413c1169-b709-43e7-b218-72e53c1cff53.json
+
+
+--------------------------------------------------------------------------------
+AGENT 2/2: [agent-b]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run failed
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $2.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-GJuEXp/2-typescript-agent-b-typescr-b0b1495e-1ef8-43e4-8860-3001f32e3a90.json
+
+
+================================================================================
+RESULTS FOR TASK 1/4: typescript (typescr)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+offline fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/2: [agent-a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-wQ8Yfn/1-typescript-agent-a-typescr-8cd2d7a9-c526-499c-99af-7e335c4e72e7.json
+
+
+--------------------------------------------------------------------------------
+AGENT 2/2: [agent-b]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run failed
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $2.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-wQ8Yfn/1-typescript-agent-b-typescr-9171494c-3721-4d20-94b5-7c7685b6c746.json
+
+
+================================================================================
+RESULTS FOR TASK 2/4: typescript (typescr)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+offline fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/2: [agent-a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-wQ8Yfn/2-typescript-agent-a-typescr-832ea938-6ee8-4aa6-a91b-cfdad88da1bc.json
+
+
+--------------------------------------------------------------------------------
+AGENT 2/2: [agent-b]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run failed
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $2.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-wQ8Yfn/2-typescript-agent-b-typescr-1683acd7-946e-4757-8ea1-4d4d6478ce55.json
+
+
+=== Task 3/4: python (python-) ===
+
+=== Task 4/4: python (python-) ===
+
+=== Task 3/4: python (python-) ===
+
+=== Task 4/4: python (python-) ===
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+}
+Judge agent output: {
+  "type": "error",
+  "message": "paid auxiliary judge fixture error"
+} Judge agent output trace: 
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+Judging results overall score: 10.0 (individual scores: 10.0)
+
+================================================================================
+RESULTS FOR TASK 3/4: python (python-)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+offline fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/2: [agent-a]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run cancelled
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-GJuEXp/3-python-agent-a-python--bf4351f0-1dba-4c12-9a30-2ff5b2a9fcbc.json
+
+
+--------------------------------------------------------------------------------
+AGENT 2/2: [agent-b]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run budget_exhausted
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $2.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-GJuEXp/3-python-agent-b-python--3766f8c0-7f23-4a33-a14d-8808de0c57c1.json
+
+
+================================================================================
+RESULTS FOR TASK 4/4: python (python-)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+offline fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/2: [agent-a]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run cancelled
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-GJuEXp/4-python-agent-a-python--2dfb36a7-fc2e-49b0-a7d0-182d1441e7ef.json
+
+
+--------------------------------------------------------------------------------
+AGENT 2/2: [agent-b]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run budget_exhausted
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $2.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-GJuEXp/4-python-agent-b-python--868ba43e-4487-4289-b76f-4de38ab4ae2d.json
+
+
+================================================================================
+RESULTS FOR TASK 3/4: python (python-)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+offline fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/2: [agent-a]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run cancelled
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-wQ8Yfn/3-python-agent-a-python--6c04b052-cd74-4d4c-af5b-4440f3c94b5c.json
+
+
+--------------------------------------------------------------------------------
+AGENT 2/2: [agent-b]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run budget_exhausted
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $2.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-wQ8Yfn/3-python-agent-b-python--ecee72aa-182b-401b-8d25-c1cdfd47712d.json
+
+
+================================================================================
+RESULTS FOR TASK 4/4: python (python-)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+offline fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/2: [agent-a]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run cancelled
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-wQ8Yfn/4-python-agent-a-python--84987fa1-42f2-4d09-9828-a328dfe805a9.json
+
+
+--------------------------------------------------------------------------------
+AGENT 2/2: [agent-b]
+--------------------------------------------------------------------------------
+
+❌ ERROR:
+--------------------------------------------------------------------------------
+Run budget_exhausted
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       10.0/10
+  Completion Score:    10.0/10
+  Code Quality Score:  10.0/10
+
+Analysis:
+offline judge fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $2.0000
+
+Trace saved to: /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-wQ8Yfn/4-python-agent-b-python--0573d60e-b97b-4ef9-aef7-6c8d1050042d.json
+
+Traces saved to /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-GJuEXp
+
+=== Summary ===
+
+agent-a:
+  Average Score: 10.00/10
+  Score: 10.00 ± 0.00 SE (2 measured)
+  Score/Cost: 10.00
+  Average Score (measured, excluding failed judges): 10.00/10 (2/2 runs)
+  Average Cost: 1.0000
+  Average Duration: 0.0s
+  Valid runs: 2/4 (excluding 2 agent error(s))
+
+agent-b:
+  Average Score: 0.00/10
+  Score: 0.00 ± 0.00 SE (0 measured)
+  Score/Cost: 0.00
+  Average Score (measured, excluding failed judges): 0.00/10 (0/0 runs)
+  Average Cost: 2.0000
+  Average Duration: 0.0s
+  Valid runs: 0/4 (excluding 4 agent error(s))
+
+=== Score Distribution ===
+
+agent-a:
+  Scores: 10.0, 10.0
+
+agent-b:
+  Scores: 
+Traces saved to /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-3D-context/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-wQ8Yfn
+
+=== Summary ===
+
+agent-a:
+  Average Score: 10.00/10
+  Score: 10.00 ± 0.00 SE (2 measured)
+  Score/Cost: 10.00
+  Average Score (measured, excluding failed judges): 10.00/10 (2/2 runs)
+  Average Cost: 1.0000
+  Average Duration: 0.0s
+  Valid runs: 2/4 (excluding 2 agent error(s))
+
+agent-b:
+  Average Score: 0.00/10
+  Score: 0.00 ± 0.00 SE (0 measured)
+  Score/Cost: 0.00
+  Average Score (measured, excluding failed judges): 0.00/10 (0/0 runs)
+  Average Cost: 2.0000
+  Average Duration: 0.0s
+  Valid runs: 0/4 (excluding 4 agent error(s))
+
+=== Score Distribution ===
+
+agent-a:
+  Scores: 10.0, 10.0
+
+agent-b:
+  Scores: 
+Complete attempt populations: {"before":{"attempts":6,"eligibleScores":4,"totalCost":14,"unknownCostAttempts":0},"after":{"attempts":6,"eligibleScores":4,"totalCost":14,"unknownCostAttempts":0}}
+repeat-agent: Overall Score: 8.00 → 4.75 (-3.25); paired repeats=2
+  Significance: rejected (n < 10; normal approximation unreliable)
+zero-agent: Overall Score: 0.00 → 0.25 (0.25); paired repeats=2
+  Significance: rejected (n < 10; normal approximation unreliable)

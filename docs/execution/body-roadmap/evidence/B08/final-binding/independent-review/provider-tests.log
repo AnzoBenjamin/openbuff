@@ -1,0 +1,519 @@
+bun test v1.3.5 (1e86cebd)
+
+packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts:
+(pass) OpenAICompatibleChatLanguageModel tool-call metadata > includes usage sent after a tool-call finish chunk [63.00ms]
+(pass) OpenAICompatibleChatLanguageModel tool-call metadata > rejects a non-streaming response with no choices [7.00ms]
+(pass) OpenAICompatibleChatLanguageModel tool-call metadata > preserves extra tool-call fields in non-streaming responses [18.00ms]
+(pass) OpenAICompatibleChatLanguageModel tool-call metadata > preserves extra tool-call fields in streaming responses [8.00ms]
+(pass) OpenAICompatibleChatLanguageModel malformed tool-call streaming > replaces an empty placeholder with later streamed object arguments [10.00ms]
+(pass) OpenAICompatibleChatLanguageModel malformed tool-call streaming > delivers a genuine empty object at stream end alongside other calls [7.00ms]
+(pass) OpenAICompatibleChatLanguageModel malformed tool-call streaming > preserves structured provider metadata on streaming error chunks [13.00ms]
+(pass) OpenAICompatibleChatLanguageModel malformed tool-call streaming > ignores billing.summary telemetry chunks in streaming responses [12.00ms]
+(pass) OpenAICompatibleChatLanguageModel malformed tool-call streaming > ignores non-standard null SSE heartbeat chunks [8.00ms]
+(pass) OpenAICompatibleChatLanguageModel malformed tool-call streaming > merges an empty-name continuation delta into the open tool call [12.00ms]
+(pass) OpenAICompatibleChatLanguageModel malformed tool-call streaming > drops a stray empty-name fragment when no tool call is open [9.00ms]
+
+sdk/src/__tests__/error-utils.test.ts:
+(pass) error-utils > createHttpError > creates error with statusCode
+(pass) error-utils > createHttpError > error can be thrown and caught
+(pass) error-utils > createAuthError > creates 401 error with default message
+(pass) error-utils > createAuthError > creates 401 error with custom message
+(pass) error-utils > createForbiddenError > creates 403 error with default message
+(pass) error-utils > createForbiddenError > creates 403 error with custom message
+(pass) error-utils > createPaymentRequiredError > creates 402 error with default message
+(pass) error-utils > createPaymentRequiredError > creates 402 error with custom message
+(pass) error-utils > createServerError > creates 500 error with default message
+(pass) error-utils > createServerError > creates custom 5xx error
+(pass) error-utils > createServerError > creates 502 bad gateway error [1.00ms]
+(pass) error-utils > createNetworkError > creates 503 error with default message
+(pass) error-utils > createNetworkError > creates 503 error with custom message
+(pass) error-utils > RETRYABLE_STATUS_CODES > contains expected status codes
+(pass) error-utils > RETRYABLE_STATUS_CODES > does not contain non-retryable status codes
+(pass) error-utils > isRetryableStatusCode > returns true for retryable status codes [5.00ms]
+(pass) error-utils > isRetryableStatusCode > returns false for non-retryable status codes
+(pass) error-utils > isRetryableStatusCode > returns false for undefined status code
+(pass) error-utils > isRetryableStatusCode > returns false for status code 0
+(pass) error-utils > getErrorStatusCode > extracts statusCode from error object [1.00ms]
+(pass) error-utils > getErrorStatusCode > extracts status from AI SDK error
+(pass) error-utils > getErrorStatusCode > prefers statusCode over status
+(pass) error-utils > getErrorStatusCode > returns undefined for plain Error
+(pass) error-utils > getErrorStatusCode > returns undefined for string
+(pass) error-utils > getErrorStatusCode > returns undefined for null
+(pass) error-utils > getErrorStatusCode > returns undefined for undefined
+(pass) error-utils > getErrorStatusCode > returns undefined for non-numeric statusCode
+(pass) error-utils > getErrorStatusCode > handles objects with numeric status strings
+(pass) error-utils > sanitizeErrorMessage > returns message from Error object [1.00ms]
+(pass) error-utils > sanitizeErrorMessage > returns string directly
+(pass) error-utils > sanitizeErrorMessage > extracts message from object with message property
+(pass) error-utils > sanitizeErrorMessage > returns string representation for other types
+(pass) error-utils > sanitizeErrorMessage > handles non-string message property
+(pass) error-utils > sanitizeErrorMessage > handles deeply nested error objects
+
+sdk/src/__tests__/model-provider.test.ts:
+Using environment: test
+(pass) model-provider > uses standard OpenAI-compatible headers for every configured provider [1.00ms]
+(pass) model-provider > adaptive reasoning varies effort by agent role without selecting a model
+(pass) model-provider > adaptive reasoning stays within provider-declared efforts
+(pass) model-provider > custom provider config > accepts explicit harness approval modes [5.00ms]
+(pass) model-provider > custom provider config > accepts explicit unlimited maxAgentSteps mode [1.00ms]
+(pass) model-provider > custom provider config > defaults readableRoots to an empty array and flows entries through the transform [2.00ms]
+(pass) model-provider > custom provider config > rejects zero as an ambiguous maxAgentSteps value [5.00ms]
+(pass) model-provider > custom provider config > validates and flows maxMissingOutputRetries through the schema transform [2.00ms]
+(pass) model-provider > custom provider config > recommends only empirically measured models for the requested coding context [11.00ms]
+(pass) model-provider > custom provider config > accepts providers and OpenCode-style provider aliases [1.00ms]
+(pass) model-provider > custom provider config > parses provider capability metadata [5.00ms]
+(pass) model-provider > custom provider config > ignores legacy context and compatibility fields when no explicit capabilities are configured [5.00ms]
+(pass) model-provider > custom provider config > merges provider default capabilities before model overrides [2.00ms]
+(pass) model-provider > custom provider config > preserves indexing.weights through schema parsing [3.00ms]
+(pass) model-provider > custom provider config > formats concise model capability summaries
+(pass) model-provider > custom provider config > resolves provider-prefixed model ids to provider model ids [1.00ms]
+(pass) model-provider > custom provider config > disables DeepSeek thinking mode for OpenAI-compatible tool loops [1.00ms]
+(pass) model-provider > custom provider config > downgrades required tool choice for GLM-compatible providers
+(pass) model-provider > custom provider config > downgrades required tool choice for providers that opt out
+(pass) model-provider > custom provider config > strips stop sequences for providers that opt out
+(pass) model-provider > custom provider config > keeps stop sequences when providers opt in
+(pass) model-provider > custom provider config > does not add DeepSeek thinking controls to non-DeepSeek models
+(pass) model-provider > custom provider config > supports explicit requested-to-provider model mappings [1.00ms]
+(pass) model-provider > custom provider config > throws a clear error when no model is configured anywhere for an agent [1.00ms]
+(pass) model-provider > custom provider config > throws the docs-quoted hard error string verbatim when no routing or caller model is configured
+(pass) model-provider > custom provider config > throws a clear error when a matched provider is missing its api key env var
+(pass) model-provider > custom provider config > rejects api keys over plaintext non-local http [6.00ms]
+(pass) model-provider > custom provider config > allows unauthenticated local http providers
+[openbuff] Loaded provider config from:
+  - /tmp/codebuff-provider-pj8YvB/openbuff.json
+(pass) model-provider > custom provider config > getModelForRequest returns a configured provider model [17.00ms]
+(pass) model-provider > custom provider config > getModelForRequest forwards defaultCapabilities.context.outputTokens as maxOutputTokens [8.00ms]
+(pass) model-provider > custom provider config > getModelForRequest lets per-model context.outputTokens override the provider default [3.00ms]
+(pass) model-provider > custom provider config > getModelForRequest leaves maxOutputTokens undefined without context.outputTokens [5.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/codebuff-provider-7YYJQ2/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > custom provider config > getModelForRequest routes opencode-go responses models to /responses [4.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/codebuff-provider-bdSksa/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > custom provider config > getModelForRequest routes responses models missing from stale provider model lists [3.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/codebuff-provider-yLOmfX/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > custom provider config > responses models post to /responses and parse Responses JSON [8.00ms]
+(pass) model-provider > custom provider config > opencode-go preset lists responses models as routable [1.00ms]
+(pass) model-provider > custom provider config > accepts an anthropic-compatible provider block [1.00ms]
+(pass) model-provider > custom provider config > defaults anthropic-compatible baseURL to the official Anthropic API [1.00ms]
+(pass) model-provider > custom provider config > resolves an anthropic-compatible model and reads its api key env
+(pass) model-provider > custom provider config > throws when an anthropic-compatible provider is missing its api key env
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/openbuff-anthropic-7nqMaZ/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > custom provider config > getModelForRequest builds an anthropic-compatible model with a /v1 base url [3.00ms]
+(pass) model-provider > custom provider config > normalizeAnthropicBaseURL appends /v1 only for bare hosts
+(pass) model-provider > custom provider config > discovers openbuff.json in an ancestor directory [3.00ms]
+(pass) model-provider > custom provider config > reports malformed implicit configs instead of silently hiding them [2.00ms]
+(pass) model-provider > custom provider config > invalidates cached provider config when implicit openbuff.d fragments change [3.00ms]
+(pass) model-provider > custom provider config > invalidates cached provider config when implicit openbuff.d fragments are added [11.00ms]
+(pass) model-provider > custom provider config > malformed repeated fragments do not poison dependency discovery for later fragments [10.00ms]
+(pass) model-provider > custom provider config > getModelForRequest fails instead of using hosted backend fallback for unmatched models [2.00ms]
+(pass) model-provider > custom provider config > supports default and per-agent model overrides before provider routing [5.00ms]
+(pass) model-provider > custom provider config > supports configurable reasoning effort for defaults, modes, and agents [3.00ms]
+(pass) model-provider > custom provider config > getModelForRequest returns configured reasoning effort with the routed model [3.00ms]
+(pass) model-provider > custom provider config > M8.1: resolveConfiguredAgentModelConfig with preferModelParam uses the explicit model over mode/agent/defaultModel routing [2.00ms]
+(pass) model-provider > custom provider config > M8.1: getModelForRequest threads preferModelParam so the failover model is actually used [8.00ms]
+(pass) model-provider > custom provider config > getModelForRequest reroutes image requests to visionModel [5.00ms]
+(pass) model-provider > custom provider config > getModelForRequest exposes resolved model context window tokens [10.00ms]
+(pass) model-provider > custom provider config > tracks primary and failover-floor context windows independently for each agent route [8.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/openbuff-provider-ktYvWF/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > custom provider config > getModelForRequest auto-picks same-provider vision fallback when no visionModel is configured [6.00ms]
+(pass) model-provider > custom provider config > getModelForRequest fails clearly for image input without a vision route [3.00ms]
+(pass) model-provider > custom provider config > supports built-in mode routing and provider presets [4.00ms]
+(pass) model-provider > custom provider config > mode routing takes precedence over root agent overrides [1.00ms]
+(pass) model-provider > custom provider config > supports Codex subscription as a configurable provider [2.00ms]
+(pass) model-provider > custom provider config > explicit malformed provider config fails clearly [2.00ms]
+(pass) model-provider > custom provider config > writeProviderConfigFile merges with existing config instead of overwriting [17.00ms]
+(pass) model-provider > custom provider config > fresh preset setup persists the repair editor route [4.00ms]
+(pass) model-provider > custom provider config > writeProviderConfigFile force=true overwrites existing config [5.00ms]
+(pass) model-provider > custom provider config > writeProviderConfigFile preserves existing routing and run options during merge [7.00ms]
+(pass) model-provider > custom provider config > updates fragmented provider config without flattening the root [5.00ms]
+(pass) model-provider > custom provider config > does not flatten config when a fragment is malformed [2.00ms]
+(pass) model-provider > custom provider config > writeProviderConfigFile throws clear error for malformed existing config without force [2.00ms]
+(pass) model-provider > chatgpt oauth rate limiting > isChatGptOAuthRateLimited returns false by default
+(pass) model-provider > chatgpt oauth rate limiting > markChatGptOAuthRateLimited sets rate limit with default time
+(pass) model-provider > chatgpt oauth rate limiting > markChatGptOAuthRateLimited respects custom reset time
+(pass) model-provider > chatgpt oauth rate limiting > rate limit expires after reset time
+(pass) model-provider > chatgpt oauth rate limiting > resetChatGptOAuthRateLimit clears rate limit
+(pass) model-provider > model discovery > getProviderDiscoveryConfig returns openrouter for openrouter provider [2.00ms]
+(pass) model-provider > model discovery > getProviderDiscoveryConfig returns ollama for localhost:11434
+(pass) model-provider > model discovery > getProviderDiscoveryConfig defaults to openai-compatible [1.00ms]
+(pass) model-provider > model discovery > getProviderDiscoveryConfig uses explicit discovery config [2.00ms]
+(pass) model-provider > model discovery > discoverProviderModels parses OpenAI-compatible response [5.00ms]
+(pass) model-provider > model discovery > discoverProviderModels forwards AbortSignal to fetch when timeout is disabled [3.00ms]
+(pass) model-provider > model discovery > discoverProviderModels aborts hung fetches after timeout [11.00ms]
+(pass) model-provider > model discovery > discoverProviderModels propagates fetch aborts [3.00ms]
+(pass) model-provider > model discovery > discoverProviderModels parses Ollama response [2.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/model-discovery-nnD9gI/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > model discovery > discoverProviderModels parses OpenRouter response with capabilities [2.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/model-discovery-RDyofz/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > model discovery > discoverProviderModels supports custom arrayPath and idPath [2.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/model-discovery-wN8pW6/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > model discovery > discoverProviderModels sends auth to same-origin custom discovery endpoints by default [3.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/model-discovery-zqwZkJ/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > model discovery > discoverProviderModels omits auth from cross-origin custom discovery endpoints by default [2.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/model-discovery-AMf2X2/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > model discovery > discoverProviderModels can opt in auth for cross-origin custom discovery endpoints [2.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/model-discovery-ywKmyW/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > model discovery > discoverProviderModels can disable auth for inferred discovery endpoints [3.00ms]
+(pass) model-provider > model discovery > discoverProviderModels throws on missing provider [1.00ms]
+(pass) model-provider > model discovery > discoverProviderModels throws on HTTP error [2.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/model-discovery-aMPUGw/openbuff.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) model-provider > model discovery > discoverProviderModels throws on missing API key [2.00ms]
+(pass) model-provider > model discovery > cache round-trip persists discovered models [3.00ms]
+(pass) model-provider > model discovery > getAvailableProviderModels merges configured and cached models [4.00ms]
+(pass) model-provider > model discovery > addDiscoveredModelToProviderConfig adds model to array models [5.00ms]
+(pass) model-provider > model discovery > addDiscoveredModelToProviderConfig adds model to map models [4.00ms]
+(pass) model-provider > model discovery > addDiscoveredModelToProviderConfig deduplicates array models [4.00ms]
+(pass) model-provider > model discovery > addDiscoveredModelToProviderConfig strips matching provider prefix [2.00ms]
+(pass) model-provider > model discovery > readModelDiscoveryCache returns empty cache for invalid JSON [1.00ms]
+(pass) model-provider > model discovery > discoverProviderModels does not make real network requests [2.00ms]
+(pass) getAncestorProviderConfigPaths — bounded ancestor walk (C1.3) > stops at the home directory boundary by default [1.00ms]
+(pass) getAncestorProviderConfigPaths — bounded ancestor walk (C1.3) > caps at MAX_ANCESTOR_SCAN_DEPTH when home is far above start
+(pass) getAncestorProviderConfigPaths — bounded ancestor walk (C1.3) > walks past the home boundary when OPENBUFF_TRUST_ANCESTOR_CONFIG=1
+(pass) ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip) > strips apiKeyEnv providers from untrusted ancestor configs and records a diagnostic [3.00ms]
+(pass) ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip) > keeps apiKeyEnv providers from ancestor configs when OPENBUFF_TRUST_ANCESTOR_CONFIG=1 [1.00ms]
+(pass) ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip) > never strips apiKeyEnv providers from the project config inside cwd [2.00ms]
+(pass) ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip) > never strips apiKeyEnv providers from the global config dir
+(pass) ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip) > trusts the explicit OPENBUFF_PROVIDER_CONFIG override but not arbitrary untrusted paths [1.00ms]
+(pass) readableRoots provenance (ER-1) > records the config-dir file that declared a readable root [1.00ms]
+(pass) readableRoots provenance (ER-1) > records the project openbuff.json that declared a readable root [2.00ms]
+(pass) selectTrustedReadableRoots (ER-1 trust gate) > registers a root declared by a config file inside the config dir [1.00ms]
+(pass) selectTrustedReadableRoots (ER-1 trust gate) > drops a root declared by a project openbuff.json
+(pass) selectTrustedReadableRoots (ER-1 trust gate) > registers a project-declared root with the explicit opt-in
+(pass) selectTrustedReadableRoots (ER-1 trust gate) > drops a root with no recorded provenance
+(pass) selectTrustedReadableRoots (ER-1 trust gate) > drops a relative entry without counting it as untrusted
+(pass) selectTrustedReadableRoots (ER-1 trust gate) > keeps a sibling directory of the config dir untrusted
+
+sdk/src/__tests__/provider-config-band.test.ts:
+(pass) transport band config contract > DEFAULT_MAX_OUTPUT_BYTES is the common transport band, not a copy
+(pass) transport band config contract > per-model override wins over defaultCapabilities [1.00ms]
+(pass) transport band config contract > defaultCapabilities.maxOutputBytes is the fallback
+(pass) transport band config contract > defaultCapabilities.maxOutputBytes stays the fallback when providerId finds no per-model override
+(pass) transport band config contract > the common band is the final fallback
+(pass) transport band config contract > providerId resolves a provider-mapped alias key like resolveModelCapabilities
+(pass) transport band config contract > omitting providerId keeps the exact single-key lookup on model
+(pass) transport band config contract > a later candidate key wins, matching mergeModelCapabilities order [1.00ms]
+(pass) transport band config contract > a provider-qualified request honors an override keyed by the unprefixed id
+(pass) transport band config contract > a provider-qualified request honors an override keyed by the qualified mapped id
+
+sdk/src/__tests__/provider-config.test.ts:
+(pass) reasoning replay defaults for IFM and can be configured for other endpoints [3.00ms]
+(pass) provider-config fragment reactivity > re-resolves provider config when a fragment file is added at runtime [4.00ms]
+(pass) provider-config fragment reactivity > re-resolves provider config when a fragment file is removed at runtime [3.00ms]
+(pass) provider config schema contracts > preserves indexing.weights.lexical.chunk through schema parsing [2.00ms]
+(pass) provider config schema contracts > preserves fileChangeHooks.runPerFile through schema parsing [2.00ms]
+[openbuff] Provider config uses the deprecated contextWindowTokens / modelContextWindowTokens fields. They still resolve the context window, but capability metadata should be declared via defaultCapabilities.context.windowTokens and modelCapabilities.<model>.context.windowTokens instead.
+(pass) resolveContextWindowTokens legacy field mapping > falls back to legacy provider-level contextWindowTokens [1.00ms]
+(pass) resolveContextWindowTokens legacy field mapping > honors per-model legacy modelContextWindowTokens over the provider default [1.00ms]
+(pass) resolveContextWindowTokens legacy field mapping > explicit modelCapabilities.context.windowTokens wins over legacy fields [1.00ms]
+(pass) resolveContextWindowTokens legacy field mapping > returns undefined when neither explicit nor legacy fields are set [1.00ms]
+(pass) provider config atomic write crash safety > writeJsonFileAtomic EEXIST fallback swaps via a backup without ever unlinking the existing config [3.00ms]
+(pass) provider config atomic write crash safety > writeJsonFileAtomic restores the original config when the post-backup rename fails — the config file is never left missing [2.00ms]
+(pass) provider config atomic write crash safety > writeJsonFilesTransaction preserves .bak backups when rollback fails to restore them [3.00ms]
+(pass) provider config atomic write crash safety > fragmented transactional write succeeds and leaves no temp or backup files behind [5.00ms]
+
+sdk/src/__tests__/provider-contract-regressions.test.ts:
+(pass) [B08] actual provider contracts > retains wrapped HTTP status without accepting prose or nonfinite values [6.00ms]
+(pass) [B08] actual provider contracts > an abort with a retryable cause is never retried [3.00ms]
+[openbuff] A provider config loaded from a non-project ancestor (/tmp/b08-provider-contract-Z4lVSx/provider.json) declares an apiKeyEnv provider. An ancestor config can route API requests to untrusted endpoints and leak secrets sourced from env vars. Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.
+(pass) [B08] actual provider contracts > context metadata resolves healthy primary and dormant backup without missing-key validation [3.00ms]
+(pass) [B08] actual provider contracts > configured OAuth skip selects BYOK backup without touching excluded credentials [6.00ms]
+(pass) [B08] actual provider contracts > actual configured arbitrary provider sends selected reasoning effort [100.00ms]
+(pass) [B08] actual provider contracts > actual SSE error keeps typed status, provider code and response headers [5.00ms]
+(pass) [B08] actual provider contracts > retry metadata names the actual configured vision route [60.00ms]
+(pass) [B08] actual provider contracts > vision failover retains the actual route in status and analytics [63.00ms]
+(pass) [B08] actual provider contracts > recursive OAuth refresh cannot reset the total attempt allowance [9.00ms]
+(pass) [B08] actual provider contracts > scrubbed offline configured-adapter fault matrix passes with exact attempt ledgers [3750.95ms]
+
+sdk/src/__tests__/retry-config.test.ts:
+(pass) retry-config constants > exposes the canonical retry constants
+(pass) waitForBackoffDelay > rejects immediately when already aborted [1.00ms]
+(pass) waitForBackoffDelay > rejects promptly when aborted during the delay
+(pass) waitForBackoffDelay > rejects when aborted after timer creation but before listener registration [27.00ms]
+(pass) waitForBackoffDelay > resolves normally when the delay elapses [25.00ms]
+(pass) computeBackoffDelayMs > exponential growth without jitter (deterministic)
+(pass) computeBackoffDelayMs > caps at RETRY_BACKOFF_MAX_DELAY_MS without jitter
+(pass) computeBackoffDelayMs > honors a custom baseDelayMs
+(pass) computeBackoffDelayMs > treats negative attempt as 0
+(pass) computeBackoffDelayMs > applies jitter within ±JITTER_FRACTION bounds [1.00ms]
+(pass) computeBackoffDelayMs > jitter never exceeds the max cap
+(pass) computeBackoffDelayMs > jitter defaults to true
+(pass) computeBackoffDelayMs > returns an integer
+(pass) RETRY_POLICY (M3-T4 shared policy object) > is the canonical policy: same budget and backoff curve as the streaming loop
+(pass) retry matrix: error class × retry decision > content-policy errors are NOT retryable [1.00ms]
+(pass) retry matrix: error class × retry decision > non-retryable 4xx client errors are NOT retryable
+(pass) retry matrix: error class × retry decision > retryable statuses (408/429/5xx) ARE retryable without a Retry-After header
+(pass) retry matrix: error class × retry decision > a valid Retry-After delta-seconds header overrides the default backoff (capped) [7.00ms]
+(pass) retry matrix: error class × retry decision > an oversized Retry-After hint is capped at RETRY_BACKOFF_MAX_DELAY_MS [7.00ms]
+(pass) retry matrix: error class × retry decision > missing/invalid Retry-After headers fail closed to the default backoff
+(pass) retry matrix: error class × retry decision > a valid HTTP-date Retry-After in the future is honored; past dates fail closed
+(pass) retry matrix: error class × retry decision > transient network errors without a status ARE retryable [1.00ms]
+(pass) retry matrix: error class × retry decision > programming errors and aborts are NOT retryable
+(pass) runWithRetryPolicy > retries transient errors with the shared policy budget and backoff curve [3.00ms]
+(pass) runWithRetryPolicy > does NOT retry content-policy or 4xx errors (fails fast on attempt 1) [1.00ms]
+(pass) runWithRetryPolicy > exhausts the shared budget (maxRetries + 1 attempts) then throws the last error [1.00ms]
+(pass) runWithRetryPolicy > honors a valid Retry-After hint instead of the exponential curve [2.00ms]
+(pass) runWithRetryPolicy > never retries after the caller aborts
+(pass) runWithRetryPolicy > retries 429 rate limits even without a Retry-After header (pin: nonretryable-429-fail-fast)
+(pass) runWithRetryPolicy > threads the caller signal into the injected sleep [2.00ms]
+(pass) runWithRetryPolicy > an abort during the injected sleep costs no extra attempt (non-abort-aware sleep)
+(pass) runWithRetryPolicy > an abort during the injected sleep surfaces the abort reason, not the transient error
+
+sdk/src/impl/__tests__/error-utils.test.ts:
+(pass) provider content-policy errors > classifies explicit moderation wording in an HTTP error response [1.00ms]
+(pass) provider content-policy errors > does not classify an unrelated client error
+(pass) provider content-policy errors > preserves an already classified policy error
+(pass) provider content-policy errors > classifies only the content-filter finish reason
+
+sdk/src/impl/__tests__/failover-integration.test.ts:
+(pass) failover loop contract (composed) > resolveModelsToTry dedupes a repeated primary and preserves failover order [1.00ms]
+(pass) failover loop contract (composed) > resolveConfiguredAgentModelConfig with preferModelParam keeps each backup model (pre-M8.1 bypass) [1.00ms]
+(pass) failover loop contract (composed) > resolveConfiguredAgentModelConfig without preferModelParam honors defaultModel for the primary
+(pass) failover loop contract (composed) > resolveModelsToTry returns a single-element list when failoverModels is unset (no-failover baseline) [1.00ms]
+(pass) failover loop contract (composed) > resolveModelsToTry dedupes a failover model that repeats a non-default primary (agentId-routed primary) [1.00ms]
+(pass) failover loop contract (composed) > resolveModelsToTry returns an empty list when primaryModel is undefined and failoverModels is unset
+(pass) failover loop contract (composed) > resolveModelsToTry dedupes ALL failover entries that repeat the primary when failoverModels contains the primary multiple times [1.00ms]
+(pass) failover loop contract (composed) > resolveModelsToTry dedupes duplicate entries within failoverModels itself (misconfigured list with duplicate backups) [1.00ms]
+360 |   return {
+361 |     specificationVersion: 'v2',
+362 |     provider: 'test-provider',
+363 |     modelId: 'test-model',
+364 |     doStream: async () => {
+365 |       throw new APICallError({
+                      ^
+AI_APICallError: Invalid API key provided
+      cause: undefined,
+        url: "http://127.0.0.1:11434/v1/chat/completions",
+ requestBodyValues: {},
+ statusCode: 401,
+ responseHeaders: undefined,
+ responseBody: undefined,
+ isRetryable: false,
+       data: undefined,
+ vercel.ai.error: true,
+ vercel.ai.error.AI_APICallError: true,
+
+      at /home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts:365:17
+      at doStream (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts:551:9)
+      at /home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:5803:17
+      at fn (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:5798:7)
+      at /home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1886:10
+      at /home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1885:26
+      at _retryWithExponentialBackoff (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:2067:12)
+      at _retryWithExponentialBackoff (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:2060:18)
+      at /home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:2048:36
+      at streamStep (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:5750:9)
+      at /home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:6169:7
+      at /home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1886:10
+      at processTicksAndRejections (native:7:39)
+
+(pass) promptAiSdkStream failover loop (integration) > advances to backup on primary 401, records preferModelParam [false, true], yields backup content [24.00ms]
+336 |     doStream: async () => {
+337 |       const parts = [
+338 |         { type: 'stream-start' },
+339 |         {
+340 |           type: 'error',
+341 |           error: new NoOutputGeneratedError({
+                       ^
+AI_NoOutputGeneratedError: No output generated. Check the stream for errors.
+      cause: undefined,
+ vercel.ai.error: true,
+ vercel.ai.error.AI_NoOutputGeneratedError: true,
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts:341:18)
+      at doStream (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts:336:15)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:5001:43)
+      at fn (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:4996:26)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1568:28)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1566:64)
+      at _retryWithExponentialBackoff (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1719:18)
+      at _retryWithExponentialBackoff (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1712:45)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1706:19)
+      at streamStep (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:4957:21)
+      at async <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:5298:15)
+      at async <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1568:28)
+
+336 |     doStream: async () => {
+337 |       const parts = [
+338 |         { type: 'stream-start' },
+339 |         {
+340 |           type: 'error',
+341 |           error: new NoOutputGeneratedError({
+                       ^
+AI_NoOutputGeneratedError: No output generated. Check the stream for errors.
+      cause: undefined,
+ vercel.ai.error: true,
+ vercel.ai.error.AI_NoOutputGeneratedError: true,
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts:341:18)
+      at doStream (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts:336:15)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:5001:43)
+      at fn (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:4996:26)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1568:28)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1566:64)
+      at _retryWithExponentialBackoff (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1719:18)
+      at _retryWithExponentialBackoff (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1712:45)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1706:19)
+      at streamStep (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:4957:21)
+      at async <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:5298:15)
+      at async <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1568:28)
+
+336 |     doStream: async () => {
+337 |       const parts = [
+338 |         { type: 'stream-start' },
+339 |         {
+340 |           type: 'error',
+341 |           error: new NoOutputGeneratedError({
+                       ^
+AI_NoOutputGeneratedError: No output generated. Check the stream for errors.
+      cause: undefined,
+ vercel.ai.error: true,
+ vercel.ai.error.AI_NoOutputGeneratedError: true,
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts:341:18)
+      at doStream (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts:336:15)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:5001:43)
+      at fn (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:4996:26)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1568:28)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1566:64)
+      at _retryWithExponentialBackoff (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1719:18)
+      at _retryWithExponentialBackoff (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1712:45)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1706:19)
+      at streamStep (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:4957:21)
+      at async <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:5298:15)
+      at async <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1568:28)
+
+336 |     doStream: async () => {
+337 |       const parts = [
+338 |         { type: 'stream-start' },
+339 |         {
+340 |           type: 'error',
+341 |           error: new NoOutputGeneratedError({
+                       ^
+AI_NoOutputGeneratedError: No output generated. Check the stream for errors.
+      cause: undefined,
+ vercel.ai.error: true,
+ vercel.ai.error.AI_NoOutputGeneratedError: true,
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts:341:18)
+      at doStream (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts:336:15)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:5001:43)
+      at fn (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:4996:26)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1568:28)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1566:64)
+      at _retryWithExponentialBackoff (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1719:18)
+      at _retryWithExponentialBackoff (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1712:45)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1706:19)
+      at streamStep (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:4957:21)
+      at async <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:5298:15)
+      at async <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs:1568:28)
+
+(pass) promptAiSdkStream failover loop (integration) > retries and failovers over an empty stream (NoOutputGeneratedError), then yields backup content [32.00ms]
+
+sdk/src/impl/__tests__/failover.test.ts:
+(pass) resolveModelsToTry > returns only the primary when no config is provided [1.00ms]
+(pass) resolveModelsToTry > returns only the primary when config has no failoverModels
+(pass) resolveModelsToTry > prepends the primary and appends configured failover models in order
+(pass) resolveModelsToTry > dedupes a failover model that repeats the primary [9.00ms]
+(pass) resolveModelsToTry > returns an empty array when the primary is undefined and no failovers are configured [1.00ms]
+(pass) resolveModelsToTry > returns only failover models when the primary is undefined
+(pass) resolveModelsToTry > dedupes duplicates within the failover list (preserves first-seen order)
+(pass) resolveModelsToTry > dedupes duplicate backups while preserving order of first occurrences
+(pass) FAILOVER_ELIGIBLE_STATUS_CODES > contains auth codes 401 and 403
+(pass) FAILOVER_ELIGIBLE_STATUS_CODES > contains 5xx server codes 500/502/503/504
+(pass) FAILOVER_ELIGIBLE_STATUS_CODES > does NOT contain 408 (timeout) or 429 (rate limit) — retry-only
+(pass) FAILOVER_ELIGIBLE_STATUS_CODES > does NOT contain 400/404/422 (client errors)
+(pass) isFailoverEligibleError > returns true for 401 auth errors
+(pass) isFailoverEligibleError > returns true for 403 forbidden errors
+(pass) isFailoverEligibleError > returns true for 500 server errors [1.00ms]
+(pass) isFailoverEligibleError > returns false for a content-policy error that preserved a 503 status (M3-T4 contract)
+(pass) isFailoverEligibleError > returns true for 502 bad gateway
+(pass) isFailoverEligibleError > returns true for 503 service unavailable (createNetworkError default)
+(pass) isFailoverEligibleError > returns true for 504 gateway timeout
+(pass) isFailoverEligibleError > returns false for an explicitly classified provider content-policy error (fail fast, per the documented contract)
+(pass) isFailoverEligibleError > returns false after normalizing an explicit HTTP 400 content-policy response (fail fast) [1.00ms]
+(pass) isFailoverEligibleError > returns true for the AI SDK NoOutputGeneratedError (empty stream, clean close)
+(pass) isFailoverEligibleError > returns false for a plain Error sharing the NoOutputGeneratedError message (marker-based classification, not message matching)
+(pass) isFailoverEligibleError > still classifies by status alongside the empty-stream path: content-policy with a failover-eligible status stays NOT eligible, status-carrying errors classify by status
+(pass) isFailoverEligibleError > returns false for 408 request timeout — retry-only, not failover-eligible
+(pass) isFailoverEligibleError > returns false for 429 rate limit — retry-only, not failover-eligible
+(pass) isFailoverEligibleError > returns false for 400 bad request
+(pass) isFailoverEligibleError > returns false for 404 not found
+(pass) isFailoverEligibleError > returns false for 422 unprocessable entity [1.00ms]
+(pass) isFailoverEligibleError > returns false for a plain Error with no status code
+(pass) isFailoverEligibleError > returns false for a non-Error value
+(pass) isFailoverEligibleError > reads the AI SDK APICallError convention (`status` property)
+(pass) isFailoverEligibleError > reads the `statusCode` property (our convention)
+(pass) isFailoverEligibleError > prefers `statusCode` over `status` when both are present (statusCode checked first)
+(pass) isFailoverEligibleError > returns false when statusCode is a non-number string
+
+sdk/src/impl/__tests__/llm-chatgpt-oauth-policy.test.ts:
+(pass) classifyChatGptOAuthStreamError > returns ignore when ChatGPT OAuth is not active
+(pass) classifyChatGptOAuthStreamError > returns fallback-rate-limit for 429 before content is yielded
+(pass) classifyChatGptOAuthStreamError > returns fail-auth-reconnect for 401/403 before content is yielded [4.00ms]
+(pass) classifyChatGptOAuthStreamError > returns fail-fast for non-rate-limit non-auth errors
+(pass) classifyChatGptOAuthStreamError > returns ignore after partial output has been yielded
+(pass) classifyChatGptOAuthStreamError > returns ignore when skip flag is set
+
+sdk/src/impl/__tests__/llm-context-window.test.ts:
+(pass) text tool instructions > renders actual structured schemas and descriptions for text-only providers [2.00ms]
+(pass) text tool instructions > fails explicitly when a tool schema cannot be rendered [1.00ms]
+(pass) text tool instructions > converts prior tool calls and results to text without tool roles [1.00ms]
+(pass) getMessagesForModelContext > uses the default trim limit when context window is unknown [1.00ms]
+(pass) getMessagesForModelContext > trims messages using the resolved model context window [45.00ms]
+(pass) getMessagesForModelContext > reserves part of the model context window for non-message request overhead [5.00ms]
+(pass) getMessagesForModelContext > emits cache_emergency_trim telemetry when request-time trim drops messages (M4.3) [40.00ms]
+(pass) getMessagesForModelContext > does not emit cache_emergency_trim telemetry when no trim occurs (M4.3) [1.00ms]
+(pass) getMessagesForModelContext > reports the applied message-only threshold in trigger/target trim telemetry [24.00ms]
+(pass) getMessagesForModelContext > reports a request-time trim to the onTrimmed consumer [33.00ms]
+(pass) getMessagesForModelContext > does not invoke onTrimmed when no trim occurs
+(pass) getMessagesForModelContext > absorbs a throwing onTrimmed consumer without changing the trim [32.00ms]
+(pass) getMessagesForModelContext > keeps trigger/target equal to the request budget when no overhead is reserved [30.00ms]
+(pass) getMessagesForModelContext > honors an adaptive provider message-limit override [13.00ms]
+(pass) getMessagesForModelContext > subtracts systemTokens so the brake matches the runtime message budget [72.00ms]
+(pass) getMessagesForModelContext > omitting systemTokens is identical to passing 0 [118.00ms]
+(pass) getMessagesForModelContext > stays behaviorally safe for a Zod-schema toolset on the exported request paths [4.00ms]
+(pass) getMessagesForModelContext > reserves materially more for a large Zod schema than a small one [2.00ms]
+(pass) getMessagesForModelContext > counts a Zod schema in the same ballpark as its JSON-Schema equivalent [2.00ms]
+(pass) getMessagesForModelContext > reserves at least the fallback floor for an unconvertible schema [1.00ms]
+(pass) getMessagesForModelContext > clamps an absurdly large schema to the per-tool ceiling [86.00ms]
+(pass) getMessagesForModelContext > counts plain JSON Schema tool surfaces exactly
+(pass) getMessagesForModelContext > never serializes a self-referential tool schema [1.00ms]
+(pass) getMessagesForModelContext > omits the tool surface when the provider strips tools [1.00ms]
+(pass) getMessagesForModelContext > extracts provider context limits from oversized-prompt errors [1.00ms]
+
+sdk/src/impl/__tests__/llm-cost.test.ts:
+(pass) computeCostCentsFromUsage > computes cost from input + output rates [2.00ms]
+(pass) computeCostCentsFromUsage > returns undefined when pricing is undefined
+(pass) computeCostCentsFromUsage > returns undefined when pricing has neither input nor output rate
+(pass) computeCostCentsFromUsage > uses cachedInputPerMillionTokens for cached input portion
+(pass) computeCostCentsFromUsage > falls back to input rate for cached tokens when cached rate is absent
+(pass) computeCostCentsFromUsage > returns 0 for zero usage
+(pass) computeCostCentsFromUsage > returns 0 when usage token counts are missing
+(pass) computeCostCentsFromUsage > treats negative / non-finite token counts as zero
+(pass) computeCostCentsFromUsage > handles input-only pricing (no output rate)
+(pass) computeCostCentsFromUsage > handles output-only pricing (no input rate)
+(pass) computeCostCentsFromUsage > rounds to whole cents
+(pass) computeCostCentsFromUsage > does not let cached tokens exceed raw input tokens [9.00ms]
+
+sdk/src/impl/__tests__/llm-ontrim-retry.test.ts:
+(pass) non-streaming retry onTrimmed idempotency > promptAiSdk reports a context trim once per request, not once per retry [1219.98ms]
+(pass) non-streaming retry onTrimmed idempotency > promptAiSdkStructured reports a context trim once per request, not once per retry [1155.98ms]
+
+sdk/src/impl/__tests__/llm-repair-tool-input.test.ts:
+(pass) repairTruncatedToolInputJson > repairs input cut mid-string by closing the quote and brackets [1.00ms]
+(pass) repairTruncatedToolInputJson > repairs trailing-comma junk
+(pass) repairTruncatedToolInputJson > repairs a dangling key left by the truncation
+(pass) repairTruncatedToolInputJson > returns already-valid JSON unchanged (idempotent)
+(pass) repairTruncatedToolInputJson > repairs unbalanced nested brackets
+(pass) repairTruncatedToolInputJson > returns undefined when the broken structure cannot be repaired [1.00ms]
+(pass) repairTruncatedToolInputJson > returns undefined for non-JSON values
+
+sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts:
+(pass) promptAiSdkStream tool-call buffering across attempts > sends the tool schema as text when the resolved provider has no native tools [5.00ms]
+(pass) promptAiSdkStream tool-call buffering across attempts > drops the failed attempt's buffered tool calls when the retry succeeds [7.00ms]
+(pass) promptAiSdkStream tool-call buffering across attempts > fails over after a stream that buffered a tool call and then failed [5.00ms]
+(pass) promptAiSdkStream tool-call buffering across attempts > yields the stream-only finish chunk as the last yielded chunk before the return value [6.00ms]
+
+ 331 pass
+ 0 fail
+ 1078 expect() calls
+Ran 331 tests across 16 files. [11.24s]

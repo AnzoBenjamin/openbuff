@@ -1,0 +1,19 @@
+# Current execution checkpoint
+
+The [live ledger](ledger.json) accepts **B01, B02, B03, B04, B08, B18, B30 and B36**. Its exact reviewed candidate was promoted byte-for-byte and validates with zero errors. **31 completion nodes remain pending.** The [architecture approval](evidence/integration/architect-first-wave/final-integration/REVIEW.md) and [promotion receipt](evidence/integration/first-wave-final-20261107/promotion/promotion.json) preserve the scope and prior ledger.
+
+The CLI is rebuilt and installed at `/home/ben/.local/share/openbuff-test/openbuff-branch`, version `1.0.0`, SHA-256 `5597a243d8676c345ba7cece90565705adb2a384d621436482084937a42d6241`. Installed help, version, run help, OpenTUI and tree-sitter probes pass. The final source typecheck passes all 11 workspaces; CLI CI records 4,436 pass, 146 skip and zero fail, and the agents suite records 1,284 pass and zero fail. See the [integration report](evidence/integration/first-wave-final-20261107/INTEGRATION.md) for exact receipts and the historical scope of the full SDK/evaluator checks.
+
+The user-requested [researcher-web overhaul](researcher-web-agent-browser.md) is registered under B33 and has a separate [planning approval](evidence/RWEB/planning-review/REVIEW.md). **RWEB-0 feasibility is approved** for the pinned Linux native/core-MCP toolchain. The [real fixture report](evidence/RWEB/feasibility/FEASIBILITY.md) and [independent review](evidence/RWEB/feasibility-independent-review/REVIEW.md) cover direct/rendered reads, navigation, screenshots, isolated sessions and observed cleanup. They also record socket length, profile/allowlist incompatibility, missing `Retry-After` metadata and the need for host-managed daemon cleanup. RWEB-1…4 and B33 implementation remain pending; delivery requires B19/B20/B28 and B33's other prerequisites.
+
+The next selected implementation work is [B05 exact-byte reads and bounded allocation](evidence/B05/preparation/CONTRACT-AND-ACCEPTANCE.md) and [B19 effective execution context](evidence/B19/preparation/current-source-supplement-2026-11-07.md). B28 is also dependency-ready and supplies the managed MCP boundary needed by the researcher work. These preparations carry no additional card acceptance.
+
+The exact publication evidence and three generated/dependency context inputs are retained in a small content-addressed archive. A separate 12 KB supplement preserves 27 sealed files from B30's toy Git repository, whose nested `.git` metadata cannot be tracked directly. In a fresh source checkout, restore both verified archives before running the unchanged ledger validator:
+
+```sh
+python3 docs/execution/body-roadmap/evidence/publication-20261107/archive/rehydrate.py
+python3 docs/execution/body-roadmap/evidence/publication-20261107/git-fixture/rehydrate.py
+python3 docs/execution/body-roadmap/validate-ledger.py
+```
+
+Both restore commands verify their pinned archives and refuse to overwrite different existing bytes. They require ordinary Python execution without `-O` or `PYTHONOPTIMIZE`. The [fixture classification](evidence/publication-20261107/independent-review/fresh-checkout/git-fixture-gap.json) records the supplement's frozen authority bindings. Restored source context supports the historical evidence check; building or testing the application still uses the repository's normal development setup. Product binaries/browser assets are external toolchain context, and unreferenced runtime caches are outside the publication set.

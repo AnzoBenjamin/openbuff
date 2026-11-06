@@ -1,0 +1,20 @@
+{
+  "fixture": "/tmp/openbuff-audit-snapshot-ssLKCJ",
+  "nativeFiles": [
+    "cli/index.ts",
+    "cli/large.ts",
+    "package.json"
+  ],
+  "fullSourceHashChanged": true,
+  "tailChangeChangedSnapshot": false,
+  "wrapperIsPublicEntrypoint": true,
+  "wrapperIncluded": false,
+  "wrapperChangeChangedSnapshot": false,
+  "explicitlyScopedWrapperFiles": [],
+  "sourceAnchors": [
+    "sdk/src/services/audit-intelligence.ts:19",
+    "sdk/src/services/audit-intelligence.ts:37",
+    "sdk/src/services/audit-intelligence.ts:124",
+    "sdk/src/services/audit-intelligence.ts:135"
+  ]
+}

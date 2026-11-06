@@ -1,0 +1,2 @@
+openbuff run: running agent body-runtime-fixture (project root /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/zero_cost)
+openbuff run: Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed.

@@ -1,0 +1,330 @@
+{
+  "createdAt": "2026-11-06T15:56:54.839Z",
+  "runtime": {
+    "executable": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+    "bun": "1.3.5"
+  },
+  "reports": [
+    {
+      "kind": "current",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+        "reviewedFiles": [
+          "state/session.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Inspect the requested reliability behavior",
+            "status": "satisfied",
+            "evidence": [
+              "state/session.ts:session"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [],
+      "phase": "awaiting_validation",
+      "specialistReviewGatesDone": [
+        "reliability-reviewer"
+      ],
+      "creditedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "creditedFileMarkers": {
+        "state/session.ts": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+      },
+      "reviewReceipts": [
+        {
+          "gateId": "reliability-reviewer:v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewer": "reliability-reviewer",
+          "verdict": "LOOKS_GOOD",
+          "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewedFiles": [
+            "state/session.ts"
+          ],
+          "reviewedFileCount": 1,
+          "reviewedFileHashes": [
+            {
+              "path": "state/session.ts",
+              "hash": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+            }
+          ],
+          "coverage": "covered",
+          "dimensions": {
+            "race_conditions_and_shared_state": "pass: final source read",
+            "retries_idempotency_and_partial_failure": "pass: final source read",
+            "cancellation_and_resource_ownership": "pass: final source read",
+            "state_machine_invariants_and_recovery": "pass: final source read"
+          },
+          "findings": [],
+          "findingCount": 0,
+          "requirementCoverage": [
+            {
+              "requirement": "Inspect the requested reliability behavior",
+              "status": "satisfied",
+              "evidence": [
+                "state/session.ts:session"
+              ],
+              "evidenceCount": 1
+            }
+          ],
+          "requirementCoverageCount": 1,
+          "recordedAt": "2026-11-06T15:56:54.835Z"
+        }
+      ],
+      "openBlockers": [],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "foreign-clean",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "reviewedFiles": [
+          "state/session.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Inspect the requested reliability behavior",
+            "status": "satisfied",
+            "evidence": [
+              "state/session.ts:session"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "phase": "awaiting_validation",
+      "specialistReviewGatesDone": [
+        "reliability-reviewer"
+      ],
+      "creditedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "creditedFileMarkers": {
+        "state/session.ts": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+      },
+      "reviewReceipts": [
+        {
+          "gateId": "reliability-reviewer:v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewer": "reliability-reviewer",
+          "verdict": "LOOKS_GOOD",
+          "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "reviewedFiles": [
+            "state/session.ts"
+          ],
+          "reviewedFileCount": 1,
+          "reviewedFileHashes": [
+            {
+              "path": "state/session.ts",
+              "hash": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+            }
+          ],
+          "coverage": "covered",
+          "dimensions": {
+            "race_conditions_and_shared_state": "pass: final source read",
+            "retries_idempotency_and_partial_failure": "pass: final source read",
+            "cancellation_and_resource_ownership": "pass: final source read",
+            "state_machine_invariants_and_recovery": "pass: final source read"
+          },
+          "findings": [],
+          "findingCount": 0,
+          "requirementCoverage": [
+            {
+              "requirement": "Inspect the requested reliability behavior",
+              "status": "satisfied",
+              "evidence": [
+                "state/session.ts:session"
+              ],
+              "evidenceCount": 1
+            }
+          ],
+          "requirementCoverageCount": 1,
+          "recordedAt": "2026-11-06T15:56:54.837Z"
+        }
+      ],
+      "openBlockers": [],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "foreign-parent-owned",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "reviewedFiles": [
+          "state/session.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Commit and push",
+            "status": "missing",
+            "evidence": [
+              "Parent owns the commit/push workflow"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "phase": "awaiting_validation",
+      "specialistReviewGatesDone": [
+        "reliability-reviewer"
+      ],
+      "creditedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "creditedFileMarkers": {
+        "state/session.ts": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+      },
+      "reviewReceipts": [
+        {
+          "gateId": "reliability-reviewer:v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewer": "reliability-reviewer",
+          "verdict": "LOOKS_GOOD",
+          "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          "reviewedFiles": [
+            "state/session.ts"
+          ],
+          "reviewedFileCount": 1,
+          "reviewedFileHashes": [
+            {
+              "path": "state/session.ts",
+              "hash": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+            }
+          ],
+          "coverage": "covered",
+          "dimensions": {
+            "race_conditions_and_shared_state": "pass: final source read",
+            "retries_idempotency_and_partial_failure": "pass: final source read",
+            "cancellation_and_resource_ownership": "pass: final source read",
+            "state_machine_invariants_and_recovery": "pass: final source read"
+          },
+          "findings": [],
+          "findingCount": 0,
+          "requirementCoverage": [
+            {
+              "requirement": "Commit and push",
+              "status": "missing",
+              "evidence": [
+                "Parent owns the commit/push workflow"
+              ],
+              "evidenceCount": 1
+            }
+          ],
+          "requirementCoverageCount": 1,
+          "recordedAt": "2026-11-06T15:56:54.839Z"
+        }
+      ],
+      "openBlockers": [],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    }
+  ],
+  "blockingCounterexamples": [
+    "foreign-clean",
+    "foreign-parent-owned"
+  ],
+  "codingFetch": {
+    "attempted": 0,
+    "forwarded": 0
+  }
+}

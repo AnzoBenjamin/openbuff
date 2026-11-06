@@ -1,0 +1,174 @@
+"""Restore captured evidence artifacts as data; no recorded command is executed."""
+from datetime import datetime, timezone
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import re
+import shlex
+
+SPEC = importlib.util.spec_from_file_location('recorded_review_data', Path(__file__).with_name('recover-recorded-data.py'))
+DATA = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(DATA)
+BASE, EVIDENCE, RECOVERY = DATA.BASE, DATA.EVIDENCE, DATA.RECOVERY
+META = {entry['capture']: entry for entry in DATA.INDEX}
+ARTIFACTS = []
+
+
+def save(name, raw, provenance, completeness, transformation):
+    path = EVIDENCE / name
+    assert path.parent == EVIDENCE
+    path.write_bytes(raw)
+    record = {'path': 'evidence/' + name, 'sha256': hashlib.sha256(raw).hexdigest(), 'bytes': len(raw), 'provenance': provenance, 'completeness': completeness, 'transformation': transformation, 'observationMeaning': 'Recorded baseline evidence; diagnostic successes reproduce defects and do not certify a repair.'}
+    ARTIFACTS.append(record)
+    return record
+
+
+def captured_json(name, capture):
+    file = RECOVERY / 'captures' / capture
+    raw = file.read_bytes()
+    value = json.loads(raw)
+    assert not set(value) <= {'i', 'index', 'value', 'result', 'output', 'status', 'chunk_id', 'wall_time_seconds', 'exit_code', 'original_token_count'}
+    return save(name, raw, DATA.provenance(META[capture]), 'complete captured JSON observation; original artifact byte hash unavailable', 'Copy verified capture bytes without rerunning the probe.')
+
+
+def json_payloads(text):
+    decoder = json.JSONDecoder()
+    for match in re.finditer(r'(?m)^(?=\{|\[)', text):
+        try:
+            value, length = decoder.raw_decode(text[match.start():])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            yield value, text[match.start():match.start() + length]
+
+
+def output_for(capture):
+    value = json.loads((RECOVERY / 'captures' / capture).read_text())
+    outputs = [(location, node['output']) for location, node in DATA.walk(value) if isinstance(node, dict) and isinstance(node.get('output'), str)]
+    assert outputs
+    return outputs[-1]
+
+
+def main():
+    mappings = {
+        '02-providers-probes.json': '9abc397a9bc7ed2f412467de6651eee7336b4da1e457fb9f82299e8a8fdcd160.json',
+        '03-orchestration-probes.json': '346e303d7807f673e1fc9a7bba9a692313d60d046c2f8bb92eae8f17d885de87.json',
+        '04-memory-fixture-result.json': '6a3582f5490c555f5530eafe2fc533567e8cdf95d82cbadde7830e4ff0d2be93.json',
+        '06-edit-probes.json': '9d560a2f85352124b83a134f7a8c8bcfeaa88d51e31d1adc8550fb44e4a31cc0.json',
+        '06-workspace-edit-probe.json': 'a159353155c7878dc147f5be6b5cebdb9fe9e67e3bb4c4d9afc3e3ff5b7a39f5.json',
+        '06-mutation-truth-probe.json': '1596aa3f475080792df5457b678333715ed5a6eb87481045ab0fcddefa790799.json',
+        '06-text-preservation-probe.json': '35ad4b3d5093203c12b7c630ac980d5fe0dedb925648fbc3f5e530ffb6b81971.json',
+        '06-broker-lock-probe.json': 'ad2fadc1cb928e1c72705708b064fcfd3777c4b5193f39f0791cbb38609705f6.json',
+        '06-broker-recovery-containment-probe.json': '64c5d1857c67b08100f59b1e911c41c663919eede0bd26e2f030167927525f9b.json',
+        '07-probes.json': '12540784a2ab324cbe7ac85727d1f12383d4546e06f17188b7ddb22d2514268e.json',
+        '07-assets.json': '4af31f9914c34cd413da88c8f25a71d17323eeaa1b9c5928d7e14d2abc1147b0.json',
+        '08-freshness-lock-probes.json': '15d1c019a78a12b9429f7f813a7c2439f777d1e068bcb4eef5b549a595be1a54.json',
+        '08-safety-sweep-probe.json': '0f5aff06a4aa2dc58f46bb08b0ccfadb668be7803f5f8e45683a4e24490c2793.json',
+        '09-policy-probe.json': '0386b8dbb5c90e1bbf553634ed53135273c3e3623fa2f049a12f71e755fb236b.json',
+        '09-supervisor-probe.json': '33f06cf9de9ba386696eeca451b4f051718b2fb4ff301fc80f4f7edd27c63d52.json',
+        '09-mcp-hooks-probe.json': 'e7fb95d6bf182645d7d20e68be67a19280a868660084e854af75a427695bd2aa.json',
+        '12-source-binding-probe.json': 'd31ce084ea48bf017e5e0a7fad8c71a7a5b2835220aaa6242fdb9dbdf4bae40e.json',
+        '12-review-bundle-probe.json': '67c8e45b774054b23ceaa54b0487db7cb9c98fd3da1a9d6e234c4fdd450e5ae4.json',
+        'historical-REVIEW-VALIDATION.json': '432d6189eb1fae3ad24c7abbfa04dc5c9e1726d0cbf82c7f966dbff8760c92bd.json',
+    }
+    for name, capture in mappings.items():
+        captured_json(name, capture)
+
+    # Recover complete JSON printed by the known, already executed probe scripts.
+    script_outputs = {
+        'snapshot-probes.ts': 'snapshot-probes.json',
+        'completeness-probe.ts': 'completeness-probe.json',
+        '08-indexer-probes.ts': '08-indexer-probes.json',
+        '09-lifecycle-probe.ts': '09-lifecycle-probe.json',
+        '09-native-probe.py': '09-native-probe.json',
+        '11-offline-probes.ts': '11-offline-probe-results.json',
+    }
+    candidates = {}
+    for command in DATA.COMMANDS:
+        command_text = Path(command['filename']).read_text()
+        if not (command_text.startswith('bun ') or command_text.startswith('/home/ben/.bun/') or command_text.startswith('python3 /tmp/')):
+            continue
+        tokens = shlex.split(command_text)
+        matches = [script for script in script_outputs if any(token.endswith('/evidence/' + script) for token in tokens)]
+        for script in matches:
+            for entry, location, output in DATA.TEXTS_BY_CALL.get(command['callId'], []):
+                for value, raw in json_payloads(output):
+                    markers = {'runtime', 'fixtureRoot', 'nativeEcho', 'heuristicStatus', 'tailChangeChangedSnapshot', 'finalCheckCancellation'}
+                    if not markers.intersection(value):
+                        continue
+                    name = script_outputs[script]
+                    previous = candidates.get(name)
+                    if previous is None or entry['timestamp'] > previous[0]['timestamp']:
+                        candidates[name] = (entry, location, raw, command)
+    for name, (entry, location, raw, command) in candidates.items():
+        save(name, (raw + '\n').encode(), {'capture': DATA.provenance(entry, location), 'command': {key: command[key] for key in ('timestamp', 'session', 'callId')}, 'commandFilename': Path(command['filename']).name}, 'complete captured JSON payload; original artifact byte hash unavailable', 'Extract the complete observed JSON block from captured stdout; add one LF. No execution.')
+
+    # The 10 probe is separately bound to its independently captured original hash.
+    ten = json.loads((EVIDENCE / '10-probe-results-PROVENANCE.json').read_text())
+    ARTIFACTS.append({'path': 'evidence/10-probe-results.json', **{key: ten[key] for key in ('bytes', 'sha256', 'provenance', 'transformation', 'originalSha256', 'originalHashReceipt')}, 'completeness': 'complete original artifact; independently recorded byte hash matches'})
+
+    # CLI help is a recorded tail, not the complete original stdout file.
+    capture = '00259f70621e461b9debc388dd9bf7597a2a97f1956db4c52b34576045141170.json'
+    location, output = output_for(capture)
+    save('cli-help.log', output.encode(), DATA.provenance(META[capture], location), 'original help tail (30 lines); original full log unavailable', 'Copy the exact recorded tail. The original entrypoint exit=0 is separately recorded in the review checkpoints.')
+
+    capture = '536ae3a99e67ba797fc30f83900a2153e1b3782cfdee70898768178aee78b664.json'
+    location, output = output_for(capture)
+    parser, indexer = output.split('indexer-tests.log\n', 1)
+    parser = parser.removeprefix('code-map-tests.log\n')
+    save('code-map-tests.log', parser.encode(), DATA.provenance(META[capture], location), 'captured parser test footer plus enumerated failure lines; original full log unavailable', 'Extract the code-map section of the recorded summary command output.')
+    save('indexer-tests.log', indexer.encode(), DATA.provenance(META[capture], location), 'captured indexer test tail and footer; original full log unavailable', 'Extract the indexer section of the recorded summary command output.')
+
+    audit = [(location, value['output']) for location, value in DATA.walk(DATA.STORES['auditprobe-0']) if isinstance(value, dict) and isinstance(value.get('output'), str) and value['output'].lstrip().startswith('(pass) containsStructuralAuditReceipt') and '28 pass' in value['output']]
+    assert len(audit) == 1
+    command = next(command for command in DATA.COMMANDS if Path(command['filename']).name.startswith('0022-'))
+    save('audit-tests.log', audit[0][1].encode(), {'storeFile': 'stores.json', 'storeSha256': DATA.digest((RECOVERY / 'stores.json').read_bytes()), 'storeKey': 'auditprobe-0', 'location': audit[0][0], 'recordedTailCommand': command, 'timestampMeaning': 'Command timestamp, not an independently recorded stdout timestamp.'}, 'captured 15-line audit test tail and footer; original full log unavailable', 'Decode the complete nested JSON record retained inside the truncated aggregate store output; retain its exact output string.')
+
+    capture = '4bdd2f0f684d4ea54dd9f432f80806da3762def842b5d51e62c2d8213b2c6364.json'
+    location, output = output_for(capture)
+    marker = 'Ran 20 tests across 1 file. [361.00ms]\n'
+    assert marker in output
+    excerpt = output[:output.index(marker) + len(marker)]
+    save('code-map-structure-alone.log', excerpt.encode(), DATA.provenance(META[capture], location), 'captured isolated structure test tail and footer; original full log unavailable', 'Take the recorded test section before the subsequent languages.ts source read.')
+
+    capture = 'c0a4f9ea7b33e5366604b80012fcd1c125272b455a5d80f47f782397058ad0ea.json'
+    location, output = output_for(capture)
+    lines = [(int(number), line) for number, line in re.findall(r'(?m)^(\d+): (.*)$', output)]
+    assert [number for number, _ in lines] == list(range(1, 71))
+    raw = ('\n'.join(line for _, line in lines) + '\n').encode()
+    save('rust-tests.log', raw, DATA.provenance(META[capture], location), 'all 70 original log lines recovered; original byte hash unavailable', 'Remove the exact numbered-reader prefixes and join with LF. Contains locked/offline 18+1 passing workspace tests.')
+
+    # Preserve the latest full captured coverage payload, including its honest
+    # complete=false feature result. Later metadata-only 5,139-byte output is
+    # not substituted for this complete earlier payload.
+    capture = '83e3e653a12f1f2bf94a65c1c2cf3c8ffdd109d97c9481cf46c8bb103718b1b0.md'
+    text = (RECOVERY / 'captures' / capture).read_text()
+    raw = text[text.index('\n{') + 1:]
+    value = json.loads(raw)
+    assert value['nativeAuditCoverageResult']['complete'] is False
+    save('historical-COVERAGE-RESULT.json', raw.encode(), DATA.provenance(META[capture]), 'complete earlier captured coverage payload; later metadata-only revision unavailable', 'Extract the complete JSON following the captured COVERAGE.md output; preserve native complete=false.')
+
+    # Baseline diagnostics with missing raw logs keep an explicit unavailable
+    # record rather than invented test output. These paths are referenced by the
+    # review, so the qualification remains visible when opening them directly.
+    for name, meaning in {
+        '01-cli-probes.log': 'Historical report records eight current-behavior assertions passing. The original raw log was not retained in the recovery data.',
+        '05-durability-probes.log': 'Historical report records passing current-behavior durability assertions. The original raw log was not retained in the recovery data.',
+        '11-comparison-cli.log': 'Historical report records a real comparison CLI run over fresh synthetic fixtures. The original raw stdout was not retained in the recovery data.',
+    }.items():
+        if not (EVIDENCE / name).exists():
+            save(name, ('RECOVERY GAP — ORIGINAL LOG UNAVAILABLE\n\n' + meaning + '\n\nThis file is an availability notice, not a reconstructed result log. The review and replacement plan retain the baseline observation with its stated assurance limits; no probe was rerun.\n').encode(), {'reviewReports': ['findings/' + ('01-cli.md' if name.startswith('01-') else '05-durability.md' if name.startswith('05-') else '11-evals-release.md')]}, 'unavailable original; explicit notice only', 'Write an honest availability notice to keep the review evidence navigation inspectable.')
+
+    DATA.write_json('RECOVERED-ARTIFACTS-PROVENANCE.json', {'schemaVersion': 1, 'createdAt': datetime.now(timezone.utc).isoformat(), 'artifacts': ARTIFACTS, 'noProbesRerun': True, 'noCapturedCommandsExecuted': True})
+    manifest = json.loads((BASE / 'EVIDENCE-RECOVERY-MANIFEST.json').read_text())
+    recovered_paths = {entry['path'] for entry in ARTIFACTS}
+    manifest['artifacts'] = [entry for entry in manifest['artifacts'] if entry['path'] not in recovered_paths] + ARTIFACTS
+    manifest['diagnosticAndLogRecovery'] = {'artifacts': len(ARTIFACTS), 'complete10OriginalHashMatched': True, 'logNotices': ['01-cli-probes.log', '05-durability-probes.log', '11-comparison-cli.log'], 'coverageResultQualification': 'Latest full data capture is recovered; later metadata-only revision is not full evidence.'}
+    manifest['state'] = 'evidence recovered with explicit gaps; final navigation/provenance freeze pending'
+    (BASE / 'EVIDENCE-RECOVERY-MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    print(json.dumps({'artifactsWritten': len(ARTIFACTS), 'autoRecoveredJSON': sorted(candidates), 'coverageResultBytes': len(raw), 'gapNotices': 3}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

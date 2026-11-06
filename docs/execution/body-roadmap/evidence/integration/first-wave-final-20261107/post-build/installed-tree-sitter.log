@@ -1,0 +1,15 @@
+[pre-init diag] argv[0]=bun
+[pre-init diag] execPath=/home/ben/.local/share/openbuff-test/openbuff-branch
+[pre-init diag] candidates=["/tmp/openbuff-installed-smoke-hmnhwj0t/workspace/tree-sitter.wasm","/home/ben/.local/share/openbuff-test/tree-sitter.wasm"]
+[pre-init diag] resolved siblingPath=/home/ben/.local/share/openbuff-test/tree-sitter.wasm
+
+Using environment: test
+[smoke diag] execPath=openbuff-branch
+[smoke diag] execDir=openbuff-test
+[smoke diag] siblingPath=tree-sitter.wasm
+[smoke diag] siblingExists=true
+[smoke diag] dir contents (35 total, showing 30): tree-sitter-c.wasm, openbuff-branch.old3, openbuff-branch.old10, tree-sitter-java.wasm, openbuff-branch.old9, openbuff-branch.old8, tree-sitter-typescript.wasm, rg, tree-sitter-tsx.wasm, tree-sitter-queries, tree-sitter.wasm, tree-sitter-python.wasm, openbuff-branch.backup.eSXIkd, tree-sitter-javascript.wasm, openbuff-branch, openbuff-branch.backup.hb7qc5jp, openbuff-branch.old7, openbuff-test.exe, tree-sitter-gdscript.wasm, openbuff.exe, tree-sitter-rust.wasm, tree-sitter-cpp.wasm, openbuff-branch.old6, openbuff-branc, tree-sitter-go.wasm, tree-sitter-c-sharp.wasm, tree-sitter-swift.wasm, tree-sitter-php.wasm, openbuff-branch.old5, tree-sitter-manifest.json (truncated to 30)
+[smoke diag] globalThis wasmPath=tree-sitter.wasm
+[smoke diag] globalThis wasmBinary bytes=205488
+
+tree-sitter smoke ok (wasmBinary, 205488 bytes)

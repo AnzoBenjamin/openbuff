@@ -1,0 +1,12 @@
+{
+  "capabilities": {
+    "tools": {}
+  },
+  "instructions": "Use the typed agent_browser_* tools to control a browser. Active MCP tools profile(s): core. Prefer agent_browser_snapshot after navigation to obtain stable element refs before clicking or typing. Use agent_browser_tools_profiles to see available startup profiles.",
+  "protocolVersion": "2025-11-25",
+  "serverInfo": {
+    "name": "agent-browser",
+    "title": "agent-browser",
+    "version": "0.41.2"
+  }
+}

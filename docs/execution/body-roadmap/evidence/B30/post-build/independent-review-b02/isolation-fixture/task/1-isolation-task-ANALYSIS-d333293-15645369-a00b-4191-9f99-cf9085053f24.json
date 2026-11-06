@@ -1,0 +1,1090 @@
+{
+  "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+  "experimentId": "unreported",
+  "taskId": "isolation-task",
+  "repeat": 0,
+  "languages": [
+    "typescript"
+  ],
+  "executionScope": "key_free_environment",
+  "commitSha": "d333293bd15fe67ef4372f2ac7ef218501acce7a",
+  "timestamp": "2026-11-06T21:45:52.753Z",
+  "overallAnalysis": "fixture",
+  "agentFeedback": [],
+  "traceAnalysisStatus": "ok",
+  "modelAttempts": [
+    {
+      "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+      "experimentId": "unreported",
+      "taskId": "isolation-task",
+      "repeat": 0,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "key_free_environment",
+      "attemptId": "034dfee0-469b-4f73-99de-ad102338bef0",
+      "agentId": "isolation-fixture",
+      "providerRoute": "unreported",
+      "role": "task_agent",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:48.218Z",
+      "durationMs": 1145,
+      "events": [
+        {
+          "type": "start",
+          "messageHistoryLength": 0
+        },
+        {
+          "type": "tool_call",
+          "toolCallId": "073fb809-1799-426f-878c-a91dd35b785b",
+          "toolName": "run_terminal_command",
+          "input": {
+            "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+            "process_type": "SYNC",
+            "detach": false,
+            "timeout_seconds": -1
+          },
+          "agentId": "main-agent"
+        },
+        {
+          "type": "tool_result",
+          "toolCallId": "073fb809-1799-426f-878c-a91dd35b785b",
+          "toolName": "run_terminal_command",
+          "output": [
+            {
+              "type": "json",
+              "value": {
+                "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+                "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-2bh8pO/repo",
+                "stdout": "sentinel=\nhome=/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home\n",
+                "exitCode": 0
+              }
+            }
+          ],
+          "agentId": "main-agent",
+          "actionOutcome": {
+            "actionId": "073fb809-1799-426f-878c-a91dd35b785b",
+            "attemptId": "stM3yJdwYt0",
+            "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+            "toolName": "run_terminal_command",
+            "basis": {
+              "inputHash": "sha256:db53aeb4c7b1fa80db4928a6de3da13e513840a31a5638e2776311763d03c78b",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        },
+        {
+          "type": "tool_call",
+          "toolCallId": "2929170a-e389-4d6c-823a-035276bee6e0",
+          "toolName": "run_terminal_command",
+          "input": {
+            "command": "cat init-env.json",
+            "process_type": "SYNC",
+            "detach": false,
+            "timeout_seconds": -1
+          },
+          "agentId": "main-agent"
+        },
+        {
+          "type": "tool_result",
+          "toolCallId": "2929170a-e389-4d6c-823a-035276bee6e0",
+          "toolName": "run_terminal_command",
+          "output": [
+            {
+              "type": "json",
+              "value": {
+                "command": "cat init-env.json",
+                "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-2bh8pO/repo",
+                "stdout": "{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-xnWzTe/home\"}",
+                "exitCode": 0
+              }
+            }
+          ],
+          "agentId": "main-agent",
+          "actionOutcome": {
+            "actionId": "2929170a-e389-4d6c-823a-035276bee6e0",
+            "attemptId": "stM35d1Cr6s",
+            "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+            "toolName": "run_terminal_command",
+            "basis": {
+              "inputHash": "sha256:f606a56b1fbd7eb6da2cd992f4d741fcd868f12ace2ab5be1a2df4cbe922e129",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        },
+        {
+          "type": "tool_call",
+          "toolCallId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+          "toolName": "set_output",
+          "input": {
+            "controller": null,
+            "providerConfig": null,
+            "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home",
+            "terminal": {
+              "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+              "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-2bh8pO/repo",
+              "stdout": "sentinel=\nhome=/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home\n",
+              "exitCode": 0
+            },
+            "init": {
+              "sentinel": null,
+              "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-xnWzTe/home"
+            }
+          },
+          "agentId": "main-agent"
+        },
+        {
+          "type": "tool_result",
+          "toolCallId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+          "toolName": "set_output",
+          "output": [
+            {
+              "type": "json",
+              "value": {
+                "message": "Output set"
+              }
+            }
+          ],
+          "agentId": "main-agent",
+          "actionOutcome": {
+            "actionId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+            "attemptId": "stM38BAX3o4",
+            "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+            "toolName": "set_output",
+            "basis": {
+              "inputHash": "sha256:10d7cb81ef1dd7329b96f03407a4a6753875666cc01c673b3abfec913d62c4e9",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        },
+        {
+          "type": "context_window",
+          "used": 3156,
+          "max": 190000,
+          "compactionTriggerTokens": 140000,
+          "compactionTargetTokens": 100000
+        },
+        {
+          "type": "finish",
+          "agentId": "isolation-fixture",
+          "totalCost": 0,
+          "runOutcome": {
+            "termination": "completed"
+          },
+          "taskAcceptance": {
+            "status": "unknown"
+          },
+          "actionOutcomes": [
+            {
+              "actionId": "073fb809-1799-426f-878c-a91dd35b785b",
+              "attemptId": "stM3yJdwYt0",
+              "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+              "toolName": "run_terminal_command",
+              "basis": {
+                "inputHash": "sha256:db53aeb4c7b1fa80db4928a6de3da13e513840a31a5638e2776311763d03c78b",
+                "workspaceRevision": 0
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "unobserved",
+                "receiptIds": [],
+                "confirmedPaths": []
+              }
+            },
+            {
+              "actionId": "2929170a-e389-4d6c-823a-035276bee6e0",
+              "attemptId": "stM35d1Cr6s",
+              "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+              "toolName": "run_terminal_command",
+              "basis": {
+                "inputHash": "sha256:f606a56b1fbd7eb6da2cd992f4d741fcd868f12ace2ab5be1a2df4cbe922e129",
+                "workspaceRevision": 0
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "unobserved",
+                "receiptIds": [],
+                "confirmedPaths": []
+              }
+            },
+            {
+              "actionId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+              "attemptId": "stM38BAX3o4",
+              "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+              "toolName": "set_output",
+              "basis": {
+                "inputHash": "sha256:10d7cb81ef1dd7329b96f03407a4a6753875666cc01c673b3abfec913d62c4e9",
+                "workspaceRevision": 0
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "unobserved",
+                "receiptIds": [],
+                "confirmedPaths": []
+              }
+            }
+          ]
+        }
+      ],
+      "costUsd": 0,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "finish.totalCost"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "controller": null,
+          "providerConfig": null,
+          "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home",
+          "terminal": {
+            "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+            "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-2bh8pO/repo",
+            "stdout": "sentinel=\nhome=/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home\n",
+            "exitCode": 0
+          },
+          "init": {
+            "sentinel": null,
+            "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-xnWzTe/home"
+          }
+        }
+      },
+      "runOutcome": {
+        "termination": "completed"
+      }
+    },
+    {
+      "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+      "experimentId": "unreported",
+      "taskId": "isolation-task",
+      "repeat": 0,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "key_free_environment",
+      "attemptId": "c3309e30-178f-40a1-a864-c73ef5e83302",
+      "agentId": "judge-gpt",
+      "providerRoute": "unreported",
+      "requestedModel": "openai/gpt-5.4",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:49.402Z",
+      "durationMs": 1220,
+      "events": [
+        {
+          "type": "start",
+          "messageHistoryLength": 0
+        },
+        {
+          "type": "tool_call",
+          "toolCallId": "a4afa627-7fd0-44aa-b69d-abf38dd8f9d4",
+          "toolName": "set_output",
+          "input": {
+            "analysis": "fixture",
+            "strengths": [],
+            "weaknesses": [],
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10
+          },
+          "agentId": "main-agent"
+        },
+        {
+          "type": "tool_result",
+          "toolCallId": "a4afa627-7fd0-44aa-b69d-abf38dd8f9d4",
+          "toolName": "set_output",
+          "output": [
+            {
+              "type": "json",
+              "value": {
+                "message": "Output set"
+              }
+            }
+          ],
+          "agentId": "main-agent",
+          "actionOutcome": {
+            "actionId": "a4afa627-7fd0-44aa-b69d-abf38dd8f9d4",
+            "attemptId": "stM834TVrRQ",
+            "runId": "local-run-fcf10df8-eeb5-458a-8788-6185cef5ada1",
+            "toolName": "set_output",
+            "basis": {
+              "inputHash": "sha256:f875004eea5024f35848464b2f25ada0c98b58e39daa9d91492c2084594114e2",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        },
+        {
+          "type": "context_window",
+          "used": 1988,
+          "max": 190000,
+          "compactionTriggerTokens": 140000,
+          "compactionTargetTokens": 100000
+        },
+        {
+          "type": "finish",
+          "agentId": "judge-gpt",
+          "totalCost": 0,
+          "runOutcome": {
+            "termination": "completed"
+          },
+          "taskAcceptance": {
+            "status": "unknown"
+          },
+          "actionOutcomes": [
+            {
+              "actionId": "a4afa627-7fd0-44aa-b69d-abf38dd8f9d4",
+              "attemptId": "stM834TVrRQ",
+              "runId": "local-run-fcf10df8-eeb5-458a-8788-6185cef5ada1",
+              "toolName": "set_output",
+              "basis": {
+                "inputHash": "sha256:f875004eea5024f35848464b2f25ada0c98b58e39daa9d91492c2084594114e2",
+                "workspaceRevision": 0
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "unobserved",
+                "receiptIds": [],
+                "confirmedPaths": []
+              }
+            }
+          ]
+        }
+      ],
+      "costUsd": 0,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "finish.totalCost"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "analysis": "fixture",
+          "strengths": [],
+          "weaknesses": [],
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        }
+      },
+      "runOutcome": {
+        "termination": "completed"
+      }
+    },
+    {
+      "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+      "experimentId": "unreported",
+      "taskId": "isolation-task",
+      "repeat": 0,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "key_free_environment",
+      "attemptId": "42634782-5067-4d04-a35a-7d0c70ed6ce3",
+      "agentId": "judge-gemini",
+      "providerRoute": "unreported",
+      "requestedModel": "google/gemini-3.1-pro-preview",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:49.404Z",
+      "durationMs": 1288,
+      "events": [
+        {
+          "type": "start",
+          "messageHistoryLength": 0
+        },
+        {
+          "type": "tool_call",
+          "toolCallId": "ee8e8f8b-0cbe-43f1-a1ab-a3c60b2dbfca",
+          "toolName": "set_output",
+          "input": {
+            "analysis": "fixture",
+            "strengths": [],
+            "weaknesses": [],
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10
+          },
+          "agentId": "main-agent"
+        },
+        {
+          "type": "tool_result",
+          "toolCallId": "ee8e8f8b-0cbe-43f1-a1ab-a3c60b2dbfca",
+          "toolName": "set_output",
+          "output": [
+            {
+              "type": "json",
+              "value": {
+                "message": "Output set"
+              }
+            }
+          ],
+          "agentId": "main-agent",
+          "actionOutcome": {
+            "actionId": "ee8e8f8b-0cbe-43f1-a1ab-a3c60b2dbfca",
+            "attemptId": "stM9LbPSCxI",
+            "runId": "local-run-35117b3e-a123-46fa-82cf-79b633826bdd",
+            "toolName": "set_output",
+            "basis": {
+              "inputHash": "sha256:f875004eea5024f35848464b2f25ada0c98b58e39daa9d91492c2084594114e2",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        },
+        {
+          "type": "context_window",
+          "used": 1990,
+          "max": 190000,
+          "compactionTriggerTokens": 140000,
+          "compactionTargetTokens": 100000
+        },
+        {
+          "type": "finish",
+          "agentId": "judge-gemini",
+          "totalCost": 0,
+          "runOutcome": {
+            "termination": "completed"
+          },
+          "taskAcceptance": {
+            "status": "unknown"
+          },
+          "actionOutcomes": [
+            {
+              "actionId": "ee8e8f8b-0cbe-43f1-a1ab-a3c60b2dbfca",
+              "attemptId": "stM9LbPSCxI",
+              "runId": "local-run-35117b3e-a123-46fa-82cf-79b633826bdd",
+              "toolName": "set_output",
+              "basis": {
+                "inputHash": "sha256:f875004eea5024f35848464b2f25ada0c98b58e39daa9d91492c2084594114e2",
+                "workspaceRevision": 0
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "unobserved",
+                "receiptIds": [],
+                "confirmedPaths": []
+              }
+            }
+          ]
+        }
+      ],
+      "costUsd": 0,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "finish.totalCost"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "analysis": "fixture",
+          "strengths": [],
+          "weaknesses": [],
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        }
+      },
+      "runOutcome": {
+        "termination": "completed"
+      }
+    },
+    {
+      "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+      "experimentId": "unreported",
+      "taskId": "isolation-task",
+      "repeat": 0,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "key_free_environment",
+      "attemptId": "3c7f1c8e-2a45-41d2-a958-187975e41657",
+      "agentId": "buffbench-lessons-extractor",
+      "providerRoute": "unreported",
+      "requestedModel": "openai/gpt-5",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:50.694Z",
+      "durationMs": 1041,
+      "events": [
+        {
+          "type": "start",
+          "messageHistoryLength": 0
+        },
+        {
+          "type": "tool_call",
+          "toolCallId": "4ed35168-850d-41e0-9c76-9750b4c02de3",
+          "toolName": "set_output",
+          "input": {
+            "lessons": [],
+            "proposals": []
+          },
+          "agentId": "main-agent"
+        },
+        {
+          "type": "tool_result",
+          "toolCallId": "4ed35168-850d-41e0-9c76-9750b4c02de3",
+          "toolName": "set_output",
+          "output": [
+            {
+              "type": "json",
+              "value": {
+                "message": "Output set"
+              }
+            }
+          ],
+          "agentId": "main-agent",
+          "actionOutcome": {
+            "actionId": "4ed35168-850d-41e0-9c76-9750b4c02de3",
+            "attemptId": "stNBOSURFLU",
+            "runId": "local-run-7287100d-f434-487c-88a2-f364effc592f",
+            "toolName": "set_output",
+            "basis": {
+              "inputHash": "sha256:eb5e0f29aea635c38120c7b4d667b005af595af51b70ee40c6f47effba367659",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        },
+        {
+          "type": "context_window",
+          "used": 5935,
+          "max": 190000,
+          "compactionTriggerTokens": 140000,
+          "compactionTargetTokens": 100000
+        },
+        {
+          "type": "finish",
+          "agentId": "buffbench-lessons-extractor",
+          "totalCost": 0,
+          "runOutcome": {
+            "termination": "completed"
+          },
+          "taskAcceptance": {
+            "status": "unknown"
+          },
+          "actionOutcomes": [
+            {
+              "actionId": "4ed35168-850d-41e0-9c76-9750b4c02de3",
+              "attemptId": "stNBOSURFLU",
+              "runId": "local-run-7287100d-f434-487c-88a2-f364effc592f",
+              "toolName": "set_output",
+              "basis": {
+                "inputHash": "sha256:eb5e0f29aea635c38120c7b4d667b005af595af51b70ee40c6f47effba367659",
+                "workspaceRevision": 0
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "unobserved",
+                "receiptIds": [],
+                "confirmedPaths": []
+              }
+            }
+          ]
+        }
+      ],
+      "costUsd": 0,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "finish.totalCost"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "lessons": [],
+          "proposals": []
+        }
+      },
+      "runOutcome": {
+        "termination": "completed"
+      }
+    },
+    {
+      "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+      "experimentId": "unreported",
+      "taskId": "isolation-task",
+      "repeat": 0,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "key_free_environment",
+      "attemptId": "c6cf4ad6-7ba6-4eb8-9e9a-c6de0eec9d25",
+      "agentId": "trace-analyzer",
+      "providerRoute": "unreported",
+      "requestedModel": "openai/gpt-5",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:51.737Z",
+      "durationMs": 1016,
+      "events": [
+        {
+          "type": "start",
+          "messageHistoryLength": 0
+        },
+        {
+          "type": "tool_call",
+          "toolCallId": "1233166a-a614-46e4-ac4e-7e38f17d0d5b",
+          "toolName": "set_output",
+          "input": {
+            "overallAnalysis": "fixture",
+            "agentFeedback": []
+          },
+          "agentId": "main-agent"
+        },
+        {
+          "type": "tool_result",
+          "toolCallId": "1233166a-a614-46e4-ac4e-7e38f17d0d5b",
+          "toolName": "set_output",
+          "output": [
+            {
+              "type": "json",
+              "value": {
+                "message": "Output set"
+              }
+            }
+          ],
+          "agentId": "main-agent",
+          "actionOutcome": {
+            "actionId": "1233166a-a614-46e4-ac4e-7e38f17d0d5b",
+            "attemptId": "stNFNfrUdP4",
+            "runId": "local-run-3d077522-5c42-4abe-b063-7ba41a26ede0",
+            "toolName": "set_output",
+            "basis": {
+              "inputHash": "sha256:c482efda88786dad58dadf36bd61d796f8bdd535fd6511f6492e161de47557ba",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        },
+        {
+          "type": "context_window",
+          "used": 5673,
+          "max": 190000,
+          "compactionTriggerTokens": 140000,
+          "compactionTargetTokens": 100000
+        },
+        {
+          "type": "finish",
+          "agentId": "trace-analyzer",
+          "totalCost": 0,
+          "runOutcome": {
+            "termination": "completed"
+          },
+          "taskAcceptance": {
+            "status": "unknown"
+          },
+          "actionOutcomes": [
+            {
+              "actionId": "1233166a-a614-46e4-ac4e-7e38f17d0d5b",
+              "attemptId": "stNFNfrUdP4",
+              "runId": "local-run-3d077522-5c42-4abe-b063-7ba41a26ede0",
+              "toolName": "set_output",
+              "basis": {
+                "inputHash": "sha256:c482efda88786dad58dadf36bd61d796f8bdd535fd6511f6492e161de47557ba",
+                "workspaceRevision": 0
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "unobserved",
+                "receiptIds": [],
+                "confirmedPaths": []
+              }
+            }
+          ]
+        }
+      ],
+      "costUsd": 0,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "finish.totalCost"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "overallAnalysis": "fixture",
+          "agentFeedback": []
+        }
+      },
+      "runOutcome": {
+        "termination": "completed"
+      }
+    }
+  ],
+  "results": [
+    {
+      "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+      "experimentId": "unreported",
+      "taskId": "isolation-task",
+      "repeat": 0,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "key_free_environment",
+      "attemptId": "462ef3d6-4e47-4333-b028-ea7b7aa4bf75",
+      "providerRoute": "unreported",
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "costEvidence": {
+        "status": "reported",
+        "source": "finish.totalCost"
+      },
+      "agentId": "isolation-fixture",
+      "commitSha": "d333293bd15fe67ef4372f2ac7ef218501acce7a",
+      "prompt": "fixture",
+      "trace": [
+        {
+          "type": "start",
+          "messageHistoryLength": 0
+        },
+        {
+          "type": "tool_call",
+          "toolCallId": "073fb809-1799-426f-878c-a91dd35b785b",
+          "toolName": "run_terminal_command",
+          "input": {
+            "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+            "process_type": "SYNC",
+            "detach": false,
+            "timeout_seconds": -1
+          },
+          "agentId": "main-agent"
+        },
+        {
+          "type": "tool_result",
+          "toolCallId": "073fb809-1799-426f-878c-a91dd35b785b",
+          "toolName": "run_terminal_command",
+          "output": [
+            {
+              "type": "json",
+              "value": {
+                "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+                "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-2bh8pO/repo",
+                "stdout": "sentinel=\nhome=/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home\n",
+                "exitCode": 0
+              }
+            }
+          ],
+          "agentId": "main-agent",
+          "actionOutcome": {
+            "actionId": "073fb809-1799-426f-878c-a91dd35b785b",
+            "attemptId": "stM3yJdwYt0",
+            "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+            "toolName": "run_terminal_command",
+            "basis": {
+              "inputHash": "sha256:db53aeb4c7b1fa80db4928a6de3da13e513840a31a5638e2776311763d03c78b",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        },
+        {
+          "type": "tool_call",
+          "toolCallId": "2929170a-e389-4d6c-823a-035276bee6e0",
+          "toolName": "run_terminal_command",
+          "input": {
+            "command": "cat init-env.json",
+            "process_type": "SYNC",
+            "detach": false,
+            "timeout_seconds": -1
+          },
+          "agentId": "main-agent"
+        },
+        {
+          "type": "tool_result",
+          "toolCallId": "2929170a-e389-4d6c-823a-035276bee6e0",
+          "toolName": "run_terminal_command",
+          "output": [
+            {
+              "type": "json",
+              "value": {
+                "command": "cat init-env.json",
+                "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-2bh8pO/repo",
+                "stdout": "{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-xnWzTe/home\"}",
+                "exitCode": 0
+              }
+            }
+          ],
+          "agentId": "main-agent",
+          "actionOutcome": {
+            "actionId": "2929170a-e389-4d6c-823a-035276bee6e0",
+            "attemptId": "stM35d1Cr6s",
+            "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+            "toolName": "run_terminal_command",
+            "basis": {
+              "inputHash": "sha256:f606a56b1fbd7eb6da2cd992f4d741fcd868f12ace2ab5be1a2df4cbe922e129",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        },
+        {
+          "type": "tool_call",
+          "toolCallId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+          "toolName": "set_output",
+          "input": {
+            "controller": null,
+            "providerConfig": null,
+            "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home",
+            "terminal": {
+              "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+              "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-2bh8pO/repo",
+              "stdout": "sentinel=\nhome=/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home\n",
+              "exitCode": 0
+            },
+            "init": {
+              "sentinel": null,
+              "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-xnWzTe/home"
+            }
+          },
+          "agentId": "main-agent"
+        },
+        {
+          "type": "tool_result",
+          "toolCallId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+          "toolName": "set_output",
+          "output": [
+            {
+              "type": "json",
+              "value": {
+                "message": "Output set"
+              }
+            }
+          ],
+          "agentId": "main-agent",
+          "actionOutcome": {
+            "actionId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+            "attemptId": "stM38BAX3o4",
+            "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+            "toolName": "set_output",
+            "basis": {
+              "inputHash": "sha256:10d7cb81ef1dd7329b96f03407a4a6753875666cc01c673b3abfec913d62c4e9",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        },
+        {
+          "type": "context_window",
+          "used": 3156,
+          "max": 190000,
+          "compactionTriggerTokens": 140000,
+          "compactionTargetTokens": 100000
+        },
+        {
+          "type": "finish",
+          "agentId": "isolation-fixture",
+          "totalCost": 0,
+          "runOutcome": {
+            "termination": "completed"
+          },
+          "taskAcceptance": {
+            "status": "unknown"
+          },
+          "actionOutcomes": [
+            {
+              "actionId": "073fb809-1799-426f-878c-a91dd35b785b",
+              "attemptId": "stM3yJdwYt0",
+              "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+              "toolName": "run_terminal_command",
+              "basis": {
+                "inputHash": "sha256:db53aeb4c7b1fa80db4928a6de3da13e513840a31a5638e2776311763d03c78b",
+                "workspaceRevision": 0
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "unobserved",
+                "receiptIds": [],
+                "confirmedPaths": []
+              }
+            },
+            {
+              "actionId": "2929170a-e389-4d6c-823a-035276bee6e0",
+              "attemptId": "stM35d1Cr6s",
+              "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+              "toolName": "run_terminal_command",
+              "basis": {
+                "inputHash": "sha256:f606a56b1fbd7eb6da2cd992f4d741fcd868f12ace2ab5be1a2df4cbe922e129",
+                "workspaceRevision": 0
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "unobserved",
+                "receiptIds": [],
+                "confirmedPaths": []
+              }
+            },
+            {
+              "actionId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+              "attemptId": "stM38BAX3o4",
+              "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+              "toolName": "set_output",
+              "basis": {
+                "inputHash": "sha256:10d7cb81ef1dd7329b96f03407a4a6753875666cc01c673b3abfec913d62c4e9",
+                "workspaceRevision": 0
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "unobserved",
+                "receiptIds": [],
+                "confirmedPaths": []
+              }
+            }
+          ]
+        }
+      ],
+      "diff": "diff --git a/.openbuff/memory/task-memory.json b/.openbuff/memory/task-memory.json\nnew file mode 100644\nindex 0000000..9b0dad4\n--- /dev/null\n+++ b/.openbuff/memory/task-memory.json\n@@ -0,0 +1,19 @@\n+{\n+  \"schemaVersion\": 1,\n+  \"goal\": \"fixture\",\n+  \"requirements\": [],\n+  \"decisions\": [],\n+  \"filesInspected\": [],\n+  \"editsMade\": [],\n+  \"validationResults\": [],\n+  \"reviewReceipts\": [],\n+  \"blockers\": [],\n+  \"nextActions\": [],\n+  \"historicalSummary\": \"\",\n+  \"evidence\": [],\n+  \"workspaceRevision\": 0,\n+  \"workspaceSnapshotId\": \"workspace.v1.0.00000000\",\n+  \"revision\": 1,\n+  \"updatedAt\": 1794001549315,\n+  \"checksum\": \"df2041d2\"\n+}\n\\ No newline at end of file\ndiff --git a/init-env.json b/init-env.json\nnew file mode 100644\nindex 0000000..4472cfc\n--- /dev/null\n+++ b/init-env.json\n@@ -0,0 +1 @@\n+{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-xnWzTe/home\"}\n\\ No newline at end of file\n",
+      "judgeResult": {
+        "analysis": "fixture",
+        "strengths": [],
+        "weaknesses": [],
+        "completionScore": 10,
+        "codeQualityScore": 10,
+        "overallScore": 10,
+        "perJudgeScores": [
+          {
+            "judgeId": "judge-gpt",
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10
+          },
+          {
+            "judgeId": "judge-gemini",
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10
+          }
+        ],
+        "scoringStatus": "scored"
+      },
+      "cost": 0,
+      "durationMs": 1247,
+      "timestamp": "2026-11-06T21:45:51.736Z",
+      "finalCheckOutputs": [
+        {
+          "checkId": "check-1",
+          "command": "node -e 'console.log(JSON.stringify({sentinel:process.env.B30_CONTROLLER_SENTINEL ?? null,home:process.env.HOME}))'",
+          "dependsOn": [],
+          "exitCode": 0,
+          "outcome": "passed",
+          "durationMs": 31,
+          "stdout": "{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-1vRFW4/home\"}\n",
+          "stderr": ""
+        }
+      ],
+      "retrievalFlow": {
+        "queryCallCount": 0,
+        "queryResultPaths": [],
+        "successfulReadPaths": [],
+        "relevantReadPaths": [],
+        "irrelevantReadPaths": [],
+        "relevantReadBeforeFirstEdit": false
+      },
+      "idiomTraceability": {
+        "verdict": "skip",
+        "signals": {
+          "nonTypeScriptEditCount": 0,
+          "languageSignals": [],
+          "hasRequiredReads": false,
+          "deliveryObservable": false,
+          "isEmpty": true
+        },
+        "reasons": [
+          "No non-TypeScript supported-language edits were detected."
+        ]
+      },
+      "thinkerHarvest": {
+        "verdict": "skip",
+        "reasons": [
+          "No thinker subagents in trace."
+        ],
+        "signals": {
+          "thinkerAgentIds": [],
+          "agents": [],
+          "anyEmptyHarvestClobber": false,
+          "anyPreservedNonEmpty": false,
+          "allPlainTextOnly": true
+        }
+      },
+      "analysis": "fixture",
+      "strengths": [],
+      "weaknesses": [],
+      "completionScore": 10,
+      "codeQualityScore": 10,
+      "overallScore": 10,
+      "perJudgeScores": [
+        {
+          "judgeId": "judge-gpt",
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        },
+        {
+          "judgeId": "judge-gemini",
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        }
+      ],
+      "scoringStatus": "scored"
+    }
+  ],
+  "prompt": "fixture"
+}

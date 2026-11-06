@@ -1,0 +1,401 @@
+{
+  "nodeId": "B04",
+  "parentCardId": null,
+  "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+  "backend": "ts",
+  "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+  "coverageTier": "Cooperative TypeScript lock exclusivity and snapshot/index CAS with fail-closed ambiguous ownership",
+  "sourceContractHashes": {
+    ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+    ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+    "bun.lock": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6",
+    "cli/src/project-files.ts": "0fd152870a583e4df147cc928d9be7adde06819cbaf91795f8a9edae55ed035c",
+    "cli/src/utils/__tests__/turn-snapshots.test.ts": "1b32d756e592b62b224250ea0dee30e15154af8229cad4d9e0fd41b4737bbb8a",
+    "cli/src/utils/env.ts": "029b7c4d309803b7cfc867d835808e7478fd297ab949e8659f26ee756952d4c5",
+    "cli/src/utils/logger.ts": "8f695de8fd69a87d8f234a9e90891fb64157c79bf727a9c4d54179c26e7d4297",
+    "cli/src/utils/turn-snapshots.ts": "2729f329316f138dd1c213b1e02a641c25854c5b22f452355ea4821e37683e43",
+    "common/package.json": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c",
+    "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
+    "package.json": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8",
+    "packages/agent-runtime/package.json": "0ecb330281d325d02c339c86fb2f52a2875b0d957abdd0b097b1ab959d281d3d",
+    "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
+    "packages/indexer/src/index-manager-semantic.test.ts": "e5df842eafbc9c1bb18335a814b81abeb5391be764892b860274de77f4101fab",
+    "packages/indexer/src/index-manager.test.ts": "d0ec0dd05db32e71b7d60de1547a4b93dd8f05b4d4658df9ed16e17a524a2cf0",
+    "packages/indexer/src/index-manager.ts": "46cda46b4c09180fa51328a24c934214db1cc99c406e6c861f0b40940dbe1bc1",
+    "packages/indexer/src/index-store.test.ts": "145bf6492f4b1b2f8495d14b5c1a549b1de6f7cb633cb63221e8cc7b42fab123",
+    "packages/indexer/src/index-store.ts": "773242747855e16e0e296934ec1d4d482c0666ccbb2c884d4b0f9eb106308b6f",
+    "sdk/package.json": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d",
+    "sdk/src/__tests__/workspace-mutation-broker.test.ts": "9a2a138c10065035f3e3e2a0b060c6492db0340ab76c3d365bda88afba0b1592",
+    "sdk/src/services/repository-identity.ts": "9f678dc1977c8b5a472652b234fd954e05e5239549f2fdb14d4537df4aad9657",
+    "sdk/src/services/workspace-mutation-broker.ts": "af865e30f270622c8adbfa2911f8a0f008d172676fe6484cf6a5e7c95034c083",
+    "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
+    "tsconfig.base.json": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+  },
+  "schemaVersion": 1,
+  "status": "accepted",
+  "planSha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+  "specificationSha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+  "acceptedPrerequisites": [],
+  "manifest": {
+    "path": "docs/execution/body-roadmap/evidence/B04/accepted/20261106T215030348965Z-manifest.json",
+    "sha256": "4cbfbdf7cc1d919b83fee02d3ae17d58c85c13fd85f4d84a0be89a83d487ad56"
+  },
+  "independentReviews": [
+    {
+      "reviewer": "/root/b02_runtime_outcomes",
+      "implementationOwners": [
+        "/root/b04_lock_cas",
+        "/root"
+      ],
+      "scope": "B04 unchanged current-source cooperative TypeScript ownership/CAS tier: direct broker, index publication and turn/Git snapshot consumers plus actual runtime records. No shipped-base2/B01 or SDK LLM/runtime/provider compatibility approval; external lock deletion, mixed-version writers, native OS fencing, automatic crashed-owner reclamation and broader shared integration remain excluded.",
+      "decision": "approve",
+      "evidence": {
+        "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/review.json",
+        "sha256": "83f963a2d91137658af39813544b85f517b6a6dcda687adae2bc839607052903"
+      }
+    }
+  ],
+  "requiredChecks": [
+    {
+      "name": "cooperative-cas-tests",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "test",
+        "--isolate",
+        "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/workspace-mutation-broker.test.ts",
+        "/home/ben/Code/CLI/openbuff/packages/indexer/src/index-store.test.ts",
+        "/home/ben/Code/CLI/openbuff/packages/indexer/src/index-manager.test.ts",
+        "/home/ben/Code/CLI/openbuff/cli/src/utils/__tests__/turn-snapshots.test.ts",
+        "/home/ben/Code/CLI/openbuff/packages/indexer/src/index-manager-semantic.test.ts"
+      ],
+      "exitCode": 0,
+      "log": {
+        "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/cooperative-cas-tests.log",
+        "sha256": "71dc5fb57f0d8a9dfbdb2b061e300299bd4f3811557684435c3554da9dca9fa2"
+      },
+      "evidence": {
+        "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/commands/cooperative-cas-tests.json",
+        "sha256": "ba803ee62600715052d44d3c4f992a6219ce15a37128a83826f43b60f49368a6"
+      }
+    },
+    {
+      "name": "cooperative-cas-replay",
+      "argv": [
+        "/usr/bin/python3",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/assess.py"
+      ],
+      "exitCode": 0,
+      "log": {
+        "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/cooperative-cas-replay.log",
+        "sha256": "835e70ba770176b93767492d184ecf2a6826c50dbbb45ff45d93ad198ab825b5"
+      },
+      "evidence": {
+        "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/commands/cooperative-cas-replay.json",
+        "sha256": "59e2238ac4cda5679f7ce6c0d84dbba1442d35a69b1aeacd15f412c26182ff92"
+      }
+    }
+  ],
+  "behaviorEvidence": [
+    {
+      "criterion": "Cooperative lock exclusion, stale ownership refusal, index publication and turn-snapshot CAS match actual recorded consumers",
+      "evidence": [
+        {
+          "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/manifest.json",
+          "sha256": "74a01a7b652be9d1fb946d1ef697a222d923a0aef3afd8cd0ff08bc964e26329"
+        },
+        {
+          "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/runtime-observations.json",
+          "sha256": "c4fd8f8b6d85e911c66cec39ec004fb3ad996c5c32580efefbe9fe9526e32ceb"
+        }
+      ]
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/final-binding/independent-review/verify.py",
+      "sha256": "31d7df85649229ed0ec1851dd0dd33493c4f892eb9cd735e3bc63a52dd9ea21e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/README.md",
+      "sha256": "ce8717eb041113a64ba92d5f2966d575a15efa71910ceeeb156f9f9167402f3b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/assertions.json",
+      "sha256": "38d388a28726eb3abe22a4019d5ce9959e3b532602a2ffd36d50670cc7f98cb5"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/cli-typecheck.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/cli-typecheck.json",
+      "sha256": "be64423e2dbb229606d4d9417380c97311a37310aaf434e9951f3396eec230b8"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/cli-typecheck.log",
+      "sha256": "3d3c45ecc39fd091f458f3c9ac69950e524cbbf36b64ebe261d051ca9be68c6d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/diff-check.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/diff-check.json",
+      "sha256": "277cd0085d6bafdc22e16166758e8157c43d0b6689e4adc4cd8fce28198df875"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/acceptance-proof/README.md",
+      "sha256": "0c0e169d8f175d396428f30848c1b892669e50b9327f14643082d2dcbcb6a9af"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/acceptance-proof/commands/cooperative-cas-replay.json",
+      "sha256": "e27a907379064a0565a737e8d52745a72d9c60fab8de67b12a31c38cc14be11b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/acceptance-proof/commands/cooperative-cas-tests.json",
+      "sha256": "a23a964bafe371fcdbf7fc2bc68edaba781e6e47bce0bfa80f5914744b4a34b7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/acceptance-proof/normalization-inputs.json",
+      "sha256": "044f7bfaf9bf8fc1538977d6dc9f426ad7c381b21620ffd7ede542f356958e5e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/acceptance-proof/normalize.py",
+      "sha256": "40377328ff7cea898fbe3845309b66c9a5b8c1a739f2ca8b1523785cb020fc19"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/acceptance-proof/review.json",
+      "sha256": "1759b7bff83a46a17c0db5a916ede5155bc24b10d1f4352af517bca03dc14ab9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/SOURCE-REVIEW.md",
+      "sha256": "8468af9df1e5ba96b4aed12822d7865f66dfc240e35995107a8955544805f040"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/approval.json",
+      "sha256": "bb9349d9654b37b89e19e36d90703da02e3e1990aea436b6455a125ce8946f0d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/check.py",
+      "sha256": "800d1180a0429cd3e8eccd6147d98107839bf2ec818d270863f4c915a674e4ec"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/commands/cooperative-cas-replay.json",
+      "sha256": "59e2238ac4cda5679f7ce6c0d84dbba1442d35a69b1aeacd15f412c26182ff92"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/commands/cooperative-cas-tests.json",
+      "sha256": "ba803ee62600715052d44d3c4f992a6219ce15a37128a83826f43b60f49368a6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/inputs.json",
+      "sha256": "793a5f02b54de1393d94e829433eddeda30fd84013b0a6f0679fbd635a66e753"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/inspect.py",
+      "sha256": "ef81e10b2845bdcb92da4fe2dc4a25097196949aae59cbcb625cd5aae827cc57"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/inspection.json",
+      "sha256": "81acbafda3eb51c2b898c10ef0b925c2ab777101fd2e2d09120d1bfa2914ff9e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/review.json",
+      "sha256": "83f963a2d91137658af39813544b85f517b6a6dcda687adae2bc839607052903"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/REVIEW.md",
+      "sha256": "3f16ed768b113bb2e328e5613b28a3ba85ff148489f0393ccdf610e910494b9b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/assess.py",
+      "sha256": "6350bc95872b3f24e36f05b98ac288203ee373a37416d052b21b99129e1f704f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/assessment.json",
+      "sha256": "835e70ba770176b93767492d184ecf2a6826c50dbbb45ff45d93ad198ab825b5"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/commands.json",
+      "sha256": "c67c47369c689000dace5fa1dedb311bc87401bf6b4f715e16e13fccbb688d9b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/cooperative-cas-replay.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/cooperative-cas-replay.log",
+      "sha256": "835e70ba770176b93767492d184ecf2a6826c50dbbb45ff45d93ad198ab825b5"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/cooperative-cas-tests.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/cooperative-cas-tests.log",
+      "sha256": "71dc5fb57f0d8a9dfbdb2b061e300299bd4f3811557684435c3554da9dca9fa2"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/fixture-config.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/historical-integrity.json",
+      "sha256": "8975a1a7008a163e6e20e0bbf416472e7d14d2e0e7ae704650adbb562b7f801d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/home/.bun/install/cache/@t@/31fc912722ffdcfb.pile",
+      "sha256": "70bb984efabd421161e0238ff768becfbae5c24f1fad8f2dfe0aaa651219ec95"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/home/.bun/install/cache/@t@/5048e7ee3f83a507.pile",
+      "sha256": "48bc2409e7ad85fdbd8c7f641f08a0c8fd942a7aab56637d8512aed485c93d44"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/home/.bun/install/cache/@t@/600a323c1c9631d1.pile",
+      "sha256": "60788413a8067f36ab0ac94480cb17294fb4e4ec0f9fea1e6bbdccd28c6c0e6d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/home/.bun/install/cache/@t@/7b39a518f92f0f3f.pile",
+      "sha256": "89a55df66eff878e618dc4a1f60b32d33e76ddd2b44b06e8926e2ff9efe7b5d8"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/home/.bun/install/cache/@t@/c8ac29009f8e5c48.pile",
+      "sha256": "7a7c20bd15d14b53f14f427c7e4b88d74f35599d080e1ea17e81fb013b832b2c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/home/.bun/install/cache/@t@/f2b2aecadd16faf9.pile",
+      "sha256": "8fad594bedd630a1c317db21bdd4bd4a2f071ecf1eb4265a2de4c9fbdb5064f9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/manifest.json",
+      "sha256": "74a01a7b652be9d1fb946d1ef697a222d923a0aef3afd8cd0ff08bc964e26329"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/runtime-observations.json",
+      "sha256": "c4fd8f8b6d85e911c66cec39ec004fb3ad996c5c32580efefbe9fe9526e32ceb"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/source-stability.json",
+      "sha256": "8cf63cd9039b1508f62d36b7f466fed30f284d982b3f4963946d8b4a18900313"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/verification-start.json",
+      "sha256": "a46577b69d7eb3e1be91a946ac7e7a30ef0394b00d940f4c77d89831b97fa1ff"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-review/verification.log",
+      "sha256": "923755e68a553049c2ff3bde3fa80266ff3b9011add8681fe8696461ca0c204a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/fixture-config.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/REVIEW.md",
+      "sha256": "f8db70ea540a9d225297c1ad3d8dce23fe2c51d141b133239f3d391695b71212"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/assess.py",
+      "sha256": "6350bc95872b3f24e36f05b98ac288203ee373a37416d052b21b99129e1f704f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/assessment.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/assessment.json",
+      "sha256": "835e70ba770176b93767492d184ecf2a6826c50dbbb45ff45d93ad198ab825b5"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/assessment.log",
+      "sha256": "835e70ba770176b93767492d184ecf2a6826c50dbbb45ff45d93ad198ab825b5"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/commands.json",
+      "sha256": "61e313dedf470779591605c2bb446ad566e4650d61a0050757f2bb5a48e34795"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/fixture-config.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/manifest.json",
+      "sha256": "e668ee9630413edd867adc5131d6353344c2038ad928f1a5a8a0940b7ff3f7cb"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/producer-integrity.json",
+      "sha256": "bd71e99f5df1eea2d760d88216cb46288b111de06cb8891c4ce3539af9f65ec9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/runtime-observations.json",
+      "sha256": "ef49540dd114945e26d8d609dabfa67e9bc22e9dc6c0e66b4230443853866a07"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/source-stability.json",
+      "sha256": "292d4fa3bdd3a129f6249cb998678030004bcc17509a140d7ddd3972b0bc3869"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/tests.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/tests.log",
+      "sha256": "6c7b6fb537a4d90bb6118477f7e601c11f49d04be9de3d3d076476c4503b8fb7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/independent-review/verify.py",
+      "sha256": "3fe3128501990d3246b2ba39fb8712bf5e2b77d6a996f20c77f842d5ee695f4a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/indexer-typecheck.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/indexer-typecheck.json",
+      "sha256": "2e063f8746a88f7e6bfc1d28e08b9c55ca1fea0a48c653450fcb930493de4f73"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/indexer-typecheck.log",
+      "sha256": "3d3c45ecc39fd091f458f3c9ac69950e524cbbf36b64ebe261d051ca9be68c6d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/manifest.json",
+      "sha256": "b2e30ea9367623fe89695d1426d2688eefe16c31113b3909f2bb2db0387d336f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/run-verification.py",
+      "sha256": "4b723e0b87f9cd31e3063a472a134cd92438283e691759cbbee0a02614d61352"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/runtime-observations.json",
+      "sha256": "ec00b3844e5f0656ac0364fdf83f346a215dbceed13d59909f3ccdee3552fa71"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/tests.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/tests.json",
+      "sha256": "a16b49eedadc40d01e9ec5a4d75dcf8f35b05dd597c65538a9d97a2177e11c45"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/tests.log",
+      "sha256": "10ded032a7b3fb209e0c8f6022f29347bf399ca770fa0d3fb3309d130e5a2b91"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B04/verify-artifacts.py",
+      "sha256": "1fc349788194b2157dfc969bfa7de244d38d69fe40d4f175394110e4324e4f2f"
+    }
+  ],
+  "acceptedAt": "2026-11-06T21:50:30.489505+00:00",
+  "limits": [
+    "No native fencing, mixed-version exclusion or automatic crash reclamation.",
+    "Unknown/crashed owners remain inspectable recovery-needed; liveness migration belongs to B22."
+  ]
+}

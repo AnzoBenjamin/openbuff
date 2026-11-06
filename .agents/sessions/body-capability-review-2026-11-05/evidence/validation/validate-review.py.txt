@@ -1,0 +1,127 @@
+import hashlib
+import json
+from pathlib import Path
+
+review = Path(__file__).resolve().parent
+root = Path('/home/ben/Code/CLI/openbuff')
+inventory = json.loads((review / 'INVENTORY.json').read_text())
+members = set(inventory['files'])
+domains = {'security','correctness','state-mutation','error-handling','performance','dependency-hygiene','test-coverage','api-contract'}
+errors = []
+receipts = []
+all_findings = set()
+read_files = set()
+read_intervals = {}
+supplemental = set()
+hashes = {}
+reports = []
+evidence_availability = []
+legacy_review = Path('/tmp/openbuff-body-review-2026-11-05')
+
+
+def resolve_recorded_path(file):
+    path = Path(file)
+    if path.is_absolute():
+        try:
+            return review / path.relative_to(legacy_review)
+        except ValueError:
+            return path
+    return root / file
+
+
+for source in sorted((review / 'findings').glob('*.json')):
+    if not source.with_suffix('.md').exists():
+        continue
+    report = json.loads(source.read_text())
+    shard = report.get('shardId', source.stem)
+    receipt = report.get('structuralReceipt', {})
+    if report.get('snapshotId') != inventory['snapshotId'] or receipt.get('snapshotId') != inventory['snapshotId']:
+        errors.append(f'{shard}: snapshot mismatch')
+    if receipt.get('shardId') != shard:
+        errors.append(f'{shard}: receipt shard mismatch')
+    if set(receipt.get('domains', [])) != domains:
+        errors.append(f'{shard}: missing audit domains')
+    for file in receipt.get('files', []):
+        if file not in members:
+            errors.append(f'{shard}: receipt file absent from native inventory: {file}')
+        read_files.add(file)
+    for subsystem in receipt.get('subsystemIds', []):
+        if not any((file.split('/')[0] if '/' in file else '.') == subsystem for file in receipt.get('files', [])):
+            errors.append(f'{shard}: subsystem has no receipt file: {subsystem}')
+    ranges = report.get('readRanges', [])
+    for item in ranges:
+        if not isinstance(item, dict) or not item.get('path'):
+            continue
+        file = item['path']
+        path = resolve_recorded_path(file)
+        if not path.exists():
+            errors.append(f'{shard}: read path missing: {file}')
+            continue
+        if file not in members and not Path(file).is_absolute():
+            supplemental.add(file)
+        start = item.get('from', item.get('fromLine', item.get('startLine')))
+        end = item.get('to', item.get('toLine', item.get('endLine')))
+        if start is not None and end is not None:
+            line_count = len(path.read_text(errors='replace').splitlines())
+            if start < 1 or end < start or end > line_count:
+                errors.append(f'{shard}: invalid range {file}:{start}-{end}, length={line_count}')
+            elif not Path(file).is_absolute():
+                read_intervals.setdefault(file, []).append((start,end))
+    for finding in report.get('findings', []):
+        ident = finding.get('id')
+        if not ident or ident in all_findings:
+            errors.append(f'{shard}: duplicate/missing finding id: {ident}')
+        all_findings.add(ident)
+        for key in ['title','severity','domains','confidence','basis','trigger','consequence','suggestedFix','acceptanceProbe']:
+            if key not in finding:
+                errors.append(f'{shard}/{ident}: missing {key}')
+        for item in finding.get('evidence', []):
+            if not isinstance(item,dict) or not item.get('path'):
+                continue
+            file = item['path']
+            path = resolve_recorded_path(file)
+            if not path.exists():
+                errors.append(f'{shard}/{ident}: evidence path missing: {file}')
+                continue
+            if path.suffix == '.log' and path.read_text(errors='replace').startswith('RECOVERY GAP'):
+                evidence_availability.append({'shardId': shard, 'findingId': ident, 'recordedPath': file, 'recoveredPath': str(path), 'availability': 'original-log-unavailable', 'qualification': 'The retained file is an explicit recovery-gap notice, not a reproduced test log or fresh behavioral confirmation.'})
+                continue
+            line = item.get('line')
+            if isinstance(line,int) and line > len(path.read_text(errors='replace').splitlines()):
+                errors.append(f'{shard}/{ident}: evidence line out of bounds: {file}:{line}')
+    receipts.append(receipt)
+    reports.append({'shardId':shard,'findings':len(report.get('findings',[])),'capabilities':len(report.get('capabilities',[])),'receiptFiles':len(receipt.get('files',[]))})
+
+unique_lines = 0
+for file, intervals in read_intervals.items():
+    end_at = 0
+    for start,end in sorted(intervals):
+        unique_lines += max(0, end - max(start,end_at+1) + 1)
+        end_at = max(end_at,end)
+for file in sorted(read_files | supplemental):
+    path = root / file
+    if path.is_file():
+        hashes[file] = hashlib.sha256(path.read_bytes()).hexdigest()
+subsystem_coverage = []
+for subsystem in inventory['subsystems']:
+    matches = [receipt for receipt in receipts if subsystem['id'] in receipt.get('subsystemIds',[])]
+    inspected = {file for receipt in matches for file in receipt['files'] if (file.split('/')[0] if '/' in file else '.') == subsystem['id']}
+    subsystem_coverage.append({**subsystem,'shards':[r['shardId'] for r in matches],'receiptFiles':len(inspected),'domains':sorted({d for r in matches for d in r['domains']})})
+baseline_path = review / 'INSPECTED-FILE-HASHES.json'
+if not baseline_path.is_file():
+    baseline = {}
+    if not (review / 'SOURCE-STABILITY.json').is_file():
+        errors.append('Missing original baseline and explicit recovery source-assurance record')
+else:
+    baseline = json.loads(baseline_path.read_text())
+changed = [file for file, digest in baseline.items() if not (root / file).is_file() or hashlib.sha256((root / file).read_bytes()).hexdigest() != digest]
+if changed:
+    errors.append({'changedOriginalSource': changed})
+unbound = sorted(set(hashes) - set(baseline)) if baseline else []
+if baseline and unbound:
+    errors.append({'readFilesWithoutOriginalHashes': unbound})
+result = {'snapshotId':inventory['snapshotId'],'completedPairs':len(receipts),'reports':reports,'errors':errors,'uniqueReceiptFiles':len(read_files),'uniqueReadWindowLines':unique_lines,'historicalUniqueReadWindowLines':147721,'historicalWindowCountReverified':unique_lines == 147721,'supplementalReadFiles':sorted(supplemental),'subsystems':subsystem_coverage,'originalSourceHashes':len(baseline),'originalHashMapRecovered':bool(baseline),'changedOriginalSource':changed if baseline else None,'currentBoundFiles':len(hashes),'evidenceAvailability':evidence_availability,'qualification':'Recovered original full-file hashes are compared only when available. Otherwise SOURCE-STABILITY records the missing original map; CURRENT-FILE-HASHES is a fresh binding, not historical equality evidence. Recovery-gap notices are not behavioral evidence.'}
+(review / 'REVIEW-VALIDATION.json').write_text(json.dumps(result,indent=2)+'\n')
+(review / 'CURRENT-FILE-HASHES.json').write_text(json.dumps(hashes,indent=2)+'\n')
+print(json.dumps({'completedPairs':len(receipts),'uniqueReceiptFiles':len(read_files),'uniqueReadWindowLines':unique_lines,'errors':errors,'supplementalReadFiles':sorted(supplemental)},indent=2))
+raise SystemExit(1 if errors else 0)

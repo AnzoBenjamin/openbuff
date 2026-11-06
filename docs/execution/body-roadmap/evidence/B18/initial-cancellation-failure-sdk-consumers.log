@@ -1,0 +1,24 @@
+Using environment: test
+[openbuff] Loaded provider config from:
+  - /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/sdk-consumers/b2fdea86-338b-43ac-9e16-2e27d0caa551/providers.json
+78 |   const records = existsSync(harnessStateDir) ? readdirSync(harnessStateDir, { recursive: true }).filter((file): file is string => typeof file === 'string' && file.endsWith('.json') && file.includes('approvals')).map(file => JSON.parse(readFileSync(path.join(harnessStateDir,file),'utf8'))) : []
+79 |   const observation = { ...fixture, elapsedMs, approvals, trace, output: result.output, runOutcome: result.runOutcome, actionOutcomes: result.actionOutcomes, approvalRecords: records }
+80 |   observations.push(observation)
+81 |   writeFileSync(path.join(evidenceDir, 'observations.json'), JSON.stringify({ schemaVersion:1, invocationDir, providerCalls, observations }, null, 2)+'\n')
+82 |   assert.equal(approvals.length, fixture.approvalCalls, fixture.name + ': actual host approval calls')
+83 |   if ('cancel' in fixture && fixture.cancel) assert.equal(result.runOutcome?.termination, 'cancelled')
+                                                         ^
+AssertionError: Expected values to be strictly equal:
+[32mactual[39m [31mexpected[39m
+
+[39m'[39m[39mc[39m[32mo[39m[32mm[39m[32mp[39m[31ma[39m[31mn[39m[31mc[39m[31me[39m[39ml[39m[31ml[39m[39me[39m[32mt[39m[32me[39m[39md[39m[39m'[39m
+
+ generatedMessage: true,
+     actual: "completed",
+   expected: "cancelled",
+   operator: "strictEqual",
+       code: "ERR_ASSERTION"
+
+      at /home/ben/Code/CLI/openbuff/scripts/body-fixtures/sdk-terminal-approval-identity.ts:83:53
+
+Bun v1.3.5 (Linux x64)

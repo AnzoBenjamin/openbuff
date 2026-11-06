@@ -1,0 +1,69 @@
+{
+  "attemptId": "034dfee0-469b-4f73-99de-ad102338bef0",
+  "event": {
+    "type": "finish",
+    "agentId": "isolation-fixture",
+    "totalCost": 0,
+    "runOutcome": {
+      "termination": "completed"
+    },
+    "taskAcceptance": {
+      "status": "unknown"
+    },
+    "actionOutcomes": [
+      {
+        "actionId": "073fb809-1799-426f-878c-a91dd35b785b",
+        "attemptId": "stM3yJdwYt0",
+        "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+        "toolName": "run_terminal_command",
+        "basis": {
+          "inputHash": "sha256:db53aeb4c7b1fa80db4928a6de3da13e513840a31a5638e2776311763d03c78b",
+          "workspaceRevision": 0
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "unobserved",
+          "receiptIds": [],
+          "confirmedPaths": []
+        }
+      },
+      {
+        "actionId": "2929170a-e389-4d6c-823a-035276bee6e0",
+        "attemptId": "stM35d1Cr6s",
+        "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+        "toolName": "run_terminal_command",
+        "basis": {
+          "inputHash": "sha256:f606a56b1fbd7eb6da2cd992f4d741fcd868f12ace2ab5be1a2df4cbe922e129",
+          "workspaceRevision": 0
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "unobserved",
+          "receiptIds": [],
+          "confirmedPaths": []
+        }
+      },
+      {
+        "actionId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+        "attemptId": "stM38BAX3o4",
+        "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+        "toolName": "set_output",
+        "basis": {
+          "inputHash": "sha256:10d7cb81ef1dd7329b96f03407a4a6753875666cc01c673b3abfec913d62c4e9",
+          "workspaceRevision": 0
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "unobserved",
+          "receiptIds": [],
+          "confirmedPaths": []
+        }
+      }
+    ]
+  },
+  "costUsd": 0,
+  "costEvidence": {
+    "status": "reported",
+    "source": "finish.totalCost"
+  }
+}

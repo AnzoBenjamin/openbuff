@@ -1,0 +1,124 @@
+{
+  "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+  "experimentId": "unreported",
+  "taskId": "isolation-task",
+  "repeat": 0,
+  "languages": [
+    "typescript"
+  ],
+  "executionScope": "key_free_environment",
+  "attemptId": "c3309e30-178f-40a1-a864-c73ef5e83302",
+  "agentId": "judge-gpt",
+  "providerRoute": "unreported",
+  "requestedModel": "openai/gpt-5.4",
+  "role": "auxiliary",
+  "phase": "settled",
+  "startedAt": "2026-11-06T21:45:49.402Z",
+  "durationMs": 1220,
+  "events": [
+    {
+      "type": "start",
+      "messageHistoryLength": 0
+    },
+    {
+      "type": "tool_call",
+      "toolCallId": "a4afa627-7fd0-44aa-b69d-abf38dd8f9d4",
+      "toolName": "set_output",
+      "input": {
+        "analysis": "fixture",
+        "strengths": [],
+        "weaknesses": [],
+        "completionScore": 10,
+        "codeQualityScore": 10,
+        "overallScore": 10
+      },
+      "agentId": "main-agent"
+    },
+    {
+      "type": "tool_result",
+      "toolCallId": "a4afa627-7fd0-44aa-b69d-abf38dd8f9d4",
+      "toolName": "set_output",
+      "output": [
+        {
+          "type": "json",
+          "value": {
+            "message": "Output set"
+          }
+        }
+      ],
+      "agentId": "main-agent",
+      "actionOutcome": {
+        "actionId": "a4afa627-7fd0-44aa-b69d-abf38dd8f9d4",
+        "attemptId": "stM834TVrRQ",
+        "runId": "local-run-fcf10df8-eeb5-458a-8788-6185cef5ada1",
+        "toolName": "set_output",
+        "basis": {
+          "inputHash": "sha256:f875004eea5024f35848464b2f25ada0c98b58e39daa9d91492c2084594114e2",
+          "workspaceRevision": 0
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "unobserved",
+          "receiptIds": [],
+          "confirmedPaths": []
+        }
+      }
+    },
+    {
+      "type": "context_window",
+      "used": 1988,
+      "max": 190000,
+      "compactionTriggerTokens": 140000,
+      "compactionTargetTokens": 100000
+    },
+    {
+      "type": "finish",
+      "agentId": "judge-gpt",
+      "totalCost": 0,
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "taskAcceptance": {
+        "status": "unknown"
+      },
+      "actionOutcomes": [
+        {
+          "actionId": "a4afa627-7fd0-44aa-b69d-abf38dd8f9d4",
+          "attemptId": "stM834TVrRQ",
+          "runId": "local-run-fcf10df8-eeb5-458a-8788-6185cef5ada1",
+          "toolName": "set_output",
+          "basis": {
+            "inputHash": "sha256:f875004eea5024f35848464b2f25ada0c98b58e39daa9d91492c2084594114e2",
+            "workspaceRevision": 0
+          },
+          "outcome": "succeeded",
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      ]
+    }
+  ],
+  "costUsd": 0,
+  "costComplete": true,
+  "costEvidence": {
+    "status": "reported",
+    "source": "finish.totalCost"
+  },
+  "output": {
+    "type": "structuredOutput",
+    "value": {
+      "analysis": "fixture",
+      "strengths": [],
+      "weaknesses": [],
+      "completionScore": 10,
+      "codeQualityScore": 10,
+      "overallScore": 10
+    }
+  },
+  "runOutcome": {
+    "termination": "completed"
+  }
+}

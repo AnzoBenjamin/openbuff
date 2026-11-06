@@ -1,0 +1,512 @@
+[
+  {
+    "path": "evals/buffbench/run-buffbench.ts",
+    "from": 135,
+    "to": 554
+  },
+  {
+    "path": "evals/buffbench/run-buffbench.ts",
+    "from": 717,
+    "to": 1112
+  },
+  {
+    "path": "evals/buffbench/agent-runner.ts",
+    "from": 1,
+    "to": 471
+  },
+  {
+    "path": "evals/buffbench/run-buffbench.ts",
+    "from": 1,
+    "to": 134
+  },
+  {
+    "path": "evals/buffbench/run-buffbench.ts",
+    "from": 551,
+    "to": 710
+  },
+  {
+    "path": "evals/buffbench/types.ts",
+    "from": 1,
+    "to": 218
+  },
+  {
+    "path": "scripts/compare-buffbench-runs.ts",
+    "from": 1,
+    "to": 328
+  },
+  {
+    "path": "evals/buffbench/compare-runs.ts",
+    "from": 1,
+    "to": 255
+  },
+  {
+    "path": "evals/buffbench/statistics.ts",
+    "from": 1,
+    "to": 274
+  },
+  {
+    "path": "evals/buffbench/proposals.ts",
+    "from": 1,
+    "to": 490
+  },
+  {
+    "path": "evals/buffbench/lessons-extractor.ts",
+    "from": 172,
+    "to": 341
+  },
+  {
+    "path": "evals/buffbench/trace-utils.ts",
+    "from": 1,
+    "to": 58
+  },
+  {
+    "path": "evals/buffbench/judge.ts",
+    "from": 1,
+    "to": 507
+  },
+  {
+    "path": "evals/buffbench/deterministic-signals.ts",
+    "from": 1,
+    "to": 268
+  },
+  {
+    "path": "evals/buffbench/main.ts",
+    "from": 1,
+    "to": 27
+  },
+  {
+    "path": "evals/buffbench/main-nightly.ts",
+    "from": 1,
+    "to": 113
+  },
+  {
+    "path": "evals/buffbench/main-openbuff.ts",
+    "from": 1,
+    "to": 110
+  },
+  {
+    "path": ".github/workflows/ci.yml",
+    "from": 1,
+    "to": 414
+  },
+  {
+    "path": ".github/workflows/rust-workspace.yml",
+    "from": 1,
+    "to": 148
+  },
+  {
+    "path": "scripts/__tests__/ci-workflow.test.ts",
+    "from": 1,
+    "to": 272
+  },
+  {
+    "path": "scripts/__tests__/measure-perf-guards-baseline.test.ts",
+    "from": 1,
+    "to": 61
+  },
+  {
+    "path": "sdk/scripts/build.ts",
+    "from": 1,
+    "to": 240
+  },
+  {
+    "path": "sdk/scripts/verify.ts",
+    "from": 1,
+    "to": 204
+  },
+  {
+    "path": "sdk/smoke-test-dist.ts",
+    "from": 1,
+    "to": 248
+  },
+  {
+    "path": "sdk/package.json",
+    "from": 1,
+    "to": 93
+  },
+  {
+    "path": "sdk/PUBLISHING.md",
+    "from": 1,
+    "to": 55
+  },
+  {
+    "path": ".github/workflows/sdk-release.yml",
+    "from": 1,
+    "to": 109
+  },
+  {
+    "path": "sdk/test/cjs-compatibility/package.json",
+    "from": 1,
+    "to": 21
+  },
+  {
+    "path": "sdk/test/cjs-compatibility/test-imports.js",
+    "from": 1,
+    "to": 77
+  },
+  {
+    "path": "sdk/test/esm-compatibility/package.json",
+    "from": 1,
+    "to": 21
+  },
+  {
+    "path": "sdk/test/esm-compatibility/test-imports.js",
+    "from": 1,
+    "to": 83
+  },
+  {
+    "path": "sdk/scripts/publish.ts",
+    "from": 1,
+    "to": 51
+  },
+  {
+    "path": "sdk/scripts/esm-export-fixup.ts",
+    "from": 1,
+    "to": 132
+  },
+  {
+    "path": "sdk/src/__tests__/build-esm-fixup.test.ts",
+    "from": 1,
+    "to": 55
+  },
+  {
+    "path": "bunfig.toml",
+    "from": 1,
+    "to": 14
+  },
+  {
+    "path": "test/setup-scm-loader.ts",
+    "from": 1,
+    "to": 15
+  },
+  {
+    "path": "sdk/test/setup-env.ts",
+    "from": 1,
+    "to": 47
+  },
+  {
+    "path": "package.json",
+    "from": 1,
+    "to": 80
+  },
+  {
+    "path": "evals/package.json",
+    "from": 1,
+    "to": 55
+  },
+  {
+    "path": "scripts/package.json",
+    "from": 1,
+    "to": 39
+  },
+  {
+    "path": "cli/package.json",
+    "from": 1,
+    "to": 64
+  },
+  {
+    "path": "packages/build-tools/executors/infisical-run/executor.ts",
+    "from": 1,
+    "to": 61
+  },
+  {
+    "path": "packages/build-tools/executors.json",
+    "from": 1,
+    "to": 9
+  },
+  {
+    "path": "packages/build-tools/package.json",
+    "from": 1,
+    "to": 15
+  },
+  {
+    "path": "packages/build-tools/project.json",
+    "from": 1,
+    "to": 23
+  },
+  {
+    "path": "scripts/dependency-provenance-guard.ts",
+    "from": 624,
+    "to": 1045
+  },
+  {
+    "path": "scripts/measure-perf-guards-baseline.ts",
+    "from": 1874,
+    "to": 2243
+  },
+  {
+    "path": "scripts/check-ci-local.ts",
+    "from": 355,
+    "to": 526
+  },
+  {
+    "path": "cli/scripts/build-binary.ts",
+    "from": 465,
+    "to": 706
+  },
+  {
+    "path": "cli/scripts/smoke-binary.ts",
+    "from": 109,
+    "to": 466
+  },
+  {
+    "path": ".github/workflows/cli-release-build.yml",
+    "from": 395,
+    "to": 475
+  },
+  {
+    "path": ".github/workflows/cli-release-build.yml",
+    "from": 593,
+    "to": 655
+  },
+  {
+    "path": "cli/scripts/run-cli-tests.ts",
+    "from": 1,
+    "to": 184
+  },
+  {
+    "path": "cli/src/__tests__/run-cli-tests.test.ts",
+    "from": 83,
+    "to": 131
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 1380,
+    "to": 1401
+  },
+  {
+    "path": "sdk/src/run.ts",
+    "from": 1920,
+    "to": 1972
+  },
+  {
+    "path": "packages/agent-runtime/src/memory/playbook-outcome-reporter.ts",
+    "from": 1,
+    "to": 49
+  },
+  {
+    "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+    "from": 3090,
+    "to": 3177
+  },
+  {
+    "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+    "from": 1755,
+    "to": 1809
+  },
+  {
+    "path": "sdk/src/provider-config.ts",
+    "from": 1934,
+    "to": 1998
+  },
+  {
+    "path": "common/src/util/router.ts",
+    "from": 133,
+    "to": 191
+  },
+  {
+    "path": "agents/base2/base-deep.ts",
+    "from": 275,
+    "to": 335
+  },
+  {
+    "path": "sdk/src/agents/load-agents.ts",
+    "from": 166,
+    "to": 240
+  },
+  {
+    "path": "evals/compaction-fidelity/scenario.test.ts",
+    "from": 1,
+    "to": 292
+  },
+  {
+    "path": "evals/compaction-retention/scenario.test.ts",
+    "from": 920,
+    "to": 1156
+  },
+  {
+    "path": "evals/edit-blocks/scenario.test.ts",
+    "from": 388,
+    "to": 529
+  },
+  {
+    "path": "scripts/run-mutation-gate.ts",
+    "from": 1,
+    "to": 18
+  },
+  {
+    "path": "evals/buffbench/__tests__/judge-calibration.test.ts",
+    "from": 175,
+    "to": 253
+  },
+  {
+    "path": "evals/buffbench/__tests__/fixtures/judge-gold-set.json",
+    "from": 1,
+    "to": 45
+  },
+  {
+    "path": "evals/buffbench/judge.ts",
+    "from": 492,
+    "to": 507
+  },
+  {
+    "path": "evals/buffbench/__tests__/run-buffbench.test.ts",
+    "from": 900,
+    "to": 1110
+  },
+  {
+    "path": "evals/buffbench/__tests__/run-buffbench.test.ts",
+    "from": 1217,
+    "to": 1502
+  },
+  {
+    "path": "evals/buffbench/__tests__/agent-runner.test.ts",
+    "from": 253,
+    "to": 333
+  },
+  {
+    "path": "evals/buffbench/__tests__/proposals.test.ts",
+    "from": 38,
+    "to": 255
+  },
+  {
+    "path": "evals/buffbench/__tests__/statistics.test.ts",
+    "from": 75,
+    "to": 213
+  },
+  {
+    "path": "evals/buffbench/runners/codebuff.ts",
+    "from": 1,
+    "to": 207
+  },
+  {
+    "path": "evals/buffbench/trace-analyzer.ts",
+    "from": 1,
+    "to": 120
+  },
+  {
+    "path": "evals/buffbench/meta-analyzer.ts",
+    "from": 150,
+    "to": 265
+  },
+  {
+    "path": ".github/workflows/buffbench.yml",
+    "from": 1,
+    "to": 50
+  },
+  {
+    "path": ".github/workflows/nightly-evals.yml",
+    "from": 1,
+    "to": 53
+  },
+  {
+    "path": "cli/scripts/smoke-binary.ts",
+    "from": 1,
+    "to": 108
+  },
+  {
+    "path": "scripts/__tests__/release-workflow.test.ts",
+    "from": 1,
+    "to": 78
+  },
+  {
+    "path": "sdk/src/__tests__/agent-runtime-impl-playbook-outcome.test.ts",
+    "from": 1,
+    "to": 195
+  },
+  {
+    "path": "evals/logger.ts",
+    "from": 1,
+    "to": 68
+  },
+  {
+    "path": "evals/buffbench/runners/runner.ts",
+    "from": 1,
+    "to": 33
+  },
+  {
+    "path": "evals/subagents/test-repo-utils.ts",
+    "from": 1,
+    "to": 164
+  },
+  {
+    "path": "packages/agent-runtime/src/util/compaction-verification.ts",
+    "from": 1,
+    "to": 103
+  },
+  {
+    "path": "evals/buffbench/README.md",
+    "from": 335,
+    "to": 416
+  },
+  {
+    "path": "docs/testing.md",
+    "from": 1,
+    "to": 95
+  },
+  {
+    "path": "docs/testing.md",
+    "from": 176,
+    "to": 194
+  },
+  {
+    "path": "cli/release/index.js",
+    "from": 890,
+    "to": 1065
+  },
+  {
+    "path": "cli/release/index.js",
+    "from": 1124,
+    "to": 1279
+  },
+  {
+    "path": "cli/release/index.js",
+    "from": 1630,
+    "to": 1757
+  },
+  {
+    "path": "cli/release/package.json",
+    "from": 1,
+    "to": 55
+  },
+  {
+    "path": "cli/src/__tests__/release-wrapper.test.ts",
+    "from": 1320,
+    "to": 1385
+  },
+  {
+    "path": "sdk/test/cjs-compatibility/test-types.ts",
+    "from": 1,
+    "to": 54
+  },
+  {
+    "path": "sdk/test/esm-compatibility/test-types.ts",
+    "from": 1,
+    "to": 76
+  },
+  {
+    "path": ".github/actions/setup-project/action.yml",
+    "from": 1,
+    "to": 31
+  },
+  {
+    "path": "docs/testing.md",
+    "from": 150,
+    "to": 173
+  },
+  {
+    "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+    "from": 1,
+    "to": 218
+  },
+  {
+    "path": "evals/buffbench/run-cross-model-experiment.ts",
+    "from": 1,
+    "to": 39
+  },
+  {
+    "path": "evals/buffbench/run-coding-harness-ablation.ts",
+    "from": 1,
+    "to": 30
+  }
+]

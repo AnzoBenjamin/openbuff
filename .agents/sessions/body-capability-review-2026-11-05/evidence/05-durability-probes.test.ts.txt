@@ -1,0 +1,230 @@
+import { describe, test, expect } from 'bun:test'
+import { Database } from 'bun:sqlite'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { createTestAgentRuntimeParams, mockFileContext } from '/home/ben/Code/CLI/openbuff/common/src/testing/fixtures/agent-runtime'
+import { getInitialSessionState, getInitialAgentState } from '/home/ben/Code/CLI/openbuff/common/src/types/session-state'
+import { promptSuccess } from '/home/ben/Code/CLI/openbuff/common/src/util/error'
+import { loopAgentSteps } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/run-agent-step'
+import { createRunJournal } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/run-journal'
+import { acquireWorkspacePathLease, releaseWorkspacePathLease } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/workspace-path-leases'
+import { createServeBridge } from '/home/ben/Code/CLI/openbuff/sdk/src/serve/bridge'
+import { AcpSessionData } from '/home/ben/Code/CLI/openbuff/sdk/src/services/acp/session-data'
+import { createAcpAgent, resolveAcpServeOptions } from '/home/ben/Code/CLI/openbuff/sdk/src/services/acp/acp-agent'
+import { serveAcpOverSocket } from '/home/ben/Code/CLI/openbuff/sdk/src/serve/socket-listener'
+import { createTurnSnapshot } from '/home/ben/Code/CLI/openbuff/cli/src/utils/turn-snapshots'
+import { runReplayCommand } from '/home/ben/Code/CLI/openbuff/cli/src/commands/replay-command'
+
+const evidenceRoot = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const receipt = (caseName: string, result: Record<string, unknown>) => console.log(JSON.stringify({ case: caseName, ...result }))
+const makeJournal = () => createRunJournal({ path: ':memory:', createDatabase: p => new Database(p) })
+
+function loopParams(template: any, journal: any, overrides: any = {}) {
+  const fixtures = createTestAgentRuntimeParams({ agentTemplate: template, localAgentTemplates: { [template.id]: template } })
+  const { mainAgentState } = getInitialSessionState(mockFileContext)
+  return {
+    ...fixtures,
+    agentType: template.id,
+    agentTemplate: template,
+    agentState: { ...mainAgentState, stepsRemaining: 10 },
+    prompt: 'audit-only prompt',
+    spawnParams: undefined,
+    userId: 'audit05-user',
+    userInputId: 'audit05-input',
+    clientSessionId: 'audit05-session',
+    fingerprintId: 'audit05-fingerprint',
+    ancestorRunIds: [],
+    signal: new AbortController().signal,
+    onResponseChunk: () => {},
+    writeToClient: () => {},
+    previousToolCallFinished: Promise.resolve(),
+    journalWriter: journal,
+    journalReader: journal,
+    ...overrides,
+  } as any
+}
+
+describe('isolated durability audit DI probes; no providers or real workspace effects', () => {
+  test('checkpoint main continuation mints a new run id before completed-result lookup', async () => {
+    const journal = makeJournal()
+    try {
+      const template = {
+        ...createTestAgentRuntimeParams().agentTemplate,
+        id: 'audit05-checkpoint',
+        handleSteps: function* () {
+          yield { toolName: 'read_files', input: { paths: ['file1.txt'] } }
+          yield 'STEP'
+        },
+      }
+      const oldRunId = 'audit05-before-crash'
+      const newRunId = 'audit05-after-resume'
+      journal.append(oldRunId, { eventType: 'tool_call', stepNumber: 0, correlation: 'old-call', payload: { toolName: 'read_files', input: { paths: ['file1.txt'] } } })
+      journal.append(oldRunId, { eventType: 'tool_result', stepNumber: 0, correlation: 'old-call', payload: { toolName: 'read_files', result: [{ type: 'json', value: { recorded: true } }] } })
+      const lookupRunIds: string[] = []
+      const reader = { ...journal, toolResultForInput: (runId: string, tool: string, input: any, occurrence: number) => {
+        lookupRunIds.push(runId)
+        return journal.toolResultForInput(runId, tool, input, occurrence)
+      } }
+      const params = loopParams(template, journal, { resumeInterruptedTurn: true, journalReader: reader, startAgentRun: async () => newRunId })
+      params.agentState.runId = oldRunId
+      params.agentState.messageHistory = [{ role: 'user', content: 'audit-only prompt', tags: ['USER_PROMPT'] }]
+      const result = await loopAgentSteps(params)
+      expect(result.agentState.runId).toBe(newRunId)
+      expect(lookupRunIds).toContain(newRunId)
+      expect(lookupRunIds).not.toContain(oldRunId)
+      expect(journal.events(newRunId).some(e => e.eventType === 'tool_result')).toBe(true)
+      receipt('main-checkpoint-run-id', { originalRunId: oldRunId, resumedRunId: result.agentState.runId, lookupRunIds, originalCompletedResultStillPresent: journal.toolResultForInput(oldRunId, 'read_files', { paths: ['file1.txt'] }, 0) !== undefined })
+    } finally { await journal.close() }
+  })
+
+  test('model-driven tools execute and enter history without tool journal boundaries', async () => {
+    const journal = makeJournal()
+    try {
+      const template = { ...createTestAgentRuntimeParams().agentTemplate, id: 'audit05-model-tools', handleSteps: undefined }
+      const params = loopParams(template, journal, { startAgentRun: async () => 'audit05-model-run', promptAiSdkStream: async function* () {
+        yield { type: 'tool-call', toolName: 'read_files', toolCallId: 'audit05-model-read', input: { paths: ['file1.txt'] } }
+        yield { type: 'tool-call', toolName: 'end_turn', toolCallId: 'audit05-model-end', input: {} }
+        return promptSuccess('audit05-message')
+      } })
+      const result = await loopAgentSteps(params)
+      const events = journal.events('audit05-model-run')
+      expect(result.agentState.messageHistory.some((e: any) => e.role === 'tool' && e.toolName === 'read_files')).toBe(true)
+      expect(events.some(e => e.eventType === 'tool_call' || e.eventType === 'tool_result')).toBe(false)
+      receipt('model-tool-journal-coverage', { historyContainsReadResult: true, journalEventTypes: events.map(e => e.eventType) })
+    } finally { await journal.close() }
+  })
+
+  test('ACP drops prior core run state and accepts a missing journal session', async () => {
+    const dir = mkdtempSync(join(evidenceRoot, '05-acp-di-'))
+    const sessionData = new AcpSessionData({ journalDir: dir })
+    const calls: any[] = []
+    const priorRun = { sessionState: getInitialSessionState(mockFileContext), output: { type: 'lastMessage', value: [] } }
+    const client = { run: async (options: any) => { calls.push(options); return priorRun } }
+    const { promptHandler } = createServeBridge({ client: client as any, sessionData })
+    const input = { sessionId: 'audit05-same-session', promptText: 'first prompt', update: async () => {}, signal: new AbortController().signal }
+    await promptHandler(input)
+    await promptHandler({ ...input, promptText: 'second prompt' })
+    expect(calls).toHaveLength(2)
+    expect(calls[1].previousRun).toBeUndefined()
+    expect(calls[1].journalWriter).toBeUndefined()
+    expect(calls[1].onCheckpoint).toBeUndefined()
+    expect(await sessionData.restoreFromJournal('audit05-never-existed')).toBe(false)
+    const agent = createAcpAgent({ ...resolveAcpServeOptions({ sessionData, promptHandler }), connection: { sessionUpdate: async () => {} } as any })
+    const loaded = await agent.loadSession({ sessionId: 'audit05-never-existed', cwd: dir, mcpServers: [] })
+    expect(loaded).toEqual({})
+    receipt('acp-session-continuity', { secondPromptCarriesPreviousRun: calls[1].previousRun !== undefined, secondPromptCarriesRunJournal: calls[1].journalWriter !== undefined, missingSessionLoadResult: loaded, advertisedJournalAvailable: sessionData.hasJournal() })
+  })
+
+  test('socket startup refuses an anonymous lock left after a killed holder', () => {
+    const dir = mkdtempSync(join(evidenceRoot, '05-socket-lock-di-'))
+    const socketPath = join(dir, 'service.sock')
+    writeFileSync(`${socketPath}.lock`, '', { flag: 'wx', mode: 0o600 })
+    let message = ''
+    try { serveAcpOverSocket({ socketPath, token: 'audit-token', promptHandler: async () => ({ stopReason: 'end_turn' }) }) }
+    catch (error) { message = String(error) }
+    expect(message).toContain('lock file already exists')
+    receipt('socket-stale-lock', { restartRejected: true, lockContainsOwnerIdentity: false, message })
+  })
+
+  test('ACP reconnect loses control of the running turn and admits another prompt', async () => {
+    const sessionData = new AcpSessionData()
+    const calls: any[] = []
+    let releaseFirst: () => void = () => {}
+    let firstStarted: () => void = () => {}
+    const firstGate = new Promise<void>(resolve => { releaseFirst = resolve })
+    const started = new Promise<void>(resolve => { firstStarted = resolve })
+    const client = { run: async (options: any) => {
+      calls.push(options)
+      if (calls.length === 1) { firstStarted(); await firstGate }
+      return { output: { type: 'lastMessage', value: [] } }
+    } }
+    const { promptHandler } = createServeBridge({ client: client as any, sessionData })
+    const options = resolveAcpServeOptions({ promptHandler, sessionData })
+    const first = createAcpAgent({ ...options, connection: { sessionUpdate: async () => {} } as any })
+    const session = await first.newSession({ cwd: evidenceRoot, mcpServers: [] })
+    const running = first.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'long first task' }] })
+    await started
+    const reconnected = createAcpAgent({ ...options, connection: { sessionUpdate: async () => {} } as any })
+    await reconnected.loadSession({ sessionId: session.sessionId, cwd: evidenceRoot, mcpServers: [] })
+    reconnected.cancel({ sessionId: session.sessionId })
+    expect(calls[0].signal.aborted).toBe(false)
+    const second = await reconnected.prompt({ sessionId: session.sessionId, prompt: [{ type: 'text', text: 'concurrent second task' }] })
+    expect(second.stopReason).toBe('end_turn')
+    expect(calls).toHaveLength(2)
+    receipt('acp-reattach-running-owner', { originalRunRemainsUncancelled: !calls[0].signal.aborted, secondPromptAdmittedBeforeOriginalSettled: true })
+    releaseFirst()
+    await running
+  })
+
+  test('JSON replay discards the runtime fullResponse payload field', async () => {
+    const journal = makeJournal()
+    journal.append('audit05-replay-run', { eventType: 'llm_response', stepNumber: 0, correlation: 'step', payload: { messageId: 'audit05-message', fullResponse: 'Retained assistant response' } })
+    const stdout: string[] = []
+    const code = await runReplayCommand({ runId: 'audit05-replay-run', json: true }, { journalPath: ':memory:', openJournal: () => journal as any, writeStdout: s => { stdout.push(s) }, writeStderr: () => {} })
+    const output = stdout.join('').trim().split('\n').map(line => JSON.parse(line))
+    expect(code).toBe(0)
+    expect(output).toEqual([{ type: 'text', text: '' }])
+    receipt('replay-response-field', { runtimePayloadHasFullResponse: true, emittedText: output[0].text, successfulExitCode: code })
+  })
+
+  test('an expired lease admits an overlapping owner while original durable state stays active', async () => {
+    const state = getInitialAgentState()
+    const projectRoot = join(evidenceRoot, '05-lease-di')
+    const first = acquireWorkspacePathLease({ state, projectRoot, ownerAgentId: 'audit05-still-working', paths: ['src/**'], leaseMs: 1 })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    const second = acquireWorkspacePathLease({ state, projectRoot, ownerAgentId: 'audit05-new-owner', paths: ['src/file.ts'] })
+    expect(second).toBeDefined()
+    expect(state.workspacePathLeases?.find(e => e.leaseId === first)?.status).toBe('active')
+    receipt('lease-expiry-live-owner', { overlappingOwnerAdmitted: true, originalRecordStatus: state.workspacePathLeases?.find(e => e.leaseId === first)?.status })
+    releaseWorkspacePathLease(state, first)
+    releaseWorkspacePathLease(state, second)
+  })
+
+  test('concurrent snapshot producers both succeed while publishing sibling commits to one ref', async () => {
+    const projectRoot = mkdtempSync(join(evidenceRoot, '05-snapshot-di-'))
+    const baseSha = 'a'.repeat(40)
+    const baseTree = 'b'.repeat(40)
+    let tip = baseSha
+    const trees = new Map<string, string>()
+    const parents: Array<{ sha: string; parent: string }> = []
+    const updates: string[][] = []
+    let parentReads = 0
+    let releaseParents: () => void = () => {}
+    const parentGate = new Promise<void>(resolve => { releaseParents = resolve })
+    const runGit = async (args: string[], context: any) => {
+      let stdout = ''
+      if (args[0] === 'rev-parse') {
+        if (args[2] === 'refs/openbuff/turns') {
+          parentReads++
+          if (parentReads <= 2) {
+            const captured = tip
+            if (parentReads === 2) releaseParents()
+            await parentGate
+            stdout = captured
+          } else stdout = tip
+        } else stdout = args[2]?.endsWith('^{tree}') ? baseTree : 'head'
+      } else if (args[0] === 'write-tree') {
+        const key = context.env.GIT_INDEX_FILE
+        if (!trees.has(key)) trees.set(key, (trees.size === 0 ? 'c' : 'd').repeat(40))
+        stdout = trees.get(key)!
+      } else if (args.includes('commit-tree')) {
+        const sha = args[args.indexOf('commit-tree') + 1]!
+        parents.push({ sha, parent: args[args.indexOf('-p') + 1]! })
+        stdout = sha
+      } else if (args[0] === 'update-ref') {
+        updates.push([...args])
+        tip = args[2]!
+      } else if (args[0] === 'log') stdout = `${tip} 1 audit-snapshot\n`
+      return { stdout, stderr: '' }
+    }
+    const outcomes = await Promise.all([
+      createTurnSnapshot({ projectRoot, label: 'first' }, { runGit }),
+      createTurnSnapshot({ projectRoot, label: 'second' }, { runGit }),
+    ])
+    expect(outcomes.map(e => e.status)).toEqual(['created', 'created'])
+    expect(parents).toHaveLength(2)
+    expect(parents.every(e => e.parent === baseSha)).toBe(true)
+    expect(updates.every(args => args.length === 3)).toBe(true)
+    receipt('snapshot-concurrent-publish', { bothReportedCreated: true, commitsHaveSameParent: true, updateRefIncludesExpectedOldSha: false, reachablePublishedTip: tip })
+  })
+})

@@ -1,0 +1,6 @@
+{
+  "outcome": "failed inspection assertion after successful candidate validation; no product mutation or product test failure",
+  "cause": "Reviewer parser searched lowercase exited with code but workspace log uses capitalized Exited with code",
+  "scriptSha256": "bff904ced1e6952e7792eee90f58547c9872061b9aabbf97f491facad472000c",
+  "exception": "AssertionError: [] at workspace exit parser"
+}

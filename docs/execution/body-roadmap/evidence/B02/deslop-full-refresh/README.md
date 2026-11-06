@@ -1,0 +1,26 @@
+# B02 current independent acceptance refresh
+
+This is a new independent approval of the original bounded B02 source TypeScript/Bun lane. The implementation owners are `/root/b02_runtime_outcomes`, `/root`, and `/root/b04_lock_cas` for the two dead-statement deletions. The original 57 contract paths are retained; only `sdk/src/serve/event-bridge.ts` has a new hash. B01 gate acceptance, B03 mutation semantics, B36 diagnostic semantics, native/installed-package behavior and OS isolation remain outside this review.
+
+The new reviewer checked the original independent authority and all 162 artifact seals, then independently reconstructed and inspected the exact event-bridge delta. The removed local had no reads; its assignment had no further side effect. The loose parsed-outcome failure check, strict canonical mutation projection, receipt attachment and content/hash redaction remain. The bounded cleanup audit retains the before-source reconstruction and stable 78-input context.
+
+Every old required command mapped the changed bridge hash: 27 had 57 inputs and SDK typecheck had 83. All 28 became stale. None was relabelled or given rewritten input maps. `plan.json` records each drifted original identity and the replacement schedule. The ten per-file producer and consumer executions were replaced by equivalent focused batches; both originally tested producer orders were retained. All fresh product commands bind 137 source/config/toolchain/helper inputs before and after execution, including all 57 B02 contract paths and the current additional context.
+
+| Current required check | Result |
+| --- | --- |
+| Original multifile producer order | 436 pass / 0 fail / 1709 assertions / 10 files |
+| CI-sorted producer subset | 436 pass / 0 fail / 1709 assertions / 10 files |
+| SDK/serve/CLI/common/replay consumer batch | 239 pass / 0 fail / 821 assertions / 10 files |
+| Actual SDK → headless → SQLite → CLI | Nine cases; exit 0; providerCalls 0 |
+| Actual SDK terminal approval and cancellation | Seven cases; exit 0; providerCalls 0 |
+| Independent in-memory ACP and headless counterexamples | Nine cases; exit 0 |
+| SDK, runtime, CLI typecheck | All exit 0 |
+| Independent fresh-oracle verification and SQLite reopen | Nine journals, seven approval cases and nine counterexamples verified; exit 0 |
+
+The full current review preserves separate execution termination, task acceptance and individual action outcomes. Producer inspection covered pre-dispatch step/cost stops, generator cancellation checkpoints and failure settlement, immutable per-attempt retention and terminal journal/receipt projection. Consumer inspection covered SDK cancellation unwind and retained actions, transport hard stops despite conflicting completed metadata, failed tool status despite successful action metadata, empty-error handling, task rejection and authoritative recovery. The fresh actual SDK controls verify failed/awaited/cancelled/zero-cost/zero-step/recovered/rejected paths through headless output, reopened SQLite and CLI state. The independent SQLite check compares full run causes, task verdicts and action arrays against both SDK and CLI; raw database bytes remain unchanged. Approval controls verify abort while waiting, no effect/no granted approval on cancellation, exact command/context binding, single execution and a fresh decision on a repeat.
+
+Tests and fixtures use pinned Bun 1.3.5, `--no-env-file`, replacement environments, empty owned temporary HOME/XDG directories and explicit empty provider configuration. The test preloads directly observed zero guarded fetch calls; actual SDK fixtures also observed providerCalls 0. These are bounded interface observations, not OS/network or native/installed-package assurance. The consumer batch passed without contamination, so no per-file rerun was needed. The independent verification helper initially assumed explicit action metadata on a legacy failed-JSON event; inspection showed preserved errorMessage evidence instead. That helper failure and its original bytes are retained uncredited, then the corrected read-only verifier passed. No product command was repeated for this helper correction.
+
+Every normalized `commands/*.json` preserves the exact argv, exit, log and complete before/after map from its new `*.original.json` provenance. The new original `approval.json` directly seals actual test/fixture sources, observed producer/consumer logs, guard traces, raw fixture artifacts and independent oracle observations. The matching `review.json` hash-references that original authority and has equal canonical fields, source map and command identities. All ten credited commands must remain required exactly once.
+
+This replaces the current B02 acceptance view while leaving all old evidence intact. Only the ten-file runtime subset and its recorded orders are credited; the full 138-file runtime CI schedule is not. The 80 additional command-context paths confer integrity/typecheck context, not implementation approval. Parent owns ledger composition and prerequisite acceptance. `format-validation.json` tests the exact authority/command/oracle formats through the unchanged strict validator in an isolated one-node format harness; it does not grant actual roadmap acceptance.

@@ -1,0 +1,34 @@
+{
+  "name": "help",
+  "argv": [
+    "/home/ben/.local/share/openbuff-test/openbuff-branch",
+    "--help"
+  ],
+  "cwd": "/tmp/openbuff-installed-smoke-hmnhwj0t/workspace",
+  "startedAt": "2026-11-06T21:46:21.912884+00:00",
+  "elapsedSeconds": 1.3955342529989139,
+  "exitCode": 0,
+  "expectedMarker": "Usage: openbuff",
+  "markerPresent": true,
+  "binarySha256": "5597a243d8676c345ba7cece90565705adb2a384d621436482084937a42d6241",
+  "binaryUnchanged": true,
+  "log": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-help.log",
+  "logSha256": "2bfe4b04ce0702cbcd72c59a5a12401cc97e04590459442e3049893790c66261",
+  "environment": {
+    "replacement": true,
+    "ephemeralHome": true,
+    "providerConfig": "empty synthetic providers",
+    "keys": [
+      "DO_NOT_TRACK",
+      "HOME",
+      "LANG",
+      "OPENBUFF_LOCAL_MODE",
+      "OPENBUFF_PROVIDER_CONFIG",
+      "OPENBUFF_TELEMETRY",
+      "PATH",
+      "TERM",
+      "TMPDIR",
+      "XDG_CONFIG_HOME"
+    ]
+  }
+}

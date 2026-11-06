@@ -1,0 +1,84 @@
+{
+  "commands": [
+    {
+      "session": "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a",
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"data\": {\n    \"closed\": true,\n    \"lifecycle\": {\n      \"effectiveLaunch\": {\n        \"browserLaunched\": false,\n        \"engine\": \"chrome\",\n        \"launchHash\": null\n      },\n      \"launched\": false,\n      \"relaunchedBrowser\": false,\n      \"restartedBackground\": false,\n      \"restoreStatus\": \"not_configured\",\n      \"reused\": false,\n      \"saveStatus\": \"not_configured\"\n    },\n    \"restoreStatus\": \"not_configured\",\n    \"saveStatus\": \"not_configured\"\n  },\n  \"error\": null,\n  \"success\": true\n}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "closed": true,
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": false,
+                  "engine": "chrome",
+                  "launchHash": null
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": false,
+                "saveStatus": "not_configured"
+              },
+              "restoreStatus": "not_configured",
+              "saveStatus": "not_configured"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"closed\":true,\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":false,\"engine\":\"chrome\",\"launchHash\":null},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":false,\"saveStatus\":\"not_configured\"},\"restoreStatus\":\"not_configured\",\"saveStatus\":\"not_configured\"},\"error\":null}\n"
+        }
+      }
+    },
+    {
+      "session": "openbuff-rweb-52f0c3b3c119-b-b8cb3b4a",
+      "result": {
+        "content": [
+          {
+            "text": "{\n  \"data\": {\n    \"closed\": true,\n    \"lifecycle\": {\n      \"effectiveLaunch\": {\n        \"browserLaunched\": false,\n        \"engine\": \"chrome\",\n        \"launchHash\": null\n      },\n      \"launched\": false,\n      \"relaunchedBrowser\": false,\n      \"restartedBackground\": false,\n      \"restoreStatus\": \"not_configured\",\n      \"reused\": false,\n      \"saveStatus\": \"not_configured\"\n    },\n    \"restoreStatus\": \"not_configured\",\n    \"saveStatus\": \"not_configured\"\n  },\n  \"error\": null,\n  \"success\": true\n}",
+            "type": "text"
+          }
+        ],
+        "isError": false,
+        "structuredContent": {
+          "exitCode": 0,
+          "response": {
+            "data": {
+              "closed": true,
+              "lifecycle": {
+                "effectiveLaunch": {
+                  "browserLaunched": false,
+                  "engine": "chrome",
+                  "launchHash": null
+                },
+                "launched": false,
+                "relaunchedBrowser": false,
+                "restartedBackground": false,
+                "restoreStatus": "not_configured",
+                "reused": false,
+                "saveStatus": "not_configured"
+              },
+              "restoreStatus": "not_configured",
+              "saveStatus": "not_configured"
+            },
+            "error": null,
+            "success": true
+          },
+          "stderr": "",
+          "stdout": "{\"success\":true,\"data\":{\"closed\":true,\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":false,\"engine\":\"chrome\",\"launchHash\":null},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":false,\"saveStatus\":\"not_configured\"},\"restoreStatus\":\"not_configured\",\"saveStatus\":\"not_configured\"},\"error\":null}\n"
+        }
+      }
+    }
+  ],
+  "remainingProcesses": [],
+  "mcpExitCode": 0
+}

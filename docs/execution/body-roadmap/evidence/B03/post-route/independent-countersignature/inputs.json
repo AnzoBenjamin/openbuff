@@ -1,0 +1,70 @@
+{
+  "schemaVersion": 1,
+  "nodeId": "B03",
+  "originalReviewManifest": {
+    "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-review/manifest.json",
+    "sha256": "45ea3e7485d936c407f410342dd72b4bebd40716dce3be7c062704655c65aa24"
+  },
+  "supportingNormalization": {
+    "path": "docs/execution/body-roadmap/evidence/B03/post-route/acceptance-proof/review.json",
+    "sha256": "a444c31a204466ff009b52ee4dec8cb5033ff47b6d5ea87b5d350436c2e14815"
+  },
+  "implementationOwners": [
+    "/root/b03_mutation_evidence",
+    "/root"
+  ],
+  "scope": "B03 current-source reattestation after exact leader-authored B08 route delta within prior source SDK mutation authority, controlled filesystem, journal, JSON/CLI/ACP consumer tier only. No B01 shipped-base2 integration, independent approval of reviewer-authored B02/B08 prerequisites, OS exclusion/crash reclamation, installed/native behavior, real provider/billing operation or task-acceptance claim.",
+  "scopeLimits": [
+    "B01 shipped-base2 integration, independent approval of reviewer-authored B02/B08 prerequisites, OS exclusion/crash reclamation, installed/native behavior, real provider/billing operation or task-acceptance claim."
+  ],
+  "independenceDisclosure": "Reviewer made no implementation/test changes in this exactly reviewed scope. Reviewer authored separate earlier B02 cancellation and B08 provider prerequisites; these receive no independent implementation approval here. Current narrow B08 route delta and regression were leader-authored. ",
+  "historicalFailedAttemptDisclosures": [
+    "Former /tmp receipts were unavailable after workspace restore; only the preserved fresh repository evidence receives credit.",
+    "Initial post-route command receipts overwrote consumer/Node probe JSON; assessor failed with KeyError before. Corrected fresh run passes. Initial run artifacts and runner corrections are preserved and sealed."
+  ],
+  "uncreditedHistoricalContext": [],
+  "commands": [
+    {
+      "name": "leader-vision-route-regression",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-review/leader-vision-route-regression.command.json",
+        "sha256": "d27253947b24b491ef776eda711ee6859579a3ac6ef2cedf9ddbbf7f99c35bac"
+      }
+    },
+    {
+      "name": "affected-runtime-acp-tests",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-review/affected-runtime-acp-tests.command.json",
+        "sha256": "c59c773a50a82b22a77834498fe3ae51927d9e1bb9485eaec7dbd6dc6be3ee3f"
+      }
+    },
+    {
+      "name": "actual-sdk-fixture",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-review/actual-sdk-fixture.command.json",
+        "sha256": "f4b892ce01e28b750476ed0580084a2a7d71004ef3bc756bc7ea8f663c9baabd"
+      }
+    },
+    {
+      "name": "consumer-probe",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-review/consumer-probe.command.json",
+        "sha256": "5410b31b469938dd811587c0c825f8aa3e77a7f23ab000c5a416feb80fa0bf90"
+      }
+    },
+    {
+      "name": "node-broker-probe",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-review/node-broker-probe.command.json",
+        "sha256": "1044d219b02bd0e97eb682977bc078a50cd0ac77555b46bae056d4a72b53f4da"
+      }
+    },
+    {
+      "name": "byte-observer-replay",
+      "provenance": {
+        "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-review/byte-observer-replay.command.json",
+        "sha256": "40d8323bde52b24cb5d4cd9cfd828673c44c0651e27b4eaf00231370fafc739a"
+      }
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+{"type":"start","messageHistoryLength":0}
+{"type":"finish","agentId":"body-runtime-fixture","totalCost":0,"runOutcome":{"termination":"budget_exhausted","cause":{"code":"cost_budget","message":"Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed."}},"taskAcceptance":{"status":"unknown"}}
+{"type":"error","message":"Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed.","runOutcome":{"termination":"budget_exhausted","cause":{"code":"cost_budget","message":"Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed."}},"taskAcceptance":{"status":"unknown"}}

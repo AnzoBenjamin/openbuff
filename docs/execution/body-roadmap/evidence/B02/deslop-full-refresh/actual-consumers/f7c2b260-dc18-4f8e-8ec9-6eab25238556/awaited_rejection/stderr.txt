@@ -1,0 +1,2 @@
+openbuff run: running agent body-runtime-fixture (project root /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/awaited_rejection)
+openbuff run: Error executing handleSteps for agent body-runtime-fixture: fixture awaited rejection

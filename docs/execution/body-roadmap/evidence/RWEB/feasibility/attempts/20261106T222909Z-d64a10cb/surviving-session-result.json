@@ -1,0 +1,34 @@
+{
+  "content": [
+    {
+      "text": "http://127.0.0.1:38489/doc",
+      "type": "text"
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "exitCode": 0,
+    "response": {
+      "data": {
+        "lifecycle": {
+          "effectiveLaunch": {
+            "browserLaunched": true,
+            "engine": "chrome",
+            "launchHash": 14350354030887980356
+          },
+          "launched": false,
+          "relaunchedBrowser": false,
+          "restartedBackground": false,
+          "restoreStatus": "not_configured",
+          "reused": true,
+          "saveStatus": "not_attempted"
+        },
+        "url": "http://127.0.0.1:38489/doc"
+      },
+      "error": null,
+      "success": true
+    },
+    "stderr": "",
+    "stdout": "{\"success\":true,\"data\":{\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":true,\"saveStatus\":\"not_attempted\"},\"url\":\"http://127.0.0.1:38489/doc\"},\"error\":null}\n"
+  }
+}

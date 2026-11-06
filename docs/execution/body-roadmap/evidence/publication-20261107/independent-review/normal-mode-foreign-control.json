@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/publication-20261107/archive/rehydrate.py",
+    "--destination",
+    "/tmp/openbuff-archive-independent-uq8yruq6"
+  ],
+  "exitCode": 1,
+  "stdout": "",
+  "stderr": "Traceback (most recent call last):\n  File \"/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/publication-20261107/archive/rehydrate.py\", line 121, in <module>\n    print(json.dumps(restore(options.destination)))\n                     ~~~~~~~^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/publication-20261107/archive/rehydrate.py\", line 59, in restore\n    assert target.is_file() and sha(target) == entry['sha256'], ('existing bytes differ', name)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: ('existing bytes differ', 'cli/src/agents/bundled-agents.generated.ts')\n",
+  "refused": true,
+  "beforeAfterFileHashesEqual": true,
+  "fileCount": 186,
+  "helperSha256": "3fbf1b955b018357f6758cccf698eaf283511916c11273347d887027bdd51871"
+}

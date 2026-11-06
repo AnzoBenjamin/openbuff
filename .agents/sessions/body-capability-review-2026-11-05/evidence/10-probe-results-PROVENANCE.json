@@ -1,0 +1,49 @@
+{
+  "artifact": "evidence/10-probe-results.json",
+  "complete": true,
+  "sha256": "8912f3e0486e73a9c189bebcb125b2c8ba86a29de1dfb485dfb7e1832ab160bf",
+  "bytes": 3345,
+  "provenance": {
+    "capture": "3a6c03c28e530eedc281a1ea4a707c0cf72fdeff30b0ca2b7b436f1cf017014d.json",
+    "sha256": "3a6c03c28e530eedc281a1ea4a707c0cf72fdeff30b0ca2b7b436f1cf017014d",
+    "bytes": 3872,
+    "title": null,
+    "keys": [
+      "chunk_id",
+      "wall_time_seconds",
+      "exit_code",
+      "original_token_count",
+      "output"
+    ],
+    "items": null,
+    "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+    "callId": "call_FdXPEDUviNlj81JH8lm75rdh",
+    "timestamp": "2026-11-05T22:44:38.757Z",
+    "transformation": "exact recorded output"
+  },
+  "transformation": "Remove non-JSON Using environment: dev stdout prefix and retain exactly one trailing newline; resulting bytes match independently recorded original artifact SHA256.",
+  "originalHashReceipt": {
+    "capture": "b1b9d27ad5791303a81963d92f7e9330f1e30f6cc0b1b258e033a87a72f1e326.json",
+    "sha256": "b1b9d27ad5791303a81963d92f7e9330f1e30f6cc0b1b258e033a87a72f1e326",
+    "bytes": 977,
+    "title": null,
+    "keys": [
+      "json",
+      "markdown",
+      "findings",
+      "capabilities",
+      "currentFiles",
+      "readRanges",
+      "wordCount",
+      "domains",
+      "snapshotId",
+      "artifactValidation"
+    ],
+    "items": null,
+    "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+    "callId": "call_KvIUk5AwIlidJF3OO0E1KxZS",
+    "timestamp": "2026-11-05T22:54:02.756Z",
+    "transformation": "exact recorded output"
+  },
+  "originalSha256": "8912f3e0486e73a9c189bebcb125b2c8ba86a29de1dfb485dfb7e1832ab160bf"
+}

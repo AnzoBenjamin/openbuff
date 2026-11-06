@@ -1,0 +1,107 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { applyProposals, decideProposalPromotion } from '/home/ben/Code/CLI/openbuff/evals/buffbench/proposals.ts'
+import { compareRuns } from '/home/ben/Code/CLI/openbuff/evals/buffbench/compare-runs.ts'
+import { pairedBootstrapMeanDiffCI, wilcoxonSignedRankTest } from '/home/ben/Code/CLI/openbuff/evals/buffbench/statistics.ts'
+import { CodebuffRunner } from '/home/ben/Code/CLI/openbuff/evals/buffbench/runners/codebuff.ts'
+import { runTask, summarizeAgentRuns } from '/home/ben/Code/CLI/openbuff/evals/buffbench/run-buffbench.ts'
+import { runFinalCheckCommands } from '/home/ben/Code/CLI/openbuff/evals/buffbench/agent-runner.ts'
+import { verifyExtractionCoverage } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/compaction-verification.ts'
+
+const evidence = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixtures = path.join(evidence, '11-fixtures')
+fs.mkdirSync(fixtures, { recursive: true })
+const observations: Record<string, unknown> = {}
+
+const agent = (score: number) => ({ agentId: 'probe-agent', runs: [], averageScore: score, averageScoreExcludingFailures: score, averageCost: 1, averageDuration: 1 })
+const dryRun = applyProposals({ agentDefinitions: [{ id: 'probe-agent', displayName: 'Probe', systemPrompt: 'Probe' }], proposals: [{ kind: 'append_system_prompt_guidance', target: { agentId: 'probe-agent' }, guidance: 'Read before editing', rationale: 'Fixture' }] })
+const invalidPairs = Array.from({ length: 12 }, () => ({ before: 0, after: Number.NaN }))
+observations.invalidNumericPromotion = {
+  pairs: '12 pairs with NaN after-values',
+  wilcoxon: wilcoxonSignedRankTest(invalidPairs),
+  bootstrap: pairedBootstrapMeanDiffCI(invalidPairs),
+  decision: decideProposalPromotion({ dryRun, comparison: compareRuns([agent(6)], [agent(6.5)]), policy: { requireSignificance: true }, pairedScores: invalidPairs }),
+}
+
+const plantedPath = 'src/services/retry-policy.ts'
+const fact = `FACT[${plantedPath}]=retry-backoff-base-1500ms`
+const pre = [
+  { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'probe', toolName: 'read_files', input: { paths: [plantedPath] } }] },
+  { role: 'tool', toolName: 'read_files', toolCallId: 'probe', content: [{ type: 'json', value: { output: fact } }] },
+]
+const post = [{ role: 'assistant', content: [{ type: 'text', text: `${plantedPath}: use backoff 0ms` }] }]
+observations.identifierOnlyFidelity = {
+  originalFact: fact,
+  postContainsOriginalValue: JSON.stringify(post).includes('1500ms'),
+  verification: verifyExtractionCoverage({ preMessages: pre as any, postMessages: post as any }),
+  droppedHistoryButCitedPath: verifyExtractionCoverage({ preMessages: pre as any, postMessages: [], taskMemory: { filesInspected: [`read:${plantedPath}`] } as any }),
+}
+
+// Deliberately route this runner's debug file into this shard's fixture path.
+// No existing private logs/lessons are read or modified.
+const errorBase = '/home/ben/Code/CLI/openbuff/evals/buffbench'
+const runner = new CodebuffRunner({
+  cwd: fixtures,
+  env: {},
+  agentId: 'probe-agent',
+  localAgentDefinitions: [],
+  printEvents: false,
+  commitId: path.relative(errorBase, path.join(fixtures, '11-injected-sdk-error')),
+  parentSha: 'HEAD',
+  client: { run: async () => ({ output: { type: 'error', message: 'Injected SDK provider failure' }, sessionState: { mainAgentState: { creditsUsed: 25 } } }) } as any,
+})
+const runnerResult = await runner.run('Offline fixture')
+const judged = { run: async () => ({ output: { type: 'structuredOutput', value: { analysis: 'Injected judgement', strengths: [], weaknesses: [], completionScore: 9, codeQualityScore: 9, overallScore: 9 } } }) } as any
+const task = await runTask({
+  client: judged,
+  commit: { id: '11-sdk-error-fixture', sha: 'abcdef123456', parentSha: 'parent', prompt: 'Offline fixture', spec: 'Offline fixture', supplementalFiles: [], fileDiffs: [] },
+  agents: ['probe-agent'], repoUrl: 'fixture-only', logsDir: fixtures, index: 0, totalTasks: 1,
+  analyzerContext: { agentDefinitions: [], agentTypeDefinition: '', testedAgentIds: ['probe-agent'] },
+  localAgentDefinitions: [], extractLessons: false, printEvents: false, disableAnalysis: true,
+  runAgentOnCommitImpl: async () => ({ diff: runnerResult.diff, contextFiles: {}, durationMs: 10, cost: runnerResult.totalCostUsd, trace: runnerResult.steps, retrievalFlow: { queryCallCount: 0, queryResultPaths: [], successfulReadPaths: [], relevantReadPaths: [], irrelevantReadPaths: [] } }),
+})
+const evalRun = task.agentResults[0].evalRun
+observations.sdkErrorOutcome = {
+  sdkOutput: 'error',
+  runnerFulfilled: true,
+  runnerHasErrorField: 'error' in runnerResult,
+  runError: evalRun.error ?? null,
+  scoringStatus: evalRun.scoringStatus,
+  score: evalRun.judging.overallScore,
+  measuredRunCount: summarizeAgentRuns({ ...agent(9), runs: [evalRun] }).measuredRuns.length,
+}
+
+const echoEnv = path.join(fixtures, '11-echo-env.cjs')
+const receivedEnvPath = path.join(fixtures, '11-received-dummy-token.txt')
+fs.writeFileSync(echoEnv, `const fs = require('node:fs'); const value = process.env.AUDIT_DUMMY_EVAL_TOKEN || 'missing'; fs.writeFileSync(${JSON.stringify(receivedEnvPath)}, value); process.stdout.write(value);\n`)
+const [envCheck] = await runFinalCheckCommands([{ id: 'dummy-env', command: `/usr/bin/node ${echoEnv}` }], fixtures)
+const receivedToken = fs.existsSync(receivedEnvPath) ? fs.readFileSync(receivedEnvPath, 'utf8') : null
+observations.finalCheckEnvironment = { fixtureToken: 'dummy-audit-token', parentFixtureToken: process.env.AUDIT_DUMMY_EVAL_TOKEN ?? null, childFileValue: receivedToken, capturedStdout: String(envCheck.stdout), stdoutType: typeof envCheck.stdout, childReceivedFixtureToken: receivedToken === 'dummy-audit-token', outcome: envCheck.outcome }
+
+const pidPath = path.join(fixtures, '11-child.pid')
+const completedPath = path.join(fixtures, '11-child-after-abort.txt')
+const childFile = path.join(fixtures, '11-cancel-child.cjs')
+if (fs.existsSync(completedPath)) fs.unlinkSync(completedPath)
+fs.writeFileSync(childFile, `const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); setTimeout(() => fs.writeFileSync(${JSON.stringify(completedPath)}, 'fixture work continued'), 300); setInterval(() => {}, 10000);\n`)
+const controller = new AbortController()
+const pending = runFinalCheckCommands([{ id: 'orphan-check', command: `/usr/bin/node ${childFile} & wait`, timeoutMs: 5000 }], fixtures, undefined, controller.signal)
+let childPid: number | undefined
+try {
+  const deadline = Date.now() + 3000
+  while (!fs.existsSync(pidPath) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20))
+  if (!fs.existsSync(pidPath)) throw new Error('Fixture child never wrote PID')
+  childPid = Number(fs.readFileSync(pidPath, 'utf8'))
+  controller.abort(new Error('Injected fixture cancellation'))
+  const [output] = await pending
+  let stillAlive = false
+  try { process.kill(childPid, 0); stillAlive = true } catch {}
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  observations.finalCheckCancellation = { outcome: output.outcome, exitCode: output.exitCode, childAliveWhenCheckSettled: stillAlive, childProducedWorkAfterCancellation: fs.existsSync(completedPath), childPid, fixtureChildKilledInFinally: true }
+} finally {
+  controller.abort()
+  if (childPid) { try { process.kill(childPid, 'SIGKILL') } catch {} }
+}
+
+const serialized = JSON.stringify(observations, (_key, value) => typeof value === 'number' && !Number.isFinite(value) ? String(value) : value, 2)
+fs.writeFileSync(path.join(evidence, '11-offline-probe-results.json'), serialized + '\n')
+console.log(serialized)

@@ -1,0 +1,2116 @@
+{
+  "schemaVersion": 1,
+  "phase": "complete and frozen; root owns final validators, assurance/status integration and publication",
+  "startedAt": "2026-11-06T05:40:54.813764+00:00",
+  "owner": "recover_audit_v2",
+  "authorizedScope": [
+    "findings",
+    "picks",
+    "FINDINGS-INDEX.json",
+    "CAPABILITY-RECORDS.json",
+    "STRUCTURAL-RECEIPTS.json",
+    "CAPABILITIES.md",
+    "AUDIT-REPORT.md",
+    "AUDIT-RECOVERY-MANIFEST.json"
+  ],
+  "preservedBaseline": [
+    {
+      "path": "findings/08-indexer.md",
+      "bytes": 16860,
+      "sha256": "8beadfdbe94ab9f068f5128423037d26d0c852d029ebfaf691fe41ffb0176e64"
+    },
+    {
+      "path": "findings/08-indexer.json",
+      "bytes": 82674,
+      "sha256": "8de80cae843ce96446bd0dce536853462d8ce66281d27a750356c545432129c1",
+      "keys": [
+        "shardId",
+        "snapshotId",
+        "structuralReceipt",
+        "readRanges",
+        "inspectionSummary",
+        "capabilities",
+        "findings",
+        "domainAssessment",
+        "coverageLimits",
+        "recommendedPlanWork",
+        "assuranceReceipts",
+        "topConclusions"
+      ],
+      "findingCount": 9,
+      "capabilityCount": 8,
+      "shardId": "08-indexer"
+    },
+    {
+      "path": "findings/04-memory.md",
+      "bytes": 17220,
+      "sha256": "01bb9621240561a90a15277372565066342d7157eba9e53f0c227e33cc89db7d"
+    },
+    {
+      "path": "findings/13-perception.json",
+      "bytes": 77441,
+      "sha256": "309d77f7712b3e51774aaf1317bbfd105e2d915aae5abef9e1a3702a2963df2b",
+      "keys": [
+        "shardId",
+        "snapshotId",
+        "structuralReceipt",
+        "readRanges",
+        "capabilities",
+        "findings",
+        "domainAssessment",
+        "coverageLimits",
+        "recommendedPlanWork",
+        "verification",
+        "searchCoverage"
+      ],
+      "findingCount": 9,
+      "capabilityCount": 11,
+      "shardId": "13-perception"
+    },
+    {
+      "path": "findings/02-providers.json",
+      "bytes": 70445,
+      "sha256": "1cca8ba71c3a967776d814ab1e5f0f5b1438361c34928ea38c7d22dd4face28e",
+      "keys": [
+        "shardId",
+        "snapshotId",
+        "structuralReceipt",
+        "readRanges",
+        "capabilities",
+        "findings",
+        "domainAssessment",
+        "coverageLimits",
+        "verification",
+        "recommendedPlanWork"
+      ],
+      "findingCount": 7,
+      "capabilityCount": 14,
+      "shardId": "02-providers"
+    },
+    {
+      "path": "findings/12-audit-docs.md",
+      "bytes": 16638,
+      "sha256": "81237f561422b0821286d6b0e98c771b1d567c05610141be74aa60db2be2b983"
+    },
+    {
+      "path": "findings/12-audit-docs.json",
+      "bytes": 83286,
+      "sha256": "de9954cd04c00b0b0a7e82b9855d9ce129556724ced6cf102f3dfa7bed60c06a",
+      "keys": [
+        "shardId",
+        "snapshotId",
+        "structuralReceipt",
+        "readMethod",
+        "summary",
+        "capabilities",
+        "findings",
+        "domainAssessment",
+        "bodyAxes",
+        "strengths",
+        "evidenceArtifacts",
+        "existingEvidenceReused",
+        "contextReferences",
+        "searchCoverage",
+        "coverageLimits",
+        "recommendedPlanWork"
+      ],
+      "findingCount": 8,
+      "capabilityCount": 12,
+      "shardId": "12-audit-docs"
+    },
+    {
+      "path": "findings/13-perception.md",
+      "bytes": 15877,
+      "sha256": "d9941fb553518b117c0c36d2cc81bd19347df6861c7aeb0d7b41c6e637f8b5b4"
+    },
+    {
+      "path": "picks/05-durability.json",
+      "bytes": 25252,
+      "sha256": "6f58b1d0367462da61e9e2aa7f9e5b0cdd0498fb5a0b6f6c8b28cd95830fe0c5",
+      "keys": [
+        "shardId",
+        "question",
+        "snapshotId",
+        "subsystemIds",
+        "selectedFiles",
+        "secondaryFiles",
+        "capabilityCandidates",
+        "searchCoverage"
+      ],
+      "findingCount": 0,
+      "capabilityCount": 0,
+      "shardId": "05-durability"
+    },
+    {
+      "path": "picks/08-indexer.json",
+      "bytes": 24416,
+      "sha256": "ddf85c4e9fd9a889cae311f8552f71ff7030751870433451cf1259f7a05320b4",
+      "keys": [
+        "shardId",
+        "question",
+        "snapshotId",
+        "subsystemIds",
+        "selectedFiles",
+        "secondaryFiles",
+        "capabilityCandidates",
+        "searchCoverage"
+      ],
+      "findingCount": 0,
+      "capabilityCount": 0,
+      "shardId": "08-indexer"
+    },
+    {
+      "path": "picks/09-execution.json",
+      "bytes": 34374,
+      "sha256": "043e895feea6a3d11013520f26206380d84866d106bb323c6d5c8ca6990edc08",
+      "keys": [
+        "shardId",
+        "question",
+        "snapshotId",
+        "subsystemIds",
+        "selectedFiles",
+        "secondaryFiles",
+        "capabilityCandidates",
+        "searchCoverage",
+        "contextFiles"
+      ],
+      "findingCount": 0,
+      "capabilityCount": 0,
+      "shardId": "09-execution"
+    },
+    {
+      "path": "picks/02-providers.json",
+      "bytes": 10663,
+      "sha256": "ec7e4d465ffc681cb564745ad18c00fa7f1782c9b38a58ae7f769b93aa37bd96",
+      "keys": [
+        "shardId",
+        "question",
+        "snapshotId",
+        "subsystemIds",
+        "selectedFiles",
+        "secondaryFiles",
+        "capabilityCandidates",
+        "searchCoverage"
+      ],
+      "findingCount": 0,
+      "capabilityCount": 0,
+      "shardId": "02-providers"
+    },
+    {
+      "path": "picks/04-memory.json",
+      "bytes": 18673,
+      "sha256": "b44e85fd2a24ddb602cd0295fe1304babd526b40212e951a82e73c2534a6e67e",
+      "keys": [
+        "shardId",
+        "question",
+        "snapshotId",
+        "subsystemIds",
+        "selectedFiles",
+        "secondaryFiles",
+        "capabilityCandidates",
+        "searchCoverage"
+      ],
+      "findingCount": 0,
+      "capabilityCount": 0,
+      "shardId": "04-memory"
+    },
+    {
+      "path": "picks/10-extensions.json",
+      "bytes": 39682,
+      "sha256": "0eb1a941f9988f2e69455065c31696dab1d39dd732337b214e29c572178e6d93",
+      "keys": [
+        "shardId",
+        "question",
+        "snapshotId",
+        "subsystemIds",
+        "selectedFiles",
+        "secondaryFiles",
+        "capabilityCandidates",
+        "searchCoverage",
+        "contextFiles"
+      ],
+      "findingCount": 0,
+      "capabilityCount": 0,
+      "shardId": "10-extensions"
+    },
+    {
+      "path": "picks/03-orchestration.json",
+      "bytes": 12378,
+      "sha256": "6a12d1c8fd22b6b5dee266d824b6cf52fd9d9816a1b15010b8f9b07d15af7605",
+      "keys": [
+        "shardId",
+        "snapshotId",
+        "question",
+        "subsystemIds",
+        "selectedFiles",
+        "secondaryFiles",
+        "capabilityCandidates",
+        "searchCoverage"
+      ],
+      "findingCount": 0,
+      "capabilityCount": 0,
+      "shardId": "03-orchestration"
+    },
+    {
+      "path": "picks/12-audit-docs.json",
+      "bytes": 40484,
+      "sha256": "87891da68ba6b8e9a09d2c8e280bd08efd07c2357f294ea3436bcc067759a3ee",
+      "keys": [
+        "shardId",
+        "question",
+        "snapshotId",
+        "subsystemIds",
+        "selectedFiles",
+        "secondaryFiles",
+        "capabilityCandidates",
+        "searchCoverage",
+        "contextFiles"
+      ],
+      "findingCount": 0,
+      "capabilityCount": 0,
+      "shardId": "12-audit-docs"
+    },
+    {
+      "path": "picks/07-languages.json",
+      "bytes": 31320,
+      "sha256": "61b8fb95442b35860e8ae3848c771fdaa55cb6bfe5823be94aea636eadeb9f4d",
+      "keys": [
+        "shardId",
+        "question",
+        "snapshotId",
+        "subsystemIds",
+        "selectedFiles",
+        "secondaryFiles",
+        "capabilityCandidates",
+        "searchCoverage",
+        "contextFiles"
+      ],
+      "findingCount": 0,
+      "capabilityCount": 0,
+      "shardId": "07-languages"
+    },
+    {
+      "path": "CAPABILITIES.md",
+      "bytes": 491,
+      "sha256": "0557c3300811fbf7c635d6f7a51d3fc8f44cbf7286289811f38f91250a5a5f7a"
+    }
+  ],
+  "sources": [],
+  "restoredArtifacts": [
+    {
+      "path": "AUDIT-REPORT.md",
+      "bytes": 39951,
+      "sha256": "ce3de5d71ccd71814cf48479de1e45cf93d70e4001b2acb7a2d2613de955ebdb",
+      "source": "stores.json:auditA+auditB+auditC",
+      "method": "literal source strings, placeholders pending"
+    },
+    {
+      "path": "CAPABILITIES.md",
+      "bytes": 31060,
+      "sha256": "eaf097207f273ded0da4e77545d91af7e86e1c3828baec89bf9a76e1be8a79ea",
+      "source": "stores.json:catalogA+catalogB+catalogC",
+      "method": "literal source strings, lineage placeholder and C15 revision pending"
+    },
+    {
+      "path": "findings/05-durability.md",
+      "bytes": 15551,
+      "sha256": "6e0263e8d7e01d17e69f4935e2650607f3e528f920c6425fcf70776d0effdc30",
+      "source": "captures/a698b0498cbdc92f0afb20369b45ad5dd1995912633bf1a29c81dcfc96b0516c.json",
+      "method": "exact recorded whole-report result string"
+    },
+    {
+      "path": "findings/06-edits.md",
+      "bytes": 14852,
+      "sha256": "e7f2b683c30309872cfc32bd4704eeb8df2c48d45e255f70215a77a59a6cfb09",
+      "source": "captures/4205017204ac4868d1a6068eddd179477c75300044e69d69482d5632a05c6173.json",
+      "method": "exact recorded whole-report result string"
+    },
+    {
+      "path": "findings/07-languages.md",
+      "bytes": 16276,
+      "sha256": "19ac289674af04687be3d4c235de03d2f73e5c4dad5bc7249bf5080f4dcf45fe",
+      "source": "captures/25b677019bcb11e796e4321b0bc32c180021d390f2f2c7669c0c29e0fc7e4c96.json",
+      "method": "exact recorded whole-report result string"
+    },
+    {
+      "path": "findings/09-execution.md",
+      "bytes": 16543,
+      "sha256": "405cf7ef03a336ae9c8552c83e2622d4b7b44c1a29359e4a2591eb14ed4d436e",
+      "source": "captures/ba8074272648806aefb4f2ad760a43532121e2902b69e3d27157868c76bc9eef.json",
+      "method": "exact recorded whole-report result string"
+    },
+    {
+      "path": "findings/10-extensions.md",
+      "bytes": 16327,
+      "sha256": "ac013bd0e8e6140f7a784a32c219349738eaebf4aab9afcc44ec8a9f7ed22cdd",
+      "source": "captures/2893216397f0c0554498ccce7c8eb95ed0635856146038fcd82951dc71958175.json",
+      "method": "exact recorded whole-report result string"
+    },
+    {
+      "path": "findings/11-evals-release.md",
+      "bytes": 15707,
+      "sha256": "873fdb6a9c0947ad4c913c5cbc6262065ec3c63e805f21bc812f94cb433125a2",
+      "source": "python/0445-call_mC0xrk5r09yvTTlpLP4n0jIu.py",
+      "method": "literal write_text argument extracted without execution"
+    },
+    {
+      "path": "findings/01-cli.json",
+      "bytes": 112962,
+      "sha256": "dc427b188cf07c00a182520b43a114b51277134ef496f76d19cdccb4d8a73a43",
+      "source": {
+        "file": "call_Z09QR3P7bAsKm71dvHayuVkP.js",
+        "session": "rollout-2026-11-05T23-58-42-01a1ad81-ba12-7d00-9220-9c1ac8a570fc.jsonl",
+        "timestamp": "2026-11-05T21:18:11.790Z",
+        "callId": "call_Z09QR3P7bAsKm71dvHayuVkP",
+        "sha256": "3b70190b0f4231b9e9254330cc235cb5e9642ac5c14034f9d7a95dbe258c5812",
+        "chars": 60825,
+        "targets": [
+          "findings/01-cli"
+        ]
+      },
+      "method": "exact recorded literal generator with normalized recorded read ranges; no original shell execution"
+    },
+    {
+      "path": "findings/01-cli.md",
+      "bytes": 45931,
+      "sha256": "aa482c2bfe07c2209fe31340a5f31105c2b2406094eef730fded82b8d57d1ffd",
+      "source": {
+        "file": "call_Z09QR3P7bAsKm71dvHayuVkP.js",
+        "session": "rollout-2026-11-05T23-58-42-01a1ad81-ba12-7d00-9220-9c1ac8a570fc.jsonl",
+        "timestamp": "2026-11-05T21:18:11.790Z",
+        "callId": "call_Z09QR3P7bAsKm71dvHayuVkP",
+        "sha256": "3b70190b0f4231b9e9254330cc235cb5e9642ac5c14034f9d7a95dbe258c5812",
+        "chars": 60825,
+        "targets": [
+          "findings/01-cli"
+        ]
+      },
+      "method": "exact recorded literal generator with normalized recorded read ranges; no original shell execution"
+    },
+    {
+      "path": "findings/04-memory.json",
+      "bytes": 77089,
+      "sha256": "2d881fb44d050c2d02d4ef55ab5732ff42476bd834026aafa03e5442580742b1",
+      "source": {
+        "file": "call_s9LUm4oU0SIkmurm9rkFcIzN.js",
+        "session": "rollout-2026-11-06T00-20-48-01a1ad95-f665-7e01-83b7-ebb497d2b9a1.jsonl",
+        "timestamp": "2026-11-05T21:44:37.125Z",
+        "callId": "call_s9LUm4oU0SIkmurm9rkFcIzN",
+        "sha256": "7f4ae28dfa50a3fbbd301caf16745cc7cdcc627c109de72df2f860daa3df314a",
+        "chars": 52137,
+        "targets": [
+          "findings/04-memory"
+        ]
+      },
+      "method": "exact recorded literal generator with normalized recorded read ranges; no original shell execution"
+    },
+    {
+      "path": "findings/05-durability.json",
+      "bytes": 99385,
+      "sha256": "d33bb0d01822bcf54767cd1d8e3eabfdd0f57110fee7e4e2f3f3bd1e32bf5dbd",
+      "source": {
+        "file": "call_a0xLDLcy8KievPskhc0LfoGh.js",
+        "session": "rollout-2026-11-06T00-27-41-01a1ad9c-43cf-7812-a29c-a6fe0744b316.jsonl",
+        "timestamp": "2026-11-05T21:56:20.035Z",
+        "callId": "call_a0xLDLcy8KievPskhc0LfoGh",
+        "sha256": "ee48054897241e880ce979d8f7c9b30edce29eada6c9de73b9dee6a75dca6e21",
+        "chars": 1271,
+        "targets": [
+          "findings/05-durability"
+        ]
+      },
+      "method": "exact recorded literal generator with normalized recorded read ranges; no original shell execution"
+    },
+    {
+      "path": "findings/02-providers.json",
+      "bytes": 79130,
+      "sha256": "9e49d1711b5c561047e9cba9f37cc3a7d8b134113242edd5cf05be55c7032e13",
+      "source": {
+        "file": "call_su1lkDtTnq67YRhamzPlZezf.js",
+        "callId": "call_su1lkDtTnq67YRhamzPlZezf",
+        "session": "rollout-2026-11-05T23-58-55-01a1ad81-edbe-7f52-a218-cacd99170781.jsonl",
+        "timestamp": "2026-11-05T21:16:35.924Z",
+        "chars": 53545,
+        "sha256": "5e7b98bdbce4d81d1f1ffcc7055c777e0fa7f7ebe4a12de5a91b40b828e0addc",
+        "targets": [
+          "providerNormalizedReads",
+          "providerReport"
+        ]
+      },
+      "method": "exact recorded literal generator with normalized recorded read ranges; no original shell execution"
+    },
+    {
+      "path": "findings/02-providers.md",
+      "bytes": 52912,
+      "sha256": "fa8642186d7d0cc7966ec551549492bbfb56afe6a04570f33743df1e980aaa0f",
+      "source": {
+        "file": "call_qWnxTNWJOhY7t4WRA4og1kV9.js",
+        "callId": "call_qWnxTNWJOhY7t4WRA4og1kV9",
+        "session": "rollout-2026-11-05T23-58-55-01a1ad81-edbe-7f52-a218-cacd99170781.jsonl",
+        "timestamp": "2026-11-05T21:17:36.188Z",
+        "chars": 6917,
+        "sha256": "767fb3b66b08d308cb26b558c0663c37823f9d9219986011a53fa3f23740cff8",
+        "targets": [
+          "providerReport"
+        ]
+      },
+      "method": "exact recorded literal generator with normalized recorded read ranges; no original shell execution"
+    },
+    {
+      "path": "findings/12-audit-docs.json",
+      "bytes": 94774,
+      "sha256": "13ac31bf7f3356a5d09b992f235b66e2f18047c61819688ce354c1b50822170b",
+      "source": {
+        "file": "call_R73Kyg6ZalGNXBgTljSCal2D.js",
+        "callId": "call_R73Kyg6ZalGNXBgTljSCal2D",
+        "session": "rollout-2026-11-06T01-42-44-01a1ade0-f933-7411-86fd-70bd20786633.jsonl",
+        "timestamp": "2026-11-05T23:03:41.793Z",
+        "chars": 63796,
+        "sha256": "a705c9b33e0fb12f5cec0a71026bec296670a10f01413a18f51491bb972a3267",
+        "targets": [
+          "receiptMeta12",
+          "report12"
+        ]
+      },
+      "method": "exact recorded literal generator with normalized recorded read ranges; no original shell execution"
+    },
+    {
+      "path": "picks/01-cli.json",
+      "bytes": 8243,
+      "sha256": "6efe47f83a7515c6ab037f07ac79d8d6f76118ed5b196f8052d129082ba81670",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0007-call_iN9WOzPM3QdGtaBtiJalDjXI.txt",
+        "timestamp": "2026-11-05T20:57:09.033Z",
+        "session": "rollout-2026-11-05T23-55-03-01a1ad7e-611a-75f1-8d85-8d69bd7d2836.jsonl",
+        "callId": "call_iN9WOzPM3QdGtaBtiJalDjXI",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0007-call_iN9WOzPM3QdGtaBtiJalDjXI.py",
+        "imports": [
+          "json"
+        ],
+        "calls": [
+          "(root / s['path']).read_text",
+          "(root / s['path']).read_text().splitlines",
+          "json.dumps",
+          "json.load",
+          "len",
+          "open",
+          "out.write_text",
+          "p.startswith",
+          "pathlib.Path",
+          "print",
+          "str",
+          "sum"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "208ff16d2cf2bcf36bd697857ea584db83229e76fc5d9d68cfd48415ef03135f",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "inspected artifact-only Python generator with scoped writes and relocated staging path"
+    },
+    {
+      "path": "findings/03-orchestration.json",
+      "bytes": 56534,
+      "sha256": "ea498f942e5e70afd129d1a2284a30955708f32e86626b45445b3509152e28d6",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0046-call_a6wmMhMK5PasJyLL4g0jid53.txt",
+        "timestamp": "2026-11-05T21:12:17.569Z",
+        "session": "rollout-2026-11-05T23-59-29-01a1ad82-714d-76e3-ae69-8c80613b6f84.jsonl",
+        "callId": "call_a6wmMhMK5PasJyLL4g0jid53",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0046-call_a6wmMhMK5PasJyLL4g0jid53.py",
+        "imports": [
+          "json",
+          "pathlib"
+        ],
+        "calls": [
+          "' '.join",
+          "' \u2192 '.join",
+          "', '.join",
+          "'; '.join",
+          "'\\n'.join",
+          "(base / 'INVENTORY.json').read_text",
+          "(base / 'findings').mkdir",
+          "(base / 'findings/03-orchestration.md').write_text",
+          "(base / 'picks/03-orchestration.json').read_text",
+          "(root / 'agents/patterns/audit-codebase.md').read_text",
+          "(root / 'agents/patterns/audit-codebase.md').read_text().splitlines",
+          "Path",
+          "SystemExit",
+          "agg.append",
+          "assessment.items",
+          "c",
+          "cap['states'].items",
+          "e",
+          "extra.items",
+          "isinstance",
+          "json.dumps",
+          "json.loads",
+          "len",
+          "max",
+          "md.append",
+          "md.extend",
+          "merged.extend",
+          "out.write_text",
+          "print",
+          "ranges.append",
+          "sorted",
+          "str"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "2bcc4e3980b5e811523c027de84b01a26c268f12ec35a1b7b4e8496dc1be543c",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "inspected artifact-only Python generator with scoped writes and relocated staging path"
+    },
+    {
+      "path": "findings/03-orchestration.md",
+      "bytes": 32084,
+      "sha256": "a5071a02cfe35ec8d4a8e35bffcf51212d0998b0bfd82fca3f5f407ccca8fc43",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0046-call_a6wmMhMK5PasJyLL4g0jid53.txt",
+        "timestamp": "2026-11-05T21:12:17.569Z",
+        "session": "rollout-2026-11-05T23-59-29-01a1ad82-714d-76e3-ae69-8c80613b6f84.jsonl",
+        "callId": "call_a6wmMhMK5PasJyLL4g0jid53",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0046-call_a6wmMhMK5PasJyLL4g0jid53.py",
+        "imports": [
+          "json",
+          "pathlib"
+        ],
+        "calls": [
+          "' '.join",
+          "' \u2192 '.join",
+          "', '.join",
+          "'; '.join",
+          "'\\n'.join",
+          "(base / 'INVENTORY.json').read_text",
+          "(base / 'findings').mkdir",
+          "(base / 'findings/03-orchestration.md').write_text",
+          "(base / 'picks/03-orchestration.json').read_text",
+          "(root / 'agents/patterns/audit-codebase.md').read_text",
+          "(root / 'agents/patterns/audit-codebase.md').read_text().splitlines",
+          "Path",
+          "SystemExit",
+          "agg.append",
+          "assessment.items",
+          "c",
+          "cap['states'].items",
+          "e",
+          "extra.items",
+          "isinstance",
+          "json.dumps",
+          "json.loads",
+          "len",
+          "max",
+          "md.append",
+          "md.extend",
+          "merged.extend",
+          "out.write_text",
+          "print",
+          "ranges.append",
+          "sorted",
+          "str"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "2bcc4e3980b5e811523c027de84b01a26c268f12ec35a1b7b4e8496dc1be543c",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "inspected artifact-only Python generator with scoped writes and relocated staging path"
+    },
+    {
+      "path": "findings/03-orchestration.json",
+      "bytes": 56615,
+      "sha256": "584eaa9d5a4bf5533d887d2c00a6df9db88b97f5ef6fa5ac4940c27aa0693e72",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0049-call_fkwBJ5HHds7vzoqaklo1UIU1.txt",
+        "timestamp": "2026-11-05T21:12:45.999Z",
+        "session": "rollout-2026-11-05T23-59-29-01a1ad82-714d-76e3-ae69-8c80613b6f84.jsonl",
+        "callId": "call_fkwBJ5HHds7vzoqaklo1UIU1",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0049-call_fkwBJ5HHds7vzoqaklo1UIU1.py",
+        "imports": [
+          "json",
+          "pathlib"
+        ],
+        "calls": [
+          "(Path('/home/ben/Code/CLI/openbuff') / r['path']).read_text",
+          "(Path('/home/ben/Code/CLI/openbuff') / r['path']).read_text().splitlines",
+          "Path",
+          "json.dumps",
+          "json.loads",
+          "len",
+          "md.read_text",
+          "md.write_text",
+          "p.read_text",
+          "p.write_text",
+          "print",
+          "text.replace"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "6454b4264b7e5a59c416b9d31bae0f018cc8fdee1ba00f9af015f5e6933d3b5a",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "exact recorded artifact correction applied to recovered report",
+      "previousSha256": "ea498f942e5e70afd129d1a2284a30955708f32e86626b45445b3509152e28d6"
+    },
+    {
+      "path": "findings/03-orchestration.md",
+      "bytes": 32165,
+      "sha256": "2fb72b5d2dcdf64af163f695b1c42d81e2f6d0b8b0d381f38ea0980068941170",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0049-call_fkwBJ5HHds7vzoqaklo1UIU1.txt",
+        "timestamp": "2026-11-05T21:12:45.999Z",
+        "session": "rollout-2026-11-05T23-59-29-01a1ad82-714d-76e3-ae69-8c80613b6f84.jsonl",
+        "callId": "call_fkwBJ5HHds7vzoqaklo1UIU1",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0049-call_fkwBJ5HHds7vzoqaklo1UIU1.py",
+        "imports": [
+          "json",
+          "pathlib"
+        ],
+        "calls": [
+          "(Path('/home/ben/Code/CLI/openbuff') / r['path']).read_text",
+          "(Path('/home/ben/Code/CLI/openbuff') / r['path']).read_text().splitlines",
+          "Path",
+          "json.dumps",
+          "json.loads",
+          "len",
+          "md.read_text",
+          "md.write_text",
+          "p.read_text",
+          "p.write_text",
+          "print",
+          "text.replace"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "6454b4264b7e5a59c416b9d31bae0f018cc8fdee1ba00f9af015f5e6933d3b5a",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "exact recorded artifact correction applied to recovered report",
+      "previousSha256": "a5071a02cfe35ec8d4a8e35bffcf51212d0998b0bfd82fca3f5f407ccca8fc43"
+    },
+    {
+      "path": "picks/11-evals-release.json",
+      "bytes": 35680,
+      "sha256": "dd35d8594ca995cff495bc2d6c301820ebb6fdd5b733bb1e6479d5eb04805f3c",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0354-call_wCLrTBEHhQBLcltTKHkJJvso.txt",
+        "timestamp": "2026-11-05T22:37:30.742Z",
+        "session": "rollout-2026-11-06T01-28-42-01a1add4-1edf-7912-a16a-fe774d1611a5.jsonl",
+        "callId": "call_wCLrTBEHhQBLcltTKHkJJvso",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0354-call_wCLrTBEHhQBLcltTKHkJJvso.py",
+        "imports": [
+          "json",
+          "pathlib"
+        ],
+        "calls": [
+          "(base / 'INVENTORY.json').read_text",
+          "(root / path).read_text",
+          "(root / path).read_text().splitlines",
+          "Path",
+          "ValueError",
+          "json.dumps",
+          "json.loads",
+          "len",
+          "min",
+          "path.write_text",
+          "print",
+          "section",
+          "set",
+          "str",
+          "sum",
+          "whole"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "041698963e8f004cd414b4a98bc996b449434398ac0e393ec9249b7817f71ab5",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "inspected artifact-only Python generator with scoped writes and relocated staging path"
+    },
+    {
+      "path": "picks/13-perception.json",
+      "bytes": 40114,
+      "sha256": "043074ed5f22cb3a6b61dbece84067c20199b5b33358ff1b8a8881d409fbc0e2",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0456-call_eDQ94r3w3hH3Qnmc0NcgpRuv.txt",
+        "timestamp": "2026-11-05T23:04:40.990Z",
+        "session": "rollout-2026-11-06T01-55-09-01a1adec-5827-77b1-ace3-cd22521a62af.jsonl",
+        "callId": "call_eDQ94r3w3hH3Qnmc0NcgpRuv",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0456-call_eDQ94r3w3hH3Qnmc0NcgpRuv.py",
+        "imports": [
+          "json",
+          "pathlib"
+        ],
+        "calls": [
+          "(base / 'INVENTORY.json').read_text",
+          "(root / entry['path']).read_text",
+          "(root / entry['path']).read_text().splitlines",
+          "Path",
+          "clipped.append",
+          "json.dumps",
+          "json.loads",
+          "len",
+          "min",
+          "output.write_text",
+          "print",
+          "set",
+          "str",
+          "sum"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "c6a843d4b3136bb91016b8ec358114463de54e2ab85f9d76d8f27528158afaab",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "inspected artifact-only Python generator with scoped writes and relocated staging path"
+    },
+    {
+      "path": "picks/13-perception.json",
+      "bytes": 41878,
+      "sha256": "5dfad278518bde45114c7cd51fa0c2d8d31ad0382738ec48940722ceeaacd565",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0465-call_67Gomz9PGBG8EnQQgasPDsQu.txt",
+        "timestamp": "2026-11-05T23:05:56.729Z",
+        "session": "rollout-2026-11-06T01-55-09-01a1adec-5827-77b1-ace3-cd22521a62af.jsonl",
+        "callId": "call_67Gomz9PGBG8EnQQgasPDsQu",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0465-call_67Gomz9PGBG8EnQQgasPDsQu.py",
+        "imports": [
+          "json",
+          "pathlib"
+        ],
+        "calls": [
+          "(base / 'INVENTORY.json').read_text",
+          "(root / entry['path']).read_text",
+          "(root / entry['path']).read_text().splitlines",
+          "Path",
+          "data['searchCoverage']['rootsSearched'].append",
+          "data['searchCoverage']['verifiedConsumerReads'].append",
+          "data['secondaryFiles'].append",
+          "hashlib.sha256",
+          "hashlib.sha256(output.read_bytes()).hexdigest",
+          "json.dumps",
+          "json.loads",
+          "len",
+          "min",
+          "output.read_bytes",
+          "output.read_text",
+          "output.write_text",
+          "print",
+          "set",
+          "str",
+          "sum"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "9dd4818860614f1bf9f0240eb5eef14c4f58852320ae42421ef3f20b330cbdf7",
+        "importsInspected": [
+          "hashlib",
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "exact recorded artifact correction applied to recovered report",
+      "previousSha256": "043074ed5f22cb3a6b61dbece84067c20199b5b33358ff1b8a8881d409fbc0e2"
+    },
+    {
+      "path": "picks/06-edits.json",
+      "bytes": 29143,
+      "sha256": "4a9fe978cb7c66768c8a092b05fc59e040e521c976773f97439d9dbd0119e82b",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0086-call_kGJnQmlXpqCM5ZFnEvH8imA8.txt",
+        "timestamp": "2026-11-05T21:26:31.564Z",
+        "session": "rollout-2026-11-06T00-20-15-01a1ad95-762d-7880-b570-1de519794d40.jsonl",
+        "callId": "call_kGJnQmlXpqCM5ZFnEvH8imA8",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0086-call_kGJnQmlXpqCM5ZFnEvH8imA8.py",
+        "imports": [
+          "json",
+          "pathlib"
+        ],
+        "calls": [
+          "(base / 'INVENTORY.json').read_text",
+          "(root / p).read_text",
+          "(root / p).read_text().splitlines",
+          "Path",
+          "enumerate",
+          "json.dumps",
+          "json.loads",
+          "len",
+          "path.write_text",
+          "print",
+          "reason.replace",
+          "set",
+          "str",
+          "sum"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "0a94a1d333e9a81c39da9d1942b6a4938bcb7a1a6cc28da148180ba5cb0af6d4",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "inspected artifact-only Python generator with scoped writes and relocated staging path"
+    },
+    {
+      "path": "findings/06-edits.json",
+      "bytes": 81414,
+      "sha256": "d175b5aa09192531cce7a1f85a3d5a34d1f7faf3c0cbc4c3c0f142b75a7be75a",
+      "source": {
+        "artifactGenerator": "evidence/06-write-report.py",
+        "sourceBytes": 73817,
+        "sourceSha256": "e3e66858ca65f134427976dad6feaa8cf0a0850b1e531d1e4721f6f5692b282e",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "inspected artifact-only Python generator with scoped writes and relocated staging path"
+    },
+    {
+      "path": "findings/07-languages.json",
+      "bytes": 93605,
+      "sha256": "2cfcdd497b2a360dd0a16ef1f6b54ba303953eefc31afaa4af1d2995f09bea63",
+      "source": {
+        "artifactGenerator": "evidence/07-report.py",
+        "sourceBytes": 75656,
+        "sourceSha256": "d97a87405b8be3c5e00e3d990a0cd0c87c250e00c2a47e86d0de0e004c7d0f02",
+        "importsInspected": [
+          "json",
+          "pathlib",
+          "re"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "inspected artifact-only Python generator with scoped writes and relocated staging path"
+    },
+    {
+      "path": "findings/09-execution.json",
+      "bytes": 70208,
+      "sha256": "afb336289d802e408ecf6a04d8fc13a2816e6fc0faa8d67546d11f5a42d2cf29",
+      "source": {
+        "artifactGenerator": "evidence/09-build-report.py",
+        "sourceBytes": 61648,
+        "sourceSha256": "46a450158f9fc550d217d8b17731324b7264681f46ae0358613b7e234c70278e",
+        "importsInspected": [
+          "json",
+          "pathlib",
+          "re"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "inspected artifact-only Python generator with scoped writes and relocated staging path"
+    },
+    {
+      "path": "findings/10-extensions.json",
+      "bytes": 109234,
+      "sha256": "9f05ce526a8e378dfabe202b3237aeff0bf4a1966ff2040934e23d3221724849",
+      "source": {
+        "artifactGenerator": "evidence/10-write-report.py",
+        "sourceBytes": 77823,
+        "sourceSha256": "f3c10e1593fd2616aa0f2d6297603117f1e428243dedce0a1f66e8be39df1fe7",
+        "importsInspected": [
+          "hashlib",
+          "json",
+          "pathlib",
+          "re"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "inspected artifact-only Python generator with scoped writes and relocated staging path"
+    },
+    {
+      "path": "findings/11-evals-release.json",
+      "bytes": 91114,
+      "sha256": "7711c2a5bef3e7aa7c6d85ff42cd5366535dd90040f88bb6973a473bbd5ce5a7",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0442-call_XIbf3MQOHnOvz3CvnMqxeMwV.txt",
+        "timestamp": "2026-11-05T22:58:25.537Z",
+        "session": "rollout-2026-11-06T01-38-18-01a1addc-eaba-7da2-b2ef-06c214db2eee.jsonl",
+        "callId": "call_XIbf3MQOHnOvz3CvnMqxeMwV",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0442-call_XIbf3MQOHnOvz3CvnMqxeMwV.py",
+        "imports": [
+          "json"
+        ],
+        "calls": [
+          "(base / 'INVENTORY.json').read_text",
+          "(base / 'evidence/11-read-ranges.json').read_text",
+          "(base / 'findings/11-evals-release.json').write_text",
+          "e",
+          "finding",
+          "json.dumps",
+          "json.loads",
+          "len",
+          "p.split",
+          "pathlib.Path",
+          "print",
+          "set",
+          "sorted",
+          "states",
+          "str",
+          "work",
+          "x['path'].startswith"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "535acd1974f948d87804c3e11656e6f704b488a47e85c22ba5c9aeb6f94d90ba",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "inspected artifact-only Python generator with scoped writes and relocated staging path"
+    },
+    {
+      "path": "findings/01-cli.json",
+      "bytes": 113064,
+      "sha256": "7bef576488f934f83306e874f262f2529c4726ef2974650c2bd295c6cba6bbf9",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0067-call_OGWpRFnnaRGubFahBYhpkvQS.txt",
+        "timestamp": "2026-11-05T21:19:26.546Z",
+        "session": "rollout-2026-11-05T23-58-42-01a1ad81-ba12-7d00-9220-9c1ac8a570fc.jsonl",
+        "callId": "call_OGWpRFnnaRGubFahBYhpkvQS",
+        "workdir": "/home/ben/Code/CLI/openbuff",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0067-call_OGWpRFnnaRGubFahBYhpkvQS.py",
+        "imports": [
+          "json"
+        ],
+        "calls": [
+          "any",
+          "e['path'].endswith",
+          "e['path'].startswith",
+          "json.dumps",
+          "json.loads",
+          "json_path.read_text",
+          "json_path.write_text",
+          "len",
+          "list",
+          "md_path.read_text",
+          "md_path.read_text().replace",
+          "md_path.read_text().replace('60 inventory files, 75 merged inspected sections, 13842 inspected source lines', '60 inventory files, 76 merged inspected sections, 13848 inspected source lines').replace",
+          "md_path.read_text().replace('60 inventory files, 75 merged inspected sections, 13842 inspected source lines', '60 inventory files, 76 merged inspected sections, 13848 inspected source lines').replace(old_count, new_count).replace",
+          "md_path.read_text().replace('60 inventory files, 75 merged inspected sections, 13842 inspected source lines', '60 inventory files, 76 merged inspected sections, 13848 inspected source lines').replace(old_count, new_count).replace(old_safety, new_safety).replace",
+          "md_path.write_text",
+          "pathlib.Path",
+          "pathlib.Path('/tmp/openbuff-body-review-2026-11-05/INVENTORY.json').read_text",
+          "pathlib.Path('/tmp/openbuff-body-review-2026-11-05/picks/01-cli.json').read_text",
+          "print",
+          "r['readRanges'].append",
+          "r['readRanges'].sort",
+          "set",
+          "str",
+          "sum",
+          "value.replace",
+          "value.replace(old_count, new_count).replace"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "c16b6909e2825483951d214cf62c8fe1c7876f653bddc6f65edae13315a6e951",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "exact recorded artifact correction applied to recovered report",
+      "previousSha256": "dc427b188cf07c00a182520b43a114b51277134ef496f76d19cdccb4d8a73a43"
+    },
+    {
+      "path": "findings/01-cli.md",
+      "bytes": 45945,
+      "sha256": "8ee5eab6c3e3bc3823e30a6fe6c1190c190920e79764258fca444c22266f23b5",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0067-call_OGWpRFnnaRGubFahBYhpkvQS.txt",
+        "timestamp": "2026-11-05T21:19:26.546Z",
+        "session": "rollout-2026-11-05T23-58-42-01a1ad81-ba12-7d00-9220-9c1ac8a570fc.jsonl",
+        "callId": "call_OGWpRFnnaRGubFahBYhpkvQS",
+        "workdir": "/home/ben/Code/CLI/openbuff",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0067-call_OGWpRFnnaRGubFahBYhpkvQS.py",
+        "imports": [
+          "json"
+        ],
+        "calls": [
+          "any",
+          "e['path'].endswith",
+          "e['path'].startswith",
+          "json.dumps",
+          "json.loads",
+          "json_path.read_text",
+          "json_path.write_text",
+          "len",
+          "list",
+          "md_path.read_text",
+          "md_path.read_text().replace",
+          "md_path.read_text().replace('60 inventory files, 75 merged inspected sections, 13842 inspected source lines', '60 inventory files, 76 merged inspected sections, 13848 inspected source lines').replace",
+          "md_path.read_text().replace('60 inventory files, 75 merged inspected sections, 13842 inspected source lines', '60 inventory files, 76 merged inspected sections, 13848 inspected source lines').replace(old_count, new_count).replace",
+          "md_path.read_text().replace('60 inventory files, 75 merged inspected sections, 13842 inspected source lines', '60 inventory files, 76 merged inspected sections, 13848 inspected source lines').replace(old_count, new_count).replace(old_safety, new_safety).replace",
+          "md_path.write_text",
+          "pathlib.Path",
+          "pathlib.Path('/tmp/openbuff-body-review-2026-11-05/INVENTORY.json').read_text",
+          "pathlib.Path('/tmp/openbuff-body-review-2026-11-05/picks/01-cli.json').read_text",
+          "print",
+          "r['readRanges'].append",
+          "r['readRanges'].sort",
+          "set",
+          "str",
+          "sum",
+          "value.replace",
+          "value.replace(old_count, new_count).replace"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "c16b6909e2825483951d214cf62c8fe1c7876f653bddc6f65edae13315a6e951",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "exact recorded artifact correction applied to recovered report",
+      "previousSha256": "aa482c2bfe07c2209fe31340a5f31105c2b2406094eef730fded82b8d57d1ffd"
+    },
+    {
+      "path": "findings/12-audit-docs.json",
+      "bytes": 95180,
+      "sha256": "e0b163a31b06a2abe36ac29eda2ad363a9aff72741d3e85269e853c6882cc57e",
+      "source": {
+        "filename": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/commands/0459-call_zmFc1RAP27NRaMJkWykGp0L3.txt",
+        "timestamp": "2026-11-05T23:04:51.369Z",
+        "session": "rollout-2026-11-06T01-42-44-01a1ade0-f933-7411-86fd-70bd20786633.jsonl",
+        "callId": "call_zmFc1RAP27NRaMJkWykGp0L3",
+        "script": "/home/ben/Code/CLI/openbuff/.omx/drafts/body-review-recovery/python/0459-call_zmFc1RAP27NRaMJkWykGp0L3.py",
+        "imports": [
+          "json",
+          "pathlib"
+        ],
+        "calls": [
+          "Path",
+          "e['path'].endswith",
+          "json.dumps",
+          "json.loads",
+          "len",
+          "p.read_text",
+          "p.write_text",
+          "print"
+        ],
+        "forbidden": false,
+        "writes": true,
+        "sourceSha256": "5971efbe78ddf61d9ecc78521f9580cc1b4ef4b12aeafb204b66df067957cf20",
+        "importsInspected": [
+          "json",
+          "pathlib"
+        ],
+        "productCodeNotExecuted": true
+      },
+      "method": "exact recorded artifact correction applied to recovered report",
+      "previousSha256": "13ac31bf7f3356a5d09b992f235b66e2f18047c61819688ce354c1b50822170b"
+    },
+    {
+      "path": "findings/02-providers.json",
+      "previousSha256": "9e49d1711b5c561047e9cba9f37cc3a7d8b134113242edd5cf05be55c7032e13",
+      "sha256": "696eecf4927b59a3edf3b0ab91b42f31a2b9c35953afef95291697e2a7a93e2f",
+      "bytes": 79250,
+      "source": {
+        "file": "call_VLnK0FathStyL5Ja6Eicsak9.js",
+        "callId": "call_VLnK0FathStyL5Ja6Eicsak9",
+        "session": "rollout-2026-11-05T23-58-55-01a1ad81-edbe-7f52-a218-cacd99170781.jsonl",
+        "timestamp": "2026-11-05T21:18:09.804Z",
+        "chars": 2353,
+        "sha256": "8266f79c606cf93dd7a34d40df36a594dfad2d8316cb939b8596674ad1e396c7",
+        "targets": [
+          "providerReport"
+        ]
+      },
+      "method": "exact recorded final provider-range and Markdown corrections; applied directly without executing recorded commands"
+    },
+    {
+      "path": "findings/02-providers.md",
+      "previousSha256": "fa8642186d7d0cc7966ec551549492bbfb56afe6a04570f33743df1e980aaa0f",
+      "sha256": "b0f17bbc24dfe1f5383d51225baa7cb8b739dd2d4f139179b5fc8a177dc034cf",
+      "bytes": 52923,
+      "source": {
+        "file": "call_VLnK0FathStyL5Ja6Eicsak9.js",
+        "callId": "call_VLnK0FathStyL5Ja6Eicsak9",
+        "session": "rollout-2026-11-05T23-58-55-01a1ad81-edbe-7f52-a218-cacd99170781.jsonl",
+        "timestamp": "2026-11-05T21:18:09.804Z",
+        "chars": 2353,
+        "sha256": "8266f79c606cf93dd7a34d40df36a594dfad2d8316cb939b8596674ad1e396c7",
+        "targets": [
+          "providerReport"
+        ]
+      },
+      "method": "exact recorded final provider-range and Markdown corrections; applied directly without executing recorded commands"
+    },
+    {
+      "path": "AUDIT-REPORT.md",
+      "previousSha256": "9ec4b46d99a2d704aa01e56030cc734f8166a281b52863725149f318679825d0",
+      "sha256": "8de8eee0ac32b8947e873b292035fde47d33f2826c4a151874706fa1757735b7",
+      "bytes": 43333,
+      "method": "root-authorized assurance qualification after exact original restoration; originals preserved verbatim in originalRestoredReports",
+      "changes": [
+        "separate mechanically recovered147555 from historical147721",
+        "replace missing original full-hash link with explicit SOURCE-STABILITY and fresh current binding",
+        "explicit complete zero-write semantic preflight versus guarded sequential partial/recovery/conflict criterion"
+      ]
+    },
+    {
+      "path": "CAPABILITIES.md",
+      "previousSha256": "c062b5530cc7efde5c4d0e995982f3a2c4fc1a15467a5153c015b075d79c5818",
+      "sha256": "f5953baaded163f3268db9c3ab516806c5eb7a688b601f865424d13cc17c3265",
+      "bytes": 38406,
+      "method": "root-authorized assurance qualification after exact original restoration; originals preserved verbatim in originalRestoredReports",
+      "changes": [
+        "separate mechanically recovered147555 from historical147721",
+        "replace missing original full-hash link with explicit SOURCE-STABILITY and fresh current binding",
+        "explicit complete zero-write semantic preflight versus guarded sequential partial/recovery/conflict criterion"
+      ]
+    }
+  ],
+  "gaps": [
+    "Original558-source full-hash map is missing; current full-file equality is not certified. SOURCE-STABILITY provides narrower captured-window equality and records this omission.",
+    "07/09/10/11 helper read-range files are reconstructed with separate evidence PROVENANCE; full original report byte equality is not claimed for those reconstructed outputs.",
+    "Historical147721-window-line claim exceeds mechanically recovered147555includingcontext by166; no surviving evidence supports padding the missing interval. Audit/catalog now disclose this distinction."
+  ],
+  "sourceEdits": false,
+  "productTestsRun": false,
+  "preservedFragment": "| C15 Complete semantic refactors | Partial. S+I, framed fake peers. | LSP WorkspaceEdit\u2192normalization/splice\u2192semantic apply\u2192changeFiles. Versions, original preimages, failed files and resource operations can disappear. [06](findings/06-edits.md). | Validate positions/encodings and the whole roster; malformed/unsupported intents refuse before writes. Guarded sequential execution completes declaration/consumer/resource changes or retains truthful partial/recovery/conflict state. |\n",
+  "updatedAt": "2026-11-06T06:09:07.116038+00:00",
+  "recordedRangeNormalization": {
+    "01-cli": {
+      "files": 60,
+      "ranges": 76,
+      "lines": 13848,
+      "matchesHistoricalSummary": true,
+      "lateCorrectionApplied": true
+    },
+    "04-memory": {
+      "files": 61,
+      "ranges": 102,
+      "lines": 16592,
+      "method": "exact original normalization formula over stored reads04; historical full report hash unavailable",
+      "historicalArtifactHashMatched": "2d881fb44d050c2d02d4ef55ab5732ff42476bd834026aafa03e5442580742b1"
+    },
+    "05-durability": {
+      "files": 73,
+      "ranges": 123,
+      "matchesHistoricalSummary": true,
+      "method": "exact original split/clipping/merge formulas over stored audit05_readRanges and recorded source range addition"
+    },
+    "02-providers": {
+      "files": 41,
+      "ranges": 64,
+      "matchesHistoricalSummary": true,
+      "method": "exact original normalization over providerReadRanges; subsequent recorded model-provider test range correction pending",
+      "lateCorrectionApplied": true
+    },
+    "12-audit-docs": {
+      "files": 62,
+      "ranges": 83,
+      "lines": 11983,
+      "matchesHistoricalSummary": true,
+      "method": "exact original normalization over stored ranges12"
+    }
+  },
+  "originalGroups": {
+    "source": {
+      "file": "call_rDPBjXGyKHgMYz4LYheT0xqr.js",
+      "session": "rollout-2026-11-06T02-24-03-01a1ae06-ca8d-7321-a19c-78dffb574482.jsonl",
+      "timestamp": "2026-11-05T23:32:38.980Z",
+      "callId": "call_rDPBjXGyKHgMYz4LYheT0xqr",
+      "sha256": "6f3db56efb36a0387eab5599c810116b47df4b0544c97ed4dda295fcd740fc93",
+      "chars": 10929,
+      "targets": [
+        "store(\"families\"",
+        "store(\"capGroups\""
+      ]
+    },
+    "families": [
+      {
+        "id": "AF01",
+        "label": "Source-preserving mutation and recovery authority",
+        "ids": [
+          "01-F2",
+          "05-F9",
+          "06-F1",
+          "06-F2",
+          "06-F4",
+          "06-F5",
+          "06-F6",
+          "06-F7",
+          "06-F8",
+          "06-F9",
+          "06-F10",
+          "06-F12",
+          "08-F8"
+        ]
+      },
+      {
+        "id": "AF02",
+        "label": "Truthful action, run and task outcomes",
+        "ids": [
+          "01-F5",
+          "01-F6",
+          "03-F1",
+          "03-F2",
+          "06-F3",
+          "07-F7",
+          "10-F1",
+          "11-F1",
+          "13-F3",
+          "13-F7",
+          "13-F9"
+        ]
+      },
+      {
+        "id": "AF03",
+        "label": "One durable session owner and executable continuation",
+        "ids": [
+          "01-F3",
+          "05-F1",
+          "05-F2",
+          "05-F3",
+          "05-F4",
+          "05-F5",
+          "05-F6",
+          "05-F7",
+          "05-F8",
+          "05-F10",
+          "13-F2"
+        ]
+      },
+      {
+        "id": "AF04",
+        "label": "Fresh, coherent language and retrieval observations",
+        "ids": [
+          "07-F1",
+          "07-F2",
+          "07-F3",
+          "07-F4",
+          "07-F6",
+          "07-F8",
+          "07-F10",
+          "07-F11",
+          "08-F1",
+          "08-F3",
+          "08-F4",
+          "08-F5",
+          "08-F6",
+          "08-F7",
+          "08-F9"
+        ]
+      },
+      {
+        "id": "AF05",
+        "label": "Knowledge that retains meaning and reaches the next decision",
+        "ids": [
+          "01-F7",
+          "04-F1",
+          "04-F2",
+          "04-F3",
+          "04-F4",
+          "04-F5",
+          "04-F9"
+        ]
+      },
+      {
+        "id": "AF06",
+        "label": "Owned processes and actual resource bounds",
+        "ids": [
+          "06-F11",
+          "07-F5",
+          "07-F9",
+          "08-F2",
+          "09-F5",
+          "09-F6",
+          "09-F7",
+          "09-F10",
+          "11-F2"
+        ]
+      },
+      {
+        "id": "AF07",
+        "label": "Provider protocol, recovery and accounting conformance",
+        "ids": [
+          "02-F1",
+          "02-F2",
+          "02-F3",
+          "02-F4",
+          "02-F5",
+          "02-F6",
+          "02-F7"
+        ]
+      },
+      {
+        "id": "AF08",
+        "label": "Exact effect policy and portable provenance",
+        "ids": [
+          "01-F1",
+          "09-F1",
+          "09-F2",
+          "09-F3",
+          "09-F4",
+          "09-F8",
+          "10-F2",
+          "10-F3",
+          "10-F8",
+          "10-F10",
+          "10-F11",
+          "11-F8",
+          "11-F9",
+          "12-F5"
+        ]
+      },
+      {
+        "id": "AF09",
+        "label": "Review, evaluation and learning evidence that deserves credit",
+        "ids": [
+          "04-F6",
+          "04-F7",
+          "04-F8",
+          "11-F3",
+          "11-F4",
+          "11-F5",
+          "11-F6",
+          "11-F7",
+          "11-F10",
+          "11-F11",
+          "11-F12",
+          "12-F1",
+          "12-F2",
+          "12-F3",
+          "12-F4",
+          "12-F6",
+          "12-F7",
+          "12-F8"
+        ]
+      },
+      {
+        "id": "AF10",
+        "label": "Feature and extension readiness across real host boundaries",
+        "ids": [
+          "01-F4",
+          "01-F8",
+          "09-F9",
+          "10-F4",
+          "10-F5",
+          "10-F6",
+          "10-F7",
+          "10-F9",
+          "13-F1",
+          "13-F4",
+          "13-F5",
+          "13-F6",
+          "13-F8"
+        ]
+      }
+    ],
+    "capabilities": [
+      {
+        "id": "C01",
+        "label": "Interactive chat, modes and command discovery",
+        "sources": [
+          "01-cli/interactive-chat-routing",
+          "01-cli/command-palette-skills-presets",
+          "03-orchestration/main-agent-selection-and-resumed-orchestration"
+        ]
+      },
+      {
+        "id": "C02",
+        "label": "Owned prompt queues and captured attachments",
+        "sources": [
+          "01-cli/attachments-live-source",
+          "01-cli/cancel-queue-run-ownership",
+          "13-perception/cli-image-attachments"
+        ]
+      },
+      {
+        "id": "C03",
+        "label": "Questions and inspectable one-use approvals",
+        "sources": [
+          "01-cli/questions-approval-ui"
+        ]
+      },
+      {
+        "id": "C04",
+        "label": "Streaming observations, status and spend provenance",
+        "sources": [
+          "01-cli/streaming-tool-subagent-display",
+          "01-cli/context-compaction-diagnostics",
+          "02-providers/providers.usage-and-cost"
+        ]
+      },
+      {
+        "id": "C05",
+        "label": "Configured provider routing and capability metadata",
+        "sources": [
+          "02-providers/providers.byok-routing",
+          "02-providers/providers.capability-resolution",
+          "02-providers/providers.oauth-subscription",
+          "02-providers/providers.native-gemini-protocol"
+        ]
+      },
+      {
+        "id": "C06",
+        "label": "Native/text tools and vision transport",
+        "sources": [
+          "02-providers/providers.native-tool-streaming",
+          "02-providers/providers.text-tool-fallback",
+          "02-providers/providers.vision-input-routing",
+          "02-providers/providers.openrouter-specific-accounting"
+        ]
+      },
+      {
+        "id": "C07",
+        "label": "Provider retry, context adaptation and output limits",
+        "sources": [
+          "02-providers/providers.retry-failover",
+          "02-providers/providers.cancellation-timeouts",
+          "02-providers/providers.context-limit-adaptation",
+          "02-providers/providers.output-ceilings-and-truncation"
+        ]
+      },
+      {
+        "id": "C08",
+        "label": "Run termination, budgets and cancellation",
+        "sources": [
+          "03-orchestration/programmatic-generator-lifecycle",
+          "03-orchestration/parent-and-user-cancellation",
+          "03-orchestration/cost-token-and-fixed-step-budgets"
+        ]
+      },
+      {
+        "id": "C09",
+        "label": "Composable trusted strategies and module execution",
+        "sources": [
+          "10-extensions/programmatic-agent-extension-abi",
+          "12-audit-docs/strategy-autonomy-body-control"
+        ]
+      },
+      {
+        "id": "C10",
+        "label": "Delegation, handoffs and child grants",
+        "sources": [
+          "03-orchestration/foreground-and-background-delegation",
+          "03-orchestration/typed-handoffs-and-child-receipts",
+          "03-orchestration/child-permission-and-path-narrowing"
+        ]
+      },
+      {
+        "id": "C11",
+        "label": "Process-supervised agents and sidecars",
+        "sources": [
+          "03-orchestration/process-supervision-and-bounded-crash-restarts",
+          "09-execution/generic-sidecar-supervision"
+        ]
+      },
+      {
+        "id": "C12",
+        "label": "Filesystem observations and authenticated read authority",
+        "sources": [
+          "06-edits/read-authority",
+          "06-edits/external-editor-concurrency",
+          "13-perception/read-image-media"
+        ]
+      },
+      {
+        "id": "C13",
+        "label": "Lossless text transactions and structural rewrites",
+        "sources": [
+          "06-edits/byte-preservation",
+          "06-edits/edit-transaction",
+          "06-edits/structural-rewrite"
+        ]
+      },
+      {
+        "id": "C14",
+        "label": "Mutation broker and group recovery",
+        "sources": [
+          "06-edits/cooperative-mutation-broker",
+          "06-edits/transaction-recovery"
+        ]
+      },
+      {
+        "id": "C15",
+        "label": "Complete versioned semantic refactors",
+        "sources": [
+          "06-edits/semantic-workspace-edit"
+        ]
+      },
+      {
+        "id": "C16",
+        "label": "Lexical and graph retrieval through clients",
+        "sources": [
+          "08-indexer/08-C1",
+          "08-indexer/08-C7"
+        ]
+      },
+      {
+        "id": "C17",
+        "label": "Semantic retrieval, cache generations and freshness",
+        "sources": [
+          "08-indexer/08-C3",
+          "08-indexer/08-C4",
+          "08-indexer/08-C5"
+        ]
+      },
+      {
+        "id": "C18",
+        "label": "Precise reference ingestion and durable enrichment",
+        "sources": [
+          "07-languages/precise-cross-language-reference-contract",
+          "08-indexer/08-C6"
+        ]
+      },
+      {
+        "id": "C19",
+        "label": "Language guidance, syntax and heuristic graph",
+        "sources": [
+          "07-languages/target-language-profiles",
+          "07-languages/grammar-query-packaging",
+          "07-languages/structural-language-semantics"
+        ]
+      },
+      {
+        "id": "C20",
+        "label": "LSP navigation, synchronization and server ownership",
+        "sources": [
+          "07-languages/lsp-navigation-lifecycle",
+          "07-languages/lsp-document-sync",
+          "09-execution/lsp-process-effects"
+        ]
+      },
+      {
+        "id": "C21",
+        "label": "Owning build/test targets and affected-test discovery",
+        "sources": [
+          "07-languages/compiler-build-test-discovery",
+          "08-indexer/08-C2",
+          "12-audit-docs/environment-target-languages"
+        ]
+      },
+      {
+        "id": "C22",
+        "label": "Configured validation and diagnostic deltas",
+        "sources": [
+          "07-languages/targeted-validation-execution",
+          "07-languages/diagnostic-delta",
+          "09-execution/validation-effects",
+          "10-extensions/file-change-validation-hooks",
+          "12-audit-docs/targeted-validation"
+        ]
+      },
+      {
+        "id": "C23",
+        "label": "Edit review, requirement coverage and durable credit",
+        "sources": [
+          "03-orchestration/dirty-scope-and-content-bound-final-review",
+          "03-orchestration/requirements-coverage-and-model-task-autonomy",
+          "03-orchestration/durable-gate-credit-and-pinned-open-work",
+          "12-audit-docs/review-evidence-gate"
+        ]
+      },
+      {
+        "id": "C24",
+        "label": "Run journals, main checkpoints and effect replay",
+        "sources": [
+          "05-durability/05-C1",
+          "05-durability/05-C2",
+          "05-durability/05-C3"
+        ]
+      },
+      {
+        "id": "C25",
+        "label": "Plan artifacts, task reads and workflow state",
+        "sources": [
+          "01-cli/durable-plan-ui",
+          "05-durability/05-C6",
+          "05-durability/05-C8",
+          "05-durability/05-C17",
+          "12-audit-docs/task-workspace-evidence"
+        ]
+      },
+      {
+        "id": "C26",
+        "label": "Background continuity, workspace leases and lanes",
+        "sources": [
+          "05-durability/05-C4",
+          "05-durability/05-C5",
+          "05-durability/05-C14",
+          "05-durability/05-C15",
+          "05-durability/05-C16"
+        ]
+      },
+      {
+        "id": "C27",
+        "label": "Git snapshots, restore preview and bisection",
+        "sources": [
+          "01-cli/snapshot-undo-restore-discovery",
+          "05-durability/05-C9"
+        ]
+      },
+      {
+        "id": "C28",
+        "label": "Retained human transcript and recorded-run inspection",
+        "sources": [
+          "01-cli/history-restore-retention",
+          "05-durability/05-C13"
+        ]
+      },
+      {
+        "id": "C29",
+        "label": "ACP transport and attached session continuity",
+        "sources": [
+          "01-cli/attach-detach-ui",
+          "05-durability/05-C10",
+          "05-durability/05-C11",
+          "05-durability/05-C12",
+          "10-extensions/extension-capability-discovery"
+        ]
+      },
+      {
+        "id": "C30",
+        "label": "Compaction, retained result archive and recall",
+        "sources": [
+          "04-memory/context-compaction",
+          "04-memory/archive-recall"
+        ]
+      },
+      {
+        "id": "C31",
+        "label": "Operational memory and cross-turn knowledge injection",
+        "sources": [
+          "04-memory/persisted-task-memory-v1",
+          "04-memory/memory-v2-roundtrip",
+          "04-memory/memory-retention-and-relevance",
+          "05-durability/05-C7"
+        ]
+      },
+      {
+        "id": "C32",
+        "label": "Procedures, lessons and optional consolidation",
+        "sources": [
+          "04-memory/procedural-learning-feedback",
+          "04-memory/bounded-consolidation"
+        ]
+      },
+      {
+        "id": "C33",
+        "label": "Shell execution, background jobs and interaction",
+        "sources": [
+          "09-execution/terminal-authority",
+          "09-execution/sync-process-lifetime",
+          "09-execution/owned-background-jobs",
+          "09-execution/interactive-pty"
+        ]
+      },
+      {
+        "id": "C34",
+        "label": "Exact effect controls, child environments and native enforcement",
+        "sources": [
+          "09-execution/high-impact-approvals",
+          "09-execution/child-env-and-output",
+          "09-execution/native-exec-standalone",
+          "09-execution/native-host-adoption"
+        ]
+      },
+      {
+        "id": "C35",
+        "label": "Outgoing MCP and configured connector tools",
+        "sources": [
+          "09-execution/mcp-process-effects",
+          "10-extensions/mcp-config-trust-and-discovery",
+          "10-extensions/mcp-tool-schema-and-result-interoperability",
+          "10-extensions/notion-mcp-templates"
+        ]
+      },
+      {
+        "id": "C36",
+        "label": "Incoming MCP, custom tools and host callbacks",
+        "sources": [
+          "10-extensions/openbuff-mcp-server",
+          "10-extensions/sdk-custom-tools-and-host-callbacks",
+          "10-extensions/native-overrides-and-host-observation"
+        ]
+      },
+      {
+        "id": "C37",
+        "label": "Local agents, portable schemas and plugin tiers",
+        "sources": [
+          "10-extensions/local-agent-loading-and-provenance",
+          "10-extensions/generated-schema-extension-contracts",
+          "10-extensions/local-external-cli-and-third-party-integrations",
+          "10-extensions/declarative-agents-lifecycle-hooks-and-plugin-host"
+        ]
+      },
+      {
+        "id": "C38",
+        "label": "Browser actions, media and delivered UI",
+        "sources": [
+          "09-execution/browser-process-effects",
+          "13-perception/browser-actions-and-policy",
+          "13-perception/browser-observations-and-media",
+          "13-perception/render-ui-link-widget"
+        ]
+      },
+      {
+        "id": "C39",
+        "label": "3D inspection, previews and declarative edits",
+        "sources": [
+          "13-perception/native-3d-inspection",
+          "13-perception/blender-3d-inspection-preview",
+          "13-perception/3d-declarative-edit"
+        ]
+      },
+      {
+        "id": "C40",
+        "label": "Game-engine workflow guidance",
+        "sources": [
+          "13-perception/game-engine-workflow-helpers"
+        ]
+      },
+      {
+        "id": "C41",
+        "label": "Native desktop and voice capabilities",
+        "sources": [
+          "13-perception/native-computer-screen-frontier",
+          "13-perception/audio-voice-frontier"
+        ]
+      },
+      {
+        "id": "C42",
+        "label": "Capability discovery, audit evidence and public contracts",
+        "sources": [
+          "12-audit-docs/native-audit-inventory",
+          "12-audit-docs/audit-coverage-readiness",
+          "12-audit-docs/durable-audit-sink",
+          "12-audit-docs/breadth-accountability",
+          "12-audit-docs/canonical-tool-agent-catalog",
+          "12-audit-docs/docs-design-plan-fidelity"
+        ]
+      },
+      {
+        "id": "C43",
+        "label": "Task evaluation, learning promotion and recommendations",
+        "sources": [
+          "02-providers/providers.empirical-language-recommendations",
+          "08-indexer/08-C8",
+          "11-evals-release/evaluation-orchestration-and-oracles",
+          "11-evals-release/paired-polyglot-evidence",
+          "11-evals-release/learning-proposal-promotion",
+          "11-evals-release/retention-and-mutation-oracles",
+          "11-evals-release/trace-artifact-hygiene"
+        ]
+      },
+      {
+        "id": "C44",
+        "label": "Installed delivery, CI and resource-quality gates",
+        "sources": [
+          "11-evals-release/ci-guards-and-performance",
+          "11-evals-release/sdk-node-packaged-consumer",
+          "11-evals-release/cli-and-native-installed-validation",
+          "11-evals-release/repo-test-loading-and-legacy-build-tools"
+        ]
+      },
+      {
+        "id": "C45",
+        "label": "Joined target-project language cooperation",
+        "sources": [
+          "07-languages/cross-language-interface-validation",
+          "12-audit-docs/learning-cooperation-assurance"
+        ]
+      }
+    ]
+  },
+  "originalRestoredReports": {
+    "AUDIT-REPORT.md": {
+      "text": "# Openbuff as a model body: capability and implementation audit\n\nReviewed 2026-11-05\u201306. Source HEAD: e65c06c0ae783130998bd9ab18c8d35320e40ea8. Native inventory snapshot: ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0.\n\n## Assessment\n\nOpenbuff already gives a configured model a substantial coding body: local BYOK inference, streamed tools and subagents, authenticated reads, coordinated edits, lexical/graph retrieval, optional semantic and precise indexes, compiler hooks, persistent memory, browser actions, image and 3D observations, and usable human controls. The main limitation is dependable continuity between those components. Several producers retain useful information that their consumers discard, reinterpret, or credit against a different identity.\n\nThe resulting macro gap is broader than an absent feature name. The body cannot yet consistently tell the model which action applied, which run failed or stopped, what remains uncertain after a crash, which observations describe current bytes, and which retained facts should inform the next task. That limits recovery and learning even when individual helpers work. This is a synthesis of the recorded implementation evidence; this review did not measure live model task success or prove a maximum achievable quality level.\n\nThe model should continue to own reasoning, strategy and action selection. Deterministic execution, observations, ownership, persistence, selected controls and truthful receipts belong to the body. Existing configurable templates, custom tools and generator workflows are useful strategic freedom. Repairing body contracts should make those strategies cooperate, while preserving the user's local/BYOK choices and intentional full-access execution posture.\n\n[CAPABILITIES.md](CAPABILITIES.md) consolidates all 144 vertical records into 45 capabilities, with maturity, assurance, current gaps and graduation criteria. The ten families below consolidate all 118 finding records. Raw shard labels are 46 HIGH, 69 MEDIUM and 3 LOW; these are recorded classifications, not 118 independent priority units or a severity certification of ordinary CLI use. Triggers include optional services, long-running or concurrent work, stale-lock interleavings, finite limits, packaged assets and explicit recovery paths. Routine functionality and narrow reusable strengths remain visible.\n\n## Scope and evidence\n\nAll 13 independent file-picker/auditor pairs completed, exceeding the minimum seven. They covered CLI/TUI; providers; orchestration; memory; durability; editing; languages; indexing; execution; extensions; evaluation/release; audit/docs; and perception. Every active package and all eight audit domains were assigned. [SCOPE.md](SCOPE.md) gives every filesystem top-level directory's disposition; [COVERAGE.md](COVERAGE.md) gives all 18 native subsystem labels and inspected counts.\n\nThe native inventory contains 3,056 files. Validated receipts contain 555 unique inspected files and 147,721 unique source/test/doc read-window lines. Those are bounded recorded windows, including tests and documentation, rather than a line-by-line audit of every inventoried file. Large orchestration, storage and browser files were sampled. Every Markdown shard report was read for this synthesis; the synthesizer used durable findings and artifacts, without rereading implementation source.\n\nActive coverage includes agents, CLI, common, SDK, scripts, evals, docs, root public configuration, .agents, .github, and every packages child: agent-runtime, code-map, indexer, internal and build-tools; Rust is separately covered. Archived agents and generated/local binaries, preferences, workflow state and old runtime/log data have explicit exclusions. Credentials, private provider values and historical raw logs were excluded. Vendored dependencies were context for selected protocol behavior, rather than a complete dependency-source audit.\n\n[REVIEW-VALIDATION.json](REVIEW-VALIDATION.json) has errors=[], 13 completed pairs, and the receipt totals above. [COVERAGE-RESULT.json](COVERAGE-RESULT.json) has no invalid structural receipts or uncovered subsystems and structuralInspectionCovered=true. Its native complete=false remains unchanged: 22 heuristic candidate records and the existing coverage helper conflate inspection with feature readiness. An audit must be able to finish after proving an ability absent; a named helper must not make an unimplemented ability ready. Both directions have counterexamples in [12-audit-docs](findings/12-audit-docs.md).\n\nNative inventory identity also excludes active cli/release sources and hashes large-file prefixes. Supplemental exact reads and full hashes of inspected files, including the release wrapper and public manifest, are retained in [INSPECTED-FILE-HASHES.json](INSPECTED-FILE-HASHES.json). They qualify the inventory's limits rather than silently extending native receipts. Root rechecked the source snapshot/HEAD as unchanged. No source fixes were applied; existing user edits were preserved.\n\nThe existing suites provide useful lower-level assurance: 413 indexer tests passed, 28 audit/control-plane tests passed, and 19 Rust tests passed. The code-map run had 154 passes and four resource-path failures; isolated structure tests also failed. Pair 07 subsequently verified current pinned PHP/Swift/Kotlin/GDScript assets and successful parsing/query compilation with explicit assets. Consequently, the supported finding concerns default discovery and publication, rather than a blanket claim that those grammars cannot work.\n\nOffline probes exercise real local SQLite, adapters, framed peers, dispatchers and process behavior with controlled dependencies. A passing diagnostic often asserts the current defect. Provider fixtures make zero external requests; injected judges and vectors do not measure model quality. Selected mutation/index probes ran on installed Bun 1.3.14, while repository suites and other probes used pinned 1.3.5. Platform frequency, live-provider reliability, full installed consumers, killed live CLI recovery, real Blender/browser tasks and held-out learning gains remain unmeasured.\n\n## Ranked families\n\nRanking weighs effects on user work, the model's next decision and the breadth of affected boundaries. It is not a serial execution dependency: small independent truth, fixture-isolation and smoke repairs can proceed immediately.\n\n### AF01 \u2014 Source-preserving mutation and recovery authority\n\n**Priority:** first repair authority that can replace or misattribute user bytes. **Confidence:** high in the demonstrated data/ownership transitions; spontaneous race frequency and power-loss behavior are unknown.\n\nOrdinary read grants, whole-file requirements, pure preflight, conditional mutation primitives and guarded rollback are real strengths. The remaining holes sit at takeover, semantic apply and recovery. A controlled stale-breaker interleaving allowed two commits from one preimage. A semantic edit computed from an earlier read CAS-protected a later snapshot, removing an external append. Interrupted group recovery restored preimages over unrelated divergence, and a failed recovery was marked terminal so the next scan found no pending work.\n\nByte and operation completeness also vary by edit route: BOM preimages cannot match raw broker bytes; scoped CRLF edits normalize unrelated terminators; malformed LSP positions reach disk; failed peer edits or unsupported resource operations disappear while surviving edits apply. Concurrent snapshot producers can both report creation while one recovery point falls out of the listed chain. A separate index-lock takeover has the same generation-fencing weakness.\n\nEvidence: [06-F1/F2/F4\u2013F10/F12](findings/06-edits.md), [05-F9](findings/05-durability.md), [08-F8](findings/08-indexer.md), [01-F2](findings/01-cli.md); representative anchors are [workspace-mutation-broker.ts:601](/home/ben/Code/CLI/openbuff/sdk/src/services/workspace-mutation-broker.ts:601), [language-intelligence.ts:350](/home/ben/Code/CLI/openbuff/sdk/src/services/language-intelligence.ts:350), and [transaction-intent-log.ts:1249](/home/ben/Code/CLI/openbuff/sdk/src/tools/transaction-intent-log.ts:1249).\n\nThe shared fix is end-to-end source and ownership authority: preserve exact preimages, document versions, full operation rosters, expected after-state and fencing generations through every adapter. Admit groups only with their promised durable capacity; retain unresolved recovery until conditional evidence establishes ownership. Graduation requires competing takeover, external-edit, failed-recovery-retry and complete refactor fixtures, with byte equality outside intended changes. Sequential multi-file commit remains an explicit contract rather than an assumed filesystem-wide atomic operation.\n\n### AF02 \u2014 Truthful action, run and task outcomes\n\n**Priority:** establish canonical outcomes before adding consumers of success. **Confidence:** high; real runtime/adapter probes establish several misclassifications, while live-model omission frequency is unknown.\n\nA cost stop on a prompt-only template with missing structured output reenters correction without using its available step. The bounded probe required its own cancellation; unbounded repetition follows the loop condition. More directly, a caught generator exception or AbortError returns ordinary endTurn and becomes a completed journal boundary and completed/ok child receipt. The visible error does not repair that machine contract.\n\nThe same pattern appears in adjacent consumers: rejected forward and rollback calls become confirmed applied evidence; resolved SDK errors become scored evaluator runs; MCP isError and structuredContent disappear; failed diagnostic capture becomes a passed empty delta. CLI client creation can strand occupancy, and validation exceptions resolve as accepted-looking sends. Browser diagnose loses media, edit-preview errors are labeled rendered, and render_ui acknowledges a render without a host acknowledgement.\n\nEvidence: [03-F1/F2](findings/03-orchestration.md), [06-F3](findings/06-edits.md), [10-F1](findings/10-extensions.md), [07-F7](findings/07-languages.md), [11-F1](findings/11-evals-release.md), [01-F5/F6](findings/01-cli.md), [13-F3/F7/F9](findings/13-perception.md); [run-programmatic-step.ts:749](/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/run-programmatic-step.ts:749), [filesystem.ts:1130](/home/ben/Code/CLI/openbuff/common/src/tools/results/filesystem.ts:1130), [codebuff.ts:125](/home/ben/Code/CLI/openbuff/evals/buffbench/runners/codebuff.ts:125).\n\nThree levels need independent truth: an action's effect/result, a run's terminal reason, and a task's acceptance. A failed action keeps its failure receipt; a task may recover and later pass its oracle. Fatal generator errors, cancellation and hard stops must retain their actual terminal reason. A committed edit can remain applied while preview fails. Tests must include both fatal-path controls and failed-action\u2192successful-recovery controls. Empty, unavailable, refused, partial and uncertain observations need explicit meanings across runtime, journal, SDK, CLI and evaluation.\n\n### AF03 \u2014 One durable session owner and executable continuation\n\n**Priority:** repair current journal/ACP ownership before enlarging daemon or lane surfaces. **Confidence:** high in source/DI facts; crash replay and simultaneous destructive effects beyond the fixtures are conditional inferences.\n\nCheckpoint storage preserves bytes and uses an atomic queue, but interrupted main resume mints a fresh run ID unless explicitly pinned. Completed-effect lookup then uses the wrong identity. Programmatic journal wrappers do not cover model-selected dispatch, and absent external acknowledgement cannot distinguish not-executed from executed-but-unrecorded. Parent cleanup closes shared journal handles while detached work can remain live; later appends become no-ops.\n\nACP has real authenticated transports and redacted projections, but its bridge starts each prompt without previousRun and discards returned state. A nonexistent session can load successfully. Loading a running ID in another connection loses its original controller and admits a second prompt in the DI fixture. Attached TUI readiness additionally checks unrelated local providers. Browser child stamps are replaced with a main owner, creating inferred sibling session interference. Live leases lack renewal; workflow telemetry is skipped because producer/consumer member names differ; replay JSON reads a different assistant-text field.\n\nEvidence: [05-F1\u2013F8/F10](findings/05-durability.md), [01-F3](findings/01-cli.md), [13-F2](findings/13-perception.md); [run-agent-step.ts:1963](/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/run-agent-step.ts:1963), [bridge.ts:754](/home/ben/Code/CLI/openbuff/sdk/src/serve/bridge.ts:754), [acp-agent.ts:886](/home/ben/Code/CLI/openbuff/sdk/src/services/acp/acp-agent.ts:886).\n\nOne service/session owner must retain executable state, identities, controllers, live-child journal lifetime and leases while connection sinks change. Effects require durable identities and declared replay policy. Arbitrary shell/MCP/custom effects can remain unobservable after a crash; automatic rerun must wait for reconciliation evidence or an explicit decision. Do not promise universal exactly-once execution. Graduation uses disposable fresh-process fixtures at pre-dispatch, during-effect, post-effect/pre-confirmation and confirmed boundaries, plus live detach/load/cancel exclusion. Manual serve and compiled Bun POSIX child supervision already exist and should be retained.\n\n### AF04 \u2014 Fresh, coherent language and retrieval observations\n\n**Priority:** fix generation and identity truth before ranking or ecosystem expansion. **Confidence:** high in deterministic counterexamples; real compiler/server task quality is unmeasured.\n\nThe lexical retriever, graph modes, command discovery and optional precision consumers are wired. Their representations can disagree. Failed embedding replacement leaves changed/deleted vectors queryable under new metadata. Scoped candidates can vanish behind an unscoped cap; fair-share walking drops files even when all eligible files fit. Known same-size/mtime changes reuse old hashes; repeated deltas reset the age that should trigger a full safety sweep. Precise edges disappear on routine refresh, and a source-only snapshot cannot fence graph-only adoption.\n\nLanguage identities have similar losses. Bare-extension family normalization merges unrelated languages, producing a Python\u2192Rust same-name call in a fixture. Truncated SCIP descriptors collide while still labeled precise. Rust crate imports and Go package suffix heuristics select wrong owners. LSP initial open and first edit both use version 1; root/document-ID selection and skipped dirty documents further weaken freshness.\n\nEvidence: [07-F1\u2013F4/F6/F8/F10/F11](findings/07-languages.md), [08-F1/F3\u2013F7/F9](findings/08-indexer.md); [index-manager.ts:663](/home/ben/Code/CLI/openbuff/packages/indexer/src/index-manager.ts:663), [scip-ingest.ts:367](/home/ben/Code/CLI/openbuff/packages/indexer/src/scip-ingest.ts:367), [language-profiles.ts:163](/home/ben/Code/CLI/openbuff/common/src/util/language-profiles.ts:163).\n\nOpaque semantic identity must survive separately from bounded labels. Publish coherent source/vector/graph generations; preserve only hash-matching enrichments; distinguish full reconciliation time from delta liveness. Share LSP document/version authority and mark skipped dirty observations unavailable or reopen them. Package queries alongside WASM and prove semantic output from isolated artifacts. Current pinned grammars work with explicit assets, which narrows the diagnosis. Graduation compares accelerated/scoped retrieval against baseline, tests changed/deleted inputs and stale merges, and follows committed bytes through actual language services.\n\n### AF05 \u2014 Knowledge that retains meaning and reaches the next decision\n\n**Priority:** repair canonical capture/injection before adding learning infrastructure. **Confidence:** high from real SQLite close/reopen fixtures; semantic usefulness and model behavior remain unmeasured.\n\nDefault CLI selection of sqlite-v2-opt-in reaches preparation, capture and protected prompt injection. Startup and terminal task transitions nevertheless share an event identity, so SQLite rejects the terminal batch and leaves finishing state. A newly prepared task filters out ordinary previous-task observations without reporting degradation. Explicit record_decision rationale and excerpts become generic metadata despite their V1 copy retaining meaning.\n\nArchive retention has a separate collision: newer pre-compaction pointers shadow original eviction bodies for exact-ID recall, although the original still exists. Ranked memory is reordered by JSON before a 12,000-character clip, dropping the most relevant fixture item. Degraded V2 telemetry claims no fallback while actual request construction can inject V1. CLI transcript trimming removes older saved presentation after 100 messages; that finding does not establish SDK model-history loss.\n\nEvidence: [04-F1\u2013F5/F9](findings/04-memory.md), [01-F7](findings/01-cli.md); [coordinator.ts:2145](/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/coordinator.ts:2145), [coordinator.ts:1173](/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/coordinator.ts:1173), [context-archive.ts:525](/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/context-archive.ts:525).\n\nPreserve replay-stable lifecycle identities, bounded decision meaning, ranked complete-item selection and the exact emitted observation set. Separate current-task correlation from project knowledge retrieval and report the actual injected authority. Original-result recall needs body-completeness selection and immutable range-readable artifacts when bounded archives age out. Existing compaction floors, stale-read revocation, revision-CAS replacement, V1 merged atomic persistence and SQLite payload equality are valuable. Graduation must carry named facts and original results through repeated compaction, terminal replay, process reopen and a distinct next task, under a declared retention envelope.\n\n### AF06 \u2014 Owned processes and actual resource bounds\n\n**Priority:** repair cleanup and bounds where finite options are selected. **Confidence:** high in Linux subprocess, allocation and fake-transport probes; broader platform behavior is unknown.\n\nSYNC timeout and BACKGROUND kill can clear escalation when the leader exits even though a TERM-resistant descendant remains alive. The probes observed sleeping descendants after 5.5 seconds, while the job reported stopped and refused further kill. Output-quota failure similarly settles before complete cleanup. Evaluator cancellation returned cancelled while a descendant later wrote a marker. LSP framing failure discards its child handle without killing it; disposal can race an unjoined restart.\n\nOther caps bound returned data rather than owned work. MCP eviction removes registry entries without closing clients. A 1 KiB file-read budget performed a 24 MiB long-line concat before returning zero bytes. Vector persistence wrote a 9,697,695-byte cache that its 8,000,000-byte loader rejected, making the cold result empty. Costs of re-embedding follow the load path but were not measured. A reused generic sidecar keeps its previous stop promise; exposure is limited by its missing default consumer.\n\nEvidence: [09-F5/F6/F7/F10](findings/09-execution.md), [11-F2](findings/11-evals-release.md), [07-F5/F9](findings/07-languages.md), [06-F11](findings/06-edits.md), [08-F2](findings/08-indexer.md); [run-terminal-command.ts:1663](/home/ben/Code/CLI/openbuff/sdk/src/tools/run-terminal-command.ts:1663), [background-jobs.ts:497](/home/ben/Code/CLI/openbuff/sdk/src/tools/background-jobs.ts:497), [node-filesystem.ts:147](/home/ben/Code/CLI/openbuff/sdk/src/tools/node-filesystem.ts:147).\n\nKeep owner and cleanup state independent of action failure or leader exit. Selected enforced deadlines require an empty owned process scope; a still-live or uncertain scope is failed enforcement acceptance and retains cleanup authority. Intentional productive wall-clock defaults remain available. Stream limits need bounded internal buffering; write/read byte budgets must agree; eviction must dispose idle resources without killing active users. Graduation measures the covered Linux scope, adversarial descendants, disposal/restart races, realistic vector dimensions and UTF-8 roundtrips. It cannot be satisfied by a stopped flag or pool count alone.\n\n### AF07 \u2014 Provider protocol, recovery and accounting conformance\n\n**Priority:** normalize errors, retry ownership and accounting in present adapters. **Confidence:** high from real AI SDK/adapter HTTP/SSE fixtures and injected routing; real API/OAuth quality is unknown.\n\nInitial HTTP503 becomes AI_RetryError after four primary requests, hides classifier status and sends zero backup requests. HTTP200 SSE503 loses structured status as it becomes prose. Separately, the outer streaming loop retries a content-policy503 four times despite the shared classifier's fail-fast decision. These are distinct observed layers; this audit does not extrapolate a universal multiplied request count.\n\nNormal transport also loses late tool usage or skips configured cost calculation under default metadata stripping. The 20k-input/10k-output fixture at $3/$15 per million should report 21 cents, but reports zero or no callback. Missing backup credentials block a healthy primary's capacity lookup; reasoning effort uses mismatched namespaces for arbitrary provider IDs; configured OAuth selection ignores the skip flag meant to recover elsewhere.\n\nEvidence: [02-F1\u2013F7](findings/02-providers.md); [error-utils.ts:189](/home/ben/Code/CLI/openbuff/sdk/src/error-utils.ts:189), [llm.ts:1844](/home/ben/Code/CLI/openbuff/sdk/src/impl/llm.ts:1844), [model-provider.ts:439](/home/ben/Code/CLI/openbuff/sdk/src/impl/model-provider.ts:439).\n\nUse one observable retry owner and canonical provider errors retaining status, cause and retry hints. Preserve the delivery gate that prevents replay after delivered content. Separate capability metadata from credential/client construction, and request compatibility from response accounting. Unknown, estimated and provider-reported usage/cost need precision, currency and provenance; remote in-flight spending cannot become an exact hard guarantee merely from post-step accounting. Graduation uses configured production constructors and consumer totals, arbitrary provider IDs, terminal usage, backup readiness, cancellation and recovery. Direct Gemini transport is an optional absent protocol; gateway Gemini remains usable.\n\n### AF08 \u2014 Exact effect policy and portable provenance\n\n**Priority:** honor the controls already retained by the product, with exact action identity. **Confidence:** high in harmless classification/env/origin probes; downstream secret exposure is conditional.\n\nApproval classification normalizes executable whitespace before parsing and hashing, allowing newline-separated effects to evade the scanner and conflating different quoted bytes. Returning the first routine effect hides later risky effects. Force/delete feature pushes become routine under balanced policy despite the retained destructive-push gate. The one-use approval store itself correctly binds and consumes scoped receipts; its input identity needs repair.\n\nThe ordinary terminal strips synthetic canonical keys even after override merging, while compiler/LSP/Chrome/discovery seams can inherit them. Configured hooks lack the run's approval/profile context. MCP origin marks survive a direct trusted path but change across JSON and reverse RPC. Trusted-root discovery imports auxiliary session, test and dependency modules before validating an entrypoint. Ordinary API strings are misclassified as paths; wrappers claim tmux-test enforcement although bundled dispatch deliberately uses full-access. Omitted autoFileChangeHooks activates inferred commands despite the documented explicit opt-in.\n\nEvidence: [09-F1\u2013F4/F8](findings/09-execution.md), [10-F2/F3/F8/F10/F11](findings/10-extensions.md), [12-F5](findings/12-audit-docs.md), [01-F1](findings/01-cli.md), [11-F8/F9](findings/11-evals-release.md); [harness-enforcement.ts:153](/home/ben/Code/CLI/openbuff/sdk/src/services/harness-enforcement.ts:153), [agent-registry.ts:185](/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/templates/agent-registry.ts:185), [file-change-hooks.ts:1538](/home/ben/Code/CLI/openbuff/sdk/src/tools/file-change-hooks.ts:1538).\n\nPreserve full access, legitimate project variables, explicit tool grants and intentional server credentials. Parse/hash exact executable bytes and evaluate the complete effect plan under the selected policy. Carry parent-owned per-server provenance through persistence/RPC; declare extension entrypoints and real path/effect fields; unify child-environment and hook authorization contracts. Reauthorize physical artifact/recovery targets. Evaluate untrusted benchmark code without controller keys/home, or label an explicitly trusted evaluation boundary. Graduation demonstrates exact identity, portable origins, scoped env delegation and truthful effective-profile receipts, without adding blanket restrictions.\n\n### AF09 \u2014 Review, evaluation and learning evidence that deserves credit\n\n**Priority:** isolate test sinks immediately, then repair source/outcome/experiment evidence before promotion. **Confidence:** high in helper/SDK/CLI probes; no faulty live promotion or model-review frequency was observed.\n\nReviewer gates accept a well-formed foreign fingerprint over the same path roster and later persist credit under the expected identity. Ordinary receipts can omit dimension outcomes and requirement coverage. Untracked equal-length changes beyond a 1 MiB prefix leave targeted-validation identity unchanged and can receive full passed assurance. Cached audit source and nested feature identities drift; quarantined findings disappear from bundle output without degraded evidence. The coverage helper cannot express a fully assessed absent capability.\n\nEvaluator evidence has independent losses: repeated commits overwrite observations; excluding low scores reverses a fixture's regression into improvement; emitted artifacts omit language/repeat/settings identity; NaN data passes a pure significance/promotion gate. Existing live promotion independently rejects insufficient single-run evidence, and measured adoption is unwired. Retention oracles often preserve identifiers rather than facts. Effective playbooks become verified and disappear, scopes are ignored, and unrelated reads manufacture negative usage signals. Some tests delete the live lesson directory; those dangerous tests were not executed.\n\nEvidence: [12-F1\u2013F4/F6\u2013F8](findings/12-audit-docs.md), [11-F3\u2013F7/F10\u2013F12](findings/11-evals-release.md), [04-F6\u2013F8](findings/04-memory.md); [gate-reviewer.ts:292](/home/ben/Code/CLI/openbuff/agents/base2/gate-reviewer.ts:292), [get-change-review-bundle.ts:393](/home/ben/Code/CLI/openbuff/sdk/src/tools/get-change-review-bundle.ts:393), [statistics.ts:188](/home/ben/Code/CLI/openbuff/evals/buffbench/statistics.ts:188).\n\nRequire full content identity, explicitly eligible assessment tiers, persistent evidence diagnostics, finite measurements and unique immutable experiment manifests. Preserve measured zeros, failures and paid incomplete attempts. Keep identifier metrics but add independent fact/negation/blocker/continuation oracles. Separate procedure activation from verification and correlate actual emitted/used evidence. Learning graduation needs a predeclared held-out split, paired baseline/candidate trials, language strata, sufficient evidence, a real adopted consumer and rollback. Markdown lessons, counters and passing policy helpers remain useful components rather than proof of improvement.\n\n### AF10 \u2014 Feature and extension readiness across real host boundaries\n\n**Priority:** repair reachable interfaces; defer frontiers until a declared workload needs them. **Confidence:** high in recorded schema/media/native probes and static branches; installed apps and 3D outcomes remain unknown.\n\nValid local generators lose module dependencies through toString/new Function. Schema transport can weaken required/never/additional-property constraints; sentinel prompt validation rejects legitimate minLength/enum schemas. MCP discovery stops at one page and caches successful listings, while delimiter-based identities misroute valid names. Original SDK custom-tool schemas and MCP provider schemas already preserve valuable validation behavior.\n\nVisible features have corresponding consumer gaps: file submission drains non-ready context; failed image retry sends previous bytes; plan commands are executable but hidden from discovery. Browser policy sources disagree, pixel diff ignores extra image extent, and glTF/GLB/OBJ inspection has no corresponding Blender preview import branch. Preview hashes describe an earlier read while Blender opens the live path, so wrong-revision attribution is a conditional consequence. Native exec works standalone, yet smoke expects its former stub and host framing has no compatible adopted path.\n\nEvidence: [01-F4/F8](findings/01-cli.md), [10-F4\u2013F7/F9](findings/10-extensions.md), [13-F1/F4\u2013F6/F8](findings/13-perception.md), [09-F9](findings/09-execution.md); [run-programmatic-step.ts:401](/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/run-programmatic-step.ts:401), [mcp/client.ts:830](/home/ben/Code/CLI/openbuff/common/src/mcp/client.ts:830), [3d-assets.ts:825](/home/ben/Code/CLI/openbuff/sdk/src/tools/3d-assets.ts:825).\n\nTrusted module/bundle execution, canonical descriptor identities, schema equivalence and generation-aware discovery should serve existing extensions. Media outcomes need accessible artifact references, actual decoded dimensions and host acknowledgements. Preserve narrow image/link/native-3D and conditional-edit capabilities. Native PTY, daemon/lane operations, declarative/untrusted plugin hosting, desktop and voice are absent or unwired in reviewed paths. Engine presets are useful recipes, with job guidance lacking a production consumer. Graduate each feature by its actual source\u2192installed/runtime\u2192host-result path; names, dependencies and stub tests do not suffice.\n\n## Why sound roadmap principles did not establish usable features\n\nThe historical roadmap contained appropriate principles: canonical contracts, one authority for effects, process supervision, replay rather than heap snapshots, open capability tiers, ecosystem analyzers, and language choices based on capabilities. Several became useful implementation. Generated tool/schema/spawn catalogs, authenticated reads, conditional mutations, real compiled-Bun supervision and configured validation should be retained.\n\n[OLD-TASK-INVENTORY.json](OLD-TASK-INVENTORY.json) contains 120 declarations, of which 58 were historically checked. Historical status is distinct from current readiness. Some completion notes expressly described a slice or deferred adoption; later work also landed real consumers. This review uses current traces and does not recycle old parent-abort or unadopted-supervision claims where current source has repaired them.\n\n| Historical example | Present strength | Why the broader ability still needs graduation |\n|---|---|---|\n| P2-T8 process supervision | Real Bun POSIX process/bridge path, bounded crash restarts and parent cancellation | Generator termination and replay/journal lifetime still produce wrong or incomplete outcomes: AF02/AF03. |\n| P3-T4 SCIP ingestion | Real opt-in CLI ingestion, graph adoption and query consumer | Bounded display strings corrupt opaque identity, refresh loses enrichment, and source-only fences miss graph changes: AF04. |\n| P3-T5 import resolution | Shared extraction and live index graph integration | Bare-extension family and owning crate/package errors create wrong edges; a consumer exists without sufficient semantic proof: AF04. |\n| X-1 canonical schemas and vectors | Real generated descriptors and strict unsupported-type generation | JSON/schema/RPC transport still changes extension origin, validation or arguments: AF08/AF10. |\n\nThe recurring cause is a weaker completion predicate than the capability requires. Tests assert a status, kind, token, path, emitted schema or helper return while skipping the next consumer. Memory cold-start queries bypass the exact task filter used by preparation. Adapter usage tests enable an option absent from configured production construction. Fidelity checks preserve an identifier while losing its value. Restart tests often gracefully reopen or seed DTOs without applying the uncertain effect. Count/byte caps verify bounded presentation while discarding identity or exceeding loader budgets.\n\nOther failures arise from producer/consumer mismatch despite valid schemas: workflow member names, reasoning-option namespaces, replay text fields, active/verified procedure states and MCP result projection. Identity and lifetime cross file, run, task, object, connection and process boundaries without a common authority. Broad roadmaps can then multiply interfaces before those guarantees are integrated. A checked scaffold or green helper becomes evidence for more than was actually executed.\n\nThe replacement plan should preserve historical implementation and map each declaration to verify/retain, integrate, split, consolidate, defer or retire. Completion needs a reachable producer\u2192consumer task, its expected positive and adverse behavior, runnable evidence, exact ownership, prerequisites and a stop rule. A task card should never turn a historical checkbox, parser count or named role into a readiness claim.\n\n## Both meanings of polyglot\n\n**Authored body.** Current implementation is predominantly TypeScript/Bun with a small real Rust execution slice. Pair 09 freshly built and executed Rust Landlock allow/deny behavior; that is stronger than a stub assertion. Default host adoption is unwired: Rust expects a raw ExecPlan and then ordinary target bytes, while the generic TS supervisor sends correlated JSON-RPC envelopes. Cwd/network/deadline fields and richer platform tiers remain outside the implemented role's current contract. A native adapter should graduate by compatible producer, lifecycle, output and effective-enforcement receipts.\n\nOptional offline Python analysis/oracles are a future conditional component, not an already authored runtime inferred from fixtures or test-file extensions. Mature parsers, language servers, SCIP indexers, compilers and native UI libraries are consumed ecosystem tools; their implementation languages do not enlarge Openbuff's authored-language inventory. Keep immediate repairs in TS. Add Rust or offline analysis only for a concrete kernel/ownership/tooling or measured workload advantage, with one run/effect authority. No language-variety rewrite or heap snapshot is indicated.\n\n**Target projects.** Generic text/read/edit/shell tools reach many languages, while syntax, semantic navigation/refactor, diagnostics/build/test and cross-component interface validation have different coverage. Twelve profile IDs, fifteen grammar variants over fourteen named source languages, eleven stdio LSP launch specs and fourteen executable probes are separate inventories. Four concrete diagnostic dispatch entries do not certify all those languages. JavaScript/TypeScript and C/C++ grouping also must not erase protocol document IDs. [07-languages](findings/07-languages.md) records the per-tier limits.\n\nTwo independent cooperation fixtures are needed. An authored-body fixture should exercise TS host\u2192Rust role with negotiated versions, exact policy/env/cwd semantics, cancellation, output and truthful enforcement; it must pass without an authored Python service. A target-project fixture should change a shared schema/ABI across a TS consumer, Python component and Rust component, follow actual consumers/generated artifacts, and execute owning build/test targets. Invoking target-project Python tools does not make Python mandatory in the body's architecture.\n\nBoth fixtures need immutable source/artifact/diagnostic identities, agreed byte and position encodings, declared capabilities, typed errors and observed outcomes. Include an unknown-language generic control and honest unavailable-tool cells. Compare task success and resource costs against the current manual tool/hook baseline. Adding more adapters is useful only when the evidence shows a capability gain.\n\n## Inputs to the executable priority queue\n\nBegin with small independent TS repairs: truthful terminal/action propagation and send cleanup; exact mutation/recovery ownership; memory lifecycle identities and cross-turn selection; MCP result preservation; exact retained policy/env forwarding; isolated evaluator sinks; and current native smoke expectations. Their correctness does not depend on a daemon, broader plugin host or a new implementation language.\n\nThen integrate durable session/effect ownership, coherent index/LSP generations, lossless refactors, source-bound review/validation, immutable experiment identity and real installed consumers. Attach relevant installation/native/CI probes to each feature task so evidence cannot become a postponed phase. Keep one shared contract owner and a short dependency-ready queue rather than blocking all immediate repairs on whole roadmap stages.\n\nOnly after those prerequisites should broader PTY/daemon/lane/plugin/media surfaces or learned routing graduate. Each uses a finite task/client/platform/language matrix and a declared envelope for correctness, recovery, interruptions, latency/cost/memory, retention and installation. Baselines and task oracles determine thresholds. No live quality gain, perfect stochastic non-regression, indefinite bounded retention or universal external-effect exactly-once guarantee is claimed by this review.\n\n## Complete finding lineage and eight-domain view\n\nEach finding is assigned once to its primary synthesis family below. Domain membership is overlapping and follows the durable source records, so its counts must not be summed as independent issues. All 118 records report high confidence in cited behavior; 114 have evidence basis and four have inference basis, specifically 05-F2/F3/F5/F9. Evidence records can also contain explicitly conditional consequences, such as outside-file disclosure or wrong-revision media. High confidence in an inspected transition is not a measured production frequency.\n\n| Family | Records | Primary members |\n|---|---:|---|\n| AF01 \u2014 Source-preserving mutation and recovery authority | 13 | 01-F2; 05-F9; 06-F1\u2013F2; 06-F4\u2013F10; 06-F12; 08-F8 |\n| AF02 \u2014 Truthful action, run and task outcomes | 11 | 01-F5\u2013F6; 03-F1\u2013F2; 06-F3; 07-F7; 10-F1; 11-F1; 13-F3; 13-F7; 13-F9 |\n| AF03 \u2014 One durable session owner and executable continuation | 11 | 01-F3; 05-F1\u2013F8; 05-F10; 13-F2 |\n| AF04 \u2014 Fresh, coherent language and retrieval observations | 15 | 07-F1\u2013F4; 07-F6; 07-F8; 07-F10\u2013F11; 08-F1; 08-F3\u2013F7; 08-F9 |\n| AF05 \u2014 Knowledge that retains meaning and reaches the next decision | 7 | 01-F7; 04-F1\u2013F5; 04-F9 |\n| AF06 \u2014 Owned processes and actual resource bounds | 9 | 06-F11; 07-F5; 07-F9; 08-F2; 09-F5\u2013F7; 09-F10; 11-F2 |\n| AF07 \u2014 Provider protocol, recovery and accounting conformance | 7 | 02-F1\u2013F7 |\n| AF08 \u2014 Exact effect policy and portable provenance | 14 | 01-F1; 09-F1\u2013F4; 09-F8; 10-F2\u2013F3; 10-F8; 10-F10\u2013F11; 11-F8\u2013F9; 12-F5 |\n| AF09 \u2014 Review, evaluation and learning evidence that deserves credit | 18 | 04-F6\u2013F8; 11-F3\u2013F7; 11-F10\u2013F12; 12-F1\u2013F4; 12-F6\u2013F8 |\n| AF10 \u2014 Feature and extension readiness across real host boundaries | 13 | 01-F4; 01-F8; 09-F9; 10-F4\u2013F7; 10-F9; 13-F1; 13-F4\u2013F6; 13-F8 |\n\nThe domain view distinguishes causes from impact. Security findings concern exact retained controls, portable provenance, physical targets and controller secrets; full access itself remains intentional. Correctness and state findings concern identities, versions, full operations and owned lifetimes, which can mislead subsequent model decisions or replace user work. Error handling loses failed/unknown state or cleanup authority. Performance findings expose concrete caps and allocations rather than measured optimality. Dependency findings concern asset/version/provenance delivery; no CVE or complete advisory audit is asserted. Tests frequently miss production composition, despite useful green suites. API/ABI defects change actual options, results, discovery and source credit.\n\n| Domain | Records | All tagged members |\n|---|---:|---|\n| security | 14 | 01-F1; 04-F8; 06-F12; 09-F1\u2013F5; 10-F2\u2013F3; 10-F11; 11-F8\u2013F9; 12-F5 |\n| correctness | 110 | 01-F2\u2013F4; 01-F6\u2013F7; 02-F1\u2013F7; 03-F1\u2013F2; 04-F1\u2013F9; 05-F1\u2013F10; 06-F1\u2013F10; 06-F12; 07-F1\u2013F4; 07-F6\u2013F11; 08-F1\u2013F9; 09-F1\u2013F6; 09-F8\u2013F10; 10-F1\u2013F10; 11-F1\u2013F7; 11-F9\u2013F12; 12-F1\u2013F8; 13-F1\u2013F9 |\n| state-mutation | 56 | 01-F2; 01-F4\u2013F5; 01-F7; 02-F3; 02-F6; 03-F2; 04-F1; 04-F3; 04-F6; 05-F1\u2013F7; 05-F9; 06-F1\u2013F8; 06-F10; 06-F12; 07-F4\u2013F6; 08-F1\u2013F2; 08-F5\u2013F9; 09-F5\u2013F7; 09-F10; 10-F2\u2013F4; 11-F2\u2013F3; 11-F9\u2013F10; 12-F2\u2013F3; 12-F6\u2013F7; 13-F2; 13-F6; 13-F8 |\n| error-handling | 45 | 01-F4\u2013F6; 02-F1\u2013F2; 02-F4; 02-F6\u2013F7; 03-F1\u2013F2; 04-F1; 04-F9; 05-F2\u2013F3; 05-F6; 06-F1; 06-F4\u2013F6; 06-F10\u2013F11; 07-F5; 07-F7; 07-F9; 08-F1\u2013F2; 08-F8; 09-F5\u2013F9; 10-F1; 10-F3; 10-F5\u2013F6; 11-F1\u2013F2; 11-F6; 11-F11\u2013F12; 12-F2; 12-F7; 13-F7\u2013F8 |\n| performance | 14 | 01-F7; 02-F7; 03-F1; 04-F5; 06-F11; 07-F5; 08-F2\u2013F4; 08-F9; 09-F6\u2013F7; 10-F3\u2013F4 |\n| dependency-hygiene | 4 | 07-F1; 11-F8; 11-F11; 13-F5 |\n| test-coverage | 105 | 01-F5\u2013F6; 01-F8; 02-F1\u2013F7; 03-F1\u2013F2; 04-F1\u2013F9; 05-F1\u2013F10; 06-F1\u2013F12; 07-F1\u2013F11; 08-F1\u2013F9; 09-F1\u2013F10; 10-F4\u2013F7; 10-F9; 11-F1\u2013F8; 11-F10\u2013F12; 12-F1\u2013F8; 13-F1; 13-F3\u2013F9 |\n| api-contract | 79 | 01-F1; 01-F3; 01-F8; 02-F1\u2013F7; 03-F1\u2013F2; 04-F1\u2013F2; 04-F4\u2013F6; 04-F8\u2013F9; 05-F1; 05-F4\u2013F5; 05-F8; 05-F10; 06-F2\u2013F3; 06-F6\u2013F11; 07-F1\u2013F3; 07-F7\u2013F9; 08-F1; 08-F3; 08-F5\u2013F7; 09-F1\u2013F4; 09-F8\u2013F10; 10-F1\u2013F2; 10-F4\u2013F11; 11-F1; 11-F4\u2013F6; 12-F1; 12-F3\u2013F6; 12-F8; 13-F1\u2013F9 |\n\nDetailed triggers, individual severity, exact source windows, probes, strengths and proposed acceptance cases remain in the [13 durable reports](findings) and [FINDINGS-INDEX.json](FINDINGS-INDEX.json). This synthesis ranks work and catalogs readiness; implementation repairs and live capability graduation remain subsequent work.\n\n",
+      "bytes": 42862,
+      "sha256": "9ec4b46d99a2d704aa01e56030cc734f8166a281b52863725149f318679825d0",
+      "numberedOutputUtf16Characters": 44151
+    },
+    "CAPABILITIES.md": {
+      "text": "# Openbuff capability catalog\n\nReviewed 2026-11-05\u201306 against native snapshot ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0. This catalog consolidates all 144 vertical records into 45 model-body capabilities. [AUDIT-REPORT.md](AUDIT-REPORT.md) ranks implementation gaps; [CAPABILITY-RECORDS.json](CAPABILITY-RECORDS.json) preserves complete source traces.\n\n## Reading the catalog\n\nThe body supplies observations, deterministic actions, lifecycle, evidence and human controls; the model supplies reasoning and chooses actions. A strategy prompt or tool name does not establish a working capability. Conversely, a narrow callable component can be useful even while its larger workflow remains partial.\n\nMaturity is independent of assurance. Usable means a declared narrow path reaches its consumer. Partial means reachable behavior has material gaps or incomplete coverage. Unwired means implementation exists without its required production consumer. Absent means the reviewed path lacks the ability. Unknown means available evidence cannot establish it. Composite rows preserve these distinctions instead of averaging an absent frontier into a working core.\n\nS means static trace, including inspected tests. U means executed unit/helper evidence. I means bounded offline integration, sometimes with injected providers, peers, Git or judges. These letters do not certify every branch in a composite row. No row has live provider/model-task quality assurance. Linux subprocess and standalone Rust observations are real local execution; fake CDP, synthetic vectors and injected judge scores are labeled accordingly. Full installed/platform certification remains separate.\n\nEach trace abbreviates entrypoint\u2192implementation\u2192real consumer. Complete test/doc references and failure, loading, empty, cancellation, retry and permission states are in the mapped JSON records. Graduation must test those relevant states through the actual consumer, including truthful unsupported/degraded behavior. An unavailable analyzer is not a clean diagnostic result; a failed action can be followed by a successfully recovered task without changing the earlier receipt.\n\nThe best-version column states acceptance criteria for a declared workload. Correctness, byte preservation, source identity, ownership and outcome invariants can be fixed now. Claims about improved task success, interruptions, latency/cost/memory or learning require comparable baselines, repeated trials and explicit uncertainty.\n\n| Responsibility | Capability coverage |\n|---|---|\n| Observe | C04, C12, C16\u201322, C38\u201339 |\n| Act | C13\u201315, C33\u201341 |\n| Control a run | C01\u201308, C11, C23 |\n| Continue | C24\u201329 |\n| Coordinate | C10\u201311, C26 |\n| Remember | C30\u201332 |\n| Learn | C32, C43 |\n| Govern | C03, C10, C14, C34, C42 |\n| Connect | C01, C29, C35\u201337 |\n| Cooperate across languages | C19\u201322, C34, C45 |\n\n## Choose actions and control work\n\n| Capability | Current maturity / assurance | Reachable trace and limiting behavior | Best-version criterion |\n|---|---|---|---|\n| C01 Interactive chat, modes and discovery | Partial; ordinary chat usable. S+U. | index.tsx:443\u2192use-send-message.ts:779\u2192mounted chat. Registry readiness works; live plan commands are missing from menu metadata. [01](findings/01-cli.md), [03](findings/03-orchestration.md). | Every intended discoverable command resolves aliases and shares prompt admission; setup errors retain retryable input. |\n| C02 Owned queues and captured attachments | Partial. S+U. | Composer\u2192pending-attachments\u2192send preparation\u2192SDK. Identity fences and recovery work; processing/failed files can drain, and failed image retry can send old bytes. [01](findings/01-cli.md), [13](findings/13-perception.md). | Ordinary/slash/picker/queued sends reserve only accepted context; failed captures remain recoverable or require explicit labeled reuse. |\n| C03 Questions and one-use approval UI | Usable UI. S. | create-run-config.ts:259\u2192ask-user bridge\u2192mounted form. Complete targets, custom/skip choices and draft preservation exist; runtime policy assurance is separate. [01](findings/01-cli.md). | Real mounted request identities, abort and subscriber cleanup work; answers and approval consumption remain distinct, observable contracts. |\n| C04 Streams, status and spend provenance | Partial; streaming display usable. S+I. | Runtime chunks\u2192CLI processors/cards; llm.ts:1844\u2192step cost observers. Diagnostics show unavailable state, but usage/cost can disappear or become zero. [01](findings/01-cli.md), [02](findings/02-providers.md). | Root/child/tool identities and actual routes survive; terminal usage/cost retains precision and unknown/estimated/provider provenance. |\n| C05 Configured routes and capabilities | Partial; BYOK routing usable; native Gemini absent. S+I. | provider-config\u2192model-provider\u2192runtime request. Explicit routes and gateways work; advisory metadata, backup credential coupling and OAuth skip differ from execution. [02](findings/02-providers.md). | Snapshot selected route/capabilities without touching dormant credentials; unsupported settings and OAuth recovery candidates are explicit. Add native protocols only for a defined need. |\n| C06 Native/text tools and vision transport | Usable narrow core; specialized OpenRouter accounting unwired. S+U+I. | prompt-agent-stream\u2192configured adapter\u2192runtime tool parser. Native schemas, text fallback and vision routing are real; arbitrary model compliance is unmeasured. [02](findings/02-providers.md). | Conformance covers malformed/empty/truncated tools, image routing and fallback history; reuse specialized code only through a real selected constructor. |\n| C07 Retry, context and output limits | Partial. S+U+I. | llm.ts:1196\u2192attempt loop\u2192CLI status. Delivery gate is sound; SDK wrappers/SSE errors lose status and streaming policy diverges. [02](findings/02-providers.md). | One observable retry budget, canonical errors and cancellation; capacity lookup is credential-free and configured output precedence remains explicit. |\n| C08 Termination, budgets and cancellation | Partial. S+I, runtime DI. | runAgentStep\u2192loopAgentSteps\u2192journal/receipt. Missing-output correction revives budget stops; caught generator errors/aborts become completed. [03](findings/03-orchestration.md). | Independent action/run/task outcomes; bounded natural budget return and honest failed/cancelled receipts. Report soft cost and per-step token semantics accurately. |\n| C09 Composable trusted strategies | Partial. S+U. | Local generator\u2192toString/new Function\u2192STEP/tool yields. Model strategy freedom is real; captured module dependencies disappear. [10](findings/10-extensions.md), [12](findings/12-audit-docs.md). | Trusted in-process modules and transported dependency bundles behave identically; lifecycle authority is shared across strategies without heap snapshots. |\n| C10 Delegation, handoffs and grants | Partial; delegation/grants usable. S; receipt I. | spawn validation\u2192foreground/background execution\u2192typed parent receipt. Batch prevalidation and narrowing work; receipt fidelity inherits terminal bugs. [03](findings/03-orchestration.md). | Success/failure/cancel/empty/schema cases preserve child outcome and committed effects; explicit scope narrows authority without inventing task completion. |\n| C11 Process-supervised agents/sidecars | Partial; generic sidecar helper unwired. S. | SDK default\u2192Bun POSIX child/parent bridge\u2192spawn settlement. Restarts and group teardown exist; Node/Windows use in-process fallback. [03](findings/03-orchestration.md), [09](findings/09-execution.md). | Real compiled/process fixtures prove state return, cancellation, restart fencing and cleanup; platform/fallback and optional deadlines are advertised accurately. |\n\n## Observe, edit and validate projects\n\n| Capability | Current maturity / assurance | Reachable trace and limiting behavior | Best-version criterion |\n|---|---|---|---|\n| C12 Filesystem observations and read authority | Partial; complete reads/image reads usable. S+I. | read_files\u2192cap.v3\u2192edit checks; SDK watcher\u2192index/LSP invalidation. Partial reads grant no overwrite; long-line buffering and image read fan-out exceed returned budgets. [06](findings/06-edits.md), [13](findings/13-perception.md). | Exact original bytes and scoped provenance; bounded peak buffering, post-I/O cancellation and explicit incomplete observation. Headless hosts expose their observation integration. |\n| C13 Lossless text and structural edits | Partial. S+I. | edit_transaction/rewrites\u2192pure preflight\u2192changeFiles\u2192CLI receipt. Ordered preflight works; BOM preimages and localized EOL handling fail on some routes. [06](findings/06-edits.md). | Every localized variant preserves bytes outside its target across BOM, CRLF/mixed EOL, astral text and missing final newline; ambiguity refuses without writes. |\n| C14 Broker and group recovery | Partial. S+I, controlled persisted faults. | workspace-mutation-broker\u2192conditional adapters\u2192intent/recovery receipts. Staging/fsync/modes work; stale takeover, unowned rollback and terminal failed recovery weaken authority. [06](findings/06-edits.md). | Fenced takeover, forward-effect truth and expected after-hashes; unresolved recovery stays retryable and durably admitted. Preserve external divergence. |\n| C15 Complete semantic refactors | Partial. S+I, framed fake peers. | LSP WorkspaceEdit\u2192normalization/splice\u2192semantic apply\u2192changeFiles. Versions, original preimages, failed files and resource operations can disappear. [06](findings/06-edits.md). | Validate positions/encodings and the whole roster; malformed/unsupported intents refuse before writes. Guarded sequential execution completes declaration/consumer/resource changes or retains truthful partial/recovery/conflict state. |\n| C16 Lexical/graph retrieval and clients | Partial; CLI lexical core usable. S+U+I. | query_index\u2192CLI override\u2192IndexManager\u2192graph/snippets\u2192TUI. Real modes/commands help discovery; SDK needs host override and MCP drops provenance fields. [08](findings/08-indexer.md). | Canonical cross-client identities/chunks/related files; scoped accelerated recall matches baseline within disclosed caps and unavailable hosts report clearly. |\n| C17 Semantic retrieval and cache freshness | Partial, opt-in. S+I, deterministic vectors. | configured embedder\u2192manager/store\u2192blended query. Exact-input fingerprints exist; stale vectors, oversized roundtrips and sweep starvation break coherent generations. [08](findings/08-indexer.md). | Publish hash-matching source/vector state, symmetric byte budgets and independent full-sweep deadlines; test changed/deleted inputs during failed and held builds. |\n| C18 Precise references and enrichment | Partial, opt-in. S+I, synthetic precise edges. | /index scip\u2192ingest/merge\u2192adopt\u2192normal references query. Identity truncates, refresh drops edges and graph-only changes evade fencing. [07](findings/07-languages.md), [08](findings/08-indexer.md). | Opaque identities survive bounded labels; fingerprint-bound enrichment persists/rebases or expires honestly. Installed indexers prove actual extraction separately. |\n| C19 Guidance, syntax and heuristic graphs | Partial; bundled profiles usable. S+I. | twelve profiles/query registry\u2192code-map\u2192outlines/index. Pinned assets work explicitly; query publication/default lookup and family/import identities remain incomplete. [07](findings/07-languages.md). | Isolated artifacts produce semantic captures for each advertised grammar; same-language positives and foreign-name negatives protect graph meaning. |\n| C20 LSP navigation, sync and ownership | Partial, optional servers. S+I, injected peers. | SDK service\u2192multiplexer\u2192server\u2192hover/references/refactor. Eleven stdio specs exist; duplicate versions, dirty skips, ignored requests and restart leaks remain. [07](findings/07-languages.md), [09](findings/09-execution.md). | One document/version authority, correct roots/IDs, negotiated positions and bounded callback replies; disposal joins every owned process/restart. |\n| C21 Owning targets and affected tests | Partial; command discovery usable. S+U. | inspect_environment/build/affected tools\u2192manifest/probe/owner resolvers\u2192SDK results. Candidates are real discovery; reverse-dependency graph tier is unwired and coverage tier empty. [07](findings/07-languages.md), [08](findings/08-indexer.md), [12](findings/12-audit-docs.md). | Per-root executed targets, broader ecosystem conventions and actual index reverse dependencies; expose confidence and unavailable tiers before suggesting validation. |\n| C22 Configured checks and diagnostic deltas | Partial; configured execution usable. S+I, injected checks. | file-change hooks\u2192terminal/diagnostic runners\u2192targeted evidence. Missing/timeout observations can pass; inferred trust, approval forwarding and source-prefix identity disagree. [07](findings/07-languages.md), [09](findings/09-execution.md), [10](findings/10-extensions.md), [12](findings/12-audit-docs.md). | Explicit opt-in/configured policy, owning cwd/env and exact source hashes; failed/unavailable/partial/skipped checks cannot become full passed assurance. |\n| C23 Review, requirements and durable credit | Partial; scope/byte guards reusable. S+I, exported guards. | base2 frozen dirty scope\u2192read-only reviewer\u2192credit/pinned work. Foreign fingerprints and omitted dimensions/requirements can pass broader gates. [03](findings/03-orchestration.md), [12](findings/12-audit-docs.md). | Credit matches reviewed bytes and an established requirement roster; reduced tiers need eligibility. Keep remaining model work distinct from current-edit approval. |\n\n## Continue, coordinate and remember\n\n| Capability | Current maturity / assurance | Reachable trace and limiting behavior | Best-version criterion |\n|---|---|---|---|\n| C24 Journals, checkpoints and replay | Partial; normal journal usable. S+I. | CLI journal/checkpoint\u2192runtime loop\u2192resume/replay. Atomic queue exists; resumed main identity changes and model-selected effects bypass programmatic journal boundaries. [05](findings/05-durability.md). | Fresh-process continuation preserves identity and confirmed effects; uncertain external effects reconcile or remain unresolved without blind replay. |\n| C25 Plans, task reads and workflow state | Partial; workflow unwired, daemon absent. S; artifact I. | Plan commands\u2192artifact readers/get_task\u2192model prompt/local UI. Useful durable state exists; helper-name drift skips telemetry and physical reads need containment. [01](findings/01-cli.md), [05](findings/05-durability.md), [12](findings/12-audit-docs.md). | Local artifacts remain discoverable, source-bound and usable; executable scheduling is advertised only with an actual owned run-state consumer. |\n| C26 Background continuity, leases and lanes | Partial; foreground re-drive/default durable leases unwired; lanes absent. S+I. | spawn\u2192path lease/background record\u2192reconstruction/settlement. Child identity pinning works; shared journal closure and unrenewed TTL break long work. [05](findings/05-durability.md). | Session/child ownership outlives clients, renews/fences leases and persists settlement. Graduate lane create/validate/land only with real operations. |\n| C27 Git snapshots, restore and bisection | Partial. S+I, controlled Git seams. | Turn/shell capture\u2192private ref\u2192preview/apply/bisect UI. Index/HEAD preservation and collision refusal exist; sibling publication can lose a reported snapshot. [01](findings/01-cli.md), [05](findings/05-durability.md). | Serialized CAS publication and accurate turn attribution. Preserve explicit target-present tracked-file materialization scope; test untracked/absent-path semantics separately. |\n| C28 Human transcript and run inspection | Partial. S+U. | CLI save/restore\u2192history paging; journal\u2192dashboard/export. Old presentation is discarded after 100 messages; failed restore can look like fresh history. [01](findings/01-cli.md), [05](findings/05-durability.md). | Rendering limits separate from declared durable retention, paging/export and visible restore recovery. SDK model-history continuity has its own oracle. |\n| C29 ACP and attached continuation | Partial; transport usable. S+I, agents/stubs. | serve\u2192bridge/session store\u2192remote backend/TUI. Auth/redaction work; projections omit executable state and reconnect loses original controller/guard. [01](findings/01-cli.md), [05](findings/05-durability.md), [10](findings/10-extensions.md). | One session/turn/controller across connection changes, backend-owned readiness, missing-session errors and restart-preserved core constraints. Live socket acceptance remains required. |\n| C30 Compaction, result archive and recall | Partial; compaction usable. S+I. | Governor\u2192programmatic pruner/evictor\u2192archive\u2192recall_context. Protected floors and stale-read revocation work; newer tombstones shadow original bodies. [04](findings/04-memory.md). | Repeated compaction/reopen retains specified facts and original results by completeness-aware selection; larger outputs use durable range-readable references under explicit lifetime bounds. |\n| C31 Operational memory and next-task knowledge | Partial; V1 usable, V2 incomplete. S+I, real SQLite. | prepare/capture/finish\u2192repository\u2192protected request context. Terminal IDs collide, task filtering hides prior knowledge and decision meaning/ranked order disappear. [04](findings/04-memory.md), [05](findings/05-durability.md). | Distinct lifecycle identities, meaningful canonical facts and exact emitted ranking; task A\u2192reopen\u2192task B injects relevant knowledge with truthful authority/fallback. |\n| C32 Procedures, lessons and consolidation | Partial, optional consolidation. S+I, seeded counters. | Operator proposal/lifecycle\u2192instruction/gate/usefulness; optional child\u2192recall summary. Verified rules disappear, applicability/usage misattribute, and inject-only rules lack a natural promotion producer. [04](findings/04-memory.md). | Verification preserves activation, declared scopes apply and observed use is correlated. Consolidation respects source coverage and cancellation; improvement requires C43 trials. |\n\n## Act through tools, hosts and native boundaries\n\n| Capability | Current maturity / assurance | Reachable trace and limiting behavior | Best-version criterion |\n|---|---|---|---|\n| C33 Shell, background jobs and interaction | Partial; full-access dispatch usable; PTY absent. S+I, Linux. | run_terminal_command\u2192Bash/job registry\u2192output/kill UI. Real spool/tails/ownership work; leader settlement and quota failures can leave descendants live. [09](findings/09-execution.md). | Selected timeout/abort/kill owns the whole scope and preserves cleanup authority; deliberate unbounded productive defaults remain available. PTY needs actual stdin/resize/attach lifecycle. |\n| C34 Effect controls, env and native enforcement | Partial; Rust standalone real, host adoption unwired. S+I. | Terminal policy/approval\u2192process env; direct Rust ExecPlan\u2192Landlock/exec. Exact classification, adjacent env delegation and TS/native framing disagree. [09](findings/09-execution.md). | Complete exact-byte effect policy, shared env contract and truthful effective profiles. Compatible host/native producer preserves cwd/env/cancel/outcome and advertises filesystem-only/degraded tiers honestly. |\n| C35 Outgoing MCP and connector tools | Partial. S+U/I, helper/fake-client probes. | Config/origin/grants\u2192list\u2192SDK dispatch\u2192MCP result/history. Schemas/grants work; origin changes across JSON, pagination/cache/identity and result projection lose meaning. [09](findings/09-execution.md), [10](findings/10-extensions.md). | Stable descriptor kind/identity/provenance, bounded fresh discovery and full failure/structured/media outcomes; dispose transports and prove optional connector compatibility separately. |\n| C36 Incoming MCP, custom tools and callbacks | Usable scoped host APIs. S. | CLI mcp bindings\u2192listed-tool dispatcher; original Zod callback\u2192SDK handler. Inspect tools and opt-in edits exist; arbitrary custom effects remain host-owned. [10](findings/10-extensions.md). | Preserve original async validation/transforms and host cancellation; unbound index/memory/mutation capabilities report availability. Effect recovery joins C24 rather than being inferred from API success. |\n| C37 Local agents, schemas and plugin tiers | Partial; declarative/untrusted host absent. S+U. | Trusted loader\u2192agent registry/generated schemas\u2192runtime/wrappers. Auxiliary imports, closure/schema loss and inaccurate profile receipts limit portability. [10](findings/10-extensions.md). | Declared entrypoints, import diagnostics, trusted dependency bundles and schema equivalence across source/binary/process paths. Optional untrusted hosting requires its own callable verified boundary. |\n| C38 Browser actions, media and delivered UI | Partial; narrow CLI link usable. S+U, fake CDP. | Browser specialist\u2192SDK/CDP\u2192media/CLI; render_ui\u2192link registry. Real actions/pipes exist; child ownership, policy, diagnose media, diff extent and acknowledgements disagree. [09](findings/09-execution.md), [13](findings/13-perception.md). | Owned sessions, explicit policy and complete result/media conditions; PDF/APNG/large results have inspectable artifacts. Host delivery and visual comparison report actual observations. |\n| C39 3D inspection, preview and edits | Partial; native glTF/GLB/OBJ inspection usable. S. | Native parser/fixed Blender scripts\u2192media; hashed copy\u2192declarative edit\u2192conditional commit. Preview formats, immutable source provenance and rendered status need repair. [13](findings/13-perception.md). | Per-format/operator availability, snapshot-bound actual PNG dimensions, retained artifacts/expiry and applied-edit plus preview-failure controls. Real Blender version fixtures graduate rendering. |\n| C40 Game-engine workflows | Partial recipes; job guidance unwired. S. | Detection\u2192palette prompt insertion/system guidance\u2192ordinary tools. Multiple engine ecosystems get guidance; no engine-owned editor/asset/build session is established. [01](findings/01-cli.md), [13](findings/13-perception.md). | Integrate detected targets and real owned jobs, or keep recipes labeled as guidance. Add richer bundles only for an explicit editor/asset workflow. |\n| C41 Native desktop and voice | Absent in reviewed native paths. S. | a11y role\u2192not_implemented; native catalog/ACP lacks recording/transcription/playback loop. External MCP media is a separate expandable route. [13](findings/13-perception.md). | Concrete platform workload with negotiated observations/actions, user controls, ownership and cancellation. Role names or audio fields cannot satisfy installed host acceptance. |\n\n## Discover capabilities, evaluate and ship\n\n| Capability | Current maturity / assurance | Reachable trace and limiting behavior | Best-version criterion |\n|---|---|---|---|\n| C42 Capability/audit/public contract truth | Partial; inventories/catalogs/sink usable. S+I. | Shared descriptors\u2192SDK inventory/coverage\u2192paired audit/artifact sink. Cached/prefix/nested identities and coverage/readiness semantics are weaker than their labels. [12](findings/12-audit-docs.md). | Separate registered/granted/installed/healthy/assessed/ready states; exact source and negative evidence. Audit completion permits absent features, preserves corruption diagnostics and current public contracts. |\n| C43 Evaluation, promotion and recommendations | Partial; measured adoption unwired; recommendation lookup usable. S+U+I. | runTask\u2192checks/judges\u2192comparison/proposal; configured evidence\u2192models recommend. Outcomes, repeats, strata, facts and finite statistics lose fidelity. [02](findings/02-providers.md), [08](findings/08-indexer.md), [11](findings/11-evals-release.md). | Immutable eligible attempts, isolated lessons, held-out paired trials and language/resource gates; actual adopted pointer plus rollback. Failed-action recovery remains a valid successful task. |\n| C44 Installed delivery, CI and quality gates | Partial. S+I, fake binary probes. | Build/wrapper/workflows\u2192compatibility/smoke\u2192distribution. Generated guards exist; repository ancestry/assets and probe-only fatal acceptance weaken installation proof. [11](findings/11-evals-release.md), [09](findings/09-execution.md). | Tarball/binary-only observe/edit/validate/cancel tasks, actual native CI receipts and approved provenance updates. Numeric resource/task budgets derive from comparable baselines. |\n| C45 Joined target-language cooperation | Absent in inspected joined pipeline; whole-product assurance unknown. S. | Language/build/semantic seams exist; no exercised schema/ABI producer\u2192consumer validation receipt found. Generic shell/hooks offer manual cooperation. [07](findings/07-languages.md), [12](findings/12-audit-docs.md). | Shared-contract change follows generated interfaces and real consumers across TS/Python/Rust, with owning compiler/tests, versions/encodings and joined artifact/diagnostic evidence. |\n\n## Language coverage is a tiered capability\n\nSource-language names do not imply compiler, semantic or task-level certification. Every row below retains generic text/shell work where applicable; binary operations follow their specific tool contracts. Profiles, grammar loading, launch specifications, command candidates and executed validation must be advertised separately.\n\n| Target-project surface | Current useful depth | Remaining semantic/validation cooperation gap |\n|---|---|---|\n| TypeScript/JavaScript | Bundled guidance, structural grammar/query paths, package-script discovery and optional LSP/SCIP | Source suffix\u2192document ID, fresh versions, module ownership and complete edits need repair. Script discovery is not an executed project oracle. |\n| Python | Guidance/syntax, optional LSP/SCIP and executable discovery/check routes | Bare-extension family failure loses/crosses graph identity; root/env/diagnostic outcome truth and actual installed analyzer tasks remain prerequisites. |\n| Rust and Go | Guidance/syntax, candidate owning targets and optional semantic tools | crate/package resolution can select wrong files; per-root target execution, complete diagnostics and durable precise edges are not certified. |\n| Java/Kotlin, C/C++, C# | Syntax/profile/launch metadata and ecosystem candidates | Grouped profiles do not preserve every document ID. Java receives no automatic diagnostic commands in the observed route; optional/skip-gated servers need real cells. |\n| Ruby/PHP/Swift/GDScript | Bundled guidance and structural support; pinned PHP/Swift/Kotlin/GDScript assets work explicitly | Ruby/PHP/GDScript lack native target discovery; Swift targets are inferred without a Swift probe; GDScript TCP LSP is unavailable. Query delivery needs isolated artifacts. |\n| Other/unknown source languages | Text observation/editing and explicit commands/custom tools remain broad | Unknown syntax/semantic/build tiers must stay unknown or unavailable. Extensible configured tooling can add depth without inventing a built-in profile. |\n| Mixed TS/Python/Rust project | Existing generic tools, schemas, analyzers and hooks can be composed manually | No exercised joined producer/consumer contract-change pipeline. Require generated schema/ABI consumers, owning builds/tests and shared immutable evidence: C45. |\n\nThe inventory is twelve profile IDs, fifteen grammar variants across fourteen named source languages, eleven stdio LSP launch specs and fourteen executable probes. These counts describe available mechanisms. C19\u201322 and the source report record failures, unsupported cells and setup conditions. No real multi-language LSP/compiler task or external SCIP extraction was executed in this review.\n\nAuthored-body cooperation has a different gate. TypeScript currently owns the runtime; Rust's standalone exec supplies real Linux filesystem enforcement. The native host adapter is unwired and its framing differs from generic supervision. A TS\u2192Rust fixture must prove negotiated request/output, effective policy, ownership and cancellation without depending on an authored Python component. Optional offline Python statistics/oracles can consume immutable evaluation receipts when they provide a measured advantage. Operating on a Python target project is independent of that choice.\n\nConsume established parsers, LSP/SCIP indexers, compilers and native UI libraries before considering ports. Their implementation languages do not count as authored Openbuff languages. Language expansion should unlock a specific capability, preserve one effect/session authority and carry versions, encodings, typed failures and artifact/outcome identities. No language-variety rewrite or live heap snapshot is a graduation criterion.\n\n## Reusable foundations and macro limits\n\nPreserve canonical tool/schema/spawn generation, strict BYOK routes, delivery-based tool retry safety, authenticated complete-read grants, pure edit preflight, conditional staging, atomic checkpoint queues, V1 merge/CAS, SQLite binding/payload equality, lexical graph modes, source-aware watchers, immutable grammar provenance, original custom-tool schemas, scoped approvals and owned browser/3D attempt files. Each removes work the model would otherwise have to guess. Their remaining adapter/consumer gaps are the highest-return repairs in the audit families.\n\nLong-running interactive work, post-crash continuation, automatic cross-component validation, installed native host effects, declarative/untrusted plugins and desktop/voice operation bundles remain partial, unwired or absent. Their inclusion is a capability inventory, not a commitment to implement every frontier. A concrete workload and cost/quality envelope determine when to proceed.\n\nLearning is particularly dependent on preceding truth: relevant facts must reach the next decision, actions/runs/tasks must retain independent outcomes, experiments must preserve eligible paid/failed attempts, and measured proposals must actually change a consumer. Current lessons, counters, recommendations and consolidation are reusable pieces. No held-out adopted improvement was established.\n\nThe review covered all assigned top-level subsystems with bounded source/test/doc windows, not every line. Live providers, actual browser/Blender use, full packed SDK/binary tasks, non-Linux platforms and killed live CLI continuation remain outside demonstrated assurance. [COVERAGE.md](COVERAGE.md), [REVIEW-VALIDATION.json](REVIEW-VALIDATION.json) and individual reports retain those limits.\n\n## Exhaustive source lineage\n\nEvery vertical record appears exactly once below. The left-hand IDs identify this consolidated catalog; the right-hand names are exact IDs within the linked shard JSON. Their full chains, states, tests, docs, strengths and limitations remain authoritative. Composite maturity qualifications above explain why a usable core and absent optional extension can share a capability family without silently promoting the latter.\n\n| Catalog ID | Exact vertical source IDs |\n|---|---|\n| C01 | [01](findings/01-cli.json): `interactive-chat-routing`, `command-palette-skills-presets`; [03](findings/03-orchestration.json): `main-agent-selection-and-resumed-orchestration` |\n| C02 | [01](findings/01-cli.json): `attachments-live-source`, `cancel-queue-run-ownership`; [13](findings/13-perception.json): `cli-image-attachments` |\n| C03 | [01](findings/01-cli.json): `questions-approval-ui` |\n| C04 | [01](findings/01-cli.json): `streaming-tool-subagent-display`, `context-compaction-diagnostics`; [02](findings/02-providers.json): `providers.usage-and-cost` |\n| C05 | [02](findings/02-providers.json): `providers.byok-routing`, `providers.capability-resolution`, `providers.oauth-subscription`, `providers.native-gemini-protocol` |\n| C06 | [02](findings/02-providers.json): `providers.native-tool-streaming`, `providers.text-tool-fallback`, `providers.vision-input-routing`, `providers.openrouter-specific-accounting` |\n| C07 | [02](findings/02-providers.json): `providers.retry-failover`, `providers.cancellation-timeouts`, `providers.context-limit-adaptation`, `providers.output-ceilings-and-truncation` |\n| C08 | [03](findings/03-orchestration.json): `programmatic-generator-lifecycle`, `parent-and-user-cancellation`, `cost-token-and-fixed-step-budgets` |\n| C09 | [10](findings/10-extensions.json): `programmatic-agent-extension-abi`; [12](findings/12-audit-docs.json): `strategy-autonomy-body-control` |\n| C10 | [03](findings/03-orchestration.json): `foreground-and-background-delegation`, `typed-handoffs-and-child-receipts`, `child-permission-and-path-narrowing` |\n| C11 | [03](findings/03-orchestration.json): `process-supervision-and-bounded-crash-restarts`; [09](findings/09-execution.json): `generic-sidecar-supervision` |\n| C12 | [06](findings/06-edits.json): `read-authority`, `external-editor-concurrency`; [13](findings/13-perception.json): `read-image-media` |\n| C13 | [06](findings/06-edits.json): `byte-preservation`, `edit-transaction`, `structural-rewrite` |\n| C14 | [06](findings/06-edits.json): `cooperative-mutation-broker`, `transaction-recovery` |\n| C15 | [06](findings/06-edits.json): `semantic-workspace-edit` |\n| C16 | [08](findings/08-indexer.json): `08-C1`, `08-C7` |\n| C17 | [08](findings/08-indexer.json): `08-C3`, `08-C4`, `08-C5` |\n| C18 | [07](findings/07-languages.json): `precise-cross-language-reference-contract`; [08](findings/08-indexer.json): `08-C6` |\n| C19 | [07](findings/07-languages.json): `target-language-profiles`, `grammar-query-packaging`, `structural-language-semantics` |\n| C20 | [07](findings/07-languages.json): `lsp-navigation-lifecycle`, `lsp-document-sync`; [09](findings/09-execution.json): `lsp-process-effects` |\n| C21 | [07](findings/07-languages.json): `compiler-build-test-discovery`; [08](findings/08-indexer.json): `08-C2`; [12](findings/12-audit-docs.json): `environment-target-languages` |\n| C22 | [07](findings/07-languages.json): `targeted-validation-execution`, `diagnostic-delta`; [09](findings/09-execution.json): `validation-effects`; [10](findings/10-extensions.json): `file-change-validation-hooks`; [12](findings/12-audit-docs.json): `targeted-validation` |\n| C23 | [03](findings/03-orchestration.json): `dirty-scope-and-content-bound-final-review`, `requirements-coverage-and-model-task-autonomy`, `durable-gate-credit-and-pinned-open-work`; [12](findings/12-audit-docs.json): `review-evidence-gate` |\n| C24 | [05](findings/05-durability.json): `05-C1`, `05-C2`, `05-C3` |\n| C25 | [01](findings/01-cli.json): `durable-plan-ui`; [05](findings/05-durability.json): `05-C6`, `05-C8`, `05-C17`; [12](findings/12-audit-docs.json): `task-workspace-evidence` |\n| C26 | [05](findings/05-durability.json): `05-C4`, `05-C5`, `05-C14`, `05-C15`, `05-C16` |\n| C27 | [01](findings/01-cli.json): `snapshot-undo-restore-discovery`; [05](findings/05-durability.json): `05-C9` |\n| C28 | [01](findings/01-cli.json): `history-restore-retention`; [05](findings/05-durability.json): `05-C13` |\n| C29 | [01](findings/01-cli.json): `attach-detach-ui`; [05](findings/05-durability.json): `05-C10`, `05-C11`, `05-C12`; [10](findings/10-extensions.json): `extension-capability-discovery` |\n| C30 | [04](findings/04-memory.json): `context-compaction`, `archive-recall` |\n| C31 | [04](findings/04-memory.json): `persisted-task-memory-v1`, `memory-v2-roundtrip`, `memory-retention-and-relevance`; [05](findings/05-durability.json): `05-C7` |\n| C32 | [04](findings/04-memory.json): `procedural-learning-feedback`, `bounded-consolidation` |\n| C33 | [09](findings/09-execution.json): `terminal-authority`, `sync-process-lifetime`, `owned-background-jobs`, `interactive-pty` |\n| C34 | [09](findings/09-execution.json): `high-impact-approvals`, `child-env-and-output`, `native-exec-standalone`, `native-host-adoption` |\n| C35 | [09](findings/09-execution.json): `mcp-process-effects`; [10](findings/10-extensions.json): `mcp-config-trust-and-discovery`, `mcp-tool-schema-and-result-interoperability`, `notion-mcp-templates` |\n| C36 | [10](findings/10-extensions.json): `openbuff-mcp-server`, `sdk-custom-tools-and-host-callbacks`, `native-overrides-and-host-observation` |\n| C37 | [10](findings/10-extensions.json): `local-agent-loading-and-provenance`, `generated-schema-extension-contracts`, `local-external-cli-and-third-party-integrations`, `declarative-agents-lifecycle-hooks-and-plugin-host` |\n| C38 | [09](findings/09-execution.json): `browser-process-effects`; [13](findings/13-perception.json): `browser-actions-and-policy`, `browser-observations-and-media`, `render-ui-link-widget` |\n| C39 | [13](findings/13-perception.json): `native-3d-inspection`, `blender-3d-inspection-preview`, `3d-declarative-edit` |\n| C40 | [13](findings/13-perception.json): `game-engine-workflow-helpers` |\n| C41 | [13](findings/13-perception.json): `native-computer-screen-frontier`, `audio-voice-frontier` |\n| C42 | [12](findings/12-audit-docs.json): `native-audit-inventory`, `audit-coverage-readiness`, `durable-audit-sink`, `breadth-accountability`, `canonical-tool-agent-catalog`, `docs-design-plan-fidelity` |\n| C43 | [02](findings/02-providers.json): `providers.empirical-language-recommendations`; [08](findings/08-indexer.json): `08-C8`; [11](findings/11-evals-release.json): `evaluation-orchestration-and-oracles`, `paired-polyglot-evidence`, `learning-proposal-promotion`, `retention-and-mutation-oracles`, `trace-artifact-hygiene` |\n| C44 | [11](findings/11-evals-release.json): `ci-guards-and-performance`, `sdk-node-packaged-consumer`, `cli-and-native-installed-validation`, `repo-test-loading-and-legacy-build-tools` |\n| C45 | [07](findings/07-languages.json): `cross-language-interface-validation`; [12](findings/12-audit-docs.json): `learning-cooperation-assurance` |\n\n",
+      "bytes": 37916,
+      "sha256": "c062b5530cc7efde5c4d0e995982f3a2c4fc1a15467a5153c015b075d79c5818",
+      "numberedOutputUtf16Characters": 38945
+    }
+  },
+  "sizeMetadataInterpretation": {
+    "callId": "call_89D6v0iXmGKDzKe8sQ3RMtQp",
+    "originalOperation": "nl -ba; bytes:r.value.output.length",
+    "meaning": "JavaScript UTF-16 character count of numbered command output, not raw file bytes",
+    "auditNumberedCharacters": 44151,
+    "catalogNumberedCharactersBeforeC15": 38851,
+    "catalogNumberedCharactersAfterC15": 38945
+  },
+  "verifiedCounts": {
+    "pairedReports": 13,
+    "picks": 13,
+    "findings": 118,
+    "verticalCapabilityRecords": 144,
+    "auditFamilies": 10,
+    "catalogCapabilities": 45,
+    "receiptFiles": 555,
+    "recordedRangeFilesIncludingContext": 558,
+    "reconstructedRangeUnionLinesIncludingContext": 147555,
+    "reconstructedReceiptRangeUnionLines": 147004,
+    "historicalClaimedWindowLines": 147721,
+    "historicalMinusReconstructedLines": 166
+  },
+  "currentArtifacts": [
+    {
+      "path": "findings/01-cli.json",
+      "bytes": 113064,
+      "sha256": "7bef576488f934f83306e874f262f2529c4726ef2974650c2bd295c6cba6bbf9"
+    },
+    {
+      "path": "findings/01-cli.md",
+      "bytes": 45945,
+      "sha256": "8ee5eab6c3e3bc3823e30a6fe6c1190c190920e79764258fca444c22266f23b5"
+    },
+    {
+      "path": "findings/02-providers.json",
+      "bytes": 79250,
+      "sha256": "696eecf4927b59a3edf3b0ab91b42f31a2b9c35953afef95291697e2a7a93e2f"
+    },
+    {
+      "path": "findings/02-providers.md",
+      "bytes": 52923,
+      "sha256": "b0f17bbc24dfe1f5383d51225baa7cb8b739dd2d4f139179b5fc8a177dc034cf"
+    },
+    {
+      "path": "findings/03-orchestration.json",
+      "bytes": 56615,
+      "sha256": "584eaa9d5a4bf5533d887d2c00a6df9db88b97f5ef6fa5ac4940c27aa0693e72"
+    },
+    {
+      "path": "findings/03-orchestration.md",
+      "bytes": 32165,
+      "sha256": "2fb72b5d2dcdf64af163f695b1c42d81e2f6d0b8b0d381f38ea0980068941170"
+    },
+    {
+      "path": "findings/04-memory.json",
+      "bytes": 77089,
+      "sha256": "2d881fb44d050c2d02d4ef55ab5732ff42476bd834026aafa03e5442580742b1"
+    },
+    {
+      "path": "findings/04-memory.md",
+      "bytes": 17220,
+      "sha256": "01bb9621240561a90a15277372565066342d7157eba9e53f0c227e33cc89db7d"
+    },
+    {
+      "path": "findings/05-durability.json",
+      "bytes": 99385,
+      "sha256": "d33bb0d01822bcf54767cd1d8e3eabfdd0f57110fee7e4e2f3f3bd1e32bf5dbd"
+    },
+    {
+      "path": "findings/05-durability.md",
+      "bytes": 15551,
+      "sha256": "6e0263e8d7e01d17e69f4935e2650607f3e528f920c6425fcf70776d0effdc30"
+    },
+    {
+      "path": "findings/06-edits.json",
+      "bytes": 81414,
+      "sha256": "d175b5aa09192531cce7a1f85a3d5a34d1f7faf3c0cbc4c3c0f142b75a7be75a"
+    },
+    {
+      "path": "findings/06-edits.md",
+      "bytes": 14852,
+      "sha256": "e7f2b683c30309872cfc32bd4704eeb8df2c48d45e255f70215a77a59a6cfb09"
+    },
+    {
+      "path": "findings/07-languages.json",
+      "bytes": 93605,
+      "sha256": "2cfcdd497b2a360dd0a16ef1f6b54ba303953eefc31afaa4af1d2995f09bea63"
+    },
+    {
+      "path": "findings/07-languages.md",
+      "bytes": 16276,
+      "sha256": "19ac289674af04687be3d4c235de03d2f73e5c4dad5bc7249bf5080f4dcf45fe"
+    },
+    {
+      "path": "findings/08-indexer.json",
+      "bytes": 82674,
+      "sha256": "8de80cae843ce96446bd0dce536853462d8ce66281d27a750356c545432129c1"
+    },
+    {
+      "path": "findings/08-indexer.md",
+      "bytes": 16860,
+      "sha256": "8beadfdbe94ab9f068f5128423037d26d0c852d029ebfaf691fe41ffb0176e64"
+    },
+    {
+      "path": "findings/09-execution.json",
+      "bytes": 70208,
+      "sha256": "afb336289d802e408ecf6a04d8fc13a2816e6fc0faa8d67546d11f5a42d2cf29"
+    },
+    {
+      "path": "findings/09-execution.md",
+      "bytes": 16543,
+      "sha256": "405cf7ef03a336ae9c8552c83e2622d4b7b44c1a29359e4a2591eb14ed4d436e"
+    },
+    {
+      "path": "findings/10-extensions.json",
+      "bytes": 109234,
+      "sha256": "9f05ce526a8e378dfabe202b3237aeff0bf4a1966ff2040934e23d3221724849"
+    },
+    {
+      "path": "findings/10-extensions.md",
+      "bytes": 16327,
+      "sha256": "ac013bd0e8e6140f7a784a32c219349738eaebf4aab9afcc44ec8a9f7ed22cdd"
+    },
+    {
+      "path": "findings/11-evals-release.json",
+      "bytes": 91114,
+      "sha256": "7711c2a5bef3e7aa7c6d85ff42cd5366535dd90040f88bb6973a473bbd5ce5a7"
+    },
+    {
+      "path": "findings/11-evals-release.md",
+      "bytes": 15707,
+      "sha256": "873fdb6a9c0947ad4c913c5cbc6262065ec3c63e805f21bc812f94cb433125a2"
+    },
+    {
+      "path": "findings/12-audit-docs.json",
+      "bytes": 95180,
+      "sha256": "e0b163a31b06a2abe36ac29eda2ad363a9aff72741d3e85269e853c6882cc57e"
+    },
+    {
+      "path": "findings/12-audit-docs.md",
+      "bytes": 16638,
+      "sha256": "81237f561422b0821286d6b0e98c771b1d567c05610141be74aa60db2be2b983"
+    },
+    {
+      "path": "findings/13-perception.json",
+      "bytes": 77441,
+      "sha256": "309d77f7712b3e51774aaf1317bbfd105e2d915aae5abef9e1a3702a2963df2b"
+    },
+    {
+      "path": "findings/13-perception.md",
+      "bytes": 15877,
+      "sha256": "d9941fb553518b117c0c36d2cc81bd19347df6861c7aeb0d7b41c6e637f8b5b4"
+    },
+    {
+      "path": "picks/01-cli.json",
+      "bytes": 8243,
+      "sha256": "6efe47f83a7515c6ab037f07ac79d8d6f76118ed5b196f8052d129082ba81670"
+    },
+    {
+      "path": "picks/02-providers.json",
+      "bytes": 10663,
+      "sha256": "ec7e4d465ffc681cb564745ad18c00fa7f1782c9b38a58ae7f769b93aa37bd96"
+    },
+    {
+      "path": "picks/03-orchestration.json",
+      "bytes": 12378,
+      "sha256": "6a12d1c8fd22b6b5dee266d824b6cf52fd9d9816a1b15010b8f9b07d15af7605"
+    },
+    {
+      "path": "picks/04-memory.json",
+      "bytes": 18673,
+      "sha256": "b44e85fd2a24ddb602cd0295fe1304babd526b40212e951a82e73c2534a6e67e"
+    },
+    {
+      "path": "picks/05-durability.json",
+      "bytes": 25252,
+      "sha256": "6f58b1d0367462da61e9e2aa7f9e5b0cdd0498fb5a0b6f6c8b28cd95830fe0c5"
+    },
+    {
+      "path": "picks/06-edits.json",
+      "bytes": 29143,
+      "sha256": "4a9fe978cb7c66768c8a092b05fc59e040e521c976773f97439d9dbd0119e82b"
+    },
+    {
+      "path": "picks/07-languages.json",
+      "bytes": 31320,
+      "sha256": "61b8fb95442b35860e8ae3848c771fdaa55cb6bfe5823be94aea636eadeb9f4d"
+    },
+    {
+      "path": "picks/08-indexer.json",
+      "bytes": 24416,
+      "sha256": "ddf85c4e9fd9a889cae311f8552f71ff7030751870433451cf1259f7a05320b4"
+    },
+    {
+      "path": "picks/09-execution.json",
+      "bytes": 34374,
+      "sha256": "043e895feea6a3d11013520f26206380d84866d106bb323c6d5c8ca6990edc08"
+    },
+    {
+      "path": "picks/10-extensions.json",
+      "bytes": 39682,
+      "sha256": "0eb1a941f9988f2e69455065c31696dab1d39dd732337b214e29c572178e6d93"
+    },
+    {
+      "path": "picks/11-evals-release.json",
+      "bytes": 35680,
+      "sha256": "dd35d8594ca995cff495bc2d6c301820ebb6fdd5b733bb1e6479d5eb04805f3c"
+    },
+    {
+      "path": "picks/12-audit-docs.json",
+      "bytes": 40484,
+      "sha256": "87891da68ba6b8e9a09d2c8e280bd08efd07c2357f294ea3436bcc067759a3ee"
+    },
+    {
+      "path": "picks/13-perception.json",
+      "bytes": 41878,
+      "sha256": "5dfad278518bde45114c7cd51fa0c2d8d31ad0382738ec48940722ceeaacd565"
+    },
+    {
+      "path": "FINDINGS-INDEX.json",
+      "bytes": 300982,
+      "sha256": "0197fc3958c8f95aa5573c3429000e554850fba758ce15b7bf1eee43d4c16b89"
+    },
+    {
+      "path": "CAPABILITY-RECORDS.json",
+      "bytes": 425680,
+      "sha256": "3e64e17540e678fafc8bc9597b63bf18a12e3a5a033a35d9abcf189b02847533"
+    },
+    {
+      "path": "STRUCTURAL-RECEIPTS.json",
+      "bytes": 42628,
+      "sha256": "558cec360e4257d4fd289e7983fb250d7943ccefd73fb96584feea02e8d9dc90"
+    },
+    {
+      "path": "AUDIT-REPORT.md",
+      "bytes": 43333,
+      "sha256": "8de8eee0ac32b8947e873b292035fde47d33f2826c4a151874706fa1757735b7"
+    },
+    {
+      "path": "CAPABILITIES.md",
+      "bytes": 38406,
+      "sha256": "f5953baaded163f3268db9c3ab516806c5eb7a688b601f865424d13cc17c3265"
+    }
+  ]
+}

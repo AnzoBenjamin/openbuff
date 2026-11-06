@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "type": "integration-inspector-receipt-adapter-failure",
+  "recordedAt": "2026-11-06T22:12:40.288192+00:00",
+  "argv": [
+    "python3",
+    "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/inspect-integration.py"
+  ],
+  "exitCode": 1,
+  "error": "KeyError: sourceUnchangedDuringCommand",
+  "script": {
+    "path": "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/inspect-integration.receipt-adapter-v1.py",
+    "sha256": "9ec8bc1b36f22d9a7753833e7d7fb0a50972c8626f16b71045c37c213eeb064e"
+  },
+  "scope": "The latest historical SDK receipt uses a different field convention; inspector failed before manifest publication. No product source changes."
+}

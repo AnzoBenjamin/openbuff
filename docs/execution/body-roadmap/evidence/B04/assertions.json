@@ -1,0 +1,9 @@
+{
+  "actualRuntimeRows": 9,
+  "brokerSingleWinner": true,
+  "crashedOwnerPreservesBytes": true,
+  "indexPresentAndAbsentSingleWinner": true,
+  "fullPersistedByteHashesVerified": true,
+  "snapshotCompetingTipRefused": true,
+  "realSnapshotRefusalAndAttributedRetry": true
+}

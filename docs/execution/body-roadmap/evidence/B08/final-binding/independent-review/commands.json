@@ -1,0 +1,172 @@
+[
+  {
+    "name": "actual-vision-failover",
+    "argv": [
+      "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+      "--no-env-file",
+      "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/independent-review/route-metadata.ts",
+      "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/route-metadata"
+    ],
+    "cwd": "/home/ben/Code/CLI/openbuff",
+    "exitCode": 0,
+    "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/actual-vision-failover.log",
+    "environmentKeys": [
+      "B08_INDEPENDENT_FETCH_LOG",
+      "DO_NOT_TRACK",
+      "HOME",
+      "LANG",
+      "NEXT_PUBLIC_CODEBUFF_APP_URL",
+      "OPENBUFF_TELEMETRY",
+      "PATH",
+      "TMPDIR",
+      "USER",
+      "XDG_CONFIG_HOME"
+    ]
+  },
+  {
+    "name": "provider-tests",
+    "argv": [
+      "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+      "--no-env-file",
+      "test",
+      "--isolate",
+      "--preload",
+      "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/offline-preload.ts",
+      "/home/ben/Code/CLI/openbuff/packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/error-utils.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/model-provider.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/provider-config-band.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/provider-config.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/provider-contract-regressions.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/retry-config.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/error-utils.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-chatgpt-oauth-policy.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-context-window.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-cost.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-ontrim-retry.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-repair-tool-input.test.ts",
+      "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts"
+    ],
+    "cwd": "/home/ben/Code/CLI/openbuff",
+    "exitCode": 0,
+    "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/provider-tests.log",
+    "environmentKeys": [
+      "B08_INDEPENDENT_FETCH_LOG",
+      "DO_NOT_TRACK",
+      "HOME",
+      "LANG",
+      "NEXT_PUBLIC_CODEBUFF_APP_URL",
+      "OPENBUFF_TELEMETRY",
+      "PATH",
+      "TMPDIR",
+      "USER",
+      "XDG_CONFIG_HOME"
+    ]
+  },
+  {
+    "name": "provider-retry-fixture",
+    "argv": [
+      "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+      "--no-env-file",
+      "--preload",
+      "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/offline-preload.ts",
+      "/home/ben/Code/CLI/openbuff/test/fixtures/body/provider-retry.ts",
+      "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/fixture"
+    ],
+    "cwd": "/home/ben/Code/CLI/openbuff",
+    "exitCode": 0,
+    "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/provider-retry-fixture.log",
+    "environmentKeys": [
+      "B08_INDEPENDENT_FETCH_LOG",
+      "DO_NOT_TRACK",
+      "HOME",
+      "LANG",
+      "NEXT_PUBLIC_CODEBUFF_APP_URL",
+      "OPENBUFF_TELEMETRY",
+      "PATH",
+      "TMPDIR",
+      "USER",
+      "XDG_CONFIG_HOME"
+    ]
+  },
+  {
+    "name": "typecheck-sdk",
+    "argv": [
+      "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+      "--no-env-file",
+      "run",
+      "--cwd",
+      "sdk",
+      "typecheck"
+    ],
+    "cwd": "/home/ben/Code/CLI/openbuff",
+    "exitCode": 0,
+    "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-sdk.log",
+    "environmentKeys": [
+      "B08_INDEPENDENT_FETCH_LOG",
+      "DO_NOT_TRACK",
+      "HOME",
+      "LANG",
+      "NEXT_PUBLIC_CODEBUFF_APP_URL",
+      "OPENBUFF_TELEMETRY",
+      "PATH",
+      "TMPDIR",
+      "USER",
+      "XDG_CONFIG_HOME"
+    ]
+  },
+  {
+    "name": "typecheck-internal",
+    "argv": [
+      "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+      "--no-env-file",
+      "run",
+      "--cwd",
+      "packages/internal",
+      "typecheck"
+    ],
+    "cwd": "/home/ben/Code/CLI/openbuff",
+    "exitCode": 0,
+    "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-internal.log",
+    "environmentKeys": [
+      "B08_INDEPENDENT_FETCH_LOG",
+      "DO_NOT_TRACK",
+      "HOME",
+      "LANG",
+      "NEXT_PUBLIC_CODEBUFF_APP_URL",
+      "OPENBUFF_TELEMETRY",
+      "PATH",
+      "TMPDIR",
+      "USER",
+      "XDG_CONFIG_HOME"
+    ]
+  },
+  {
+    "name": "typecheck-common",
+    "argv": [
+      "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+      "--no-env-file",
+      "run",
+      "--cwd",
+      "common",
+      "typecheck"
+    ],
+    "cwd": "/home/ben/Code/CLI/openbuff",
+    "exitCode": 0,
+    "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-common.log",
+    "environmentKeys": [
+      "B08_INDEPENDENT_FETCH_LOG",
+      "DO_NOT_TRACK",
+      "HOME",
+      "LANG",
+      "NEXT_PUBLIC_CODEBUFF_APP_URL",
+      "OPENBUFF_TELEMETRY",
+      "PATH",
+      "TMPDIR",
+      "USER",
+      "XDG_CONFIG_HOME"
+    ]
+  }
+]

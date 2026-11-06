@@ -1,0 +1,234 @@
+"""Recover review data only; never execute captured commands or product probes."""
+from __future__ import annotations
+
+import ast
+from collections import defaultdict
+from datetime import datetime, timezone
+import hashlib
+import json
+from pathlib import Path
+import re
+import shlex
+
+ROOT = Path('/home/ben/Code/CLI/openbuff')
+BASE = ROOT / '.omx/drafts/openbuff-body-review-2026-11-05'
+RECOVERY = ROOT / '.omx/drafts/body-review-recovery'
+EVIDENCE = BASE / 'evidence'
+INDEX = json.loads((RECOVERY / 'capture-index.json').read_text())
+COMMANDS = json.loads((RECOVERY / 'commands.json').read_text())
+STORES = json.loads((RECOVERY / 'stores.json').read_text())
+
+
+def digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def provenance(entry: dict, location: str | None = None) -> dict:
+    result = {key: entry[key] for key in ('capture', 'sha256', 'bytes', 'timestamp', 'session', 'callId', 'transformation') if key in entry}
+    if location is not None:
+        result['location'] = location
+    return result
+
+
+def walk(value, location='$'):
+    """Visit structured data and decode JSON output values without executing them."""
+    yield location, value
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield from walk(child, location + '.' + key)
+    elif isinstance(value, list):
+        for number, child in enumerate(value):
+            yield from walk(child, location + f'[{number}]')
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(('{', '[')):
+            try:
+                child = json.loads(stripped)
+            except json.JSONDecodeError:
+                child = None
+            if child is not None:
+                yield from walk(child, location + '[decoded-json]')
+                return
+        # Several captures are exact output containing one compact JSON record
+        # per line after the tool's truncation metadata. Recover complete records
+        # only; an incomplete JSON prefix is not a recovered artifact.
+        for number, line in enumerate(value.splitlines()):
+            if not line.strip().startswith(('{', '[')):
+                continue
+            try:
+                child = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            yield from walk(child, location + f'[decoded-json-line:{number + 1}]')
+
+
+def capture_data():
+    seen = set()
+    for entry in INDEX:
+        name = entry['capture']
+        if name in seen:
+            continue
+        seen.add(name)
+        file = RECOVERY / 'captures' / name
+        raw = file.read_bytes()
+        assert digest(raw) == entry['sha256'], name
+        assert len(raw) == entry['bytes'], name
+        value = json.loads(raw) if file.suffix == '.json' else raw.decode()
+        yield entry, value
+
+
+CAPTURES = list(capture_data())
+TEXTS_BY_CALL = defaultdict(list)
+OBJECTS_BY_CALL = defaultdict(list)
+for entry, data in CAPTURES:
+    for location, value in walk(data):
+        if isinstance(value, str):
+            TEXTS_BY_CALL[entry['callId']].append((entry, location, value))
+        elif isinstance(value, dict):
+            OBJECTS_BY_CALL[entry['callId']].append((entry, location, value))
+
+
+def write_json(name: str, value) -> dict:
+    file = EVIDENCE / name
+    assert file.parent == EVIDENCE
+    raw = (json.dumps(value, indent=2, ensure_ascii=False) + '\n').encode()
+    file.write_bytes(raw)
+    return {'path': 'evidence/' + name, 'bytes': len(raw), 'sha256': digest(raw)}
+
+
+def requested_reads():
+    """Interpret only argument data for the four reviewed slice helpers."""
+    result = defaultdict(list)
+    issues = []
+    for entry in COMMANDS:
+        source = Path(entry['filename']).read_text()
+        if not re.match(r'^python3 /tmp/openbuff-body-review-2026-11-05/evidence/(07|09|10|11)-read\.py(?: |$)', source):
+            continue
+        tokens = shlex.split(source)
+        assert tokens[0] == 'python3'
+        group = Path(tokens[1]).name[:2]
+        args = tokens[2:]
+        specs = []
+        if group == '07':
+            assert len(args) % 3 == 0
+            specs = [(args[n], int(args[n + 1]), int(args[n + 2])) for n in range(0, len(args), 3)]
+        elif group == '10':
+            for arg in args:
+                path, first, last = arg.rsplit(':', 2)
+                specs.append((path, int(first), int(last)))
+        elif group == '11':
+            assert len(args) == 1
+            specs = json.loads(args[0])
+        elif args[0] in ('selectedFiles', 'secondaryFiles', 'contextFiles'):
+            # The original helper indexed the initial 46-secondary-file picker.
+            # Later amended picker copies have 45 entries; indexing those changes
+            # the historical invocation instead of recovering it.
+            picker = STORES['picker09']
+            for number in args[1:]:
+                selection = picker[args[0]][int(number)]
+                specs.append((selection['path'], selection.get('from', 1), selection.get('to')))
+        else:
+            specs = [(args[0], int(args[1]) if len(args) > 1 else 1, int(args[2]) if len(args) > 2 else None)]
+        for path, first, requested_last in specs:
+            outputs = TEXTS_BY_CALL.get(entry['callId'], [])
+            recorded_header = []
+            if group == '09':
+                pattern = r'^FILE ' + re.escape(path) + r' L' + str(first) + r'-L(\d+)$'
+            elif group == '11':
+                pattern = r'^' + re.escape(path) + ':' + str(first) + r'-(\d+)$'
+            else:
+                pattern = None
+            if pattern:
+                for captured, loc, text in outputs:
+                    for match in re.finditer(pattern, text, re.M):
+                        recorded_header.append((int(match.group(1)), provenance(captured, loc)))
+            ends = {number for number, _ in recorded_header}
+            if len(ends) == 1:
+                last = next(iter(ends))
+                binding = 'captured exact helper range header'
+            elif len(ends) > 1:
+                issues.append({'group': group, 'path': path, 'from': first, 'requestedTo': requested_last, 'reason': 'conflicting captured range endpoints', 'endpoints': sorted(ends)})
+                continue
+            else:
+                # A requested upper endpoint is exact only if its numbered row survives.
+                last = requested_last
+                found_endpoint = False
+                observed_lasts = []
+                for captured, loc, text in outputs:
+                    block = re.search(r'^' + re.escape(path) + r'\s*\n((?:[ \t]*\d+[ \t].*(?:\n|\Z))*)', text, re.M)
+                    if not block:
+                        continue
+                    numbers = [int(number) for number in re.findall(r'^\s*(\d+)(?::|\s)\s', block.group(1), re.M)]
+                    if numbers:
+                        observed_lasts.append((max(numbers), provenance(captured, loc)))
+                        if last is not None and last in numbers:
+                            found_endpoint = True
+                            recorded_header.append((last, provenance(captured, loc)))
+                if found_endpoint:
+                    binding = 'captured numbered row matches requested endpoint'
+                else:
+                    current = Path(path) if path.startswith('/') else ROOT / path
+                    if not current.is_file() or path.startswith('/tmp/'):
+                        issues.append({'group': group, 'path': path, 'from': first, 'requestedTo': requested_last, 'reason': 'endpoint not captured and disposable file unavailable', 'command': Path(entry['filename']).name})
+                        continue
+                    current_last = len(current.read_text().splitlines())
+                    last = min(requested_last, current_last) if requested_last is not None else current_last
+                    binding = 'recorded helper arguments; endpoint clamped using present source line count'
+                    if observed_lasts and max(n for n, _ in observed_lasts) == last:
+                        binding = 'captured numbered final row agrees with present line-count clamp'
+                        recorded_header.extend(observed_lasts)
+                    issues.append({'group': group, 'path': path, 'from': first, 'requestedTo': requested_last, 'to': last, 'reason': binding, 'command': Path(entry['filename']).name})
+            result[group].append({'range': {'path': path, 'from': first, 'to': last}, 'endpointBinding': binding, 'command': {'filename': Path(entry['filename']).name, 'sha256': digest(Path(entry['filename']).read_bytes()), 'timestamp': entry['timestamp'], 'session': entry['session'], 'callId': entry['callId']}, 'captures': [meta for _, meta in recorded_header]})
+    return result, issues
+
+
+def historical_hash_comparisons():
+    found = []
+    seen = set()
+    for entry, data in CAPTURES:
+        for location, value in walk(data):
+            if not isinstance(value, dict):
+                continue
+            if (value.get('baselineFiles') == 558 and isinstance(value.get('changed'), list)) or (value.get('baselineSourceHashes') == 558 and isinstance(value.get('changedSource'), list)) or ('inspectedSourceHashesUnchanged' in value):
+                key = json.dumps(value, sort_keys=True)
+                if key in seen:
+                    continue
+                seen.add(key)
+                found.append({'recordedResult': value, 'provenance': provenance(entry, location), 'qualification': 'Historical comparison result only; original 558-file whole-byte baseline is unavailable.'})
+    return found
+
+
+def main():
+    recovered = []
+    # Preserve the complete numbered coverage output; metadata-only round2 output is not content.
+    output = STORES['COVERAGE.md']['value']['output']
+    lines = output.splitlines(keepends=True)
+    assert all(re.match(r'^\s*\d+\t', line) for line in lines)
+    coverage = ''.join(re.sub(r'^\s*\d+\t', '', line) for line in lines)
+    original = EVIDENCE / 'historical-COVERAGE.md'
+    original.write_text(coverage)
+    recovered.append({'path': 'evidence/historical-COVERAGE.md', 'bytes': original.stat().st_size, 'sha256': digest(original.read_bytes()), 'provenance': {'store': 'stores.json', 'storeKey': 'COVERAGE.md', 'transformation': 'line number and tab prefixes removed; no prose reconstruction'}, 'complete': True})
+    current_coverage = coverage + '\n## Recovery assurance qualification\n\nRecovered on 2026-11-06 from recorded coverage output. The original 558-file whole-byte hash map is unavailable in the recovery data. Historical comparisons reported no changes, but a fresh whole-file comparison to that missing map cannot be performed. Present-source binding is reported separately in SOURCE-STABILITY.json and SOURCE-STABILITY.md. The coverage counts describe original bounded inspection, not a recovered whole-file stability guarantee.\n'
+    (BASE / 'COVERAGE.md').write_text(current_coverage)
+    comparisons = historical_hash_comparisons()
+    recovered.append(write_json('historical-source-hash-comparisons.json', comparisons))
+    reads, issues = requested_reads()
+    for group, entries in sorted(reads.items()):
+        ranges = [entry['range'] for entry in entries]
+        if group in ('07', '11'):
+            ranges = list({json.dumps(item, sort_keys=True): item for item in ranges}.values())
+        if group == '09':
+            path = EVIDENCE / '09-read-ranges.jsonl'
+            raw = ''.join(json.dumps(item) + '\n' for item in ranges).encode()
+            path.write_bytes(raw)
+            recovered.append({'path': 'evidence/' + path.name, 'bytes': len(raw), 'sha256': digest(raw)})
+        else:
+            recovered.append(write_json(group + '-read-ranges.json', ranges))
+        recovered.append(write_json(group + '-read-ranges-PROVENANCE.json', {'rangeCount': len(ranges), 'commandRangeCount': len(entries), 'entries': entries, 'limitations': [entry for entry in issues if entry['group'] == group]}))
+    manifest = {'schemaVersion': 1, 'recoveryStartedAt': datetime.now(timezone.utc).isoformat(), 'state': 'partial recovery; recorded diagnostics and source bindings pending', 'sourceHEAD': 'e65c06c0ae783130998bd9ab18c8d35320e40ea8', 'sourceSnapshot': 'ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0', 'originalHashMapRecovered': False, 'originalWholeFileHashCountRecorded': 558, 'originalWholeFileHashesRecovered': 0, 'historicalComparisons': comparisons, 'captureIndexEntries': len(INDEX), 'uniqueCaptureFilesVerified': len(CAPTURES), 'artifacts': recovered, 'gaps': [{'artifact': 'INSPECTED-FILE-HASHES.json', 'reason': 'Original map was generated from live source but no full or partial source-hash map survives stores or indexed captures. Current files must not be labeled original.'}], 'readRangeEndpointQualifications': issues, 'safety': {'capturedCommandsExecuted': False, 'productOrDiagnosticProbesRerun': False, 'wholeEvaluationSuiteRun': False, 'privateEnvironmentOrProviderValuesRead': False, 'historicalProductRunLogsRead': False}}
+    (BASE / 'EVIDENCE-RECOVERY-MANIFEST.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    print(json.dumps({'artifacts': len(recovered), 'uniqueCapturesVerified': len(CAPTURES), 'originalHashMapRecovered': False, 'historicalComparisons': len(comparisons), 'rangeCounts': {group: len(entries) for group, entries in reads.items()}, 'endpointQualificationCounts': {group: sum(issue['group'] == group for issue in issues) for group in reads}}, indent=2))
+
+
+if __name__ == '__main__':
+    main()

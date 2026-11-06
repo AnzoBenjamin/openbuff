@@ -1,0 +1,8 @@
+{
+  "exitCode": 1,
+  "scriptSha256": "dbd8bd936295b30f539fb01fab4b59ba806948b5aa17c7967757763d97cc581c",
+  "observedFailure": "AssertionError at top-level candidate/live comparison, line 109",
+  "cause": "Harness did not permit assembler-documented evidenceDirectory migration from /tmp/openbuff-body-execution-20261106 to repository evidence. Candidate and live ledger hashes remain unchanged.",
+  "adaptation": "Require exact repository evidenceDirectory separately and omit only nodes, updatedAt and evidenceDirectory from unchanged-top-level comparison; fix expected completion-refusal error substring before its first execution.",
+  "productOrValidatorFailure": false
+}

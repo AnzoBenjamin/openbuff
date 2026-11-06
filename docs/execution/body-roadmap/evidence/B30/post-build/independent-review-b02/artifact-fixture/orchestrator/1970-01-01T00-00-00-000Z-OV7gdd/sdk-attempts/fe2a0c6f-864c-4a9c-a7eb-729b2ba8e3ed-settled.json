@@ -1,0 +1,33 @@
+{
+  "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+  "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+  "taskId": "typescript",
+  "repeat": 1,
+  "languages": [
+    "typescript"
+  ],
+  "executionScope": "trusted_task",
+  "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+  "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+  "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+  "attemptId": "fe2a0c6f-864c-4a9c-a7eb-729b2ba8e3ed",
+  "agentId": "judge-gemini",
+  "providerRoute": "unreported",
+  "requestedModel": "google/gemini-3.1-pro-preview",
+  "role": "auxiliary",
+  "phase": "settled",
+  "startedAt": "2026-11-06T21:45:58.156Z",
+  "durationMs": 1,
+  "events": [],
+  "costUsd": 0.25,
+  "costComplete": true,
+  "costEvidence": {
+    "status": "reported",
+    "source": "creditsUsed"
+  },
+  "output": {
+    "type": "error",
+    "message": "paid auxiliary judge fixture error"
+  },
+  "error": "paid auxiliary judge fixture error"
+}

@@ -1,0 +1,2906 @@
+bun test v1.3.5 (1e86cebd)
+
+agents/__tests__/base2.test.ts:
+(pass) base2 inline repairEditorReadablePaths > expands package roots for multi-segment paths without granting project-wide **/* [1.00ms]
+(pass) base2 inline repairEditorReadablePaths > extracts cited schema/context paths from finding text into READ scope
+(pass) base2 inline repairEditorReadablePaths > skips URL-like tokens, node_modules, and .env paths from free-text extraction
+(pass) base2 inline repairEditorReadablePaths > root-level files stay file + parent-dir only (no bare **/*)
+(pass) base2 inline condone helpers > a stored BLOCKING key condones a NON_BLOCKING re-raise of the same identity
+(pass) base2 inline condone helpers > a stored NON_BLOCKING key never condones a BLOCKING re-raise
+(pass) base2 inline condone helpers > a legacy prefix-less key stays class-exact in both directions
+(pass) base2 inline condone helpers > the legacy text fallback matches both stripped and raw prefixed blockers
+(pass) base2 inline condone helpers > boundCondonedEntries dedupes and keeps only the most recent 200 entries
+(pass) base2 inline condone helpers > correlateReviewerFindingRecord prefers [id], then exact text, and refuses ambiguous substrings
+(pass) base2 inline parseGitStatusLine > drops untracked-directory entries (trailing slash) so they never become gate files [1.00ms]
+(pass) base2 inline parseGitStatusLine > keeps regular file entries and rename handling
+(pass) base2 validation/reviewer coordination prompts > declares the automatically spawned context pruner for derived agents
+(pass) base2 validation/reviewer coordination prompts > requires joining parallel validation and review before finalizing [2.00ms]
+(pass) base2 validation/reviewer coordination prompts > plan mode requires all durable artifacts for non-trivial plans [1.00ms]
+(pass) base2 validation/reviewer coordination prompts > base2 exposes update_plan_status alongside create_plan
+(pass) base2 validation/reviewer coordination prompts > plan mode exposes broad read-only analysis agents without mutation agents [1.00ms]
+(pass) base2 validation/reviewer coordination prompts > plan mode allows repeated bounded analysis waves
+(pass) base2 validation/reviewer coordination prompts > plan mode prompts explain incremental update_plan_status semantics [1.00ms]
+(pass) base2 validation/reviewer coordination prompts > default mode defers the single completion summary until after the gate
+(pass) base2 validation/reviewer coordination prompts > fast mode keeps the original single-summary wording
+(pass) base2 validation/reviewer coordination prompts > tells the orchestrator to size delegated work to the child window [1.00ms]
+(pass) base2 validation/reviewer coordination prompts > names the catalog window suffix and the receipt contextUsage field
+(pass) base-deep prompt naming and tool guidance > uses Openbuff naming and current tool preferences [1.00ms]
+(pass) base-deep gate lifecycle parity with base2 > inherits handleSteps and exposes the gate tools + repair editor [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base-deep gate lifecycle parity with base2 > handleSteps runs the same validation gate sequence as base2 [26.00ms]
+(pass) base2 resume safety: persisted unlockedToolTiers cannot narrow the surface > every mode publishes progressiveToolDisclosure: false (runtime tier filtering off) [1.00ms]
+(pass) base2 resume safety: persisted unlockedToolTiers cannot narrow the surface > a stale non-empty unlockedToolTiers leaves the full surface intact
+(pass) base2 resume safety: persisted unlockedToolTiers cannot narrow the surface > handleSteps does not depend on clearing tiers at each yielded step
+(pass) base2 resume safety: persisted unlockedToolTiers cannot narrow the surface > conversational fast path also leaves persisted tiers untouched [1.00ms]
+(pass) base2 resume safety: persisted unlockedToolTiers cannot narrow the surface > an absent unlockedToolTiers is never introduced by handleSteps
+(pass) base2 conversational fast path > answers a fresh greeting without injecting git status or running gates
+(pass) base2 proactive index lookup > code-intent prompts no longer auto-query and always start at git_status
+(pass) base2 proactive index lookup > starts codebase-oriented Q&A prompts at git_status [1.00ms]
+(pass) base2 proactive index lookup > does not auto-inject structural discovery for broad cross-subsystem audits
+(pass) base2 proactive index lookup > does not restart proactive discovery for a continuity-only prompt
+(pass) base2 proactive index lookup > does not query_index for generic chat prompts
+(pass) base2 proactive index lookup > does not run proactive discovery when the prompt names explicit file paths
+(pass) base2 proactive index lookup > strong-intent and Q&A prompts both start at git_status [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > serialized handleSteps does not depend on createBase2 closure variables [31.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"blocked","pendingFileCount":1,"pendingFiles":["src/a.ts"],"validationStatus":"failed","skipReason":"unparseable-failures","blockerCount":1,"repairRound":0,"event":"base2.gate"}
+(pass) base2 verification and reviewer gates > failed verification hooks reopen the turn so failures get fixed [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-passing-hooks-review-J9Er18/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+1604 |         'REDUCED_ASSURANCE: Configured file-change hooks were skipped because none matched the changed files.',
+1605 |       )
+1606 |       const afterReview = gen.next(
+1607 |         attestedReviewerResult(reviewCall.value) as any,
+1608 |       )
+1609 |       expect(afterReview.value).toMatchObject({ toolName: 'git_status' })
+                                       ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-passing-hooks-review-J9Er18/a.ts
++ Snapshot fingerprint (echo exactly): v3:76c5a7e29c05475fcd69445878164d669f0e339774611eac1938a4bc9a455efe
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-passing-hooks-review-J9Er18/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: REDUCED_ASSURANCE: Configured file-change hooks were skipped because none matched the changed files.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:1609:33)
+(fail) base2 verification and reviewer gates > passing verification hooks trigger code review before completion for non-allowlisted default ids [8.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-abs-rel-CwTEIv/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+1734 |         toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+1735 |       } as any).value
+1736 |       expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+1737 |       expect(
+1738 |         gen.next(attestedReviewerResult(reviewCall) as any).value,
+1739 |       ).toMatchObject({ toolName: 'git_status' })
+               ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-abs-rel-CwTEIv/a.ts
++ Snapshot fingerprint (echo exactly): v3:eff6ce1c231a889a9f9d521130df0622091ba6bcef5b4c4ecbc256b6768b8a5b
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-abs-rel-CwTEIv/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:1739:9)
+(fail) base2 verification and reviewer gates > absolute and relative paths share durable gate-passed state after review [4.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+1814 |     } as any).value
+1815 |     expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+1816 |     const finalPreCreditStatus = gen.next(
+1817 |       attestedReviewerResult(reviewCall) as any,
+1818 |     ).value
+1819 |     expect(finalPreCreditStatus).toMatchObject({ toolName: 'git_status' })
+                                        ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:1819:34)
+(fail) base2 verification and reviewer gates > structured reviewer approval allows finalization [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-durable-pass-46OB3p/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+1881 |       } as any).value
+1882 |       expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+1883 |       const finalPreCreditStatus = gen.next(
+1884 |         attestedReviewerResult(reviewCall) as any,
+1885 |       ).value
+1886 |       expect(finalPreCreditStatus).toMatchObject({ toolName: 'git_status' })
+                                          ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-durable-pass-46OB3p/a.ts
++ Snapshot fingerprint (echo exactly): v3:245b3a5e9cbc23c8661d7522201d67e3736353c0c2f15596a194e0dfd1535eff
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-durable-pass-46OB3p/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:1886:36)
+(fail) base2 verification and reviewer gates > structured reviewer response records durable pass state [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > durable gate pass does not reuse when no fingerprint is recorded (fail closed) [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":2,"pendingFiles":[".base2-test-scratch/base2-conversation-pass-RIYjrS/a.ts",".base2-test-scratch/base2-conversation-pass-RIYjrS/b.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":2,"pendingFiles":[".base2-test-scratch/base2-conversation-pass-RIYjrS/a.ts",".base2-test-scratch/base2-conversation-pass-RIYjrS/b.ts"],"reviewerStatus":"passed","validationStatus":"passed","reuseReason":"conversation-gate-state","reviewerVerdict":"LOOKS_GOOD","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > reuses prior passed conversation gate-state for unchanged pending files [6.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-stale-conversation-pass-bTtsGJ/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > does not reuse prior conversation gate-state when local file content changed [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-commit-reuse-dalAfN/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-commit-reuse-dalAfN/a.ts"],"reviewerStatus":"passed","validationStatus":"passed","reuseReason":"conversation-gate-state","reviewerVerdict":"LOOKS_GOOD","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > reuses prior gate pass after a commit clears the status line (content unchanged) [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > does not reuse prior conversation gate-state after later file-changing messages [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-receipt-reuse-i4xRpE/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > reuses the newest full-assurance validationEvidence receipt for unchanged bytes without re-running hooks [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-receipt-reduced-cuPTo4/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > does not reuse a validationEvidence receipt whose summary starts with REDUCED_ASSURANCE [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-receipt-stale-marker-a75ZqT/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > does not reuse a validationEvidence receipt whose fileMarkers no longer match the live bytes [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-receipt-legacy-W2vp8C/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > does not reuse a legacy validationEvidence receipt that lacks fileMarkers (fail closed) [2.00ms]
+(pass) base2 verification and reviewer gates > hitStepCap breaks out instead of falling through to the validation/reviewer gate [1.00ms]
+(pass) base2 verification and reviewer gates > allows suggest_followups on a clean analysis turn with no edits or pending gate work
+(pass) base2 verification and reviewer gates > still blocks suggest_followups when the working tree is dirty at turn start [1.00ms]
+(pass) base2 verification and reviewer gates > publishes uncommittedUnvalidatedFiles: agent-touched dirty files not covered by a gate pass [2.00ms]
+(pass) base2 verification and reviewer gates > P3: non-reviewable dirty task files are not published in uncommittedUnvalidatedFiles [1.00ms]
+(pass) base2 verification and reviewer gates > P0: unreviewed dirty reviewable task files re-arm a durable pass at turn start [2.00ms]
+(pass) base2 verification and reviewer gates > P0 negative: concurrent dirty non-task file does not re-arm a durable pass [1.00ms]
+(pass) base2 verification and reviewer gates > credited dirty task file does not re-expand gate scope after LOOKS_GOOD [2.00ms]
+(pass) base2 verification and reviewer gates > P1: agentReceipt changedFiles enter pendingGateFiles without file_mutation_result [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":0,"pendingFiles":[],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","hooksRan":true,"advisoryCount":0,"event":"base2.gate"}
+(pass) base2 verification and reviewer gates > historical changed files alone do not trigger stale validation or review [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/new.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > historical changed files gate only newly detected edits [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":0,"pendingFiles":[],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","hooksRan":true,"advisoryCount":0,"event":"base2.gate"}
+(pass) base2 verification and reviewer gates > ignores non-edit tool results with file fields when detecting changes [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":0,"pendingFiles":[],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","hooksRan":true,"advisoryCount":0,"event":"base2.gate"}
+(pass) base2 verification and reviewer gates > ignores unverified legacy edit results with a file and success flag
+{"currentPhase":"final_response_allowed","pendingFileCount":0,"pendingFiles":[],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","hooksRan":true,"advisoryCount":0,"event":"base2.gate"}
+(pass) base2 verification and reviewer gates > ignores unverified editor changedFiles summaries without mutation receipts
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-direct-edit-dirty-amMblE/already-dirty.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+3540 |         input: { agents: [{ agent_type: 'code-reviewer' }] },
+3541 |       })
+3542 |       const finalPreCreditStatus = gen.next(
+3543 |         attestedReviewerResult(reviewCall) as any,
+3544 |       )
+3545 |       expect(finalPreCreditStatus.value).toMatchObject({
+                                                ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-direct-edit-dirty-amMblE/already-dirty.ts
++ Snapshot fingerprint (echo exactly): v3:a6c00e91f32e2eda615f663ea0e42cc3986dcd064c8eccdf0ab6fb617d32d3c2
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-direct-edit-dirty-amMblE/already-dirty.ts	sha256:ebe0b8b895e5c5b198adf7acbbfc2e5725b9d4fde4f72da6d27e4cb57ef4478f:24
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:3545:42)
+(fail) base2 verification and reviewer gates > direct edit tool calls in message history trigger gates when git status was already dirty [15.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/already-dirty.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > apply_patch calls in message history trigger gates when git status was already dirty [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/already-dirty.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > apply_smart_patch calls in message history trigger gates when git status was already dirty [1.00ms]
+(pass) base2 verification and reviewer gates > prior write_todos state in message history is pinned before the next step [2.00ms]
+(pass) base2 verification and reviewer gates > write_todos after a step advances pinned workflow action without restarting completed work [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":2,"pendingFiles":["src/one.ts","src/two.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > direct edit_transaction calls collect all edited paths from message history [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":0,"pendingFiles":[],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","hooksRan":true,"advisoryCount":0,"event":"base2.gate"}
+(pass) base2 verification and reviewer gates > does not treat nested edit-shaped data in non-tool-call messages as direct edits [1.00ms]
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","skipReason":"validation-and-reviewer-gates-disabled","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > fast/no-validation mode skips file-change hooks and reviewer after edits [1.00ms]
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","skipReason":"validation-and-reviewer-gates-disabled","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > custom hasNoValidation option skips file-change hooks and reviewer after edits [2.00ms]
+{"currentPhase":"blocked","pendingFileCount":0,"pendingFiles":[],"skipReason":"edits-detected-without-pending-gate-files","validationStatus":"failed","reviewerStatus":"failed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > awaiting validation with changed files but no pending gate files blocks as unsafe [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/legacy.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > legacy unresolved reviewer blockers seed pending gate files [2.00ms]
+(pass) base2 verification and reviewer gates > pinned gate-status line reports hooks summary present=yes when lastValidationSummary is set [1.00ms]
+(pass) base2 verification and reviewer gates > pinned gate-status line reports hooks summary present=no when lastValidationSummary is empty
+(pass) base2 verification and reviewer gates > pinned active-work message renders Gate progress line when gateProgressLine is set [1.00ms]
+(pass) base2 verification and reviewer gates > pinned active-work message omits Gate progress line when gateProgressLine is empty [1.00ms]
+(pass) base2 verification and reviewer gates > legacy gate state without gateProgressLine renders the pinned block with no Gate progress line [1.00ms]
+(pass) base2 verification and reviewer gates > second pinned emission is delta-only when only gateProgressLine changed [1.00ms]
+(pass) base2 verification and reviewer gates > second pinned emission re-emits the full block when reviewer blockers change [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-reviewer-pinned-LCC0Ez/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+4707 |         gen.next(
+4708 |           attestedReviewerResult(reviewCall, 'BLOCKING', [
+4709 |             'Fix the edge case.',
+4710 |           ]) as any,
+4711 |         ).value,
+4712 |       ).toMatchObject({ toolName: 'add_message' })
+               ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "add_message",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-reviewer-pinned-LCC0Ez/a.ts
++ Snapshot fingerprint (echo exactly): v3:08bb6acf50eddc35bc588ea75dbc44a91309e0c304d7d22f0c9fae80a564cd25
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-reviewer-pinned-LCC0Ez/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:4712:9)
+(fail) base2 verification and reviewer gates > reviewer feedback is pinned as active work before the next step [5.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+4819 |     // coverage: 'missing' with empty findings produces only the synthetic
+4820 |     // all-coverage blocker classified by isTestCoverageReviewerFinding.
+4821 |     const afterReview = gen.next(
+4822 |       attestedReviewerResult(reviewCall, 'NON_BLOCKING', [], 'missing') as any,
+4823 |     )
+4824 |     expect(afterReview.value).toMatchObject({
+                                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:4824:31)
+(fail) base2 verification and reviewer gates > all-coverage reviewer findings route exclusively to test-writer [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+4887 |         'BLOCKING',
+4888 |         ['Fix the edge case.'],
+4889 |         'missing',
+4890 |       ) as any,
+4891 |     )
+4892 |     expect(afterReview.value).toMatchObject({
+                                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:4892:31)
+(fail) base2 verification and reviewer gates > mixed coverage and code findings keep repair-editor only [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-repair-progress-KGpm6v/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+4952 |         gen.next(
+4953 |           attestedReviewerResult(reviewCall, 'BLOCKING', [
+4954 |             'Fix the edge case.',
+4955 |           ]) as any,
+4956 |         ).value,
+4957 |       ).toMatchObject({ toolName: 'add_message' })
+               ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "add_message",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-repair-progress-KGpm6v/a.ts
++ Snapshot fingerprint (echo exactly): v3:c44e45019cf44ddf323f9aedc45d539be845c3e9ced16ff48818fad43da23984
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-repair-progress-KGpm6v/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:4957:9)
+(fail) base2 verification and reviewer gates > repair-editor with mutation progress continues into re-validation even when receipt is blocked [5.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-repair-zero-addressed-nekPBD/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > repair receipt with progress but zero addressed findings is rejected [5.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-repair-no-progress-M1Lrz5/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+5110 |         gen.next(
+5111 |           attestedReviewerResult(reviewCall, 'BLOCKING', [
+5112 |             'Fix the edge case.',
+5113 |           ]) as any,
+5114 |         ).value,
+5115 |       ).toMatchObject({ toolName: 'add_message' })
+               ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "add_message",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-repair-no-progress-M1Lrz5/a.ts
++ Snapshot fingerprint (echo exactly): v3:850882051c7b59e90fb5fd6bfb088ed5de898e3eabb56ea7b0b9af10bb83a1e8
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-repair-no-progress-M1Lrz5/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:5115:9)
+(fail) base2 verification and reviewer gates > reviewer repair that changes no bytes trips the no-progress guard [4.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-repair-cycle-TIdAX4/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+5203 |         gen.next(
+5204 |           attestedReviewerResult(firstReviewCall, 'BLOCKING', [
+5205 |             'Fix the edge case.',
+5206 |           ]) as any,
+5207 |         ).value,
+5208 |       ).toMatchObject({ toolName: 'add_message' })
+               ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "add_message",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-repair-cycle-TIdAX4/a.ts
++ Snapshot fingerprint (echo exactly): v3:75cb74bec63684418de779add535bf1856ded37cbce9c44e391612eb1cdc2c34
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-repair-cycle-TIdAX4/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:5208:9)
+(fail) base2 verification and reviewer gates > reviewer repair that oscillates A->B->A trips the cycle guard [6.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+5329 |       gen.next(
+5330 |         attestedReviewerResult(reviewCall, 'BLOCKING', [
+5331 |           'Fix the edge case.',
+5332 |         ]) as any,
+5333 |       ).value,
+5334 |     ).toMatchObject({ toolName: 'add_message' })
+             ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "add_message",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:5334:7)
+(fail) base2 verification and reviewer gates > repair-editor ignores forged child value receipt before runtime agentReceipt [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+5413 |       attestedReviewerResult(reviewCall, 'BLOCKING', [
+5414 |         'Fix the edge case.',
+5415 |       ]) as any,
+5416 |     )
+5417 | 
+5418 |     expect(afterReview.value).toMatchObject({
+                                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:5418:31)
+(fail) base2 verification and reviewer gates > blocking reviewer feedback reopens the turn [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-gate-mismatch-rJOzl5/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > durable gate pass is NOT reused when working-tree content hash differs [5.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-gate-reuse-xp2msh/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-gate-reuse-xp2msh/a.ts"],"reviewerStatus":"passed","validationStatus":"passed","reuseReason":"durable-fingerprint-match","reviewerVerdict":"LOOKS_GOOD","fingerprintPrefix":"v3:fc569e50d1fd2","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > durable gate pass IS reused when working-tree content hash matches [5.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-gate-content-change-oym7gT/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > durable gate pass is invalidated when same-path file content changes between turns [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-gate-missing-8RHeXu/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > durable gate pass is NOT reused when previously-hashed file is now missing [4.00ms]
+{"currentPhase":"repair_loop","pendingFileCount":1,"pendingFiles":["sdk/src/policy/terminal-command-policy.ts"],"reviewerStatus":"failed","validationStatus":"passed","blockerCount":2,"reuseReason":"aux-gate:security-reviewer-blocking","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > snapshot-bound blocking security-review output remains blocked and invokes repair [9.00ms]
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["sdk/src/policy/terminal-command-policy.ts"],"reviewerStatus":"passed","validationStatus":"passed","reuseReason":"aux-gate:security-reviewer","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["sdk/src/policy/terminal-command-policy.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > credits a LOOKS_GOOD security review whose only requirement gaps are parent-owned [5.00ms]
+{"currentPhase":"repair_loop","pendingFileCount":1,"pendingFiles":["sdk/src/policy/terminal-command-policy.ts"],"reviewerStatus":"failed","validationStatus":"passed","blockerCount":2,"reuseReason":"aux-gate:security-reviewer-blocking","event":"base2.gate"}
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["sdk/src/policy/terminal-command-policy.ts"],"reviewerStatus":"passed","validationStatus":"passed","reuseReason":"aux-gate:security-reviewer","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["sdk/src/policy/terminal-command-policy.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["sdk/src/policy/terminal-command-policy.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6088 |       input: { agents: [{ agent_type: 'code-reviewer' }] },
+6089 |     })
+6090 |     const finalPreCreditStatus = gen.next(
+6091 |       attestedReviewerResult(finalReview.value) as any,
+6092 |     )
+6093 |     expect(finalPreCreditStatus.value).toMatchObject({ toolName: 'git_status' })
+                                              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: sdk/src/policy/terminal-command-policy.ts
++ Snapshot fingerprint (echo exactly): v3:ae41cb2649fc6c3f340e8882b6cc5800a14d6dc4257aef175bcc2f45f403b948
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ sdk/src/policy/terminal-command-policy.ts	missing
++ --
++ 
++ Validation gate summary: Configured file-change hooks passed: typecheck.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6093:40)
+(fail) base2 verification and reviewer gates > security repair revalidates with security-reviewer before finalization [7.00ms]
+{"currentPhase":"blocked","pendingFileCount":1,"pendingFiles":["sdk/src/policy/terminal-command-policy.ts"],"reviewerStatus":"failed","validationStatus":"passed","skipReason":"security-review-protocol-failure","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > malformed snapshot-bound security-review output blocks without inventing repair findings [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6216 |       attestedReviewerResult(reviewCall, 'BLOCKING', [
+6217 |         'Fix the structured edge case.',
+6218 |       ]) as any,
+6219 |     )
+6220 | 
+6221 |     expect(afterReview.value).toMatchObject({
+                                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6221:31)
+(fail) base2 verification and reviewer gates > structured BLOCKING reviewer JSON output reopens the turn [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6265 |     } as any).value
+6266 |     expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+6267 |     const finalPreCreditStatus = gen.next(
+6268 |       attestedReviewerResult(reviewCall) as any,
+6269 |     )
+6270 |     expect(finalPreCreditStatus.value).toMatchObject({ toolName: 'git_status' })
+                                              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6270:40)
+(fail) base2 verification and reviewer gates > structured LOOKS_GOOD reviewer JSON output finalizes [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > rejects non-1 attestation schema versions before finalization [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6429 |             },
+6430 |           ],
+6431 |         },
+6432 |       ],
+6433 |     } as any)
+6434 |     expect(finalPreCreditStatus.value).toMatchObject({ toolName: 'git_status' })
+                                              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "includeToolCall": false,
++   "input": {
++     "content": 
++ "Reviewer gate: code-reviewer failed snapshot/file attestation twice.
++ 
++ BLOCKING: reviewer did not assess correctness
++ BLOCKING: reviewer did not assess security
++ BLOCKING: reviewer did not assess tests
++ BLOCKING: reviewer did not assess apiCompatibility
++ BLOCKING: reviewer did not assess performance
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ This is a reviewer protocol/configuration failure, not a source-code finding. The harness did not spawn repair-editor or finalize. Stop retrying automatically; obtain a fresh matching structured review or explicitly authorize the reviewer-protocol bypass."
++ ,
++     "role": "user",
++   },
++   "toolName": "add_message",
+  }
+
+- Expected  - 1
++ Received  + 17
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6434:40)
+(fail) base2 verification and reviewer gates > reviewer attestation errors retry the reviewer once without spawning repair-editor [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > repeated reviewer attestation errors stop after the bounded retry [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > reviewer prompt maps gate test coverage to the changed test file in the same snapshot [1.00ms]
+{"currentPhase":"awaiting_validation","pendingFileCount":2,"pendingFiles":["agents/base2/base2.ts","agents/__tests__/base2.test.ts"],"validationStatus":"passed","reviewerStatus":"passed","reuseReason":"aux-gate:test-writer","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":2,"pendingFiles":["agents/base2/base2.ts","agents/__tests__/base2.test.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":2,"pendingFiles":["agents/base2/base2.ts","agents/__tests__/base2.test.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6785 |             },
+6786 |           ],
+6787 |         },
+6788 |       ],
+6789 |     } as any)
+6790 |     expect(finalPreCreditStatus.value).toMatchObject({ toolName: 'git_status' })
+                                              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: agents/base2/base2.ts, agents/__tests__/base2.test.ts
++ Snapshot fingerprint (echo exactly): v3:5ff21aa3bf7d6dad13ff5d77a085373f6b3931f871a6f4f11f48b4bdb78a10dc
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ agents/__tests__/base2.test.ts	sha256:ffe9ffc928d99f6d569c5ae533c93ccca151db670e7eab0e179a9bae800bc01e:596445
++ agents/base2/base2.ts	sha256:abc1c17f000983586b5221df2e5c86cc3a2264d1c5e001662e216fa706f13c72:807656
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not assess security
++ BLOCKING: reviewer did not assess apiCompatibility
++ BLOCKING: reviewer did not assess performance
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 28
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6790:40)
+(fail) base2 verification and reviewer gates > reviewer attestation citing the changed test file clears the gate test-coverage requirement [15.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6883 |           ],
+6884 |         },
+6885 |       ],
+6886 |     } as any)
+6887 | 
+6888 |     expect(afterReview.value).toMatchObject({
+                                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not assess security
++ BLOCKING: reviewer did not assess tests
++ BLOCKING: reviewer did not assess apiCompatibility
++ BLOCKING: reviewer did not assess performance
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 26
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6888:31)
+(fail) base2 verification and reviewer gates > structured NON_BLOCKING reviewer JSON output does not finalize and enters repair [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-vAQKBh/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6988 |       reviewCall,
+6989 |       firstVerdict,
+6990 |       Array.isArray(findingSummary) ? findingSummary : [findingSummary],
+6991 |     )
+6992 |     const afterFirst = gen.next(firstReview as any)
+6993 |     expect(afterFirst.value).toMatchObject({
+                                    ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-vAQKBh/a.ts
++ Snapshot fingerprint (echo exactly): v3:96396aa2643887bc4bf692149cf5397724c92919bd72fd9f8e98d5655df5b654
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-vAQKBh/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at driveThroughRepairToSecondReview (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6993:30)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7062:32)
+(fail) base2 verification and reviewer gates > same NON_BLOCKING finding text after repair-editor addressed it finalizes instead of looping [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-N34XVm/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+7146 |             [],
+7147 |             'covered',
+7148 |             advisories,
+7149 |           ) as any,
+7150 |         ).value,
+7151 |       ).toMatchObject({ toolName: 'git_status' })
+               ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-N34XVm/a.ts
++ Snapshot fingerprint (echo exactly): v3:4fbe5e1383da435aeb19fecd31af76bb540226752b5d039413d6bf07f93cbd96
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-N34XVm/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7151:9)
+(fail) base2 verification and reviewer gates > a LOOKS_GOOD receipt with advisories persists and surfaces bounded advisories [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-haEK9R/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+7219 |           ['Fix the edge case.'],
+7220 |           'covered',
+7221 |           advisories,
+7222 |         ) as any,
+7223 |       )
+7224 |       expect(afterReview.value).toMatchObject({
+                                       ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-haEK9R/a.ts
++ Snapshot fingerprint (echo exactly): v3:7f4114a7fd53017343d134d20e782a31d499142b84962d4cdb8abd41b65d2b71
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-haEK9R/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7224:33)
+(fail) base2 verification and reviewer gates > a blocking reviewer round displays bounded advisories without turning them into blockers [4.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-HcPSsu/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+7279 |       const afterReview = gen.next(
+7280 |         attestedReviewerResult(reviewCall, 'BLOCKING', [
+7281 |           'Fix the edge case.',
+7282 |         ]) as any,
+7283 |       )
+7284 |       expect(afterReview.value).toMatchObject({
+                                       ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-HcPSsu/a.ts
++ Snapshot fingerprint (echo exactly): v3:e02b1a9b22ef2e47d766cd4a6ef195621dd4f1dd1a80970b38e1c23fabd69524
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-HcPSsu/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7284:33)
+(fail) base2 verification and reviewer gates > a blocking reviewer round with no advisories keeps the blocker message byte-identical [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-oUQP8h/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6988 |       reviewCall,
+6989 |       firstVerdict,
+6990 |       Array.isArray(findingSummary) ? findingSummary : [findingSummary],
+6991 |     )
+6992 |     const afterFirst = gen.next(firstReview as any)
+6993 |     expect(afterFirst.value).toMatchObject({
+                                    ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-oUQP8h/a.ts
++ Snapshot fingerprint (echo exactly): v3:3a10252b97f452e79bc15596125eb4c06ce3738445665d0e4e547b4775dfe399
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-oUQP8h/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at driveThroughRepairToSecondReview (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6993:30)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7315:32)
+(fail) base2 verification and reviewer gates > re-raising a condoned NON_BLOCKING text as BLOCKING is not condoned [4.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-9G0ilR/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6988 |       reviewCall,
+6989 |       firstVerdict,
+6990 |       Array.isArray(findingSummary) ? findingSummary : [findingSummary],
+6991 |     )
+6992 |     const afterFirst = gen.next(firstReview as any)
+6993 |     expect(afterFirst.value).toMatchObject({
+                                    ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-9G0ilR/a.ts
++ Snapshot fingerprint (echo exactly): v3:64b38e7b69669b58a60068d9830e94ce39472123af7c7931534c18ce87e2f887
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-9G0ilR/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at driveThroughRepairToSecondReview (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6993:30)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7365:32)
+(fail) base2 verification and reviewer gates > a condoned finding re-raised at the same class still converges [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-IHcAYY/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6988 |       reviewCall,
+6989 |       firstVerdict,
+6990 |       Array.isArray(findingSummary) ? findingSummary : [findingSummary],
+6991 |     )
+6992 |     const afterFirst = gen.next(firstReview as any)
+6993 |     expect(afterFirst.value).toMatchObject({
+                                    ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-IHcAYY/a.ts
++ Snapshot fingerprint (echo exactly): v3:b4b5304a230be6a21ee292463059f94d868e9b593842c353cbfb3cf6da2d84d0
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-IHcAYY/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at driveThroughRepairToSecondReview (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6993:30)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7406:32)
+(fail) base2 verification and reviewer gates > a finding condoned at BLOCKING and re-raised as NON_BLOCKING still converges [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-y86XYE/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6988 |       reviewCall,
+6989 |       firstVerdict,
+6990 |       Array.isArray(findingSummary) ? findingSummary : [findingSummary],
+6991 |     )
+6992 |     const afterFirst = gen.next(firstReview as any)
+6993 |     expect(afterFirst.value).toMatchObject({
+                                    ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-y86XYE/a.ts
++ Snapshot fingerprint (echo exactly): v3:efe28bb1e8db4d553b13afac471d5a54760ded02a6596b50ffc582d7f8b638c0
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-y86XYE/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at driveThroughRepairToSecondReview (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6993:30)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7481:32)
+(fail) base2 verification and reviewer gates > an object finding with a stable id records an id-keyed condone key and stays open when re-raised as BLOCKING [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-cleanup-Q6dd9x/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+7631 |       const afterReview = gen.next(
+7632 |         attestedReviewerResult(reviewCall, 'NON_BLOCKING', [
+7633 |           findingText,
+7634 |         ]) as any,
+7635 |       )
+7636 |       expect(afterReview.value).toMatchObject({ toolName: 'git_status' })
+                                       ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-cleanup-Q6dd9x/a.ts
++ Snapshot fingerprint (echo exactly): v3:13557e7953fc5efdb722ccec9db17c89aa30f32b66d8b4526e4774dde6822e0d
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-cleanup-Q6dd9x/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7636:33)
+(fail) base2 verification and reviewer gates > condoned pass keeps another reviewer BLOCKING blocker that shares the condoned text [3.00ms]
+{"currentPhase":"repair_loop","pendingFileCount":1,"pendingFiles":["sdk/src/policy/terminal-command-policy.ts"],"reviewerStatus":"failed","validationStatus":"passed","blockerCount":1,"reuseReason":"aux-gate:security-reviewer-blocking","event":"base2.gate"}
+(pass) base2 verification and reviewer gates > a security finding re-raised at BLOCKING is not condoned by a class-agnostic condone key [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-vIWkTO/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+6988 |       reviewCall,
+6989 |       firstVerdict,
+6990 |       Array.isArray(findingSummary) ? findingSummary : [findingSummary],
+6991 |     )
+6992 |     const afterFirst = gen.next(firstReview as any)
+6993 |     expect(afterFirst.value).toMatchObject({
+                                    ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-vIWkTO/a.ts
++ Snapshot fingerprint (echo exactly): v3:a9cd147072ebbf0d42a03f43d541d7992bdda0b9e977cdfd2c4959b14bc511fd
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-vIWkTO/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at driveThroughRepairToSecondReview (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:6993:30)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7766:32)
+(fail) base2 verification and reviewer gates > genuinely NEW finding on re-review still blocks and spawns repair-editor [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-C0bcK4/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+7849 |       expect(
+7850 |         blockers.some((blocker: string) =>
+7851 |           /BLOCKING:\s*requirement\s+missing:\s*commit and push/i.test(blocker),
+7852 |         ),
+7853 |       ).toBe(false)
+7854 |       expect(blockers).toEqual([
+                              ^
+error: expect(received).toEqual(expected)
+
+- [
+-   "NON_BLOCKING: reviewer returned non-blocking nits without findings; re-address and re-review until LOOKS_GOOD",
+- ]
++ []
+
+- Expected  - 3
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7854:24)
+(fail) base2 verification and reviewer gates > parent-owned requirementCoverage gap is still filtered alongside condoned texts [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-qEpstB/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+7890 |       driveToFirstReview()
+7891 |     try {
+7892 |       const firstReview = attestedReviewerResult(reviewCall, 'NON_BLOCKING', [
+7893 |         findingText,
+7894 |       ])
+7895 |       expect(gen.next(firstReview as any).value).toMatchObject({
+                                                        ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-qEpstB/a.ts
++ Snapshot fingerprint (echo exactly): v3:3ed161be57478c6e21897b447a5a845ec9ad94b1060dcd8fe48a45e793571b90
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-qEpstB/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7895:50)
+(fail) base2 verification and reviewer gates > blocked repair receipt does not condone the findings it claims to have addressed [4.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-U96Ngu/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+7988 |       driveToFirstReview()
+7989 |     try {
+7990 |       const firstReview = attestedReviewerResult(reviewCall, 'NON_BLOCKING', [
+7991 |         findingText,
+7992 |       ])
+7993 |       expect(gen.next(firstReview as any).value).toMatchObject({
+                                                        ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-U96Ngu/a.ts
++ Snapshot fingerprint (echo exactly): v3:c7b0e24220bb28985a6dd40c420c8d2180617e55c48525a04321c3958d5ab562
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-U96Ngu/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:7993:50)
+(fail) base2 verification and reviewer gates > completed repair receipt with no changed files does not condone its findings [7.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+8104 |             },
+8105 |           ],
+8106 |         },
+8107 |       ],
+8108 |     } as any)
+8109 |     expect(finalPreCreditStatus.value).toMatchObject({ toolName: 'git_status' })
+                                              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not assess security
++ BLOCKING: reviewer did not assess tests
++ BLOCKING: reviewer did not assess apiCompatibility
++ BLOCKING: reviewer did not assess performance
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 28
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:8109:40)
+(fail) base2 verification and reviewer gates > bounds durable review receipts by total serialized size [4.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-a8EdCI/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+8128 |     const { gen, agentState, reviewCall, tmpDir, tmpFile, gateFile } =
+8129 |       driveToFirstReview()
+8130 |     try {
+8131 |       expect(
+8132 |         gen.next(attestedReviewerResult(reviewCall) as any).value,
+8133 |       ).toMatchObject({ toolName: 'git_status' })
+               ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-condoned-review-a8EdCI/a.ts
++ Snapshot fingerprint (echo exactly): v3:5f8564fbe3629364c949ed47f438d5477dc4386f39e498e8cbfede7330f5d38c
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-condoned-review-a8EdCI/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:8133:9)
+(fail) base2 verification and reviewer gates > recordSuccessfulReviewReceipt binds reviewedFileHashes to the reviewed file markers [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-5piiyW/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-condoned-review-5piiyW/a.ts"],"reviewerStatus":"passed","validationStatus":"skipped","reviewerVerdict":"LOOKS_GOOD","hooksRan":false,"advisoryCount":0,"event":"base2.gate"}
+(pass) base2 verification and reviewer gates > fitReceiptToStorageBound keeps reviewedFileHashes through truncation [46.00ms]
+(pass) base2 verification and reviewer gates > execute-plan prompts use injected artifacts without repeated unchanged reads [1.00ms]
+(pass) base2 verification and reviewer gates > editor handoff guidance includes the standardized envelope fields
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+8308 |       attestedReviewerResult(reviewCall, 'NON_BLOCKING', [
+8309 |         'Improve naming.',
+8310 |       ]) as any,
+8311 |     )
+8312 | 
+8313 |     expect(afterReview.value).toMatchObject({
+                                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:8313:31)
+(fail) base2 verification and reviewer gates > non-blocking reviewer feedback with findings does not finalize and enters repair [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-credit-marker-YdhGJH/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+8381 |         toolResult: [{ type: 'json', value: { status: ` M ${gateFile}` } }],
+8382 |       } as any).value
+8383 |       expect(reviewCall).toMatchObject({ toolName: 'spawn_agents' })
+8384 |       expect(
+8385 |         gen.next(attestedReviewerResult(reviewCall) as any).value,
+8386 |       ).toMatchObject({ toolName: 'git_status' })
+               ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-credit-marker-YdhGJH/a.ts
++ Snapshot fingerprint (echo exactly): v3:ece456f95d79eccfca64b35c98d34eb32fbb34f493b71453897342668d373682
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-credit-marker-YdhGJH/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:8386:9)
+(fail) base2 gate-passed credit ledger (Option A) > records a content marker for every file credited on a passing gate [3.00ms]
+(pass) base2 gate-passed credit ledger (Option A) > evicts a credited file whose content drifted and republishes it as unvalidated [1.00ms]
+(pass) base2 gate-passed credit ledger (Option A) > fails closed and evicts a credited file that has no stored marker (legacy state) [1.00ms]
+(pass) base2 gate-passed credit ledger (Option A) > retains a credited file whose stored marker still matches current content [1.00ms]
+(pass) base2 gate-passed credit ledger (Option A) > retains a credited-as-deleted file whose stored marker is still missing (no gate loop) [1.00ms]
+(pass) base2 gate-passed credit ledger (Option A) > evicts a credited-as-deleted file that reappears on disk (fail closed) [1.00ms]
+(pass) base2 gate-passed credit ledger (Option A) > evicts a credited-as-deleted file whose current marker becomes non-creditable (fail closed) [2.00ms]
+(pass) base2 gate-passed credit ledger (Option A) > gate-state type round-trips gatePassedFileMarkers through JSON and is optional on older state [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 validation-first reviewer snapshots > validates before spawning the final reviewer [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"repair_loop","pendingFileCount":1,"pendingFiles":["src/a.ts"],"validationStatus":"failed","repairRound":1,"blockerCount":1,"event":"base2.gate"}
+{"currentPhase":"blocked","pendingFileCount":1,"pendingFiles":["src/a.ts"],"validationStatus":"failed","repairRound":1,"blockerCount":1,"skipReason":"repair-incomplete","event":"base2.gate"}
+(pass) base2 repair-loop gate-state telemetry (M6.4) > repair-incomplete gate-state block surfaces repairRound and maxRepairRounds [5.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":0,"pendingFiles":[],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","hooksRan":true,"advisoryCount":0,"event":"base2.gate"}
+(pass) base2 repair-loop gate-state telemetry (M6.4) > non-repair gate-state blocks omit repairRound/maxRepairRounds for backward compatibility [2.00ms]
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["src/a.ts"],"validationStatus":"passed","reviewerStatus":"passed","reuseReason":"aux-gate:test-writer","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 test-writer aux-gate completion path > a valid structured writer receipt sets testWriterGateDone and proceeds to validation [4.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 test-writer aux-gate completion path > an incomplete/invalid writer receipt blocks and does not loop indefinitely [1.00ms]
+(pass) base2 COMMIT ANYWAY commit-scope bypass publisher > authorizes the bypass at turn start for an exact standalone user COMMIT ANYWAY message [1.00ms]
+(pass) base2 COMMIT ANYWAY commit-scope bypass publisher > recognizes a COMMIT ANYWAY message that arrives in the post-STEP message history [1.00ms]
+(pass) base2 COMMIT ANYWAY commit-scope bypass publisher > does not authorize for substring prose or assistant/tool-role exact phrases [1.00ms]
+(pass) resolveMaxReviewerRepairRounds > defaults to unlimited (null) when undefined
+(pass) resolveMaxReviewerRepairRounds > accepts a finite option number
+(pass) resolveMaxReviewerRepairRounds > invalid values fall back to unlimited (null) [1.00ms]
+(pass) resolveMaxReviewerRepairRounds > caps at 20
+(pass) resolveMaxRepairRounds > defaults to unlimited (null) when undefined
+(pass) resolveMaxRepairRounds > accepts a finite option number
+(pass) resolveMaxRepairRounds > invalid values fall back to unlimited (null)
+(pass) resolveMaxRepairRounds > caps at 20
+(pass) resolveMaxSpecialistRepairRounds > defaults to unlimited (null) when undefined
+(pass) resolveMaxSpecialistRepairRounds > accepts a finite option number
+(pass) resolveMaxSpecialistRepairRounds > invalid values fall back to unlimited (null)
+(pass) resolveMaxSpecialistRepairRounds > caps at 20
+(pass) createBase2 maxReviewerRepairRounds option/env > option is stored on programmaticConfig
+(pass) createBase2 maxReviewerRepairRounds option/env > env string is used when option is omitted
+(pass) createBase2 maxReviewerRepairRounds option/env > option wins over env
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+9495 |       attestedReviewerResult(reviewCall, 'BLOCKING', [
+9496 |         'Fix the persistent edge case.',
+9497 |       ]) as any,
+9498 |     )
+9499 | 
+9500 |     expect(exhausted.value).toMatchObject({
+                                   ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ Repair round: 2. This is a re-review.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 24
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:9500:29)
+(fail) createBase2 maxReviewerRepairRounds option/env > createBase2({ maxReviewerRepairRounds: 2 }) exhausts when count is seeded at 2 [2.00ms]
+(pass) createBase2 maxRepairRounds option/env > option is stored on programmaticConfig [1.00ms]
+(pass) createBase2 maxRepairRounds option/env > env string is used when option is omitted
+(pass) createBase2 maxRepairRounds option/env > option wins over env
+(pass) createBase2 maxRepairRounds option/env > default createBase2 stores unlimited (null) repair budgets on programmaticConfig
+(pass) createBase2 maxSpecialistRepairRounds option/env > option is stored on programmaticConfig
+(pass) createBase2 maxSpecialistRepairRounds option/env > env string is used when option is omitted
+(pass) createBase2 maxSpecialistRepairRounds option/env > option wins over env
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+9659 |       attestedReviewerResult(reviewCall, 'BLOCKING', [
+9660 |         'Fix the persistent edge case.',
+9661 |       ]) as any,
+9662 |     )
+9663 | 
+9664 |     expect(afterReview.value).toMatchObject({
+                                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ Repair round: 6. This is a re-review.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 24
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:9664:31)
+(fail) base2 reviewer repair budget cap > default unlimited does not exhaust at seed count 6 [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+9726 |       attestedReviewerResult(reviewCall, 'BLOCKING', [
+9727 |         'Fix the persistent edge case.',
+9728 |       ]) as any,
+9729 |     )
+9730 | 
+9731 |     expect(exhausted.value).toMatchObject({
+                                   ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ Repair round: 1. This is a re-review.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 24
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:9731:29)
+(fail) base2 reviewer repair budget cap > explicit small maxReviewerRepairRounds still exhausts as opt-in cap [1.00ms]
+{"currentPhase":"repair_loop","pendingFileCount":1,"pendingFiles":["sdk/src/policy/terminal-command-policy.ts"],"reviewerStatus":"failed","validationStatus":"passed","blockerCount":2,"reuseReason":"aux-gate:security-reviewer-blocking","event":"base2.gate"}
+(pass) base2 content-based reviewer finding correlation > security-reviewer findings correlate to their record by content, not positional index [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+9933 |             },
+9934 |           ],
+9935 |         },
+9936 |       ],
+9937 |     } as any)
+9938 |     expect(afterReview.value).toMatchObject({ toolName: 'add_message' })
+                                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "add_message",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:9938:31)
+(fail) base2 content-based reviewer finding correlation > code-reviewer object findings keep their reviewer-supplied id [2.00ms]
+(pass) base2 specialist parent-owned LOOKS_GOOD credit > LOOKS_GOOD reliability-reviewer with only parent-owned requirementCoverage does not spawn repair-editor [3.00ms]
+(pass) base2 specialist attestation tolerance > credits a routed specialist that omits a deleted pending file from reviewedFiles [4.00ms]
+10376 |       ).toContain('reliability-reviewer')
+10377 | 
+10378 |       const driftEvents = telemetry.filter(
+10379 |         (event) => event.reviewerStatus === 'attestation-fingerprint-drift',
+10380 |       )
+10381 |       expect(driftEvents).toHaveLength(1)
+                                  ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 1
+Received length: 0
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:10381:27)
+(fail) base2 specialist attestation tolerance > records fingerprint drift for a coverage-complete routed specialist review [2.00ms]
+10446 |         gen.next(
+10447 |           attestedReviewerResult(firstReviewCall, 'NON_BLOCKING', [
+10448 |             findingText,
+10449 |           ]) as any,
+10450 |         ).value,
+10451 |       ).toMatchObject({ toolName: 'add_message' })
+                ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "add_message",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-round-findings-Ql711J/a.ts
++ Snapshot fingerprint (echo exactly): v3:79667e7c75dd52d0844485fc4814a09ad3a9f860b5ea531f3d40407bdef82032
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-round-findings-Ql711J/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:10451:9)
+(fail) base2 reviewer round-findings telemetry > emits one round-findings event per round and carries repeated finding text [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 reviewer re-review round ledger > round 0 (first review) adds no ledger at all [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-ledger-rereview-LI8kfZ/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 reviewer re-review round ledger > a re-review emits the round line, the verbatim re-raise rule, and its own findings verbatim [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-ledger-cap-TciRJA/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 reviewer re-review round ledger > caps the ledger at 12 entries and reports how many were omitted [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-ledger-empty-yKtQ9b/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 reviewer re-review round ledger > emits only the round line when no finding belongs to this reviewer [7.00ms]
+(pass) base2 emitGateTelemetry durable sink recorder > forwards the same undefined-stripped payload to the injected recorder and console.info [1.00ms]
+(pass) base2 emitGateTelemetry durable sink recorder > behaves exactly as before when no recorder is injected [1.00ms]
+(pass) base2 emitGateTelemetry durable sink recorder > a throwing recorder never throws out of the gate loop [1.00ms]
+(pass) base2 emitGateTelemetry durable sink recorder > a legal transition persists the same base2-gate-v1 state as the engine [1.00ms]
+(pass) base2 emitGateTelemetry durable sink recorder > an illegal transition records the structured error and does not throw
+(pass) base2 emitGateTelemetry durable sink recorder > a failing console emit still reaches the durable sink [1.00ms]
+(pass) base2 inline emitGateTelemetry discriminator guard > a payload key named `event` cannot override the base2.gate discriminator [3.00ms]
+(pass) base2 inline emitGateTelemetry transition isolation > a rejected phase transition still records the payload and logs it [2.00ms]
+(pass) base2 inline formatGateStateBlock delimiter safety > reviewer-authored text carrying the closing delimiter cannot truncate the block [3.00ms]
+{"currentPhase":"repair_loop","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-gate-state-specialist-blocking-a9AdjE/state/session.ts"],"reviewerStatus":"failed","validationStatus":"passed","blockerCount":1,"repairRound":1,"reuseReason":"aux-gate:reliability-reviewer-blocking","event":"base2.gate"}
+(pass) base2 gate-state reviewer-family and skip-reason fields > specialist blocking findings name the routed reviewer family in the block [4.00ms]
+(pass) base2 gate-state reviewer-family and skip-reason fields > specialist rate-limit crash carries reviewers and the specialist-rate-limited skip token [2.00ms]
+(pass) base2 gate-state reviewer-family and skip-reason fields > a stale skip token is overwritten on the specialist terminal-failure path [2.00ms]
+(pass) base2 gate-state reviewer-family and skip-reason fields > a stale specialist-rate-limited token does not misclassify a non-crash terminal failure [2.00ms]
+{"currentPhase":"repair_loop","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-specialist-stale-token-no-progress-aMh9pc/state/session.ts"],"reviewerStatus":"failed","validationStatus":"passed","blockerCount":1,"repairRound":1,"reuseReason":"aux-gate:reliability-reviewer-blocking","event":"base2.gate"}
+{"currentPhase":"blocked","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-specialist-stale-token-no-progress-aMh9pc/state/session.ts"],"reviewerStatus":"failed","validationStatus":"passed","repairRound":1,"skipReason":"specialist-repair-no-progress","event":"base2.gate"}
+(pass) base2 gate-state reviewer-family and skip-reason fields > a stale skip token is overwritten on the specialist no-progress repair exit [2.00ms]
+(pass) base2 gate-state reviewer-family and skip-reason fields > a stale skip token is overwritten on the specialist no-verdict budget-exhaustion path [2.00ms]
+(pass) base2 gate-state reviewer-family and skip-reason fields > a specialist exit overwrites the protocol token but not the protocol latch [2.00ms]
+(pass) base2 gate-state reviewer-family and skip-reason fields > rehydration derives the protocol latch from pre-split serialized state
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-gate-state-docs-skip-iR7dH8/notes.md"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"awaiting_review","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-gate-state-docs-skip-iR7dH8/notes.md"],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","skipReason":"reviewer-skip-no-reviewable-source-files","event":"base2.gate"}
+(pass) base2 gate-state reviewer-family and skip-reason fields > a docs-only pending set reports the reviewer-skip token in the block [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-gate-state-repair-validation-wMJWXp/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+12186 |       const afterReview = gen.next(
+12187 |         attestedReviewerResult(reviewCall, 'BLOCKING', [
+12188 |           'Fix the edge case.',
+12189 |         ]) as any,
+12190 |       )
+12191 |       expect(afterReview.value).toMatchObject({
+                                        ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-gate-state-repair-validation-wMJWXp/a.ts
++ Snapshot fingerprint (echo exactly): v3:370f4a48c061b524905a90dc3935aeeaec84579fdd616febf3a716b947611934
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-gate-state-repair-validation-wMJWXp/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12191:33)
+(fail) base2 gate-state reviewer-family and skip-reason fields > reviewer-repair re-validation failure names the code-reviewer family [4.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-gate-state-repair-validation-mixed-NaTY8q/state/session.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+12317 |       const afterReview = gen.next(
+12318 |         attestedReviewerResult(reviewCall, 'BLOCKING', [
+12319 |           'Fix the edge case.',
+12320 |         ]) as any,
+12321 |       )
+12322 |       expect(afterReview.value).toMatchObject({
+                                        ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "input": {
+-     "role": "user",
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-gate-state-repair-validation-mixed-NaTY8q/state/session.ts
++ Snapshot fingerprint (echo exactly): v3:55d6ceb9d47870c51756a7dce9e51ac640a22ac154ce89368d5ee96df9d4e8b4
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-gate-state-repair-validation-mixed-NaTY8q/state/session.ts	sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
+    },
+-   "toolName": "add_message",
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 23
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12322:33)
+(fail) base2 gate-state reviewer-family and skip-reason fields > reviewer-repair re-validation failure names every open reviewer family, not just code-reviewer [4.00ms]
+(pass) base2 gate-state reviewer-family and skip-reason fields > reviewers/skipReason are bounded, sanitized, and omitted when empty [3.00ms]
+(pass) base2 gate-state reviewer-family and skip-reason fields > legacy blocks without the new fields still parse
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+12527 |       toolName: 'spawn_agents',
+12528 |       input: { agents: [{ agent_type: 'code-reviewer' }] },
+12529 |     })
+12530 |     expect(
+12531 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+12532 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToGatePassMessage (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12532:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12542:21)
+(fail) base2 gate-pass continuation directive > with no incomplete workflow todos the gate-pass notice is unchanged [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+12527 |       toolName: 'spawn_agents',
+12528 |       input: { agents: [{ agent_type: 'code-reviewer' }] },
+12529 |     })
+12530 |     expect(
+12531 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+12532 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToGatePassMessage (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12532:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12558:21)
+(fail) base2 gate-pass continuation directive > with an incomplete workflow todo the gate-pass notice tells the agent to continue this turn [2.00ms]
+(pass) base2 gate-pass continuation directive > DEFAULT step prompt carries the write_todos continuation directive; fast mode does not
+(pass) base2 gate-pass continuation directive > EXECUTE_PLAN step prompt continues to the next plan task without relaxing one-in_progress
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+12527 |       toolName: 'spawn_agents',
+12528 |       input: { agents: [{ agent_type: 'code-reviewer' }] },
+12529 |     })
+12530 |     expect(
+12531 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+12532 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToGatePassMessage (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12532:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12632:21)
+(fail) base2 gate-pass continuation directive > the gate-pass <gate-state> block carries workflow progress when declared work remains [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+12527 |       toolName: 'spawn_agents',
+12528 |       input: { agents: [{ agent_type: 'code-reviewer' }] },
+12529 |     })
+12530 |     expect(
+12531 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+12532 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToGatePassMessage (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12532:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12657:21)
+(fail) base2 gate-pass continuation directive > the workflow key is absent when every declared todo is complete [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+12527 |       toolName: 'spawn_agents',
+12528 |       input: { agents: [{ agent_type: 'code-reviewer' }] },
+12529 |     })
+12530 |     expect(
+12531 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+12532 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToGatePassMessage (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12532:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12670:21)
+(fail) base2 gate-pass continuation directive > the workflow key is absent when no declared workflow progress exists [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+12527 |       toolName: 'spawn_agents',
+12528 |       input: { agents: [{ agent_type: 'code-reviewer' }] },
+12529 |     })
+12530 |     expect(
+12531 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+12532 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToGatePassMessage (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12532:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12681:21)
+(fail) base2 gate-pass continuation directive > the workflow key is absent when the next workflow action is blank [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+12527 |       toolName: 'spawn_agents',
+12528 |       input: { agents: [{ agent_type: 'code-reviewer' }] },
+12529 |     })
+12530 |     expect(
+12531 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+12532 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToGatePassMessage (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12532:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12710:21)
+(fail) base2 gate-pass continuation directive > the workflow action is truncated at 240 characters [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["src/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+12527 |       toolName: 'spawn_agents',
+12528 |       input: { agents: [{ agent_type: 'code-reviewer' }] },
+12529 |     })
+12530 |     expect(
+12531 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+12532 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: src/a.ts
++ Snapshot fingerprint (echo exactly): v3:d9cbce7b98718a2a5fb71fc7968377663f56a60217016dacd78034bae92474c6
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ src/a.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToGatePassMessage (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12532:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:12730:21)
+(fail) base2 gate-pass continuation directive > control characters are stripped from the workflow action [2.00ms]
+(pass) base2 reviewer skip via the durable receipt ledger > legacy serialized state carrying the removed reviewedReviewableFingerprint key is ignored [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":2,"pendingFiles":[".base2-test-scratch/base2-reviewer-skip-docs-dirty-kyK2JC/a.ts","notes.md"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"awaiting_review","pendingFileCount":2,"pendingFiles":[".base2-test-scratch/base2-reviewer-skip-docs-dirty-kyK2JC/a.ts","notes.md"],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","skipReason":"reviewer-skip-docs-only-after-review","event":"base2.gate"}
+(pass) base2 reviewer skip via the durable receipt ledger > dirty docs-only files after a matching review skip with the docs-only reason [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":2,"pendingFiles":[".base2-test-scratch/base2-reviewer-skip-docs-edit-EEBrti/a.ts","docs/notes.md"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"awaiting_review","pendingFileCount":2,"pendingFiles":[".base2-test-scratch/base2-reviewer-skip-docs-edit-EEBrti/a.ts","docs/notes.md"],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","skipReason":"reviewer-skip-docs-only-after-review","event":"base2.gate"}
+(pass) base2 reviewer skip via the durable receipt ledger > a docs-only edit after a matching review skips instead of re-running the reviewer [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-reviewer-skip-reviewable-edit-dFT4wn/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 reviewer skip via the durable receipt ledger > a reviewable-file edit after a matching review still re-arms the reviewer [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-reviewer-skip-scalar-8s4vl4/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"awaiting_review","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-reviewer-skip-scalar-8s4vl4/a.ts"],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","skipReason":"reviewer-skip-reviewable-set-unchanged","event":"base2.gate"}
+(pass) base2 reviewer skip via the durable receipt ledger > a matching receipt skips the reviewer (no regression) [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-reviewer-skip-no-crypto-IJBQnt/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 reviewer skip via the durable receipt ledger > a non-attestable reviewable fingerprint never grants a receipt-based skip (fail closed) [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-reviewer-skip-reported-only-Gu12Dd/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 reviewer skip via the durable receipt ledger > a receipt whose gate-computed gateId does not match still spawns the reviewer [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-reviewer-skip-mismatch-haSf0W/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-reviewer-skip-mismatch-haSf0W/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 reviewer skip via the durable receipt ledger > a receipt whose reviewedFiles or reviewer family differs still spawns the reviewer [2.00ms]
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > an explicit currentTask pointer is normalized to its stable ID token [1.00ms]
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > the last in_progress update is claimed when no currentTask is supplied
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > an in_progress update falls back to task when taskId is absent [1.00ms]
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a successful empty currentTask clears the claimed task
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a pointer-only clear message clears the claimed task
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a pointer-only claim message claims the task
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a pointer-only clear that applied nothing leaves the claim intact [1.00ms]
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > moving the claimed task to done clears the claim
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a rejected update_plan_status call never claims a task
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-plan-gate-receipt-1pv2Ez/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+13384 |       String(reviewCall.input.agents[0].prompt).match(
+13385 |         /Snapshot fingerprint \(echo exactly\): ([^\n]+)/,
+13386 |       )?.[1] ?? ''
+13387 |     expect(
+13388 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+13389 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-plan-gate-receipt-1pv2Ez/a.ts
++ Snapshot fingerprint (echo exactly): v3:080fbb9c1e4d2beb8e20700a2cea9eb9d2ef054be2bb499095f4a934a8860eb4
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-plan-gate-receipt-1pv2Ez/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToPlanGatePass (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:13389:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:13737:46)
+(fail) base2 EXECUTE_PLAN gate-issued plan-task receipts > a fresh gate pass mints one receipt and names it in the gate-pass message [5.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-plan-gate-receipt-dedupe-yIghwL/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+13547 |       String(reviewCall.input.agents[0].prompt).match(
+13548 |         /Snapshot fingerprint \(echo exactly\): ([^\n]+)/,
+13549 |       )?.[1] ?? ''
+13550 |     expect(
+13551 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+13552 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-plan-gate-receipt-dedupe-yIghwL/a.ts
++ Snapshot fingerprint (echo exactly): v3:cc572aa208fb5f32623a46f9d0cf7d8d7ace3d91f9fe903cdcfc8ce9c48cc2f4
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-plan-gate-receipt-dedupe-yIghwL/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveSeededPendingGatePass (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:13552:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:13823:46)
+(fail) base2 EXECUTE_PLAN gate-issued plan-task receipts > a repeat pass on the identical snapshot appends no duplicate receipt [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-plan-gate-receipt-unclaimed-2Ycr8P/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+13384 |       String(reviewCall.input.agents[0].prompt).match(
+13385 |         /Snapshot fingerprint \(echo exactly\): ([^\n]+)/,
+13386 |       )?.[1] ?? ''
+13387 |     expect(
+13388 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+13389 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-plan-gate-receipt-unclaimed-2Ycr8P/a.ts
++ Snapshot fingerprint (echo exactly): v3:43d952cfa34dfdbfc50c28e39812a8a7e639d3e0606cb9e69115d98755216178
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-plan-gate-receipt-unclaimed-2Ycr8P/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToPlanGatePass (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:13389:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:13852:27)
+(fail) base2 EXECUTE_PLAN gate-issued plan-task receipts > with no claimed plan task the gate mints nothing and the pass content is unchanged [3.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["docs/plan-notes.md"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"awaiting_review","pendingFileCount":1,"pendingFiles":["docs/plan-notes.md"],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","skipReason":"reviewer-skip-no-reviewable-source-files","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["docs/plan-notes.md"],"reviewerStatus":"passed","validationStatus":"skipped","reviewerVerdict":"LOOKS_GOOD","hooksRan":false,"advisoryCount":0,"event":"base2.gate"}
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a non-attestable gate fingerprint mints no receipt (fail closed) [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-plan-gate-receipt-docs-2xYPGX/plan-notes.md"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"awaiting_review","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-plan-gate-receipt-docs-2xYPGX/plan-notes.md"],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","skipReason":"reviewer-skip-no-reviewable-source-files","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-plan-gate-receipt-docs-2xYPGX/plan-notes.md"],"reviewerStatus":"passed","validationStatus":"skipped","reviewerVerdict":"LOOKS_GOOD","hooksRan":false,"advisoryCount":0,"event":"base2.gate"}
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a docs-only gate cycle mints an unreviewed-scope receipt over the validated pending set [2.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":0,"pendingFiles":[],"reviewerStatus":"skipped","validationStatus":"passed","reviewerVerdict":"LOOKS_GOOD","hooksRan":true,"advisoryCount":0,"event":"base2.gate"}
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a gate pass with no pending files mints a no-diff receipt
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > turn-start content verification drops a receipt whose covered bytes changed [1.00ms]
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > turn-start content verification keeps a receipt whose bytes still match [1.00ms]
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a non-array planTaskGateReceipts ledger is normalized to an empty array
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-plan-gate-receipt-nonarray-Kb5jm8/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+13384 |       String(reviewCall.input.agents[0].prompt).match(
+13385 |         /Snapshot fingerprint \(echo exactly\): ([^\n]+)/,
+13386 |       )?.[1] ?? ''
+13387 |     expect(
+13388 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+13389 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-plan-gate-receipt-nonarray-Kb5jm8/a.ts
++ Snapshot fingerprint (echo exactly): v3:3744ce413941d1539113141c375bb4195bc8b08adaacd22f4627126bf302d2e7
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-plan-gate-receipt-nonarray-Kb5jm8/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToPlanGatePass (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:13389:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:14136:46)
+(fail) base2 EXECUTE_PLAN gate-issued plan-task receipts > a gate pass over a non-array ledger still mints and prints one receipt [3.00ms]
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a recorded change supersedes non-reviewed receipts and intersecting reviewed ones [1.00ms]
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-plan-gate-receipt-replace-Sj7Mkq/a.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+13384 |       String(reviewCall.input.agents[0].prompt).match(
+13385 |         /Snapshot fingerprint \(echo exactly\): ([^\n]+)/,
+13386 |       )?.[1] ?? ''
+13387 |     expect(
+13388 |       gen.next(attestedReviewerResult(reviewCall) as any).value,
+13389 |     ).toMatchObject({ toolName: 'git_status' })
+              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-plan-gate-receipt-replace-Sj7Mkq/a.ts
++ Snapshot fingerprint (echo exactly): v3:ee258733d8404bba23c5d9367dcb46f0335644e9644025bae4540127568c6928
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-plan-gate-receipt-replace-Sj7Mkq/a.ts	sha256:fce82f4c8897b6f0ab4e35910e4c833a7dbccb365e310891f2e4f2f144ef1d6e:23
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 25
+
+      at driveToPlanGatePass (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:13389:7)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:14311:21)
+(fail) base2 EXECUTE_PLAN gate-issued plan-task receipts > a second fresh pass for the same task replaces its earlier receipt [3.00ms]
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > the pinned active-work message names the live plan-task gate receipt [1.00ms]
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a no-validation run leaves planTaskGateReceipts absent entirely
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > a gate-disabled variant clears an inherited planTaskGateReceipts key
+(pass) base2 EXECUTE_PLAN gate-issued plan-task receipts > the EXECUTE_PLAN prompts state the gate-issued receipt contract
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":[".base2-test-scratch/base2-deleted-before-snapshot-zXpejK/scripts/perf-probe-tmp.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+14713 |                 },
+14714 |               ],
+14715 |             },
+14716 |           ],
+14717 |         } as any).value,
+14718 |       ).toMatchObject({ toolName: 'git_status' })
+                ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: .base2-test-scratch/base2-deleted-before-snapshot-zXpejK/scripts/perf-probe-tmp.ts
++ Snapshot fingerprint (echo exactly): v3:a50e5187e8068b6998a740a4f17602bd6379893eb2a2a3037fcd05829b53296d
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ .base2-test-scratch/base2-deleted-before-snapshot-zXpejK/scripts/perf-probe-tmp.ts	missing
++ --
++ 
++ Validation gate summary: No configured file-change hooks ran.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not assess correctness
++ BLOCKING: reviewer did not assess security
++ BLOCKING: reviewer did not assess tests
++ BLOCKING: reviewer did not assess apiCompatibility
++ BLOCKING: reviewer did not assess performance
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 1
++ Received  + 30
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/__tests__/base2.test.ts:14718:9)
+(fail) base2 deleted-before-first-snapshot gate files > prunes stale unreadable findings for a deleted-never-snapshotted file and never re-spawns its specialist [3.00ms]
+(pass) base2 deleted-before-first-snapshot gate files > keeps open findings that name any still-existing or unreadable-but-present file [1.00ms]
+(pass) base2 deleted-before-first-snapshot gate files > a partial prune sheds only the pruned-and-unbacked family from the owed set and re-mirrors the scalar
+(pass) base2 committed-surface review mode > a successful requestCommittedSurfaceReview call stores a pending request [1.00ms]
+(pass) base2 committed-surface review mode > a requestCommittedSurfaceReview call without a claimed task stores nothing
+(pass) base2 committed-surface review mode > an unapplied requestCommittedSurfaceReview call stores nothing
+(pass) base2 committed-surface review mode > a recorded change to a committed-surface receipt retires it, an unrelated change does not [1.00ms]
+(pass) base2 committed-surface review mode > a pending committed-surface request on a dirty worktree is rejected and falls through to the normal gate [1.00ms]
+(pass) base2 committed-surface review mode > a pending committed-surface request on a clean tree routes, attests, and mints the receipt [2.00ms]
+(pass) base2 committed-surface review mode > committed-surface failure branches > rejects no-reviewable-committed-files when no derived file survives (empty fileset)
+(pass) base2 committed-surface review mode > committed-surface failure branches > rejects fileset-overflow when the derived fileset exceeds the 40-file cap [4.00ms]
+(pass) base2 committed-surface review mode > committed-surface failure branches > rejects with no receipt when hashing is unavailable (non-attestable fingerprint family) [1.00ms]
+(pass) base2 committed-surface review mode > committed-surface failure branches > rejects attestation-failed when a specialist does not return the structured attestation [1.00ms]
+(pass) base2 committed-surface review mode > committed-surface failure branches > rejects a non-LOOKS_GOOD specialist verdict even with a clean attestation [1.00ms]
+(pass) base2 committed-surface review mode > committed-surface failure branches > the replay watermark keeps an already-resolved request from re-becoming pending [1.00ms]
+
+58 tests failed:
+(fail) base2 verification and reviewer gates > passing verification hooks trigger code review before completion for non-allowlisted default ids [8.00ms]
+(fail) base2 verification and reviewer gates > absolute and relative paths share durable gate-passed state after review [4.00ms]
+(fail) base2 verification and reviewer gates > structured reviewer approval allows finalization [3.00ms]
+(fail) base2 verification and reviewer gates > structured reviewer response records durable pass state [3.00ms]
+(fail) base2 verification and reviewer gates > direct edit tool calls in message history trigger gates when git status was already dirty [15.00ms]
+(fail) base2 verification and reviewer gates > reviewer feedback is pinned as active work before the next step [5.00ms]
+(fail) base2 verification and reviewer gates > all-coverage reviewer findings route exclusively to test-writer [2.00ms]
+(fail) base2 verification and reviewer gates > mixed coverage and code findings keep repair-editor only [3.00ms]
+(fail) base2 verification and reviewer gates > repair-editor with mutation progress continues into re-validation even when receipt is blocked [5.00ms]
+(fail) base2 verification and reviewer gates > reviewer repair that changes no bytes trips the no-progress guard [4.00ms]
+(fail) base2 verification and reviewer gates > reviewer repair that oscillates A->B->A trips the cycle guard [6.00ms]
+(fail) base2 verification and reviewer gates > repair-editor ignores forged child value receipt before runtime agentReceipt [3.00ms]
+(fail) base2 verification and reviewer gates > blocking reviewer feedback reopens the turn [3.00ms]
+(fail) base2 verification and reviewer gates > security repair revalidates with security-reviewer before finalization [7.00ms]
+(fail) base2 verification and reviewer gates > structured BLOCKING reviewer JSON output reopens the turn [2.00ms]
+(fail) base2 verification and reviewer gates > structured LOOKS_GOOD reviewer JSON output finalizes [2.00ms]
+(fail) base2 verification and reviewer gates > reviewer attestation errors retry the reviewer once without spawning repair-editor [2.00ms]
+(fail) base2 verification and reviewer gates > reviewer attestation citing the changed test file clears the gate test-coverage requirement [15.00ms]
+(fail) base2 verification and reviewer gates > structured NON_BLOCKING reviewer JSON output does not finalize and enters repair [1.00ms]
+(fail) base2 verification and reviewer gates > same NON_BLOCKING finding text after repair-editor addressed it finalizes instead of looping [3.00ms]
+(fail) base2 verification and reviewer gates > a LOOKS_GOOD receipt with advisories persists and surfaces bounded advisories [3.00ms]
+(fail) base2 verification and reviewer gates > a blocking reviewer round displays bounded advisories without turning them into blockers [4.00ms]
+(fail) base2 verification and reviewer gates > a blocking reviewer round with no advisories keeps the blocker message byte-identical [2.00ms]
+(fail) base2 verification and reviewer gates > re-raising a condoned NON_BLOCKING text as BLOCKING is not condoned [4.00ms]
+(fail) base2 verification and reviewer gates > a condoned finding re-raised at the same class still converges [2.00ms]
+(fail) base2 verification and reviewer gates > a finding condoned at BLOCKING and re-raised as NON_BLOCKING still converges [3.00ms]
+(fail) base2 verification and reviewer gates > an object finding with a stable id records an id-keyed condone key and stays open when re-raised as BLOCKING [3.00ms]
+(fail) base2 verification and reviewer gates > condoned pass keeps another reviewer BLOCKING blocker that shares the condoned text [3.00ms]
+(fail) base2 verification and reviewer gates > genuinely NEW finding on re-review still blocks and spawns repair-editor [3.00ms]
+(fail) base2 verification and reviewer gates > parent-owned requirementCoverage gap is still filtered alongside condoned texts [3.00ms]
+(fail) base2 verification and reviewer gates > blocked repair receipt does not condone the findings it claims to have addressed [4.00ms]
+(fail) base2 verification and reviewer gates > completed repair receipt with no changed files does not condone its findings [7.00ms]
+(fail) base2 verification and reviewer gates > bounds durable review receipts by total serialized size [4.00ms]
+(fail) base2 verification and reviewer gates > recordSuccessfulReviewReceipt binds reviewedFileHashes to the reviewed file markers [3.00ms]
+(fail) base2 verification and reviewer gates > non-blocking reviewer feedback with findings does not finalize and enters repair [2.00ms]
+(fail) base2 gate-passed credit ledger (Option A) > records a content marker for every file credited on a passing gate [3.00ms]
+(fail) createBase2 maxReviewerRepairRounds option/env > createBase2({ maxReviewerRepairRounds: 2 }) exhausts when count is seeded at 2 [2.00ms]
+(fail) base2 reviewer repair budget cap > default unlimited does not exhaust at seed count 6 [2.00ms]
+(fail) base2 reviewer repair budget cap > explicit small maxReviewerRepairRounds still exhausts as opt-in cap [1.00ms]
+(fail) base2 content-based reviewer finding correlation > code-reviewer object findings keep their reviewer-supplied id [2.00ms]
+(fail) base2 specialist attestation tolerance > records fingerprint drift for a coverage-complete routed specialist review [2.00ms]
+(fail) base2 reviewer round-findings telemetry > emits one round-findings event per round and carries repeated finding text [2.00ms]
+(fail) base2 gate-state reviewer-family and skip-reason fields > reviewer-repair re-validation failure names the code-reviewer family [4.00ms]
+(fail) base2 gate-state reviewer-family and skip-reason fields > reviewer-repair re-validation failure names every open reviewer family, not just code-reviewer [4.00ms]
+(fail) base2 gate-pass continuation directive > with no incomplete workflow todos the gate-pass notice is unchanged [2.00ms]
+(fail) base2 gate-pass continuation directive > with an incomplete workflow todo the gate-pass notice tells the agent to continue this turn [2.00ms]
+(fail) base2 gate-pass continuation directive > the gate-pass <gate-state> block carries workflow progress when declared work remains [2.00ms]
+(fail) base2 gate-pass continuation directive > the workflow key is absent when every declared todo is complete [1.00ms]
+(fail) base2 gate-pass continuation directive > the workflow key is absent when no declared workflow progress exists [2.00ms]
+(fail) base2 gate-pass continuation directive > the workflow key is absent when the next workflow action is blank [2.00ms]
+(fail) base2 gate-pass continuation directive > the workflow action is truncated at 240 characters [1.00ms]
+(fail) base2 gate-pass continuation directive > control characters are stripped from the workflow action [2.00ms]
+(fail) base2 EXECUTE_PLAN gate-issued plan-task receipts > a fresh gate pass mints one receipt and names it in the gate-pass message [5.00ms]
+(fail) base2 EXECUTE_PLAN gate-issued plan-task receipts > a repeat pass on the identical snapshot appends no duplicate receipt [3.00ms]
+(fail) base2 EXECUTE_PLAN gate-issued plan-task receipts > with no claimed plan task the gate mints nothing and the pass content is unchanged [3.00ms]
+(fail) base2 EXECUTE_PLAN gate-issued plan-task receipts > a gate pass over a non-array ledger still mints and prints one receipt [3.00ms]
+(fail) base2 EXECUTE_PLAN gate-issued plan-task receipts > a second fresh pass for the same task replaces its earlier receipt [3.00ms]
+(fail) base2 deleted-before-first-snapshot gate files > prunes stale unreadable findings for a deleted-never-snapshotted file and never re-spawns its specialist [3.00ms]
+
+ 204 pass
+ 58 fail
+ 2003 expect() calls
+Ran 262 tests across 1 file. [787.00ms]

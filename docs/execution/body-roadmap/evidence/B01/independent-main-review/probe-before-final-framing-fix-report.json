@@ -1,0 +1,743 @@
+{
+  "createdAt": "2026-11-06T15:40:17.242Z",
+  "runtime": {
+    "executable": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+    "bun": "1.3.5"
+  },
+  "observations": {
+    "unimplementedDiscovery": {
+      "feature": "claim",
+      "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba",
+      "evidenceKind": "heuristic",
+      "maturity": "unknown",
+      "inspectionStatus": "partial",
+      "evidence": {
+        "entrypoints": [
+          "cli/commands/claim.ts"
+        ],
+        "implementation": [
+          "cli/commands/claim.ts",
+          "sdk/src/claim.ts"
+        ],
+        "consumers": [
+          "cli/commands/claim.ts",
+          "sdk/src/__tests__/claim.test.ts",
+          "sdk/src/claim.ts"
+        ],
+        "tests": [
+          "sdk/src/__tests__/claim.test.ts"
+        ],
+        "docs": [
+          "README.md"
+        ],
+        "failureStates": [
+          "cli/commands/claim.ts",
+          "sdk/src/claim.ts"
+        ]
+      },
+      "status": "unknown",
+      "missing": [],
+      "coverageReceipt": {
+        "schema_version": 1,
+        "snapshot_id": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba",
+        "feature": "claim",
+        "evidence_kind": "heuristic",
+        "maturity": "unknown",
+        "status": "unknown",
+        "missing": [],
+        "evidence": {
+          "entrypoints": [
+            "cli/commands/claim.ts"
+          ],
+          "implementation": [
+            "cli/commands/claim.ts",
+            "sdk/src/claim.ts"
+          ],
+          "consumers": [
+            "cli/commands/claim.ts",
+            "sdk/src/__tests__/claim.test.ts",
+            "sdk/src/claim.ts"
+          ],
+          "tests": [
+            "sdk/src/__tests__/claim.test.ts"
+          ],
+          "docs": [
+            "README.md"
+          ],
+          "failure_states": [
+            "cli/commands/claim.ts",
+            "sdk/src/claim.ts"
+          ]
+        }
+      }
+    },
+    "inspectionAndMaturity": [
+      {
+        "schemaVersion": 1,
+        "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba",
+        "complete": true,
+        "inspectionComplete": true,
+        "readinessComplete": false,
+        "assurance": "source_inspection",
+        "sourceBinding": {
+          "status": "current",
+          "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba"
+        },
+        "featureAssessments": [
+          {
+            "feature": "claim",
+            "maturity": "partial",
+            "status": "partial",
+            "assurance": "source_inspection",
+            "runtimeReadiness": "not_assessed",
+            "missing": [
+              "implementation",
+              "tests"
+            ]
+          }
+        ],
+        "invalidReceipts": [],
+        "uncoveredSubsystems": [],
+        "uncoveredFiles": [],
+        "directoryDispositions": [
+          {
+            "id": "empty-directory",
+            "status": "empty",
+            "reason": "No included source files"
+          },
+          {
+            "id": "cli",
+            "status": "inventoried",
+            "reason": "Included in source snapshot"
+          },
+          {
+            "id": "sdk",
+            "status": "inventoried",
+            "reason": "Included in source snapshot"
+          }
+        ],
+        "incompleteFeatures": [],
+        "outOfScope": []
+      },
+      {
+        "schemaVersion": 1,
+        "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba",
+        "complete": true,
+        "inspectionComplete": true,
+        "readinessComplete": false,
+        "assurance": "source_inspection",
+        "sourceBinding": {
+          "status": "current",
+          "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba"
+        },
+        "featureAssessments": [
+          {
+            "feature": "claim",
+            "maturity": "unwired",
+            "status": "partial",
+            "assurance": "source_inspection",
+            "runtimeReadiness": "not_assessed",
+            "missing": [
+              "implementation",
+              "tests"
+            ]
+          }
+        ],
+        "invalidReceipts": [],
+        "uncoveredSubsystems": [],
+        "uncoveredFiles": [],
+        "directoryDispositions": [
+          {
+            "id": "empty-directory",
+            "status": "empty",
+            "reason": "No included source files"
+          },
+          {
+            "id": "cli",
+            "status": "inventoried",
+            "reason": "Included in source snapshot"
+          },
+          {
+            "id": "sdk",
+            "status": "inventoried",
+            "reason": "Included in source snapshot"
+          }
+        ],
+        "incompleteFeatures": [],
+        "outOfScope": []
+      },
+      {
+        "schemaVersion": 1,
+        "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba",
+        "complete": true,
+        "inspectionComplete": true,
+        "readinessComplete": false,
+        "assurance": "source_inspection",
+        "sourceBinding": {
+          "status": "current",
+          "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba"
+        },
+        "featureAssessments": [
+          {
+            "feature": "claim",
+            "maturity": "absent",
+            "status": "partial",
+            "assurance": "source_inspection",
+            "runtimeReadiness": "not_assessed",
+            "missing": [
+              "implementation",
+              "tests"
+            ]
+          }
+        ],
+        "invalidReceipts": [],
+        "uncoveredSubsystems": [],
+        "uncoveredFiles": [],
+        "directoryDispositions": [
+          {
+            "id": "empty-directory",
+            "status": "empty",
+            "reason": "No included source files"
+          },
+          {
+            "id": "cli",
+            "status": "inventoried",
+            "reason": "Included in source snapshot"
+          },
+          {
+            "id": "sdk",
+            "status": "inventoried",
+            "reason": "Included in source snapshot"
+          }
+        ],
+        "incompleteFeatures": [],
+        "outOfScope": []
+      },
+      {
+        "schemaVersion": 1,
+        "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba",
+        "complete": true,
+        "inspectionComplete": true,
+        "readinessComplete": false,
+        "assurance": "source_inspection",
+        "sourceBinding": {
+          "status": "current",
+          "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba"
+        },
+        "featureAssessments": [
+          {
+            "feature": "claim",
+            "maturity": "unknown",
+            "status": "partial",
+            "assurance": "source_inspection",
+            "runtimeReadiness": "not_assessed",
+            "missing": [
+              "implementation",
+              "tests"
+            ]
+          }
+        ],
+        "invalidReceipts": [],
+        "uncoveredSubsystems": [],
+        "uncoveredFiles": [],
+        "directoryDispositions": [
+          {
+            "id": "empty-directory",
+            "status": "empty",
+            "reason": "No included source files"
+          },
+          {
+            "id": "cli",
+            "status": "inventoried",
+            "reason": "Included in source snapshot"
+          },
+          {
+            "id": "sdk",
+            "status": "inventoried",
+            "reason": "Included in source snapshot"
+          }
+        ],
+        "incompleteFeatures": [],
+        "outOfScope": []
+      }
+    ],
+    "foreignNestedSnapshot": {
+      "schemaVersion": 1,
+      "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba",
+      "complete": false,
+      "inspectionComplete": false,
+      "readinessComplete": false,
+      "assurance": "incomplete_inspection",
+      "sourceBinding": {
+        "status": "current",
+        "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba"
+      },
+      "featureAssessments": [
+        {
+          "feature": "claim",
+          "maturity": "unknown",
+          "status": "partial",
+          "assurance": "source_inspection",
+          "runtimeReadiness": "not_assessed",
+          "missing": [
+            "implementation",
+            "tests"
+          ]
+        }
+      ],
+      "invalidReceipts": [],
+      "uncoveredSubsystems": [],
+      "uncoveredFiles": [],
+      "directoryDispositions": [
+        {
+          "id": "empty-directory",
+          "status": "empty",
+          "reason": "No included source files"
+        },
+        {
+          "id": "cli",
+          "status": "inventoried",
+          "reason": "Included in source snapshot"
+        },
+        {
+          "id": "sdk",
+          "status": "inventoried",
+          "reason": "Included in source snapshot"
+        }
+      ],
+      "incompleteFeatures": [
+        {
+          "feature": "claim",
+          "status": "partial",
+          "missing": [
+            "implementation",
+            "tests"
+          ],
+          "reason": "snapshot_mismatch"
+        }
+      ],
+      "outOfScope": []
+    },
+    "missingNestedSnapshotSchemaRejected": true,
+    "omittedInventoriedSource": {
+      "schemaVersion": 1,
+      "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba",
+      "complete": false,
+      "inspectionComplete": false,
+      "readinessComplete": false,
+      "assurance": "incomplete_inspection",
+      "sourceBinding": {
+        "status": "current",
+        "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba"
+      },
+      "featureAssessments": [
+        {
+          "feature": "claim",
+          "maturity": "unknown",
+          "status": "partial",
+          "assurance": "source_inspection",
+          "runtimeReadiness": "not_assessed",
+          "missing": [
+            "implementation",
+            "tests"
+          ]
+        }
+      ],
+      "invalidReceipts": [],
+      "uncoveredSubsystems": [],
+      "uncoveredFiles": [
+        "sdk/src/claim.ts"
+      ],
+      "directoryDispositions": [
+        {
+          "id": "empty-directory",
+          "status": "empty",
+          "reason": "No included source files"
+        },
+        {
+          "id": "cli",
+          "status": "inventoried",
+          "reason": "Included in source snapshot"
+        },
+        {
+          "id": "sdk",
+          "status": "inventoried",
+          "reason": "Included in source snapshot"
+        }
+      ],
+      "incompleteFeatures": [],
+      "outOfScope": []
+    },
+    "findingsOnlyChurn": {
+      "snapshotIdUnchanged": true,
+      "response": {
+        "feature": "claim",
+        "snapshotId": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba",
+        "evidenceKind": "heuristic",
+        "maturity": "unknown",
+        "inspectionStatus": "partial",
+        "evidence": {
+          "entrypoints": [
+            "cli/commands/claim.ts"
+          ],
+          "implementation": [
+            "cli/commands/claim.ts",
+            "sdk/src/claim.ts"
+          ],
+          "consumers": [
+            "cli/commands/claim.ts",
+            "sdk/src/__tests__/claim.test.ts",
+            "sdk/src/claim.ts"
+          ],
+          "tests": [
+            "sdk/src/__tests__/claim.test.ts"
+          ],
+          "docs": [
+            "README.md"
+          ],
+          "failureStates": [
+            "cli/commands/claim.ts",
+            "sdk/src/claim.ts"
+          ]
+        },
+        "status": "unknown",
+        "missing": [],
+        "coverageReceipt": {
+          "schema_version": 1,
+          "snapshot_id": "0af4b18d032e386bb3731dc2a197e7b3aa86c843b1f8bde2042ea626319989ba",
+          "feature": "claim",
+          "evidence_kind": "heuristic",
+          "maturity": "unknown",
+          "status": "unknown",
+          "missing": [],
+          "evidence": {
+            "entrypoints": [
+              "cli/commands/claim.ts"
+            ],
+            "implementation": [
+              "cli/commands/claim.ts",
+              "sdk/src/claim.ts"
+            ],
+            "consumers": [
+              "cli/commands/claim.ts",
+              "sdk/src/__tests__/claim.test.ts",
+              "sdk/src/claim.ts"
+            ],
+            "tests": [
+              "sdk/src/__tests__/claim.test.ts"
+            ],
+            "docs": [
+              "README.md"
+            ],
+            "failure_states": [
+              "cli/commands/claim.ts",
+              "sdk/src/claim.ts"
+            ]
+          }
+        }
+      }
+    },
+    "cachedEqualLengthTailDrift": {
+      "errorMessage": "The codebase snapshot is stale. Re-run inspect_codebase_structure.",
+      "sourceBinding": {
+        "status": "stale",
+        "expectedSnapshotId": "672c3243e8dae8569b138f2d985aa54006b11601a9cf82071730ed66f91a3e18",
+        "observedSnapshotId": "a28a8397421ffb3427e5e53459c252ceee548b7ea196c1ae6e40eff95ccca621"
+      }
+    },
+    "recognizedReleaseSource": {
+      "sourceBinding": {
+        "status": "complete",
+        "identity": "full-file-sha256",
+        "shippedMembership": "all-non-live-entries",
+        "symlinkIdentity": "link-target-bytes",
+        "shippedSourceFiles": [
+          "bin/launch.mjs",
+          "release-staging/tools/bootstrap.sh",
+          "release/tools/publish.ts"
+        ]
+      },
+      "directoryDispositions": [
+        {
+          "id": "bin",
+          "status": "inventoried",
+          "reason": "Included in source snapshot"
+        },
+        {
+          "id": "release-staging",
+          "status": "inventoried",
+          "reason": "Included in source snapshot"
+        },
+        {
+          "id": "release",
+          "status": "inventoried",
+          "reason": "Included in source snapshot"
+        },
+        {
+          "id": ".agents",
+          "status": "empty",
+          "reason": "No included source files"
+        },
+        {
+          "id": "empty-directory",
+          "status": "empty",
+          "reason": "No included source files"
+        },
+        {
+          "id": "cli",
+          "status": "inventoried",
+          "reason": "Included in source snapshot"
+        },
+        {
+          "id": "sdk",
+          "status": "inventoried",
+          "reason": "Included in source snapshot"
+        }
+      ]
+    },
+    "unrecognizedShippedSource": {
+      "missingFiles": [],
+      "beforeSnapshot": "b3ddc456b3cbfb6f7f78943c0e6e8cd7e21d3507903c6a690603897612181f5a",
+      "afterSnapshot": "b85218eb87795258077cdbc56e85a62c1739da3b202a7faecc5ec969b628464a",
+      "sourceBinding": {
+        "status": "complete",
+        "identity": "full-file-sha256",
+        "shippedMembership": "all-non-live-entries",
+        "symlinkIdentity": "link-target-bytes",
+        "shippedSourceFiles": [
+          "bin/launch.mjs",
+          "bin/openbuff",
+          "release-staging/tools/bootstrap.sh",
+          "release/tools/bootstrap",
+          "release/tools/publish.ts",
+          "release/tools/worker.hpp"
+        ]
+      }
+    },
+    "shippedSymlinkIdentity": {
+      "included": true,
+      "beforeSnapshot": "480c6bbabb79aa815cd7918c8771f376088f1df4b863f5efe59bd2ae13ab6740",
+      "afterSnapshot": "adb5ac4d9a9fc9684be76e7aebfbd6df1340e7bdfbaf06d557962f53c542a7e8",
+      "sourceBinding": {
+        "status": "complete",
+        "identity": "full-file-sha256",
+        "shippedMembership": "all-non-live-entries",
+        "symlinkIdentity": "link-target-bytes",
+        "shippedSourceFiles": [
+          "bin/launch.mjs",
+          "bin/openbuff",
+          "release-staging/tools/bootstrap.sh",
+          "release/tools/bootstrap",
+          "release/tools/link.ts",
+          "release/tools/publish.ts",
+          "release/tools/worker.hpp"
+        ]
+      }
+    },
+    "sourceRecordFraming": {
+      "beforeSnapshot": "afe91510aaff50608a8a193d3e4a06ae51913b17d7029dc26fb1b0a49e31498f",
+      "afterSnapshot": "afe91510aaff50608a8a193d3e4a06ae51913b17d7029dc26fb1b0a49e31498f",
+      "beforeABytesBase64": "eA==",
+      "beforeBBytesBase64": "eQ==",
+      "afterABytesBase64": "eApyZWxlYXNlL3Rvb2xzL2IudHMAMzMxODgAZmlsZQB5",
+      "beforeFiles": [
+        "release/tools/a.ts",
+        "release/tools/b.ts"
+      ],
+      "afterFiles": [
+        "release/tools/a.ts"
+      ],
+      "sourceBinding": {
+        "status": "complete",
+        "identity": "full-file-sha256",
+        "shippedMembership": "all-non-live-entries",
+        "symlinkIdentity": "link-target-bytes",
+        "shippedSourceFiles": [
+          "bin/launch.mjs",
+          "bin/openbuff",
+          "release-staging/tools/bootstrap.sh",
+          "release/tools/a.ts",
+          "release/tools/bootstrap",
+          "release/tools/link.ts",
+          "release/tools/publish.ts",
+          "release/tools/worker.hpp"
+        ]
+      }
+    },
+    "finalMetadataBoundaryDrift": {
+      "mutationInjected": true,
+      "beforeBytesSha256": "0d1321e02d7beefc4f4b0a202feeaf622b35f5595552276683469419fb517c09",
+      "afterBytesSha256": "ab1ebd8edd1ae7842e16c9a30af8ca5699fe7a35ceb6a348fd37c46726d5a221",
+      "beforeSnapshot": "afe91510aaff50608a8a193d3e4a06ae51913b17d7029dc26fb1b0a49e31498f",
+      "freshSnapshot": "5aeb7feb4680c5e9a4c72a5273f94d7f4c5a2abd511dbd8a2d7c2406f1134ab7",
+      "error": "Error: Source changed during snapshot attestation: sdk/src/claim.ts"
+    },
+    "reviewerEligibility": {
+      "fullClean": [],
+      "emptyDimensions": [
+        "BLOCKING: reviewer did not assess correctness",
+        "BLOCKING: reviewer did not assess security",
+        "BLOCKING: reviewer did not assess tests",
+        "BLOCKING: reviewer did not assess apiCompatibility",
+        "BLOCKING: reviewer did not assess performance"
+      ],
+      "emptyRequirements": [
+        "BLOCKING: reviewer did not provide nonempty requirement evidence"
+      ],
+      "staleReview": [
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "borrowedDimensions": [
+        "BLOCKING: reviewer did not assess correctness",
+        "BLOCKING: reviewer did not assess security",
+        "BLOCKING: reviewer did not assess tests",
+        "BLOCKING: reviewer did not assess apiCompatibility",
+        "BLOCKING: reviewer did not assess performance",
+        "BLOCKING: reviewer did not provide nonempty requirement evidence"
+      ],
+      "eligibleReduced": [],
+      "ineligibleReduced": [
+        "BLOCKING: reduced reviewer contract is not eligible for this file scope"
+      ],
+      "substantiveReduced": [
+        "BLOCKING: substantive reduced review requires the full reviewer contract"
+      ],
+      "reducedRequired": [
+        "schemaVersion",
+        "verdict",
+        "snapshotFingerprint",
+        "reviewedFiles",
+        "coverage"
+      ],
+      "fullRequired": [
+        "schemaVersion",
+        "verdict",
+        "snapshotFingerprint",
+        "reviewedFiles",
+        "coverage",
+        "dimensions",
+        "requirementCoverage",
+        "family"
+      ]
+    },
+    "ordinaryReviewerSchema": {
+      "required": [
+        "schemaVersion",
+        "verdict",
+        "snapshotFingerprint",
+        "reviewedFiles",
+        "coverage",
+        "dimensions",
+        "requirementCoverage",
+        "family"
+      ],
+      "dimensions": {
+        "type": "object",
+        "properties": {
+          "correctness": {
+            "type": "string",
+            "minLength": 1
+          },
+          "security": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tests": {
+            "type": "string",
+            "minLength": 1
+          },
+          "apiCompatibility": {
+            "type": "string",
+            "minLength": 1
+          },
+          "performance": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "correctness",
+          "security",
+          "tests",
+          "apiCompatibility",
+          "performance"
+        ]
+      },
+      "requirements": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+          "type": "object",
+          "properties": {
+            "requirement": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "satisfied",
+                "missing",
+                "uncertain"
+              ]
+            },
+            "evidence": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "required": [
+            "requirement",
+            "status",
+            "evidence"
+          ]
+        }
+      }
+    }
+  },
+  "blocking": [
+    {
+      "id": "source-record-framing-alias",
+      "expected": "Source identity uses length-delimited/domain-separated records so changing membership cannot alias moving one file preimage into another file body.",
+      "observed": {
+        "beforeSnapshot": "afe91510aaff50608a8a193d3e4a06ae51913b17d7029dc26fb1b0a49e31498f",
+        "afterSnapshot": "afe91510aaff50608a8a193d3e4a06ae51913b17d7029dc26fb1b0a49e31498f",
+        "beforeABytesBase64": "eA==",
+        "beforeBBytesBase64": "eQ==",
+        "afterABytesBase64": "eApyZWxlYXNlL3Rvb2xzL2IudHMAMzMxODgAZmlsZQB5",
+        "beforeFiles": [
+          "release/tools/a.ts",
+          "release/tools/b.ts"
+        ],
+        "afterFiles": [
+          "release/tools/a.ts"
+        ],
+        "sourceBinding": {
+          "status": "complete",
+          "identity": "full-file-sha256",
+          "shippedMembership": "all-non-live-entries",
+          "symlinkIdentity": "link-target-bytes",
+          "shippedSourceFiles": [
+            "bin/launch.mjs",
+            "bin/openbuff",
+            "release-staging/tools/bootstrap.sh",
+            "release/tools/a.ts",
+            "release/tools/bootstrap",
+            "release/tools/link.ts",
+            "release/tools/publish.ts",
+            "release/tools/worker.hpp"
+          ]
+        }
+      }
+    }
+  ],
+  "codingFetch": {
+    "attempted": 0,
+    "forwarded": 0
+  },
+  "note": "Initial independent observations; source freeze and final bindings pending. This fixture does not approve the reviewer-owned tail/store subset."
+}

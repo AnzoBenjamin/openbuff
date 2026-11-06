@@ -1,0 +1,378 @@
+{
+  "output": {
+    "type": "structuredOutput",
+    "value": {
+      "done": true
+    }
+  },
+  "runOutcome": {
+    "termination": "completed"
+  },
+  "events": [
+    {
+      "type": "start",
+      "messageHistoryLength": 0
+    },
+    {
+      "type": "tool_call",
+      "toolCallId": "bbd58fd7-4207-42e4-82fd-8c8b81a8fbf9",
+      "toolName": "edit_transaction",
+      "input": {
+        "edits": [
+          {
+            "path": "a.txt",
+            "type": "str_replace",
+            "replacements": [
+              {
+                "oldString": "a-before\n",
+                "newString": "a-after\n",
+                "allowMultiple": false
+              }
+            ]
+          },
+          {
+            "path": "b.txt",
+            "type": "str_replace",
+            "replacements": [
+              {
+                "oldString": "b-before\n",
+                "newString": "b-after\n",
+                "allowMultiple": false
+              }
+            ]
+          }
+        ]
+      },
+      "agentId": "main-agent"
+    },
+    {
+      "type": "tool_result",
+      "toolCallId": "bbd58fd7-4207-42e4-82fd-8c8b81a8fbf9",
+      "toolName": "edit_transaction",
+      "output": [
+        {
+          "type": "json",
+          "value": {
+            "kind": "file_mutation_result",
+            "version": 1,
+            "operationId": "090c82b9-4d7d-40bd-8a55-7c6f46696dd3",
+            "outcome": "rollback_incomplete",
+            "actions": [
+              {
+                "actionId": "18c9f886-0c47-4a73-a701-de831fd6b4f3",
+                "index": 0,
+                "action": "update",
+                "path": "a.txt",
+                "outcome": "applied",
+                "beforeHash": "sha256:021aad3bada42202b77dbee3563071ee6bed8a7183c9b2691854583e2d6bdbde",
+                "afterHash": "sha256:0732c97eef85880f7cf628e0b7ade6151515ddb78793dbb88c9ee2ff18bb4af9",
+                "forward": {
+                  "outcome": "applied",
+                  "afterHashes": {
+                    "a.txt": "sha256:0732c97eef85880f7cf628e0b7ade6151515ddb78793dbb88c9ee2ff18bb4af9"
+                  }
+                },
+                "error": {
+                  "code": "rollback_incomplete",
+                  "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+                  "retryable": false,
+                  "recovery": "inspect_rollback"
+                },
+                "rollback": {
+                  "attempted": true,
+                  "succeeded": false,
+                  "error": {
+                    "code": "rollback_incomplete",
+                    "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+                    "retryable": false,
+                    "recovery": "inspect_rollback"
+                  }
+                }
+              },
+              {
+                "actionId": "1090a59d-dc6d-4c3f-9ad9-ff576323ac4a",
+                "index": 1,
+                "action": "update",
+                "path": "b.txt",
+                "outcome": "rollback_incomplete",
+                "beforeHash": "sha256:4c61e7410528ba20f137b5fa6f834f60082b06434b28ae721fcaa62e1b4d9e3e",
+                "afterHash": "sha256:95aebb28195b8d737effe0df18d71d39c8d8ba6569286fd3930fbc9f9767181e",
+                "forward": {
+                  "outcome": "unconfirmed",
+                  "afterHashes": {
+                    "b.txt": "sha256:95aebb28195b8d737effe0df18d71d39c8d8ba6569286fd3930fbc9f9767181e"
+                  }
+                },
+                "error": {
+                  "code": "rollback_incomplete",
+                  "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+                  "retryable": false,
+                  "recovery": "inspect_rollback"
+                },
+                "rollback": {
+                  "attempted": true,
+                  "succeeded": false,
+                  "error": {
+                    "code": "rollback_incomplete",
+                    "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+                    "retryable": false,
+                    "recovery": "inspect_rollback"
+                  }
+                }
+              }
+            ],
+            "authorityTier": "conditional_commit",
+            "receiptId": "dc06447e-3353-4fdf-8177-09dae41b0c86",
+            "authorityReceipt": {
+              "kind": "commit_receipt",
+              "version": 1,
+              "receiptId": "dc06447e-3353-4fdf-8177-09dae41b0c86",
+              "operationId": "090c82b9-4d7d-40bd-8a55-7c6f46696dd3",
+              "callId": "bbd58fd7-4207-42e4-82fd-8c8b81a8fbf9",
+              "transactionId": "tx-090c82b9-4d7d-40bd-8a55-7c6f46696dd3",
+              "authorityTier": "conditional_commit",
+              "status": "rollback_incomplete",
+              "actions": [
+                {
+                  "actionId": "18c9f886-0c47-4a73-a701-de831fd6b4f3",
+                  "index": 0,
+                  "action": "update",
+                  "path": "a.txt",
+                  "status": "rollback_failed",
+                  "beforeHash": "sha256:021aad3bada42202b77dbee3563071ee6bed8a7183c9b2691854583e2d6bdbde",
+                  "afterHash": "sha256:0732c97eef85880f7cf628e0b7ade6151515ddb78793dbb88c9ee2ff18bb4af9",
+                  "forward": {
+                    "outcome": "applied",
+                    "afterHashes": {
+                      "a.txt": "sha256:0732c97eef85880f7cf628e0b7ade6151515ddb78793dbb88c9ee2ff18bb4af9"
+                    }
+                  },
+                  "error": {
+                    "code": "rollback_incomplete",
+                    "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+                    "retryable": false,
+                    "recovery": "inspect_rollback"
+                  }
+                },
+                {
+                  "actionId": "1090a59d-dc6d-4c3f-9ad9-ff576323ac4a",
+                  "index": 1,
+                  "action": "update",
+                  "path": "b.txt",
+                  "status": "rollback_failed",
+                  "beforeHash": "sha256:4c61e7410528ba20f137b5fa6f834f60082b06434b28ae721fcaa62e1b4d9e3e",
+                  "afterHash": "sha256:95aebb28195b8d737effe0df18d71d39c8d8ba6569286fd3930fbc9f9767181e",
+                  "forward": {
+                    "outcome": "unconfirmed",
+                    "afterHashes": {
+                      "b.txt": "sha256:95aebb28195b8d737effe0df18d71d39c8d8ba6569286fd3930fbc9f9767181e"
+                    }
+                  },
+                  "error": {
+                    "code": "rollback_incomplete",
+                    "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+                    "retryable": false,
+                    "recovery": "inspect_rollback"
+                  }
+                }
+              ],
+              "finalHashes": {
+                "a.txt": "sha256:0732c97eef85880f7cf628e0b7ade6151515ddb78793dbb88c9ee2ff18bb4af9",
+                "b.txt": "sha256:95aebb28195b8d737effe0df18d71d39c8d8ba6569286fd3930fbc9f9767181e"
+              }
+            },
+            "errors": [
+              {
+                "code": "rollback_incomplete",
+                "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+                "retryable": false,
+                "recovery": "inspect_rollback"
+              },
+              {
+                "code": "rollback_incomplete",
+                "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+                "retryable": false,
+                "recovery": "inspect_rollback"
+              }
+            ],
+            "freshCapabilities": []
+          }
+        }
+      ],
+      "agentId": "main-agent",
+      "actionOutcome": {
+        "actionId": "bbd58fd7-4207-42e4-82fd-8c8b81a8fbf9",
+        "attemptId": "stK1PaVT57o",
+        "runId": "local-run-6f9faa3c-05f4-4737-ab1c-297654489b7c",
+        "toolName": "edit_transaction",
+        "basis": {
+          "inputHash": "sha256:092d87619b3651ed155bb376ada8931ec764fc9058e1681624a7935e27690ad0",
+          "workspaceRevision": 0
+        },
+        "outcome": "uncertain",
+        "cause": {
+          "code": "rollback_incomplete",
+          "message": "Rollback conflict: updated file no longer matches transaction-owned state"
+        },
+        "effect": {
+          "status": "partial",
+          "receiptIds": [
+            "dc06447e-3353-4fdf-8177-09dae41b0c86"
+          ],
+          "confirmedPaths": [
+            "a.txt"
+          ],
+          "forward": [
+            {
+              "actionId": "18c9f886-0c47-4a73-a701-de831fd6b4f3",
+              "outcome": "applied",
+              "afterHashes": {
+                "a.txt": "sha256:0732c97eef85880f7cf628e0b7ade6151515ddb78793dbb88c9ee2ff18bb4af9"
+              }
+            },
+            {
+              "actionId": "1090a59d-dc6d-4c3f-9ad9-ff576323ac4a",
+              "outcome": "unconfirmed",
+              "afterHashes": {
+                "b.txt": "sha256:95aebb28195b8d737effe0df18d71d39c8d8ba6569286fd3930fbc9f9767181e"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "tool_call",
+      "toolCallId": "04815806-e98a-49a1-a837-c16c478fe411",
+      "toolName": "set_output",
+      "input": {
+        "done": true
+      },
+      "agentId": "main-agent"
+    },
+    {
+      "type": "tool_result",
+      "toolCallId": "04815806-e98a-49a1-a837-c16c478fe411",
+      "toolName": "set_output",
+      "output": [
+        {
+          "type": "json",
+          "value": {
+            "message": "Output set"
+          }
+        }
+      ],
+      "agentId": "main-agent",
+      "actionOutcome": {
+        "actionId": "04815806-e98a-49a1-a837-c16c478fe411",
+        "attemptId": "stK1Y_InVfg",
+        "runId": "local-run-6f9faa3c-05f4-4737-ab1c-297654489b7c",
+        "toolName": "set_output",
+        "basis": {
+          "inputHash": "sha256:df45e0bd6465ca580d37437b965aaf8d9961ea004e5d6537917c6015d49180af",
+          "workspaceRevision": 1
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "unobserved",
+          "receiptIds": [],
+          "confirmedPaths": []
+        }
+      }
+    },
+    {
+      "type": "context_window",
+      "used": 4364,
+      "max": 190000,
+      "compactionTriggerTokens": 140000,
+      "compactionTargetTokens": 100000
+    },
+    {
+      "type": "finish",
+      "agentId": "b03-fixture",
+      "totalCost": 0,
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "taskAcceptance": {
+        "status": "unknown"
+      },
+      "actionOutcomes": [
+        {
+          "actionId": "bbd58fd7-4207-42e4-82fd-8c8b81a8fbf9",
+          "attemptId": "stK1PaVT57o",
+          "runId": "local-run-6f9faa3c-05f4-4737-ab1c-297654489b7c",
+          "toolName": "edit_transaction",
+          "basis": {
+            "inputHash": "sha256:092d87619b3651ed155bb376ada8931ec764fc9058e1681624a7935e27690ad0",
+            "workspaceRevision": 0
+          },
+          "outcome": "uncertain",
+          "cause": {
+            "code": "rollback_incomplete",
+            "message": "Rollback conflict: updated file no longer matches transaction-owned state"
+          },
+          "effect": {
+            "status": "partial",
+            "receiptIds": [
+              "dc06447e-3353-4fdf-8177-09dae41b0c86"
+            ],
+            "confirmedPaths": [
+              "a.txt"
+            ],
+            "forward": [
+              {
+                "actionId": "18c9f886-0c47-4a73-a701-de831fd6b4f3",
+                "outcome": "applied",
+                "afterHashes": {
+                  "a.txt": "sha256:0732c97eef85880f7cf628e0b7ade6151515ddb78793dbb88c9ee2ff18bb4af9"
+                }
+              },
+              {
+                "actionId": "1090a59d-dc6d-4c3f-9ad9-ff576323ac4a",
+                "outcome": "unconfirmed",
+                "afterHashes": {
+                  "b.txt": "sha256:95aebb28195b8d737effe0df18d71d39c8d8ba6569286fd3930fbc9f9767181e"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "actionId": "04815806-e98a-49a1-a837-c16c478fe411",
+          "attemptId": "stK1Y_InVfg",
+          "runId": "local-run-6f9faa3c-05f4-4737-ab1c-297654489b7c",
+          "toolName": "set_output",
+          "basis": {
+            "inputHash": "sha256:df45e0bd6465ca580d37437b965aaf8d9961ea004e5d6537917c6015d49180af",
+            "workspaceRevision": 1
+          },
+          "outcome": "succeeded",
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      ]
+    }
+  ],
+  "observers": [
+    {
+      "toolName": "edit_transaction",
+      "callId": "bbd58fd7-4207-42e4-82fd-8c8b81a8fbf9",
+      "operationId": "090c82b9-4d7d-40bd-8a55-7c6f46696dd3",
+      "receiptId": "dc06447e-3353-4fdf-8177-09dae41b0c86",
+      "workspaceRevision": 1,
+      "workspaceSnapshotId": "workspace.v1.1.2f46e5fe",
+      "actions": [
+        {
+          "action": "update",
+          "path": "a.txt",
+          "beforeHash": "sha256:021aad3bada42202b77dbee3563071ee6bed8a7183c9b2691854583e2d6bdbde",
+          "afterHash": "sha256:0732c97eef85880f7cf628e0b7ade6151515ddb78793dbb88c9ee2ff18bb4af9"
+        }
+      ]
+    }
+  ]
+}

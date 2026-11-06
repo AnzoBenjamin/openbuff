@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-11-06T16:20:34.085Z",
+  "allAssertionsPassed": true,
+  "runtime": {
+    "executable": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+    "bun": "1.3.5"
+  },
+  "environment": {
+    "replacementEnvironment": true,
+    "homeIsEphemeral": true,
+    "configIsEphemeral": true
+  },
+  "codingFetch": {
+    "attempted": 0,
+    "forwarded": 0
+  },
+  "cases": {
+    "equalLengthUntrackedTail": {
+      "beforeSize": 1048711,
+      "afterSize": 1048711,
+      "retainedPrefixEqual": true,
+      "beforeSha256": "7d0869ca3af9dc6d9705007b33dc8848d7de649d895d3ca5cfca64953b9d4fcd",
+      "afterSha256": "150eb0fe1d5e6384fbf0e0b3675a88432589ea3cdf45b6c0b2cacbc8bc6a6886",
+      "beforeTailBase64": "YmVmb3JlCg==",
+      "afterTailBase64": "YWZ0ZXIhCg==",
+      "beforeSnapshot": "37349730b5713ce67487823eb128d004ba1a296c72c6140d9a95d52a122fbb0e",
+      "afterSnapshot": "d797b44f437d958c647b5b48a9bdb9fc67ce8c751db9e63d85e0afc77b4e5e2d",
+      "identityOnlyAgreed": true,
+      "passingHook": {
+        "command": "fixture-pass",
+        "hookName": "fixture",
+        "exitCode": 0
+      },
+      "validation": {
+        "schemaVersion": 1,
+        "snapshotId": "37349730b5713ce67487823eb128d004ba1a296c72c6140d9a95d52a122fbb0e",
+        "files": [
+          "tail.txt"
+        ],
+        "artifactKinds": [],
+        "status": "failed",
+        "assurance": "none",
+        "summary": "Validation evidence rejected because the worktree changed during validation.",
+        "results": [
+          {
+            "command": "fixture-pass",
+            "hookName": "fixture",
+            "exitCode": 0
+          }
+        ]
+      }
+    },
+    "equalLengthGitTail": {
+      "retainedBytes": 4194304,
+      "retainedPrefixEqual": true,
+      "beforeTotal": 5243133,
+      "afterTotal": 5243133,
+      "beforeFullSha256": "9a66157ad3888d175ae4b1f77368207cc80ceed9bb78205adb0de9c986c7b4b4",
+      "afterFullSha256": "94072a6de80b00b9f1b40ccb1a17181afcb37478c2931c6c93e4a6bf4e59557a",
+      "complete": true,
+      "independentFullGitReferenceAgreed": true
+    },
+    "membershipOverflow": {
+      "enumeratedFixtureFiles": 5500,
+      "totalStatusBytes": 4323000,
+      "retainedStatusBytes": 4194304,
+      "fullStatusSha256": "f28b3eadbf51f72fd5c0d00f7e0a2815df0c7b1ff8aacf09f0a8f8f3e82028ff",
+      "completeStream": true,
+      "truncatedMembership": true,
+      "bundle": {
+        "errorMessage": "Git status exceeds identity membership limit; complete review files are unavailable."
+      },
+      "identity": {
+        "errorMessage": "Git status exceeds identity membership limit; complete review files are unavailable."
+      },
+      "validation": {
+        "schemaVersion": 1,
+        "snapshotId": "unavailable",
+        "files": [
+          "seed.txt"
+        ],
+        "artifactKinds": [],
+        "status": "failed",
+        "assurance": "none",
+        "summary": "Validation refused because the requested snapshot is stale or unavailable.",
+        "results": []
+      },
+      "hooksRan": false
+    },
+    "durableQuarantine": {
+      "healthyOpenFindings": 1,
+      "corruptRawSha256": "be302461cda285db3ed2d45fb767b23e08ca8808b35a638009937df22b332d73",
+      "diagnosticsPersistedAcrossInstances": true,
+      "subsequentDirectReadRejected": true,
+      "quarantinedBytesPreserved": true,
+      "bundle": {
+        "errorMessage": "Finding evidence unavailable: 1 corrupt or quarantined finding record(s) require repair."
+      },
+      "subsequentBundle": {
+        "errorMessage": "Finding evidence unavailable: 1 corrupt or quarantined finding record(s) require repair."
+      },
+      "lostSidecarStillUnavailable": true,
+      "lostSidecarMessage": "Quarantined harness record; original diagnostic unavailable."
+    },
+    "cancellation": {
+      "observedRejection": "fixture cancel"
+    }
+  },
+  "limits": [
+    "Filesystem metadata checks detect observed concurrent drift; they are not an OS snapshot or filesystem fence.",
+    "A timed-out OS read may finish later; its task observes cancellation and closes the file handle when I/O returns.",
+    "Status overflow explicitly refuses incomplete membership. Corruption remains unavailable until repaired; no automatic diagnostic acknowledgement is implemented."
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "type": "sealed-evidence-restoration-controls",
+  "startedAt": "2026-11-06T22:48:05.773724+00:00",
+  "elapsedSeconds": 1.0911872789984045,
+  "scratchDirectory": "/tmp/openbuff-evidence-restore-k5vaii5t",
+  "controls": [
+    {
+      "name": "fresh-and-idempotent-restoration",
+      "restored": 186,
+      "allHashesMatch": true,
+      "repeatWrites": 0
+    },
+    {
+      "name": "foreign-existing-file",
+      "rejected": true,
+      "reason": "('existing bytes differ', 'cli/src/agents/bundled-agents.generated.ts')",
+      "pathsUnchanged": true
+    },
+    {
+      "name": "symlink-destination",
+      "rejected": true,
+      "reason": "('path escapes destination', 'cli/src/agents/bundled-agents.generated.ts')",
+      "pathsUnchanged": true
+    },
+    {
+      "name": "archive-hash-mismatch",
+      "rejected": true,
+      "reason": "Archive manifest differs from the pinned sealed snapshot",
+      "pathsUnchanged": true
+    },
+    {
+      "name": "non-inventoried-traversal-path",
+      "rejected": true,
+      "reason": "",
+      "pathsUnchanged": true
+    },
+    {
+      "name": "python-O-refusal",
+      "rejected": true,
+      "exitCode": 1,
+      "foreignBytesUnchanged": true
+    },
+    {
+      "name": "PYTHONOPTIMIZE-refusal",
+      "rejected": true,
+      "exitCode": 1,
+      "foreignBytesUnchanged": true
+    }
+  ],
+  "rehydratorSha256": "3fbf1b955b018357f6758cccf698eaf283511916c11273347d887027bdd51871",
+  "archiveManifestSha256": "10cd5954b23ded435418e101f3f3c1ba17f1e10bb176a70dc11c992882505903",
+  "archiveSha256": "301f2e8ef2e17a1b0416b54b907328b186947fd5f76f261ee7457ddcc66e4271",
+  "passed": true,
+  "scope": "Exact missing-byte restoration and bounded refusal controls; no original evidence, source files or task acceptance changed."
+}

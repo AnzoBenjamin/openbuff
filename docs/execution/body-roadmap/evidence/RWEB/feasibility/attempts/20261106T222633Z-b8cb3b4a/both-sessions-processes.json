@@ -1,0 +1,146 @@
+[
+  {
+    "pid": 613049,
+    "argv": "/tmp/openbuff-rweb-toolchain-ml81t51k/package/bin/agent-browser-linux-x64 --session openbuff-rweb-52f0c3b3c119-a-b8cb3b4a --config /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/mcp-config.json mcp --tools core "
+  },
+  {
+    "pid": 613053,
+    "argv": "/tmp/openbuff-rweb-toolchain-ml81t51k/package/bin/agent-browser-linux-x64 "
+  },
+  {
+    "pid": 613067,
+    "argv": "/opt/google/chrome/chrome --remote-debugging-port=0 --no-first-run --no-default-browser-check --disable-background-networking --disable-backgrounding-occluded-windows --disable-component-update --disable-default-apps --disable-hang-monitor --disable-popup-blocking --disable-prompt-on-repost --disable-sync --disable-features=Translate --enable-features=NetworkService,NetworkServiceInProcess --metrics-recording-only --password-store=basic --use-mock-keychain --headless=new --hide-scrollbars --enable-unsafe-swiftshader --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --window-size=1280,720 --force-webrtc-ip-handling-policy=disable_non_proxied_udp "
+  },
+  {
+    "pid": 613069,
+    "argv": "/opt/google/chrome/chrome_crashpad_handler --monitor-self --monitor-self-annotation=ptype=crashpad-handler --user-stream-region=4,65568 --database=/tmp/openbuff-rweb-toolchain-ml81t51k/config/google-chrome/Crash Reports --url=https://clients2.google.com/cr/report --annotation=channel= --annotation=lsb-release=Arch Linux --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=157.0.8103.38 --initial-client-fd=7 --shared-client-connection "
+  },
+  {
+    "pid": 613071,
+    "argv": "/opt/google/chrome/chrome_crashpad_handler --no-periodic-tasks --monitor-self-annotation=ptype=crashpad-handler --database=/tmp/openbuff-rweb-toolchain-ml81t51k/config/google-chrome/Crash Reports --url=https://clients2.google.com/cr/report --annotation=channel= --annotation=lsb-release=Arch Linux --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=157.0.8103.38 --initial-client-fd=4 --shared-client-connection "
+  },
+  {
+    "pid": 613077,
+    "argv": "/opt/google/chrome/chrome --type=zygote --no-zygote-sandbox --headless=new --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl "
+  },
+  {
+    "pid": 613078,
+    "argv": "/opt/google/chrome/chrome --type=zygote --headless=new --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl "
+  },
+  {
+    "pid": 613080,
+    "argv": "/opt/google/chrome/chrome --type=zygote --headless=new --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl "
+  },
+  {
+    "pid": 613105,
+    "argv": "/opt/google/chrome/chrome --type=gpu-process --gpu-recent-crash-count=0 --headless=new --ozone-platform=headless --use-angle=swiftshader-webgl --enable-unsafe-swiftshader --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --change-stack-guard-on-fork=enable --gpu-preferences=YAAAAAAAAAAgAAACAAAAAAAAAAAAAGAASAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAMAAAAAQAAAAAAAAAAAAAACAAAAAAAAAAIAAAAAAAAAA== --shared-files --field-trial-handle=3,i,8308548242686546039,10149745946894283661,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,12583598312422037460,6228886368468272098,4 --trace-process-track-uuid=3190708988185955192 "
+  },
+  {
+    "pid": 613129,
+    "argv": "/opt/google/chrome/chrome --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=none --use-angle=swiftshader-webgl --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --change-stack-guard-on-fork=enable --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8308548242686546039,10149745946894283661,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,12583598312422037460,6228886368468272098,4 --trace-process-track-uuid=3190708989122997041 "
+  },
+  {
+    "pid": 613143,
+    "argv": "/opt/google/chrome/chrome --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-US --service-sandbox-type=utility --use-angle=swiftshader-webgl --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --change-stack-guard-on-fork=enable --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8308548242686546039,10149745946894283661,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,12583598312422037460,6228886368468272098,4 --trace-process-track-uuid=3190708990060038890 "
+  },
+  {
+    "pid": 613162,
+    "argv": "/opt/google/chrome/chrome --type=renderer --top-chrome-webui --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=5 --launch-time-ticks=30068901766 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8308548242686546039,10149745946894283661,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,12583598312422037460,6228886368468272098,4 --trace-process-track-uuid=3190708990997080739 "
+  },
+  {
+    "pid": 613173,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=7 --launch-time-ticks=30068920992 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8308548242686546039,10149745946894283661,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,12583598312422037460,6228886368468272098,4 --trace-process-track-uuid=3190708992871164437 "
+  },
+  {
+    "pid": 613174,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --ntp-process --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=6 --launch-time-ticks=30068923229 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8308548242686546039,10149745946894283661,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,12583598312422037460,6228886368468272098,4 --trace-process-track-uuid=3190708991934122588 "
+  },
+  {
+    "pid": 613208,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=8 --launch-time-ticks=30068994834 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8308548242686546039,10149745946894283661,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,12583598312422037460,6228886368468272098,4 --trace-process-track-uuid=3190708993808206286 "
+  },
+  {
+    "pid": 613232,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --extension-process --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=9 --launch-time-ticks=30069037074 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8308548242686546039,10149745946894283661,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,12583598312422037460,6228886368468272098,4 --trace-process-track-uuid=3190708994745248135 "
+  },
+  {
+    "pid": 613233,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --extension-process --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=10 --launch-time-ticks=30069039469 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8308548242686546039,10149745946894283661,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,12583598312422037460,6228886368468272098,4 --trace-process-track-uuid=3190708995682289984 "
+  },
+  {
+    "pid": 613240,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --extension-process --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=11 --launch-time-ticks=30069042439 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8308548242686546039,10149745946894283661,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,12583598312422037460,6228886368468272098,4 --trace-process-track-uuid=3190708996619331833 "
+  },
+  {
+    "pid": 613289,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613069 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-14cf8dd4-874c-436c-a808-78b31bbdba05 --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=12 --launch-time-ticks=30069150686 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,8308548242686546039,10149745946894283661,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,12583598312422037460,6228886368468272098,4 --trace-process-track-uuid=3190708997556373682 "
+  },
+  {
+    "pid": 613358,
+    "argv": "/tmp/openbuff-rweb-toolchain-ml81t51k/package/bin/agent-browser-linux-x64 "
+  },
+  {
+    "pid": 613372,
+    "argv": "/opt/google/chrome/chrome --remote-debugging-port=0 --no-first-run --no-default-browser-check --disable-background-networking --disable-backgrounding-occluded-windows --disable-component-update --disable-default-apps --disable-hang-monitor --disable-popup-blocking --disable-prompt-on-repost --disable-sync --disable-features=Translate --enable-features=NetworkService,NetworkServiceInProcess --metrics-recording-only --password-store=basic --use-mock-keychain --headless=new --hide-scrollbars --enable-unsafe-swiftshader --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --window-size=1280,720 --force-webrtc-ip-handling-policy=disable_non_proxied_udp "
+  },
+  {
+    "pid": 613374,
+    "argv": "/opt/google/chrome/chrome_crashpad_handler --monitor-self --monitor-self-annotation=ptype=crashpad-handler --user-stream-region=4,65568 --database=/tmp/openbuff-rweb-toolchain-ml81t51k/config/google-chrome/Crash Reports --url=https://clients2.google.com/cr/report --annotation=channel= --annotation=lsb-release=Arch Linux --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=157.0.8103.38 --initial-client-fd=7 --shared-client-connection "
+  },
+  {
+    "pid": 613376,
+    "argv": "/opt/google/chrome/chrome_crashpad_handler --no-periodic-tasks --monitor-self-annotation=ptype=crashpad-handler --database=/tmp/openbuff-rweb-toolchain-ml81t51k/config/google-chrome/Crash Reports --url=https://clients2.google.com/cr/report --annotation=channel= --annotation=lsb-release=Arch Linux --annotation=plat=Linux --annotation=prod=Chrome_Linux --annotation=ver=157.0.8103.38 --initial-client-fd=4 --shared-client-connection "
+  },
+  {
+    "pid": 613382,
+    "argv": "/opt/google/chrome/chrome --type=zygote --no-zygote-sandbox --headless=new --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl "
+  },
+  {
+    "pid": 613383,
+    "argv": "/opt/google/chrome/chrome --type=zygote --headless=new --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl "
+  },
+  {
+    "pid": 613385,
+    "argv": "/opt/google/chrome/chrome --type=zygote --headless=new --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --change-stack-guard-on-fork=enable --no-first-run --ozone-platform=headless --ozone-override-screen-size=800,600 --use-angle=swiftshader-webgl "
+  },
+  {
+    "pid": 613410,
+    "argv": "/opt/google/chrome/chrome --type=gpu-process --gpu-recent-crash-count=0 --headless=new --ozone-platform=headless --use-angle=swiftshader-webgl --enable-unsafe-swiftshader --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --change-stack-guard-on-fork=enable --gpu-preferences=YAAAAAAAAAAgAAACAAAAAAAAAAAAAGAASAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAMAAAAAAAAAAwAAAAAAAAAAAAAAAAAAAACAAAAAAAAAAMAAAAAQAAAAAAAAAAAAAACAAAAAAAAAAIAAAAAAAAAA== --shared-files --field-trial-handle=3,i,3206437747273752516,5458399641374730985,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,4135827083858244550,946718583631836826,4 --trace-process-track-uuid=3190708988185955192 "
+  },
+  {
+    "pid": 613445,
+    "argv": "/opt/google/chrome/chrome --type=utility --utility-sub-type=network.mojom.NetworkService --lang=en-US --service-sandbox-type=none --use-angle=swiftshader-webgl --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --change-stack-guard-on-fork=enable --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,3206437747273752516,5458399641374730985,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,4135827083858244550,946718583631836826,4 --trace-process-track-uuid=3190708989122997041 "
+  },
+  {
+    "pid": 613458,
+    "argv": "/opt/google/chrome/chrome --type=utility --utility-sub-type=storage.mojom.StorageService --lang=en-US --service-sandbox-type=utility --use-angle=swiftshader-webgl --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --change-stack-guard-on-fork=enable --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,3206437747273752516,5458399641374730985,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,4135827083858244550,946718583631836826,4 --trace-process-track-uuid=3190708990060038890 "
+  },
+  {
+    "pid": 613477,
+    "argv": "/opt/google/chrome/chrome --type=renderer --top-chrome-webui --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=5 --launch-time-ticks=30070216752 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,3206437747273752516,5458399641374730985,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,4135827083858244550,946718583631836826,4 --trace-process-track-uuid=3190708990997080739 "
+  },
+  {
+    "pid": 613488,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=7 --launch-time-ticks=30070237778 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,3206437747273752516,5458399641374730985,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,4135827083858244550,946718583631836826,4 --trace-process-track-uuid=3190708992871164437 "
+  },
+  {
+    "pid": 613489,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --ntp-process --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=6 --launch-time-ticks=30070240559 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,3206437747273752516,5458399641374730985,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,4135827083858244550,946718583631836826,4 --trace-process-track-uuid=3190708991934122588 "
+  },
+  {
+    "pid": 613522,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=8 --launch-time-ticks=30070315404 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,3206437747273752516,5458399641374730985,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,4135827083858244550,946718583631836826,4 --trace-process-track-uuid=3190708993808206286 "
+  },
+  {
+    "pid": 613539,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --extension-process --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=9 --launch-time-ticks=30070355418 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,3206437747273752516,5458399641374730985,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,4135827083858244550,946718583631836826,4 --trace-process-track-uuid=3190708994745248135 "
+  },
+  {
+    "pid": 613540,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --extension-process --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=10 --launch-time-ticks=30070357601 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,3206437747273752516,5458399641374730985,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,4135827083858244550,946718583631836826,4 --trace-process-track-uuid=3190708995682289984 "
+  },
+  {
+    "pid": 613546,
+    "argv": "/opt/google/chrome/chrome --type=renderer --crashpad-handler-pid=613374 --enable-crash-reporter=, --noerrdialogs --user-data-dir=/tmp/openbuff-rweb-toolchain-ml81t51k/browser-tmp/agent-browser-chrome-bb665b89-b022-473b-b814-dbf92b8284e3 --extension-process --change-stack-guard-on-fork=enable --remote-debugging-port=0 --ozone-platform=headless --disable-gpu-compositing --lang=en-US --num-raster-threads=4 --enable-main-frame-before-activation --renderer-client-id=11 --launch-time-ticks=30070359925 --shared-files=v8_context_snapshot_data:100 --field-trial-handle=3,i,3206437747273752516,5458399641374730985,262144 --enable-features=NetworkService,NetworkServiceInProcess --disable-features=PaintHolding,Translate --variations-seed-version --pseudonymization-salt-handle=7,i,4135827083858244550,946718583631836826,4 --trace-process-track-uuid=3190708996619331833 "
+  }
+]

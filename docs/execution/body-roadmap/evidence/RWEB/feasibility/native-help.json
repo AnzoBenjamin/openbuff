@@ -1,0 +1,33 @@
+{
+  "name": "native-help",
+  "argv": [
+    "/tmp/openbuff-rweb-toolchain-ml81t51k/package/bin/agent-browser-linux-x64",
+    "--help"
+  ],
+  "cwd": "/tmp/openbuff-rweb-toolchain-ml81t51k",
+  "startedAt": "2026-11-06T22:16:30.334678+00:00",
+  "elapsedSeconds": 0.003010541000548983,
+  "exitCode": 0,
+  "stdout": {
+    "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/native-help.log",
+    "sha256": "d4ace66eb681e4fc44ef0cdeb341ca8ea4b1ecec2f5bb1794330c079d2f54565"
+  },
+  "stderr": {
+    "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/native-help.stderr.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "environment": {
+    "replacement": true,
+    "keys": [
+      "HOME",
+      "LANG",
+      "PATH",
+      "TERM",
+      "XDG_CACHE_HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_RUNTIME_DIR"
+    ],
+    "privateHome": "/tmp/openbuff-rweb-toolchain-ml81t51k/home"
+  }
+}

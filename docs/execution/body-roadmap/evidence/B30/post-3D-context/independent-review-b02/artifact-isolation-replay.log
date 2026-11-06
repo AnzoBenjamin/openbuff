@@ -1,0 +1,73 @@
+{
+  "verdict": "approve B30 current bound source within declared environment-isolation scope",
+  "populations": [
+    {
+      "runId": "f2c4ab4a-f046-49e2-8a4b-7182aa4c07cc",
+      "agentAttempts": 8,
+      "completed": 2,
+      "agentCostUsd": 12,
+      "auxiliaryAttempts": 16,
+      "knownAuxiliaryCostUsd": 2,
+      "unknownAuxiliaryCosts": 8,
+      "wholeExperimentCostComplete": false,
+      "fileCount": 53,
+      "languages": [
+        "python",
+        "typescript"
+      ],
+      "routes": [
+        "offline/provider-a",
+        "offline/provider-b"
+      ]
+    },
+    {
+      "runId": "aacc7dc7-d7ed-40ac-bf62-5377c2156d02",
+      "agentAttempts": 8,
+      "completed": 2,
+      "agentCostUsd": 12,
+      "auxiliaryAttempts": 16,
+      "knownAuxiliaryCostUsd": 2,
+      "unknownAuxiliaryCosts": 8,
+      "wholeExperimentCostComplete": false,
+      "fileCount": 53,
+      "languages": [
+        "python",
+        "typescript"
+      ],
+      "routes": [
+        "offline/provider-a",
+        "offline/provider-b"
+      ]
+    }
+  ],
+  "recomputedComparisonMeans": {
+    "before": {
+      "repeat-agent": 8.0,
+      "zero-agent": 0.0
+    },
+    "after": {
+      "repeat-agent": 4.75,
+      "zero-agent": 0.25
+    }
+  },
+  "comparisonPopulationPerSide": {
+    "attempts": 6,
+    "eligibleScores": 4,
+    "costUsd": 14
+  },
+  "actualSDKTaskAndAuxiliaryWorkers": 7,
+  "validMissingCredential": {
+    "agent": "valid-no-key-fixture",
+    "termination": "failed",
+    "fetchAttempts": 0,
+    "forwarded": 0
+  },
+  "fetchGuardControl": {
+    "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+    "attempted": 1,
+    "forwarded": 0,
+    "refused": 1,
+    "refuseForFixture": true
+  },
+  "scope": "Source SDK process environment/home replacement; SDK global fetch refusal control only; no OS/filesystem/network confinement or real billing/improvement claim."
+}

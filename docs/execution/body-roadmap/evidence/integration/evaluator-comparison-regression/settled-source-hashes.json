@@ -1,0 +1,8 @@
+{
+  "evals/buffbench/statistics.ts": "88405ca40b68dcb496b5a6bfeea5350fdf713bfd86c0a46aabdfac7009781210",
+  "evals/buffbench/run-buffbench.ts": "02a6b88f1a0bd2dedfbd0697142ffbad3531f72a96ab32a8e5dc681bc870edc3",
+  "scripts/compare-buffbench-runs.ts": "e069312c7ef8f6f090f22c6833376ece5442028f0eba384ad7dbda3d1d1ef561",
+  "evals/buffbench/__tests__/statistics.test.ts": "18c9a791107aea8c072243505bc8d7adb4104e8b12bd18c58d8a1aab862237e8",
+  "evals/buffbench/__tests__/run-buffbench.test.ts": "5034b02f85ebd1e575a1c575cf69ba892eb918e06b15615ebd686cd08b1551a6",
+  "scripts/__tests__/compare-buffbench-runs.test.ts": "db623b0771a918a5157e0c71e210994aa5aae4c14ab3e2505b87977f91561acd"
+}

@@ -1,0 +1,17 @@
+{
+  "argv": [
+    "/tmp/openbuff-rweb-toolchain-ml81t51k/package/bin/agent-browser-linux-x64",
+    "--session",
+    "openbuff-rweb-52f0c3b3c119-a-b8cb3b4a-denied",
+    "--config",
+    "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/mcp-config.json",
+    "--profile",
+    "/tmp/openbuff-rweb-toolchain-ml81t51k/disallowed-profile",
+    "--json",
+    "open",
+    "http://127.0.0.1:33085/doc"
+  ],
+  "exitCode": 1,
+  "stdout": "{\"error\":\"Session name 'openbuff-rweb-52f0c3b3c119-a-b8cb3b4a-denied' is too long. Socket path would be 108 bytes (max 103).\\nUse a shorter session name or set AGENT_BROWSER_SOCKET_DIR to a shorter path.\",\"success\":false}\n",
+  "stderr": ""
+}

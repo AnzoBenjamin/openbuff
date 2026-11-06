@@ -1,0 +1,693 @@
+{
+  "schemaVersion": 1,
+  "card": "B08",
+  "recommendation": "approve",
+  "scope": "Canonical B08 offline request/error/retry/route-metadata/settings contract; root owns final acceptance",
+  "createdAt": "2026-11-06T17:04:52.761745+00:00",
+  "canonicalPrerequisites": [],
+  "authorship": "Independent probe/oracle authored by this lane; no B08 production/test/ledger authorship. Prior B01 tail/store authorship excluded.",
+  "toolchain": {
+    "executable": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+    "version": "1.3.5",
+    "sha256": "a56093cbdd2efc7290a744ccc39971dcc4be52c5732be15c7fb1465cc119c8de"
+  },
+  "environment": {
+    "replacement": true,
+    "ownedEmptyHomeAndXdg": true,
+    "noEnvFile": true,
+    "providerKeys": "No ambient credentials; fixture/test-controlled synthetic keys only"
+  },
+  "commands": [
+    {
+      "name": "actual-vision-failover",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/independent-review/route-metadata.ts",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/route-metadata"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/actual-vision-failover.log",
+      "environmentKeys": [
+        "B08_INDEPENDENT_FETCH_LOG",
+        "DO_NOT_TRACK",
+        "HOME",
+        "LANG",
+        "NEXT_PUBLIC_CODEBUFF_APP_URL",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USER",
+        "XDG_CONFIG_HOME"
+      ]
+    },
+    {
+      "name": "provider-tests",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "test",
+        "--isolate",
+        "--preload",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/offline-preload.ts",
+        "/home/ben/Code/CLI/openbuff/packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/error-utils.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/model-provider.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/provider-config-band.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/provider-config.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/provider-contract-regressions.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/__tests__/retry-config.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/error-utils.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover-integration.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/failover.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-chatgpt-oauth-policy.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-context-window.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-cost.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-ontrim-retry.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-repair-tool-input.test.ts",
+        "/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/provider-tests.log",
+      "environmentKeys": [
+        "B08_INDEPENDENT_FETCH_LOG",
+        "DO_NOT_TRACK",
+        "HOME",
+        "LANG",
+        "NEXT_PUBLIC_CODEBUFF_APP_URL",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USER",
+        "XDG_CONFIG_HOME"
+      ]
+    },
+    {
+      "name": "provider-retry-fixture",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "--preload",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/offline-preload.ts",
+        "/home/ben/Code/CLI/openbuff/test/fixtures/body/provider-retry.ts",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/fixture"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/provider-retry-fixture.log",
+      "environmentKeys": [
+        "B08_INDEPENDENT_FETCH_LOG",
+        "DO_NOT_TRACK",
+        "HOME",
+        "LANG",
+        "NEXT_PUBLIC_CODEBUFF_APP_URL",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USER",
+        "XDG_CONFIG_HOME"
+      ]
+    },
+    {
+      "name": "typecheck-sdk",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "--cwd",
+        "sdk",
+        "typecheck"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-sdk.log",
+      "environmentKeys": [
+        "B08_INDEPENDENT_FETCH_LOG",
+        "DO_NOT_TRACK",
+        "HOME",
+        "LANG",
+        "NEXT_PUBLIC_CODEBUFF_APP_URL",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USER",
+        "XDG_CONFIG_HOME"
+      ]
+    },
+    {
+      "name": "typecheck-internal",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "--cwd",
+        "packages/internal",
+        "typecheck"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-internal.log",
+      "environmentKeys": [
+        "B08_INDEPENDENT_FETCH_LOG",
+        "DO_NOT_TRACK",
+        "HOME",
+        "LANG",
+        "NEXT_PUBLIC_CODEBUFF_APP_URL",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USER",
+        "XDG_CONFIG_HOME"
+      ]
+    },
+    {
+      "name": "typecheck-common",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "--cwd",
+        "common",
+        "typecheck"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-common.log",
+      "environmentKeys": [
+        "B08_INDEPENDENT_FETCH_LOG",
+        "DO_NOT_TRACK",
+        "HOME",
+        "LANG",
+        "NEXT_PUBLIC_CODEBUFF_APP_URL",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USER",
+        "XDG_CONFIG_HOME"
+      ]
+    }
+  ],
+  "observedTests": {
+    "pass": 331,
+    "fail": 0,
+    "assertions": 1078,
+    "reportedTotal": 331,
+    "files": 16
+  },
+  "observedProducerFixtureControls": 44,
+  "additionalIndependentControls": 1,
+  "oracleResults": {
+    "schemaVersion": 1,
+    "independentlyEnumeratedProducerControlCount": 44,
+    "producerControlFailures": [],
+    "producerControlsPass": true,
+    "additionalIndependentControlCount": 1,
+    "additionalRouteControlPass": true,
+    "blockingCounterexamples": [],
+    "allRequiredOraclesPass": true
+  },
+  "resolvedFinding": {
+    "id": "B08-F1-actual-vision-failover-route-metadata",
+    "priorRejectedManifest": "docs/execution/body-roadmap/evidence/B08/independent-review/manifest.json",
+    "priorRejectedManifestSha256": "f15e8403c5addddc5f24a796be30552620802b4189265a66e4bfd14140e8e138",
+    "oldStatusModel": "primary/model",
+    "newStatusModel": "vision/model",
+    "requestLedger": [
+      "vision",
+      "vision",
+      "vision",
+      "backup"
+    ],
+    "waits": [
+      100,
+      200
+    ],
+    "probeSourceUnchanged": true
+  },
+  "sourceBindings": [
+    {
+      "path": ".agents/sessions/body-capability-review-2026-11-05/PLAN.md",
+      "sha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241"
+    },
+    {
+      "path": ".agents/sessions/body-capability-review-2026-11-05/SPEC.md",
+      "sha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31"
+    },
+    {
+      "path": "bun.lock",
+      "sha256": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6"
+    },
+    {
+      "path": "common/package.json",
+      "sha256": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c"
+    },
+    {
+      "path": "common/src/constants/chatgpt-oauth.ts",
+      "sha256": "639d8588df5410689cffec29efdb08d8e700a96c63812d02ecceeb9a8c7f2a58"
+    },
+    {
+      "path": "common/src/old-constants.ts",
+      "sha256": "bff89d506a20df1c1948ac67c325c537c29f840e3611ae3e11f4375441d877e1"
+    },
+    {
+      "path": "common/src/tools/constants.ts",
+      "sha256": "8064a62829d99bb3276de0b38d9a32cfc0137fb40596a819b3202629642b83b0"
+    },
+    {
+      "path": "common/src/types/contracts/llm.ts",
+      "sha256": "5f4a39d3d236fe6f8c616d8d14cd1034fbbb7dd7a6b295e7ab4508128ffefad0"
+    },
+    {
+      "path": "common/src/types/run-outcome.ts",
+      "sha256": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054"
+    },
+    {
+      "path": "common/src/util/error.ts",
+      "sha256": "bba70d5e459a97e83e972cb28c3bd6e7ebae1d4584c5da11bde634bdfd5f5d93"
+    },
+    {
+      "path": "common/src/util/messages.ts",
+      "sha256": "4a547583f363a22bc9f64629ce6d741dd9316f4dfcba874cc8db99110429c363"
+    },
+    {
+      "path": "common/tsconfig.json",
+      "sha256": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20"
+    },
+    {
+      "path": "docs/configuration.md",
+      "sha256": "b7ee0ad4537e2e0cc3b3c2c11b18bb6d5a031ee2f6f236fcf519136add2b38d8"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/independent-review/route-metadata.ts",
+      "sha256": "36ca44a15f8c9c256971e7a506edc4e6d93ce86cc629228951037a55823c93ef"
+    },
+    {
+      "path": "evals/buffbench/isolated-sdk-client.ts",
+      "sha256": "0be0e1e719de62ac305501f68f84f661927c7db91a800aeba91966344894c54c"
+    },
+    {
+      "path": "evals/buffbench/isolated-sdk-worker.ts",
+      "sha256": "185f58d9f7a59ce9776586a07a6cd83bb66b6d322ddf82d9bf4359341656b15f"
+    },
+    {
+      "path": "package.json",
+      "sha256": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8"
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "sha256": "6a405a2ea01ccb3fa4ef005bbf4c45f4b91acd96b836ba818f221965165a42db"
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "sha256": "2865e32af22ec49c57bc396ea6b1ba491c1ca3c466842343c9a181387d3208db"
+    },
+    {
+      "path": "packages/agent-runtime/src/util/context-pruning.ts",
+      "sha256": "e626ed6dcc282e0e0baf6acc0546b5d11f372b660bb55836e649f73b7dd72a78"
+    },
+    {
+      "path": "packages/agent-runtime/src/util/messages.ts",
+      "sha256": "d4be968a48002a8df376e775ce2e767e6c8e2698d97b00147a3b9830b618b540"
+    },
+    {
+      "path": "packages/agent-runtime/src/util/parse-tool-calls-from-text.ts",
+      "sha256": "fa47ed268c911b2ec525a732f90110f21190c2ee433fd6fbd19e1e3c28b3ed76"
+    },
+    {
+      "path": "packages/agent-runtime/src/util/token-counter.ts",
+      "sha256": "39db966fdbe308e95d11cd2dad11a462cce53d27df31f6894b96d75e179af127"
+    },
+    {
+      "path": "packages/internal/package.json",
+      "sha256": "1fc60f23c474260f422bb0a08460b787cadc5d2f57e222950ed658a9424c2e39"
+    },
+    {
+      "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts",
+      "sha256": "0b87f3dc063f43801979b4b42bfc7295f6bdf016bc621188ea39dba663b7d701"
+    },
+    {
+      "path": "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts",
+      "sha256": "58fbe85769982c8be114fa457a509df15477e5ebcf119101f4997d24d26fabaf"
+    },
+    {
+      "path": "packages/internal/src/openai-compatible/openai-compatible-error.ts",
+      "sha256": "a696f1cfeafb07fa10dea86e4b41fb11d15e87d484d0445668a2195233f3daca"
+    },
+    {
+      "path": "packages/internal/tsconfig.json",
+      "sha256": "fc5a4782a724725b8bccf080a1bb69df84ddda28f573ba2cf76a364d745dc9fe"
+    },
+    {
+      "path": "scripts/body-fixtures/evaluator-isolation.ts",
+      "sha256": "d768957e94d8801251474b170cc80bf9abbd082e5d4fbc722a3dd18f3dd1cc7a"
+    },
+    {
+      "path": "sdk/package.json",
+      "sha256": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d"
+    },
+    {
+      "path": "sdk/src/__tests__/error-utils.test.ts",
+      "sha256": "db88099c212ddf0379a0b019b29dcb055e87587e658b9a02e673de2a977d05ba"
+    },
+    {
+      "path": "sdk/src/__tests__/model-provider.test.ts",
+      "sha256": "e70bf67fad3ff1d7bcd9cc02d7b04a643be11d98a6b809e2ed2366f166df99e6"
+    },
+    {
+      "path": "sdk/src/__tests__/provider-config-band.test.ts",
+      "sha256": "1de2f4c0bfba9d9042148c99fb4fca44a8a0b205b8e580a6ac1a71ed1bc6e01d"
+    },
+    {
+      "path": "sdk/src/__tests__/provider-config.test.ts",
+      "sha256": "9cd237a8ebe5586f4aa57859584ae9f6768de81f4572ed649a0b0039221f40d7"
+    },
+    {
+      "path": "sdk/src/__tests__/provider-contract-regressions.test.ts",
+      "sha256": "904140141f77414577f46b498c71c64dca1c83dfd1a44eb1d559b7c23fde323b"
+    },
+    {
+      "path": "sdk/src/__tests__/retry-config.test.ts",
+      "sha256": "a8bd0c3812f16939e3cf4e2ede9d631292f8e42e274c0e13c26d76901af3462e"
+    },
+    {
+      "path": "sdk/src/client.ts",
+      "sha256": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7"
+    },
+    {
+      "path": "sdk/src/credentials.ts",
+      "sha256": "475f86ede09938d87b9662113edf570124fc06df988ddd12ed1de6e97b4fc098"
+    },
+    {
+      "path": "sdk/src/env.ts",
+      "sha256": "3ed5f4a1f2e63af625de6930eee65962b9bf64dda3158e40ce609e7b80691f01"
+    },
+    {
+      "path": "sdk/src/error-utils.ts",
+      "sha256": "11565db8d9f430fcbb617f040a7807beafac0e521dd2ec9341bf35a371743b29"
+    },
+    {
+      "path": "sdk/src/impl/__tests__/error-utils.test.ts",
+      "sha256": "37c6c4e29bd7b6463cfc8b17e475acc14313488e195ac56847cf88c6fed2d509"
+    },
+    {
+      "path": "sdk/src/impl/__tests__/failover-integration.test.ts",
+      "sha256": "621d779b3cfacadc130311b9f59fc1ef99a534430895eda79e6e2357d9de2428"
+    },
+    {
+      "path": "sdk/src/impl/__tests__/failover.test.ts",
+      "sha256": "9f604d7d936a428416109f33f23618e2b29ae9bd4b4ba69c30365772c3d610cd"
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-chatgpt-oauth-policy.test.ts",
+      "sha256": "c435f046772b0f29f6b2bd37be0a64440656e247790dfdc725381ea3e250ad78"
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-context-window.test.ts",
+      "sha256": "4356a8919cf4ed7e99b36ef2821ce94c518718195a1276c304e7f26131e9a7fd"
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-cost.test.ts",
+      "sha256": "0cd127b06e174742266698aeb2dc44b91a349c107bd2dded610a250d4ce284b9"
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-ontrim-retry.test.ts",
+      "sha256": "fa757140c7a0fd1827c956a54f16721c06c921dae19e8bb84002c1bba4f8b5a5"
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-repair-tool-input.test.ts",
+      "sha256": "fd7acc32588a993da76fe2e6b903bf1e6c590dd69027900bc6cc777c132a7b49"
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts",
+      "sha256": "7e91de9ef8080225665efd2a69a362b1e642263e4613ccffade235a740bfd49b"
+    },
+    {
+      "path": "sdk/src/impl/chatgpt-backend-fetch.ts",
+      "sha256": "4fe53976e121fc76a5aa344ecf92a9ce430899ced646b08ec300d29255388a28"
+    },
+    {
+      "path": "sdk/src/impl/direct-agent-tool-repair.ts",
+      "sha256": "25e8e5e83c1148592f0c4e6f5fdf2de8be9f707fe5e80f1cb62d863c16c04690"
+    },
+    {
+      "path": "sdk/src/impl/failover.ts",
+      "sha256": "62930f709bc5be8975375b50ec1e200eec7dd46ce4df5482da4c46ba06b2e793"
+    },
+    {
+      "path": "sdk/src/impl/llm.ts",
+      "sha256": "76b1b88454eb1471eeb3a71ae2ec60e97b83603c40799d3ce3cdbc6abe226be5"
+    },
+    {
+      "path": "sdk/src/impl/model-provider.ts",
+      "sha256": "2e14b4aa5534c0e8761b16c234eca300052f4419178ed3ab1d3137af82b2c11e"
+    },
+    {
+      "path": "sdk/src/impl/opencode-go-responses-fetch.ts",
+      "sha256": "613beb8bfe008368aa8e68d692c0bbcace004054e2ef4f788be39d39b17040ca"
+    },
+    {
+      "path": "sdk/src/index.ts",
+      "sha256": "36bfe777b384462ac3a4740751579a3a8b4d8508b4bf90f7a1458d14774adae1"
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "sha256": "6a659575360e14a8fba319cf6e7e406faa8505d681342a6911835bc870dd8922"
+    },
+    {
+      "path": "sdk/src/retry-config.ts",
+      "sha256": "fab975fea396f8333ca7ed9787515dfa858a445056409daffee5ea0f6f50c91b"
+    },
+    {
+      "path": "sdk/src/run-state.ts",
+      "sha256": "131d5e2a0fe1470dd26312952b199db3ef481386cb03fa3593035129589b2a68"
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "sha256": "c80be3b62a436b92b851cde37d00ae569b860b33ffee597016e0462715fa7562"
+    },
+    {
+      "path": "sdk/src/tools/run-terminal-command.ts",
+      "sha256": "0ad82faa2597d6b9d4d1b7e1420f75a8ee3c5961b3bf276d77f70cd4c1b5db74"
+    },
+    {
+      "path": "sdk/tsconfig.json",
+      "sha256": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21"
+    },
+    {
+      "path": "test/fixtures/body/provider-retry.ts",
+      "sha256": "d306802367c40f470e9c36cca42c12793091250036dc36498b3c3ea781bad896"
+    },
+    {
+      "path": "tsconfig.base.json",
+      "sha256": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+    }
+  ],
+  "configBindings": [
+    {
+      "path": "package.json",
+      "sha256": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8"
+    },
+    {
+      "path": "sdk/package.json",
+      "sha256": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d"
+    },
+    {
+      "path": "common/package.json",
+      "sha256": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c"
+    },
+    {
+      "path": "packages/internal/package.json",
+      "sha256": "1fc60f23c474260f422bb0a08460b787cadc5d2f57e222950ed658a9424c2e39"
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "c0b9832ecc949a4636069bebf216821d6c2afb25ac60e961394c47a56ec5c23e"
+    },
+    {
+      "path": "tsconfig.base.json",
+      "sha256": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+    },
+    {
+      "path": "sdk/tsconfig.json",
+      "sha256": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21"
+    },
+    {
+      "path": "common/tsconfig.json",
+      "sha256": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20"
+    },
+    {
+      "path": "packages/internal/tsconfig.json",
+      "sha256": "fc5a4782a724725b8bccf080a1bb69df84ddda28f573ba2cf76a364d745dc9fe"
+    },
+    {
+      "path": "bunfig.toml",
+      "sha256": "48a8b5826d7b001640f0e0f82cf8f612405c6e56080fa182d239e56d5b8a8505"
+    },
+    {
+      "path": "bun.lock",
+      "sha256": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6"
+    }
+  ],
+  "sourceStableDuringChecks": true,
+  "configStableDuringChecks": true,
+  "sourceStableAtFinalSweep": true,
+  "originalProducerAndRejectedArtifactsPreserved": true,
+  "originalProducerArtifactCount": 452,
+  "preimportGuardTrace": {
+    "provider-retry-fixture-fetch.jsonl": {
+      "events": [
+        {
+          "event": "guard-installed-before-imports",
+          "pid": 87,
+          "refused": 0,
+          "forwarded": 0
+        },
+        {
+          "event": "process-exit",
+          "pid": 87,
+          "refused": 0,
+          "forwarded": 0
+        }
+      ],
+      "recordedRefusals": 0,
+      "forwarded": 0
+    },
+    "provider-tests-fetch.jsonl": {
+      "events": [
+        {
+          "event": "guard-installed-before-imports",
+          "pid": 27,
+          "refused": 0,
+          "forwarded": 0
+        }
+      ],
+      "recordedRefusals": 0,
+      "forwarded": 0
+    }
+  },
+  "requiredChecksPass": true,
+  "blockingFindings": [],
+  "closedProcessArtifactSweep": true,
+  "exclusions": [
+    "No production, source-test or ledger edits by the independent reviewer.",
+    "No independent credit for prior B01 tail/store authorship.",
+    "No B09 admission/billing, installed CLI, live provider/OAuth or whole B30 pipeline acceptance.",
+    "No OS/network confinement claim."
+  ],
+  "artifacts": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/README.md",
+      "sha256": "56d89da0839842c93bad2431650f635e3d6c1b75db810b0171174e0cc88a88d0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/REVIEW.md",
+      "sha256": "8d070e3e3b343ed46237719f2acd42d04cc6659c60c3e086fc4002c7ca3bfd4c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/actual-vision-failover.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/actual-vision-failover.log",
+      "sha256": "9e599a95cb57f3989c6ae584ae7af712014cd2f382b229924e0c21456ccd7d5d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/check-oracle.py",
+      "sha256": "cdb9179ba032923b2d46adc2a0a9e85b7c5147e2b152b5b9813bb01827b3b9c5"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/command-results.json",
+      "sha256": "231272a417191b37121f1ed2d2f023cd7f3b9d7517ff74977f15eb03636ac3b4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/commands.json",
+      "sha256": "73e795e7400378b7ad754433fdd88247ffda60b7a1716d2a0d023cd387597270"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/fixture/observations.json",
+      "sha256": "4f724a5f939b49ace112cbf714018741619971a32db3e06d21c630bbc55fd2d8"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/fixture/provider.json",
+      "sha256": "4da6a6b3342a2904a27430ea3f89c887302a46cc155936197fa9c80ac839f17a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/offline-preload.ts",
+      "sha256": "c92571da632bdd53a89714f5fe305f38684d223a3fcc3c445002508f2f80c7b4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/oracle-results.json",
+      "sha256": "294e5a3cb66c58580c08cc000c18c4d7ca74c8a7ec2ee4c3aee9751a89aa8d11"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/precommitted-inputs.json",
+      "sha256": "99f4b24e942ccac1fa23e0dd00da898d05e8f1c01210439345258c6981f257d4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/preservation-and-historical-integrity.json",
+      "sha256": "1e1464466e7f947441ff906da4c8cc6dff1d1fb7662eb4eab6c63f91cee936f7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/provider-retry-fixture-fetch.jsonl",
+      "sha256": "e82116e25786680b33b9f99d482a3181ba188aec912b46033c093e4a07be9b2e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/provider-retry-fixture.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/provider-retry-fixture.log",
+      "sha256": "3edb0f9cc9082135efbb8749db4863c4ea90042661dac43921106c8ef7c51593"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/provider-tests-fetch.jsonl",
+      "sha256": "2a81c83a3fb67e8f82ceb34b549b7a41698f72d9788b7589875dff71734db6a8"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/provider-tests.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/provider-tests.log",
+      "sha256": "6c80ef68f551e27e0c241c01360e4896c03b0488ef348affbb9d46089bee96fe"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/route-metadata/observations.json",
+      "sha256": "8d07f017c592c3cfb19dfc4ec1aa17e232c0792d171660e506d336245c910fb4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/route-metadata/provider.json",
+      "sha256": "d5dbb5c9f0ca3b2e697966e0987bdd6e8d7cc7a5c332f75e15241553cf4da364"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/run-checks.py",
+      "sha256": "e5e09ebb86bdb811aa12f45899b59784ffc9d6b41254f661a2fefe78d187b2d9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-common.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-common.log",
+      "sha256": "3d3c45ecc39fd091f458f3c9ac69950e524cbbf36b64ebe261d051ca9be68c6d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-internal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-internal.log",
+      "sha256": "3d3c45ecc39fd091f458f3c9ac69950e524cbbf36b64ebe261d051ca9be68c6d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-sdk.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/typecheck-sdk.log",
+      "sha256": "3d3c45ecc39fd091f458f3c9ac69950e524cbbf36b64ebe261d051ca9be68c6d"
+    }
+  ]
+}

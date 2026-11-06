@@ -1,0 +1,190 @@
+{
+  "passed": true,
+  "refused": 0,
+  "forwarded": 0,
+  "requests": [
+    {
+      "url": "https://vision.independent.invalid/v1/chat/completions",
+      "body": {
+        "model": "model",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Inspect image"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,iVBORw0KGgo="
+                }
+              }
+            ]
+          }
+        ],
+        "stream": true
+      }
+    },
+    {
+      "url": "https://vision.independent.invalid/v1/chat/completions",
+      "body": {
+        "model": "model",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Inspect image"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,iVBORw0KGgo="
+                }
+              }
+            ]
+          }
+        ],
+        "stream": true
+      }
+    },
+    {
+      "url": "https://vision.independent.invalid/v1/chat/completions",
+      "body": {
+        "model": "model",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Inspect image"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,iVBORw0KGgo="
+                }
+              }
+            ]
+          }
+        ],
+        "stream": true
+      }
+    },
+    {
+      "url": "https://backup.independent.invalid/v1/chat/completions",
+      "body": {
+        "model": "model",
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "Inspect image"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,iVBORw0KGgo="
+                }
+              }
+            ]
+          }
+        ],
+        "stream": true
+      }
+    }
+  ],
+  "ledger": [
+    "vision",
+    "vision",
+    "vision",
+    "backup"
+  ],
+  "waits": [
+    100,
+    200
+  ],
+  "statuses": [
+    {
+      "action": {
+        "type": "response-chunk",
+        "userInputId": "b08-independent",
+        "chunk": {
+          "type": "provider_status",
+          "status": "retrying",
+          "model": "vision/model",
+          "attempt": 2,
+          "maxAttempts": 3,
+          "delayMs": 100,
+          "statusCode": 503
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "response-chunk",
+        "userInputId": "b08-independent",
+        "chunk": {
+          "type": "provider_status",
+          "status": "retrying",
+          "model": "vision/model",
+          "attempt": 3,
+          "maxAttempts": 3,
+          "delayMs": 200,
+          "statusCode": 503
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "response-chunk",
+        "userInputId": "b08-independent",
+        "chunk": {
+          "type": "provider_status",
+          "status": "failover",
+          "model": "vision/model",
+          "nextModel": "backup/model",
+          "statusCode": 503
+        }
+      }
+    },
+    {
+      "action": {
+        "type": "response-chunk",
+        "userInputId": "b08-independent",
+        "chunk": {
+          "type": "provider_status",
+          "status": "recovered"
+        }
+      }
+    }
+  ],
+  "chunks": [
+    {
+      "type": "text",
+      "text": "healthy",
+      "agentId": "fixture"
+    },
+    {
+      "type": "finish",
+      "finishReason": "stop"
+    }
+  ],
+  "expectedFailover": {
+    "model": "vision/model",
+    "nextModel": "backup/model"
+  },
+  "actualFailover": {
+    "type": "provider_status",
+    "status": "failover",
+    "model": "vision/model",
+    "nextModel": "backup/model",
+    "statusCode": 503
+  }
+}

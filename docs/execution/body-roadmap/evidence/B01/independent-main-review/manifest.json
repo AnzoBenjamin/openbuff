@@ -1,0 +1,685 @@
+{
+  "schemaVersion": 1,
+  "card": "B01",
+  "scope": "Independent review of leader-owned coverage/maturity/source inventory and reviewer gating only",
+  "createdAt": "2026-11-06T16:35:31.244977+00:00",
+  "baselineHead": "03a1c562717b1794c898510c694db6d6f5b485d9",
+  "toolchain": {
+    "bun": {
+      "executable": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+      "version": "1.3.5",
+      "sha256": "a56093cbdd2efc7290a744ccc39971dcc4be52c5732be15c7fb1465cc119c8de"
+    },
+    "git": "git version 2.56.0"
+  },
+  "environment": {
+    "replacement": true,
+    "keys": [
+      "HOME",
+      "LANG",
+      "PATH",
+      "TMPDIR",
+      "XDG_CONFIG_HOME"
+    ],
+    "home": "owned ephemeral empty directory",
+    "xdgConfigHome": "owned ephemeral empty directory",
+    "bunEnvFileLoading": false
+  },
+  "commands": [
+    {
+      "name": "tests",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "test",
+        "--isolate",
+        "sdk/src/__tests__/audit-intelligence.test.ts",
+        "common/src/tools/params/__tests__/write-audit-findings.test.ts",
+        "sdk/src/__tests__/write-audit-findings.test.ts",
+        "common/src/util/__tests__/audit-receipt.test.ts",
+        "agents/__tests__/gate-reviewer.test.ts",
+        "agents/__tests__/code-reviewer.test.ts",
+        "agents/__tests__/gate-reviewer-parity.test.ts",
+        "agents/__tests__/audit-contracts.test.ts",
+        "agents/__tests__/base2.test.ts",
+        "agents/__tests__/base2-writer-spawn-rules.test.ts",
+        "agents/__tests__/review-rubric-parity.test.ts",
+        "agents/e2e/reviewer-spawn-conditions.e2e.test.ts"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B01/independent-main-review/tests.log",
+      "exitFile": "docs/execution/body-roadmap/evidence/B01/independent-main-review/tests.exit"
+    },
+    {
+      "name": "probe",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B01/independent-main-review/probe.ts"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B01/independent-main-review/probe.log",
+      "exitFile": "docs/execution/body-roadmap/evidence/B01/independent-main-review/probe.exit"
+    },
+    {
+      "name": "ordinary-consumer",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B01/independent-main-review/ordinary-consumer.ts"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B01/independent-main-review/ordinary-consumer.log",
+      "exitFile": "docs/execution/body-roadmap/evidence/B01/independent-main-review/ordinary-consumer.exit"
+    },
+    {
+      "name": "specialist-consumer",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B01/independent-main-review/specialist-consumer.ts"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B01/independent-main-review/specialist-consumer.log",
+      "exitFile": "docs/execution/body-roadmap/evidence/B01/independent-main-review/specialist-consumer.exit"
+    },
+    {
+      "name": "sdk-typecheck",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "--cwd",
+        "sdk",
+        "typecheck"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B01/independent-main-review/sdk-typecheck.log",
+      "exitFile": "docs/execution/body-roadmap/evidence/B01/independent-main-review/sdk-typecheck.exit"
+    },
+    {
+      "name": "agent-typecheck",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "node_modules/typescript/bin/tsc",
+        "--noEmit",
+        "-p",
+        "agents/tsconfig.json"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B01/independent-main-review/agent-typecheck.log",
+      "exitFile": "docs/execution/body-roadmap/evidence/B01/independent-main-review/agent-typecheck.exit"
+    },
+    {
+      "name": "generated-gate-parity",
+      "argv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "scripts/generate-gate-helpers.ts",
+        "--check",
+        "agents/base2/base2.ts"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B01/independent-main-review/generated-gate-parity.log",
+      "exitFile": "docs/execution/body-roadmap/evidence/B01/independent-main-review/generated-gate-parity.exit"
+    },
+    {
+      "name": "whitespace",
+      "argv": [
+        "git",
+        "diff",
+        "--check",
+        "--",
+        "sdk/src/services/audit-intelligence.ts",
+        "sdk/src/tools/audit-intelligence.ts",
+        "common/src/tools/params/tool/audit-intelligence.ts",
+        "agents/base2/gate-reviewer.ts",
+        "agents/base2/base2.ts",
+        "agents/reviewer/code-reviewer.ts",
+        "sdk/src/__tests__/audit-intelligence.test.ts",
+        "agents/__tests__/gate-reviewer.test.ts",
+        "agents/__tests__/code-reviewer.test.ts",
+        "agents/__tests__/base2.test.ts",
+        "agents/__tests__/base2-writer-spawn-rules.test.ts"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "log": "docs/execution/body-roadmap/evidence/B01/independent-main-review/whitespace.log",
+      "exitFile": "docs/execution/body-roadmap/evidence/B01/independent-main-review/whitespace.exit"
+    }
+  ],
+  "reviewedSources": [
+    {
+      "path": "sdk/src/services/audit-intelligence.ts",
+      "sha256": "fcdc495c769dbfb00d97205b9ef2dbf0d1c70837529ea3236dc660f23529c1d7"
+    },
+    {
+      "path": "sdk/src/tools/audit-intelligence.ts",
+      "sha256": "bc2f387028e79f54467eccd71628ae5d24ef390c8e87e390e361881e14ec9874"
+    },
+    {
+      "path": "common/src/tools/params/tool/audit-intelligence.ts",
+      "sha256": "486661533aa57b7b05d11f3956a8acfa812824dca182331f318b2929a7f13fcf"
+    },
+    {
+      "path": "agents/base2/gate-reviewer.ts",
+      "sha256": "8b9a8020f3311048b4cd58aa1e9ce406398c0f5df107188350c031e70c503d34"
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "sha256": "db89fd9013ffdca6f168db047b72dce9f883769c5ca0a28c79899b4adb119c1b"
+    },
+    {
+      "path": "agents/reviewer/code-reviewer.ts",
+      "sha256": "622a1635cdc5b9f34ad822ee9a93833b27578d63bb86073f3976027abe2afb0c"
+    },
+    {
+      "path": "sdk/src/__tests__/audit-intelligence.test.ts",
+      "sha256": "64bf7f70c704a00c5dc72928aa0081eea54ca6b0ba9fe4a1f478e0d4c56bafa4"
+    },
+    {
+      "path": "agents/__tests__/gate-reviewer.test.ts",
+      "sha256": "9fbfe08552b19307bfc2c954209fea90252cede07ed1d1dddd360da7548bed19"
+    },
+    {
+      "path": "agents/__tests__/code-reviewer.test.ts",
+      "sha256": "0e3e04b1907b792df775e38622ec49c0c30d7e197c9510599db0e6005de53fb2"
+    },
+    {
+      "path": "agents/__tests__/base2.test.ts",
+      "sha256": "69d90a077219a5ba5a339b62e5d620c1fe0d31f47e25f3c6cf36f6775d1702dd"
+    },
+    {
+      "path": "agents/__tests__/base2-writer-spawn-rules.test.ts",
+      "sha256": "4a9881a9b62abd7e14da46ab020f8916fe65bcd0accb4eedf047fe7000249471"
+    }
+  ],
+  "dependencyBindings": [
+    {
+      "path": "sdk/src/tools/write-audit-findings.ts",
+      "sha256": "e6dd605a418fa66713e865b22049b44d514086282008bfe3f82e9cdf2c674286"
+    },
+    {
+      "path": "common/src/util/audit-receipt.ts",
+      "sha256": "91cc161309cfecdf32a4496971b1d5251bbee9b06424a3a21a5928e025f626ce"
+    },
+    {
+      "path": "common/src/tools/params/tool/write-audit-findings.ts",
+      "sha256": "82d26c1e53a118ff3696f1ab5a446ff7a750c710b489fe65d86d68dfb75e0317"
+    },
+    {
+      "path": "common/src/tools/compile-tool-definitions.ts",
+      "sha256": "e9aa2151af53905da8121bb8c31d5e63e03da4ef20ce86047c1aff35b39dc144"
+    },
+    {
+      "path": "common/src/types/json.ts",
+      "sha256": "f8f967c4b3a6798691f09ecd7431d67414e591354de5cdde5fd32d5967166fcd"
+    },
+    {
+      "path": "common/src/tools/list.ts",
+      "sha256": "9b28ff06f872a23166fd6fb55fd650087951df421ba16038ab06f1cb8a139e1a"
+    },
+    {
+      "path": "common/src/tools/params/utils.ts",
+      "sha256": "5f9dd0bba05bd3290c6a5b0ed6706663717d3418b2f723b6bf43658a3626ffaf"
+    },
+    {
+      "path": "agents/base2/gate-paths.ts",
+      "sha256": "d903ad3ebb85d340097bf00389f9101eb84db503d9001b43c7df90db73d2a345"
+    },
+    {
+      "path": "agents/base2/gate-repair.ts",
+      "sha256": "40447854bc8e478acd3d6b75fc0289c07cd793f54af938b0bb33783b2925e2eb"
+    },
+    {
+      "path": "agents/base2/gate-concurrency.ts",
+      "sha256": "c44b7ee3d95b4f1e3f81190854f000e56b2633454157cff5b2bf31971149e3a4"
+    },
+    {
+      "path": "agents/base2/gate-fingerprint.ts",
+      "sha256": "f52d9b33decb6abcfe77ed1444837541614e06210ecca0aa178e461af51420d0"
+    },
+    {
+      "path": "agents/base2/gate-committed-surface.ts",
+      "sha256": "5c7f395eecbcc96a3872f787a886d211cd7e99385946a0317e613cacb75f84eb"
+    },
+    {
+      "path": "agents/base2/quality-prompt-section.ts",
+      "sha256": "ba62e24eadf2ee22bfd3b4f3222d00e6765b61d978488b2841d4092bfe59e24f"
+    },
+    {
+      "path": "agents/base2/tool-tiers.ts",
+      "sha256": "a47d85528d97ea77849145d397e4d6b1491fe3b867d8f4ea0b473eab1f21a53a"
+    },
+    {
+      "path": "agents/base2/spawn-contract.ts",
+      "sha256": "8e5f4d74cc8176f118175835d6ac2c027fb0675e460413528fd8b9ab36aef2c1"
+    },
+    {
+      "path": "agents/specialists/create-specialist.ts",
+      "sha256": "0a6652e93e4332057c2ea5f1e9e130b6260fe2405288094dc060589eb5db8026"
+    },
+    {
+      "path": "agents/specialists/reliability-reviewer.ts",
+      "sha256": "527f7bb9fe8776075c0c83e9857a2a1e496e93b98e092d8d3b67f5c23972fcae"
+    },
+    {
+      "path": "agents/security-reviewer/security-reviewer.ts",
+      "sha256": "aa456cc025c87193174e1b0c94327d8f35917f3ed33f7de2b9148c23dae244a6"
+    },
+    {
+      "path": "common/src/agents/specialist-risk-router.ts",
+      "sha256": "845977c73b1cb491b97e8cd768681c4c09a50e0888593502dc83cb01a4697f22"
+    },
+    {
+      "path": "agents/types/util-types.ts",
+      "sha256": "8e08d515959e94d2972b4cb957b784b6842711947367202f00c62134802446b4"
+    },
+    {
+      "path": "agents/types/secret-agent-definition.ts",
+      "sha256": "b76b2cfde0aab62d3010424eab81f71ef6493dc117cd51201a2ff678ee211ddb"
+    },
+    {
+      "path": "agents/constants.ts",
+      "sha256": "ba9b820617101defe6503a3335d275a8f10329170b82529f4d2e047f80feda5e"
+    },
+    {
+      "path": "agents/__tests__/helpers/base2-step-fixtures.ts",
+      "sha256": "133fdac41378abd8a6698fc4482c86b811ce62add9a8c80581e4c2b6e0d1a736"
+    },
+    {
+      "path": "agents/__tests__/helpers/extract-inline-function-source.ts",
+      "sha256": "b8818537d124478d2a23e388024c5405d1e7ee2216923ddbf1d02681d3db8d14"
+    },
+    {
+      "path": "scripts/generate-gate-helpers.ts",
+      "sha256": "2c64d89a789825e9507aeee46845bc9ac1ed8c193d9530e743a6007fb2d890db"
+    },
+    {
+      "path": "scripts/generate-tool-definitions.ts",
+      "sha256": "6bc3ea5ffdd6c4c9716f6cb4991c9fc5c9dcb553de547f326af295dea54bb3dd"
+    },
+    {
+      "path": "agents/types/tools.ts",
+      "sha256": "e4b2fa47548bc622df03c8bc2cc18fa358f33270b3470cd7e0553c3b84d29132"
+    },
+    {
+      "path": "common/src/templates/initial-agents-dir/types/tools.ts",
+      "sha256": "e4b2fa47548bc622df03c8bc2cc18fa358f33270b3470cd7e0553c3b84d29132"
+    },
+    {
+      "path": ".agents/types/tools.ts",
+      "sha256": "c4121c5fd085f6bf68aa312658a73e3d2d9d4009859ea72e0af73be447e7c53f"
+    },
+    {
+      "path": "cli/src/data/initial-agent-type-sources.generated.ts",
+      "sha256": "771410516e99d861b7ed6aa1d29352a33f4b731529166edf8abf4b2ce102755e"
+    },
+    {
+      "path": "common/src/tools/params/__tests__/write-audit-findings.test.ts",
+      "sha256": "94ce9bf42a4f878cf9c621b667d236034e96f693b352427eb1a766d98ea09f5d"
+    },
+    {
+      "path": "sdk/src/__tests__/write-audit-findings.test.ts",
+      "sha256": "8be79f349d2fac49c83624520387fd065877c6d4b3af3ff2b894428e8d1870e9"
+    },
+    {
+      "path": "common/src/util/__tests__/audit-receipt.test.ts",
+      "sha256": "52305f1fc5b6fd107932f3bd1cf4b93c2ecb7a38685ef6eb94e08303b4050d79"
+    },
+    {
+      "path": "agents/__tests__/gate-reviewer-parity.test.ts",
+      "sha256": "34240ed0f8dd57f5dc030004502cacf7ebcc2049fe69e0b364beae8067aa5a2c"
+    },
+    {
+      "path": "agents/__tests__/audit-contracts.test.ts",
+      "sha256": "a4bf9b3ff6c08f3c6daba23182a35ae37c307ab89abce4f1e6078c4e57921b00"
+    },
+    {
+      "path": "agents/__tests__/review-rubric-parity.test.ts",
+      "sha256": "19784bd43edcd84e1d596bb4191acecaba84b55921abbbe491483c0a38cde078"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "sha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07"
+    }
+  ],
+  "configBindings": [
+    {
+      "path": "package.json",
+      "sha256": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8"
+    },
+    {
+      "path": "sdk/package.json",
+      "sha256": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d"
+    },
+    {
+      "path": "common/package.json",
+      "sha256": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c"
+    },
+    {
+      "path": "agents/package.json",
+      "sha256": "40afe33da8f72c1027973c8e4006d3538394a770c67cb5af499701b299960ef8"
+    },
+    {
+      "path": "tsconfig.json",
+      "sha256": "c0b9832ecc949a4636069bebf216821d6c2afb25ac60e961394c47a56ec5c23e"
+    },
+    {
+      "path": "tsconfig.base.json",
+      "sha256": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+    },
+    {
+      "path": "sdk/tsconfig.json",
+      "sha256": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21"
+    },
+    {
+      "path": "common/tsconfig.json",
+      "sha256": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20"
+    },
+    {
+      "path": "agents/tsconfig.json",
+      "sha256": "f6ab4feec3746ff39c739719eb3b2b6fffe955e1d2f42f83cff92db8947a8a62"
+    },
+    {
+      "path": "bunfig.toml",
+      "sha256": "48a8b5826d7b001640f0e0f82cf8f612405c6e56080fa182d239e56d5b8a8505"
+    },
+    {
+      "path": "bun.lock",
+      "sha256": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6"
+    }
+  ],
+  "frozenPlanBindings": [
+    {
+      "path": ".agents/sessions/body-capability-review-2026-11-05/PLAN.md",
+      "sha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241"
+    },
+    {
+      "path": ".agents/sessions/body-capability-review-2026-11-05/SPEC.md",
+      "sha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31"
+    }
+  ],
+  "sourceStableDuringChecks": true,
+  "configStableDuringChecks": true,
+  "blockingCounterexamples": [],
+  "requiredChecksPass": true,
+  "artifacts": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/README.md",
+      "sha256": "3e0cc650ac0831f0931ce8d0b90bf12de0ace2a9d241659212ac361bf9c4d376"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/agent-typecheck.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/agent-typecheck.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/current-source-recommendation.json",
+      "sha256": "af06ca703efb179f083f12c32ecb83b4ee979289c24bd18a4faf2c77f6263969"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/final-source-artifact-sweep.json",
+      "sha256": "3ad193a2a8f240098dc03d30e10851c1a3cc3d089216ce36815d4fb5d3a3d1b4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/frozen-ordinary-consumer.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/frozen-ordinary-consumer.log",
+      "sha256": "fa8d7bc782cd12c6a18808f6df44b13f6035a7ee2e13279205a85a9f00719e07"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/frozen-probe-bindings.json",
+      "sha256": "a18b6897906f711e560445e1af06ed824a72da6ced624742e2aa2415155d419d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/frozen-probe.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/frozen-probe.log",
+      "sha256": "dd2df0ae71f659ab4ebc1f6ca7a3367e76cdf5344051fc89cc6e51cdb8a2cd0e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/generated-gate-parity.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/generated-gate-parity.log",
+      "sha256": "f610bd23b54f836d1c83f451c546af61ffd0f7af645d9c96805bc0902a7db82b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-adjacent-command.json",
+      "sha256": "751184fff817a3d90f99736c94e2a52789ef0b5e26eecadf30b1a2fdbfbd8854"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-adjacent-consumers.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-adjacent-consumers.log",
+      "sha256": "20d2d5b8399e196d9b788fb68e96d66df6cfad1ff5b73a4dba84b7d993048ffb"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-agent-typecheck.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-agent-typecheck.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-base2-consumer.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-base2-consumer.log",
+      "sha256": "ce4900faf3d39d7c4e9cf0ed7208cdcc66787789968d4c5bd4d5c9e607d78728"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-commands.json",
+      "sha256": "10dba2184836522100b53bb917b9aa957684372e7dd0e4f1e41ec075f93f8435"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-core.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-core.log",
+      "sha256": "dfe28b406373a4cc4814d28047ba9a99344cf7b3a83998e6200a10f30c923909"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-expanded-specialist-consumer-report.json",
+      "sha256": "9715589d3296552f232e1c7d931b783f4a9b1c3669faf61d1976359426085945"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-expanded-specialist-consumer.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-expanded-specialist-consumer.log",
+      "sha256": "b403baa079cd867492d010ec1a4e4af448cbd31a3fddb748ace23793ba00fb2c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-probe-framing.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-probe-framing.log",
+      "sha256": "bc9c67e7e6251a9a4e76615815939c361a8ba4df7963d2e89bf6281facf73641"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-probe-metadata.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-probe-metadata.log",
+      "sha256": "d00f3151493ec0cba13784ca226a1c82d599f096d7dc7247ce95ad3d110ae003"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-probe.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-probe.log",
+      "sha256": "51c50b3234930a770af58f3aea8cbe0428e024ecb56ea5a06e0c2a54a98bca0f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-sdk-typecheck.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-sdk-typecheck.log",
+      "sha256": "3d3c45ecc39fd091f458f3c9ac69950e524cbbf36b64ebe261d051ca9be68c6d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-specialist-consumer-report.json",
+      "sha256": "882b19f36f21187e69a6bfaf0971a25e9abfaa8566e52eb1f2ff0d9253dcc3c2"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-specialist-consumer.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-specialist-consumer.log",
+      "sha256": "0567d6cc8c53780bd5de2a6111f534a0e9b7541e2c0b0c5183ef566c74ec998a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-twelve-specialist-consumer-report.json",
+      "sha256": "5bf6ae25c0e40a303f785ce6d55cb2af07766015fc3fdd2bdb043604a4b1d080"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-twelve-specialist-consumer.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-twelve-specialist-consumer.log",
+      "sha256": "59c62c4076de20d7e0077e4ddbf1579fb57f360732dd0d4e9204f3bb8dc56f15"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-windowed-specialist-consumer-report.json",
+      "sha256": "9e94c7d6eb3bd10336d9a22f35d47e8a1ad86ea6e1dbea6b255da11d08a80814"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-windowed-specialist-consumer-summary.json",
+      "sha256": "66fbd26204b0cf7ee6432c2b935d6af94d5a5a4059b4c9892a39cb30dc65a5c4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-windowed-specialist-consumer.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/initial-windowed-specialist-consumer.log",
+      "sha256": "1556c978cabea7670a1af0bb776788f71fd85b09b8c0a5c9c3dbb2ff128abfbe"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/ordinary-consumer-report.json",
+      "sha256": "162468f5490dcaac806d4e50d2d6a1b5650e4d4e9938e24bee537391ba159317"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/ordinary-consumer.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/ordinary-consumer.log",
+      "sha256": "fa8d7bc782cd12c6a18808f6df44b13f6035a7ee2e13279205a85a9f00719e07"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/ordinary-consumer.ts",
+      "sha256": "661bd662d67d202a40e409d6a29e222e0dcbff175a28ea4c37511ac52e3eb091"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/probe-before-final-framing-fix-report.json",
+      "sha256": "9184bee718806d99485c27d63770c405da5398fb33a4ae66a9c89e3d6b7cba8d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/probe-report.json",
+      "sha256": "932b963a19dc37c552d727f0a3087d91bc7b034bf075d7f94294185f8faa44e1"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/probe.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/probe.log",
+      "sha256": "dd2df0ae71f659ab4ebc1f6ca7a3367e76cdf5344051fc89cc6e51cdb8a2cd0e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/probe.ts",
+      "sha256": "0c9f1437ac6e3455cb9b27edd93070cbd010571c5a28ce3a28ce4cc4f7ce42ad"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/reviewed-current.diff",
+      "sha256": "3952dabec19df3cfc7f09c8c1093da7828c169a1fc2406c206cd5cce5e4977ac"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/run-checks.py",
+      "sha256": "23487567c0ae5f7b896473b6734b90c679bb7f835c0176c2dec9e8002cc5b218"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/sdk-typecheck.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/sdk-typecheck.log",
+      "sha256": "3d3c45ecc39fd091f458f3c9ac69950e524cbbf36b64ebe261d051ca9be68c6d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/specialist-consumer-report.json",
+      "sha256": "dd6222449f2306595b77bdfb158564f3f23467209408ed5901e1d800dcdaaba9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/specialist-consumer.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/specialist-consumer.log",
+      "sha256": "3cc28b9edd85a90ac80020031041ef580d6af20f476f33182c1858a212800e4f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/specialist-consumer.ts",
+      "sha256": "cb398def94522e7a298fe879bd2bfdc33a1211881ab731b412cc6f418088b30b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/tests.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/tests.log",
+      "sha256": "d9bdfde019683c0d5c0f8b168bea890040a340d3506fc371b10f9664d94be251"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/whitespace.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B01/independent-main-review/whitespace.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "exclusions": [
+    "No independent approval of the reviewer-owned B01 tail/store subset.",
+    "No model/provider request or whole OS/network/filesystem confinement claim.",
+    "No production/test edit or ledger acceptance by this verifier."
+  ],
+  "finalSourceArtifactSweep": "docs/execution/body-roadmap/evidence/B01/independent-main-review/final-source-artifact-sweep.json",
+  "currentSourceRecommendation": "docs/execution/body-roadmap/evidence/B01/independent-main-review/current-source-recommendation.json"
+}

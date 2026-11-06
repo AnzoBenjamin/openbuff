@@ -1,0 +1,646 @@
+{
+  "externalStructuredReferences": [
+    {
+      "path": "/home/ben/.local/share/openbuff-test/openbuff-branch",
+      "sha256": "5597a243d8676c345ba7cece90565705adb2a384d621436482084937a42d6241",
+      "kind": "supplementary_hashed_reference",
+      "origin": "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/integration-manifest.json",
+      "pointer": "/installedBinary"
+    }
+  ],
+  "externalPathMentions": [
+    {
+      "path": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/build-retry/cli-build.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build-cli-outside/cli-tests.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/agents-suite.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/guard-byok-wording.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/guard-dependency-provenance.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/guard-determinism.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/guard-memory-drift.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/guard-mock-module.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/guard-project-root.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/guard-sync-agent-config.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/guard-types-declaration.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/typecheck.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/openbuff-branch",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json",
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/inspection.json",
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/review.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/integration-manifest.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-help.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-opentui.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-run-help.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-smoke.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-tree-sitter.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-version.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/rg",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-c-sharp.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-c.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-cpp.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-gdscript.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-go.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-java.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-javascript.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-kotlin.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-manifest.json",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-php.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-python.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-c-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-c_sharp-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-cpp-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-gdscript-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-go-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-java-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-javascript-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-kotlin-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-php-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-python-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-ruby-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-rust-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-swift-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-queries/tree-sitter-typescript-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-ruby.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-rust.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-swift.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-tsx.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter-typescript.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/home/ben/.local/share/openbuff-test/tree-sitter.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/tmp/openbuff-installed-smoke-hmnhwj0t/workspace",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/inspection.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-help.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-opentui.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-run-help.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-smoke.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-tree-sitter.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-version.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/usr/bin/python3",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/validator-command.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/promotion/promotion.json"
+      ],
+      "publication": "environment context; do not stage"
+    },
+    {
+      "path": "/usr/bin:/bin",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/validator-command.json"
+      ],
+      "publication": "environment context; do not stage"
+    }
+  ],
+  "repoProductBinaryContext": [
+    {
+      "path": "cli/bin/openbuff",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/rg",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-c-sharp.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-c.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-cpp.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-gdscript.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-go.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-java.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-javascript.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-kotlin.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-manifest.json",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-php.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-python.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-c-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-c_sharp-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-cpp-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-gdscript-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-go-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-java-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-javascript-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-kotlin-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-php-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-python-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-ruby-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-rust-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-swift-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-queries/tree-sitter-typescript-tags.scm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-ruby.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-rust.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-swift.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-tsx.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter-typescript.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    },
+    {
+      "path": "cli/bin/tree-sitter.wasm",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/delivery-inspection.json"
+      ],
+      "publication": "build/install context only; do not stage"
+    }
+  ],
+  "excludedRwebFeasibility": "Root-owned future documents and /tmp distribution/home/browser data are not part of this inventory.",
+  "nonFilesystemIdentifiers": [
+    {
+      "path": "/commands/0",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/commands/1",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/commands/2",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/commands/3",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/commands/4",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/commands/5",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/commands/6",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/commands/7",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/root",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/RWEB/planning-review/review.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/review.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/root/b02_runtime_outcomes",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/root/b03_mutation_evidence",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/root/b04_lock_cas",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/inspection.json",
+        "docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/candidate-independent-review-b04/review.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    },
+    {
+      "path": "/root/first_wave_architect",
+      "origins": [
+        "docs/execution/body-roadmap/evidence/RWEB/planning-review/review.json",
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/inspection.json",
+        "docs/execution/body-roadmap/evidence/integration/architect-first-wave/final-integration/review.json"
+      ],
+      "publication": "environment context; do not stage",
+      "interpretation": "JSON pointer or canonical agent identity, not a filesystem dependency"
+    }
+  ]
+}

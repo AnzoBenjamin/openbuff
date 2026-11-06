@@ -1,0 +1,60 @@
+{
+  "tail": {
+    "sourceBytes": 1200028,
+    "sameSize": true,
+    "beforeSnapshot": "d8512af036442750f805abe3307d6fc89140ac8fed9d9abf2ea3a53562c345ac",
+    "afterSnapshot": "d8512af036442750f805abe3307d6fc89140ac8fed9d9abf2ea3a53562c345ac",
+    "snapshotChanged": false,
+    "files": [
+      "untracked.ts"
+    ],
+    "bundleTruncated": false,
+    "tailBefore": "export const value = 0",
+    "tailAfter": "export const value = 1"
+  },
+  "validation": {
+    "schemaVersion": 1,
+    "snapshotId": "d8512af036442750f805abe3307d6fc89140ac8fed9d9abf2ea3a53562c345ac",
+    "files": [
+      "untracked.ts"
+    ],
+    "artifactKinds": [],
+    "status": "passed",
+    "assurance": "full",
+    "summary": "Targeted validation checks passed for the attested snapshot.",
+    "results": [
+      {
+        "exitCode": 0,
+        "stdout": "",
+        "stderr": "",
+        "hookName": "fixture validation"
+      }
+    ]
+  },
+  "corruptFinding": {
+    "beforeFindings": [
+      {
+        "schemaVersion": 1,
+        "id": "open-finding",
+        "revision": 0,
+        "repositoryId": "b670b46e161b9af661d520f6",
+        "workspaceId": "9fe3e1e1622e9566b57b1785",
+        "runId": "fixture-run",
+        "snapshotId": "d8512af036442750f805abe3307d6fc89140ac8fed9d9abf2ea3a53562c345ac",
+        "createdAt": "2026-11-05T22:51:31.750Z",
+        "updatedAt": "2026-11-05T22:51:31.750Z",
+        "files": [
+          "untracked.ts"
+        ],
+        "status": "open",
+        "text": "fixture blocker"
+      }
+    ],
+    "afterFindings": [],
+    "returnedError": null,
+    "diagnosticsReturned": [],
+    "quarantinedFiles": [
+      "open-finding.json.1793919091787.e7d1196b-71ac-4860-863d-616b15b49ebb"
+    ]
+  }
+}

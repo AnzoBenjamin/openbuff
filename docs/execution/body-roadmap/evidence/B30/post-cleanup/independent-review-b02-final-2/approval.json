@@ -1,0 +1,1138 @@
+{
+  "schemaVersion": 1,
+  "nodeId": "B30",
+  "reviewer": "/root/b02_runtime_outcomes",
+  "implementationOwners": [
+    "/root",
+    "/root/b03_mutation_evidence"
+  ],
+  "independent": true,
+  "decision": "approve",
+  "scope": "B30 full current controlled process/environment/accounting/artifact isolation after four-file falsy-cause, empty-error and attempt-identity cleanup; current dependency context only, without unrelated prerequisite/B01/OS-network/billing/empirical-improvement approval.",
+  "sourceContractHashes": {
+    ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+    ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+    "bun.lock": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6",
+    "common/package.json": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c",
+    "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
+    "common/src/util/promise.ts": "827dfea95828d72c186f56d6ef26da8e7a5e2a9813fe1a2b345bc0f24b9cb2d2",
+    "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
+    "evals/buffbench/__tests__/agent-runner.test.ts": "b42efacea5a64e8ea7bfd1f3776e9501e51132740b2a092cbd02777e1dc3dc7b",
+    "evals/buffbench/__tests__/evaluation-artifacts.test.ts": "7238cacf2c8db8ea8a216fc7311d7cf9f14349bf56075f4da73be6483b064202",
+    "evals/buffbench/__tests__/isolated-sdk-client.test.ts": "b97546e21f0500edd1ce8991ba7c8fbbc45e0c32026b62ee3610bbb318d1e3e5",
+    "evals/buffbench/__tests__/proposals.test.ts": "bffdd93f1a979761163760b2bd71396f8b57cde0fc29106ed3844b41756b4e9a",
+    "evals/buffbench/__tests__/run-buffbench.test.ts": "c9a1994ef8487aca2016090db0b56607afbac091985378bdcd95fa1b4ea2242b",
+    "evals/buffbench/__tests__/statistics.test.ts": "ba0970ef7d6617993bfc7dbd127d3d6c2afab91aaf21b6442cfca22b72274e6e",
+    "evals/buffbench/agent-runner.ts": "48e0e54e0366e75a9426e713af646ee87d194ad5f2100de68e8db5d3dfca2c0f",
+    "evals/buffbench/evaluation-artifacts.ts": "938a83d24a62b256c83b807f820b5ca034d67919d6cb308e35417c250e5ae3b1",
+    "evals/buffbench/evaluation-environment.ts": "5b5a310fd3ac13164fb874e2f31e823c8c507ed33a12cc83137835a7c74b0626",
+    "evals/buffbench/evaluation-model-attempts.ts": "450f5cfff96c3d5102ec5d3b242a051216a9b70aca464626fcb82897248f4f79",
+    "evals/buffbench/isolated-sdk-client.ts": "0be0e1e719de62ac305501f68f84f661927c7db91a800aeba91966344894c54c",
+    "evals/buffbench/isolated-sdk-worker.ts": "185f58d9f7a59ce9776586a07a6cd83bb66b6d322ddf82d9bf4359341656b15f",
+    "evals/buffbench/judge.ts": "f2de569ba8d5b06af0e6e49febe122d3b704c7ce7198a98dcf61bf764445dddb",
+    "evals/buffbench/lessons-extractor.ts": "c3a61383df248aa97a53ff61a7d304b5b98c2f5a32b71f87e6afc4545f6e3c16",
+    "evals/buffbench/meta-analyzer.ts": "7207d97a1743f3ae4fe836c80baa61376e51183a10cfbe305475d9b202377a8a",
+    "evals/buffbench/proposals.ts": "6bb090fa498d4cda5a373b17ec3b29a7feb3c11c6ddbdf2d15a7e05b30b1bf0a",
+    "evals/buffbench/run-buffbench.ts": "dd788763e41eecf0d8223896f729cd5b58362705df3d95021a004ee7e5d51ede",
+    "evals/buffbench/runners/codebuff.ts": "0d3a25ac92644a4f863290aaffc8300455445ac53c0f0b614ad975b4a0650f47",
+    "evals/buffbench/runners/runner.ts": "6ce3d563c581180a7417cb73aef2124c0f55fab7d9a5bf05b15f8e25f0aee6a2",
+    "evals/buffbench/statistics.ts": "3f637879a807086944053a4128a92f0204c44c5b48b04be297dd44e7da6d76c2",
+    "evals/buffbench/trace-analyzer.ts": "a6e02367c43f21f7ee18fe2186c3e1eece2a3dd99af83d82ecb27fbba485adaf",
+    "evals/buffbench/types.ts": "4ec94b860a485a51dc99ebedff200f8bf82bc261f0aa02b859b44986ce54d41d",
+    "evals/package.json": "d348ef06288a5033a5da328ba79dce8d6b68099cd42f51606a2a62761195ed32",
+    "evals/subagents/test-repo-utils.ts": "2870d516f8aee71ef1d2d63e35517b418e8c4abac3b13729e3b6f8312d2c7d4d",
+    "evals/tsconfig.json": "a2ed752ea995d7c86c22165a2d6e69cc2e0748abff95401cdb20032443a9b75a",
+    "package.json": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8",
+    "packages/agent-runtime/package.json": "0ecb330281d325d02c339c86fb2f52a2875b0d957abdd0b097b1ab959d281d3d",
+    "packages/agent-runtime/src/run-programmatic-step.ts": "6a405a2ea01ccb3fa4ef005bbf4c45f4b91acd96b836ba818f221965165a42db",
+    "packages/agent-runtime/src/tools/tool-executor.ts": "2865e32af22ec49c57bc396ea6b1ba491c1ca3c466842343c9a181387d3208db",
+    "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
+    "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts": "58fbe85769982c8be114fa457a509df15477e5ebcf119101f4997d24d26fabaf",
+    "packages/internal/src/openai-compatible/openai-compatible-error.ts": "a696f1cfeafb07fa10dea86e4b41fb11d15e87d484d0445668a2195233f3daca",
+    "scripts/body-fixtures/evaluator-isolation.ts": "d768957e94d8801251474b170cc80bf9abbd082e5d4fbc722a3dd18f3dd1cc7a",
+    "scripts/compare-buffbench-runs.ts": "31fb6c0dcba535c8baea212aee2eb19dd4751df968b95036cfbbbd12df8f3afe",
+    "sdk/package.json": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d",
+    "sdk/src/__tests__/provider-contract-regressions.test.ts": "904140141f77414577f46b498c71c64dca1c83dfd1a44eb1d559b7c23fde323b",
+    "sdk/src/__tests__/terminal-environment.test.ts": "d55b7ba506f806d1c7cf96250fa10c0f9002cfebd9448d1427e453444011664e",
+    "sdk/src/client.ts": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7",
+    "sdk/src/error-utils.ts": "11565db8d9f430fcbb617f040a7807beafac0e521dd2ec9341bf35a371743b29",
+    "sdk/src/impl/failover.ts": "62930f709bc5be8975375b50ec1e200eec7dd46ce4df5482da4c46ba06b2e793",
+    "sdk/src/impl/llm.ts": "76b1b88454eb1471eeb3a71ae2ec60e97b83603c40799d3ce3cdbc6abe226be5",
+    "sdk/src/impl/model-provider.ts": "2e14b4aa5534c0e8761b16c234eca300052f4419178ed3ab1d3137af82b2c11e",
+    "sdk/src/index.ts": "36bfe777b384462ac3a4740751579a3a8b4d8508b4bf90f7a1458d14774adae1",
+    "sdk/src/provider-config.ts": "6a659575360e14a8fba319cf6e7e406faa8505d681342a6911835bc870dd8922",
+    "sdk/src/retry-config.ts": "fab975fea396f8333ca7ed9787515dfa858a445056409daffee5ea0f6f50c91b",
+    "sdk/src/run-state.ts": "131d5e2a0fe1470dd26312952b199db3ef481386cb03fa3593035129589b2a68",
+    "sdk/src/run.ts": "c80be3b62a436b92b851cde37d00ae569b860b33ffee597016e0462715fa7562",
+    "sdk/src/serve/bridge.ts": "7e77aac98fde3882aa471dfa0e897acdc3de8098a0f6eebc7286f9f8ccc2560d",
+    "sdk/src/serve/event-bridge.ts": "20daae14096a76c175ec2478219c9cf4a0aa0ba071c1533d6be6bcfbca824768",
+    "sdk/src/services/harness-enforcement.ts": "0391312e7311a1f42f862a5f41d255cb1e55b52455d973c5be0672c4e0900f73",
+    "sdk/src/tools/run-terminal-command.ts": "0ad82faa2597d6b9d4d1b7e1420f75a8ee3c5961b3bf276d77f70cd4c1b5db74",
+    "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
+    "test/fixtures/body/evaluation-artifacts.ts": "0548f2415238ee3f76d5025501bb7f1b77f329426ce86d5750a90a3e27308056",
+    "tsconfig.base.json": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+  },
+  "commandReceipts": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/affected-evaluator-consumers.json",
+      "sha256": "09ab254158a2fbf72c61949ed810fb2dc3d8184d7f538a0bd89cc063f2171f35"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/full-evals-ci.json",
+      "sha256": "8a99888627890a5ee9e324765d6529b31414932cfab3aa32f2d8454e452b579c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/leader-vision-route-regression.json",
+      "sha256": "59a7068eade39b04468168d818730ee8c881e6b628fb68654facf4266844f75f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/actual-isolated-sdk.json",
+      "sha256": "8d88c05e8686a62465a8f2d6d48371fea765e161b262bc3e6b3edcffb748519b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/actual-evaluation-artifacts.json",
+      "sha256": "442bf3fdda34621a0a67a1bb0f9c66d7aa53e02cc1531c8f3c68ad8304b88ab0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/artifact-isolation-replay.json",
+      "sha256": "bd828c73098225c2cc422303e32fedc1bd131979e1bad03525c3b96d3e986f63"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/HISTORICAL-ATTEMPT.md",
+      "sha256": "c001cfc514e1a9b8752dd80ba0685f82dc21fba75b6ceaace7ca5eeb58dbfe1a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/PLAN.md",
+      "sha256": "2b5fa1e27f13ae99b04e78587db2e237574194b7b11601f110bb00ef3f773bd5"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/SOURCE-REVIEW.md",
+      "sha256": "b5cc466403a19ba9b412eff273a62878b3c621c9c47c30b5c55eb81897cd39fc"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/actual-evaluation-artifacts-fetch.jsonl",
+      "sha256": "a5e64dd9ed56ddca35242629ca091ceab76e8916f99cc2b1997c022eaf427ed4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/actual-evaluation-artifacts.command.json",
+      "sha256": "e9c22d7a881785b9d7b0763885d2e7362f0aed91a664437af04756c92215c5c5"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/actual-evaluation-artifacts.log",
+      "sha256": "0a1ec1d14cbc819fcc5927b8ddcc877d64f72d8390d6c07532595fff64bef098"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/actual-isolated-sdk-fetch.jsonl",
+      "sha256": "7d2a16620986806878211858779a205242f648480fbee0ca458609bf8e3b158a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/actual-isolated-sdk.command.json",
+      "sha256": "95c7d82edaa61724293ca0dcc7ac29a0f898242a66d2116d259fe4919a5e40f9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/actual-isolated-sdk.log",
+      "sha256": "e1e9a8ca673070804e0aba2d30cdec10ed25649879f87c04be9cf3ed6903bd2b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/affected-evaluator-consumers-fetch.jsonl",
+      "sha256": "3f312d0360262bca96c64fcc499831bed10758fbb5d6a5e1e2cc7ec701b71fd2"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/affected-evaluator-consumers.command.json",
+      "sha256": "7b7606f3cf1ef28d278da41f9cb3aaaf4ea28852c68c738673db59c9f242c432"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/affected-evaluator-consumers.log",
+      "sha256": "a32e9b35336185f4e8591de17a4a82eecca68173e0f3f49dbb402cb0156879a4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/after/0-ANALYSIS.json",
+      "sha256": "1a3b86667947544c2d3cf124f04c5b96b9fb968f57238e1b6e653940161057d6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/after/1-ANALYSIS.json",
+      "sha256": "a730fb5718a5d78c0700f58f59c3f3ecaab2091994d2db0170d7f358d79f25d4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/before/0-ANALYSIS.json",
+      "sha256": "125b17b53eb8844fe8817bfdf5be7820e508358066ac4d333805b7279dd9e63d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/before/1-ANALYSIS.json",
+      "sha256": "bbf3358b9ca0953f063d1a62ac021c3512255977b98461f0ecb1ef63b1d122ce"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/comparison-cli.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/comparison-cli.log",
+      "sha256": "54f0dcaf24e855aba4c97891cd4a29a54e5dec5ac694bb83a576d60dc45fa1b9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/fixture-eval.json",
+      "sha256": "fe68d0c3e5cf917ef3ecd5c5520bc9931f454a07f2952d4be297cb099dea4445"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/fixture-report.json",
+      "sha256": "1d6a9377d215f977cee88e7500857918a652db4af45e7e4dc936d6ec6add1b41"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/incomparable-population.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/incomparable-population.log",
+      "sha256": "103fc4f979fc392edfa79d0fe67c3be3be380c340da481fe5c22bbff7cde1431"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/insufficient.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/insufficient.log",
+      "sha256": "ca9f560d2c8aded1fa37f32864c368fbfbed1d2a5346a13dacb03fb57adb2b63"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/insufficient/0-ANALYSIS.json",
+      "sha256": "1cd647dc671ae9e9fd1130978a2162f2e08228a969181dc46d3fd602e1fa92cb"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/invalid-nonfinite.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/invalid-nonfinite.log",
+      "sha256": "896db620e9fe86a3e0b6f74f3dc617511b55d46bded8c17f8bc9b84d66d44b62"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/invalid/0-ANALYSIS.json",
+      "sha256": "c76e4f5b0b4d10bb1b6c9eb85eb713ef3c705a25c4983ea9c54c9ac371169b66"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/1-typescript-ANALYSIS-typescr-d23a2679-9a8d-44b1-8c31-0ddf4c96f663.json",
+      "sha256": "58663b889001fce7d721279170d9ee275ec3d114a2a9d17861c528be08d4b7e7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/1-typescript-agent-a-typescr-ca518d00-1dec-4462-adfa-b982e200f3a6.json",
+      "sha256": "b6b13f681249ba681545b14ab63eca04ed49f5d7867705435bd6b25654cb0bd0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/1-typescript-agent-b-typescr-046c306a-35fc-485b-b036-a2f31a674fd2.json",
+      "sha256": "3527bb0ac86cbeb17f0ee727192920dec8b6436bdf39d64abc3b59f28abf458a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/2-typescript-ANALYSIS-typescr-8dd6a6fc-f77e-459a-9ef3-31cfd5f16909.json",
+      "sha256": "5c293b4f8f4fbeab0af513ffd449a812f7ee1ee42057f0b2e0263d83fd0cec1a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/2-typescript-agent-a-typescr-ae3d7d6f-0a8b-4eb1-b223-59a5b0fe003b.json",
+      "sha256": "fb3f8146756f9671cb78842180f3849dda2ef8f071c0502b33233c448b9809e1"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/2-typescript-agent-b-typescr-72840805-489d-4382-ae68-42dc17b6d51a.json",
+      "sha256": "21cecc6eb5f13c02716a2c6856333c769f62813dc54080192eeb901b4da355c3"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/3-python-ANALYSIS-python--ba673e30-3889-4dca-82ac-533e4ac90d23.json",
+      "sha256": "547aa0dfad5b541bc012f119a767e36e668fcc50935a1f9cb203dd91456daf64"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/3-python-agent-a-python--6e557094-3eb0-4382-9517-4c2716258484.json",
+      "sha256": "1d326031c7fa35ba6d9946f76606a6ced5379d966f8c6704e96503db37f73cf4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/3-python-agent-b-python--6ea4160a-18ba-47b3-a525-39b32430935d.json",
+      "sha256": "c736933422807692dc1471cd11fec2fb6a29d65117ca662f13b31bb7c515fc3f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/4-python-ANALYSIS-python--742de708-a234-4f83-b7f9-2d2bca06fe51.json",
+      "sha256": "0da2af4816f402958331e13d49b5608ffc7fbf958ddf3336453f4b54a86b16e1"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/4-python-agent-a-python--5e1412d3-27e9-459b-a7e8-be96e5864d50.json",
+      "sha256": "7c5e595c2c3e97619d6a31a9eb20710a9b369076fa0ea29ee73ac1e2aa076029"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/4-python-agent-b-python--b6ead76d-e4f9-4c8a-904c-a91d6bd9778d.json",
+      "sha256": "f6506e869f40ea40a838d5ca4b47c7453e7c5b2023f8a5a0c60554d25f118bd3"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/FINAL_RESULTS.json",
+      "sha256": "5564febd30d348b559174b4e4f3db582af1f68d457539f4143c366ba8e9b097d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/python-judge-gemini-5e1412d3-27e9-459b-a7e8-be96e5864d50-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/python-judge-gemini-6e557094-3eb0-4382-9517-4c2716258484-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/python-judge-gemini-6ea4160a-18ba-47b3-a525-39b32430935d-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/python-judge-gemini-b6ead76d-e4f9-4c8a-904c-a91d6bd9778d-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/03c99452-6cc3-414b-9926-7c92712a8c26-settled.json",
+      "sha256": "60d78604f1dc94210022695e3010a6ae80fc9b67296c732a26a908205d7a996e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/03c99452-6cc3-414b-9926-7c92712a8c26-started.json",
+      "sha256": "ccdde8d8519e95ee0d709f8482441b873c8cbb2b79153db22b00bf8bb9fb466b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/09ecbfcf-7845-4182-a966-68d9b5488482-settled.json",
+      "sha256": "ecc4bab06307ff38865dde8b69c5aca5f72f0775a30dbf6a0bf8d331ef6f57c4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/09ecbfcf-7845-4182-a966-68d9b5488482-started.json",
+      "sha256": "2e69e7a2a97b2f4ce9d8f0cdddfe4318ca7bade57ee3255f05ede5ed33322323"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/1c4f744e-2f75-4d7d-ab49-063de6b2e209-settled.json",
+      "sha256": "64d67938475c0ba12abfd6160335f407feca32fc5dd977fa82713c8b2afa8aea"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/1c4f744e-2f75-4d7d-ab49-063de6b2e209-started.json",
+      "sha256": "c621c09a484164e14bb97d628b735c7aedd0481a5901b309fd60c877712926a3"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/32deab0b-e1f5-47c9-8953-c043eddeb9de-settled.json",
+      "sha256": "887854d0421395cad2cacca6af5c790750a0e56cf45da69425df69204b4ea456"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/32deab0b-e1f5-47c9-8953-c043eddeb9de-started.json",
+      "sha256": "5eccc81e824720783084b50b41a2a4fe3a12f3fa274f92bdd89ca69b94af416b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/3445d1ea-08d4-486e-8c51-bc22367508aa-settled.json",
+      "sha256": "92082dd1f5c8c9caa80356c2b6474726f5535a439ad9779bfdf5eb7328a6fcde"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/3445d1ea-08d4-486e-8c51-bc22367508aa-started.json",
+      "sha256": "9ee7d087d3392a5275db3744b602b33c4459f4ff5c5b3d87ebad8cb2b56cfd30"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/34a2c3df-43b6-4e08-b901-8f81cc02f57f-settled.json",
+      "sha256": "a2769be876646e43abd723d6b2ac5fa49074888445810edf1b13ab333275661c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/34a2c3df-43b6-4e08-b901-8f81cc02f57f-started.json",
+      "sha256": "af0fe1fe9955457564c7972173c209f55427b7b0cc1c4cec37ef2c5ea1b96611"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/4b1002b5-49df-4e1d-817d-768ee3268dcf-settled.json",
+      "sha256": "01839304977144b4e81d1ef5918fa4592503cb51cc3fd86f3935c10913a893c5"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/4b1002b5-49df-4e1d-817d-768ee3268dcf-started.json",
+      "sha256": "a768702d3c82df5d58979f6a43f3c841e976f988c7fa302de27df1d736a2cec5"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/4b53c793-c85a-46f2-ae13-ebcc6a3a4212-settled.json",
+      "sha256": "64eae23a220047ba8555677b11b5deb46c0ad9416f8176473e888b283e639faa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/4b53c793-c85a-46f2-ae13-ebcc6a3a4212-started.json",
+      "sha256": "e3193db6a9d2983ff4b92424fae003273e292cc7a09349f4a0161d672ce29e25"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/551f82f9-0acd-4936-9593-2c1073f43189-settled.json",
+      "sha256": "9c77423a3ef13074d1f2b30ccd79e83f0d1de51cbc6efe412b195895c2c26d89"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/551f82f9-0acd-4936-9593-2c1073f43189-started.json",
+      "sha256": "466fc7c2404817544276751e3bab444c3894795d1d98254b5d1e814f7caee09a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/8acba63c-4350-4349-b6e4-e7a1a2c4fcd7-settled.json",
+      "sha256": "41a99ba09d4b4dceafe054203b9e61fb543c22ab90daa0ba34f7b0f456ef0f32"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/8acba63c-4350-4349-b6e4-e7a1a2c4fcd7-started.json",
+      "sha256": "edad39ac0f8d29061e3abad604b3af8064159201b70ee4fbf812b4e2ac99577d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/9ce6cf52-89b9-4ac3-b8c5-ecc289e65fec-settled.json",
+      "sha256": "bd4b0e01b2f1617ef27758e07f881925decd87ec57b7bd186f9f5b1763cb19bf"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/9ce6cf52-89b9-4ac3-b8c5-ecc289e65fec-started.json",
+      "sha256": "8c65d8fb4648eaa8013b8d9bfecdd74fa7745186ecb572c31f3e512a18385809"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/a45dd0dc-9f07-489a-b322-bfe6f19578a2-settled.json",
+      "sha256": "207da8b8935cb4fdb5936840d3cc9fbdc3e3c962f4379508dff77090c873cffd"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/a45dd0dc-9f07-489a-b322-bfe6f19578a2-started.json",
+      "sha256": "0017c885ee96b2984d7efb5aa956ebeb08b6fdf3a586f10040933dd2ae07e291"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/afba88e5-dac9-42d7-ba6e-bc10ae48380b-settled.json",
+      "sha256": "e2ab68de139e2b57a46fa5092d9945a07dafc1edf6611415267221bb505425ad"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/afba88e5-dac9-42d7-ba6e-bc10ae48380b-started.json",
+      "sha256": "2b2239d86514ef44bcab47020231fecb9ff72671a7403ec5dcbc9258a9ea57b3"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/bf073abb-f05c-4b11-bffa-c7ff66930836-settled.json",
+      "sha256": "68c1d586ed15e51990c1913e72a9b7100d7300eb297452a365667e6cb85e6537"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/bf073abb-f05c-4b11-bffa-c7ff66930836-started.json",
+      "sha256": "b3f3349d7e49a8f83827fcd905dce946cc824695a1fe762c74aad34e33ff5f2b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/c24f779e-d1a6-4770-9aba-1fa1ebdd52ff-settled.json",
+      "sha256": "0c1de2c4a35b7e8a88c93e19c64411d1c1f597c9caf37df062e36bc4332c7530"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/c24f779e-d1a6-4770-9aba-1fa1ebdd52ff-started.json",
+      "sha256": "3499fc35352c88fe6411682c17096d643de19f7d10c4886f5912012d242da5ef"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/c3867267-b4ba-42d8-8915-61a4de023dd7-settled.json",
+      "sha256": "5b38c272e3617b2652df3bc13044f5eae0a5b101ffd89de25fd6b8d9f8c24e0e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/sdk-attempts/c3867267-b4ba-42d8-8915-61a4de023dd7-started.json",
+      "sha256": "cc911308f7712fa6e4a68e9d5b59bb9b9759cc892452a5c2d75ec72c1d5762f1"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/typescript-judge-gemini-046c306a-35fc-485b-b036-a2f31a674fd2-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/typescript-judge-gemini-72840805-489d-4382-ae68-42dc17b6d51a-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/typescript-judge-gemini-ae3d7d6f-0a8b-4eb1-b223-59a5b0fe003b-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-AJOAPs/typescript-judge-gemini-ca518d00-1dec-4462-adfa-b982e200f3a6-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/1-typescript-ANALYSIS-typescr-6ebecbf0-840a-4ef0-987c-44c8bb0c3fdb.json",
+      "sha256": "c34f3bc56bd3446f31196d135f494fdf06b06f508db2a105519efeb12aa46a66"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/1-typescript-agent-a-typescr-164ab5ed-b2d2-4fe1-8ef7-dfe51be6b227.json",
+      "sha256": "11d3e2870cc7f1c8419c531f876fb215b4531ad4dd3027f50b83cb5ede0b32a6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/1-typescript-agent-b-typescr-b868d228-8df7-498e-b81a-74db9ab26c64.json",
+      "sha256": "4d1a40c4cca5d2a3f46cf0ca7f5072e5d6389dd7288072992e8ea4a2683b97ff"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/2-typescript-ANALYSIS-typescr-3a67a49a-3625-4e2a-8c8d-defd32af5eec.json",
+      "sha256": "3eacc9864d3862aa070f2b163cf6b45d908d9d1cfa987d9e94c642d537659c8c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/2-typescript-agent-a-typescr-87eb72ed-53e8-4371-8bd6-405caf70ffc2.json",
+      "sha256": "adfec3b3eae66611d1712512a1950e6a85da6d2144abaaa1b47975876e1afd84"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/2-typescript-agent-b-typescr-af12d13a-d53c-4cfd-9521-e101b9608ad0.json",
+      "sha256": "b11e6fc8b3a4814294083fd4f0618f3131a0a32b2aa8a8605603e57e2d25913f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/3-python-ANALYSIS-python--29cdcd24-de66-4361-b7ee-ffd7ac60a458.json",
+      "sha256": "e7005b9e3fd69d90c7076bb754030daf4e328ea4617f872644a5e1441100c28a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/3-python-agent-a-python--c83ba7d8-4e88-46a2-bb3e-8ee914b5dc29.json",
+      "sha256": "9c0ec8052eb3144b14a0413d08cd829fa9cf2e35d1ec653b2781050f960480a6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/3-python-agent-b-python--72836269-4a22-486b-98de-fcd5a4ed05b0.json",
+      "sha256": "48be36c59391cf61925ef0e4d70a371eca298a50d85f47af979ad7e367e34723"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/4-python-ANALYSIS-python--2dd13cad-13b5-49fc-9dd1-aaad405a8f8e.json",
+      "sha256": "cb045267a93035923eb17b0115e82d35e478d3e4d3badd5fbea99ef148c85914"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/4-python-agent-a-python--d1ba2059-a334-491c-be9a-a0028e70b955.json",
+      "sha256": "185f6e40a2741e2ec0836e9bf274014987cd12c1093364120d75f73b2aa79dd0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/4-python-agent-b-python--72f6f563-3daa-4547-8496-8629d0e0157c.json",
+      "sha256": "18f846b4e27e1bdb7ddbde5b24d52f134feaa7286d788a08146d3ed9a6d85411"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/FINAL_RESULTS.json",
+      "sha256": "cf50a72093407c43e13f241c86391275381850e5a59089c50849e34a6d8fe930"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/python-judge-gemini-72836269-4a22-486b-98de-fcd5a4ed05b0-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/python-judge-gemini-72f6f563-3daa-4547-8496-8629d0e0157c-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/python-judge-gemini-c83ba7d8-4e88-46a2-bb3e-8ee914b5dc29-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/python-judge-gemini-d1ba2059-a334-491c-be9a-a0028e70b955-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/46276355-cec1-40f0-a22f-c99db3042582-settled.json",
+      "sha256": "4ec5d4f17a99a60562a8ecd63941761a4ac72f44c4023962939da9986fee9f9c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/46276355-cec1-40f0-a22f-c99db3042582-started.json",
+      "sha256": "2993cdfa2c4ea89f533be7fb7a9814527f43d912bbd25679d0fca872554d0d68"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/59c6fa07-2ed7-4737-8401-59e7b50d1095-settled.json",
+      "sha256": "623dbff4402b943ba06c8f10884e7f675b1d55e83260287f350694a749234d84"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/59c6fa07-2ed7-4737-8401-59e7b50d1095-started.json",
+      "sha256": "188a6f1040f6f68632854311799fca75cb4ecde65d59a04b6292e35fd0c7579a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/62f5eba4-2b0d-4b6e-934d-7b8bfa0d2f0e-settled.json",
+      "sha256": "08240fb445883af47f80150b56d9a9a45caab8719144381648bedb355f49791f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/62f5eba4-2b0d-4b6e-934d-7b8bfa0d2f0e-started.json",
+      "sha256": "8ac6fb411da24c64b280c305898393ea850815874496e27888923ba704a44c64"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/6bc94625-1516-4218-89f8-37cb3059ee31-settled.json",
+      "sha256": "3d9ea414f24bb8d56d5dc96936b9a60fcb385fc225605ee0ddd219112a999658"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/6bc94625-1516-4218-89f8-37cb3059ee31-started.json",
+      "sha256": "69edde70f05c1a93a228b4c244ecfe22cfc7cc8761b7b3b1d4c7b527555b478d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/6df4fee5-8db1-4f7a-a8f4-e53ad1c4e84b-settled.json",
+      "sha256": "1b27d0733bd21d8cf9dcfe3a202158503e6293d0396c71a418aebb23d44c1dfa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/6df4fee5-8db1-4f7a-a8f4-e53ad1c4e84b-started.json",
+      "sha256": "03c98103c9d89be16041e79af0bcac39b564ea5aaed680eeb9848421d1a7306a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/6e2931ab-5054-40d7-8eff-35da5d635524-settled.json",
+      "sha256": "22e47038521f3d2a50750066b20dd4fc873e5994d96cf8bd0c275b6770f2661d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/6e2931ab-5054-40d7-8eff-35da5d635524-started.json",
+      "sha256": "7d8eccd00037d6cc3ea9c3f2523efda20ee6b9abe0ec41a94e8b608116ea5ae9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/6fb81158-a05d-426f-9f9f-3bf21d0b0d4d-settled.json",
+      "sha256": "a1677657720807bb677d4e03c074efe7c02dd6a6d654fc85c4a38bbf5b2ee017"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/6fb81158-a05d-426f-9f9f-3bf21d0b0d4d-started.json",
+      "sha256": "725ec038814162d395ec0affb7acdaa846f75174fd846cf6382298288b114c9d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/75d3df65-de51-4e6b-b0a3-3b6e618879e5-settled.json",
+      "sha256": "794d71e69b9b0310e32ebb5e2425d85b5ce8a80bbec465404aec63673050de86"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/75d3df65-de51-4e6b-b0a3-3b6e618879e5-started.json",
+      "sha256": "47c8a25cc3781a96d7f95bc85e38b21ec622b1c3ec28023cd048e9f29e9fef6e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/7cdf40ee-35c4-44e8-8b96-eef45fc8158d-settled.json",
+      "sha256": "1639c062dc2475b480ac7a4ee1a65a9b54e95b569836ac02e002a65c74c67e79"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/7cdf40ee-35c4-44e8-8b96-eef45fc8158d-started.json",
+      "sha256": "5008e785c81e7892eab45ba7b05bc032398fa1008fd8ff875c8764c5ccea1b4c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/8367ba2f-f9fc-494b-bc93-2aef62883b22-settled.json",
+      "sha256": "ff84503cd24be038969d996c4a279899d140a8e29b2b69fdab831f0b0289270b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/8367ba2f-f9fc-494b-bc93-2aef62883b22-started.json",
+      "sha256": "51d60644733a0894e26efc5f8151dac1a78115dbd105d8cdbb2579a45ac5e557"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/87b4b502-0d1b-4408-9e86-5d6c73453bbe-settled.json",
+      "sha256": "203fbc0551a77e1ce8e97e71f63df65dafe9cec79a7383d8894cbe6e089aa138"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/87b4b502-0d1b-4408-9e86-5d6c73453bbe-started.json",
+      "sha256": "b2e8ac4107f17a899c03dab0cac7d30fea1f0a39231eaef9c575bd64ea294966"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/a1c5ccff-00a5-4c36-85f1-190401745129-settled.json",
+      "sha256": "ef8aed2c0bc05977a604528cc55d2a76007945158d73e4b6d77ad4c332ea9325"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/a1c5ccff-00a5-4c36-85f1-190401745129-started.json",
+      "sha256": "9444e642202091b1b7190a88f61420a9192845984cdb658a082053334fe0015e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/ab203ac6-ab8d-44f2-be33-194a765287d9-settled.json",
+      "sha256": "18fa6bbc6039fcf8f8bfa447d3313e07b2782705dfb4d8ca64da659229e8c280"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/ab203ac6-ab8d-44f2-be33-194a765287d9-started.json",
+      "sha256": "51e040ba9391fa11c7d0e076efea45c9ac81e53ac51e1a0dcb8ccd92987b6525"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/afad1d16-e4b3-4436-b180-9d9b733c9c9c-settled.json",
+      "sha256": "49b2e9e329d445e84efd814f1b5e955a9754f034310ac2ce4147c4d5f0cfb3c0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/afad1d16-e4b3-4436-b180-9d9b733c9c9c-started.json",
+      "sha256": "cd804589f1c6c9551d5be66a22a73f02ab6f146c2586b9334b3a4fb83e975c48"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/bb1af105-1d5d-4063-895a-f611da5c4062-settled.json",
+      "sha256": "adccd17346c62d82c2dc42dc312d849c8fc7d0ca96251e2bcd9398ea5c6cf7c1"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/bb1af105-1d5d-4063-895a-f611da5c4062-started.json",
+      "sha256": "98b959faf08b65e7134234438010aefd7bdea7baad4c2f2f6c5a1ab7c59671a7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/c9236f39-235e-489d-913e-afd462077511-settled.json",
+      "sha256": "27fce8ff7047c08770ea3f1577b3f1bc587ca406d28cf92b628b661892087985"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/sdk-attempts/c9236f39-235e-489d-913e-afd462077511-started.json",
+      "sha256": "e8a296791426a52a36768558e40d35d5b363574ea4493cad0c1735806dd07815"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/typescript-judge-gemini-164ab5ed-b2d2-4fe1-8ef7-dfe51be6b227-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/typescript-judge-gemini-87eb72ed-53e8-4371-8bd6-405caf70ffc2-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/typescript-judge-gemini-af12d13a-d53c-4cfd-9521-e101b9608ad0-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-qnq44i/typescript-judge-gemini-b868d228-8df7-498e-b81a-74db9ab26c64-agent-output-error.json",
+      "sha256": "b268f21e926cfbff16f39cd052d67519355640a35edfe3f72ba3ae3a4cb37594"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-isolation-replay.command.json",
+      "sha256": "9e66549f7cb22166cdfbc5383c1474303aa063a454ad7fc35108f586f764833d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/artifact-isolation-replay.log",
+      "sha256": "568728a15c99d68d8ed2cd7adfe323ea83876321fa26f3ab84fa89fb52e1a33e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/assess.py",
+      "sha256": "efd459ea63a7a6fa8becce60ad7d1719515153ceb273cdd88e10945be35ae7c9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/assessment.json",
+      "sha256": "568728a15c99d68d8ed2cd7adfe323ea83876321fa26f3ab84fa89fb52e1a33e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/actual-evaluation-artifacts.json",
+      "sha256": "442bf3fdda34621a0a67a1bb0f9c66d7aa53e02cc1531c8f3c68ad8304b88ab0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/actual-isolated-sdk.json",
+      "sha256": "8d88c05e8686a62465a8f2d6d48371fea765e161b262bc3e6b3edcffb748519b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/affected-evaluator-consumers.json",
+      "sha256": "09ab254158a2fbf72c61949ed810fb2dc3d8184d7f538a0bd89cc063f2171f35"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/artifact-isolation-replay.json",
+      "sha256": "bd828c73098225c2cc422303e32fedc1bd131979e1bad03525c3b96d3e986f63"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/full-evals-ci.json",
+      "sha256": "8a99888627890a5ee9e324765d6529b31414932cfab3aa32f2d8454e452b579c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/commands/leader-vision-route-regression.json",
+      "sha256": "59a7068eade39b04468168d818730ee8c881e6b628fb68654facf4266844f75f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/eval-test-discovery.json",
+      "sha256": "f6702fbb45f806b3eb8f3566228c2c4ecddb7ea57ea8884f410383a40b2b3109"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/full-evals-ci-fetch.jsonl",
+      "sha256": "c74dd1aa85e8be72e696bffece868ecf978a94db4a3c5330a9c3ad520f0627c0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/full-evals-ci.command.json",
+      "sha256": "7d53f229e6c93eadc6e208941faaffbafeb62281fef792d377648b0a9efe3739"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/full-evals-ci.log",
+      "sha256": "08030550e17d2e006b79bf2d517a938106ba1551c5dcfafb8e091b72bee9a6d3"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/inspect.py",
+      "sha256": "e8e40f37b578d388c79919187f54671e5e5a96a4a8d93c4dd90bedb1aa4541ca"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/inspection.json",
+      "sha256": "6842ebdfa40ee778c86affb66d8aaf2f59cfda20e2f7e59d33538059b81ba604"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/controller-provider-config.json",
+      "sha256": "6a9e997751482695bbb9a82e6f541bd0e15b7773b96eca54b1155a592b487c41"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/isolation-report.json",
+      "sha256": "ffb70488200a74cca60e2ef11d963d3b6acfafae2762316cda14adb513f0d537"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/missing-credential-provider.json",
+      "sha256": "67641e753fa57ef24dcf2a2a8b9b6c6e57a77521a87a58242372948fc0c9fe40"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/repo/.openbuff/memory/task-memory.json",
+      "sha256": "55275bb55688c22a8b28d13861d1a800eac12162c2c7f5f429c3375a70582fd9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/repo/README.md",
+      "sha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/1-isolation-task-ANALYSIS-a7284a6-d3a180f1-804b-4d7a-8f04-485791ceafc8.json",
+      "sha256": "52a14dbcbfd64d1d8661dfeeca87e11ba1062826fb632ed72826c86f8dc9ebe0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/1-isolation-task-isolation-fixture-a7284a6-432acca8-5d78-4b80-87f5-2e521d372fe2.json",
+      "sha256": "64d59a06079ddb59981b94653f8f88745cb4d5cdb253b6b660f11ebdf58fe489"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/lessons/isolation-fixture.md",
+      "sha256": "e3fce3dbdbcc6753ac16ad80b883a38b293f40a8d4cdd168d935ccd97f1eb583"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/0d51f39b-0b4f-461e-812e-20d7caf31b68-event-1.json",
+      "sha256": "bb2a899c295c589d18cfc3616d9bb944387873d486e84c6556bfcfd74697ef6f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/0d51f39b-0b4f-461e-812e-20d7caf31b68-event-2.json",
+      "sha256": "2f4bdde8b7e96b49c3f1e9a2f66fb0a676a4f062c231c2c03e326f69084bb716"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/0d51f39b-0b4f-461e-812e-20d7caf31b68-event-3.json",
+      "sha256": "6dc8f15887abb7a38af281e15e490fb56a83b928f51440cf4f531a9962ae7c1a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/0d51f39b-0b4f-461e-812e-20d7caf31b68-event-4.json",
+      "sha256": "bfc5ea559c1a31377bcb1cf1bc2464bc29a9b68161661fae90068e83b93010ab"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/0d51f39b-0b4f-461e-812e-20d7caf31b68-event-5.json",
+      "sha256": "41de8318f06fc04c1e183a57e226e9eb7c482bfe6badcee6d6f8639fb329d3e7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/0d51f39b-0b4f-461e-812e-20d7caf31b68-event-6.json",
+      "sha256": "893f1f7282f9847303e577ee044f683e38a9017fd0f060bc6e081f7723aa6d99"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/0d51f39b-0b4f-461e-812e-20d7caf31b68-event-7.json",
+      "sha256": "36fff38938e38e3f5d3833bb0c5bbcd5fa863d6f209a81b2f64093077423ac7d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/0d51f39b-0b4f-461e-812e-20d7caf31b68-event-8.json",
+      "sha256": "f3c3532736b436160bb2a8a02e3a4d21ce43c4fffcba55648bf52766c0bd3934"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/0d51f39b-0b4f-461e-812e-20d7caf31b68-event-9.json",
+      "sha256": "2539c38b8ca423dc2392e807061407fa974114b7ad9796c6af7e17332a9fa3e8"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/0d51f39b-0b4f-461e-812e-20d7caf31b68-settled.json",
+      "sha256": "6c5ef656528de89605c609210db6ea78f4e8fc629355eb4dc2a361a147e8cf12"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/0d51f39b-0b4f-461e-812e-20d7caf31b68-started.json",
+      "sha256": "63236bc5278944286098acf46f3255de22f0260f58dc3eb666571a8e1996a2b4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/2e9a9c69-c00d-4e9b-9b8c-b42b042cc662-event-1.json",
+      "sha256": "6466c50c83348aa4e58ee85d0ac28815ed63fd28947e00b8248c7909b3e0cb12"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/2e9a9c69-c00d-4e9b-9b8c-b42b042cc662-event-2.json",
+      "sha256": "a95c559cc9c870daff6719bdfb576a70a2dfa20014822b771e9225f6b9adb512"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/2e9a9c69-c00d-4e9b-9b8c-b42b042cc662-event-3.json",
+      "sha256": "c4b1f52b678e26fb0787a84982fb46cc73ebf5de4cde39dc4d1249aaf38286a0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/2e9a9c69-c00d-4e9b-9b8c-b42b042cc662-event-4.json",
+      "sha256": "74e0f637ae76a963e604e1b49b3d1d0e492b7811ce3acce32ff30bd35837e1d9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/2e9a9c69-c00d-4e9b-9b8c-b42b042cc662-event-5.json",
+      "sha256": "4340a4b87dd5b4d9049e2d0decdf791bf0bb892f20ec9169e849a28bd3c1edfb"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/2e9a9c69-c00d-4e9b-9b8c-b42b042cc662-settled.json",
+      "sha256": "81b1d70b95324ccca6af8d958a822bfd80e402e39ef37b957c17c089582e39ee"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/2e9a9c69-c00d-4e9b-9b8c-b42b042cc662-started.json",
+      "sha256": "a803b029d50ac2a15808018c9baa1d0ef04a4dd62d7cf32a95c41e29593c5a64"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/5e74ee0e-56e5-4cc4-b739-42c878c06fbd-event-1.json",
+      "sha256": "300ee5fed3826cb9468165a128924222dc77408e26e4e39ea5a6492278433e91"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/5e74ee0e-56e5-4cc4-b739-42c878c06fbd-event-2.json",
+      "sha256": "8fd212a1fe46addeb68cf1ae8d84257f68b8be3af17a9b5a94cf0d5d06426e99"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/5e74ee0e-56e5-4cc4-b739-42c878c06fbd-event-3.json",
+      "sha256": "a54cb8c385739853801fb78287a0439b672677480d32639d97de153c7d0208f7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/5e74ee0e-56e5-4cc4-b739-42c878c06fbd-event-4.json",
+      "sha256": "205163b74ad409f7db0bc247a8489443b8b95d6fb0a7ecc251a86f360ebb4f3a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/5e74ee0e-56e5-4cc4-b739-42c878c06fbd-event-5.json",
+      "sha256": "c657221ae6aac61d3507314118905feb316f1c99376e63bb8c147a0041cdca7b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/5e74ee0e-56e5-4cc4-b739-42c878c06fbd-settled.json",
+      "sha256": "4c8314d3d579e81f932f600f6385a28a0b31df24ec2279d6b74cce10ae324b3b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/5e74ee0e-56e5-4cc4-b739-42c878c06fbd-started.json",
+      "sha256": "d73f31b6185e6fcc740d444f5159a68484b6ebc9894219de7daaa3ef722427be"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/6fd4e1c9-6ffd-4820-894c-209ae02397ae-event-1.json",
+      "sha256": "9aa67147a6c3c0f693b0b166a6c569cc58ec8eeaf88fe1de38601f2d6d9e68ec"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/6fd4e1c9-6ffd-4820-894c-209ae02397ae-event-2.json",
+      "sha256": "d5ba5b9b2a63d2869bbc607f359cc62ea9620f4836b443a5bdc99f2d40247b94"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/6fd4e1c9-6ffd-4820-894c-209ae02397ae-event-3.json",
+      "sha256": "1613d62d00d0e3c59d43b78b2316364c930caa069f7193d0cbb52aa20b5058e8"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/6fd4e1c9-6ffd-4820-894c-209ae02397ae-event-4.json",
+      "sha256": "fdc33c1618f8189fc5c5817520ae59a8bb217a707fd874bdf6f6b0e365426855"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/6fd4e1c9-6ffd-4820-894c-209ae02397ae-event-5.json",
+      "sha256": "a0af9b463430ba4e66b23ba06ced537b6e6a2db0a5ad65a4a7096087e4c9bab6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/6fd4e1c9-6ffd-4820-894c-209ae02397ae-settled.json",
+      "sha256": "07a9193345a6e4bddb3f2394eedb7d04e8a08bf19badc73fce6352690b65d57e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/6fd4e1c9-6ffd-4820-894c-209ae02397ae-started.json",
+      "sha256": "07fe5a43cc42cc16a709f89981f76af282521026f8da7cab1f2e6c2ff54a8358"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/ffd4bb1c-2df9-47a5-9f92-1b7dbd0bd7de-event-1.json",
+      "sha256": "5512e4b72764cc7bc652072181ea263ca17c0caf6c51e4f7414c04dc7c32a629"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/ffd4bb1c-2df9-47a5-9f92-1b7dbd0bd7de-event-2.json",
+      "sha256": "77f58afe6fa8eff628e892ed40df2bc6a4f4a845bcd7e7c065a51a94b35164aa"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/ffd4bb1c-2df9-47a5-9f92-1b7dbd0bd7de-event-3.json",
+      "sha256": "dccee056ceeb966de1b99a2cf1e531eb76defa1737626b09f213b77455204842"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/ffd4bb1c-2df9-47a5-9f92-1b7dbd0bd7de-event-4.json",
+      "sha256": "e5a37093e7bac8b74b415cb1e67f10e2aadf6dfd6cc7bdee0592f22e44edfd28"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/ffd4bb1c-2df9-47a5-9f92-1b7dbd0bd7de-event-5.json",
+      "sha256": "bdb8cb60c8ce48b1650c7a4298439d5148a5f994bdf3887d9b9982566d681984"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/ffd4bb1c-2df9-47a5-9f92-1b7dbd0bd7de-settled.json",
+      "sha256": "f697abd3fa918d0ffb0d3270db147a3ef71ec823a049dc61fab7e6125f437d38"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/isolation-fixture/task/sdk-attempts/ffd4bb1c-2df9-47a5-9f92-1b7dbd0bd7de-started.json",
+      "sha256": "dcc30343af339003b8193598d78e8293cd2ed27f26837766a2b4b676f0a8527f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/leader-vision-route-regression-fetch.jsonl",
+      "sha256": "9bf72554914fe018c424bcfce2181dc70a558d52779f98108bd77dc918cd2c51"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/leader-vision-route-regression.command.json",
+      "sha256": "5713258130dc9926ac15db70434a3cf4b882195ab3c1a5e7a4212b275b98e18b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/leader-vision-route-regression.log",
+      "sha256": "e97904ee0cd16bfd9bfc1c2076e1eb2739cab36a0d0dcad96155617c258544dc"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/offline-preload.ts",
+      "sha256": "c4658b6bac028b41aa16d7ea4c83993024185135a4f4c24f26d3e41da4f9c211"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/offline-test-preload.ts",
+      "sha256": "6aff5ff5063936591f4fd308a0e9b614a515395eea7043d8b2b37b5e8bbd86f4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/provider-config.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/run-results.json",
+      "sha256": "73b80714c9eccd199df941249ff345bf32b46420557b70d3522c332fb3e0e582"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/run.py",
+      "sha256": "35f86ace2308196bbefcc3f418f32e06642ccc3d23662ba777c3ee19ef97edf3"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/shared-lessons-after.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/shared-lessons-before.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/source-inputs.json",
+      "sha256": "80afa7676e6abcf39381fbb3e5b081475e13a06ab169120818aa2b1fdaeee9f4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final/affected-evaluator-consumers.command.json",
+      "sha256": "1786ef9dc91216fa697b5e21128cf91ef58dd45d658b2be874c85fe3cf9454ee"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final/run.py",
+      "sha256": "483ea65b248388607bdcc0475f019b3981dc0f96125f68424488317ee6b45fc7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02/affected-evaluator-consumers.command.json",
+      "sha256": "75aa651523f58261fc3e0f0e328a72636aa11429199e59f6b73acdee1d1a7691"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02/run.py",
+      "sha256": "90b63b66d85c03dae2c14bd6a833b0931ab9b69f74bfe652b4d895ce780253f9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/approval.json",
+      "sha256": "5b0135b942c023458e2568a2200780daf50d584524182de73a37a1e3d6f6e93d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/commands/actual-evaluation-artifacts.json",
+      "sha256": "bd86e1980d9b74425997d930a1d25a45a0e4ce42ad9349da3503d96947d678a7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/commands/actual-isolated-sdk.json",
+      "sha256": "ff57b311a178db411618066bfc251d5118e38ac0f1321d55f1ef153063072d88"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/commands/affected-evaluator-consumers.json",
+      "sha256": "7a86c42506e21e58a16ab0052814474e77000284cced939e8b6dae69365b0869"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/commands/artifact-isolation-replay.json",
+      "sha256": "f7efbc0db57e2b8f54ba02cbf40bc94133a64bb878f4c214cab18639e6190b3e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/commands/leader-vision-route-regression.json",
+      "sha256": "856e70663ef0c0eead91ca20b930cee50f8d62a568a8fb852c70697e3f812c97"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/inputs.json",
+      "sha256": "5dd837d13533a62e1bbe2568016f71649f9117e5cc5389fe3018d2ee7fbdf0f6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/inspection.json",
+      "sha256": "5dfd433dc7956b15aa94e59dd74b18c104910acc22d085ad7c4e0dd59b7eaf5e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/review.json",
+      "sha256": "e1e555fd6ab5cc36614f5b36709ce3cd9a1b56870f037473827d10f46de3caa9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/cleanup-delta.diff",
+      "sha256": "0b0476e8849d35609fec3445550b96f3d80faca2924567628bb60cd76f5049ae"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/cleanup-seal.json",
+      "sha256": "5bf5025ec49de0508f12c9c1e493a2c8f60bac10f53ba0f563b8151be9ca5881"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/evals-regression-import-final.json",
+      "sha256": "75921a3e406def6afb45b3efe4b324d6e38575118e4b1642dd30e96c4f78389c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/evals-regression-import-final.log",
+      "sha256": "6997335e62fb594d1a827674ec4dbe22dba88aacd07012ba975811c6de767672"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/evals-typecheck-import-final.json",
+      "sha256": "ef8ef64117257005e5ba8f2fb6c456316319b01ce9cd0db38d46af7add3fbc61"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/evals-typecheck-import-final.log",
+      "sha256": "3d3c45ecc39fd091f458f3c9ac69950e524cbbf36b64ebe261d051ca9be68c6d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/falsy-error-before.json",
+      "sha256": "c8aaa4fe03e8effd15a63d7c79abc999cd95bb74e7b2b03c7e3c479ff9ea25ee"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/falsy-tests-before.json",
+      "sha256": "eee8c7aaf7e946a7dec024422f792749b3d0d9377dc242dd5a963784fdbd36d7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/falsy-tests-before.log",
+      "sha256": "d1e38b69da2f8c4b3e9196d5402de71acbc0a3000c2fe1ee9b257cda05c32072"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/runner-empty-error-before.json",
+      "sha256": "0a00e316027a2ba0ee472dbb508add9c79f9f813aa456a572cb83f90ab17cffd"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/runner-import-final.json",
+      "sha256": "31f39d6a00b62592d72375b9ec9cdc6242cb04e5c3fa487c83a3bdfe7a897a8f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/runner-import-final.log",
+      "sha256": "f3e5bc0071083f8c418721005f2dca67ededdf297e42317e6b5aacff26514e6a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/runner-tests-before.json",
+      "sha256": "39e12e255e9de9d10df5505b7996e28da4062ad3c1c6cc98162924a99338de0b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-agents-common-evals/runner-tests-before.log",
+      "sha256": "259fec11dc057ba5d7b516190d4a17abcd0cd9775325daead4113fbc889350c7"
+    }
+  ],
+  "scopeLimits": [
+    "Reviewer-authored B02/B08 prerequisites and unrelated guard/perf/indexer implementations receive no independent implementation approval; hashes bind dependency/command context only.",
+    "B01 shipped-base2 integration and leader-owned ledger/card promotion are excluded.",
+    "No OS filesystem/network confinement, universal descendant cleanup, paid-provider/billing admission or held-out empirical learning/improvement claim.",
+    "Broader full eval CI establishes regression compatibility, not independent approval of every context-bound feature.",
+    "Historical drifted approvals/maps and incomplete packaging attempts receive no current passing-command credit."
+  ],
+  "supportingEvidence": [
+    {
+      "role": "Current independent exact lineage/source/command and persisted-oracle inspection",
+      "evidence": {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/inspection.json",
+        "sha256": "6842ebdfa40ee778c86affb66d8aaf2f59cfda20e2f7e59d33538059b81ba604"
+      }
+    },
+    {
+      "role": "Current independent findings, fresh test counts and scope limitations",
+      "evidence": {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/SOURCE-REVIEW.md",
+        "sha256": "b5cc466403a19ba9b412eff273a62878b3c621c9c47c30b5c55eb81897cd39fc"
+      }
+    },
+    {
+      "role": "Independent persisted artifact replay, synthetic populations and isolation oracle",
+      "evidence": {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final-2/assessment.json",
+        "sha256": "568728a15c99d68d8ed2cd7adfe323ea83876321fa26f3ab84fa89fb52e1a33e"
+      }
+    }
+  ],
+  "independenceDisclosure": "Reviewer made no B30 implementation or test edits. Reviewer authored separate earlier B02/B08 prerequisite implementations and separate guard/perf/indexer repairs; these receive no independent implementation approval here. B30 cleanup owner is /root/b03_mutation_evidence, with prior implementation owner /root.",
+  "historicalFailedAttemptDisclosures": [
+    "Prior post-route missing /tmp evidence and initial filtered-count packaging failure remain historical context, not replaced commands.",
+    "New initial and count-corrected independent affected suites both passed 34/0, but harness count packaging and Bun --isolate exit-observation assumptions respectively stopped completion. Exact old runners, receipts, maps and logs remain in sibling directories. Current fresh complete six-command run is credited."
+  ],
+  "uncreditedHistoricalContext": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/approval.json",
+      "sha256": "5b0135b942c023458e2568a2200780daf50d584524182de73a37a1e3d6f6e93d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/review.json",
+      "sha256": "e1e555fd6ab5cc36614f5b36709ce3cd9a1b56870f037473827d10f46de3caa9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/inputs.json",
+      "sha256": "5dd837d13533a62e1bbe2568016f71649f9117e5cc5389fe3018d2ee7fbdf0f6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/inspection.json",
+      "sha256": "5dfd433dc7956b15aa94e59dd74b18c104910acc22d085ad7c4e0dd59b7eaf5e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/commands/leader-vision-route-regression.json",
+      "sha256": "856e70663ef0c0eead91ca20b930cee50f8d62a568a8fb852c70697e3f812c97"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/commands/affected-evaluator-consumers.json",
+      "sha256": "7a86c42506e21e58a16ab0052814474e77000284cced939e8b6dae69365b0869"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/commands/actual-isolated-sdk.json",
+      "sha256": "ff57b311a178db411618066bfc251d5118e38ac0f1321d55f1ef153063072d88"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/commands/actual-evaluation-artifacts.json",
+      "sha256": "bd86e1980d9b74425997d930a1d25a45a0e4ce42ad9349da3503d96947d678a7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-route/independent-countersignature/commands/artifact-isolation-replay.json",
+      "sha256": "f7efbc0db57e2b8f54ba02cbf40bc94133a64bb878f4c214cab18639e6190b3e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02/run.py",
+      "sha256": "90b63b66d85c03dae2c14bd6a833b0931ab9b69f74bfe652b4d895ce780253f9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02/affected-evaluator-consumers.command.json",
+      "sha256": "75aa651523f58261fc3e0f0e328a72636aa11429199e59f6b73acdee1d1a7691"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final/run.py",
+      "sha256": "483ea65b248388607bdcc0475f019b3981dc0f96125f68424488317ee6b45fc7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-cleanup/independent-review-b02-final/affected-evaluator-consumers.command.json",
+      "sha256": "1786ef9dc91216fa697b5e21128cf91ef58dd45d658b2be874c85fe3cf9454ee"
+    }
+  ],
+  "requiredProductReruns": [],
+  "reviewBasis": "New attributable independent current B30 source/cleanup inspection and six fresh exact-map key-free controls, followed by persisted raw accounting/identity/isolation oracle checks; historical approval decisions are not reused.",
+  "productEditsMade": false,
+  "productCommandsRerun": true,
+  "issuedUtc": "2026-11-06T20:58:29.958696+00:00",
+  "type": "body-independent-approval"
+}

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "workspace",
+  "revision": 0,
+  "repositoryId": "816fc349d3faebf805d1bed7",
+  "workspaceId": "816fc349d3faebf805d1bed7",
+  "runId": "local-run-6f9faa3c-05f4-4737-ab1c-297654489b7c",
+  "snapshotId": "workspace.v1.1.2f46e5fe",
+  "createdAt": "2026-11-06T21:45:15.870Z",
+  "updatedAt": "2026-11-06T21:45:15.870Z",
+  "state": {
+    "schemaVersion": 1,
+    "revision": 1,
+    "snapshotId": "workspace.v1.1.2f46e5fe",
+    "updatedAt": 1794001515870,
+    "changes": [
+      {
+        "revision": 1,
+        "source": "sdk:edit_transaction",
+        "operationId": "090c82b9-4d7d-40bd-8a55-7c6f46696dd3",
+        "receiptId": "dc06447e-3353-4fdf-8177-09dae41b0c86",
+        "occurredAt": 1794001515870,
+        "actions": [
+          {
+            "action": "update",
+            "path": "a.txt",
+            "beforeHash": "sha256:021aad3bada42202b77dbee3563071ee6bed8a7183c9b2691854583e2d6bdbde",
+            "afterHash": "sha256:0732c97eef85880f7cf628e0b7ade6151515ddb78793dbb88c9ee2ff18bb4af9"
+          }
+        ]
+      }
+    ]
+  }
+}

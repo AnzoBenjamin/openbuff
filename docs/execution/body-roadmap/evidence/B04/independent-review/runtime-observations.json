@@ -1,0 +1,230 @@
+[
+  {
+    "b04": "broker-real-process",
+    "events": [
+      {
+        "event": "enter",
+        "pid": 33,
+        "token": "c2c3df38-49ab-483c-b2f7-b240babf7e11"
+      },
+      {
+        "event": "exit",
+        "pid": 33,
+        "token": "c2c3df38-49ab-483c-b2f7-b240babf7e11"
+      },
+      {
+        "event": "enter",
+        "pid": 32,
+        "token": "782c141b-2877-4ea2-abae-69be20a2efdf"
+      },
+      {
+        "event": "exit",
+        "pid": 32,
+        "token": "782c141b-2877-4ea2-abae-69be20a2efdf"
+      }
+    ],
+    "results": [
+      {
+        "applied": false,
+        "actualHash": "sha256:480c2336b410f1ad5f8bf1b28944490255804b65350c527787e74ebdd511e3a4",
+        "receipt": {
+          "receiptId": "d44c462e-6bef-4e9f-8b8b-56d8b2489614",
+          "brokerRevision": 2,
+          "authorityKind": "cooperative_cas"
+        }
+      },
+      {
+        "applied": true,
+        "receipt": {
+          "receiptId": "5d2e1a8b-23e0-4956-9b85-fd6bf0970641",
+          "brokerRevision": 1,
+          "authorityKind": "cooperative_cas"
+        }
+      }
+    ]
+  },
+  {
+    "b04": "broker-crash-refusal",
+    "owner": {
+      "schemaVersion": 1,
+      "token": "101cc04b-2cb4-4966-b513-dddbddddce92",
+      "pid": 70,
+      "acquiredAt": "2026-11-06T14:53:55.691Z"
+    },
+    "beforeHash": "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+    "afterHash": "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb"
+  },
+  {
+    "b04": "index-real-process",
+    "expectedPublicationToken": "6811301eb8daec7ee49254b2252d67944e07d56605d0140d9f2d2b5f1b35bb70",
+    "actualPublicationToken": "995b580ec05ea72d0891e78398f7cb7ad18dc88f0d1079a80cd3557b86c4e62f",
+    "sourceSnapshotId": "e476b15f4972209861a45e9b0bfff1d843f2100642d81b8ceb0b9a16cfe7fbbe",
+    "initial": false,
+    "outputs": [
+      {
+        "pid": 115,
+        "result": false
+      },
+      {
+        "pid": 116,
+        "result": true
+      }
+    ],
+    "observations": [
+      {
+        "event": "enter",
+        "pid": 116
+      },
+      {
+        "event": "exit",
+        "pid": 116,
+        "owner": "116:6448801f-7152-4916-ae26-74f28332a332"
+      },
+      {
+        "event": "enter",
+        "pid": 115
+      },
+      {
+        "event": "exit",
+        "pid": 115,
+        "owner": "115:f0e70a20-53c4-4864-897e-16d23d66d480"
+      }
+    ],
+    "after": "{\n  \"version\": \"2\",\n  \"builtAt\": 100,\n  \"projectRoot\": \"/tmp/openbuff-index-process-cas-vzm03S\",\n  \"workspaceRevision\": \"base\",\n  \"fileCount\": 0,\n  \"files\": {},\n  \"graph\": {\n    \"nodes\": {\n      \"b\": {\n        \"id\": \"b\",\n        \"kind\": \"file\",\n        \"name\": \"b\",\n        \"filePath\": \"b\"\n      }\n    },\n    \"edges\": []\n  }\n}"
+  },
+  {
+    "b04": "index-real-process",
+    "expectedPublicationToken": null,
+    "actualPublicationToken": "7a44db61acf6d4b756e1b3057e7c31b73facf9858b8655c7e08fd2151afdb01f",
+    "sourceSnapshotId": "5a836f5e1ba2f1b4951d9e108c99c7d5f79172cfc51916752c93f866fa501458",
+    "initial": true,
+    "outputs": [
+      {
+        "pid": 145,
+        "result": false
+      },
+      {
+        "pid": 146,
+        "result": true
+      }
+    ],
+    "observations": [
+      {
+        "event": "enter",
+        "pid": 146
+      },
+      {
+        "event": "exit",
+        "pid": 146,
+        "owner": "146:2ee73a80-f633-418b-8dcf-90347af03af5"
+      },
+      {
+        "event": "enter",
+        "pid": 145
+      },
+      {
+        "event": "exit",
+        "pid": 145,
+        "owner": "145:114aa025-785a-48f7-9f1d-04170c47f39d"
+      }
+    ],
+    "after": "{\n  \"version\": \"2\",\n  \"builtAt\": 100,\n  \"projectRoot\": \"/tmp/openbuff-index-process-cas-mIkOLE\",\n  \"workspaceRevision\": \"base\",\n  \"fileCount\": 0,\n  \"files\": {},\n  \"graph\": {\n    \"nodes\": {\n      \"b\": {\n        \"id\": \"b\",\n        \"kind\": \"file\",\n        \"name\": \"b\",\n        \"filePath\": \"b\"\n      }\n    },\n    \"edges\": []\n  }\n}"
+  },
+  {
+    "b04": "manager-graph-cas-refusal",
+    "sourceIdentity": "2c923b76a8705ea0ed87501253bbcd3f1505f0dafe8944aae9a998699de569ff",
+    "beforeToken": "1afece1151cb615e3fe82229e5aa20eaa76f6b8c21eda5ea7f23a138f0dec071",
+    "winnerToken": "0def9f83023f8c043d8d5831845f2c75817b6f4ecf2b6e4ae9aeb94889824532",
+    "returned": false,
+    "graph": {
+      "nodes": {
+        "file:src/auth.ts": {
+          "id": "file:src/auth.ts",
+          "type": "file",
+          "label": "src/auth.ts",
+          "path": "src/auth.ts"
+        },
+        "symbol:.ts:src/auth.ts#loginUser": {
+          "id": "symbol:.ts:src/auth.ts#loginUser",
+          "type": "symbol",
+          "label": "loginUser",
+          "path": "src/auth.ts"
+        }
+      },
+      "edges": [
+        {
+          "from": "file:src/auth.ts",
+          "to": "symbol:.ts:src/auth.ts#loginUser",
+          "type": "defines",
+          "weight": 1,
+          "label": "loginUser"
+        },
+        {
+          "from": "file:src/auth.ts",
+          "to": "file:src/auth.ts",
+          "type": "references",
+          "weight": 1
+        }
+      ]
+    }
+  },
+  {
+    "b04": "snapshot-cas",
+    "withParent": false,
+    "expected": "",
+    "winner": "7ff17feb290bb657f5117fdbe40784b7d07e5b2b",
+    "outcome": {
+      "status": "error",
+      "message": "Command failed: git update-ref refs/openbuff/turns 840c45a9f10ac4f2653f2d53c682198f1a822898 \nfatal: update_ref failed for ref 'refs/openbuff/turns': cannot lock ref 'refs/openbuff/turns': reference already exists\n"
+    }
+  },
+  {
+    "b04": "snapshot-cas",
+    "withParent": true,
+    "expected": "f16b6aa6b991bd87451811b305f3377c2722aa98",
+    "winner": "dfdebdb85c9407c873e22d6163d1f38db843b2c7",
+    "outcome": {
+      "status": "error",
+      "message": "Command failed: git update-ref refs/openbuff/turns 1e94d4e4d4e0aeeecdc540814fb79c17b0729a96 f16b6aa6b991bd87451811b305f3377c2722aa98\nfatal: update_ref failed for ref 'refs/openbuff/turns': cannot lock ref 'refs/openbuff/turns': is at dfdebdb85c9407c873e22d6163d1f38db843b2c7 but expected f16b6aa6b991bd87451811b305f3377c2722aa98\n"
+    }
+  },
+  {
+    "b04": "snapshot-attribution",
+    "refused": {
+      "status": "skipped",
+      "reason": "another snapshot or bisection owns the repository gate; retry after it finishes, or resolve the preserved owner record if recovery is needed"
+    },
+    "chain": [
+      {
+        "sha": "acbf37ac07192e26e45745e70d706f9f2d26790b",
+        "timestamp": 1793976865,
+        "label": "turn-B"
+      },
+      {
+        "sha": "2df253969b795018628238c92014b6be8eb43d20",
+        "timestamp": 1793976865,
+        "label": "turn-A"
+      }
+    ]
+  },
+  {
+    "b04": "snapshot-real-process",
+    "owner": "2006:5c2cbfc2-0d34-453f-a3dd-7054adec76a2",
+    "refused": {
+      "status": "skipped",
+      "reason": "another snapshot or bisection owns the repository gate; retry after it finishes, or resolve the preserved owner record if recovery is needed"
+    },
+    "chain": [
+      {
+        "sha": "2c4f84d712b2141ef737d44da04db5f63a096569",
+        "timestamp": 1793976866,
+        "label": "parent-turn"
+      },
+      {
+        "sha": "fb7358f7cac0273c67d3338261cae2d9bca33a10",
+        "timestamp": 1793976866,
+        "label": "child-turn"
+      }
+    ]
+  }
+]
