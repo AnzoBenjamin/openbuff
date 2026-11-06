@@ -1282,10 +1282,10 @@ describe('handleSetOutput', () => {
     const ack = output[0].value
     expect(ack.artifactPersisted).toBe(true)
     expect(ack.artifactWrittenByThisCall).toBe(true)
-    expect(ack.artifactPath).toBe(salvaged.artifactPath)
+    expect(salvaged.artifactPath).toBe(ack.artifactPath)
     expect(ack.artifactBytes).toBe(Buffer.byteLength(oversized, 'utf8'))
     expect(ack.sha256).toBe(createHash('sha256').update(oversized).digest('hex'))
-    expect(ack.artifactCreatedAt).toBe(salvaged.artifactCreatedAt)
+    expect(salvaged.artifactCreatedAt).toBe(ack.artifactCreatedAt)
     expect(salvaged.truncation).toEqual({
       reason: 'oversized_payload',
       totalChars: oversized.length,
