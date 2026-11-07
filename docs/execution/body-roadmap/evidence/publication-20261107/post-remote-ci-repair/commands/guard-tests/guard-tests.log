@@ -1,0 +1,87 @@
+bun test v1.3.5 (1e86cebd)
+
+scripts/__tests__/memory-drift-guard.test.ts:
+(pass) task-memory checker flags missing evidence paths that are not marked stale [38.00ms]
+(pass) task-memory checker ignores an untracked machine-local record [19.00ms]
+(pass) task-memory checker ignores a record when git is unavailable [3.00ms]
+(pass) task-memory checker ignores existing paths and entries without a path [23.00ms]
+(pass) task-memory checker is silent for absent, malformed, or shapeless records [29.00ms]
+(pass) path checker flags missing backtick-quoted repo-relative path [2.00ms]
+(pass) path checker accepts declared build outputs before generation and checks neighboring paths [1.00ms]
+(pass) path checker flags declared outputs when their producer is absent or a directory
+(pass) edges checker flags missing architectural directory [1.00ms]
+(pass) index-sync checker flags missing file referenced in AGENTS.md
+(pass) staleness checker flags knowledge.md with older last commit than sibling src/ [55.00ms]
+(pass) staleness checker skips dirty knowledge.md before freshness commit lands [50.00ms]
+(pass) staleness checker does NOT flag knowledge.md when its last commit is newer than src/ [48.00ms]
+(pass) staleness checker skips untracked knowledge.md (no false positive without git history) [7.00ms]
+(pass) staleness checker skips untracked knowledge.md in a git repo [34.00ms]
+(pass) staleness checker does NOT flag topic-prefixed knowledge file when only topic-irrelevant sibling src changed [57.00ms]
+(pass) staleness checker flags topic-prefixed knowledge file when a topic-relevant src file name changed [48.00ms]
+(pass) staleness checker flags topic-prefixed knowledge file when a topic-relevant src directory changed [45.00ms]
+(pass) staleness checker matches topic-relevant src paths case-insensitively [48.00ms]
+(pass) staleness checker still flags plain knowledge.md for any sibling src change while sparing a topic file [63.00ms]
+(pass) staleness checker does NOT flag topic-prefixed knowledge file with no matching source under sibling src/ [50.00ms]
+(pass) command checker flags missing script via --cwd subpackage [1.00ms]
+(pass) command checker skips file-path fragments like `evals` from `bun run evals/foo.ts` [1.00ms]
+(pass) command checker skips --cwd flag fragment when placeholder follows
+(pass) command checker skips out-of-repo absolute --cwd paths
+(pass) command checker infers cwd from `cd <dir> &&` prefix on same line
+(pass) command checker skips out-of-repo `cd <dir> &&` prefix [1.00ms]
+(pass) dependency checker flags missing @codebuff package
+(pass) cross-file checker flags missing relative markdown link [1.00ms]
+(pass) script-coverage checker flags unmentioned script
+(pass) script-coverage checker does NOT flag a script wired into a non-root workspace manifest [1.00ms]
+(pass) script-coverage checker does NOT flag a script wired into a globbed workspace member
+(pass) script-coverage checker still flags a script referenced nowhere despite workspace scan
+(pass) script-coverage checker respects .coverage-allow allowlist [1.00ms]
+(pass) tool-config-sync checker flags missing ROUTER.md referenced file
+(pass) tool-config-sync returns no findings when ROUTER.md absent
+(pass) index-sync checker covers agents/patterns/INDEX.md and flags missing referenced file [1.00ms]
+(pass) index-sync returns no findings for patterns INDEX when all referenced files exist
+(pass) memory-drift guard skips .bun-install cache directories
+(pass) memory-drift guard skips .agents/sessions plan-session markdown [1.00ms]
+(pass) memory-drift guard skips other SKIP_PATH_PREFIXES like evals/test-repos
+(pass) memory-drift guard skips the exact raw B30 snapshot while checking active neighboring docs [2.00ms]
+(pass) memory-drift guard skips exact RWEB snapshots while checking active neighboring docs [2.00ms]
+(pass) broken-link checker resolves positive Markdown source-line citations without hiding missing files [1.00ms]
+[memory-drift-guard] buildMarkdownSnapshot read failed for /tmp/mdg-sriWjA/docs/secret.md: EACCES: permission denied, open '/tmp/mdg-sriWjA/docs/secret.md'
+[memory-drift-guard] buildMarkdownSnapshot read failed for /tmp/mdg-sriWjA/docs/secret.md: EACCES: permission denied, open '/tmp/mdg-sriWjA/docs/secret.md'
+(pass) unreadable markdown file is skipped instead of crashing the guard [1.00ms]
+(pass) formatMemoryDriftReport reports clean pass when score is zero
+(pass) command checker infers cwd from multi-line cd prefix in code block [1.00ms]
+(pass) command checker accepts root script documented bare in a package README
+(pass) command checker still flags when script is missing from nearest package and root
+(pass) command checker does not fall back to root when explicit --cwd package is missing the script [1.00ms]
+(pass) todo-fixme checker flags TODO and allows allowlisted line
+(pass) todo-fixme checker skips feature-name usage like "TODO List Positioning"
+(pass) todo-fixme checker still flags TODO(...) parenthesized form
+(pass) broken-link checker flags missing non-http link
+(pass) broken-link checker skips anchor fragments on existing file [1.00ms]
+(pass) integration: runMemoryDriftGuard returns sum score and 11 checkers in order [53.00ms]
+[memory-drift-guard] staleness suppressed by review receipt: packages/demo/knowledge.md
+(pass) staleness checker review-receipt suppression > a valid receipt with matching hashes suppresses the stale finding [66.00ms]
+(pass) staleness checker review-receipt suppression > a receipt with a stale/mismatched hash for one file does NOT suppress [64.00ms]
+[memory-drift-guard] staleness suppressed by review receipt: packages/demo/knowledge.md
+(pass) staleness checker review-receipt suppression > a receipt stops suppressing once the attested source bytes change [88.00ms]
+(pass) staleness checker review-receipt suppression > a receipt with no hash entry for a committed src file does not suppress [79.00ms]
+[memory-drift-guard] loadReviewReceipt failed for /tmp/mdg-xyXGxI/.openbuff/memory/review-receipt.json: JSON Parse error: Expected '}'
+[memory-drift-guard] loadReviewReceipt failed for /tmp/mdg-xyXGxI/.openbuff/memory/review-receipt.json: JSON Parse error: Expected '}'
+(pass) staleness checker review-receipt suppression > malformed or missing receipt behaves as absent (finding stands) [73.00ms]
+(pass) staleness checker review-receipt suppression > a non-LOOKS_GOOD verdict does not suppress [59.00ms]
+(pass) staleness checker review-receipt suppression > loadReviewReceipt is fail-open and verifyReceiptCoversPair verifies current bytes [49.00ms]
+(pass) review receipt strict validation (forgery resistance) > a wrong schemaVersion is treated as ABSENT (never suppressive) [67.00ms]
+(pass) review receipt strict validation (forgery resistance) > an unknown verdict string is treated as ABSENT [62.00ms]
+(pass) review receipt strict validation (forgery resistance) > a fileHashes value that is not 64-hex sha256 is treated as ABSENT [64.00ms]
+(pass) review receipt strict validation (forgery resistance) > an empty reviewer name is treated as ABSENT [41.00ms]
+(pass) review receipt strict validation (forgery resistance) > an empty optional receiptId/agentId is treated as ABSENT [57.00ms]
+[memory-drift-guard] staleness suppressed by review receipt: packages/demo/knowledge.md
+(pass) review receipt strict validation (forgery resistance) > a valid receipt carries receiptId/agentId and still suppresses [63.00ms]
+[memory-drift-guard] checkStaleness git lookup failed: Command failed: /tmp/mdg-IiExfm/probe-only-bin/git status --porcelain -- packages/demo/knowledge.md
+(pass) review receipt strict validation (forgery resistance) > checkStaleness degrades visibly when git fails during the per-pair work [51.00ms]
+(pass) review receipt strict validation (forgery resistance) > checkStaleness degrades visibly (not silently clean) when git cannot run [50.00ms]
+
+ 71 pass
+ 0 fail
+ 164 expect() calls
+Ran 71 tests across 1 file. [1.72s]

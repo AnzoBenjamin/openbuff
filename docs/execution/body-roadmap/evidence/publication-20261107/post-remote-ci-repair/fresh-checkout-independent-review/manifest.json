@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-remote-ci-staged-publication-review-seal",
+  "recordedAt": "2026-11-07T00:49:41.445446+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "decision": "approve-exact-reviewed-index-and-repair-delta",
+  "indexSha256": "1572d282f8bebdefd69a118ca5aa802abdff2ae13a102511e3b25c981b37d8ad",
+  "ledgerSha256": "fe0e337cb0675613310f1b86dd58d823f187e0672b0ea5b8a4a8060121f7e83c",
+  "scope": "Exact staged Git modes, required/restored bytes and preserved restored executable bits, with two explicit umask permission reductions. No product/native/platform or new card acceptance.",
+  "files": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/fresh-checkout-independent-review/REVIEW.md",
+      "sha256": "6b0e78a58164897ff2e75e4192f9b55ef37610a433f14cb5f18ba72eb1ffb0e8",
+      "bytes": 2874
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/fresh-checkout-independent-review/review.json",
+      "sha256": "6285be595454fe44f74615068d42665dea80474c4d1f5a383351ac77466908fd",
+      "bytes": 52151
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/fresh-checkout-independent-review/verify-checkout.py",
+      "sha256": "06ab83bfad08f7cc426bfb57fec1ee316caa7ffab6c23a9d32ccd195a15be5b0",
+      "bytes": 16060
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/fresh-checkout-independent-review/verify-checkout.initial.py",
+      "sha256": "9730a0012475585fdfe208e14b85d70fff099aca818fde4a12c9b99c83d1bfb5",
+      "bytes": 15207
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/fresh-checkout-independent-review/permission-observation.json",
+      "sha256": "45306ff7658e4742bb984ac162b95aa83df47f584d4f53c42c84289d489412fc",
+      "bytes": 842
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/fresh-checkout-independent-review/reviewed-index.nul.gz",
+      "sha256": "2106b11c15f1124f2638f1d81b43c05ce727b49936ed8c85395c0ff5b9df6e88",
+      "bytes": 158093
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/fresh-checkout-independent-review/reviewed-index.final.nul.gz",
+      "sha256": "2106b11c15f1124f2638f1d81b43c05ce727b49936ed8c85395c0ff5b9df6e88",
+      "bytes": 158093
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/fresh-checkout-independent-review/materialized-staged-bindings.json.gz",
+      "sha256": "aec6a51f66e5528f04394d9a449a84be549b46ed16db326c45d7545f811499a2",
+      "bytes": 360129
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/fresh-checkout-independent-review/materialized-staged-bindings.final.json.gz",
+      "sha256": "aec6a51f66e5528f04394d9a449a84be549b46ed16db326c45d7545f811499a2",
+      "bytes": 360129
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/fresh-checkout-independent-review/ledger-validation.stdout.log",
+      "sha256": "6978ab14d7f8ed9196a74c0105e60c769a27cdf00f1db077e24a9b5b46aaecaa",
+      "bytes": 813
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/fresh-checkout-independent-review/ledger-validation.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  ]
+}

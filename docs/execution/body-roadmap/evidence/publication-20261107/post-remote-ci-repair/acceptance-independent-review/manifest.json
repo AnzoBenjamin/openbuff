@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-exact-remote-ci-candidate-review-seal",
+  "recordedAt": "2026-11-07T00:40:58.573383+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "decision": "approve-exact-candidate-for-byte-preserving-promotion",
+  "candidateSha256": "fe0e337cb0675613310f1b86dd58d823f187e0672b0ea5b8a4a8060121f7e83c",
+  "previousLiveSha256": "64bdc49206f2e3efad0393dad82048134c4403e43bef8bdb26696251bbf7b07b",
+  "scope": "Two-node contextual command credit/reference consistency only; no implementation self-approval or new card acceptance. Smoke script and remote native execution remain separate.",
+  "files": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance-independent-review/REVIEW.md",
+      "sha256": "0b095de3045c4fb9e0c875f84450d5e890a5f63995c4be04d540569d0dca4923",
+      "bytes": 2578
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance-independent-review/review.json",
+      "sha256": "b9e91c9c566bc46f227c68260433afb7f69eae7a4c16e41cb0f2239ac6471c98",
+      "bytes": 91986
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance-independent-review/verify-candidate.py",
+      "sha256": "46887352837f5ba3694fb7e0a9a2afb7c75936412ebcf0e4988085008540eb6f",
+      "bytes": 15507
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance-independent-review/verify-candidate.initial.py",
+      "sha256": "916593beb70e74648505c1a1d43594ade9fba399bb95a968021760674dc371db",
+      "bytes": 15192
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance-independent-review/verify-candidate.second.py",
+      "sha256": "da1bc90a79188feeef502c56fa91f2a834ff17f2397e4a80f573b37c850150b9",
+      "bytes": 15265
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance-independent-review/initial-harness-observation.json",
+      "sha256": "e69356e883910029a1b63942cd4619185ba2aef74ae42d011171211c85806309",
+      "bytes": 899
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance-independent-review/second-harness-observation.json",
+      "sha256": "19aa6c05c62952986bb716b8ee42d27695989f4dcea80481c23ce087a7a912b1",
+      "bytes": 656
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance-independent-review/candidate-validation.stdout.log",
+      "sha256": "6978ab14d7f8ed9196a74c0105e60c769a27cdf00f1db077e24a9b5b46aaecaa",
+      "bytes": 813
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance-independent-review/candidate-validation.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  ]
+}

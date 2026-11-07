@@ -1,0 +1,15 @@
+[
+  {
+    "criterion": "Actual diagnostic children through delta/hooks, source SDK JSON and CLI classification preserve unsuccessful/incomplete/unknown evidence.",
+    "evidence": [
+      {
+        "path": "docs/execution/body-roadmap/evidence/B36/current-independent-review/sdk-client-observations.json",
+        "sha256": "440db8a1cf8a9a264b0592acc707b21ec58acaffdfb92771418945d782b96819"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B36/current-independent-review/integration-tests.log",
+        "sha256": "d387777ab71f63b47fd7406c0a9a8669d28fccd94cdb64dd156b67864614c804"
+      }
+    ]
+  }
+]

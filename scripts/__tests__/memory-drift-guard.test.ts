@@ -187,6 +187,59 @@ test('path checker flags missing backtick-quoted repo-relative path', () => {
   expect(findings.some((f) => f.message.includes('src/missing.ts'))).toBe(true)
 })
 
+test('path checker accepts declared build outputs before generation and checks neighboring paths', () => {
+  mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
+  mkdirSync(join(tmpRoot, 'cli/scripts'), { recursive: true })
+  mkdirSync(join(tmpRoot, 'sdk/scripts'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'cli/scripts/prebuild-agents.ts'),
+    '// producer\n',
+  )
+  writeFileSync(join(tmpRoot, 'sdk/scripts/build.ts'), '// producer\n')
+  const generated = [
+    'cli/src/agents/bundled-agents.generated.ts',
+    'sdk/dist/index.mjs',
+    'sdk/dist/index.d.ts',
+  ]
+  const missing = [
+    'cli/src/agents/unknown.generated.ts',
+    'sdk/dist/unknown.mjs',
+    'sdk/src/missing.ts',
+  ]
+  writeFileSync(
+    join(tmpRoot, 'docs/notes.md'),
+    [...generated, ...missing].map((path) => `See \`${path}\`.\n`).join(''),
+  )
+
+  const findings = checkPath(tmpRoot)
+  expect(findings.map((finding) => finding.message)).toEqual(
+    missing.map((path) => `referenced path \`${path}\` does not exist`),
+  )
+  for (const path of generated) {
+    expect(existsSync(join(tmpRoot, path))).toBe(false)
+  }
+})
+
+test('path checker flags declared outputs when their producer is absent or a directory', () => {
+  mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
+  const generated = [
+    'cli/src/agents/bundled-agents.generated.ts',
+    'sdk/dist/index.mjs',
+    'sdk/dist/index.d.ts',
+  ]
+  writeFileSync(
+    join(tmpRoot, 'docs/notes.md'),
+    generated.map((path) => `See \`${path}\`.\n`).join(''),
+  )
+  expect(checkPath(tmpRoot)).toHaveLength(3)
+
+  mkdirSync(join(tmpRoot, 'cli/scripts/prebuild-agents.ts'), {
+    recursive: true,
+  })
+  mkdirSync(join(tmpRoot, 'sdk/scripts/build.ts'), { recursive: true })
+  expect(checkPath(tmpRoot)).toHaveLength(3)
+})
+
 test('edges checker flags missing architectural directory', () => {
   mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
   writeFileSync(

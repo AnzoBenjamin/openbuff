@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync, existsSync } from 'node:fs'
+import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { dirname, relative, resolve, sep, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
@@ -54,6 +54,18 @@ const SKIP_MARKDOWN_FILES = new Set([
 
 const PATH_QUOTED_REGEX =
   /`((?:src|packages|cli|common|sdk|agents|scripts|docs)\/[A-Za-z0-9._\/-]+\.[A-Za-z]+)`/g
+
+// These exact outputs are absent before a build in a fresh checkout. Validate
+// their documentation references against the producer; build/release checks
+// remain responsible for generating and verifying the actual output bytes.
+const GENERATED_PATH_PRODUCERS = new Map([
+  [
+    'cli/src/agents/bundled-agents.generated.ts',
+    'cli/scripts/prebuild-agents.ts',
+  ],
+  ['sdk/dist/index.mjs', 'sdk/scripts/build.ts'],
+  ['sdk/dist/index.d.ts', 'sdk/scripts/build.ts'],
+])
 
 const COMMAND_REGEX =
   /bun\s+(?:--cwd[=\s]+[^\s]+\s+)?run\s+(?:--cwd[=\s]+[^\s]+\s+)?([a-zA-Z0-9:_-]+)/g
@@ -275,7 +287,13 @@ export function checkPath(
       let match: RegExpExecArray | null
       while ((match = PATH_QUOTED_REGEX.exec(line)) !== null) {
         const quoted = match[1]
-        if (!existsSync(join(root, quoted))) {
+        if (existsSync(join(root, quoted))) continue
+        const producer = GENERATED_PATH_PRODUCERS.get(quoted)
+        const declaredOutput =
+          producer &&
+          existsSync(join(root, producer)) &&
+          statSync(join(root, producer)).isFile()
+        if (!declaredOutput) {
           findings.push({
             path: projectPath,
             line: index + 1,

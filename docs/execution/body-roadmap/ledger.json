@@ -389,7 +389,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Source TypeScript/Bun coverage, maturity, source identity, reviewer gating and persistent evidence diagnostics",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B01/accepted/20261106T232934662561Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance/B01/manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -400,8 +400,8 @@
             "scope": "Independent approval of the 11 leader-owned B01 coverage/maturity/source-inventory and ordinary/specialist reviewer-gating source files only. The 37 declared dependencies are integrity inputs, not separately approved implementation.",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-node-review/B01/review.json",
-              "sha256": "e104687798891af8c0c0b819828bc69b7c7a91ac7b0e79dab77a2a53e5cceaf1"
+              "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-node-review/B01/review.json",
+              "sha256": "3a1e33ff35f3f0f83d8f135900b8bcee7fc6d218876a5370b3e0188476243e8f"
             }
           },
           {
@@ -426,8 +426,8 @@
       ],
       "acceptedAt": "2026-11-06T23:29:34.718720+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B01/accepted/20261106T232934662561Z-acceptance.json",
-        "sha256": "e39c90a34e4dfaa2dc2d48f303580c5552a4de1f3194ad6122465e1dd0c0ddb9"
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance/B01/acceptance.json",
+        "sha256": "ff12aa5b76cf0dbdba35985673f5791639a874317ccd66202b2d734532d6a5b2"
       }
     },
     {
@@ -1557,7 +1557,7 @@
       "backend": "ts",
       "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
       "coverageTier": "Real diagnostic child outcomes through delta/hooks, source SDK dispatch, retained baselines and CLI classification",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B36/accepted/20261106T232934662561Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance/B36/manifest.json",
       "verification": {
         "independentReviews": [
           {
@@ -1569,8 +1569,8 @@
             "scope": "Real fixed diagnostic children \u2192 delta/hooks \u2192 source SDK dispatch/JSON \u2192 CLI classifier, retained source-SDK client baselines and actual Node bounded reads.",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-node-review/B36/review.json",
-              "sha256": "5be413776644461f9fc56522e1cd56aabafe77a6ab2d4113598e5929a2495c2a"
+              "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-node-review/B36/review.json",
+              "sha256": "6da014174c0d5a3cb5dfc096ca8ea5f67f0890310d2bd6d2fa0aeef4e60a6852"
             }
           }
         ],
@@ -1582,8 +1582,8 @@
       ],
       "acceptedAt": "2026-11-06T23:29:34.769968+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B36/accepted/20261106T232934662561Z-acceptance.json",
-        "sha256": "f1bf08a98b546f3c3eeec5c50bb14df8ddc323ce8893aa2e1813adadfc6099dd"
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance/B36/acceptance.json",
+        "sha256": "4d2cd5ca5c5bcd0bb4eb27a26c3ac5a5f957ce458e8cdebbeb3ae20d1cf29aba"
       }
     },
     {
@@ -1644,5 +1644,5 @@
       "risks": []
     }
   ],
-  "updatedAt": "2026-11-06T23:29:34.772101+00:00"
+  "updatedAt": "2026-11-07T00:36:22.196189+00:00"
 }

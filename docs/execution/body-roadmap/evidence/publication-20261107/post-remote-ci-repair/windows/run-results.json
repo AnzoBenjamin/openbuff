@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "reviewer": "/root/b02_runtime_outcomes",
+  "sourceBefore": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/rust-workspace.before.yml",
+    "sha256": "d10d2fe0b51f7e4f130a9736796f9b824bd36ceaa7faa20337caf1995041eb78"
+  },
+  "sourceAfter": {
+    "path": ".github/workflows/rust-workspace.yml",
+    "sha256": "0b971a487ab44dd0df8e2080d7ab6ab8bfd4f248918655fa9f9803e2f76095f3"
+  },
+  "commands": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/yaml-condition-order.json",
+      "sha256": "666d10bb0fbbe25dddc9e9766188915da0a43776c1a00de70ca61e38c8365a67"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/git-diff-check.json",
+      "sha256": "f4e1de5788f8461fd1e39e666515183a05172b9b60924e80107fee9facfdc602"
+    }
+  ],
+  "verification": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/verification.json",
+    "sha256": "b83854f80a118669d4edc4a8db7555ad2e40fa3d6b977620d9cadfc4ef748ccc"
+  },
+  "delta": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/workflow-delta.diff",
+    "sha256": "b7e93a0e752706869dc6ebc125e2a8b7532aeab04626a8fe20216b4a6ff9a0ab"
+  },
+  "allStructuralControlsPassed": true,
+  "windowsExecuted": false,
+  "realGitHubRerunRequired": true
+}

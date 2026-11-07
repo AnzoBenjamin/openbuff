@@ -1,0 +1,706 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-remote-ci-repair-binding-scope",
+  "recordedAt": "2026-11-07T00:20:55.102665+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "method": "Run frozen validate() with a digest observer that delegates every original calculation unchanged; record actual file_binding calls for all three proposed source files.",
+  "ledger": {
+    "path": "docs/execution/body-roadmap/ledger.json",
+    "sha256": "64bdc49206f2e3efad0393dad82048134c4403e43bef8bdb26696251bbf7b07b",
+    "bytes": 83077
+  },
+  "validator": {
+    "path": "docs/execution/body-roadmap/validate-ledger.py",
+    "sha256": "6aa69375eeeae93f4850a6a068e1c17d39ba08b7a7b4d14c8ebe10e552d36c4c",
+    "bytes": 28560
+  },
+  "frozenInventory": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/curated-required-files.json",
+    "sha256": "f12426acfb0e68b64a584a08a46ed830a305f3045cdf7bf02c6ffda5f07f5731",
+    "bytes": 2165517
+  },
+  "sourceBefore": {
+    "scripts/memory-drift-guard.ts": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+    "scripts/__tests__/memory-drift-guard.test.ts": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+    ".github/workflows/rust-workspace.yml": "d10d2fe0b51f7e4f130a9736796f9b824bd36ceaa7faa20337caf1995041eb78"
+  },
+  "sourceAfter": {
+    "scripts/memory-drift-guard.ts": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+    "scripts/__tests__/memory-drift-guard.test.ts": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+    ".github/workflows/rust-workspace.yml": "d10d2fe0b51f7e4f130a9736796f9b824bd36ceaa7faa20337caf1995041eb78"
+  },
+  "sourceStable": true,
+  "actualFileBindingCallCount": 57020,
+  "targetBindingCalls": [
+    {
+      "path": "scripts/__tests__/memory-drift-guard.test.ts",
+      "actualSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "expectedSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "label": "B01 command original before input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B01-command-workspace-typecheck.json",
+          "sha256": "6934e96975e1ce08f0070ad0530c9019afbfb7c070438c5b9e152fd99b452dc6"
+        }
+      }
+    },
+    {
+      "path": "scripts/memory-drift-guard.ts",
+      "actualSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "expectedSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "label": "B01 command original before input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B01-command-workspace-typecheck.json",
+          "sha256": "6934e96975e1ce08f0070ad0530c9019afbfb7c070438c5b9e152fd99b452dc6"
+        }
+      }
+    },
+    {
+      "path": "scripts/__tests__/memory-drift-guard.test.ts",
+      "actualSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "expectedSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "label": "B01 command normalized before input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B01-command-workspace-typecheck.json",
+          "sha256": "6934e96975e1ce08f0070ad0530c9019afbfb7c070438c5b9e152fd99b452dc6"
+        }
+      }
+    },
+    {
+      "path": "scripts/memory-drift-guard.ts",
+      "actualSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "expectedSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "label": "B01 command normalized before input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B01-command-workspace-typecheck.json",
+          "sha256": "6934e96975e1ce08f0070ad0530c9019afbfb7c070438c5b9e152fd99b452dc6"
+        }
+      }
+    },
+    {
+      "path": "scripts/__tests__/memory-drift-guard.test.ts",
+      "actualSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "expectedSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "label": "B01 command original after input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B01-command-workspace-typecheck.json",
+          "sha256": "6934e96975e1ce08f0070ad0530c9019afbfb7c070438c5b9e152fd99b452dc6"
+        }
+      }
+    },
+    {
+      "path": "scripts/memory-drift-guard.ts",
+      "actualSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "expectedSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "label": "B01 command original after input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B01-command-workspace-typecheck.json",
+          "sha256": "6934e96975e1ce08f0070ad0530c9019afbfb7c070438c5b9e152fd99b452dc6"
+        }
+      }
+    },
+    {
+      "path": "scripts/__tests__/memory-drift-guard.test.ts",
+      "actualSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "expectedSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "label": "B01 command normalized after input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B01-command-workspace-typecheck.json",
+          "sha256": "6934e96975e1ce08f0070ad0530c9019afbfb7c070438c5b9e152fd99b452dc6"
+        }
+      }
+    },
+    {
+      "path": "scripts/memory-drift-guard.ts",
+      "actualSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "expectedSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "label": "B01 command normalized after input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B01-command-workspace-typecheck.json",
+          "sha256": "6934e96975e1ce08f0070ad0530c9019afbfb7c070438c5b9e152fd99b452dc6"
+        }
+      }
+    },
+    {
+      "path": "scripts/__tests__/memory-drift-guard.test.ts",
+      "actualSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "expectedSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "label": "B36 command original before input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B36-command-workspace-typecheck.json",
+          "sha256": "b4ed1721fa0dcf982ffd056ce10c4f2e9f51cf060c4bf4252a53cb6cebb8eca7"
+        }
+      }
+    },
+    {
+      "path": "scripts/memory-drift-guard.ts",
+      "actualSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "expectedSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "label": "B36 command original before input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B36-command-workspace-typecheck.json",
+          "sha256": "b4ed1721fa0dcf982ffd056ce10c4f2e9f51cf060c4bf4252a53cb6cebb8eca7"
+        }
+      }
+    },
+    {
+      "path": "scripts/__tests__/memory-drift-guard.test.ts",
+      "actualSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "expectedSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "label": "B36 command normalized before input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B36-command-workspace-typecheck.json",
+          "sha256": "b4ed1721fa0dcf982ffd056ce10c4f2e9f51cf060c4bf4252a53cb6cebb8eca7"
+        }
+      }
+    },
+    {
+      "path": "scripts/memory-drift-guard.ts",
+      "actualSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "expectedSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "label": "B36 command normalized before input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B36-command-workspace-typecheck.json",
+          "sha256": "b4ed1721fa0dcf982ffd056ce10c4f2e9f51cf060c4bf4252a53cb6cebb8eca7"
+        }
+      }
+    },
+    {
+      "path": "scripts/__tests__/memory-drift-guard.test.ts",
+      "actualSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "expectedSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "label": "B36 command original after input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B36-command-workspace-typecheck.json",
+          "sha256": "b4ed1721fa0dcf982ffd056ce10c4f2e9f51cf060c4bf4252a53cb6cebb8eca7"
+        }
+      }
+    },
+    {
+      "path": "scripts/memory-drift-guard.ts",
+      "actualSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "expectedSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "label": "B36 command original after input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B36-command-workspace-typecheck.json",
+          "sha256": "b4ed1721fa0dcf982ffd056ce10c4f2e9f51cf060c4bf4252a53cb6cebb8eca7"
+        }
+      }
+    },
+    {
+      "path": "scripts/__tests__/memory-drift-guard.test.ts",
+      "actualSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "expectedSha256": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e",
+      "label": "B36 command normalized after input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B36-command-workspace-typecheck.json",
+          "sha256": "b4ed1721fa0dcf982ffd056ce10c4f2e9f51cf060c4bf4252a53cb6cebb8eca7"
+        }
+      }
+    },
+    {
+      "path": "scripts/memory-drift-guard.ts",
+      "actualSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "expectedSha256": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+      "label": "B36 command normalized after input",
+      "commandProvenance": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "commandArgv": [
+        "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+        "--no-env-file",
+        "run",
+        "typecheck"
+      ],
+      "activeCheck": {
+        "name": "root all-workspaces typecheck after post-commit CI guard repair (shared actual invocation)",
+        "argv": [
+          "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+          "--no-env-file",
+          "run",
+          "typecheck"
+        ],
+        "exitCode": 0,
+        "log": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+          "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+        },
+        "evidence": {
+          "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/normalized-commands/B36-command-workspace-typecheck.json",
+          "sha256": "b4ed1721fa0dcf982ffd056ce10c4f2e9f51cf060c4bf4252a53cb6cebb8eca7"
+        }
+      }
+    }
+  ],
+  "directAcceptedSourceContracts": {
+    "scripts/memory-drift-guard.ts": [],
+    "scripts/__tests__/memory-drift-guard.test.ts": [],
+    ".github/workflows/rust-workspace.yml": []
+  },
+  "frozenInventoryRows": {
+    "scripts/memory-drift-guard.ts": [
+      {
+        "path": "scripts/memory-drift-guard.ts",
+        "sha256": "d21dacd87f74b1d7df1a003d9a101884a2ef821763a14d25185d8e7d531d823c",
+        "bytes": 51051,
+        "validatorRequired": true,
+        "tracked": true,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "current_source_or_context"
+        ],
+        "reason": {
+          "kind": "current_source_or_context",
+          "origin": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-whitespace.json",
+          "pointer": "B01 command original before input"
+        },
+        "bindingEdgeCount": 8,
+        "originDocumentCount": 5,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      }
+    ],
+    "scripts/__tests__/memory-drift-guard.test.ts": [
+      {
+        "path": "scripts/__tests__/memory-drift-guard.test.ts",
+        "sha256": "f0530b608a3e80936b75722f89034df4420712c811760c1f47cd1df2e0d21551",
+        "bytes": 53771,
+        "validatorRequired": true,
+        "tracked": true,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "current_source_or_context"
+        ],
+        "reason": {
+          "kind": "current_source_or_context",
+          "origin": "docs/execution/body-roadmap/evidence/B01/typed-independent-review/command-whitespace.json",
+          "pointer": "B01 command original before input"
+        },
+        "bindingEdgeCount": 8,
+        "originDocumentCount": 5,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      }
+    ],
+    ".github/workflows/rust-workspace.yml": []
+  },
+  "acceptedPrerequisiteRows": {
+    "B01": [],
+    "B02": [],
+    "B03": [],
+    "B04": [],
+    "B08": [],
+    "B18": [],
+    "B30": [],
+    "B36": []
+  },
+  "validation": {
+    "schemaVersion": 1,
+    "valid": true,
+    "scope": "plan/ledger/evidence consistency; no product or unavailable-platform assurance is inferred",
+    "cardCount": 36,
+    "nodeCount": 39,
+    "accepted": [
+      "B01",
+      "B02",
+      "B03",
+      "B04",
+      "B08",
+      "B18",
+      "B30",
+      "B36"
+    ],
+    "remaining": [
+      "B05",
+      "B06",
+      "B07",
+      "B09",
+      "B10",
+      "B11",
+      "B12",
+      "B13",
+      "B14",
+      "B15",
+      "B16",
+      "B17",
+      "B19",
+      "B20",
+      "B21",
+      "B22",
+      "B23",
+      "B24",
+      "B25",
+      "B26",
+      "B27",
+      "B28",
+      "B29",
+      "B31",
+      "B32",
+      "B33",
+      "B34",
+      "B35",
+      "M22-CORE",
+      "M22-TXN",
+      "M22-CHILD"
+    ],
+    "ready": [
+      "B05",
+      "B09",
+      "B10",
+      "B11",
+      "B12",
+      "B15",
+      "B19",
+      "B23",
+      "B28",
+      "B32"
+    ],
+    "errors": []
+  },
+  "sourceLedgerStagingOrHistoricalArtifactsEdited": false
+}

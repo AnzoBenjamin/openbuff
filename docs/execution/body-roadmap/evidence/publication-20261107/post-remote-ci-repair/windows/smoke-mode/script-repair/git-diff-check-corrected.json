@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "type": "body-corrected-smoke-whitespace-command",
+  "owner": "/root/b02_runtime_outcomes",
+  "argv": [
+    "git",
+    "diff",
+    "--check",
+    "--",
+    "rust/scripts/smoke-test-sidecar.sh"
+  ],
+  "cwd": "/home/ben/Code/CLI/openbuff",
+  "exitCode": 0,
+  "startedUtc": "2026-11-07T00:39:33.813330+00:00",
+  "finishedUtc": "2026-11-07T00:39:33.818671+00:00",
+  "sourceBefore": {
+    "rust/scripts/smoke-test-sidecar.sh": "4e14f7277fff234942723c0c22399b8f66bf24b098c1797d6eb3341524f0ee81",
+    ".github/workflows/rust-workspace.yml": "0b971a487ab44dd0df8e2080d7ab6ab8bfd4f248918655fa9f9803e2f76095f3",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check-corrected.py": "cf1ba4eba70e2e64cc98f07628df99479da88bd57d8f0da1f5871ce49492a2cc"
+  },
+  "sourceAfter": {
+    "rust/scripts/smoke-test-sidecar.sh": "4e14f7277fff234942723c0c22399b8f66bf24b098c1797d6eb3341524f0ee81",
+    ".github/workflows/rust-workspace.yml": "0b971a487ab44dd0df8e2080d7ab6ab8bfd4f248918655fa9f9803e2f76095f3",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check-corrected.py": "cf1ba4eba70e2e64cc98f07628df99479da88bd57d8f0da1f5871ce49492a2cc"
+  },
+  "sourceStable": true,
+  "runner": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check-corrected.py",
+    "sha256": "cf1ba4eba70e2e64cc98f07628df99479da88bd57d8f0da1f5871ce49492a2cc"
+  },
+  "log": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check-corrected.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "environment": {
+    "replacement": true,
+    "values": {
+      "PATH": "/usr/bin:/bin",
+      "HOME": "/tmp/openbuff-smoke-root-diff-hy2648g5/home",
+      "TMPDIR": "/tmp/openbuff-smoke-root-diff-hy2648g5",
+      "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_CONFIG_GLOBAL": "/tmp/openbuff-smoke-root-diff-hy2648g5/home/.gitconfig"
+    }
+  },
+  "historicalMisScopedReceipt": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check.json",
+    "sha256": "f15cbc6121096e6eb0cbcc9aa26621764575e5dd090c3981f0a33de5ae15e3b3"
+  },
+  "scope": "Actual repository-root whitespace check of the modified smoke script; earlier Rust-cwd path receives no whitespace credit.",
+  "closed": true
+}

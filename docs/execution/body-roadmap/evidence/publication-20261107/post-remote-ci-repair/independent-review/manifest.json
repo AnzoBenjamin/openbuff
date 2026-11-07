@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-bounded-remote-ci-source-review-seal",
+  "recordedAt": "2026-11-07T00:33:03.611337+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "decision": "approve-three-source-ci-repair",
+  "scope": "Exact guard/test/workflow source bindings and inspected validation; separate from B03 B01/B36 acceptance-credit renewal and candidate/publication approval.",
+  "files": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-review/REVIEW.md",
+      "sha256": "d56accdefca514207e4f453367d07dd063712ce620d3e202f8053fd7847ec3a6",
+      "bytes": 3320
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-review/review.json",
+      "sha256": "d915bbbc42b0dc8c683767378ef37ca26e1183f858a00c731ed72cfb9ebdde0c",
+      "bytes": 10992
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-review/receipt-verification.json",
+      "sha256": "959cd408244deb088bc71c33aa4ea0fe1fbd104de0e4d08949769df21577b671",
+      "bytes": 4791
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-review/reviewed-source.diff",
+      "sha256": "980cb84f8678e8df0dc089e6e634bb5bf1dae33e4f81d422b90ed51660e158bc",
+      "bytes": 5704
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-review/snapshot-probe.ts",
+      "sha256": "92870bd4432dbb8a1aba6eb99a0d23ec17b5a0b530a57c6f2aee427d2d2f6df2",
+      "bytes": 3663
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-review/snapshot-probe.json",
+      "sha256": "551de73c33e980772b32a35727511f9703a89f48e9377fff0a972467abea3a79",
+      "bytes": 9992
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-review/verify-receipts.py",
+      "sha256": "fa39751fdceaaf8cca7a0b6861500bc5d6519cc33663c9a40a40c51f2f8b1ef0",
+      "bytes": 4788
+    }
+  ]
+}

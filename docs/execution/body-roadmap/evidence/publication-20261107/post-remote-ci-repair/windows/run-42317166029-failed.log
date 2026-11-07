@@ -1,0 +1,126 @@
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	﻿2026-11-07T00:16:08.8062527Z ##[group]Run actions/checkout@v4
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8064134Z with:
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8064706Z   repository: AnzoBenjamin/openbuff
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8069634Z   token: ***
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8070171Z   ssh-strict: true
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8070705Z   ssh-user: git
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8071208Z   persist-credentials: true
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8071801Z   clean: true
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8072302Z   sparse-checkout-cone-mode: true
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8072865Z   fetch-depth: 1
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8073368Z   fetch-tags: false
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8073860Z   show-progress: true
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8074349Z   lfs: false
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8074874Z   submodules: false
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8075393Z   set-safe-directory: true
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8075967Z   allow-unsafe-pr-checkout: false
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:08.8076885Z ##[endgroup]
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.0099036Z Syncing repository: AnzoBenjamin/openbuff
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.0101592Z ##[group]Getting Git version info
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.0102585Z Working directory is 'D:\a\openbuff\openbuff'
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.0835879Z [command]"C:\Program Files\Git\bin\git.exe" version
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.4134233Z git version 2.56.0.windows.4
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.4188214Z ##[endgroup]
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.4228155Z Temporarily overriding HOME='D:\a\_temp\86c39264-f670-4b57-858f-1e6082c6ff22' before making global git config changes
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.4233200Z Adding repository directory to the temporary git global config as a safe directory
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.4236173Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\openbuff\openbuff
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.4885973Z Deleting the contents of 'D:\a\openbuff\openbuff'
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.4893011Z ##[group]Initializing the repository
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.4902675Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\openbuff\openbuff
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.5745519Z Initialized empty Git repository in D:/a/openbuff/openbuff/.git/
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.5801324Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/AnzoBenjamin/openbuff
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.6533754Z ##[endgroup]
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.6535990Z ##[group]Disabling automatic garbage collection
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.6543257Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.6939661Z ##[endgroup]
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.6942664Z ##[group]Setting up auth
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.6951919Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:09.7344017Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:11.1208114Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:11.1604832Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:11.7402336Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:11.7792360Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:12.3162895Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:12.3569386Z ##[endgroup]
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:12.3570546Z ##[group]Fetching the repository
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:12.3582248Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +a712a32ff588fd888d5117264593dbbd8e3692a8:refs/remotes/pull/93/merge
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.1410642Z From https://github.com/AnzoBenjamin/openbuff
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.1414816Z  * [new ref]         a712a32ff588fd888d5117264593dbbd8e3692a8 -> pull/93/merge
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.1463727Z ##[endgroup]
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.1464614Z ##[group]Determining the checkout info
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.1467366Z ##[endgroup]
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.1477276Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.2025902Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.2399597Z ##[group]Checking out the ref
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.2407537Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force refs/remotes/pull/93/merge
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.8281139Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/approval-cancellation/f2cdf15d-cd1d-4d66-8c3d-249209b60e4f/repeat_requires_new_decision/harness/b8b6a5d3af0283a6c13cc172/approvals/approval-14d675b3-21b7-4e2b-a684-e1a31c48a491.json: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.8775329Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/fixture/fetch-guard-harness/93aecce0fed49a5fd8897fb6/mutation-brokers/93aecce0fed49a5fd8897fb6/receipts/0000000000000001-20e8513f-cf7c-4e12-86c3-2c0e3b440aec.json: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.9392769Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B18/final-binding/independent-review/corrupt-approval-fixture/invalid-json/repo/approvals/.corrupt/approval-0b942123-ed56-4ef5-843b-c32648897fbc.json.1793983167380.bd5ae61c-72e1-44dc-ba28-c2a8c5b38250: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.9400611Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B18/final-binding/independent-review/corrupt-approval-fixture/invalid-json/repo/approvals/.corrupt/approval-0b942123-ed56-4ef5-843b-c32648897fbc.json.1793983167380.bd5ae61c-72e1-44dc-ba28-c2a8c5b38250.diagnostic.json: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.9406991Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B18/final-binding/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/.corrupt/approval-5af836c0-25a1-4592-b5b6-4abb0382de85.json.1793983167383.a0f1f524-55da-4a0c-a0dd-8c843f48666c: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.9413017Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B18/final-binding/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/.corrupt/approval-5af836c0-25a1-4592-b5b6-4abb0382de85.json.1793983167383.a0f1f524-55da-4a0c-a0dd-8c843f48666c.diagnostic.json: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.9419353Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B18/final-binding/independent-review/corrupt-approval-fixture/lost-sidecar/repo/approvals/.corrupt/approval.tmp.control.json.1793983167386.4b6ee76c-037b-44a0-a732-ebada4826021.diagnostic.json.tmp.695.00000000-0000-4000-8000-000000000000: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.9564964Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B18/final-binding/independent-review/sdk-fixture/2bd14b8b-8784-42a8-870b-e28384711e83/repeat_requires_new_decision/harness/b8b6a5d3af0283a6c13cc172/approvals/approval-11ab2fd7-96d7-4215-96b5-a47cde9b41de.json: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.9700104Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-json/repo/approvals/.corrupt/approval-ddf4f00d-7368-44f9-85c3-5b7fd2eafa71.json.1793984958643.82db9613-7420-4f52-9033-d30a254d6cd7.diagnostic.json: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.9706801Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/.corrupt/approval-3469248e-89a8-4200-8960-cb48bb6fb3dd.json.1793984958649.660a1995-8f25-4133-a68d-d562f5a895f1.diagnostic.json: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.9713740Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/lost-sidecar/repo/approvals/.corrupt/approval.tmp.control.json.1793984958653.eeee7104-981b-499b-b0bd-58582e3be255.diagnostic.json.tmp.709.00000000-0000-4000-8000-000000000000: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:16.9914207Z ##[error]error: unable to create file docs/execution/body-roadmap/evidence/B18/post-route/independent-review/sdk-fixture/c347e6c1-522b-4870-8724-d02a9558a360/repeat_requires_new_decision/harness/b8b6a5d3af0283a6c13cc172/approvals/approval-5ac7fa4d-9acb-4a08-bc16-4762d9a260c0.json: Filename too long
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:17.7058969Z Updating files:  75% (3753/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:17.7244925Z Updating files:  76% (3775/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:17.7319802Z Updating files:  77% (3825/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:17.7514328Z Updating files:  78% (3875/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:17.8970394Z Updating files:  79% (3924/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:17.9229688Z Updating files:  80% (3974/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:17.9393830Z Updating files:  81% (4024/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:17.9555901Z Updating files:  82% (4073/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:17.9701388Z Updating files:  83% (4123/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:17.9809158Z Updating files:  84% (4173/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:17.9949839Z Updating files:  85% (4222/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.0070437Z Updating files:  86% (4272/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.0173974Z Updating files:  87% (4322/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.0286458Z Updating files:  88% (4371/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.0400516Z Updating files:  89% (4421/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.0498658Z Updating files:  90% (4471/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.0629824Z Updating files:  91% (4520/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.0758934Z Updating files:  92% (4570/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.0858952Z Updating files:  93% (4620/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.0989469Z Updating files:  94% (4669/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.1122992Z Updating files:  95% (4719/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.1247970Z Updating files:  96% (4769/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.1456637Z Updating files:  97% (4818/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.1614961Z Updating files:  98% (4868/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.3579139Z Updating files:  99% (4918/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4108565Z Updating files:  99% (4959/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4109194Z Updating files: 100% (4967/4967)
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4109643Z Updating files: 100% (4967/4967), done.
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4284342Z Note: switching to 'refs/remotes/pull/93/merge'.
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4284909Z 
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4285198Z You are in 'detached HEAD' state. You can look around, make experimental
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4286081Z changes and commit them, and you can discard any commits you make in this
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4286629Z state without impacting any branches by switching back to a branch.
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4286904Z 
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4287138Z If you want to create a new branch to retain commits you create, you may
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4287879Z do so (now or later) by using -c with the switch command. Example:
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4288301Z 
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4288460Z   git switch -c <new-branch-name>
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4288678Z 
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4288895Z Or undo this operation with:
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4289112Z 
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4289213Z   git switch -
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4289390Z 
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4289638Z Turn off this advice by setting config variable advice.detachedHead to false
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4290031Z 
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4290453Z HEAD is now at a712a32 Merge 0f34d0f7775443552c4b99fad55cccb2c600a298 into 8ca3c62cad180eb041814d757feef3c3d2488198
+build-target-x86_64-pc-windows-msvc	Run actions/checkout@v4	2026-11-07T00:16:18.4553608Z ##[error]The process 'C:\Program Files\Git\bin\git.exe' failed with exit code 1
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	﻿2026-11-07T00:16:18.5009359Z ##[group]Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	2026-11-07T00:16:18.5009940Z with:
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	2026-11-07T00:16:18.5010260Z   name: openbuff-native-x86_64-pc-windows-msvc
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	2026-11-07T00:16:18.5010795Z   path: rust/target/x86_64-pc-windows-msvc/release/openbuff-native*
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	2026-11-07T00:16:18.5011242Z   if-no-files-found: error
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	2026-11-07T00:16:18.5011563Z   compression-level: 6
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	2026-11-07T00:16:18.5011879Z   overwrite: false
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	2026-11-07T00:16:18.5012200Z   include-hidden-files: false
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	2026-11-07T00:16:18.5012544Z ##[endgroup]
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	2026-11-07T00:16:18.7192636Z (node:2936) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	2026-11-07T00:16:18.7193662Z (Use `node --trace-deprecation ...` to show where the warning was created)
+build-target-x86_64-pc-windows-msvc	Upload openbuff-native binary	2026-11-07T00:16:18.7229473Z ##[error]No files were found with the provided path: rust/target/x86_64-pc-windows-msvc/release/openbuff-native*. No artifacts will be uploaded.
