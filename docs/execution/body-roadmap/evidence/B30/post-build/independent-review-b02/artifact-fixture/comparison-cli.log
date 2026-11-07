@@ -1,0 +1,5 @@
+Complete attempt populations: {"before":{"attempts":6,"eligibleScores":4,"totalCost":14,"unknownCostAttempts":0},"after":{"attempts":6,"eligibleScores":4,"totalCost":14,"unknownCostAttempts":0}}
+repeat-agent: Overall Score: 8.00 → 4.75 (-3.25); paired repeats=2
+  Significance: rejected (n < 10; normal approximation unreliable)
+zero-agent: Overall Score: 0.00 → 0.25 (0.25); paired repeats=2
+  Significance: rejected (n < 10; normal approximation unreliable)

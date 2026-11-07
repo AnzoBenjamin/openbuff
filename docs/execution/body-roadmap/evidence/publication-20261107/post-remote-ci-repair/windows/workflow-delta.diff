@@ -1,0 +1,30 @@
+--- a/.github/workflows/rust-workspace.yml
++++ b/.github/workflows/rust-workspace.yml
+@@ -97,6 +97,11 @@
+       run:
+         working-directory: rust
+     steps:
++      - name: Enable long paths on Windows
++        if: runner.os == 'Windows'
++        working-directory: ${{ runner.temp }}
++        run: git config --global core.longpaths true
++
+       - uses: actions/checkout@v4
+ 
+       # Same explicit 1.87.0 pin as build-test; `targets:` installs the target
+@@ -126,13 +131,13 @@
+       # Cross-compiled test binaries cannot execute without emulation, so
+       # `cargo test` runs only where host == target.
+       - run: cargo test --workspace
+-        if: matrix.runs-tests == 'true'
++        if: matrix.runs-tests
+ 
+       # Charter rule 2: the leg that CAN run the binary must smoke-test it.
+       # Only the host-runnable legs set runs-smoke; the path is target-scoped
+       # so each runnable leg smoke-tests its own binary.
+       - name: Smoke test openbuff-native
+-        if: matrix.runs-smoke == 'true'
++        if: matrix.runs-smoke
+         run: ./scripts/smoke-test-sidecar.sh target/${{ matrix.target }}/release/openbuff-native
+ 
+       # Per-target binary artifact (windows leg produces openbuff-native.exe;

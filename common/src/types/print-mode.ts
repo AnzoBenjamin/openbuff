@@ -2,6 +2,11 @@ import z from 'zod/v4'
 
 import { toolResultOutputSchema } from './messages/content-part'
 import { MemoryReuseReceiptV1Schema } from './memory-v2'
+import {
+  actionOutcomeSchema,
+  runOutcomeSchema,
+  taskAcceptanceSchema,
+} from './run-outcome'
 
 export const printModeStartSchema = z.object({
   type: z.literal('start'),
@@ -13,6 +18,8 @@ export type PrintModeStart = z.infer<typeof printModeStartSchema>
 export const printModeErrorSchema = z.object({
   type: z.literal('error'),
   message: z.string(),
+  runOutcome: runOutcomeSchema.optional(),
+  taskAcceptance: taskAcceptanceSchema.optional(),
   // Concise, calm summary for agent-recoverable errors (e.g. a malformed tool
   // call the agent will auto-correct, or a runtime-enforced tool-ordering
   // rejection the agent corrects by reordering). When present, UIs should show
@@ -86,6 +93,7 @@ export const printModeToolResultSchema = z.object({
   toolCallId: z.string(),
   toolName: z.string(),
   output: toolResultOutputSchema.array(),
+  actionOutcome: actionOutcomeSchema.optional(),
   agentId: z.string().optional(),
   parentAgentId: z.string().optional(),
 })
@@ -102,6 +110,9 @@ export const printModeFinishSchema = z.object({
   type: z.literal('finish'),
   agentId: z.string().optional(),
   totalCost: z.number(),
+  runOutcome: runOutcomeSchema.optional(),
+  taskAcceptance: taskAcceptanceSchema.optional(),
+  actionOutcomes: z.array(actionOutcomeSchema).optional(),
 })
 export type PrintModeFinish = z.infer<typeof printModeFinishSchema>
 
@@ -136,6 +147,8 @@ export const printModeSubagentFinishSchema = z.object({
   // Present when the subagent finished due to an error rather than completing
   // normally. Lets the UI distinguish a failed finish from a successful one.
   error: z.string().optional(),
+  runOutcome: runOutcomeSchema.optional(),
+  taskAcceptance: taskAcceptanceSchema.optional(),
 })
 export type PrintModeSubagentFinish = z.infer<
   typeof printModeSubagentFinishSchema

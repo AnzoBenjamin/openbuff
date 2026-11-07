@@ -1,0 +1,39 @@
+{
+  "content": [
+    {
+      "text": "# Second chapter\n\nThe second chapter requires fresh navigation observations.",
+      "type": "text"
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "exitCode": 0,
+    "response": {
+      "data": {
+        "content": "# Second chapter\n\nThe second chapter requires fresh navigation observations.",
+        "contentType": "text/html",
+        "finalUrl": "http://127.0.0.1:33085/second",
+        "lifecycle": {
+          "effectiveLaunch": {
+            "browserLaunched": true,
+            "engine": "chrome",
+            "launchHash": 14350354030887980356
+          },
+          "launched": false,
+          "relaunchedBrowser": false,
+          "restartedBackground": false,
+          "restoreStatus": "not_configured",
+          "reused": false,
+          "saveStatus": "not_attempted"
+        },
+        "source": "active-tab-html",
+        "truncated": false,
+        "url": "http://127.0.0.1:33085/second"
+      },
+      "error": null,
+      "success": true
+    },
+    "stderr": "",
+    "stdout": "{\"success\":true,\"data\":{\"content\":\"# Second chapter\\n\\nThe second chapter requires fresh navigation observations.\",\"contentType\":\"text/html\",\"finalUrl\":\"http://127.0.0.1:33085/second\",\"lifecycle\":{\"effectiveLaunch\":{\"browserLaunched\":true,\"engine\":\"chrome\",\"launchHash\":14350354030887980356},\"launched\":false,\"relaunchedBrowser\":false,\"restartedBackground\":false,\"restoreStatus\":\"not_configured\",\"reused\":false,\"saveStatus\":\"not_attempted\"},\"source\":\"active-tab-html\",\"truncated\":false,\"url\":\"http://127.0.0.1:33085/second\"},\"error\":null}\n"
+  }
+}

@@ -1,0 +1,242 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
+import * as ai from '/home/ben/Code/CLI/openbuff/node_modules/ai/dist/index.mjs'
+import * as credentials from '/home/ben/Code/CLI/openbuff/sdk/src/credentials.ts'
+import { promptAiSdkStream } from '/home/ben/Code/CLI/openbuff/sdk/src/impl/llm.ts'
+import { getModelForRequest, resolveModelContextWindow } from '/home/ben/Code/CLI/openbuff/sdk/src/impl/model-provider.ts'
+import { clearProviderConfigCacheForTest, loadProviderConfigSync } from '/home/ben/Code/CLI/openbuff/sdk/src/provider-config.ts'
+import { createProviderContentPolicyError, getErrorStatusCode } from '/home/ben/Code/CLI/openbuff/sdk/src/error-utils.ts'
+import * as retry from '/home/ben/Code/CLI/openbuff/sdk/src/retry-config.ts'
+
+// Offline behavior probes. Every provider config is synthesized here and every
+// network seam is replaced. These pin CURRENT behavior, not desired acceptance.
+// No credential files, environment values, or external endpoints are read.
+const observations: Record<string, unknown>[] = []
+const logger = { debug() {}, info() {}, warn() {}, error() {} }
+let fixtureDir: string
+const restore: (() => void)[] = []
+
+beforeEach(() => {
+  fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-audit-02-'))
+  process.env.OPENBUFF_PROVIDER_CONFIG = path.join(fixtureDir, 'openbuff.json')
+  delete process.env.OPENBUFF_AUDIT_02_MISSING_KEY
+  clearProviderConfigCacheForTest()
+})
+
+afterEach(() => {
+  for (const undo of restore.splice(0).reverse()) undo()
+  delete process.env.OPENBUFF_PROVIDER_CONFIG
+  delete process.env.OPENBUFF_AUDIT_02_MISSING_KEY
+  clearProviderConfigCacheForTest()
+  fs.rmSync(fixtureDir, { recursive: true, force: true })
+})
+
+afterAll(() => {
+  fs.writeFileSync('/tmp/openbuff-body-review-2026-11-05/evidence/02-providers-probes.json', JSON.stringify({
+    kind: 'offline-current-behavior-probes',
+    noExternalApiCalls: true,
+    noPrivateConfigOrCredentialReads: true,
+    observations,
+  }, null, 2) + '\n')
+})
+
+function config(overrides: Record<string, unknown> = {}, providerOverrides: Record<string, unknown> = {}) {
+  fs.writeFileSync(process.env.OPENBUFF_PROVIDER_CONFIG!, JSON.stringify({
+    defaultModel: 'local/primary',
+    providers: {
+      local: {
+        type: 'openai-compatible',
+        baseURL: 'http://127.0.0.1:11434/v1',
+        models: ['primary', 'backup'],
+        defaultCapabilities: { context: { windowTokens: 200000 } },
+        ...providerOverrides,
+      },
+    },
+    ...overrides,
+  }))
+  clearProviderConfigCacheForTest()
+}
+
+function params(extra: Record<string, unknown> = {}) {
+  return {
+    apiKey: 'offline-audit-fixture', runId: 'audit-02',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'Offline probe' }] }],
+    clientSessionId: 'audit-02', fingerprintId: 'audit-02',
+    userInputId: 'audit-02', userId: undefined, agentId: 'base2',
+    logger, trackEvent() {}, sendAction() {}, onError() {},
+    signal: new AbortController().signal,
+    // This is the actual caller value in prompt-agent-stream.ts:95.
+    maxRetries: 3,
+    ...extra,
+  } as never
+}
+
+function sse(events: unknown[]) {
+  return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n', {
+    headers: { 'content-type': 'text/event-stream' },
+  })
+}
+
+function installFetch(implementation: (...args: any[]) => Promise<Response>) {
+  const previous = globalThis.fetch
+  globalThis.fetch = implementation as typeof fetch
+  restore.push(() => { globalThis.fetch = previous })
+}
+
+async function drain(extra: Record<string, unknown> = {}) {
+  const chunks: any[] = []
+  try {
+    for await (const chunk of promptAiSdkStream(params(extra))) chunks.push(chunk)
+    return { chunks, error: undefined }
+  } catch (error) {
+    return { chunks, error }
+  }
+}
+
+const nativeTools = {
+  noop: ai.tool({
+    description: 'An offline no-op tool used for transport inspection',
+    inputSchema: ai.jsonSchema({ type: 'object', properties: {}, additionalProperties: false }),
+  }),
+}
+const pricing = { inputPerMillionTokens: 3, outputPerMillionTokens: 15 }
+const usage = { prompt_tokens: 20000, completion_tokens: 10000, total_tokens: 30000 }
+
+test('production configured adapter cuts off late tool-turn usage and reports zero cost', async () => {
+  config({}, { compatibility: { stripProviderMetadata: false }, defaultCapabilities: { context: { windowTokens: 200000 }, pricing } })
+  let request: any
+  installFetch(async (_url, init) => {
+    request = JSON.parse(init.body)
+    return sse([
+      { id: 'offline', choices: [{ delta: { tool_calls: [{ index: 0, id: 'call-1', function: { name: 'noop', arguments: '{}' } }] }, finish_reason: null }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
+      { choices: [], usage },
+    ])
+  })
+  const costs: number[] = []
+  const observedUsage: any[] = []
+  const result = await drain({ tools: nativeTools, onCostCalculated: async (n: number) => { costs.push(n) }, onCacheDebugUsageReceived: (u: unknown) => observedUsage.push(u) })
+  expect(result.error).toBeUndefined()
+  expect(request.stream_options).toBeUndefined()
+  expect(result.chunks.filter(chunk => chunk.type === 'tool-call')).toHaveLength(1)
+  expect(costs).toEqual([0])
+  expect(observedUsage[0]?.inputTokens).toBe(0)
+  observations.push({ id: 'late-tool-usage', assurance: 'real SDK stream + production configured model + injected HTTP/SSE', requestIncludesUsage: Boolean(request.stream_options?.include_usage), observedCostCents: costs, observedUsage, offeredProviderUsage: usage, expectedConfiguredCostCents: 21, toolCallsDelivered: 1 })
+})
+
+test('stripProviderMetadata suppresses cost even when real streaming usage is available', async () => {
+  config({}, { compatibility: { stripProviderMetadata: true }, defaultCapabilities: { context: { windowTokens: 200000 }, pricing } })
+  installFetch(async () => sse([{ id: 'offline', choices: [{ delta: { content: 'hello' }, finish_reason: null }] }, { choices: [{ delta: {}, finish_reason: 'stop' }], usage }]))
+  const costs: number[] = []
+  const observedUsage: any[] = []
+  const result = await drain({ onCostCalculated: async (n: number) => { costs.push(n) }, onCacheDebugUsageReceived: (u: unknown) => observedUsage.push(u) })
+  expect(result.error).toBeUndefined()
+  expect(observedUsage[0]?.inputTokens).toBe(20000)
+  expect(costs).toEqual([])
+  observations.push({ id: 'strip-provider-metadata-cost-gate', assurance: 'real SDK stream + production configured model + injected HTTP/SSE', observedCostCents: costs, observedUsage, expectedConfiguredCostCents: 21 })
+})
+
+test('initial HTTP 503 retries inside AI SDK but its wrapper prevents configured failover', async () => {
+  config({ failoverModels: ['local/backup'] })
+  const requests: string[] = []
+  installFetch(async (_url, init) => {
+    const model = JSON.parse(init.body).model
+    requests.push(model)
+    return model === 'primary'
+      ? new Response(JSON.stringify({ error: { message: 'Provider unavailable' } }), { status: 503, headers: { 'content-type': 'application/json', 'retry-after': '0' } })
+      : sse([{ choices: [{ delta: { content: 'backup' }, finish_reason: 'stop' }] }])
+  })
+  const result = await drain()
+  expect(requests).toEqual(['primary', 'primary', 'primary', 'primary'])
+  expect((result.error as any)?.name).toBe('AI_RetryError')
+  expect(getErrorStatusCode(result.error)).toBeUndefined()
+  expect((result.error as any)?.lastError?.statusCode).toBe(503)
+  observations.push({ id: 'http-retry-wrapper-disables-failover', assurance: 'real SDK stream + production configured model + injected HTTP', requests, finalErrorName: (result.error as any)?.name, classifierStatus: getErrorStatusCode(result.error) ?? null, wrappedLastErrorStatus: (result.error as any)?.lastError?.statusCode, backupCalls: requests.filter(model => model === 'backup').length })
+})
+
+test('provider SSE error status is reduced to message text and never retries or fails over', async () => {
+  config({ failoverModels: ['local/backup'] })
+  const requests: string[] = []
+  installFetch(async (_url, init) => {
+    requests.push(JSON.parse(init.body).model)
+    return sse([{ error: { message: 'Upstream provider failure', code: 'upstream_error', status: '503' } }])
+  })
+  const result = await drain({ maxRetries: 0 })
+  expect(requests).toEqual(['primary'])
+  expect((result.error as any)?.name).toBe('OpenAICompatibleStreamError')
+  expect(getErrorStatusCode(result.error)).toBeUndefined()
+  observations.push({ id: 'sse-status-loss', assurance: 'real SDK stream + production configured model + injected SSE', requests, providerStatus: '503', finalErrorName: (result.error as any)?.name, classifierStatus: getErrorStatusCode(result.error) ?? null, finalMessage: (result.error as any)?.message })
+})
+
+test('an uncredentialed backup prevents a valid primary before provider dispatch', async () => {
+  config({
+    failoverModels: ['backup/emergency'],
+    providers: {
+      local: { type: 'openai-compatible', baseURL: 'http://127.0.0.1:11434/v1', models: ['primary'], defaultCapabilities: { context: { windowTokens: 200000 } } },
+      backup: { type: 'openai-compatible', baseURL: 'https://example.test/v1', apiKeyEnv: 'OPENBUFF_AUDIT_02_MISSING_KEY', models: ['emergency'], defaultCapabilities: { context: { windowTokens: 32000 } } },
+    },
+  })
+  const primary = await getModelForRequest({ apiKey: 'offline-audit-fixture', agentId: 'base2' })
+  expect(primary.effectiveModel).toBe('local/primary')
+  expect(() => resolveModelContextWindow({ agentId: 'base2' })).toThrow('OPENBUFF_AUDIT_02_MISSING_KEY')
+  let fetchCalls = 0
+  installFetch(async () => { fetchCalls++; throw new Error('Unexpected dispatch') })
+  const result = await drain()
+  expect(fetchCalls).toBe(0)
+  expect((result.error as any)?.message).toContain('OPENBUFF_AUDIT_02_MISSING_KEY')
+  observations.push({ id: 'context-preflight-backup-credential-coupling', assurance: 'real routing/context resolver + real SDK stream + injected HTTP guard', primaryRoutable: primary.effectiveModel, fetchCalls, finalMessage: (result.error as any)?.message })
+})
+
+test('configured reasoning effort is selected but omitted from custom provider wire options', async () => {
+  config({ defaultReasoningEffort: 'high' }, { defaultCapabilities: { context: { windowTokens: 200000 }, reasoning: { supported: true, efforts: ['low', 'medium', 'high'] } } })
+  const selected = await getModelForRequest({ apiKey: 'offline-audit-fixture', agentId: 'base2' })
+  let request: any
+  installFetch(async (_url, init) => { request = JSON.parse(init.body); return sse([{ choices: [{ delta: { content: 'hello' }, finish_reason: 'stop' }] }]) })
+  const result = await drain()
+  expect(result.error).toBeUndefined()
+  expect(selected.reasoningEffort).toBe('high')
+  expect(request.reasoning_effort).toBeUndefined()
+  observations.push({ id: 'reasoning-provider-options-namespace', assurance: 'real routing + real SDK stream + production configured model + injected HTTP', providerId: 'local', selectedReasoningEffort: selected.reasoningEffort, wireReasoningEffort: request.reasoning_effort ?? null })
+})
+
+test('explicit OAuth provider selection ignores the skip flag used by fallback', async () => {
+  config({ defaultModel: 'codex/gpt-5.5', providers: { codex: { type: 'chatgpt-oauth', models: ['gpt-5.5'] } } })
+  const credentialSpy = spyOn(credentials, 'getValidChatGptOAuthCredentials').mockResolvedValue({ accessToken: 'offline-audit-fake-token' } as never)
+  restore.push(() => credentialSpy.mockRestore())
+  const selected = await getModelForRequest({ apiKey: 'offline-audit-fixture', agentId: 'base2', skipChatGptOAuth: true })
+  expect(selected.isChatGptOAuth).toBe(true)
+  expect(credentialSpy).toHaveBeenCalledTimes(1)
+  observations.push({ id: 'configured-oauth-ignores-skip', assurance: 'real model resolver + injected credential function, no credential reads or HTTP', skipChatGptOAuth: true, selectedOAuth: selected.isChatGptOAuth, selectedModel: selected.effectiveModel })
+})
+
+test('streaming retry loop retries deterministic policy errors with a preserved 503 status', async () => {
+  config()
+  let streamCalls = 0
+  const policyError = createProviderContentPolicyError({ statusCode: 503 })
+  const streamSpy = spyOn(ai, 'streamText').mockImplementation((() => {
+    streamCalls++
+    async function* fullStream() { throw policyError }
+    return { fullStream: fullStream(), finishReason: Promise.resolve('unknown'), response: Promise.resolve({ id: 'offline' }), providerMetadata: Promise.resolve({}), usage: Promise.resolve({}), request: Promise.resolve({}) } as never
+  }) as typeof ai.streamText)
+  const backoffSpy = spyOn(retry, 'waitForBackoffDelay').mockResolvedValue(undefined)
+  restore.push(() => streamSpy.mockRestore(), () => backoffSpy.mockRestore())
+  const result = await drain()
+  expect(result.error).toBe(policyError)
+  expect(retry.classifyRetryableError(policyError)).toEqual({ retryable: false })
+  expect(streamCalls).toBe(4)
+  observations.push({ id: 'stream-loop-bypasses-shared-retry-classifier', assurance: 'real SDK stream loop + injected stream/error + injected wait', sharedClassifier: retry.classifyRetryableError(policyError), streamCalls, backoffCalls: backoffSpy.mock.calls.length, expectedPolicyCalls: 1 })
+})
+
+test('tools capability metadata is advisory while provider compatibility controls the wire', async () => {
+  config({}, { modelCapabilities: { primary: { tools: { supported: false } } } })
+  const loaded = loadProviderConfigSync()
+  const selected = await getModelForRequest({ apiKey: 'offline-audit-fixture', agentId: 'base2' })
+  let request: any
+  installFetch(async (_url, init) => { request = JSON.parse(init.body); return sse([{ choices: [{ delta: { content: 'hello' }, finish_reason: 'stop' }] }]) })
+  const result = await drain({ tools: nativeTools })
+  expect(result.error).toBeUndefined()
+  expect(request.tools).toHaveLength(1)
+  observations.push({ id: 'advisory-tools-metadata', assurance: 'real routing + real SDK stream + production configured model + injected HTTP', declaredModelToolsSupported: loaded.config.providers.local.modelCapabilities?.primary?.tools?.supported, actualProviderSupportsTools: selected.compatibility.supportsTools, wireHasNativeTools: request.tools.length > 0, assessment: 'Capability metadata is not per-model transport negotiation; provider-level compatibility.supportsTools is the actual control. Record as completeness limit rather than assuming a security vulnerability.' })
+})

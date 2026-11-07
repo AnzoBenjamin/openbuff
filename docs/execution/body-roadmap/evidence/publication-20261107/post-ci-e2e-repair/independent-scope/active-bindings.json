@@ -1,0 +1,262 @@
+{
+  "schemaVersion": 1,
+  "type": "read-only-active-ledger-e2e-binding-scope",
+  "recordedAt": "2026-11-06T23:51:05.183160+00:00",
+  "ledgerSha256": "64bdc49206f2e3efad0393dad82048134c4403e43bef8bdb26696251bbf7b07b",
+  "validatorSha256": "6aa69375eeeae93f4850a6a068e1c17d39ba08b7a7b4d14c8ebe10e552d36c4c",
+  "method": "Run exact frozen validate() with SHA-256 wrapper that records existing call arguments and delegates every digest unchanged; no source or evidence mutation.",
+  "proposedFiles": [
+    "agents/e2e/gate-aux-ordering.e2e.test.ts",
+    "agents/e2e/gate-lifecycle.e2e.test.ts"
+  ],
+  "sourceBefore": {
+    "agents/e2e/base-deep.e2e.test.ts": "bdf8d7041f30ace92a88aa5d2f90d61e10b6fde34177c93b592899be7ee4e171",
+    "agents/e2e/context-pruner.e2e.test.ts": "f88560c9b60bed359c0143b5b1394006c2c054bbbe97ecefa1f66c842b806823",
+    "agents/e2e/context-pruning-threshold.e2e.test.ts": "81dc9941d0d2d46570022b48cee842d83ffba34f58fe8b3932f54ded884003d1",
+    "agents/e2e/editor-orchestrator-contract.e2e.test.ts": "d3a57242c423ef3251936d54e8e01439850f6cc0f8ec376da1a9d5f00c6b2b9a",
+    "agents/e2e/file-explorer.e2e.test.ts": "b7ac93cac7f1fd2e1d38334ffaf483c473b9e1e5cb7b1a97a1f78c2238d8c48b",
+    "agents/e2e/gate-aux-ordering.e2e.test.ts": "16a901871944e07a96e4e17f122235ac040cc29b111f9670a5a3f018ddeb6a48",
+    "agents/e2e/gate-lifecycle.e2e.test.ts": "7c83fcf146c578c840f1e7b6cc1485c24d871f6f687c792132a280570916dc32",
+    "agents/e2e/helpers/pruning-test-helpers.ts": "273f0520c599e25ab49c50e94ec8102aa6addab0c532dd0b84f5204d09382a07",
+    "agents/e2e/reviewer-spawn-conditions.e2e.test.ts": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07"
+  },
+  "sourceAfter": {
+    "agents/e2e/base-deep.e2e.test.ts": "bdf8d7041f30ace92a88aa5d2f90d61e10b6fde34177c93b592899be7ee4e171",
+    "agents/e2e/context-pruner.e2e.test.ts": "f88560c9b60bed359c0143b5b1394006c2c054bbbe97ecefa1f66c842b806823",
+    "agents/e2e/context-pruning-threshold.e2e.test.ts": "81dc9941d0d2d46570022b48cee842d83ffba34f58fe8b3932f54ded884003d1",
+    "agents/e2e/editor-orchestrator-contract.e2e.test.ts": "d3a57242c423ef3251936d54e8e01439850f6cc0f8ec376da1a9d5f00c6b2b9a",
+    "agents/e2e/file-explorer.e2e.test.ts": "b7ac93cac7f1fd2e1d38334ffaf483c473b9e1e5cb7b1a97a1f78c2238d8c48b",
+    "agents/e2e/gate-aux-ordering.e2e.test.ts": "16a901871944e07a96e4e17f122235ac040cc29b111f9670a5a3f018ddeb6a48",
+    "agents/e2e/gate-lifecycle.e2e.test.ts": "7c83fcf146c578c840f1e7b6cc1485c24d871f6f687c792132a280570916dc32",
+    "agents/e2e/helpers/pruning-test-helpers.ts": "273f0520c599e25ab49c50e94ec8102aa6addab0c532dd0b84f5204d09382a07",
+    "agents/e2e/reviewer-spawn-conditions.e2e.test.ts": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07"
+  },
+  "sourceStable": true,
+  "allE2eFilesScanned": [
+    "agents/e2e/base-deep.e2e.test.ts",
+    "agents/e2e/context-pruner.e2e.test.ts",
+    "agents/e2e/context-pruning-threshold.e2e.test.ts",
+    "agents/e2e/editor-orchestrator-contract.e2e.test.ts",
+    "agents/e2e/file-explorer.e2e.test.ts",
+    "agents/e2e/gate-aux-ordering.e2e.test.ts",
+    "agents/e2e/gate-lifecycle.e2e.test.ts",
+    "agents/e2e/helpers/pruning-test-helpers.ts",
+    "agents/e2e/reviewer-spawn-conditions.e2e.test.ts"
+  ],
+  "actualFileBindingHashCalls": 57020,
+  "e2eFileBindingCalls": [
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original after input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized after input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original after input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized after input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original after input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized after input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original after input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized after input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original after input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized after input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized before input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command original after input"
+    },
+    {
+      "path": "agents/e2e/reviewer-spawn-conditions.e2e.test.ts",
+      "actualSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "expectedSha256": "f4f3af72e01f0fd56f94109ef4596d4d0f2d31058dd250ca0a234676d051ef07",
+      "label": "B01 command normalized after input"
+    }
+  ],
+  "proposedFileBindingCalls": [],
+  "directAcceptedSourceContracts": [],
+  "historicalInventoryMembership": {
+    "agents/e2e/gate-aux-ordering.e2e.test.ts": false,
+    "agents/e2e/gate-lifecycle.e2e.test.ts": false
+  },
+  "validation": {
+    "schemaVersion": 1,
+    "valid": true,
+    "scope": "plan/ledger/evidence consistency; no product or unavailable-platform assurance is inferred",
+    "cardCount": 36,
+    "nodeCount": 39,
+    "accepted": [
+      "B01",
+      "B02",
+      "B03",
+      "B04",
+      "B08",
+      "B18",
+      "B30",
+      "B36"
+    ],
+    "remaining": [
+      "B05",
+      "B06",
+      "B07",
+      "B09",
+      "B10",
+      "B11",
+      "B12",
+      "B13",
+      "B14",
+      "B15",
+      "B16",
+      "B17",
+      "B19",
+      "B20",
+      "B21",
+      "B22",
+      "B23",
+      "B24",
+      "B25",
+      "B26",
+      "B27",
+      "B28",
+      "B29",
+      "B31",
+      "B32",
+      "B33",
+      "B34",
+      "B35",
+      "M22-CORE",
+      "M22-TXN",
+      "M22-CHILD"
+    ],
+    "ready": [
+      "B05",
+      "B09",
+      "B10",
+      "B11",
+      "B12",
+      "B15",
+      "B19",
+      "B23",
+      "B28",
+      "B32"
+    ],
+    "errors": []
+  }
+}

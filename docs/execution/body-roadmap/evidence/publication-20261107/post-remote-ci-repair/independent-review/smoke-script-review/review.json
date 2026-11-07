@@ -1,0 +1,477 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-smoke-script-supplement-review",
+  "recordedAt": "2026-11-07T00:42:08.382760+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "implementationOwner": "/root/b02_runtime_outcomes",
+  "decision": "approve-smoke-script-mode-and-placeholder-correction",
+  "scope": "One unbound smoke script executable-bit and obsolete placeholder probe repair; local Linux ordinary CLI/placeholder validation only. No Rust implementation, Windows/Darwin, payload/enforcement, new card acceptance or publication approval.",
+  "source": {
+    "path": "rust/scripts/smoke-test-sidecar.sh",
+    "sha256": "4e14f7277fff234942723c0c22399b8f66bf24b098c1797d6eb3341524f0ee81",
+    "bytes": 1800
+  },
+  "filesystemMode": "0755",
+  "expectedGitMode": "100755",
+  "indexMustBeVerifiedByRootAtStaging": true,
+  "implementationSeal": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/repair-seal.json",
+    "sha256": "9a7809628b681ed9f29100f973d8b42f19d87b60eff35594fb6a70e0339c2f08",
+    "bytes": 8602
+  },
+  "matchingHostBuild": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/host-build-current-source.json",
+    "sha256": "6cd6648fe64c4f3d284617df08dc6c76bc30b0d65776c713524dfa380ac9facb"
+  },
+  "binary": {
+    "path": "rust/target/debug/openbuff-native",
+    "sha256": "4ca44c15aa884cd4f936d9ddd35ecbd89d24fd99df9be5b8481dc06a3ccaaacd"
+  },
+  "rustToolchain": {
+    "cargo": {
+      "path": "/home/ben/.rustup/toolchains/1.87.0-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "a9fb5ef0f95be70b324f3e88a4621a566320e2eb00635dc37f8a98e0a9fb7c9a"
+    },
+    "rustc": {
+      "path": "/home/ben/.rustup/toolchains/1.87.0-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "9aac770e110f2b2cf1a38e40c9da8268139bae1fcf88d5d152889d199a514a73"
+    },
+    "pinnedVersion": "1.87.0"
+  },
+  "currentControls": [
+    {
+      "receipt": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/shell-syntax.json",
+        "sha256": "eb1f7c825d46746dacbc1e2a0f5cc3fb31a9926db11ec28a18960622fbc0ecad"
+      },
+      "argv": [
+        "/usr/bin/bash",
+        "-n",
+        "/home/ben/Code/CLI/openbuff/rust/scripts/smoke-test-sidecar.sh"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff/rust",
+      "exitCode": 0,
+      "currentStableInputCount": 18
+    },
+    {
+      "receipt": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/daemon-placeholder.json",
+        "sha256": "85e4afc657b7c7e6c186f06259229731fda62ab1a6fceb5b57e2e5458606cbe0"
+      },
+      "argv": [
+        "/home/ben/Code/CLI/openbuff/rust/target/debug/openbuff-native",
+        "daemon"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff/rust",
+      "exitCode": 2,
+      "currentStableInputCount": 18
+    },
+    {
+      "receipt": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/direct-corrected-smoke.json",
+        "sha256": "1ff256d9dca22714787c8220c6ac48783b0f907d179cdf44f2d2f5957b186b76"
+      },
+      "argv": [
+        "/home/ben/Code/CLI/openbuff/rust/scripts/smoke-test-sidecar.sh",
+        "/home/ben/Code/CLI/openbuff/rust/target/debug/openbuff-native"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff/rust",
+      "exitCode": 0,
+      "currentStableInputCount": 18
+    },
+    {
+      "receipt": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check-corrected.json",
+        "sha256": "4d894e3105076d81b3939aca142eae2c2cb3b8a487382938f221fcad05eba8ca"
+      },
+      "argv": [
+        "git",
+        "diff",
+        "--check",
+        "--",
+        "rust/scripts/smoke-test-sidecar.sh"
+      ],
+      "cwd": "/home/ben/Code/CLI/openbuff",
+      "exitCode": 0,
+      "currentStableInputCount": 3
+    }
+  ],
+  "preservedNegativeControls": [
+    {
+      "receipt": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-exec-placeholder.json",
+        "sha256": "104192e7c8afd6c0ab0d392e722bb08a009098dce69e7bb6e457efcd313ce8ef",
+        "bytes": 7082
+      },
+      "exitCode": 1,
+      "expectedExitCode": 2,
+      "stdout": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-exec-placeholder.stdout.log",
+        "sha256": "4ba8c9fdea9219cce1f5e55188a94bc565139c0ef72fce5bd8380978f93e3f3f"
+      },
+      "stderr": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-exec-placeholder.stderr.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "receipt": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/direct-script-smoke.json",
+        "sha256": "2319c7d602aac0342bcb70554d7909a239caddb20e662db8a57f076f7f93b9fc",
+        "bytes": 7128
+      },
+      "exitCode": 1,
+      "expectedExitCode": 0,
+      "stdout": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/direct-script-smoke.stdout.log",
+        "sha256": "e2d1311aaaa474ce635195043fc2b5f44702c2bd7dd0aa1bdfb272e99c9e4b0d"
+      },
+      "stderr": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/direct-script-smoke.stderr.log",
+        "sha256": "845a184d60625ffa9140c1ab7ae975ff09df92db84dafcd62cd657098b0cc626"
+      }
+    }
+  ],
+  "preservedMisScopedWhitespaceControl": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check.json",
+    "sha256": "f15cbc6121096e6eb0cbcc9aa26621764575e5dd090c3981f0a33de5ae15e3b3"
+  },
+  "findings": [],
+  "observations": [
+    "Direct executable invocation is supported by0755; script bytes bind the approved daemon-placeholder correction.",
+    "Version and unknown-role checks remain byte-identical. Only comments, selected placeholder role and related failure labels change.",
+    "Current Rust dispatch sends exec to the implemented initialization path and daemon to NotImplemented; this supports the corrected category without exercising exec payloads.",
+    "Corrected direct-script command passes on the same pinned current-source Linux binary; daemon emits exact structured not_implemented JSON with exit2.",
+    "The old exec EOF failure/direct-script failure and mis-scoped whitespace receipt remain historical without positive credit.",
+    "Settled workflow and all193 typecheck input hashes remain current; no typecheck renewal is caused by this unbound script."
+  ],
+  "bindings": [
+    {
+      "path": ".github/workflows/rust-workspace.yml",
+      "sha256": "0b971a487ab44dd0df8e2080d7ab6ab8bfd4f248918655fa9f9803e2f76095f3",
+      "bytes": 5926
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-review/smoke-mode-scope/scope.json",
+      "sha256": "8fdea3ce0346cbc04d27d63badf90880964cd93ce51d89aaba91655669393295",
+      "bytes": 4469
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/repair-seal.json",
+      "sha256": "6f4a92570328cef03eab7e86c73630de7e81e69a02c334542da4bcd3dbec2c29",
+      "bytes": 4947
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/REPORT.md",
+      "sha256": "d1af62d7dfdb2936402d3340b1f918ff65ab38a7c74e5dd2ba478263ddcb19f2",
+      "bytes": 2751
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/before.json",
+      "sha256": "4123c2ff9ad5009029440d1061eb80bc7dcb4580832791136ea2402a35e95fae",
+      "bytes": 716
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-exec-placeholder.json",
+      "sha256": "104192e7c8afd6c0ab0d392e722bb08a009098dce69e7bb6e457efcd313ce8ef",
+      "bytes": 7082
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-exec-placeholder.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-exec-placeholder.stdout.log",
+      "sha256": "4ba8c9fdea9219cce1f5e55188a94bc565139c0ef72fce5bd8380978f93e3f3f",
+      "bytes": 50
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-unknown-role.json",
+      "sha256": "5f8aed99935f94ed1a67e959af554f873d4b099d34c700a37a31a9ce786c33a1",
+      "bytes": 7075
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-unknown-role.stderr.log",
+      "sha256": "30bef915a94a79542b2ca184a475489ac370ba0d414c1013e82c552296109437",
+      "bytes": 325
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-unknown-role.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-version.json",
+      "sha256": "534323c12335e366828b26be54704a7acfa3be276d23b81b1c68bf41366d0e68",
+      "bytes": 7057
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-version.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-version.stdout.log",
+      "sha256": "7bc1bde5fd2030be4c6942f2aa0277a794e40aa8a3c7cef8c95411822e534ce6",
+      "bytes": 49
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/direct-script-smoke.json",
+      "sha256": "2319c7d602aac0342bcb70554d7909a239caddb20e662db8a57f076f7f93b9fc",
+      "bytes": 7128
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/direct-script-smoke.stderr.log",
+      "sha256": "845a184d60625ffa9140c1ab7ae975ff09df92db84dafcd62cd657098b0cc626",
+      "bytes": 35
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/direct-script-smoke.stdout.log",
+      "sha256": "e2d1311aaaa474ce635195043fc2b5f44702c2bd7dd0aa1bdfb272e99c9e4b0d",
+      "bytes": 98
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/git-mode-diff.log",
+      "sha256": "309ea6cfec1b8885447355ed575ff018160fdeb1496333da05e20118a5f40776",
+      "bytes": 65
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/host-build-current-source.json",
+      "sha256": "6cd6648fe64c4f3d284617df08dc6c76bc30b0d65776c713524dfa380ac9facb",
+      "bytes": 7149
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/host-build-current-source.stderr.log",
+      "sha256": "4cf86278c1e6d659943a46a3d7e3da429ac15be90f0f17742e24ef85228e7d3e",
+      "bytes": 72
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/host-build-current-source.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/repair-seal.json",
+      "sha256": "5f4aa5efd4a1d73f182f1a5692f04d08c0f258b0758fc7042e6e0b566ed49193",
+      "bytes": 9020
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/run-results.json",
+      "sha256": "deaa65bb19963157486fcb7529d00a11810c73da85420156c109396f2a73867b",
+      "bytes": 2485
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/run.py",
+      "sha256": "f95e15db827f70772e927c97e1a79e57d0888248f74b5b10c200c5f4929c8fb2",
+      "bytes": 6579
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/rustc-version.json",
+      "sha256": "6f03eef769658acd95e7952c509b75b3ccfb52b7abc1f244508d39b8a6af4012",
+      "bytes": 7082
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/rustc-version.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/rustc-version.stdout.log",
+      "sha256": "3915fd9cc4c77ac31faa34ec6e4858aa939c550c98cd626c605daae3d23a86ea",
+      "bytes": 196
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/REPORT.md",
+      "sha256": "a89cd4bd6bafa678572b0120a19d049670f9387a3839ae01d75212de07fe9832",
+      "bytes": 2404
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/daemon-placeholder.json",
+      "sha256": "85e4afc657b7c7e6c186f06259229731fda62ab1a6fceb5b57e2e5458606cbe0",
+      "bytes": 7575
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/daemon-placeholder.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/daemon-placeholder.stdout.log",
+      "sha256": "e342eba4983ef5f413cf61859333ab39c71635afe43de30aca889d864365c63f",
+      "bytes": 55
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/direct-corrected-smoke.json",
+      "sha256": "1ff256d9dca22714787c8220c6ac48783b0f907d179cdf44f2d2f5957b186b76",
+      "bytes": 7643
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/direct-corrected-smoke.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/direct-corrected-smoke.stdout.log",
+      "sha256": "7b2f72a35275e51d9c70c437d1bd91cd89c3bd5e1a0f3027aeef00b96ac0c880",
+      "bytes": 222
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check-corrected.json",
+      "sha256": "4d894e3105076d81b3939aca142eae2c2cb3b8a487382938f221fcad05eba8ca",
+      "bytes": 2606
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check-corrected.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check-corrected.py",
+      "sha256": "cf1ba4eba70e2e64cc98f07628df99479da88bd57d8f0da1f5871ce49492a2cc",
+      "bytes": 2313
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check.json",
+      "sha256": "f15cbc6121096e6eb0cbcc9aa26621764575e5dd090c3981f0a33de5ae15e3b3",
+      "bytes": 7570
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/git-diff-check.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/repair-seal.json",
+      "sha256": "9a7809628b681ed9f29100f973d8b42f19d87b60eff35594fb6a70e0339c2f08",
+      "bytes": 8602
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/run-results.json",
+      "sha256": "a32ad9c9bd29a274fe9cad727d0ea39de695eed6d3201d8f0e13ff445dd011b9",
+      "bytes": 3938
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/run.py",
+      "sha256": "be7ea5459dd2acc8e77355d25dea1068d76daca44e6919960e010033a270ef61",
+      "bytes": 5744
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/script-delta.diff",
+      "sha256": "06a355128a25e427b60d654a6dd83898988c83e98e027bfa26b030aa1e8f916e",
+      "bytes": 1024
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/seal.py",
+      "sha256": "1d933812aa1704bb5dc990c904cebb77a490edb8fa58d43027a952dae0ac5985",
+      "bytes": 2961
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/shell-syntax.json",
+      "sha256": "eb1f7c825d46746dacbc1e2a0f5cc3fb31a9926db11ec28a18960622fbc0ecad",
+      "bytes": 7575
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/shell-syntax.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/shell-syntax.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/script-repair/smoke-test-sidecar.before.sh",
+      "sha256": "3928fef2828a7ab4434431c7fee7ccf82afba0a2d43891e3867982b88cdcb96f",
+      "bytes": 1711
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/seal.py",
+      "sha256": "af6baaba65ba14402fa4e1c03f88ffdd41c34d9a961fce8c666d160dfeccf26d",
+      "bytes": 3184
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/smoke-test-sidecar.before.sh",
+      "sha256": "3928fef2828a7ab4434431c7fee7ccf82afba0a2d43891e3867982b88cdcb96f",
+      "bytes": 1711
+    },
+    {
+      "path": "rust/Cargo.lock",
+      "sha256": "8eb91d4eb3bc1bbbed06a422dfbe2367e0d5dd39207faf3e4f555bb6a63201a7",
+      "bytes": 4469
+    },
+    {
+      "path": "rust/Cargo.toml",
+      "sha256": "5804b3a9ffbae3693d2ccb84f7b21e474eb101c2d699817671395763082f8292",
+      "bytes": 302
+    },
+    {
+      "path": "rust/crates/openbuff-native/Cargo.toml",
+      "sha256": "36679c08486d35c9b3ef1525c70f80cfcf7e36e11c075b3c16582c4e340e3410",
+      "bytes": 935
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/landlock_fs.rs",
+      "sha256": "7da2f8e5e150358be64f603eaaa78dc5ff0b774265c437b0288c98773e5af64d",
+      "bytes": 4436
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/mod.rs",
+      "sha256": "38f41eed77d8fc99d51f8d51c7061c85ca6fae15aeaca914f192f70e813078ff",
+      "bytes": 8550
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/plan.rs",
+      "sha256": "8b7ee3e6976d09c7b2c92ca6bf55974e4a5da86166c79ee5bfe09da865e0b0aa",
+      "bytes": 2517
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/exec/runner.rs",
+      "sha256": "6739926889b2cb5fc382dde683c3b0ecf73984fbb1219b55367d1961b20f47e3",
+      "bytes": 3278
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/lib.rs",
+      "sha256": "2537edb5b356cb33b0ba88a9da0c36c896810d5621b6f354a33b4fcea3297321",
+      "bytes": 6554
+    },
+    {
+      "path": "rust/crates/openbuff-native/src/main.rs",
+      "sha256": "1923f92d72126926448b92752206984dbf1dc74229cebd4db011a1b160e0b072",
+      "bytes": 1428
+    },
+    {
+      "path": "rust/crates/openbuff-workspace-harness/Cargo.toml",
+      "sha256": "11252f9e8e4f8e3c402a0f3cae44b95637f8c444d99105b68c33c5c706b4caef",
+      "bytes": 97
+    },
+    {
+      "path": "rust/crates/openbuff-workspace-harness/src/lib.rs",
+      "sha256": "cd4ac3723fd9af59dd83f9295d923daa3777cbca9e83938aa3afbfe91eb50335",
+      "bytes": 914
+    },
+    {
+      "path": "rust/rust-toolchain.toml",
+      "sha256": "d4e55d8f04b06b1cddd4359cc87aaed956b03956bba70e02b5bf36c4cc9bb350",
+      "bytes": 601
+    },
+    {
+      "path": "rust/scripts/smoke-test-sidecar.sh",
+      "sha256": "4e14f7277fff234942723c0c22399b8f66bf24b098c1797d6eb3341524f0ee81",
+      "bytes": 1800
+    },
+    {
+      "path": "rust/target/debug/openbuff-native",
+      "sha256": "4ca44c15aa884cd4f936d9ddd35ecbd89d24fd99df9be5b8481dc06a3ccaaacd",
+      "bytes": 6897264
+    }
+  ],
+  "sourceLedgerStagingOrPriorArtifactsEdited": false,
+  "productCommandsRerunByReviewer": false
+}

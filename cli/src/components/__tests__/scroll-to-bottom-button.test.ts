@@ -33,15 +33,15 @@ describe('ScrollToBottomButton reserved width', () => {
     expect(restingWidth).toBeLessThanOrEqual(SCROLL_BUTTON_WIDTH)
     expect(SCROLL_BUTTON_COMPACT_WIDTH).toBe(restingWidth)
     // Same pinning as the expanded width, against the duplicated reservation.
-    expect(SCROLL_BUTTON_COMPACT_WIDTH).toBe(3)
+    expect(SCROLL_BUTTON_COMPACT_WIDTH).toBe(8)
   })
 
   test('the hint label and the compact form share the resting glyph', () => {
     // The compact width is derived from SCROLL_GLYPH, so the glyph the button
     // renders when resting is the one the width was measured from.
-    expect(SCROLL_HINT_LABEL.startsWith(SCROLL_GLYPH)).toBe(true)
+    expect(SCROLL_HINT_LABEL).toContain(SCROLL_GLYPH)
     // Non-ASCII, so rendered width rather than `.length` is what matters.
-    expect(stringWidth(SCROLL_GLYPH)).toBe(1)
+    expect(SCROLL_GLYPH).toBe('Latest')
   })
 
   test('the hint stays short enough to leave the chips room', () => {

@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "type": "body-smoke-mode-supplement",
+  "owner": "/root/b02_runtime_outcomes",
+  "sourceTextChanged": false,
+  "script": {
+    "path": "rust/scripts/smoke-test-sidecar.sh",
+    "sha256": "3928fef2828a7ab4434431c7fee7ccf82afba0a2d43891e3867982b88cdcb96f"
+  },
+  "worktreeModeBefore": "0o600",
+  "worktreeModeAfter": "0o755",
+  "requestedGitModeBefore": "100644",
+  "requestedGitModeAfter": "100755",
+  "indexNotStaged": true,
+  "workflow": {
+    "path": ".github/workflows/rust-workspace.yml",
+    "sha256": "0b971a487ab44dd0df8e2080d7ab6ab8bfd4f248918655fa9f9803e2f76095f3"
+  },
+  "commands": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/rustc-version.json",
+      "sha256": "6f03eef769658acd95e7952c509b75b3ccfb52b7abc1f244508d39b8a6af4012"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/host-build-current-source.json",
+      "sha256": "6cd6648fe64c4f3d284617df08dc6c76bc30b0d65776c713524dfa380ac9facb"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-version.json",
+      "sha256": "534323c12335e366828b26be54704a7acfa3be276d23b81b1c68bf41366d0e68"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-unknown-role.json",
+      "sha256": "5f8aed99935f94ed1a67e959af554f873d4b099d34c700a37a31a9ce786c33a1"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/binary-exec-placeholder.json",
+      "sha256": "104192e7c8afd6c0ab0d392e722bb08a009098dce69e7bb6e457efcd313ce8ef"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/direct-script-smoke.json",
+      "sha256": "2319c7d602aac0342bcb70554d7909a239caddb20e662db8a57f076f7f93b9fc"
+    }
+  ],
+  "matchingHostBuildCompleted": true,
+  "binary": {
+    "path": "rust/target/debug/openbuff-native",
+    "sha256": "4ca44c15aa884cd4f936d9ddd35ecbd89d24fd99df9be5b8481dc06a3ccaaacd"
+  },
+  "ordinaryVersionPassed": true,
+  "unknownRolePassed": true,
+  "execPlaceholderPassed": false,
+  "directSmokePassed": false,
+  "windowsExecuted": false,
+  "downstreamNativeAcceptanceClaimed": false,
+  "sealedUtc": "2026-11-07T00:36:00.235599+00:00"
+}

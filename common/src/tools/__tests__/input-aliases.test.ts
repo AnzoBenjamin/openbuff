@@ -105,6 +105,20 @@ describe('tool input compatibility aliases', () => {
     ).toHaveLength(1)
   })
 
+  it('accepts agentType inside spawn entries while keeping agent_type authoritative', () => {
+    const parsed = toolParams.spawn_agents.inputSchema.parse({
+      agents: [
+        { agentType: 'basher', command: 'bun test' },
+        { agent_type: 'thinker', agentType: 'basher', prompt: 'decide' },
+      ],
+    })
+    expect(parsed.agents[0]).toMatchObject({
+      agent_type: 'basher',
+      params: { command: 'bun test' },
+    })
+    expect(parsed.agents[1].agent_type).toBe('thinker')
+  })
+
   it('repairs mechanical camelCase and snake_case aliases', () => {
     expect(
       toolParams.query_index.inputSchema.parse({

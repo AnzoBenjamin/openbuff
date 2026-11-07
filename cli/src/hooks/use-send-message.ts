@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef } from 'react'
 import { setCurrentChatId } from '../project-files'
 import { createStreamController } from './stream-state'
 import { useChatStore } from '../state/chat-store'
+import { stampRunPromptBoundary } from '../utils/conversation-fork'
 import { getCodebuffClient } from '../utils/codebuff-client'
 import { AGENT_MODE_TO_COST_MODE, AGENT_MODE_TO_ID } from '../utils/constants'
 import { createEventHandlerState } from '../utils/create-event-handler-state'
@@ -13,7 +14,7 @@ import { getOpenbuffProviderReadiness } from '../utils/openbuff-provider'
 import {
   clearCheckpoint,
   loadCheckpoint,
-  loadMostRecentChatState,
+  loadMostRecentChatStateAsync,
   saveChatState,
   saveCheckpoint,
   type TurnCheckpoint,
@@ -35,6 +36,8 @@ import {
   resetEarlyReturnState,
   setupStreamingContext,
 } from './helpers/send-message'
+import { whenRegistriesReady } from '../services/deferred-registries'
+import { hydrateContextArchiveSnapshots } from '../services/memory-v2/context-archive-sync'
 import { NETWORK_ERROR_ID } from '../utils/validation-error-helpers'
 import { yieldToEventLoop } from '../utils/yield-to-event-loop'
 
@@ -50,6 +53,12 @@ import type {
   SetContextWindowUsageFn,
 } from '../utils/sdk-event-handlers'
 import type { AgentDefinition, MessageContent, RunState } from '@openbuff/sdk'
+import {
+  openRunJournalForRun,
+  resolveRunJournalPath,
+} from '../utils/run-journal-path'
+import { describeRunConfigForLog } from '../utils/run-config-digest'
+
 interface UseSendMessageOptions {
   inputRef: React.MutableRefObject<any>
   activeSubagentsRef: React.MutableRefObject<Set<string>>
@@ -67,7 +76,7 @@ interface UseSendMessageOptions {
   /** Optional callback fired with the per-turn cost in cents (USD * 100). */
   onTotalCost?: (costCents: number) => void
   mainAgentTimer: ElapsedTimeTracker
-  scrollToLatest: () => void
+  scrollToLatest: (options?: { immediate?: boolean }) => void
   onTimerEvent?: (event: SendMessageTimerEvent) => void
   isQueuePausedRef?: React.MutableRefObject<boolean>
   isProcessingQueueRef?: React.MutableRefObject<boolean>
@@ -129,7 +138,7 @@ export const useSendMessage = ({
   continueChatId,
 }: UseSendMessageOptions): {
   sendMessage: SendMessageFn
-  clearMessages: () => void
+  clearMessages: (runState?: RunState | null) => void
 } => {
   // Read store setters fresh on each callback invocation via useChatStore.getState()
   // rather than capturing them once at component scope. If the zustand store is ever
@@ -155,21 +164,132 @@ export const useSendMessage = ({
   }
   const streamRefs = streamRefsRef.current
   const activeRunOwnerRef = useRef<symbol | null>(null)
+  const sdkExecutionRef = useRef<symbol | null>(null)
+  const restorePromiseRef = useRef<Promise<void> | null>(null)
+  const restoreAbortRef = useRef<AbortController | null>(null)
 
-  // P6.4: The restore path performs synchronous fs reads; deferring it until
-  // after the first paint lets the TUI shell render immediately and the
-  // restored state is swapped in once ready. The persisted format is unchanged.
+  // Keep the latest scrollToLatest reachable without putting it in the restore
+  // effect's dependency array: scrollToLatest's useCallback (useChatScrollbox)
+  // depends on `messages` plus scroll helpers, so its identity changes on every
+  // store message mutation. Listing it in the restore effect's deps would tear
+  // down and re-run an in-flight one-shot restore (aborting the controller,
+  // nulling restorePromiseRef, and scheduling a second load of the same chat),
+  // opening a window where handleSendMessage's `await restorePromiseRef.current`
+  // observes null and proceeds from pre-restore state.
+  const scrollToLatestRef = useRef(scrollToLatest)
+  useEffect(() => {
+    scrollToLatestRef.current = scrollToLatest
+  })
+
   useEffect(() => {
     if (!continueChat || previousRunStateRef.current) return
     let cancelled = false
-    const timer = setTimeout(() => {
-      if (cancelled) return
-      const loadedState = loadMostRecentChatState(continueChatId ?? undefined)
-      if (!loadedState) return
+    let scrollTimer: ReturnType<typeof setTimeout> | undefined
+    const controller = new AbortController()
+    restoreAbortRef.current = controller
+    const restore = async () => {
+      const loadedState = await loadMostRecentChatStateAsync(
+        continueChatId ?? undefined,
+        controller.signal,
+      )
+      if (cancelled || controller.signal.aborted || !loadedState) return
+      // The effect's own one-shot cancellation token: effect cleanup sets
+      // `cancelled` (a replaced run) and clearMessages aborts `controller`.
+      // Every late store write below is gated on it so a completed send or a
+      // replaced effect run can never have its messages overwritten by this
+      // load.
+      const restoreIsLive = () => !cancelled && !controller.signal.aborted
       const { setRunState, setMessages } = useChatStore.getState()
+      if (!restoreIsLive()) return
       previousRunStateRef.current = loadedState.runState
       setRunState(loadedState.runState)
       setMessages(loadedState.messages)
+      // Wait for React to commit the restored messages before targeting the
+      // bottom. scrollToLatestRef reads the latest scrollToLatest without
+      // making it a dependency of this effect. scrollToLatest also verifies
+      // against the settled layout.
+      scrollTimer = setTimeout(() => {
+        if (!cancelled && !controller.signal.aborted) {
+          scrollToLatestRef.current({ immediate: true })
+        }
+      }, 0)
+      // Cross-session context-archive hydration (SEAM: this restore effect —
+      // the place where loadMostRecentChatState's result is applied to the
+      // live session via setRunState, so it is where durable memory-v2
+      // archive snapshots are merged back into the restored agentState so
+      // recall_context covers prior sessions). The restore path itself is
+      // synchronous, so hydration runs as a fire-and-forget merge applied
+      // through the same setRunState path used for live state updates. The
+      // identity guards keep the merge from clobbering a run started in
+      // between (any run replaces the store's runState object), and
+      // previousRunStateRef is kept in lockstep so the next send forks from
+      // the hydrated archive. The helper is no-throw; the .catch is a
+      // double-guard so an unexpected rejection can only ever log.
+      const restoredRunState = loadedState.runState
+      const restoredSessionState = restoredRunState.sessionState
+      // restore-hydration-unchecked-mainagentstate: loadChatStateFromDirectory
+      // validates runState presence and the messages array but never that
+      // sessionState.mainAgentState exists, so a persisted envelope shaped
+      // that way would throw an uncaught TypeError on the render thread —
+      // both HERE (unconditional deref) and in the .then merge below (which
+      // re-reads mainAgentState). Guard with a falsy check, warn, and skip
+      // the merge when the field is absent.
+      const restoredMainAgentState = restoredSessionState?.mainAgentState
+      if (!restoredMainAgentState) {
+        if (restoredSessionState) {
+          logger.warn(
+            { chatId: loadedState.chatId },
+            '[send-message] Restored session state has no mainAgentState; skipping context archive hydration merge',
+          )
+        }
+      } else {
+        void hydrateContextArchiveSnapshots(
+          restoredMainAgentState.compactionArchive,
+          {
+            includeProjectArchive:
+              restoredMainAgentState.contextArchiveHydration !==
+              'in-memory-only',
+          },
+        )
+          .then((mergedArchive) => {
+            const { runState: latestRunState, setRunState: setLatestRunState } =
+              useChatStore.getState()
+            const latestSessionState = latestRunState?.sessionState
+            // Re-verify before deref: the store could have been replaced
+            // between scheduling and settle (identity guards below), and a
+            // runState legitimately without mainAgentState must not throw
+            // here either.
+            const latestMainAgentState = latestSessionState?.mainAgentState
+            if (
+              !latestRunState ||
+              !latestSessionState ||
+              !latestMainAgentState ||
+              latestRunState !== restoredRunState ||
+              latestSessionState !== restoredSessionState ||
+              latestMainAgentState !== restoredMainAgentState
+            ) {
+              return
+            }
+            const hydratedRunState: RunState = {
+              ...latestRunState,
+              sessionState: {
+                ...latestSessionState,
+                mainAgentState: {
+                  ...latestSessionState.mainAgentState,
+                  compactionArchive: mergedArchive,
+                },
+              },
+            }
+            previousRunStateRef.current = hydratedRunState
+            setLatestRunState(hydratedRunState)
+          })
+          .catch((error) => {
+            logger.warn(
+              { error },
+              '[send-message] Context archive hydration merge failed (non-fatal)',
+            )
+          })
+      }
       if (loadedState.chatId) {
         setCurrentChatId(loadedState.chatId)
       }
@@ -192,14 +312,26 @@ export const useSendMessage = ({
             { checkpointTurnId: checkpoint.checkpointTurnId },
             '[send-message] Mid-turn checkpoint is stale (no matching message), discarding',
           )
-          clearCheckpoint()
+          // Fire-and-forget clear (cancel + drain + unlink is serialized
+          // inside clearCheckpoint itself; nothing here needs to wait on it).
+          void clearCheckpoint()
         }
       }
-    }, 0)
+    }
+    const restorePromise = restore()
+    restorePromiseRef.current = restorePromise
     return () => {
       cancelled = true
-      clearTimeout(timer)
+      controller.abort()
+      if (restoreAbortRef.current === controller) restoreAbortRef.current = null
+      if (restorePromiseRef.current === restorePromise)
+        restorePromiseRef.current = null
+      if (scrollTimer !== undefined) clearTimeout(scrollTimer)
     }
+    // Deps intentionally exclude scrollToLatest (reached through
+    // scrollToLatestRef above): this is a one-shot restore per
+    // continueChat/continueChatId and must never be aborted or restarted by
+    // scroll or UI-state identity changes.
   }, [continueChat, continueChatId])
 
   const updateChainInProgress = useCallback(
@@ -248,9 +380,17 @@ export const useSendMessage = ({
     [updateActiveSubagents],
   )
 
-  function clearMessages() {
-    previousRunStateRef.current = null
-    useChatStore.getState().setRunState(null)
+  function clearMessages(runState: RunState | null = null) {
+    activeRunOwnerRef.current = null
+    abortControllerRef.current?.abort()
+    const stillCancelling = sdkExecutionRef.current !== null
+    updateChainInProgress(stillCancelling)
+    setStreamStatus('idle')
+    setCanProcessQueue(!stillCancelling && !isQueuePausedRef?.current)
+    restoreAbortRef.current?.abort()
+    previousRunStateRef.current = runState
+    resumableCheckpointRef.current = null
+    useChatStore.getState().setRunState(runState)
   }
 
   const prepareUserMessage = useCallback(
@@ -259,6 +399,7 @@ export const useSendMessage = ({
       agentMode: AgentMode
       postUserMessage?: (prev: ChatMessage[]) => ChatMessage[]
       attachments?: PendingAttachment[]
+      isCurrent?: () => boolean
     }) => {
       // Access store fresh each call so setters bind to the live store instance.
       const {
@@ -282,7 +423,13 @@ export const useSendMessage = ({
   )
 
   const sendMessage = useCallback<SendMessageFn>(
-    async ({ content, agentMode, postUserMessage, attachments }) => {
+    async ({
+      content,
+      agentMode,
+      postUserMessage,
+      attachments,
+      onAccepted,
+    }) => {
       // Read setters fresh from the live store on each invocation so they always
       // bind to the current store instance (see note above about store recreation).
       const {
@@ -326,17 +473,24 @@ export const useSendMessage = ({
       let finalContent: string
 
       try {
+        // A prompt submitted during restore must fork from the restored state
+        // and append after its messages, rather than being overwritten by it.
+        await restorePromiseRef.current
+        if (!isCurrentRunOwner()) return
         const prepared = await prepareUserMessage({
           content,
           agentMode,
           postUserMessage,
           attachments,
+          isCurrent: isCurrentRunOwner,
         })
+        if (!isCurrentRunOwner()) return
         userMessageId = prepared.userMessageId
         messageContent = prepared.messageContent
         bashContextForPrompt = prepared.bashContextForPrompt
         finalContent = prepared.finalContent
       } catch (error) {
+        if (!isCurrentRunOwner()) return
         logger.error(
           { error },
           '[send-message] prepareUserMessage failed with exception',
@@ -359,7 +513,15 @@ export const useSendMessage = ({
 
       // Validate before sending (e.g., agent config checks)
       try {
+        // P1-T9 gating: onBeforeMessageSend (agent validation) reads the
+        // agent registry via loadAgentDefinitions, so the deferred registry
+        // loads must have settled BEFORE it runs — otherwise mid-startup
+        // validation observes an empty/partial registry. This is the same
+        // gate the run below uses for its own loadAgentDefinitions read.
+        await whenRegistriesReady()
+        if (!isCurrentRunOwner()) return
         const validationResult = await onBeforeMessageSend()
+        if (!isCurrentRunOwner()) return
 
         if (!validationResult.success) {
           logger.warn(
@@ -399,6 +561,7 @@ export const useSendMessage = ({
           return
         }
       } catch (error) {
+        if (!isCurrentRunOwner()) return
         logger.error(
           { error },
           '[send-message] Validation before message send failed with exception',
@@ -411,7 +574,10 @@ export const useSendMessage = ({
           ),
         ])
         await yieldToEventLoop()
-        setTimeout(() => scrollToLatest(), 0)
+        if (!isCurrentRunOwner()) return
+        setTimeout(() => {
+          if (isCurrentRunOwner()) scrollToLatest()
+        }, 0)
 
         resetEarlyReturnState({
           setCanProcessQueue,
@@ -430,6 +596,7 @@ export const useSendMessage = ({
 
       // Get SDK client
       const client = await getCodebuffClient()
+      if (!isCurrentRunOwner()) return
 
       if (!client) {
         logger.error(
@@ -444,7 +611,10 @@ export const useSendMessage = ({
           ),
         ])
         await yieldToEventLoop()
-        setTimeout(() => scrollToLatest(), 0)
+        if (!isCurrentRunOwner()) return
+        setTimeout(() => {
+          if (isCurrentRunOwner()) scrollToLatest()
+        }, 0)
         resetEarlyReturnState({
           setCanProcessQueue,
           updateChainInProgress,
@@ -486,8 +656,24 @@ export const useSendMessage = ({
       // before any async work, so the router can correctly detect busy state.
       let actualCredits: number | undefined
 
+      // P2-T7: opened LAZILY below — only after the provider-readiness gate
+      // inside the run try-block, so a send that never starts a run (a
+      // validation failure, a providerReadiness failure early-return) never
+      // creates the journal db. The SAME object serves writer and reader (one
+      // connection, one file), and it is closed in the finally below (the
+      // run's promise-chain end).
+      // Fail-open: an unopenable journal warns once and the turn proceeds
+      // WITHOUT journaling — a journaling outage can never break a user turn.
+      let runJournal: ReturnType<typeof openRunJournalForRun> = undefined
+      let executionToken: symbol | undefined
+
       // Execute SDK run with streaming handlers
       try {
+        // P1-T9: agent/skill registries load post-first-frame; wait for them
+        // here so the first send never reads a not-yet-loaded registry. This
+        // resolves immediately once ready (or when no deferred load ran).
+        await whenRegistriesReady()
+        if (!isCurrentRunOwner()) return
         const agentDefinitions = loadAgentDefinitions()
         const resolvedAgent = resolveAgent(agentMode, agentId, agentDefinitions)
         const providerReadiness = getOpenbuffProviderReadiness({
@@ -509,6 +695,19 @@ export const useSendMessage = ({
           return
         }
 
+        onAccepted?.()
+        if (!isCurrentRunOwner()) return
+
+        // P2-T7: open the run journal ONLY now that the run is actually
+        // starting (never at TUI startup, never on a validation failure, and
+        // never on a providerReadiness failure early-return above).
+        runJournal = openRunJournalForRun({
+          path: resolveRunJournalPath(),
+          warn: (message) => {
+            logger.warn({ message }, '[send-message] Run journal unavailable')
+          },
+        })
+
         const promptWithBashContext = bashContextForPrompt
           ? bashContextForPrompt + finalContent
           : finalContent
@@ -524,7 +723,7 @@ export const useSendMessage = ({
         // checkpoint state.
         const checkpoint = resumableCheckpointRef.current
         let resumeInterruptedTurn = false
-        let previousRunState = previousRunStateRef.current
+        let previousRunState = useChatStore.getState().runState
         if (checkpoint && previousRunState?.sessionState) {
           const lastUserMessage = [...checkpoint.mainAgentState.messageHistory]
             .reverse()
@@ -549,7 +748,10 @@ export const useSendMessage = ({
             // Prompt doesn't match — user typed a new message. Discard the
             // stale checkpoint so it can't interfere with future turns.
             resumableCheckpointRef.current = null
-            clearCheckpoint()
+            // Serialize the clear with any in-flight queued checkpoint write
+            // BEFORE the next save can enqueue (see clearCheckpoint).
+            await clearCheckpoint()
+            if (!isCurrentRunOwner()) return
           }
         }
 
@@ -592,11 +794,27 @@ export const useSendMessage = ({
           resumeInterruptedTurn,
         })
 
+        // Size digest only: most fields of the run config carry per-run
+        // transcript state, so the config is never stringified into the log
+        // — top-level fields are measured, not logged, and the
+        // [send-message] prefix is kept for grep-ability.
         logger.info(
-          { runConfig },
+          describeRunConfigForLog(runConfig),
           '[send-message] Sending message with sdk run config',
         )
-        const runState = await client.run(runConfig)
+        executionToken = Symbol('sdk-execution')
+        sdkExecutionRef.current = executionToken
+        let runState = await client.run({
+          ...runConfig,
+          // P2-T7: thread the live run journal into the SDK run so tool
+          // calls/results, spawns, and step boundaries are journaled for
+          // crash-safe resume + `openbuff dash`/replay. Conditional spread:
+          // an unjournalable run carries no journal fields at all (the
+          // additive-optional contract).
+          ...(runJournal
+            ? { journalWriter: runJournal, journalReader: runJournal }
+            : {}),
+        })
 
         // Accept an aborted run's preserved state while it still owns the send.
         // This serializes cancel-A/send-B and prevents continuation from forking
@@ -612,6 +830,7 @@ export const useSendMessage = ({
           return
         }
 
+        runState = stampRunPromptBoundary(runState, userMessageId)
         previousRunStateRef.current = runState
         setRunState(runState)
         setIsRetrying(false)
@@ -621,7 +840,10 @@ export const useSendMessage = ({
           return currentMessages
         })
         // The SDK state is authoritative for both success and cooperative abort.
-        clearCheckpoint()
+        // Awaited so the checkpoint clear (cancel + drain + unlink) is fully
+        // serialized before anything else enqueues for this target.
+        await clearCheckpoint()
+        if (!isCurrentRunOwner()) return
         resumableCheckpointRef.current = null
         handleRunCompletion({
           runState,
@@ -640,7 +862,7 @@ export const useSendMessage = ({
           isQueuePausedRef,
         })
       } catch (error) {
-        if (!abortController.signal.aborted) {
+        if (isCurrentRunOwner() && !abortController.signal.aborted) {
           handleRunError({
             error,
             timerController,
@@ -666,6 +888,7 @@ export const useSendMessage = ({
           }
         }
       } finally {
+        const abandoned = !isCurrentRunOwner()
         if (isCurrentRunOwner()) {
           if (isChainInProgressRef.current) {
             logger.warn(
@@ -684,6 +907,26 @@ export const useSendMessage = ({
         }
         releaseRunOwner()
         updater.dispose()
+        if (executionToken && sdkExecutionRef.current === executionToken) {
+          sdkExecutionRef.current = null
+          if (abandoned && activeRunOwnerRef.current === null) {
+            updateChainInProgress(false)
+            setStreamStatus('idle')
+            setCanProcessQueue(!isQueuePausedRef?.current)
+            if (isProcessingQueueRef) isProcessingQueueRef.current = false
+          }
+        }
+        if (runJournal) {
+          // P2-T7: the run's promise-chain end is the journal's cleanup seam.
+          // Best-effort (the turn's outcome is already decided): a close
+          // failure logs and must never break the TUI.
+          void runJournal.close().catch((closeError) => {
+            logger.warn(
+              { error: closeError },
+              '[send-message] Run journal close failed',
+            )
+          })
+        }
       }
     },
     [

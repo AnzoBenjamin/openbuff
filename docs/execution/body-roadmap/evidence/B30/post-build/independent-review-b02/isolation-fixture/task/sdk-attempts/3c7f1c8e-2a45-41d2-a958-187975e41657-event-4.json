@@ -1,0 +1,14 @@
+{
+  "attemptId": "3c7f1c8e-2a45-41d2-a958-187975e41657",
+  "event": {
+    "type": "context_window",
+    "used": 5935,
+    "max": 190000,
+    "compactionTriggerTokens": 140000,
+    "compactionTargetTokens": 100000
+  },
+  "costUsd": null,
+  "costEvidence": {
+    "status": "unknown"
+  }
+}

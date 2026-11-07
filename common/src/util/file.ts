@@ -156,6 +156,36 @@ export type ProjectFileContext = {
   }
 }
 
+/**
+ * The project root to use for scope and capability work, tolerating an absent
+ * fileContext.
+ *
+ * `ProjectFileContext.projectRoot` is typed as a required string, but the
+ * runtime value can be missing (a handler invoked from a programmatic/child
+ * path, a test-seam harness, or a partially-built context). Returning '' lets
+ * every downstream scope check fail closed rather than the handler throwing a
+ * raw TypeError out of `path.resolve`:
+ *
+ * - `encodeReadCapabilityToken` refuses an empty projectId, so no read
+ *   capability is minted; `hasAuthoritativeReadCapabilityScope` reports false.
+ * - `readCapabilityMatchesScope` simply fails to match, so a reconciliation
+ *   pass degrades to "unconfirmed" instead of crashing.
+ * - a workspace-path lease keyed on '' still conflicts correctly with other
+ *   rootless leases.
+ *
+ * DO NOT use this where the root anchors a CONTAINMENT decision. `path.resolve('',
+ * p)` is a real path (it resolves against `process.cwd()`), not an error, so an
+ * empty root would silently re-anchor a containment check on the cwd instead of
+ * the project. Sites like that must explicitly skip the check when there is no
+ * root — see the filesystem-scope backstop in
+ * `packages/agent-runtime/src/tools/tool-executor.ts`.
+ */
+export function resolveProjectRootOrEmpty(
+  fileContext: { projectRoot?: string } | undefined,
+): string {
+  return fileContext?.projectRoot ?? ''
+}
+
 export const fileRegex =
   /<write_file>\s*<path>([^<]+)<\/path>\s*<content>([\s\S]*?)<\/content>\s*<\/write_file>/g
 export const fileWithNoPathRegex = /<write_file>([\s\S]*?)<\/write_file>/g

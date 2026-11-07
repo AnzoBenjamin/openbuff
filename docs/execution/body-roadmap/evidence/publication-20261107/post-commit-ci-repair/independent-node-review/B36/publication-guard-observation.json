@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "reviewer": "/root/b03_mutation_evidence",
+  "purpose": "Publication repair context only; original node implementation scope remains unchanged.",
+  "sourceHashes": {
+    "scripts/memory-drift-guard.ts": "546da641fa97462b7bfbf96d8483c40087f836841c4c84fc9c034e3828111e89",
+    "scripts/__tests__/memory-drift-guard.test.ts": "a89cb63cfc91a36c4b416c60c7cb4344e5f86da180a7e99699755725fbf1071e"
+  },
+  "independentSmallFixAuthority": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/manifest.json",
+    "sha256": "3e675f3a479431b9df553b7f3dfb42134daee3c6f676d893ba3114c9d86466e5"
+  },
+  "independentControls": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/guard-fix-controls.json",
+    "sha256": "b0e137d999ed78706f87a08839b07234c1868d88cda8b13baafc176d0c00dae0"
+  },
+  "independentReport": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/REVIEW.md",
+    "sha256": "32923083c7e21b2217c30ee15142885f4e1e82488b08ea4deb0fd4113df45a55"
+  },
+  "observations": [
+    "Inspected guard diff, new regression and Markdown traversal: an exact-path Set excludes only four immutable RWEB snapshots; enclosing-directory traversal appends a slash and remains active.",
+    "Portable project-relative spelling is used; existing prefix exclusions are unchanged; other guard/test diff changes are formatting only.",
+    "New regression tests four checkers in direct/shared-snapshot modes against four archived and six active neighboring files. Independently recorded controls additionally retain backup suffix and unrelated same-basename documents.",
+    "Knowledge additions describe already accepted outcome/mutation boundaries and link the active checkpoint. They introduce no guard bypass or forged review receipt.",
+    "All three root receipt logs, pinned Bun identity, equal 187-input maps and current hashes were independently verified; no scoped behavior commands were rerun."
+  ],
+  "rootChecks": [
+    {
+      "receipt": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/guard-tests/guard-tests.json",
+        "sha256": "fe860f7ceac7819bc48c3227b4867a54f1a191978516f398d8a55a740d2f1804"
+      },
+      "log": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/guard-tests/guard-tests.log",
+        "sha256": "287479c6393177ffaed828b5ad826e15630037c2a919bbb1a860c3efd7c759dc"
+      }
+    },
+    {
+      "receipt": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/guard-memory-drift/guard-memory-drift.json",
+        "sha256": "4c7fb3e6610aa5505c718ea831ea77cd71c9ec16248c359b5ee28bce7e043904"
+      },
+      "log": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/guard-memory-drift/guard-memory-drift.log",
+        "sha256": "f2344d92ff183a952010e0c02a705d9c8721b2e6bcee8a8b6856d023af67da87"
+      }
+    },
+    {
+      "receipt": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+        "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10"
+      },
+      "log": {
+        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.log",
+        "sha256": "b823fff82e44ee157bbca27157c5b5d953263c1b50ddffc013b7600395fa63a8"
+      }
+    }
+  ],
+  "scopeLimits": [
+    "No other card implementation or broader native/provider/installed/OS guarantee is approved here.",
+    "B04 independent probe is reused without rerunning it."
+  ]
+}

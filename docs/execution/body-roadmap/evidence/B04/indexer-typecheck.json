@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "card": "B04",
+  "command": "indexer-typecheck",
+  "argv": [
+    "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+    "run",
+    "typecheck"
+  ],
+  "cwd": "/home/ben/Code/CLI/openbuff/packages/indexer",
+  "startedAt": "2026-11-06T14:18:44.681032+00:00",
+  "finishedAt": "2026-11-06T14:18:48.196560+00:00",
+  "elapsedSeconds": 3.51646340100001,
+  "exit": 0,
+  "log": "indexer-typecheck.log",
+  "logSha256": "3d3c45ecc39fd091f458f3c9ac69950e524cbbf36b64ebe261d051ca9be68c6d",
+  "environment": {
+    "inheritedKeys": [
+      "HOME",
+      "LANG",
+      "LC_ALL",
+      "SHELL",
+      "TERM",
+      "USER"
+    ],
+    "PATH": "pinned Bun bin prepended to inherited executable search path",
+    "OPENBUFF_PROVIDER_CONFIG": "fixture-config.json",
+    "NEXT_PUBLIC_CB_ENVIRONMENT": "test",
+    "credentials": "not inherited"
+  },
+  "head": "03a1c562717b1794c898510c694db6d6f5b485d9",
+  "platform": "Linux-7.2.14-arch1-1-x86_64-with-glibc2.44",
+  "bun": {
+    "path": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+    "version": "1.3.5",
+    "sha256": "a56093cbdd2efc7290a744ccc39971dcc4be52c5732be15c7fb1465cc119c8de"
+  },
+  "sourceBefore": {
+    "sdk/src/services/workspace-mutation-broker.ts": "af865e30f270622c8adbfa2911f8a0f008d172676fe6484cf6a5e7c95034c083",
+    "sdk/src/__tests__/workspace-mutation-broker.test.ts": "9a2a138c10065035f3e3e2a0b060c6492db0340ab76c3d365bda88afba0b1592",
+    "packages/indexer/src/index-store.ts": "773242747855e16e0e296934ec1d4d482c0666ccbb2c884d4b0f9eb106308b6f",
+    "packages/indexer/src/index-store.test.ts": "145bf6492f4b1b2f8495d14b5c1a549b1de6f7cb633cb63221e8cc7b42fab123",
+    "packages/indexer/src/index-manager.ts": "46cda46b4c09180fa51328a24c934214db1cc99c406e6c861f0b40940dbe1bc1",
+    "packages/indexer/src/index-manager.test.ts": "d0ec0dd05db32e71b7d60de1547a4b93dd8f05b4d4658df9ed16e17a524a2cf0",
+    "cli/src/utils/turn-snapshots.ts": "2729f329316f138dd1c213b1e02a641c25854c5b22f452355ea4821e37683e43",
+    "cli/src/utils/__tests__/turn-snapshots.test.ts": "1b32d756e592b62b224250ea0dee30e15154af8229cad4d9e0fd41b4737bbb8a",
+    "packages/indexer/src/index-manager-semantic.test.ts": "e5df842eafbc9c1bb18335a814b81abeb5391be764892b860274de77f4101fab"
+  },
+  "sourceAfter": {
+    "sdk/src/services/workspace-mutation-broker.ts": "af865e30f270622c8adbfa2911f8a0f008d172676fe6484cf6a5e7c95034c083",
+    "sdk/src/__tests__/workspace-mutation-broker.test.ts": "9a2a138c10065035f3e3e2a0b060c6492db0340ab76c3d365bda88afba0b1592",
+    "packages/indexer/src/index-store.ts": "773242747855e16e0e296934ec1d4d482c0666ccbb2c884d4b0f9eb106308b6f",
+    "packages/indexer/src/index-store.test.ts": "145bf6492f4b1b2f8495d14b5c1a549b1de6f7cb633cb63221e8cc7b42fab123",
+    "packages/indexer/src/index-manager.ts": "46cda46b4c09180fa51328a24c934214db1cc99c406e6c861f0b40940dbe1bc1",
+    "packages/indexer/src/index-manager.test.ts": "d0ec0dd05db32e71b7d60de1547a4b93dd8f05b4d4658df9ed16e17a524a2cf0",
+    "cli/src/utils/turn-snapshots.ts": "2729f329316f138dd1c213b1e02a641c25854c5b22f452355ea4821e37683e43",
+    "cli/src/utils/__tests__/turn-snapshots.test.ts": "1b32d756e592b62b224250ea0dee30e15154af8229cad4d9e0fd41b4737bbb8a",
+    "packages/indexer/src/index-manager-semantic.test.ts": "e5df842eafbc9c1bb18335a814b81abeb5391be764892b860274de77f4101fab"
+  },
+  "sourceUnchangedDuringCommand": true,
+  "configHashes": {
+    "bun.lock": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6",
+    "package.json": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8",
+    "sdk/package.json": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d",
+    "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
+    "cli/package.json": "cb6557b3cdbc58e38dc9eeb9c2a4c073325c6dd06891e7f8ba81f88e105a3de4",
+    "packages/indexer/package.json": "97273d922a6505ac3e619b3138a118017db83149ee18209f48e04027423b37cf",
+    ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+    ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+    ".omx/context/openbuff-body-execution-20261106T102953Z.md": "ed12c6e2ae4a8eaf2a4c1a3d55467cf9e3da742e7a469a74972a497fb34dacbd"
+  }
+}

@@ -1,5 +1,6 @@
 import { SimpleToolCallItem } from './tool-call-item'
 import { defineToolComponent } from './types'
+import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
 
 import type { ToolRenderConfig } from './types'
 
@@ -19,8 +20,25 @@ export const SkillComponent = defineToolComponent({
       return { content: null }
     }
 
+    const error = getStructuredErrorMessages(toolBlock.outputRaw)[0]
+    const status = error
+      ? `failed · ${error}`
+      : toolBlock.lifecycle === 'queued' ||
+          toolBlock.lifecycle === 'running' ||
+          toolBlock.lifecycle === 'cancelled' ||
+          toolBlock.lifecycle === 'failed'
+        ? toolBlock.lifecycle
+        : toolBlock.outputRaw !== undefined
+          ? 'captured · Inspect for skill content'
+          : 'output unavailable'
     return {
-      content: <SimpleToolCallItem name="Load Skill" description={skillName} />,
+      collapsedPreview: `Load Skill ${skillName} · ${status}`,
+      content: (
+        <SimpleToolCallItem
+          name="Load Skill"
+          description={`${skillName} · ${status}`}
+        />
+      ),
     }
   },
 })

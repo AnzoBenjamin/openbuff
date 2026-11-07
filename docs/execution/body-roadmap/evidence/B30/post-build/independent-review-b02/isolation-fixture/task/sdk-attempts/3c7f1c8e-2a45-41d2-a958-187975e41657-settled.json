@@ -1,0 +1,116 @@
+{
+  "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+  "experimentId": "unreported",
+  "taskId": "isolation-task",
+  "repeat": 0,
+  "languages": [
+    "typescript"
+  ],
+  "executionScope": "key_free_environment",
+  "attemptId": "3c7f1c8e-2a45-41d2-a958-187975e41657",
+  "agentId": "buffbench-lessons-extractor",
+  "providerRoute": "unreported",
+  "requestedModel": "openai/gpt-5",
+  "role": "auxiliary",
+  "phase": "settled",
+  "startedAt": "2026-11-06T21:45:50.694Z",
+  "durationMs": 1041,
+  "events": [
+    {
+      "type": "start",
+      "messageHistoryLength": 0
+    },
+    {
+      "type": "tool_call",
+      "toolCallId": "4ed35168-850d-41e0-9c76-9750b4c02de3",
+      "toolName": "set_output",
+      "input": {
+        "lessons": [],
+        "proposals": []
+      },
+      "agentId": "main-agent"
+    },
+    {
+      "type": "tool_result",
+      "toolCallId": "4ed35168-850d-41e0-9c76-9750b4c02de3",
+      "toolName": "set_output",
+      "output": [
+        {
+          "type": "json",
+          "value": {
+            "message": "Output set"
+          }
+        }
+      ],
+      "agentId": "main-agent",
+      "actionOutcome": {
+        "actionId": "4ed35168-850d-41e0-9c76-9750b4c02de3",
+        "attemptId": "stNBOSURFLU",
+        "runId": "local-run-7287100d-f434-487c-88a2-f364effc592f",
+        "toolName": "set_output",
+        "basis": {
+          "inputHash": "sha256:eb5e0f29aea635c38120c7b4d667b005af595af51b70ee40c6f47effba367659",
+          "workspaceRevision": 0
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "unobserved",
+          "receiptIds": [],
+          "confirmedPaths": []
+        }
+      }
+    },
+    {
+      "type": "context_window",
+      "used": 5935,
+      "max": 190000,
+      "compactionTriggerTokens": 140000,
+      "compactionTargetTokens": 100000
+    },
+    {
+      "type": "finish",
+      "agentId": "buffbench-lessons-extractor",
+      "totalCost": 0,
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "taskAcceptance": {
+        "status": "unknown"
+      },
+      "actionOutcomes": [
+        {
+          "actionId": "4ed35168-850d-41e0-9c76-9750b4c02de3",
+          "attemptId": "stNBOSURFLU",
+          "runId": "local-run-7287100d-f434-487c-88a2-f364effc592f",
+          "toolName": "set_output",
+          "basis": {
+            "inputHash": "sha256:eb5e0f29aea635c38120c7b4d667b005af595af51b70ee40c6f47effba367659",
+            "workspaceRevision": 0
+          },
+          "outcome": "succeeded",
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      ]
+    }
+  ],
+  "costUsd": 0,
+  "costComplete": true,
+  "costEvidence": {
+    "status": "reported",
+    "source": "finish.totalCost"
+  },
+  "output": {
+    "type": "structuredOutput",
+    "value": {
+      "lessons": [],
+      "proposals": []
+    }
+  },
+  "runOutcome": {
+    "termination": "completed"
+  }
+}

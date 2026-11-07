@@ -178,6 +178,37 @@ describe('model-provider', () => {
       ).toBe(false)
     })
 
+    test('validates and flows maxMissingOutputRetries through the schema transform', () => {
+      // A positive integer cap parses and flows through the transform.
+      const parsed = providerConfigFileSchema.parse({
+        maxMissingOutputRetries: 3,
+      })
+      expect(parsed.maxMissingOutputRetries).toBe(3)
+
+      // Zero is not a positive integer: unset means unlimited, so a
+      // zero "cap" is ambiguous and must be rejected.
+      expect(
+        providerConfigFileSchema.safeParse({ maxMissingOutputRetries: 0 })
+          .success,
+      ).toBe(false)
+      // Negative values can never mean "cap the retries".
+      expect(
+        providerConfigFileSchema.safeParse({ maxMissingOutputRetries: -1 })
+          .success,
+      ).toBe(false)
+      // Fractional retry counts are not meaningful.
+      expect(
+        providerConfigFileSchema.safeParse({ maxMissingOutputRetries: 2.5 })
+          .success,
+      ).toBe(false)
+
+      // Unset stays absent after the transform: consumers see unlimited
+      // retries, never an implicit cap (same contract as maxAgentSteps).
+      expect(
+        providerConfigFileSchema.parse({}).maxMissingOutputRetries,
+      ).toBeUndefined()
+    })
+
     test('recommends only empirically measured models for the requested coding context', () => {
       const parsed = providerConfigFileSchema.parse({
         providers: {
@@ -531,7 +562,7 @@ describe('model-provider', () => {
     })
 
     test('strips stop sequences for providers that opt out', () => {
-      const transformed = applyConfiguredProviderRequestCompatibility(
+      const transformedOpenAI = applyConfiguredProviderRequestCompatibility(
         {
           model: 'custom-coder',
           messages: [{ role: 'user', content: 'hello' }],
@@ -545,7 +576,23 @@ describe('model-provider', () => {
         },
       )
 
-      expect(transformed.stop).toBeUndefined()
+      expect(transformedOpenAI.stop).toBeUndefined()
+
+      const transformedAnthropic = applyConfiguredProviderRequestCompatibility(
+        {
+          model: 'custom-coder',
+          messages: [{ role: 'user', content: 'hello' }],
+          stop_sequences: ['"cb_easp"'],
+        },
+        {
+          providerModel: 'custom-coder',
+          compatibility: {
+            supportsStopSequences: false,
+          },
+        },
+      )
+
+      expect(transformedAnthropic.stop_sequences).toBeUndefined()
     })
 
     test('keeps stop sequences when providers opt in', () => {
@@ -2084,6 +2131,7 @@ describe('model-provider', () => {
           agents: { thinker: 'custom/thinker' },
           failoverModels: ['custom/backup-a', 'custom/backup-b'],
           maxAgentSteps: 42,
+          maxMissingOutputRetries: 3,
           providers: {
             custom: {
               type: 'openai-compatible',
@@ -2118,6 +2166,7 @@ describe('model-provider', () => {
         'custom/backup-b',
       ])
       expect(mergedConfig.maxAgentSteps).toBe(42)
+      expect(mergedConfig.maxMissingOutputRetries).toBe(3)
     })
 
     test('updates fragmented provider config without flattening the root', () => {

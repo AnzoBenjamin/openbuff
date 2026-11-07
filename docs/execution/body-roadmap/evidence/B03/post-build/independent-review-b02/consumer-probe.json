@@ -1,0 +1,1054 @@
+{
+  "rawUnbacked": {
+    "classified": {
+      "outcome": "uncertain",
+      "cause": {
+        "code": "mutation_applied",
+        "message": "Mutation applied."
+      },
+      "effect": {
+        "status": "partial",
+        "receiptIds": [
+          "fixture-receipt"
+        ],
+        "confirmedPaths": [],
+        "forward": [
+          {
+            "actionId": "fixture-action-0",
+            "outcome": "applied",
+            "afterHashes": {
+              ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+            }
+          }
+        ]
+      }
+    },
+    "cliOutcome": "unconfirmed",
+    "summary": {
+      "filesEdited": 0,
+      "filesFailed": 1,
+      "filesUnconfirmed": 0,
+      "filesRolledBack": 0,
+      "rollbackIncomplete": 0,
+      "reviewVerdict": null,
+      "testPassed": 0,
+      "testFailed": 0,
+      "hooksPassed": 0,
+      "hooksFailed": 0,
+      "hooksSkipped": 0,
+      "auxiliaryCompleted": 0,
+      "auxiliaryFailed": 0,
+      "errors": 0
+    },
+    "acp": {
+      "sessionUpdate": "tool_call_update",
+      "toolCallId": "raw",
+      "status": "failed",
+      "content": [
+        {
+          "type": "text",
+          "text": "{\"kind\":\"file_mutation_result\",\"version\":1,\"operationId\":\"fixture-operation\",\"outcome\":\"applied\",\"actions\":[{\"actionId\":\"fixture-action-0\",\"index\":0,\"action\":\"update\",\"path\":\".env\",\"outcome\":\"applied\",\"beforeHash\":\"sha256:redacted\",\"afterHash\":\"sha256:redacted\",\"forward\":{\"outcome\":\"applied\",\"afterHashes\":{\".env\":\"sha256:redacted\"}},\"afterContent\":\"[sensitive]\"}],\"authorityTier\":\"conditional_commit\",\"receiptId\":\"fixture-receipt\",\"errors\":[],\"freshCapabilities\":[]}"
+        }
+      ],
+      "_meta": {
+        "openbuff.dev": {
+          "receipt": {
+            "kind": "openbuff.receipt_envelope",
+            "version": 1,
+            "sessionId": "independent",
+            "toolCallId": "raw",
+            "laneId": "main",
+            "mutation": {
+              "kind": "file_mutation_result",
+              "version": 1,
+              "operationId": "fixture-operation",
+              "outcome": "applied",
+              "actions": [
+                {
+                  "actionId": "fixture-action-0",
+                  "index": 0,
+                  "action": "update",
+                  "path": ".env",
+                  "outcome": "applied",
+                  "beforeHash": "sha256:redacted",
+                  "afterHash": "sha256:redacted",
+                  "forward": {
+                    "outcome": "applied",
+                    "afterHashes": {
+                      ".env": "sha256:redacted"
+                    }
+                  }
+                }
+              ],
+              "authorityTier": "conditional_commit",
+              "receiptId": "fixture-receipt",
+              "errors": [],
+              "freshCapabilities": []
+            }
+          }
+        }
+      }
+    }
+  },
+  "cases": [
+    {
+      "name": "confirmed",
+      "mutation": {
+        "kind": "file_mutation_result",
+        "version": 1,
+        "operationId": "fixture-operation",
+        "outcome": "applied",
+        "actions": [
+          {
+            "actionId": "fixture-action-0",
+            "index": 0,
+            "action": "update",
+            "path": ".env",
+            "outcome": "applied",
+            "beforeHash": "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+            "afterHash": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f",
+            "forward": {
+              "outcome": "applied",
+              "afterHashes": {
+                ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+              }
+            },
+            "afterContent": "B03_SYNTHETIC_VALUE=after\r\n",
+            "editAnchor": {
+              "startLine": 1,
+              "endLine": 2,
+              "contentHash": "sha256:47fe7868235a514bde5079667bb2e329d5cb44a906f7437f4887db11ed9b1b45",
+              "readCapability": "cap.v3.fixture-only"
+            }
+          }
+        ],
+        "authorityTier": "conditional_commit",
+        "receiptId": "fixture-receipt",
+        "authorityReceipt": {
+          "kind": "commit_receipt",
+          "version": 1,
+          "receiptId": "fixture-receipt",
+          "operationId": "fixture-operation",
+          "callId": "fixture-call",
+          "authorityTier": "conditional_commit",
+          "status": "committed",
+          "actions": [
+            {
+              "actionId": "fixture-action-0",
+              "index": 0,
+              "action": "update",
+              "path": ".env",
+              "status": "committed",
+              "beforeHash": "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+              "afterHash": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f",
+              "forward": {
+                "outcome": "applied",
+                "afterHashes": {
+                  ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+                }
+              }
+            }
+          ],
+          "finalHashes": {
+            ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+          }
+        },
+        "errors": [],
+        "freshCapabilities": []
+      },
+      "confirmation": 1,
+      "actionOutcome": {
+        "actionId": "confirmed",
+        "attemptId": "confirmed",
+        "runId": "independent-run",
+        "toolName": "write_file",
+        "basis": {
+          "inputHash": "sha256:synthetic-input-identity"
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "confirmed",
+          "receiptIds": [
+            "fixture-receipt"
+          ],
+          "confirmedPaths": [
+            ".env"
+          ],
+          "forward": [
+            {
+              "actionId": "fixture-action-0",
+              "outcome": "applied",
+              "afterHashes": {
+                ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+              }
+            }
+          ]
+        }
+      },
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "confirmed",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"kind\":\"file_mutation_result\",\"version\":1,\"operationId\":\"fixture-operation\",\"outcome\":\"applied\",\"actions\":[{\"actionId\":\"fixture-action-0\",\"index\":0,\"action\":\"update\",\"path\":\".env\",\"outcome\":\"applied\",\"beforeHash\":\"sha256:redacted\",\"afterHash\":\"sha256:redacted\",\"forward\":{\"outcome\":\"applied\",\"afterHashes\":{\".env\":\"sha256:redacted\"}},\"afterContent\":\"[sensitive]\"}],\"authorityTier\":\"conditional_commit\",\"receiptId\":\"fixture-receipt\",\"authorityReceipt\":{\"kind\":\"commit_receipt\",\"version\":1,\"receiptId\":\"fixture-receipt\",\"operationId\":\"fixture-operation\",\"callId\":\"fixture-call\",\"authorityTier\":\"conditional_commit\",\"status\":\"committed\",\"actions\":[{\"actionId\":\"fixture-action-0\",\"index\":0,\"action\":\"update\",\"path\":\".env\",\"status\":\"committed\",\"beforeHash\":\"sha256:redacted\",\"afterHash\":\"sha256:redacted\",\"forward\":{\"outcome\":\"applied\",\"afterHashes\":{\".env\":\"sha256:redacted\"}}}],\"finalHashes\":{\".env\":\"sha256:redacted\"}},\"errors\":[],\"freshCapabilities\":[]}"
+          },
+          {
+            "type": "text",
+            "text": "[sensitive file changed: .env]"
+          }
+        ],
+        "_meta": {
+          "openbuff.dev": {
+            "receipt": {
+              "kind": "openbuff.receipt_envelope",
+              "version": 1,
+              "sessionId": "independent",
+              "toolCallId": "confirmed",
+              "laneId": "main",
+              "mutation": {
+                "kind": "file_mutation_result",
+                "version": 1,
+                "operationId": "fixture-operation",
+                "outcome": "applied",
+                "actions": [
+                  {
+                    "actionId": "fixture-action-0",
+                    "index": 0,
+                    "action": "update",
+                    "path": ".env",
+                    "outcome": "applied",
+                    "beforeHash": "sha256:redacted",
+                    "afterHash": "sha256:redacted",
+                    "forward": {
+                      "outcome": "applied",
+                      "afterHashes": {
+                        ".env": "sha256:redacted"
+                      }
+                    }
+                  }
+                ],
+                "authorityTier": "conditional_commit",
+                "receiptId": "fixture-receipt",
+                "authorityReceipt": {
+                  "kind": "commit_receipt",
+                  "version": 1,
+                  "receiptId": "fixture-receipt",
+                  "operationId": "fixture-operation",
+                  "callId": "fixture-call",
+                  "authorityTier": "conditional_commit",
+                  "status": "committed",
+                  "actions": [
+                    {
+                      "actionId": "fixture-action-0",
+                      "index": 0,
+                      "action": "update",
+                      "path": ".env",
+                      "status": "committed",
+                      "beforeHash": "sha256:redacted",
+                      "afterHash": "sha256:redacted",
+                      "forward": {
+                        "outcome": "applied",
+                        "afterHashes": {
+                          ".env": "sha256:redacted"
+                        }
+                      }
+                    }
+                  ],
+                  "finalHashes": {
+                    ".env": "sha256:redacted"
+                  }
+                },
+                "errors": [],
+                "freshCapabilities": []
+              }
+            },
+            "actionOutcome": {
+              "actionId": "confirmed",
+              "attemptId": "confirmed",
+              "runId": "independent-run",
+              "toolName": "write_file",
+              "basis": {
+                "inputHash": "sha256:redacted"
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "confirmed",
+                "receiptIds": [
+                  "fixture-receipt"
+                ],
+                "confirmedPaths": [
+                  ".env"
+                ],
+                "forward": [
+                  {
+                    "actionId": "fixture-action-0",
+                    "outcome": "applied",
+                    "afterHashes": {
+                      ".env": "sha256:redacted"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "terminal": {
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "actionOutcomes": [
+          {
+            "actionId": "confirmed",
+            "attemptId": "confirmed",
+            "runId": "independent-run",
+            "toolName": "write_file",
+            "basis": {
+              "inputHash": "sha256:redacted"
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "confirmed",
+              "receiptIds": [
+                "fixture-receipt"
+              ],
+              "confirmedPaths": [
+                ".env"
+              ],
+              "forward": [
+                {
+                  "actionId": "fixture-action-0",
+                  "outcome": "applied",
+                  "afterHashes": {
+                    ".env": "sha256:redacted"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "refused-rollback",
+      "mutation": {
+        "kind": "file_mutation_result",
+        "version": 1,
+        "operationId": "fixture-operation",
+        "outcome": "rollback_incomplete",
+        "actions": [
+          {
+            "actionId": "fixture-action-0",
+            "index": 0,
+            "action": "update",
+            "path": ".env",
+            "outcome": "not_applied",
+            "beforeHash": "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+            "afterHash": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f",
+            "forward": {
+              "outcome": "not_applied",
+              "afterHashes": {
+                ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+              }
+            },
+            "rollback": {
+              "attempted": true,
+              "succeeded": false
+            }
+          }
+        ],
+        "authorityTier": "conditional_commit",
+        "receiptId": "fixture-receipt",
+        "authorityReceipt": {
+          "kind": "commit_receipt",
+          "version": 1,
+          "receiptId": "fixture-receipt",
+          "operationId": "fixture-operation",
+          "callId": "fixture-call",
+          "authorityTier": "conditional_commit",
+          "status": "rollback_incomplete",
+          "actions": [
+            {
+              "actionId": "fixture-action-0",
+              "index": 0,
+              "action": "update",
+              "path": ".env",
+              "status": "rollback_failed",
+              "beforeHash": "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+              "afterHash": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f",
+              "forward": {
+                "outcome": "not_applied",
+                "afterHashes": {
+                  ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+                }
+              }
+            }
+          ],
+          "finalHashes": {
+            ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+          }
+        },
+        "errors": [],
+        "freshCapabilities": []
+      },
+      "confirmation": 0,
+      "actionOutcome": {
+        "actionId": "refused-rollback",
+        "attemptId": "refused-rollback",
+        "runId": "independent-run",
+        "toolName": "write_file",
+        "basis": {
+          "inputHash": "sha256:synthetic-input-identity"
+        },
+        "outcome": "uncertain",
+        "cause": {
+          "code": "mutation_rollback_incomplete",
+          "message": "Mutation rollback_incomplete."
+        },
+        "effect": {
+          "status": "unobserved",
+          "receiptIds": [
+            "fixture-receipt"
+          ],
+          "confirmedPaths": [],
+          "forward": [
+            {
+              "actionId": "fixture-action-0",
+              "outcome": "not_applied",
+              "afterHashes": {
+                ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+              }
+            }
+          ]
+        }
+      },
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "refused-rollback",
+        "status": "failed",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"kind\":\"file_mutation_result\",\"version\":1,\"operationId\":\"fixture-operation\",\"outcome\":\"rollback_incomplete\",\"actions\":[{\"actionId\":\"fixture-action-0\",\"index\":0,\"action\":\"update\",\"path\":\".env\",\"outcome\":\"not_applied\",\"beforeHash\":\"sha256:redacted\",\"afterHash\":\"sha256:redacted\",\"forward\":{\"outcome\":\"not_applied\",\"afterHashes\":{\".env\":\"sha256:redacted\"}},\"rollback\":{\"attempted\":true,\"succeeded\":false}}],\"authorityTier\":\"conditional_commit\",\"receiptId\":\"fixture-receipt\",\"authorityReceipt\":{\"kind\":\"commit_receipt\",\"version\":1,\"receiptId\":\"fixture-receipt\",\"operationId\":\"fixture-operation\",\"callId\":\"fixture-call\",\"authorityTier\":\"conditional_commit\",\"status\":\"rollback_incomplete\",\"actions\":[{\"actionId\":\"fixture-action-0\",\"index\":0,\"action\":\"update\",\"path\":\".env\",\"status\":\"rollback_failed\",\"beforeHash\":\"sha256:redacted\",\"afterHash\":\"sha256:redacted\",\"forward\":{\"outcome\":\"not_applied\",\"afterHashes\":{\".env\":\"sha256:redacted\"}}}],\"finalHashes\":{\".env\":\"sha256:redacted\"}},\"errors\":[],\"freshCapabilities\":[]}"
+          }
+        ],
+        "_meta": {
+          "openbuff.dev": {
+            "receipt": {
+              "kind": "openbuff.receipt_envelope",
+              "version": 1,
+              "sessionId": "independent",
+              "toolCallId": "refused-rollback",
+              "laneId": "main",
+              "mutation": {
+                "kind": "file_mutation_result",
+                "version": 1,
+                "operationId": "fixture-operation",
+                "outcome": "rollback_incomplete",
+                "actions": [
+                  {
+                    "actionId": "fixture-action-0",
+                    "index": 0,
+                    "action": "update",
+                    "path": ".env",
+                    "outcome": "not_applied",
+                    "beforeHash": "sha256:redacted",
+                    "afterHash": "sha256:redacted",
+                    "forward": {
+                      "outcome": "not_applied",
+                      "afterHashes": {
+                        ".env": "sha256:redacted"
+                      }
+                    },
+                    "rollback": {
+                      "attempted": true,
+                      "succeeded": false
+                    }
+                  }
+                ],
+                "authorityTier": "conditional_commit",
+                "receiptId": "fixture-receipt",
+                "authorityReceipt": {
+                  "kind": "commit_receipt",
+                  "version": 1,
+                  "receiptId": "fixture-receipt",
+                  "operationId": "fixture-operation",
+                  "callId": "fixture-call",
+                  "authorityTier": "conditional_commit",
+                  "status": "rollback_incomplete",
+                  "actions": [
+                    {
+                      "actionId": "fixture-action-0",
+                      "index": 0,
+                      "action": "update",
+                      "path": ".env",
+                      "status": "rollback_failed",
+                      "beforeHash": "sha256:redacted",
+                      "afterHash": "sha256:redacted",
+                      "forward": {
+                        "outcome": "not_applied",
+                        "afterHashes": {
+                          ".env": "sha256:redacted"
+                        }
+                      }
+                    }
+                  ],
+                  "finalHashes": {
+                    ".env": "sha256:redacted"
+                  }
+                },
+                "errors": [],
+                "freshCapabilities": []
+              }
+            },
+            "actionOutcome": {
+              "actionId": "refused-rollback",
+              "attemptId": "refused-rollback",
+              "runId": "independent-run",
+              "toolName": "write_file",
+              "basis": {
+                "inputHash": "sha256:redacted"
+              },
+              "outcome": "uncertain",
+              "cause": {
+                "code": "mutation_rollback_incomplete",
+                "message": "Mutation rollback_incomplete."
+              },
+              "effect": {
+                "status": "unobserved",
+                "receiptIds": [
+                  "fixture-receipt"
+                ],
+                "confirmedPaths": [],
+                "forward": [
+                  {
+                    "actionId": "fixture-action-0",
+                    "outcome": "not_applied",
+                    "afterHashes": {
+                      ".env": "sha256:redacted"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "terminal": {
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "actionOutcomes": [
+          {
+            "actionId": "refused-rollback",
+            "attemptId": "refused-rollback",
+            "runId": "independent-run",
+            "toolName": "write_file",
+            "basis": {
+              "inputHash": "sha256:redacted"
+            },
+            "outcome": "uncertain",
+            "cause": {
+              "code": "mutation_rollback_incomplete",
+              "message": "Mutation rollback_incomplete."
+            },
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [
+                "fixture-receipt"
+              ],
+              "confirmedPaths": [],
+              "forward": [
+                {
+                  "actionId": "fixture-action-0",
+                  "outcome": "not_applied",
+                  "afterHashes": {
+                    ".env": "sha256:redacted"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "uncertain-rollback",
+      "mutation": {
+        "kind": "file_mutation_result",
+        "version": 1,
+        "operationId": "fixture-operation",
+        "outcome": "rollback_incomplete",
+        "actions": [
+          {
+            "actionId": "fixture-action-0",
+            "index": 0,
+            "action": "update",
+            "path": ".env",
+            "outcome": "rollback_incomplete",
+            "beforeHash": "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+            "afterHash": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f",
+            "forward": {
+              "outcome": "unconfirmed",
+              "afterHashes": {
+                ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+              }
+            },
+            "rollback": {
+              "attempted": true,
+              "succeeded": false
+            }
+          }
+        ],
+        "authorityTier": "conditional_commit",
+        "receiptId": "fixture-receipt",
+        "authorityReceipt": {
+          "kind": "commit_receipt",
+          "version": 1,
+          "receiptId": "fixture-receipt",
+          "operationId": "fixture-operation",
+          "callId": "fixture-call",
+          "authorityTier": "conditional_commit",
+          "status": "rollback_incomplete",
+          "actions": [
+            {
+              "actionId": "fixture-action-0",
+              "index": 0,
+              "action": "update",
+              "path": ".env",
+              "status": "rollback_failed",
+              "beforeHash": "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+              "afterHash": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f",
+              "forward": {
+                "outcome": "unconfirmed",
+                "afterHashes": {
+                  ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+                }
+              }
+            }
+          ],
+          "finalHashes": {
+            ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+          }
+        },
+        "errors": [],
+        "freshCapabilities": []
+      },
+      "confirmation": 0,
+      "actionOutcome": {
+        "actionId": "uncertain-rollback",
+        "attemptId": "uncertain-rollback",
+        "runId": "independent-run",
+        "toolName": "write_file",
+        "basis": {
+          "inputHash": "sha256:synthetic-input-identity"
+        },
+        "outcome": "uncertain",
+        "cause": {
+          "code": "mutation_rollback_incomplete",
+          "message": "Mutation rollback_incomplete."
+        },
+        "effect": {
+          "status": "partial",
+          "receiptIds": [
+            "fixture-receipt"
+          ],
+          "confirmedPaths": [],
+          "forward": [
+            {
+              "actionId": "fixture-action-0",
+              "outcome": "unconfirmed",
+              "afterHashes": {
+                ".env": "sha256:7b6ac4b1a9eb20e9bc9cb4717c1be0cb6fec81ad9e732a65177902caa981292f"
+              }
+            }
+          ]
+        }
+      },
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "uncertain-rollback",
+        "status": "failed",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"kind\":\"file_mutation_result\",\"version\":1,\"operationId\":\"fixture-operation\",\"outcome\":\"rollback_incomplete\",\"actions\":[{\"actionId\":\"fixture-action-0\",\"index\":0,\"action\":\"update\",\"path\":\".env\",\"outcome\":\"rollback_incomplete\",\"beforeHash\":\"sha256:redacted\",\"afterHash\":\"sha256:redacted\",\"forward\":{\"outcome\":\"unconfirmed\",\"afterHashes\":{\".env\":\"sha256:redacted\"}},\"rollback\":{\"attempted\":true,\"succeeded\":false}}],\"authorityTier\":\"conditional_commit\",\"receiptId\":\"fixture-receipt\",\"authorityReceipt\":{\"kind\":\"commit_receipt\",\"version\":1,\"receiptId\":\"fixture-receipt\",\"operationId\":\"fixture-operation\",\"callId\":\"fixture-call\",\"authorityTier\":\"conditional_commit\",\"status\":\"rollback_incomplete\",\"actions\":[{\"actionId\":\"fixture-action-0\",\"index\":0,\"action\":\"update\",\"path\":\".env\",\"status\":\"rollback_failed\",\"beforeHash\":\"sha256:redacted\",\"afterHash\":\"sha256:redacted\",\"forward\":{\"outcome\":\"unconfirmed\",\"afterHashes\":{\".env\":\"sha256:redacted\"}}}],\"finalHashes\":{\".env\":\"sha256:redacted\"}},\"errors\":[],\"freshCapabilities\":[]}"
+          }
+        ],
+        "_meta": {
+          "openbuff.dev": {
+            "receipt": {
+              "kind": "openbuff.receipt_envelope",
+              "version": 1,
+              "sessionId": "independent",
+              "toolCallId": "uncertain-rollback",
+              "laneId": "main",
+              "mutation": {
+                "kind": "file_mutation_result",
+                "version": 1,
+                "operationId": "fixture-operation",
+                "outcome": "rollback_incomplete",
+                "actions": [
+                  {
+                    "actionId": "fixture-action-0",
+                    "index": 0,
+                    "action": "update",
+                    "path": ".env",
+                    "outcome": "rollback_incomplete",
+                    "beforeHash": "sha256:redacted",
+                    "afterHash": "sha256:redacted",
+                    "forward": {
+                      "outcome": "unconfirmed",
+                      "afterHashes": {
+                        ".env": "sha256:redacted"
+                      }
+                    },
+                    "rollback": {
+                      "attempted": true,
+                      "succeeded": false
+                    }
+                  }
+                ],
+                "authorityTier": "conditional_commit",
+                "receiptId": "fixture-receipt",
+                "authorityReceipt": {
+                  "kind": "commit_receipt",
+                  "version": 1,
+                  "receiptId": "fixture-receipt",
+                  "operationId": "fixture-operation",
+                  "callId": "fixture-call",
+                  "authorityTier": "conditional_commit",
+                  "status": "rollback_incomplete",
+                  "actions": [
+                    {
+                      "actionId": "fixture-action-0",
+                      "index": 0,
+                      "action": "update",
+                      "path": ".env",
+                      "status": "rollback_failed",
+                      "beforeHash": "sha256:redacted",
+                      "afterHash": "sha256:redacted",
+                      "forward": {
+                        "outcome": "unconfirmed",
+                        "afterHashes": {
+                          ".env": "sha256:redacted"
+                        }
+                      }
+                    }
+                  ],
+                  "finalHashes": {
+                    ".env": "sha256:redacted"
+                  }
+                },
+                "errors": [],
+                "freshCapabilities": []
+              }
+            },
+            "actionOutcome": {
+              "actionId": "uncertain-rollback",
+              "attemptId": "uncertain-rollback",
+              "runId": "independent-run",
+              "toolName": "write_file",
+              "basis": {
+                "inputHash": "sha256:redacted"
+              },
+              "outcome": "uncertain",
+              "cause": {
+                "code": "mutation_rollback_incomplete",
+                "message": "Mutation rollback_incomplete."
+              },
+              "effect": {
+                "status": "partial",
+                "receiptIds": [
+                  "fixture-receipt"
+                ],
+                "confirmedPaths": [],
+                "forward": [
+                  {
+                    "actionId": "fixture-action-0",
+                    "outcome": "unconfirmed",
+                    "afterHashes": {
+                      ".env": "sha256:redacted"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "terminal": {
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "actionOutcomes": [
+          {
+            "actionId": "uncertain-rollback",
+            "attemptId": "uncertain-rollback",
+            "runId": "independent-run",
+            "toolName": "write_file",
+            "basis": {
+              "inputHash": "sha256:redacted"
+            },
+            "outcome": "uncertain",
+            "cause": {
+              "code": "mutation_rollback_incomplete",
+              "message": "Mutation rollback_incomplete."
+            },
+            "effect": {
+              "status": "partial",
+              "receiptIds": [
+                "fixture-receipt"
+              ],
+              "confirmedPaths": [],
+              "forward": [
+                {
+                  "actionId": "fixture-action-0",
+                  "outcome": "unconfirmed",
+                  "afterHashes": {
+                    ".env": "sha256:redacted"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "confirmed-delete",
+      "mutation": {
+        "kind": "file_mutation_result",
+        "version": 1,
+        "operationId": "fixture-operation",
+        "outcome": "applied",
+        "actions": [
+          {
+            "actionId": "fixture-action-0",
+            "index": 0,
+            "action": "delete",
+            "path": ".env",
+            "outcome": "applied",
+            "beforeHash": "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+            "afterHash": null,
+            "forward": {
+              "outcome": "applied",
+              "afterHashes": {
+                ".env": null
+              }
+            }
+          }
+        ],
+        "authorityTier": "conditional_commit",
+        "receiptId": "fixture-receipt",
+        "authorityReceipt": {
+          "kind": "commit_receipt",
+          "version": 1,
+          "receiptId": "fixture-receipt",
+          "operationId": "fixture-operation",
+          "callId": "fixture-call",
+          "authorityTier": "conditional_commit",
+          "status": "committed",
+          "actions": [
+            {
+              "actionId": "fixture-action-0",
+              "index": 0,
+              "action": "delete",
+              "path": ".env",
+              "status": "committed",
+              "beforeHash": "sha256:6db7d803e74f1ffa7d8f5adc0bf95b3e15bf4c8373fffadf546227cc6c6742cb",
+              "afterHash": null,
+              "forward": {
+                "outcome": "applied",
+                "afterHashes": {
+                  ".env": null
+                }
+              }
+            }
+          ],
+          "finalHashes": {
+            ".env": null
+          }
+        },
+        "errors": [],
+        "freshCapabilities": []
+      },
+      "confirmation": 1,
+      "actionOutcome": {
+        "actionId": "confirmed-delete",
+        "attemptId": "confirmed-delete",
+        "runId": "independent-run",
+        "toolName": "write_file",
+        "basis": {
+          "inputHash": "sha256:synthetic-input-identity"
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "confirmed",
+          "receiptIds": [
+            "fixture-receipt"
+          ],
+          "confirmedPaths": [
+            ".env"
+          ],
+          "forward": [
+            {
+              "actionId": "fixture-action-0",
+              "outcome": "applied",
+              "afterHashes": {
+                ".env": null
+              }
+            }
+          ]
+        }
+      },
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "confirmed-delete",
+        "status": "completed",
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"kind\":\"file_mutation_result\",\"version\":1,\"operationId\":\"fixture-operation\",\"outcome\":\"applied\",\"actions\":[{\"actionId\":\"fixture-action-0\",\"index\":0,\"action\":\"delete\",\"path\":\".env\",\"outcome\":\"applied\",\"beforeHash\":\"sha256:redacted\",\"afterHash\":null,\"forward\":{\"outcome\":\"applied\",\"afterHashes\":{\".env\":null}}}],\"authorityTier\":\"conditional_commit\",\"receiptId\":\"fixture-receipt\",\"authorityReceipt\":{\"kind\":\"commit_receipt\",\"version\":1,\"receiptId\":\"fixture-receipt\",\"operationId\":\"fixture-operation\",\"callId\":\"fixture-call\",\"authorityTier\":\"conditional_commit\",\"status\":\"committed\",\"actions\":[{\"actionId\":\"fixture-action-0\",\"index\":0,\"action\":\"delete\",\"path\":\".env\",\"status\":\"committed\",\"beforeHash\":\"sha256:redacted\",\"afterHash\":null,\"forward\":{\"outcome\":\"applied\",\"afterHashes\":{\".env\":null}}}],\"finalHashes\":{\".env\":null}},\"errors\":[],\"freshCapabilities\":[]}"
+          },
+          {
+            "type": "text",
+            "text": "[sensitive file changed: .env]"
+          }
+        ],
+        "_meta": {
+          "openbuff.dev": {
+            "receipt": {
+              "kind": "openbuff.receipt_envelope",
+              "version": 1,
+              "sessionId": "independent",
+              "toolCallId": "confirmed-delete",
+              "laneId": "main",
+              "mutation": {
+                "kind": "file_mutation_result",
+                "version": 1,
+                "operationId": "fixture-operation",
+                "outcome": "applied",
+                "actions": [
+                  {
+                    "actionId": "fixture-action-0",
+                    "index": 0,
+                    "action": "delete",
+                    "path": ".env",
+                    "outcome": "applied",
+                    "beforeHash": "sha256:redacted",
+                    "afterHash": null,
+                    "forward": {
+                      "outcome": "applied",
+                      "afterHashes": {
+                        ".env": null
+                      }
+                    }
+                  }
+                ],
+                "authorityTier": "conditional_commit",
+                "receiptId": "fixture-receipt",
+                "authorityReceipt": {
+                  "kind": "commit_receipt",
+                  "version": 1,
+                  "receiptId": "fixture-receipt",
+                  "operationId": "fixture-operation",
+                  "callId": "fixture-call",
+                  "authorityTier": "conditional_commit",
+                  "status": "committed",
+                  "actions": [
+                    {
+                      "actionId": "fixture-action-0",
+                      "index": 0,
+                      "action": "delete",
+                      "path": ".env",
+                      "status": "committed",
+                      "beforeHash": "sha256:redacted",
+                      "afterHash": null,
+                      "forward": {
+                        "outcome": "applied",
+                        "afterHashes": {
+                          ".env": null
+                        }
+                      }
+                    }
+                  ],
+                  "finalHashes": {
+                    ".env": null
+                  }
+                },
+                "errors": [],
+                "freshCapabilities": []
+              }
+            },
+            "actionOutcome": {
+              "actionId": "confirmed-delete",
+              "attemptId": "confirmed-delete",
+              "runId": "independent-run",
+              "toolName": "write_file",
+              "basis": {
+                "inputHash": "sha256:redacted"
+              },
+              "outcome": "succeeded",
+              "effect": {
+                "status": "confirmed",
+                "receiptIds": [
+                  "fixture-receipt"
+                ],
+                "confirmedPaths": [
+                  ".env"
+                ],
+                "forward": [
+                  {
+                    "actionId": "fixture-action-0",
+                    "outcome": "applied",
+                    "afterHashes": {
+                      ".env": null
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "terminal": {
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "actionOutcomes": [
+          {
+            "actionId": "confirmed-delete",
+            "attemptId": "confirmed-delete",
+            "runId": "independent-run",
+            "toolName": "write_file",
+            "basis": {
+              "inputHash": "sha256:redacted"
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "confirmed",
+              "receiptIds": [
+                "fixture-receipt"
+              ],
+              "confirmedPaths": [
+                ".env"
+              ],
+              "forward": [
+                {
+                  "actionId": "fixture-action-0",
+                  "outcome": "applied",
+                  "afterHashes": {
+                    ".env": null
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

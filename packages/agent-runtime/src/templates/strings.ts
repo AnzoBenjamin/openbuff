@@ -27,6 +27,7 @@ import { getAgentTemplate } from './agent-registry'
 import {
   buildFullSpawnableAgentsSpec,
   formatCompactAgentCatalogLine,
+  formatGenericAgentInputContract,
   getModelVisibleSpawnableAgents,
 } from './prompts'
 import { PLACEHOLDER, placeholderValues } from './types'
@@ -167,6 +168,8 @@ export async function formatPrompt(
   const toInject: Record<PlaceholderValue, () => string | Promise<string>> = {
     [PLACEHOLDER.AGENT_NAME]: () =>
       agentTemplate ? agentTemplate.displayName || 'Unknown Agent' : 'Buffy',
+    // NOTE(P2-T1): CURRENT_DATE is non-persisted prompt content, intentionally NOT
+    // clock-injected. If prompt-identical replay is later required, thread Clock here.
     [PLACEHOLDER.CURRENT_DATE]: () => formatCurrentDate(new Date()),
     [PLACEHOLDER.FILE_TREE_PROMPT_SMALL]: () =>
       getProjectFileTreePrompt({
@@ -202,9 +205,7 @@ export async function formatPrompt(
     [PLACEHOLDER.GIT_CHANGES_PROMPT]: () =>
       getGitChangesPrompt(fileContext, ledger),
     [PLACEHOLDER.REMAINING_STEPS]: () =>
-      agentState.stepsRemaining < 0
-        ? 'unlimited (no-progress watchdog active)'
-        : `${agentState.stepsRemaining}`,
+      agentState.stepsRemaining < 0 ? 'unlimited' : `${agentState.stepsRemaining}`,
     [PLACEHOLDER.PROJECT_ROOT]: () => fileContext.projectRoot,
     [PLACEHOLDER.SYSTEM_INFO_PROMPT]: () =>
       getSystemInfoPrompt(fileContext, ledger),
@@ -410,7 +411,7 @@ export async function getAgentPrompt<T extends StringField>(
             agentId: agentType,
             localAgentTemplates: agentTemplates,
           })
-          return formatCompactAgentCatalogLine(
+          const line = formatCompactAgentCatalogLine(
             agentType,
             template,
             params.resolveModelContextWindow?.({
@@ -418,6 +419,9 @@ export async function getAgentPrompt<T extends StringField>(
               model: template?.model,
             }),
           )
+          return agentTemplate.spawnableAgentToolMode === 'generic' && template
+            ? `${line}\n${formatGenericAgentInputContract(agentType, template)}`
+            : line
         }),
       )
       addendum += `\n\nYou can spawn the following agents:\n\n${agentDescriptions.join('\n')}`

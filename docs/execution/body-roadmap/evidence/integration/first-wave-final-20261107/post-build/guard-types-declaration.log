@@ -1,0 +1,6 @@
+$ bun run types-declaration-guard.ts
+Type declaration guard passed: every runtime dependency of every workspace manifest declares its typings in that same manifest, and every declared @types package has the runtime dependency it types in that same manifest, or is recorded in NO_TYPES_PACKAGE / ORPHANED_TYPES_EXEMPT with the package that supplies them.
+Note: 3 runtime dependency release(s) rely on a NO_TYPES_PACKAGE exemption; confirm each still has no conventional @types sibling:
+  - evals/package.json: @anthropic-ai/claude-code
+  - package.json: gif-encoder-2
+  - packages/code-map/package.json: tree-sitter-wasms

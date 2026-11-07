@@ -149,6 +149,33 @@ const faultHandoff = {
   },
 }
 
+describe('journal deps propagation (P2-T2)', () => {
+  it(
+    'extractSubagentContextParams forwards journalWriter/journalReader into the subagent params spread',
+    () => {
+      const journalWriter = { append: () => {} }
+      const journalReader = {
+        lastEvent: () => undefined,
+        events: () => [],
+        toolResultFor: () => undefined,
+        toolResultForInput: () => undefined,
+      }
+      const extracted = realExtractSubagentContextParams({
+        clientSessionId: 'test-session',
+        fileContext: mockFileContext,
+        signal: new AbortController().signal,
+        userId: TEST_USER_ID,
+        journalWriter,
+        journalReader,
+      } as unknown as Parameters<
+        typeof realExtractSubagentContextParams
+      >[0])
+      expect(extracted.journalWriter).toBe(journalWriter)
+      expect(extracted.journalReader).toBe(journalReader)
+    },
+  )
+})
+
 describe('spawn settle fault injection (M2-T1)', () => {
   const createMockAgent = (
     id: string,

@@ -1,0 +1,8 @@
+{
+  "executablePath": "/opt/google/chrome/chrome",
+  "allowedDomains": [
+    "127.0.0.1"
+  ],
+  "maxOutput": 8192,
+  "namespace": "openbuff-rweb-52f0c3b3c119"
+}

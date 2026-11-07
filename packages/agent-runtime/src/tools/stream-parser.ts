@@ -5,6 +5,7 @@ import { AbortError } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { advanceWorkspaceState } from '@codebuff/common/types/workspace-state'
+import { toToolCallStreamChunkPayload } from '@codebuff/common/types/contracts/llm'
 
 import { processStreamWithTools } from '../tool-stream-parser'
 import { DEFAULT_INCLUDE_REASONING_IN_MESSAGE_HISTORY } from '../constants'
@@ -17,6 +18,7 @@ import { remintConfirmedPostEditAnchors } from '../util/read-authorization'
 import { withSystemTags } from '../util/messages'
 import { resolveProjectPath } from '@codebuff/common/util/project-path-containment'
 import { normalizeToolPath } from './handlers/tool/write-file'
+import { createHash } from 'node:crypto'
 
 import type { CustomToolCall, ExecuteToolCallParams } from './tool-executor'
 import type { AgentTemplate } from '../templates/types'
@@ -33,6 +35,15 @@ import type { ProviderMetadata } from '@codebuff/common/types/messages/provider-
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import type { Subgoal } from '@codebuff/common/types/session-state'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
+
+// Structured invalid-arguments marker on the error event emitted by
+// tool-executor's validation failure paths when publishing a ToolCallError.
+// The shared PrintModeEvent contract is additive-optional, so the marker is
+// typed locally here (the sole consumption point: the degeneration guard in
+// createResponseHandler) rather than widening the shared event types.
+type InvalidArgumentsValidationError = PrintModeEvent & {
+  invalidArgumentsValidation?: boolean
+}
 
 /**
  * Tools that only perform read operations and are safe to run concurrently with
@@ -110,6 +121,11 @@ export async function processStream(
     []
   const assistantMessages: Message[] = []
   let hadToolCallError = false
+  // Only verified argument-validation failures may arm the repeated-call
+  // guard. Provider/transport/policy errors are also emitted as `error`
+  // events, but are not evidence that an identical invalid call was made.
+  const invalidCallSignatures: string[] = []
+  const invalidCallToolNames = new Set<string>()
   let unknownWorkspaceMutationMayHaveRun = false
   const errorMessages: Message[] = []
   // Per-path write barriers. Writes on DIFFERENT paths run concurrently;
@@ -283,11 +299,38 @@ export async function processStream(
   // === RESPONSE HANDLER ===
   // Creates a response handler that captures tool events into assistantMessages.
   // When isXmlMode=true, also captures tool_result events for interleaved ordering.
-  function createResponseHandler() {
+  function createResponseHandler(toolName: string, input: unknown) {
     return (chunk: string | PrintModeEvent) => {
       if (typeof chunk !== 'string') {
         if (chunk.type === 'error') {
           hadToolCallError = true
+          // Arm the repeated-invalid-call degeneration guard ONLY on the
+          // structured flag emitted by tool-executor's validation failure
+          // paths (both native and custom executors set it for every
+          // ToolCallError). Never key this on `message` prose: the human text
+          // may be reworded, localized, or varied per tool, and prose drift
+          // would silently disarm the three-identical-invalid-calls break in
+          // loopAgentSteps without any failure signal. Provider/transport/
+          // policy errors also arrive as `error` events but carry no flag, so
+          // they cannot falsely arm an identical-invalid-calls count, which
+          // matches the prior prose rule's scope.
+          if (
+            (chunk as InvalidArgumentsValidationError)
+              .invalidArgumentsValidation === true
+          ) {
+            if (/^[a-zA-Z0-9_.-]{1,80}$/.test(toolName)) {
+              invalidCallToolNames.add(toolName)
+            }
+            try {
+              const serialized = JSON.stringify([toolName, input])
+              invalidCallSignatures.push(
+                createHash('sha256').update(serialized).digest('hex'),
+              )
+            } catch {
+              // Unserializable inputs cannot be compared safely. Preserve the
+              // feedback, but do not claim that repeated calls were identical.
+            }
+          }
           errorMessages.push(
             userMessage({
               content: withSystemTags(
@@ -305,18 +348,22 @@ export async function processStream(
   // === TOOL EXECUTION ===
   // Unified callback factory for both native and custom tools.
   function createToolExecutionCallback(toolName: string, isXmlMode: boolean) {
-    const responseHandler = createResponseHandler()
     return {
       onTagStart: () => {},
       onTagEnd: async (
         _: string,
         input: Record<string, string>,
-        context?: { toolCallId?: string; providerOptions?: ProviderMetadata },
+        context?: {
+          toolCallId?: string
+          providerOptions?: ProviderMetadata
+          providerReportedTruncation?: boolean
+        },
       ) => {
         if (signal.aborted) {
           return
         }
         const toolCallId = context?.toolCallId ?? generateCompactId()
+        const responseHandler = createResponseHandler(toolName, input)
         // Deprecated compatibility shim: `apply_patch` was removed from the native registry but
         // retained in the exported ToolName/ToolParamsMap as @deprecated for type-compat.
         // Keep a runtime alias so existing callers still succeed with a deprecation warning
@@ -668,6 +715,7 @@ export async function processStream(
             fullResponse: fullResponseChunks.join(''),
             previousToolCallFinished: previousPromise,
             providerOptions: context?.providerOptions,
+            providerReportedTruncation: context?.providerReportedTruncation,
             toolCallId,
             toolCalls,
             toolCallsToAddToMessageHistory,
@@ -689,6 +737,7 @@ export async function processStream(
             fullResponse: fullResponseChunks.join(''),
             previousToolCallFinished: previousPromise,
             providerOptions: context?.providerOptions,
+            providerReportedTruncation: context?.providerReportedTruncation,
             toolCallId,
             toolCalls,
             toolCallsToAddToMessageHistory,
@@ -762,6 +811,15 @@ export async function processStream(
     ]),
     defaultProcessor: (name: string) =>
       createToolExecutionCallback(name, false),
+    onParserError: (error) => {
+      if (error.rawExcerptComplete && error.rawExcerpt !== undefined) {
+        invalidCallSignatures.push(
+          createHash('sha256')
+            .update(JSON.stringify([error.code, error.rawExcerpt]))
+            .digest('hex'),
+        )
+      }
+    },
     loggerOptions: {
       userId,
       model: agentTemplate.model,
@@ -769,11 +827,38 @@ export async function processStream(
     },
     onResponseChunk: (chunk) => {
       if (chunk.type === 'text') {
+        // Dual-channel text delivery is intentional; each client consumes
+        // exactly one form, so nothing renders twice. Print mode renders
+        // this event form (its handleEvent prints {type:'text'} and it
+        // passes no handleStreamChunk), while the TUI renders the string
+        // form the consumption loop emits below (handleStreamChunk) and
+        // drops this event form (its createEventHandler has no 'text'
+        // case). Do not remove either channel (reviewer advisory on
+        // double-delivery: confirmed intended, pinned here).
         if (chunk.text) {
           assistantMessages.push(assistantMessage(chunk.text))
         }
       } else if (chunk.type === 'error') {
-        // do nothing
+        // Streaming XML parser errors (invalid_tool_call_json /
+        // missing_tool_name / tool_call_buffer_exceeded) reach the model only
+        // through this callback: emitParserErrors never yields them into the
+        // stream, so the consumption loop's error branch never fires for them
+        // and a dropped malformed call was indistinguishable from a
+        // successful one — the model repeated the identical malformed shape
+        // indefinitely. Record it exactly as that branch and
+        // createResponseHandler already do, so the finally block persists a
+        // TOOL_CALL_ERROR user message the next model turn can see and retry
+        // from, and hadToolCallError arms the turn-control retry safety net.
+        // .agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md
+        hadToolCallError = true
+        errorMessages.push(
+          userMessage({
+            content: withSystemTags(
+              `Error during tool call: ${chunk.message}. Please check the tool name and arguments and try again.`,
+            ),
+            tags: ['TOOL_CALL_ERROR'],
+          }),
+        )
       } else {
         chunk satisfies never
         throw new Error(
@@ -814,7 +899,10 @@ export async function processStream(
       }
 
       if (chunk.type === 'reasoning') {
-        if (includeReasoningInMessageHistory && chunk.text) {
+        if (
+          (includeReasoningInMessageHistory || chunk.replayRequired) &&
+          chunk.text
+        ) {
           const last = assistantMessages[assistantMessages.length - 1]
           const lastPart =
             last?.role === 'assistant' && Array.isArray(last.content)
@@ -828,13 +916,15 @@ export async function processStream(
             )
           }
         }
-        onResponseChunk({
-          type: 'reasoning_delta',
-          text: chunk.text,
-          ancestorRunIds,
-          runId,
-          agentId: agentState.agentId,
-        })
+        if (!chunk.suppressDisplay) {
+          onResponseChunk({
+            type: 'reasoning_delta',
+            text: chunk.text,
+            ancestorRunIds,
+            runId,
+            agentId: agentState.agentId,
+          })
+        }
       } else if (chunk.type === 'text') {
         onResponseChunk(chunk.text)
         fullResponseChunks.push(chunk.text)
@@ -934,7 +1024,10 @@ export async function processStream(
       ...agentState.messageHistory,
       ...assistantMessages,
       ...filteredToolCalls.map((toolCall) =>
-        assistantMessage({ ...toolCall, type: 'tool-call' }),
+        // Strip at every boundary into message history: the shared helper is
+        // the enforcement point, so a stream-only transport marker can never
+        // reach persisted history even if a future producer adds one.
+        assistantMessage(toToolCallStreamChunkPayload(toolCall)),
       ),
       ...toolResultsToAddToMessageHistory,
       ...errorMessages,
@@ -949,6 +1042,16 @@ export async function processStream(
     fullResponse: fullResponseChunks.join(''),
     fullResponseChunks,
     hadToolCallError,
+    // Only error-only generations count toward the loop guard. A generation
+    // that also performed a valid tool call made progress and resets it.
+    toolCallErrorSignature:
+      invalidCallSignatures.length > 0 && toolCalls.length === 0
+        ? JSON.stringify([...new Set(invalidCallSignatures)].sort())
+        : undefined,
+    toolCallErrorTools:
+      invalidCallSignatures.length > 0 && toolCalls.length === 0
+        ? [...invalidCallToolNames].sort()
+        : [],
     messageId,
     toolCalls,
     toolResults,

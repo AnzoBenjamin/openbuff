@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "type": "body-execution-plan-addenda",
+  "basePlan": {
+    "path": ".agents/sessions/body-capability-review-2026-11-05/PLAN.md",
+    "sha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241"
+  },
+  "specification": {
+    "path": ".agents/sessions/body-capability-review-2026-11-05/SPEC.md",
+    "sha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31"
+  },
+  "baseCompletionNodeCount": 39,
+  "addenda": [
+    {
+      "id": "RWEB",
+      "requestedBy": "user",
+      "requestedDate": "2026-11-07",
+      "status": "planned",
+      "title": "Overhaul researcher-web with agent-browser",
+      "document": {
+        "path": "docs/execution/body-roadmap/researcher-web-agent-browser.md",
+        "sha256": "26bc7f378dca9c4d1d847b0cc989b8b9655ff63d0a54d7f9a17e5bd1d819b30e"
+      },
+      "sourceInspection": {
+        "path": "docs/execution/body-roadmap/researcher-web-agent-browser.sources.json",
+        "sha256": "ccbb56a8f1b7da933b73fb06d953c8636b8ac518f0c91bde516a1b169ee18b19"
+      },
+      "requiredByCard": "B33",
+      "affectedCards": ["B19", "B20", "B28", "B33"],
+      "tasks": [
+        {
+          "id": "RWEB-0",
+          "status": "planned",
+          "prerequisites": []
+        },
+        {
+          "id": "RWEB-1",
+          "status": "planned",
+          "prerequisites": ["RWEB-0", "B19", "B20", "B28"]
+        },
+        {
+          "id": "RWEB-2",
+          "status": "planned",
+          "prerequisites": ["RWEB-1"]
+        },
+        {
+          "id": "RWEB-3",
+          "status": "planned",
+          "prerequisites": ["RWEB-2", "B03", "B05"]
+        },
+        {
+          "id": "RWEB-4",
+          "status": "planned",
+          "prerequisites": ["RWEB-3", "B03", "B05", "B19", "B20", "B28"]
+        }
+      ],
+      "readyPreparationTasks": ["RWEB-0"],
+      "acceptanceRule": "B33 must bind this active addendum and pass every RWEB task and base prerequisite/oracle before acceptance; no current card acceptance is inferred."
+    }
+  ]
+}

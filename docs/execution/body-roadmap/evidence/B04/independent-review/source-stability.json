@@ -1,0 +1,15 @@
+{
+  "allMatch": true,
+  "sources": {
+    "sdk/src/services/workspace-mutation-broker.ts": "af865e30f270622c8adbfa2911f8a0f008d172676fe6484cf6a5e7c95034c083",
+    "sdk/src/__tests__/workspace-mutation-broker.test.ts": "9a2a138c10065035f3e3e2a0b060c6492db0340ab76c3d365bda88afba0b1592",
+    "packages/indexer/src/index-store.ts": "773242747855e16e0e296934ec1d4d482c0666ccbb2c884d4b0f9eb106308b6f",
+    "packages/indexer/src/index-store.test.ts": "145bf6492f4b1b2f8495d14b5c1a549b1de6f7cb633cb63221e8cc7b42fab123",
+    "packages/indexer/src/index-manager.ts": "46cda46b4c09180fa51328a24c934214db1cc99c406e6c861f0b40940dbe1bc1",
+    "packages/indexer/src/index-manager.test.ts": "d0ec0dd05db32e71b7d60de1547a4b93dd8f05b4d4658df9ed16e17a524a2cf0",
+    "cli/src/utils/turn-snapshots.ts": "2729f329316f138dd1c213b1e02a641c25854c5b22f452355ea4821e37683e43",
+    "cli/src/utils/__tests__/turn-snapshots.test.ts": "1b32d756e592b62b224250ea0dee30e15154af8229cad4d9e0fd41b4737bbb8a",
+    "packages/indexer/src/index-manager-semantic.test.ts": "e5df842eafbc9c1bb18335a814b81abeb5391be764892b860274de77f4101fab"
+  },
+  "producerManifestHash": "b2e30ea9367623fe89695d1426d2688eefe16c31113b3909f2bb2db0387d336f"
+}

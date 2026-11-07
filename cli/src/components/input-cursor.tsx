@@ -1,5 +1,6 @@
 import { TextAttributes } from '@opentui/core'
 import React, { useEffect, useRef, useState } from 'react'
+import { getCliEnv } from '../utils/env'
 
 interface InputCursorProps {
   visible: boolean
@@ -22,6 +23,9 @@ export const InputCursor: React.FC<InputCursorProps> = ({
   blinkInterval = 500, // Faster blinking
   bold = true,
 }) => {
+  const reducedMotion =
+    getCliEnv().OPENBUFF_REDUCED_MOTION === 'true' ||
+    getCliEnv().OPENBUFF_REDUCED_MOTION === '1'
   // false = normal/visible, true = invisible
   const [isInvisible, setIsInvisible] = useState(false)
   const blinkIntervalRef = useRef<NodeJS.Timeout | null>(null)
@@ -38,7 +42,7 @@ export const InputCursor: React.FC<InputCursorProps> = ({
     setIsInvisible(false)
 
     // Only blink if shouldBlink is enabled, focused, and visible
-    if (!shouldBlink || !focused || !visible) return
+    if (reducedMotion || !shouldBlink || !focused || !visible) return
 
     // Set up idle detection
     const idleTimer = setTimeout(() => {
@@ -55,7 +59,7 @@ export const InputCursor: React.FC<InputCursorProps> = ({
         blinkIntervalRef.current = null
       }
     }
-  }, [visible, focused, shouldBlink, blinkDelay, blinkInterval])
+  }, [visible, focused, shouldBlink, blinkDelay, blinkInterval, reducedMotion])
 
   if (!visible || !focused) {
     return null

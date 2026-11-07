@@ -1,4 +1,7 @@
-import type { Message } from '@codebuff/common/types/messages/codebuff-message'
+import type {
+  Message,
+  ToolMessage,
+} from '@codebuff/common/types/messages/codebuff-message'
 import type { ContextArchiveSnapshot } from '@codebuff/common/types/context-archive'
 
 export type { ContextArchiveSnapshot }
@@ -9,40 +12,86 @@ export type { ContextArchiveSnapshot }
  * extraction layer (knowledge memory) and eviction tombstones lose information
  * by design; this archive makes that loss recoverable via `recall_context`.
  * Never enters the model context directly; captures are keyed by array
- * IDENTITY so re-settling the same array is a no-op. Eviction is deliberately
- * NOT archived (tombstones already instruct a tool re-run; fresh reads beat
- * stale bodies). Only semantic passes and the mechanical trim archive,
- * because those rewrites have no other recovery path.
+ * IDENTITY so re-settling the same array is a no-op. D26 supersedes the old
+ * "eviction is deliberately NOT archived" decision:
+ * `archiveEvictedToolResults` now records tombstoned tool-result segments as
+ * bounded, identity-keyed `tool_result_eviction` snapshots carrying the FULL
+ * original content plus step provenance, so a stale tombstone no longer means
+ * unrecoverable detail. Semantic passes, the mechanical trim, and evictions
+ * all archive, because those rewrites have no other recovery path.
  */
 export const MAX_ARCHIVE_SNAPSHOTS = 8
+/**
+ * D26 recall honesty: eviction snapshots carry the ORIGINAL (pre-tombstone)
+ * tool-result bodies, so they get their OWN dedicated snapshot cap instead of
+ * sharing MAX_ARCHIVE_SNAPSHOTS with semantic/mechanical snapshots. Sharing
+ * the 8-snapshot cap let routine compaction passes evict eviction records
+ * before recall ever ran. The eviction cap applies ONLY to
+ * `tool_result_eviction` snapshots (dropped oldest-first when it overflows);
+ * semantic/mechanical snapshots keep their own MAX_ARCHIVE_SNAPSHOTS cap and
+ * oldest-dropped-first ordering unchanged.
+ */
+export const MAX_EVICTION_ARCHIVE_SNAPSHOTS = 16
 export const MAX_ARCHIVE_MESSAGES = 200
 export const MAX_ARCHIVE_MESSAGE_CHARS = 4_000
+/**
+ * D26 recall honesty: per-message truncation bound for EVICTION snapshots.
+ * The default MAX_ARCHIVE_MESSAGE_CHARS (4k) contradicted the full-content
+ * recall claim for evicted tool results — the tombstone leaves no other copy
+ * of the body, so a 4k clip destroyed most of the recallable content.
+ * Eviction snapshots therefore persist bodies up to this larger bound.
+ * Semantic/mechanical snapshots keep the 4k bound unchanged.
+ */
+export const EVICTION_ARCHIVE_MESSAGE_CHARS = 64_000
 export const RECALL_MAX_RESULTS = 6
 export const RECALL_SNIPPET_CHARS = 600
 
-const truncate = (value: string): string =>
-  value.length <= MAX_ARCHIVE_MESSAGE_CHARS
-    ? value
-    : value.slice(0, MAX_ARCHIVE_MESSAGE_CHARS) + '…[truncated in archive]'
+/** Bounded index line carried by semantic memory; the archive remains the source. */
+const ARCHIVE_POINTER_LINE_CHARS = 240
+/** Keep the visible index shallow even if archive retention grows later. */
+const ARCHIVE_POINTER_MAX_SNAPSHOTS = 24
 
-const archiveMessage = (message: Message): Message => {
-  if (message.role !== 'tool') return message
-  const tool = message
+const truncateWithCap = (value: string, maxChars: number): string =>
+  value.length <= maxChars
+    ? value
+    : value.slice(0, maxChars) + '…[truncated in archive]'
+
+const truncate = (value: string): string =>
+  truncateWithCap(value, MAX_ARCHIVE_MESSAGE_CHARS)
+
+const archiveMessageWithCap = (message: Message, maxChars: number): Message => {
+  if (message.role === 'tool') {
+    return {
+      ...message,
+      content: message.content.map((part) =>
+        part.type === 'json'
+          ? {
+              ...part,
+              value:
+                typeof part.value === 'string'
+                  ? truncateWithCap(part.value, maxChars)
+                  : truncateWithCap(JSON.stringify(part.value), maxChars),
+            }
+          : part,
+      ),
+    }
+  }
+
+  // Conversation text is just as recoverable as a tool result, but must obey
+  // the archive's per-message size contract. Without this cap a single huge
+  // user or assistant message bypassed the archive bound entirely.
   return {
-    ...tool,
-    content: tool.content.map((part) =>
-      part.type === 'json'
-        ? {
-            ...part,
-            value:
-              typeof part.value === 'string'
-                ? truncate(part.value)
-                : truncate(JSON.stringify(part.value)),
-          }
+    ...message,
+    content: message.content.map((part) =>
+      part.type === 'text' || part.type === 'reasoning'
+        ? { ...part, text: truncateWithCap(part.text, maxChars) }
         : part,
     ),
-  }
+  } as Message
 }
+
+const archiveMessage = (message: Message): Message =>
+  archiveMessageWithCap(message, MAX_ARCHIVE_MESSAGE_CHARS)
 
 /**
  * Within-process identity dedupe: the same pre-compaction array settling
@@ -84,6 +133,34 @@ const mintArchivedAt = (now: number): number => {
   return lastMintedArchivedAt
 }
 
+/**
+ * Dedicated-cap append (D26 recall honesty): append `snapshot` and cap ONLY
+ * the snapshots matched by `isCappedKind` at `keepNewestOfKind`, dropping that
+ * kind's OLDEST entries first while leaving every other snapshot untouched
+ * (each kind is capped by its own append path). Chronological order is
+ * preserved, so an archive containing only the capped kind trims exactly like
+ * the historical `.slice(-cap)`.
+ */
+function appendSnapshotWithDedicatedCap(
+  existing: ContextArchiveSnapshot[] | undefined,
+  snapshot: ContextArchiveSnapshot,
+  isCappedKind: (action: ContextArchiveSnapshot['action']) => boolean,
+  keepNewestOfKind: number,
+): ContextArchiveSnapshot[] {
+  const merged = [...(existing ?? []), snapshot]
+  let kindSeen = 0
+  const kept: ContextArchiveSnapshot[] = []
+  for (let i = merged.length - 1; i >= 0; i--) {
+    const entry = merged[i]
+    if (isCappedKind(entry.action)) {
+      if (kindSeen >= keepNewestOfKind) continue
+      kindSeen += 1
+    }
+    kept.push(entry)
+  }
+  return kept.reverse()
+}
+
 /** Archive a pre-compaction transcript on `agentState`. Identity-keyed. */
 export function archivePreCompaction(
   agentState: {
@@ -92,22 +169,143 @@ export function archivePreCompaction(
   messages: Message[],
   action: ContextArchiveSnapshot['action'],
   keepRecentSteps: number,
+  now?: number,
 ): void {
   const source = messages
   if (archivedSources.has(source)) return
   const stored = source.slice(-MAX_ARCHIVE_MESSAGES)
   const snapshot: ContextArchiveSnapshot = {
-    archivedAt: mintArchivedAt(Date.now()),
+    archivedAt: mintArchivedAt(now ?? Date.now()),
     action,
     keepRecentSteps,
     stepBase: source.length - stored.length,
     messages: stored.map(archiveMessage),
   }
-  agentState.compactionArchive = [
-    ...(agentState.compactionArchive ?? []),
+  // Semantic/mechanical snapshots keep their historical MAX_ARCHIVE_SNAPSHOTS
+  // cap and oldest-dropped-first ordering; eviction snapshots are NOT counted
+  // against it (they have their own MAX_EVICTION_ARCHIVE_SNAPSHOTS cap), so a
+  // routine compaction pass can no longer evict eviction records.
+  agentState.compactionArchive = appendSnapshotWithDedicatedCap(
+    agentState.compactionArchive,
     snapshot,
-  ].slice(-MAX_ARCHIVE_SNAPSHOTS)
+    (snapshotAction) => snapshotAction !== 'tool_result_eviction',
+    MAX_ARCHIVE_SNAPSHOTS,
+  )
   archivedSources.add(source)
+}
+
+/**
+ * Build the bounded archive index that semantic compaction places in pinned
+ * knowledge memory. It intentionally carries only provenance and a digest;
+ * `recall_context` retrieves the archived content on demand.
+ */
+export function buildCompactionArchivePointers(
+  archive: ContextArchiveSnapshot[] | undefined,
+): string[] | undefined {
+  if (!archive || archive.length === 0) return undefined
+  const pointers = archive
+    .slice(-ARCHIVE_POINTER_MAX_SNAPSHOTS)
+    .map((snapshot) => {
+      const stepRange =
+        Array.isArray(snapshot.steps) && snapshot.steps.length > 0
+          ? `steps=${snapshot.steps[0]}-${snapshot.steps[snapshot.steps.length - 1]}`
+          : `steps=${snapshot.stepBase ?? 0}-${(snapshot.stepBase ?? 0) + Math.max(snapshot.messages.length - 1, 0)}`
+      const digest = (
+        snapshot.reason ?? `${snapshot.messages.length} archived messages`
+      )
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 80)
+      return `[action=${snapshot.action} ${stepRange} msgs=${snapshot.messages.length}] ${digest}`.slice(
+        0,
+        ARCHIVE_POINTER_LINE_CHARS,
+      )
+    })
+  return pointers.length > 0 ? pointers : undefined
+}
+
+/** D26: why-clause stored on every `tool_result_eviction` snapshot. */
+export const EVICTION_ARCHIVE_REASON =
+  'deterministic tool-result eviction (stale recency)'
+
+/**
+ * D26: archive tombstoned tool-result segments as recoverable records
+ * (content + provenance + eviction reason), bounded per run.
+ *
+ * Mirrors `archivePreCompaction` exactly where it matters: identity-keyed (a
+ * toolCallId already recorded in an earlier `tool_result_eviction` snapshot is
+ * skipped), the same append-new/shift-old discipline (the OLDEST eviction
+ * snapshot is dropped when MAX_EVICTION_ARCHIVE_SNAPSHOTS would overflow,
+ * never a semantic/mechanical snapshot), and the same collision-safe
+ * `mintArchivedAt` timestamp threading. Bounded persisted size: at most
+ * MAX_ARCHIVE_MESSAGES entries per snapshot (newest kept), and each archived
+ * body routed through `archiveMessageWithCap` at the DEDICATED
+ * EVICTION_ARCHIVE_MESSAGE_CHARS (64k) bound — larger than the 4k bound the
+ * other snapshots use, because the evictor's tombstone leaves no other copy
+ * of the body and the D26 recall claim is only honest if most of it survives.
+ * In-memory only (on `agentState.compactionArchive`); no I/O.
+ */
+export function archiveEvictedToolResults(
+  agentState: {
+    compactionArchive?: ContextArchiveSnapshot[]
+  },
+  evicted: Array<{
+    toolCallId: string
+    toolName: string
+    content: ToolMessage['content']
+    stepIndex: number
+  }>,
+  now?: number,
+): void {
+  if (evicted.length === 0) return
+  const existing = agentState.compactionArchive ?? []
+  const archivedCallIds = new Set<string>()
+  for (const snapshot of existing) {
+    if (snapshot.action !== 'tool_result_eviction') continue
+    for (const message of snapshot.messages) {
+      if (message.role === 'tool') archivedCallIds.add(message.toolCallId)
+    }
+  }
+  const fresh = evicted.filter((entry) => !archivedCallIds.has(entry.toolCallId))
+  if (fresh.length === 0) return
+  // Same per-snapshot message cap as `archivePreCompaction` (newest entries
+  // win); only the per-message CHAR bound differs (see
+  // EVICTION_ARCHIVE_MESSAGE_CHARS).
+  const bounded = fresh.slice(-MAX_ARCHIVE_MESSAGES)
+  const snapshot: ContextArchiveSnapshot = {
+    archivedAt: mintArchivedAt(now ?? Date.now()),
+    action: 'tool_result_eviction',
+    // Eviction snapshots are not tied to a recency window of the archive
+    // itself; provenance lives in `steps` instead.
+    keepRecentSteps: 0,
+    steps: bounded.map((entry) => entry.stepIndex),
+    reason: EVICTION_ARCHIVE_REASON,
+    // Routed through `archiveMessageWithCap` at the eviction-specific bound:
+    // the tombstone left no other copy of these bodies, so the D26 recall
+    // claim needs the larger EVICTION_ARCHIVE_MESSAGE_CHARS truncation.
+    messages: bounded
+      .map(
+        (entry): Message => ({
+          role: 'tool',
+          toolCallId: entry.toolCallId,
+          toolName: entry.toolName,
+          content: entry.content,
+        }),
+      )
+      .map((message) =>
+        archiveMessageWithCap(message, EVICTION_ARCHIVE_MESSAGE_CHARS),
+      ),
+  }
+  // Eviction snapshots cap at their DEDICATED MAX_EVICTION_ARCHIVE_SNAPSHOTS
+  // (oldest eviction snapshot dropped first); semantic/mechanical snapshots
+  // in the same archive are untouched (they cap at MAX_ARCHIVE_SNAPSHOTS via
+  // their own append path).
+  agentState.compactionArchive = appendSnapshotWithDedicatedCap(
+    existing,
+    snapshot,
+    (snapshotAction) => snapshotAction === 'tool_result_eviction',
+    MAX_EVICTION_ARCHIVE_SNAPSHOTS,
+  )
 }
 
 export type RecallContextResult = {
@@ -117,18 +315,106 @@ export type RecallContextResult = {
   archivedAt: number[]
 }
 
-const toText = (message: Message): string => {
-  if (message.role !== 'tool') return ''
-  return message.content
-    .map((part) =>
-      part.type === 'json' ? JSON.stringify(part.value) : '[media]',
-    )
+export type ArchiveRecallEntry = {
+  toolName: string
+  toolCallId: string
+  text: string
+}
+
+/**
+ * Convert one archived message to a recall row. Earlier versions indexed only
+ * tool results, leaving the user request and assistant decisions unrecoverable
+ * after a mechanical trim. Conversation entries use stable synthetic provenance
+ * while real tool entries keep their exact call ids.
+ */
+export const getArchiveRecallEntry = (
+  message: Message,
+  step: number,
+): ArchiveRecallEntry => {
+  if (message.role === 'tool') {
+    return {
+      toolName: message.toolName,
+      toolCallId: message.toolCallId,
+      text: message.content
+        .map((part) =>
+          part.type === 'json' ? JSON.stringify(part.value) : '[media]',
+        )
+        .join(' '),
+    }
+  }
+
+  const text = message.content
+    .map((part) => {
+      if (part.type === 'text' || part.type === 'reasoning') return part.text
+      if (part.type === 'tool-call') {
+        return `tool call ${part.toolName}: ${JSON.stringify(part.input)}`
+      }
+      if (part.type === 'file') return part.filename ?? '[file]'
+      return '[media]'
+    })
     .join(' ')
+  return {
+    toolName: 'conversation',
+    toolCallId: `conversation-${message.role}-${step}`,
+    text,
+  }
+}
+
+/**
+ * The VERBATIM stored body for by-ID recall — the recovery payload the
+ * eviction tombstone promises. `getArchiveRecallEntry.text` is the FTS/index
+ * PROJECTION: it `JSON.stringify`s every json part, but
+ * `archiveMessageWithCap` already normalizes non-string json values to their
+ * serialized string at ARCHIVE WRITE time, so real-path tool bodies (already
+ * strings) would come back from `entry.text` DOUBLE-encoded — quote-escaped,
+ * not the "full original output" the tombstone names recall_context for. The
+ * stored string is therefore returned as-is; object values that predate the
+ * write-time normalization (hand-built/legacy snapshots) are serialized
+ * exactly once. Conversation entries keep the projected entry text.
+ */
+const rawToolBodyOrEntryText = (
+  message: Message,
+  entry: ArchiveRecallEntry,
+): string =>
+  message.role === 'tool'
+    ? message.content
+        .map((part) =>
+          part.type === 'json'
+            ? typeof part.value === 'string'
+              ? part.value
+              : JSON.stringify(part.value)
+            : '[media]',
+        )
+        .join(' ')
+    : entry.text
+
+/**
+ * Original-transcript step number for an archived tool message. D26
+ * `tool_result_eviction` snapshots carry a parallel `steps` array holding the
+ * ORIGINAL-transcript step of each archived tool message — reporting the
+ * slice-local index would misstate provenance for archived evictions. Every
+ * other snapshot (and legacy eviction snapshots without `steps`) falls back
+ * to `stepBase`-based slice-local numbering, per the documented contract.
+ */
+export const stepProvenance = (
+  snapshot: ContextArchiveSnapshot,
+  index: number,
+): number => {
+  if (
+    snapshot.action === 'tool_result_eviction' &&
+    Array.isArray(snapshot.steps) &&
+    typeof snapshot.steps[index] === 'number'
+  ) {
+    return snapshot.steps[index]
+  }
+  return index + (snapshot.stepBase ?? 0)
 }
 
 /**
  * Query the archive: case-insensitive whole-word terms, ALL of which must
- * appear in a result's text (AND semantics). Newest snapshots win. Returns
+ * appear in a result's text (AND semantics). Scans EVERY snapshot regardless
+ * of `action`: `tool_result_eviction` snapshots (D26) are first-class recall
+ * sources and share this same bounded-snippet scanner. Newest snapshots win. Returns
  * bounded snippets plus provenance (archive timestamps) so the caller knows
  * the content is PRE-COMPACTION and possibly stale — verify against live
  * files before acting on it.
@@ -151,18 +437,25 @@ export function recallFromArchive(
   if (terms.length === 0) return empty
 
   const matches: RecallContextResult['matches'] = []
+  // snapshotsSearched must report the scan's ACTUAL progress, not the archive
+  // length: an early exit (result cap hit) stops mid-archive, so only the
+  // snapshots actually visited count as searched.
+  let snapshotsSearched = 0
   for (const snapshot of [...archive].reverse()) {
+    snapshotsSearched += 1
     for (let i = snapshot.messages.length - 1; i >= 0; i--) {
       if (matches.length >= RECALL_MAX_RESULTS) {
         return {
           matches,
-          snapshotsSearched: archive.length,
+          snapshotsSearched,
           archivedAt: [...archive].reverse().map((s) => s.archivedAt),
         }
       }
       const message = snapshot.messages[i]
-      if (message.role !== 'tool') continue
-      const text = toText(message)
+      const step = stepProvenance(snapshot, i)
+      const entry = getArchiveRecallEntry(message, step)
+      const text = entry.text
+      if (!text) continue
       const lowered = text.toLowerCase()
       if (!terms.every((term) => lowered.includes(term))) continue
       const first = Math.min(
@@ -172,9 +465,12 @@ export function recallFromArchive(
       matches.push({
         // Original-transcript step number, not the index within the archived
         // slice (they differ once the snapshot cap trims the oldest messages).
-        step: i + (snapshot.stepBase ?? 0),
-        toolName: message.toolName,
-        toolCallId: message.toolCallId,
+        // D26 `tool_result_eviction` snapshots carry the per-message original
+        // step in their parallel `steps` array — slice-local indices there
+        // would misreport provenance.
+        step,
+        toolName: entry.toolName,
+        toolCallId: entry.toolCallId,
         snippet: text.slice(start, start + RECALL_SNIPPET_CHARS),
       })
     }
@@ -182,6 +478,78 @@ export function recallFromArchive(
   const archivedAt = [...archive].reverse().map((s) => s.archivedAt)
   return {
     matches,
+    snapshotsSearched,
+    archivedAt,
+  }
+}
+
+/**
+ * D26 exact-ID retrieval: recover ONE archived tool body by its `toolCallId`.
+ *
+ * WHY: the eviction tombstone names `toolCallId=<id>` and promises
+ * recall_context as the recovery path, but both existing recall surfaces are
+ * TEXT search — `recallFromArchive`'s scanner and the FTS index match only
+ * archived BODY text, so looking the named id up as a query term MISSES
+ * whenever the id string appears in no archived body (the usual case: the
+ * id lives on the message, not inside its content). The observable symptom
+ * was a tombstoned result whose id the model faithfully searched for and
+ * got zero matches back — the tombstone's promise was unkeepable. Matching
+ * the ENTRY IDENTITY instead of its text is what keeps the promise.
+ *
+ * Ordering mirrors `recallFromArchive` exactly — snapshots newest-first
+ * (`[...archive].reverse()`), messages last-to-first within a snapshot — so
+ * the NEWEST copy of a duplicated call id wins, and at most ONE match is
+ * returned.
+ *
+ * The snippet is the FULL archived body and deliberately BYPASSES
+ * `RECALL_SNIPPET_CHARS`: the whole point is body recovery (the tombstone
+ * left no other copy), and the archive write already caps bodies at
+ * `EVICTION_ARCHIVE_MESSAGE_CHARS` (64k for eviction snapshots), so the
+ * archive's own write-time bound is the per-result bound here.
+ *
+ * Provenance reuses `stepProvenance`/`getArchiveRecallEntry` unchanged (D26
+ * `steps` arrays for eviction snapshots, `stepBase` slice-local numbering
+ * otherwise). Pure; no I/O; a miss reports `matches: []` with the full
+ * archive as searched.
+ */
+export function recallFromArchiveByToolCallId(
+  archive: ContextArchiveSnapshot[] | undefined,
+  toolCallId: string,
+): RecallContextResult {
+  if (!archive || archive.length === 0) {
+    return { matches: [], snapshotsSearched: 0, archivedAt: [] }
+  }
+  // Newest-first provenance, the same ordering `recallFromArchive` reports.
+  const archivedAt = [...archive].reverse().map((s) => s.archivedAt)
+  let snapshotsSearched = 0
+  for (const snapshot of [...archive].reverse()) {
+    snapshotsSearched += 1
+    for (let i = snapshot.messages.length - 1; i >= 0; i--) {
+      const step = stepProvenance(snapshot, i)
+      const entry = getArchiveRecallEntry(snapshot.messages[i], step)
+      if (entry.toolCallId === toolCallId && entry.text) {
+        return {
+          matches: [
+            {
+              step,
+              toolName: entry.toolName,
+              toolCallId,
+              // FULL archived body, NOT a RECALL_SNIPPET_CHARS slice and NOT
+              // the double-encoded FTS projection: the tombstone left no other
+              // copy, so body recovery needs the whole VERBATIM stored body
+              // (bounded at write time by EVICTION_ARCHIVE_MESSAGE_CHARS).
+              snippet: rawToolBodyOrEntryText(snapshot.messages[i], entry),
+            },
+          ],
+          snapshotsSearched,
+          archivedAt,
+        }
+      }
+    }
+  }
+  // Miss: the whole archive was visited; keep the identical result shape.
+  return {
+    matches: [],
     snapshotsSearched: archive.length,
     archivedAt,
   }

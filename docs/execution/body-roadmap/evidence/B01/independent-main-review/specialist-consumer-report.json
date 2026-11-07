@@ -1,0 +1,2322 @@
+{
+  "createdAt": "2026-11-06T16:33:39.860Z",
+  "runtime": {
+    "executable": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+    "bun": "1.3.5"
+  },
+  "reports": [
+    {
+      "kind": "current",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+        "reviewedFiles": [
+          "state/session.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Inspect the requested reliability behavior",
+            "status": "satisfied",
+            "evidence": [
+              "state/session.ts:session"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [],
+      "positive": true,
+      "reviewerSpawns": 1,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 1,
+      "generatorStoppedNaturally": false,
+      "phase": "awaiting_validation",
+      "specialistReviewGatesDone": [
+        "reliability-reviewer"
+      ],
+      "creditedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "creditedFileMarkers": {
+        "state/session.ts": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+      },
+      "waveCompletions": {},
+      "reviewReceipts": [
+        {
+          "gateId": "reliability-reviewer:v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewer": "reliability-reviewer",
+          "verdict": "LOOKS_GOOD",
+          "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewedFiles": [
+            "state/session.ts"
+          ],
+          "reviewedFileCount": 1,
+          "reviewedFileHashes": [
+            {
+              "path": "state/session.ts",
+              "hash": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+            }
+          ],
+          "coverage": "covered",
+          "dimensions": {
+            "race_conditions_and_shared_state": "pass: final source read",
+            "retries_idempotency_and_partial_failure": "pass: final source read",
+            "cancellation_and_resource_ownership": "pass: final source read",
+            "state_machine_invariants_and_recovery": "pass: final source read"
+          },
+          "findings": [],
+          "findingCount": 0,
+          "requirementCoverage": [
+            {
+              "requirement": "Inspect the requested reliability behavior",
+              "status": "satisfied",
+              "evidence": [
+                "state/session.ts:session"
+              ],
+              "evidenceCount": 1
+            }
+          ],
+          "requirementCoverageCount": 1,
+          "recordedAt": "2026-11-06T16:33:39.797Z"
+        }
+      ],
+      "openBlockers": [],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 1 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "foreign-clean",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "reviewedFiles": [
+          "state/session.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Inspect the requested reliability behavior",
+            "status": "satisfied",
+            "evidence": [
+              "state/session.ts:session"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "positive": false,
+      "reviewerSpawns": 2,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        },
+        {
+          "reviewerSpawns": 2,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 1,
+      "generatorStoppedNaturally": false,
+      "phase": "blocked",
+      "specialistReviewGatesDone": [],
+      "waveCompletions": {},
+      "reviewReceipts": [],
+      "openBlockers": [
+        "reliability-reviewer could not attest to a stable snapshot after one automatic refresh.",
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 1 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "foreign-parent-owned",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "reviewedFiles": [
+          "state/session.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Commit and push",
+            "status": "missing",
+            "evidence": [
+              "Parent owns the commit/push workflow"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "positive": false,
+      "reviewerSpawns": 2,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Commit and push",
+                "status": "missing",
+                "evidence": [
+                  "Parent owns the commit/push workflow"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        },
+        {
+          "reviewerSpawns": 2,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Commit and push",
+                "status": "missing",
+                "evidence": [
+                  "Parent owns the commit/push workflow"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 1,
+      "generatorStoppedNaturally": false,
+      "phase": "blocked",
+      "specialistReviewGatesDone": [],
+      "waveCompletions": {},
+      "reviewReceipts": [],
+      "openBlockers": [
+        "reliability-reviewer could not attest to a stable snapshot after one automatic refresh.",
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 1 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "missing-file",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+        "reviewedFiles": [],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Inspect the requested reliability behavior",
+            "status": "satisfied",
+            "evidence": [
+              "state/session.ts:session"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [
+        "BLOCKING: reviewer did not attest to every pending file: state/session.ts"
+      ],
+      "positive": false,
+      "reviewerSpawns": 2,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+            "reviewedFiles": [],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer did not attest to every pending file: state/session.ts"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        },
+        {
+          "reviewerSpawns": 2,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+            "reviewedFiles": [],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer did not attest to every pending file: state/session.ts"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 1,
+      "generatorStoppedNaturally": false,
+      "phase": "blocked",
+      "specialistReviewGatesDone": [],
+      "waveCompletions": {},
+      "reviewReceipts": [],
+      "openBlockers": [
+        "reliability-reviewer could not attest to a stable snapshot after one automatic refresh.",
+        "BLOCKING: reviewer did not attest to every pending file: state/session.ts"
+      ],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 1 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "invalid-schema",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "schemaVersion": 2,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+        "reviewedFiles": [
+          "state/session.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Inspect the requested reliability behavior",
+            "status": "satisfied",
+            "evidence": [
+              "state/session.ts:session"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [
+        "BLOCKING: reviewer returned an invalid attestation schemaVersion"
+      ],
+      "positive": false,
+      "reviewerSpawns": 2,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 2,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer returned an invalid attestation schemaVersion"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        },
+        {
+          "reviewerSpawns": 2,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 2,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer returned an invalid attestation schemaVersion"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 1,
+      "generatorStoppedNaturally": false,
+      "phase": "blocked",
+      "specialistReviewGatesDone": [],
+      "waveCompletions": {},
+      "reviewReceipts": [],
+      "openBlockers": [
+        "reliability-reviewer could not attest to a stable snapshot after one automatic refresh.",
+        "BLOCKING: reviewer returned an invalid attestation schemaVersion"
+      ],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 1 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "no-verdict",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": "The session retry path looks acceptable to me.",
+      "helperIssues": [
+        "BLOCKING: reviewer did not return the required structured snapshot attestation"
+      ],
+      "positive": false,
+      "reviewerSpawns": 2,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": "The session retry path looks acceptable to me.",
+          "helperIssues": [
+            "BLOCKING: reviewer did not return the required structured snapshot attestation"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        },
+        {
+          "reviewerSpawns": 2,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": "The session retry path looks acceptable to me.",
+          "helperIssues": [
+            "BLOCKING: reviewer did not return the required structured snapshot attestation"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 1,
+      "generatorStoppedNaturally": false,
+      "phase": "blocked",
+      "specialistReviewGatesDone": [],
+      "waveCompletions": {},
+      "reviewReceipts": [],
+      "openBlockers": [
+        "reliability-reviewer could not attest to a stable snapshot after one automatic refresh.",
+        "BLOCKING: reviewer did not return the required structured snapshot attestation"
+      ],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 1 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "transient-crash",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "errorMessage": "429 Too many requests: provider rate limit"
+      },
+      "helperIssues": [
+        "BLOCKING: reviewer did not return the required structured snapshot attestation"
+      ],
+      "positive": false,
+      "reviewerSpawns": 1,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "errorMessage": "429 Too many requests: provider rate limit"
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer did not return the required structured snapshot attestation"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 1,
+      "generatorStoppedNaturally": false,
+      "phase": "blocked",
+      "specialistReviewGatesDone": [],
+      "waveCompletions": {},
+      "reviewReceipts": [],
+      "openBlockers": [
+        "reliability-reviewer hit a rate-limit or concurrency limit during specialist review: 429 Too many requests: provider rate limit",
+        "End this turn and retry later. Do not spawn repair-editor. Do not recompute bare-hex fingerprints from get_change_review_bundle."
+      ],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 1 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "protocol-crash",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "errorMessage": "Reviewer schema validation failed: invalid structured output"
+      },
+      "helperIssues": [
+        "BLOCKING: reviewer did not return the required structured snapshot attestation"
+      ],
+      "positive": false,
+      "reviewerSpawns": 1,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "errorMessage": "Reviewer schema validation failed: invalid structured output"
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer did not return the required structured snapshot attestation"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 1,
+      "generatorStoppedNaturally": false,
+      "phase": "blocked",
+      "specialistReviewGatesDone": [],
+      "waveCompletions": {},
+      "reviewReceipts": [],
+      "openBlockers": [
+        "reliability-reviewer crashed during specialist review: Reviewer schema validation failed: invalid structured output"
+      ],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 1 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "current-scoped",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+        "reviewedFiles": [
+          "state/session.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Inspect the requested reliability behavior",
+            "status": "satisfied",
+            "evidence": [
+              "state/session.ts:session"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [],
+      "positive": true,
+      "reviewerSpawns": 1,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 2,
+      "generatorStoppedNaturally": false,
+      "phase": "awaiting_validation",
+      "specialistReviewGatesDone": [
+        "reliability-reviewer"
+      ],
+      "creditedFingerprint": "v3:eaabc2bc463f4df90e9b100933eaffe7c13d47b53ed771dc5346b7fa53fe435b",
+      "creditedFileMarkers": {
+        "state/other.ts": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+        "state/session.ts": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+      },
+      "waveCompletions": {},
+      "reviewReceipts": [
+        {
+          "gateId": "reliability-reviewer:v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewer": "reliability-reviewer",
+          "verdict": "LOOKS_GOOD",
+          "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewedFiles": [
+            "state/session.ts"
+          ],
+          "reviewedFileCount": 1,
+          "reviewedFileHashes": [
+            {
+              "path": "state/session.ts",
+              "hash": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+            }
+          ],
+          "coverage": "covered",
+          "dimensions": {
+            "race_conditions_and_shared_state": "pass: final source read",
+            "retries_idempotency_and_partial_failure": "pass: final source read",
+            "cancellation_and_resource_ownership": "pass: final source read",
+            "state_machine_invariants_and_recovery": "pass: final source read"
+          },
+          "findings": [],
+          "findingCount": 0,
+          "requirementCoverage": [
+            {
+              "requirement": "Inspect the requested reliability behavior",
+              "status": "satisfied",
+              "evidence": [
+                "state/session.ts:session"
+              ],
+              "evidenceCount": 1
+            }
+          ],
+          "requirementCoverageCount": 1,
+          "recordedAt": "2026-11-06T16:33:39.828Z"
+        }
+      ],
+      "openBlockers": [],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 2 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts, state/other.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "retry-positive",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+        "reviewedFiles": [
+          "state/session.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Inspect the requested reliability behavior",
+            "status": "satisfied",
+            "evidence": [
+              "state/session.ts:session"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [],
+      "positive": true,
+      "reviewerSpawns": 2,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        },
+        {
+          "reviewerSpawns": 2,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 1,
+      "generatorStoppedNaturally": false,
+      "phase": "awaiting_validation",
+      "specialistReviewGatesDone": [
+        "reliability-reviewer"
+      ],
+      "creditedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "creditedFileMarkers": {
+        "state/session.ts": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+      },
+      "waveCompletions": {},
+      "reviewReceipts": [
+        {
+          "gateId": "reliability-reviewer:v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewer": "reliability-reviewer",
+          "verdict": "LOOKS_GOOD",
+          "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewedFiles": [
+            "state/session.ts"
+          ],
+          "reviewedFileCount": 1,
+          "reviewedFileHashes": [
+            {
+              "path": "state/session.ts",
+              "hash": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+            }
+          ],
+          "coverage": "covered",
+          "dimensions": {
+            "race_conditions_and_shared_state": "pass: final source read",
+            "retries_idempotency_and_partial_failure": "pass: final source read",
+            "cancellation_and_resource_ownership": "pass: final source read",
+            "state_machine_invariants_and_recovery": "pass: final source read"
+          },
+          "findings": [],
+          "findingCount": 0,
+          "requirementCoverage": [
+            {
+              "requirement": "Inspect the requested reliability behavior",
+              "status": "satisfied",
+              "evidence": [
+                "state/session.ts:session"
+              ],
+              "evidenceCount": 1
+            }
+          ],
+          "requirementCoverageCount": 1,
+          "recordedAt": "2026-11-06T16:33:39.829Z"
+        }
+      ],
+      "openBlockers": [],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 1 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "scoped-retry-positive",
+      "expectedFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+        "reviewedFiles": [
+          "state/session.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Inspect the requested reliability behavior",
+            "status": "satisfied",
+            "evidence": [
+              "state/session.ts:session"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [],
+      "positive": true,
+      "reviewerSpawns": 2,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+          ],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        },
+        {
+          "reviewerSpawns": 2,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 2,
+      "generatorStoppedNaturally": false,
+      "phase": "awaiting_validation",
+      "specialistReviewGatesDone": [
+        "reliability-reviewer"
+      ],
+      "creditedFingerprint": "v3:eaabc2bc463f4df90e9b100933eaffe7c13d47b53ed771dc5346b7fa53fe435b",
+      "creditedFileMarkers": {
+        "state/other.ts": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+        "state/session.ts": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+      },
+      "waveCompletions": {},
+      "reviewReceipts": [
+        {
+          "gateId": "reliability-reviewer:v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewer": "reliability-reviewer",
+          "verdict": "LOOKS_GOOD",
+          "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+          "reviewedFiles": [
+            "state/session.ts"
+          ],
+          "reviewedFileCount": 1,
+          "reviewedFileHashes": [
+            {
+              "path": "state/session.ts",
+              "hash": "sha256:b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea:28"
+            }
+          ],
+          "coverage": "covered",
+          "dimensions": {
+            "race_conditions_and_shared_state": "pass: final source read",
+            "retries_idempotency_and_partial_failure": "pass: final source read",
+            "cancellation_and_resource_ownership": "pass: final source read",
+            "state_machine_invariants_and_recovery": "pass: final source read"
+          },
+          "findings": [],
+          "findingCount": 0,
+          "requirementCoverage": [
+            {
+              "requirement": "Inspect the requested reliability behavior",
+              "status": "satisfied",
+              "evidence": [
+                "state/session.ts:session"
+              ],
+              "evidenceCount": 1
+            }
+          ],
+          "requirementCoverageCount": 1,
+          "recordedAt": "2026-11-06T16:33:39.831Z"
+        }
+      ],
+      "openBlockers": [],
+      "actualContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 2 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts, state/other.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "inflight-byte-drift",
+      "expectedFingerprint": "v3:98c80e5c9281dfb60d0c7876f6d71ddbd5dc1de4ae90103cb4f886e291bbcaea",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+        "reviewedFiles": [
+          "state/session.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Inspect the requested reliability behavior",
+            "status": "satisfied",
+            "evidence": [
+              "state/session.ts:session"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "positive": false,
+      "reviewerSpawns": 2,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [],
+          "dispatchedContentSha256": "b8d67f0d2a12a1208ced63d2b4b21a3373d1f2d3bfb860f5108dd9f34dac82ea",
+          "returnedContentSha256": "722637a02c2e8686975259bc8c6dac5fd20994a1ec8ea88ed6cb0fc1137aac03"
+        },
+        {
+          "reviewerSpawns": 2,
+          "spawnParams": {
+            "files": [
+              "state/session.ts"
+            ],
+            "snapshot_id": "v3:98c80e5c9281dfb60d0c7876f6d71ddbd5dc1de4ae90103cb4f886e291bbcaea"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:00564f8f00ad7d3388d9c74213e5712789e03e84669535dc3080d22175560487",
+            "reviewedFiles": [
+              "state/session.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+          ],
+          "dispatchedContentSha256": "722637a02c2e8686975259bc8c6dac5fd20994a1ec8ea88ed6cb0fc1137aac03",
+          "returnedContentSha256": "722637a02c2e8686975259bc8c6dac5fd20994a1ec8ea88ed6cb0fc1137aac03"
+        }
+      ],
+      "windowed": false,
+      "sourcePathCount": 1,
+      "generatorStoppedNaturally": false,
+      "phase": "blocked",
+      "specialistReviewGatesDone": [],
+      "waveCompletions": {},
+      "reviewReceipts": [],
+      "openBlockers": [
+        "reliability-reviewer could not attest to a stable snapshot after one automatic refresh.",
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "actualContentSha256": "722637a02c2e8686975259bc8c6dac5fd20994a1ec8ea88ed6cb0fc1137aac03",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 1 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "foreign-windowed-wave",
+      "expectedFingerprint": "v3:fa50bf630b42448ffa1f6e3b0c3a4382e452608e8c68b74cdf7ffdcf0ab28b2f",
+      "receipt": {
+        "schemaVersion": 1,
+        "family": "reviewer",
+        "verdict": "LOOKS_GOOD",
+        "findings": [],
+        "coverage": "covered",
+        "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "reviewedFiles": [
+          "state/session.ts",
+          "state/item-00.ts",
+          "state/item-01.ts",
+          "state/item-02.ts",
+          "state/item-03.ts",
+          "state/item-04.ts",
+          "state/item-05.ts",
+          "state/item-06.ts",
+          "state/item-07.ts",
+          "state/item-08.ts",
+          "state/item-09.ts",
+          "state/item-10.ts",
+          "state/item-11.ts",
+          "state/item-12.ts",
+          "state/item-13.ts",
+          "state/item-14.ts",
+          "state/item-15.ts",
+          "state/item-16.ts",
+          "state/item-17.ts",
+          "state/item-18.ts",
+          "state/item-19.ts",
+          "state/item-20.ts",
+          "state/item-21.ts",
+          "state/item-22.ts",
+          "state/item-23.ts",
+          "state/item-24.ts",
+          "state/item-25.ts",
+          "state/item-26.ts",
+          "state/item-27.ts",
+          "state/item-28.ts",
+          "state/item-29.ts",
+          "state/item-30.ts",
+          "state/item-31.ts",
+          "state/item-32.ts",
+          "state/item-33.ts",
+          "state/item-34.ts",
+          "state/item-35.ts",
+          "state/item-36.ts",
+          "state/item-37.ts",
+          "state/item-38.ts",
+          "state/item-39.ts"
+        ],
+        "dimensions": {
+          "race_conditions_and_shared_state": "pass: final source read",
+          "retries_idempotency_and_partial_failure": "pass: final source read",
+          "cancellation_and_resource_ownership": "pass: final source read",
+          "state_machine_invariants_and_recovery": "pass: final source read"
+        },
+        "requirementCoverage": [
+          {
+            "requirement": "Inspect the requested reliability behavior",
+            "status": "satisfied",
+            "evidence": [
+              "state/session.ts:session"
+            ]
+          }
+        ]
+      },
+      "helperIssues": [
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "positive": false,
+      "reviewerSpawns": 2,
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "spawnParams": {
+            "files": [
+              "state/session.ts",
+              "state/item-00.ts",
+              "state/item-01.ts",
+              "state/item-02.ts",
+              "state/item-03.ts",
+              "state/item-04.ts",
+              "state/item-05.ts",
+              "state/item-06.ts",
+              "state/item-07.ts",
+              "state/item-08.ts",
+              "state/item-09.ts",
+              "state/item-10.ts",
+              "state/item-11.ts",
+              "state/item-12.ts",
+              "state/item-13.ts",
+              "state/item-14.ts",
+              "state/item-15.ts",
+              "state/item-16.ts",
+              "state/item-17.ts",
+              "state/item-18.ts",
+              "state/item-19.ts",
+              "state/item-20.ts",
+              "state/item-21.ts",
+              "state/item-22.ts",
+              "state/item-23.ts",
+              "state/item-24.ts",
+              "state/item-25.ts",
+              "state/item-26.ts",
+              "state/item-27.ts",
+              "state/item-28.ts",
+              "state/item-29.ts",
+              "state/item-30.ts",
+              "state/item-31.ts",
+              "state/item-32.ts",
+              "state/item-33.ts",
+              "state/item-34.ts",
+              "state/item-35.ts",
+              "state/item-36.ts",
+              "state/item-37.ts",
+              "state/item-38.ts",
+              "state/item-39.ts"
+            ],
+            "snapshot_id": "v3:fa50bf630b42448ffa1f6e3b0c3a4382e452608e8c68b74cdf7ffdcf0ab28b2f"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "reviewedFiles": [
+              "state/session.ts",
+              "state/item-00.ts",
+              "state/item-01.ts",
+              "state/item-02.ts",
+              "state/item-03.ts",
+              "state/item-04.ts",
+              "state/item-05.ts",
+              "state/item-06.ts",
+              "state/item-07.ts",
+              "state/item-08.ts",
+              "state/item-09.ts",
+              "state/item-10.ts",
+              "state/item-11.ts",
+              "state/item-12.ts",
+              "state/item-13.ts",
+              "state/item-14.ts",
+              "state/item-15.ts",
+              "state/item-16.ts",
+              "state/item-17.ts",
+              "state/item-18.ts",
+              "state/item-19.ts",
+              "state/item-20.ts",
+              "state/item-21.ts",
+              "state/item-22.ts",
+              "state/item-23.ts",
+              "state/item-24.ts",
+              "state/item-25.ts",
+              "state/item-26.ts",
+              "state/item-27.ts",
+              "state/item-28.ts",
+              "state/item-29.ts",
+              "state/item-30.ts",
+              "state/item-31.ts",
+              "state/item-32.ts",
+              "state/item-33.ts",
+              "state/item-34.ts",
+              "state/item-35.ts",
+              "state/item-36.ts",
+              "state/item-37.ts",
+              "state/item-38.ts",
+              "state/item-39.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+          ],
+          "dispatchedContentSha256": "91f6dd420af6dc7d6717f95287b660bde4ceddaea26f3db1aeb177b4009eec7a",
+          "returnedContentSha256": "91f6dd420af6dc7d6717f95287b660bde4ceddaea26f3db1aeb177b4009eec7a"
+        },
+        {
+          "reviewerSpawns": 2,
+          "spawnParams": {
+            "files": [
+              "state/session.ts",
+              "state/item-00.ts",
+              "state/item-01.ts",
+              "state/item-02.ts",
+              "state/item-03.ts",
+              "state/item-04.ts",
+              "state/item-05.ts",
+              "state/item-06.ts",
+              "state/item-07.ts",
+              "state/item-08.ts",
+              "state/item-09.ts",
+              "state/item-10.ts",
+              "state/item-11.ts",
+              "state/item-12.ts",
+              "state/item-13.ts",
+              "state/item-14.ts",
+              "state/item-15.ts",
+              "state/item-16.ts",
+              "state/item-17.ts",
+              "state/item-18.ts",
+              "state/item-19.ts",
+              "state/item-20.ts",
+              "state/item-21.ts",
+              "state/item-22.ts",
+              "state/item-23.ts",
+              "state/item-24.ts",
+              "state/item-25.ts",
+              "state/item-26.ts",
+              "state/item-27.ts",
+              "state/item-28.ts",
+              "state/item-29.ts",
+              "state/item-30.ts",
+              "state/item-31.ts",
+              "state/item-32.ts",
+              "state/item-33.ts",
+              "state/item-34.ts",
+              "state/item-35.ts",
+              "state/item-36.ts",
+              "state/item-37.ts",
+              "state/item-38.ts",
+              "state/item-39.ts"
+            ],
+            "snapshot_id": "v3:fa50bf630b42448ffa1f6e3b0c3a4382e452608e8c68b74cdf7ffdcf0ab28b2f"
+          },
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "snapshotFingerprint": "v3:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "reviewedFiles": [
+              "state/session.ts",
+              "state/item-00.ts",
+              "state/item-01.ts",
+              "state/item-02.ts",
+              "state/item-03.ts",
+              "state/item-04.ts",
+              "state/item-05.ts",
+              "state/item-06.ts",
+              "state/item-07.ts",
+              "state/item-08.ts",
+              "state/item-09.ts",
+              "state/item-10.ts",
+              "state/item-11.ts",
+              "state/item-12.ts",
+              "state/item-13.ts",
+              "state/item-14.ts",
+              "state/item-15.ts",
+              "state/item-16.ts",
+              "state/item-17.ts",
+              "state/item-18.ts",
+              "state/item-19.ts",
+              "state/item-20.ts",
+              "state/item-21.ts",
+              "state/item-22.ts",
+              "state/item-23.ts",
+              "state/item-24.ts",
+              "state/item-25.ts",
+              "state/item-26.ts",
+              "state/item-27.ts",
+              "state/item-28.ts",
+              "state/item-29.ts",
+              "state/item-30.ts",
+              "state/item-31.ts",
+              "state/item-32.ts",
+              "state/item-33.ts",
+              "state/item-34.ts",
+              "state/item-35.ts",
+              "state/item-36.ts",
+              "state/item-37.ts",
+              "state/item-38.ts",
+              "state/item-39.ts"
+            ],
+            "dimensions": {
+              "race_conditions_and_shared_state": "pass: final source read",
+              "retries_idempotency_and_partial_failure": "pass: final source read",
+              "cancellation_and_resource_ownership": "pass: final source read",
+              "state_machine_invariants_and_recovery": "pass: final source read"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Inspect the requested reliability behavior",
+                "status": "satisfied",
+                "evidence": [
+                  "state/session.ts:session"
+                ]
+              }
+            ]
+          },
+          "helperIssues": [
+            "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+          ],
+          "dispatchedContentSha256": "91f6dd420af6dc7d6717f95287b660bde4ceddaea26f3db1aeb177b4009eec7a",
+          "returnedContentSha256": "91f6dd420af6dc7d6717f95287b660bde4ceddaea26f3db1aeb177b4009eec7a"
+        }
+      ],
+      "windowed": true,
+      "sourcePathCount": 41,
+      "sourceFileBindings": [
+        {
+          "path": "state/session.ts",
+          "byteLength": 22,
+          "sha256": "91f6dd420af6dc7d6717f95287b660bde4ceddaea26f3db1aeb177b4009eec7a"
+        },
+        {
+          "path": "state/item-00.ts",
+          "byteLength": 22,
+          "sha256": "795f2a82f007bbed6734ac43084f8cbe4b7a20953a8409c5d2e86ae26362bc79"
+        },
+        {
+          "path": "state/item-01.ts",
+          "byteLength": 22,
+          "sha256": "e89eea5819523d197bebfc4c432b6dfe4a15af2c0a8acdd2ff28857d871a02eb"
+        },
+        {
+          "path": "state/item-02.ts",
+          "byteLength": 22,
+          "sha256": "a88d853b12ebdfa981d00b5d22f5dd0bb578ad30749f98d64347bf1e8b01e11f"
+        },
+        {
+          "path": "state/item-03.ts",
+          "byteLength": 22,
+          "sha256": "22ea5977ee60c4ffc0e1a11d2506eb352aed4a4ce9fda19eb08895b668dfac7a"
+        },
+        {
+          "path": "state/item-04.ts",
+          "byteLength": 22,
+          "sha256": "5ca37b14507b9f8df9c955cb72aff11aa94945ecb04bae9c5bdd24fb1ab7da35"
+        },
+        {
+          "path": "state/item-05.ts",
+          "byteLength": 22,
+          "sha256": "d95bf01c81964357fd9a3d9b69d522897671568c777f5b597b6b8102e4860140"
+        },
+        {
+          "path": "state/item-06.ts",
+          "byteLength": 22,
+          "sha256": "74c43005d92c6b065b23b3ded59209b80305c0893064502d8c8fc9bc4bee7b6b"
+        },
+        {
+          "path": "state/item-07.ts",
+          "byteLength": 22,
+          "sha256": "1f4d87db2e365e4e9188ec4dc069c5b5fb2ca32fd694ebfb47f3517c9de7a04a"
+        },
+        {
+          "path": "state/item-08.ts",
+          "byteLength": 22,
+          "sha256": "0b41f2257659290ba83b24bb5fd1797effeb5d186b125834721f06b426a5b411"
+        },
+        {
+          "path": "state/item-09.ts",
+          "byteLength": 23,
+          "sha256": "4e0afb73d8c0da31db49b4fce4b201ea8f6c4aa933b1ace1bf376afc4aeca2f2"
+        },
+        {
+          "path": "state/item-10.ts",
+          "byteLength": 23,
+          "sha256": "dfecc0da86d8073d94eaac3a516b311edb550245798e015ea5081b5ea2c767ff"
+        },
+        {
+          "path": "state/item-11.ts",
+          "byteLength": 23,
+          "sha256": "6b877bca796fb99a3dcfcb8d65c920ddd48ab91ca01d33b99f1091313250eb6d"
+        },
+        {
+          "path": "state/item-12.ts",
+          "byteLength": 23,
+          "sha256": "a609553916cd0c4538ba126ddc61fcc8b0cd2cc0a3a91924b7f55b1e8d950f93"
+        },
+        {
+          "path": "state/item-13.ts",
+          "byteLength": 23,
+          "sha256": "0308e405423853b178e1322a52d6dd4076b63b4b892637fbf6c9702098666cc9"
+        },
+        {
+          "path": "state/item-14.ts",
+          "byteLength": 23,
+          "sha256": "b91558b4c861e78a5e867f7b2cc7934c808e3c310f64617d22b7274f222fdaf9"
+        },
+        {
+          "path": "state/item-15.ts",
+          "byteLength": 23,
+          "sha256": "3235a77c2ef0707b3ec91deb5d4f71ea97d356977401a148380e019b1e6d5a8c"
+        },
+        {
+          "path": "state/item-16.ts",
+          "byteLength": 23,
+          "sha256": "43172a44d7ded72dab61ccb93d65c92b50547ceb4f5653f012c6f5717a216770"
+        },
+        {
+          "path": "state/item-17.ts",
+          "byteLength": 23,
+          "sha256": "f02b6af06bea65025d9a068604f05e4d8580d6412d0b1bfa4c2cda5faac1fee6"
+        },
+        {
+          "path": "state/item-18.ts",
+          "byteLength": 23,
+          "sha256": "3f36bf67490150d374ca6c673f0c569a7de8740e16e7dc8ee4ea7a01e0288021"
+        },
+        {
+          "path": "state/item-19.ts",
+          "byteLength": 23,
+          "sha256": "5a235a6548c529d66d35f9f2a0a1ae637291b879013957e893853ae23e524d82"
+        },
+        {
+          "path": "state/item-20.ts",
+          "byteLength": 23,
+          "sha256": "650e9faa79039eec2b3aec5ef4fbfc80f0b412c2e1233c5a0241e4a18ddb6903"
+        },
+        {
+          "path": "state/item-21.ts",
+          "byteLength": 23,
+          "sha256": "9440f6f3c3b99db4705bab47df19d9825c990153339b4076c643ddbfa1c79fa6"
+        },
+        {
+          "path": "state/item-22.ts",
+          "byteLength": 23,
+          "sha256": "ba8a5f082c6c74ff24c4a69ec58ccc112757ac20bf86c0ceaef086618d698774"
+        },
+        {
+          "path": "state/item-23.ts",
+          "byteLength": 23,
+          "sha256": "4939956b1cbb5f624123a1f5b35036b13a43efdc533431568d8ae17bca4276dd"
+        },
+        {
+          "path": "state/item-24.ts",
+          "byteLength": 23,
+          "sha256": "dcc97c89887879cb27e25047bfe4dbd288241de24a9f99d01e3a79ea67770102"
+        },
+        {
+          "path": "state/item-25.ts",
+          "byteLength": 23,
+          "sha256": "d9cdee0e1bfaa0fc8a39583a57d3972fc0d73b5cab5ffbadd66591d2294ae30e"
+        },
+        {
+          "path": "state/item-26.ts",
+          "byteLength": 23,
+          "sha256": "28815660511a70ba37d0a5b6835bd829f2a01d5ec83da870c80442d5edcd21c9"
+        },
+        {
+          "path": "state/item-27.ts",
+          "byteLength": 23,
+          "sha256": "9cc789339b86986e0dc98f470fd98d0a92301f02eccb84a05782316b57e7cb6d"
+        },
+        {
+          "path": "state/item-28.ts",
+          "byteLength": 23,
+          "sha256": "9d8ef55811c47a098bb5b34dd33d0b1a8658ed65d17674a99f6faa0dc9107bd6"
+        },
+        {
+          "path": "state/item-29.ts",
+          "byteLength": 23,
+          "sha256": "7570679d06f4d3352d40d54d25591dc523b1ec19df3f540a73e8cfd8ba0182bd"
+        },
+        {
+          "path": "state/item-30.ts",
+          "byteLength": 23,
+          "sha256": "34188f2855f3471f164ebb8d94836990f5f4b010282ea5e177479717c7f4b924"
+        },
+        {
+          "path": "state/item-31.ts",
+          "byteLength": 23,
+          "sha256": "f6d677952dc5d9640ade010ed25b82a4050957a795f275a13aab131de62a45b5"
+        },
+        {
+          "path": "state/item-32.ts",
+          "byteLength": 23,
+          "sha256": "375d67135c009215d9e601273b99e8d1bb9612e770c4107d4bb8bfa64dacf96c"
+        },
+        {
+          "path": "state/item-33.ts",
+          "byteLength": 23,
+          "sha256": "8c94d82e39b3da7f18d4ffb0bc6b23c0f19f1d5df333d1d0d9757bc6b10cd19f"
+        },
+        {
+          "path": "state/item-34.ts",
+          "byteLength": 23,
+          "sha256": "b9acd021f97ae0830b9cda28628e7d22acd7b6bd345164b111a262b4bd19bd53"
+        },
+        {
+          "path": "state/item-35.ts",
+          "byteLength": 23,
+          "sha256": "a25e3970dd6cebc2a389988228d3c2e2c687482e1f90da7a5c7b06da1acfa2d4"
+        },
+        {
+          "path": "state/item-36.ts",
+          "byteLength": 23,
+          "sha256": "aafe341f07a7bb625b98238f83d28c6279ca2d2ca08fd13a1423fa0ce337f21d"
+        },
+        {
+          "path": "state/item-37.ts",
+          "byteLength": 23,
+          "sha256": "b1a07d4e6107983ef6f137ac94c5152aa8f5ce6db6792cd0f3ab6db970ac0491"
+        },
+        {
+          "path": "state/item-38.ts",
+          "byteLength": 23,
+          "sha256": "ad7110fbd2d54ecccba23f8ca457acb749179542075b1efef2c47b6784256e23"
+        },
+        {
+          "path": "state/item-39.ts",
+          "byteLength": 23,
+          "sha256": "8f0285d23c1d31b190174698cb8ae8f2418a67863dba1897d73a47b6e9d7f97e"
+        }
+      ],
+      "generatorStoppedNaturally": true,
+      "phase": "blocked",
+      "specialistReviewGatesDone": [],
+      "waveCompletions": {},
+      "reviewReceipts": [],
+      "openBlockers": [
+        "reliability-reviewer could not attest to a stable snapshot after one automatic refresh.",
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "actualContentSha256": "91f6dd420af6dc7d6717f95287b660bde4ceddaea26f3db1aeb177b4009eec7a",
+      "siblingMarker": "sha256:b15331e4084911f7278428f01e5a68a74c14bf59bf5964bf27e0a4db4f39b1b4:28",
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "add_message",
+          "message": "Harness pinned active-work state (controlling state; do not ignore):\n\nThis generated state survives context compaction and overrides stale summarized dialogue.\n\nRole: root orchestrator. Do not call set_output. Use only tools currently exposed by the runtime.\n\nCurrent phase: awaiting_validation\n\nGATE: PENDING\nphase: awaiting_validation\nhooks summary present: no\nallowed actions: finish implementation work, then end your turn (stop calling tools and yield; do not write the completion summary yet)\nblocked actions: git-committer, suggest_followups, claiming the gate is running\nlocal checks (basher/typecheck) are not the gate\nThis is a durable turn-start snapshot; the runtime advances the gate when you end your turn.\n\ndirty reviewable: 41 (unreviewed: 0)\n\nsuggest_followups: BLOCKED — GATE: PENDING. End your turn (do not retry this call or re-write the summary; re-emitting it now only re-triggers this rejection). Call suggest_followups only after GATE: PASSED.\n\nPending validation/reviewer gate files: state/session.ts, state/item-00.ts, state/item-01.ts, state/item-02.ts, state/item-03.ts, state/item-04.ts, state/item-05.ts, state/item-06.ts, state/item-07.ts, state/item-08.ts, state/item-09.ts, state/item-10.ts, state/item-11.ts, state/item-12.ts, state/item-13.ts, state/item-14.ts, state/item-15.ts, state/item-16.ts, state/item-17.ts, state/item-18.ts, state/item-19.ts, state/item-20.ts, state/item-21.ts, state/item-22.ts, state/item-23.ts, state/item-24.ts, state/item-25.ts, state/item-26.ts, state/item-27.ts, state/item-28.ts, state/item-29.ts, state/item-30.ts, state/item-31.ts, state/item-32.ts, state/item-33.ts, state/item-34.ts, state/item-35.ts, state/item-36.ts, state/item-37.ts, state/item-38.ts, state/item-39.ts"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        },
+        {
+          "toolName": "get_change_review_bundle"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agents": [
+            "reliability-reviewer"
+          ]
+        },
+        {
+          "toolName": "add_message",
+          "message": "Specialist review gate failed snapshot/file attestation after one automatic refresh.\n\nreliability-reviewer could not attest to a stable snapshot after one automatic refresh.\nBLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree\n\nThis is a specialist reviewer protocol/configuration failure, not a source-code finding. The harness did not spawn repair-editor or finalize. Stop retrying automatically; obtain a fresh matching specialist review against a stable review bundle.\nOr, to finalize on the recorded validation evidence for this snapshot only, explicitly reply \"BYPASS REVIEWER mw571uz7-f2lnwf\".\n<gate-state>{\"gate\":\"reviewer\",\"status\":\"failed\",\"details\":\"specialist-terminal-failure: specialist review gate failed snapshot/file attestation after one automatic refresh.\",\"reviewers\":[\"reliability-reviewer\"],\"skipReason\":\"specialist-terminal-failure\"}</gate-state>"
+        }
+      ]
+    }
+  ],
+  "blockingCounterexamples": [],
+  "codingFetch": {
+    "attempted": 0,
+    "forwarded": 0
+  }
+}

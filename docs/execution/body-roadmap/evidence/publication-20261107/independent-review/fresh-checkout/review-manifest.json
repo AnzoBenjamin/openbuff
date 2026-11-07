@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-supplement-and-fresh-checkout-review-seal",
+  "createdAt": "2026-11-06T23:09:58.398444+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "decision": "approved-with-stated-filesystem-and-evidence-scope",
+  "reviewedIndexSha256": "e8b34416c2c0a29d5867f6712f35677229ec020eff8a5994d1da28805b2fe880",
+  "files": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/REVIEW.md",
+      "sha256": "4c322e37b6be3edfa655c5f1140003b0010db74c6aa4df8fc490222b3ee352a7",
+      "bytes": 4624
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/git-fixture-gap.json",
+      "sha256": "75f1292ba660dec30045250f03359a2adc6e0f421cb7127bfb78f1ede7041e1b",
+      "bytes": 86730
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/ledger-validation.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/ledger-validation.stdout.log",
+      "sha256": "6978ab14d7f8ed9196a74c0105e60c769a27cdf00f1db077e24a9b5b46aaecaa",
+      "bytes": 813
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/materialized-staged-bindings.json",
+      "sha256": "9717e10e9fa078650fa40151d2095f95dbfee5c14c6e97d86f0013358e4ab9e5",
+      "bytes": 1415443
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/reviewed-index.nul",
+      "sha256": "e8b34416c2c0a29d5867f6712f35677229ec020eff8a5994d1da28805b2fe880",
+      "bytes": 595787
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/reviewed-supplement-source/build-archive.py",
+      "sha256": "d8ad5c83cffe01553ad95d1a95b99055c18ea5d7a40bd22001eada4b1c059b59",
+      "bytes": 4221
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/reviewed-supplement-source/manifest.json",
+      "sha256": "6de54c8670bd9602051a421ba1b228e4d06bc5645fa9816fdcc8f98447f1bfcf",
+      "bytes": 8873
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/reviewed-supplement-source/rehydrate.py",
+      "sha256": "f936c122fef9f6a86f86a6f529f14882795198cd46f236dd3e62c34a102bab6f",
+      "bytes": 6686
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/reviewed-supplement-source/restoration-controls.json",
+      "sha256": "d4749a1728444d221930d5b113da6a38e465285855b015858dbc94852adebb01",
+      "bytes": 2423
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/reviewed-supplement-source/verify-restoration.py",
+      "sha256": "b75841560d637f4a7b04e07470741dbb4eabe230666494148df3754c5975b316",
+      "bytes": 6639
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/supplement-and-checkout-review.json",
+      "sha256": "0dff64e433f84396c5f49025fc6ad27b0ad8b7a6a773c6ebe608ccfbbe09b0e4",
+      "bytes": 23041
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/verify-supplement-and-checkout.py",
+      "sha256": "67e76a7b6fb545e53efde4e60d0a35a19d8bc593adb5fa1a4f6d3bc6b6cf27d0",
+      "bytes": 18598
+    }
+  ]
+}

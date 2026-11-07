@@ -5,14 +5,20 @@ import { Button } from './button'
 import { cancelBashCommand } from '../utils/bash-command-controller'
 import { useTheme } from '../hooks/use-theme'
 import { DASHED_BORDER_CHARS } from '../utils/ui-constants'
+import { useOutputReaderStore } from '../state/output-reader-store'
+import { createTextDocument } from '../utils/output-document'
 
 import type { PendingBashMessage as PendingBashMessageType } from '../types/store'
 
 interface PendingBashMessageProps {
   message: PendingBashMessageType
+  onStopCommand?: (id: string) => void
 }
 
-export const PendingBashMessage = ({ message }: PendingBashMessageProps) => {
+export const PendingBashMessage = ({
+  message,
+  onStopCommand = cancelBashCommand,
+}: PendingBashMessageProps) => {
   const theme = useTheme()
 
   return (
@@ -42,25 +48,75 @@ export const PendingBashMessage = ({ message }: PendingBashMessageProps) => {
         {/* Command output using shared component */}
         <TerminalCommandDisplay
           command={message.command}
-          output={message.stdout || message.stderr || null}
+          output={null}
           expandable={false}
           maxVisibleLines={10}
           isRunning={message.isRunning}
           cwd={message.cwd}
+          status={
+            message.isRunning
+              ? 'running'
+              : message.exitCode === undefined
+                ? 'outcome unknown'
+                : message.exitCode === 0
+                  ? 'succeeded'
+                  : 'failed'
+          }
+          exitCode={message.exitCode ?? undefined}
         />
+        {message.stdout !== null && message.stdout !== undefined && (
+          <TerminalCommandDisplay
+            command={message.command}
+            output={message.stdout || '(No stdout captured)'}
+            showCommandHeader={false}
+            outputLabel="stdout · captured"
+            expandable={false}
+            maxVisibleLines={5}
+          />
+        )}
+        {message.stderr !== null && message.stderr !== undefined && (
+          <TerminalCommandDisplay
+            command={message.command}
+            output={message.stderr || '(No stderr captured)'}
+            showCommandHeader={false}
+            outputLabel="stderr · captured"
+            expandable={false}
+            maxVisibleLines={5}
+          />
+        )}
+        <Button
+          onClick={() =>
+            useOutputReaderStore
+              .getState()
+              .open({
+                document: createTextDocument({
+                  id: `pending-shell:${message.id}`,
+                  title: `$ ${message.command}`,
+                  kind: 'log',
+                  text: `Command: ${message.command}\nWorking directory: ${message.cwd ?? 'not captured'}\nState: ${message.isRunning ? 'running' : message.exitCode === undefined ? 'outcome unknown' : `exit ${message.exitCode}`}\n\nstdout · captured\n${message.stdout ?? '(Not captured)'}\n\nstderr · captured\n${message.stderr ?? '(Not captured)'}`,
+                  notice:
+                    'Captured stdout and stderr are grouped by channel; their original interleaving is unavailable.',
+                }),
+              })
+          }
+        >
+          <text fg={theme.secondary}>Inspect captured channels</text>
+        </Button>
 
         {/* Note about pending status */}
         <box style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
           <text fg={theme.muted} attributes={TextAttributes.ITALIC}>
-            Will be added to chat history when it completes
+            {message.isRunning
+              ? 'Stop this shell command; agent run and draft remain available.'
+              : 'Captured shell result; retained channels remain inspectable.'}
           </text>
           {message.isRunning && (
             <Button
               onClick={() => {
-                cancelBashCommand(message.id)
+                onStopCommand(message.id)
               }}
             >
-              <text fg={theme.error}>Cancel</text>
+              <text fg={theme.error}>Stop shell command</text>
             </Button>
           )}
         </box>

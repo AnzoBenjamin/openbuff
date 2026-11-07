@@ -1,0 +1,63 @@
+bun test v1.3.5 (1e86cebd)
+
+../../../../../../tmp/openbuff-body-review-2026-11-05/evidence/01-cli-probes.test.ts:
+Using environment: test
+Using environment: test
+(pass) observed: attach with a ready stub server still fails the local provider gate [32.00ms]
+(pass) observed: prompt-producing slash command consumes a still-processing file [10.00ms]
+(pass) observed: ordinary prompt consumes a failed file without its path/error in model context [2.00ms]
+(pass) observed: bisection stops ordinary prompts but allows prompt-producing slash command [3.00ms]
+(pass) observed: client factory rejection leaves run/queue occupancy held [2.00ms]
+(pass) observed: validation exception-shaped result provides no user-visible error [3.00ms]
+(pass) observed: preparation removes old messages instead of retaining them for pagination [3.00ms]
+{
+  "evidenceKind": "safe stub behavioral probes",
+  "observations": [
+    {
+      "probe": "attach-local-readiness",
+      "remoteRuns": 0,
+      "errors": [
+        "Openbuff provider is not configured. Run `/setup opencode-go`, `/setup openai`, `/setup anthropic`, `/setup openrouter`, `/setup ollama`, or `/provider` for details."
+      ],
+      "chainBusy": false
+    },
+    {
+      "probe": "slash-processing-file",
+      "finalContent": "inspect project",
+      "pendingCount": 0,
+      "storedFileCount": 0
+    },
+    {
+      "probe": "failed-file-drain",
+      "finalContent": "inspect project",
+      "pendingCount": 0
+    },
+    {
+      "probe": "slash-bisection-bypass",
+      "ordinaryBlocked": true,
+      "slashDispatched": true
+    },
+    {
+      "probe": "client-init-rejection",
+      "chainBusy": true,
+      "canQueue": false
+    },
+    {
+      "probe": "empty-validation-error",
+      "messageCount": 2,
+      "visibleFailure": false
+    },
+    {
+      "probe": "live-history-trim",
+      "seededCount": 105,
+      "retainedCount": 100,
+      "oldestLost": true
+    }
+  ]
+}
+(pass) print structured observations [1.00ms]
+
+ 8 pass
+ 0 fail
+ 20 expect() calls
+Ran 8 tests across 1 file. [2.82s]

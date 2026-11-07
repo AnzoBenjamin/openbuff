@@ -11,6 +11,8 @@ export interface ChatHistoryEntry {
   lastPrompt: string
   timestamp: Date
   messageCount: number
+  messageCountKnown?: boolean
+  captureUnavailable?: boolean
 }
 
 function getChatsDir(): string {
@@ -22,7 +24,7 @@ function getChatsDir(): string {
  */
 function getFirstUserPrompt(messages: ChatMessage[]): string {
   for (const msg of messages) {
-    if (msg?.variant === 'user' && msg.content) {
+    if (msg?.variant === 'user' && typeof msg.content === 'string' && msg.content) {
       // Truncate long prompts
       const content = msg.content.trim()
       if (content.length > 100) {
@@ -45,9 +47,11 @@ async function mapInBatches<T, R>(
   items: T[],
   batchSize: number,
   mapper: (item: T) => Promise<R>,
+  signal?: AbortSignal,
 ): Promise<R[]> {
   const results: R[] = []
   for (let index = 0; index < items.length; index += batchSize) {
+    if (signal?.aborted) break
     results.push(
       ...(await Promise.all(items.slice(index, index + batchSize).map(mapper))),
     )
@@ -139,8 +143,16 @@ export function getAllChats(maxChats: number = 500): ChatHistoryEntry[] {
 
 export async function getAllChatsAsync(
   maxChats: number = 500,
+  signal?: AbortSignal,
+  onInitial?: (entries: ChatHistoryEntry[]) => void,
+  initialCount = 25,
+  onState?: (state: {
+    state: 'loaded' | 'partial' | 'unavailable'
+    omitted?: number
+  }) => void,
 ): Promise<ChatHistoryEntry[]> {
   const chatsDir = getChatsDir()
+  let omitted = 0
   try {
     const chatIds = await fs.promises.readdir(chatsDir)
     const infos = (
@@ -160,37 +172,65 @@ export async function getAllChatsAsync(
                 }
               : null
           } catch {
+            omitted++
             return null
           }
         },
+        signal,
       )
     )
       .filter((info): info is ChatDirInfo => info !== null)
       .sort((a, b) => b.mtime.getTime() - a.mtime.getTime())
       .slice(0, maxChats)
 
-    const entries = await mapInBatches(
-      infos,
-      16,
-      async (info): Promise<ChatHistoryEntry | null> => {
-        try {
-          const messages = JSON.parse(
-            await fs.promises.readFile(info.messagesPath, 'utf8'),
-          ) as ChatMessage[]
-          if (messages.length === 0) return null
-          return {
-            chatId: info.chatId,
-            lastPrompt: getFirstUserPrompt(messages),
-            timestamp: info.mtime,
-            messageCount: messages.length,
+    const loadEntries = (items: ChatDirInfo[]) =>
+      mapInBatches(
+        items,
+        16,
+        async (info): Promise<ChatHistoryEntry | null> => {
+          try {
+            const messages = JSON.parse(
+              await fs.promises.readFile(info.messagesPath, {
+                encoding: 'utf8',
+                signal,
+              }),
+            ) as ChatMessage[]
+            if (!Array.isArray(messages)) throw new Error('Saved transcript is not a message array')
+            if (messages.length === 0) return null
+            return {
+              chatId: info.chatId,
+              lastPrompt: getFirstUserPrompt(messages),
+              timestamp: info.mtime,
+              messageCount: messages.length,
+            }
+          } catch {
+            if (signal?.aborted) return null
+            omitted++
+            return {
+              chatId: info.chatId,
+              lastPrompt: '(saved capture unavailable · Inspect for recovery)',
+              timestamp: info.mtime,
+              messageCount: 0,
+              messageCountKnown: false,
+              captureUnavailable: true,
+            }
           }
-        } catch {
-          return null
-        }
-      },
+        },
+        signal,
+      )
+    const first = onInitial ? infos.slice(0, initialCount) : []
+    const initial = await loadEntries(first)
+    const valid = (entry: ChatHistoryEntry | null): entry is ChatHistoryEntry =>
+      entry !== null
+    if (onInitial && !signal?.aborted) onInitial(initial.filter(valid))
+    const remaining = await loadEntries(
+      onInitial ? infos.slice(initialCount) : infos,
     )
-    return entries.filter((entry): entry is ChatHistoryEntry => entry !== null)
+    if (!signal?.aborted)
+      onState?.({ state: omitted ? 'partial' : 'loaded', omitted })
+    return [...initial, ...remaining].filter(valid)
   } catch {
+    if (!signal?.aborted) onState?.({ state: 'unavailable' })
     return []
   }
 }

@@ -146,6 +146,7 @@ describe('StrReplaceComponent', () => {
       path: 'src/pending.ts',
       content: 'export const value = 1',
     })
+    toolBlock.lifecycle = 'running'
 
     const result = renderToolComponent(
       toolBlock,

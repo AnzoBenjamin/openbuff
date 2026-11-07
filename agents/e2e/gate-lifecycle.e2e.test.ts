@@ -106,7 +106,7 @@ function reviewerResult(params: {
   findings?: string[]
   /** Defaults to `covered`; pass `missing` to fire the coverage hard rule. */
   coverage?: 'covered' | 'missing' | 'n/a'
-  /** Defaults to an empty list. */
+  /** Defaults to evidence for the requested fixture behavior. */
   requirementCoverage?: Array<{
     requirement: string
     status: string
@@ -115,6 +115,7 @@ function reviewerResult(params: {
 }) {
   return feedJson({
     schemaVersion: 1,
+    family: 'reviewer',
     verdict: params.verdict,
     snapshotFingerprint: params.snapshotFingerprint,
     reviewedFiles: params.reviewedFiles,
@@ -127,7 +128,15 @@ function reviewerResult(params: {
       apiCompatibility: 'pass',
       performance: 'pass',
     },
-    requirementCoverage: params.requirementCoverage ?? [],
+    requirementCoverage: params.requirementCoverage ?? [
+      {
+        requirement: 'Preserve the requested fixture behavior',
+        status: 'satisfied',
+        evidence: [
+          `Synthetic fixture review attests ${params.reviewedFiles.join(', ')} at ${params.snapshotFingerprint}.`,
+        ],
+      },
+    ],
   })
 }
 
@@ -964,11 +973,10 @@ describe('base2 deterministic gate lifecycle e2e', () => {
     expect(drain.done).toBe(true)
   })
 
-  // RF-4: a coverage-complete review whose fingerprint is well-formed but does
-  // NOT match the expected snapshot is tolerated (the gate still credits
-  // LOOKS_GOOD) and the tolerated drift is recorded exactly once as gate
-  // telemetry with dedicated reported/expected fingerprint keys.
-  test('tolerates a well-formed non-matching reviewer fingerprint and records the drift once', () => {
+  // A full-evidence review must echo the current content basis. A stale
+  // fingerprint gets one reviewer-only protocol retry and no gate credit;
+  // correcting that attestation permits the original happy-path finalization.
+  test('rejects a non-matching reviewer fingerprint before a corrected protocol retry passes', () => {
     mkdirSync(path.dirname(FINGERPRINT_DRIFT_FILE), { recursive: true })
     writeFileSync(FINGERPRINT_DRIFT_FILE, 'export const drift = "before"\n')
     const driftFingerprint = `v3:${'e'.repeat(64)}`
@@ -1027,9 +1035,36 @@ describe('base2 deterministic gate lifecycle e2e', () => {
 
       // Coverage-complete review (every pending file attested) that echoes a
       // well-formed but different v3 fingerprint.
-      const preCreditStatus = gen.next(
+      const protocolRetry = gen.next(
         reviewerResult({
           snapshotFingerprint: driftFingerprint,
+          reviewedFiles: [FINGERPRINT_DRIFT_FILE],
+          verdict: 'LOOKS_GOOD',
+        }),
+      )
+      expect(protocolRetry.value).toMatchObject({
+        toolName: 'spawn_agents',
+        input: { agents: [{ agent_type: 'code-reviewer' }] },
+      })
+      expect((protocolRetry.value as any).input.agents).toHaveLength(1)
+      expect((protocolRetry.value as any).input.agents[0].prompt).toContain(
+        'reviewer snapshot fingerprint did not match the reviewed working tree',
+      )
+      expect(reviewerFingerprintFromSpawn(protocolRetry.value)).toBe(
+        expectedFingerprint,
+      )
+      expect((agentState as any).base2ActiveWork).toMatchObject({
+        currentPhase: 'awaiting_review',
+        pendingGateFiles: [FINGERPRINT_DRIFT_FILE],
+        reviewerProtocolRetryCount: 1,
+        reviewReceipts: [],
+      })
+      expect((agentState as any).base2ActiveWork.gatePassedFiles).not.toContain(
+        FINGERPRINT_DRIFT_FILE,
+      )
+      const preCreditStatus = gen.next(
+        reviewerResult({
+          snapshotFingerprint: expectedFingerprint,
           reviewedFiles: [FINGERPRINT_DRIFT_FILE],
           verdict: 'LOOKS_GOOD',
         }),
@@ -1056,20 +1091,20 @@ describe('base2 deterministic gate lifecycle e2e', () => {
         gatePassedReviewerVerdict: 'LOOKS_GOOD',
       })
 
-      // The tolerated drift is recorded exactly once, with dedicated payload
-      // keys instead of a concatenated reuseReason string.
+      // Rejected drift is never recorded as tolerated or used as receipt
+      // evidence. Exactly one review receipt binds the corrected fingerprint.
       const driftEvents = telemetry.filter(
         (event) => event.reviewerStatus === 'attestation-fingerprint-drift',
       )
-      expect(driftEvents).toHaveLength(1)
-      expect(driftEvents[0]).toMatchObject({
-        event: 'base2.gate',
+      expect(driftEvents).toHaveLength(0)
+      const receipts = (agentState as any).base2ActiveWork.reviewReceipts
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]).toMatchObject({
         reviewer: 'code-reviewer',
-        reportedFingerprint: driftFingerprint,
-        expectedFingerprint,
-        pendingFiles: [FINGERPRINT_DRIFT_FILE],
+        gateId: `code-reviewer:${expectedFingerprint}`,
+        snapshotFingerprint: expectedFingerprint,
+        reviewedFiles: [FINGERPRINT_DRIFT_FILE],
       })
-      expect(driftEvents[0]!.reuseReason).toBeUndefined()
     } finally {
       console.info = originalInfo
     }
@@ -1128,8 +1163,16 @@ describe('base2 deterministic gate lifecycle e2e', () => {
         reviewedFiles: [PARENT_OWNED_FILE],
         verdict: 'LOOKS_GOOD',
         requirementCoverage: [
-          { requirement: 'Commit and push', status: 'missing' },
-          { requirement: 'Confirm CI/CD is green', status: 'uncertain' },
+          {
+            requirement: 'Commit and push',
+            status: 'missing',
+            evidence: ['parent only: commit and push after specialist review'],
+          },
+          {
+            requirement: 'Confirm CI/CD is green',
+            status: 'uncertain',
+            evidence: ['parent only: confirm CI/CD after publication'],
+          },
           // Parent-owned only via evidence; the requirement text alone is
           // in-scope, so the gate must consult the structured evidence.
           {
@@ -1219,7 +1262,11 @@ describe('base2 deterministic gate lifecycle e2e', () => {
         reviewedFiles: [IN_SCOPE_REQUIREMENT_FILE],
         verdict: 'LOOKS_GOOD',
         requirementCoverage: [
-          { requirement: 'Commit and push', status: 'missing' },
+          {
+            requirement: 'Commit and push',
+            status: 'missing',
+            evidence: ['parent only: commit and push after specialist review'],
+          },
           {
             requirement: 'preserve CLI compatibility',
             status: 'missing',

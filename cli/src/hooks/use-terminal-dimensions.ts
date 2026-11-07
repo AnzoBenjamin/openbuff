@@ -6,7 +6,8 @@ import { useMemo } from 'react'
 
 export const useTerminalDimensions = () => {
   const renderer = useRenderer()
-  const { width: measuredWidth } = useOpenTuiDimensions()
+  const { width: measuredWidth, height: measuredHeight } =
+    useOpenTuiDimensions()
 
   const sanitizeDimension = (
     value: number | null | undefined,
@@ -25,8 +26,11 @@ export const useTerminalDimensions = () => {
   )
 
   const resolvedTerminalHeight = useMemo(
-    () => sanitizeDimension(renderer?.height) ?? 24,
-    [renderer?.height],
+    () =>
+      sanitizeDimension(measuredHeight) ??
+      sanitizeDimension(renderer?.height) ??
+      24,
+    [measuredHeight, renderer?.height],
   )
 
   const terminalWidth = resolvedTerminalWidth

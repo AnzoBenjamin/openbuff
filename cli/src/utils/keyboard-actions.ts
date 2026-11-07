@@ -34,6 +34,7 @@ export type ChatKeyboardState = {
   // Queue state
   queuePaused: boolean
   queuedCount: number
+  editingMessageId?: string | null
 
   // History navigation state
   historyNavUpEnabled: boolean
@@ -48,6 +49,7 @@ export type ChatKeyboardState = {
  * Each action represents a distinct behavior to be handled.
  */
 export type ChatKeyboardAction =
+  | { type: 'cancel-edit' }
   // Mode actions
   | { type: 'exit-input-mode' }
   | { type: 'exit-feedback-mode' }
@@ -154,6 +156,7 @@ export function resolveChatKeyboardAction(
   }
 
   // Priority 2: Non-default input mode escape
+  if (isEscape && state.editingMessageId) return { type: 'cancel-edit' }
   // Escape should exit the current mode BEFORE interrupting streams
   // Exception: modes with blockKeyboardExit cannot be escaped
   const modeConfig = getInputModeConfig(state.inputMode)

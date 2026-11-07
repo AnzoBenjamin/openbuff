@@ -1,0 +1,137 @@
+{
+  "runtime": "1.3.5",
+  "scope": "Isolated source VM + real SDK loader/schema helper imports. No network, account, model, process, or repository writes.",
+  "assurance": "unit-level/source-boundary probes, not a live provider/transport integration",
+  "mcpEmptyFailure": [],
+  "mcpTextFailure": [
+    {
+      "type": "json",
+      "value": "synthetic data"
+    }
+  ],
+  "mcpStructuredOnly": [],
+  "mcpTextResource": [
+    {
+      "type": "media",
+      "data": "plain text observation",
+      "mediaType": "text/plain"
+    }
+  ],
+  "discovery": {
+    "first": [
+      "first"
+    ],
+    "repeat": [
+      "first"
+    ],
+    "secondSelector": [],
+    "calls": 1,
+    "cursors": [
+      null
+    ]
+  },
+  "loader": {
+    "trust": "Explicit agentsPath opts into this synthetic directory only",
+    "imported": [
+      "probe.test.js",
+      "types/runtime.js",
+      "lib/helper.mjs",
+      "node_modules/package/entry.js",
+      "__tests__/side-effect.spec.ts",
+      "sessions/run/probe.ts"
+    ],
+    "agentIds": [
+      "source-probe-agent"
+    ],
+    "validationErrors": []
+  },
+  "generatorClosure": {
+    "error": "ReferenceError: outsideHelper is not defined",
+    "validatedByLoader": true
+  },
+  "promptSchemas": [
+    {
+      "schema": {
+        "type": "string"
+      },
+      "success": true
+    },
+    {
+      "schema": {
+        "type": "string",
+        "minLength": 5
+      },
+      "success": false,
+      "error": "Agent \"prompt-schema\" (Synthetic): Invalid inputSchema.prompt in unknown: Schema must allow string or undefined values. Current schema validation error: String must be at least 5 characters long. Please ensure your JSON schema accepts string types."
+    },
+    {
+      "schema": {
+        "type": "string",
+        "enum": [
+          "work"
+        ]
+      },
+      "success": false,
+      "error": "Agent \"prompt-schema\" (Synthetic): Invalid inputSchema.prompt in unknown: Schema must allow string or undefined values. Current schema validation error: Invalid input: expected \"work\". Please ensure your JSON schema accepts string types."
+    }
+  ],
+  "zodHusk": {
+    "beforeRejectsEmpty": true,
+    "afterAcceptsEmpty": true
+  },
+  "neverSchema": {
+    "wire": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "not": {}
+    },
+    "afterAcceptsObject": true
+  },
+  "richSchema": {
+    "emptyAccepted": false,
+    "invalidEnumAccepted": false,
+    "extraAccepted": true
+  },
+  "mcpNames": {
+    "publishedName": "team__api__read",
+    "decodedServer": "team",
+    "decodedTool": "api__read",
+    "realServer": "team__api",
+    "realTool": "read"
+  },
+  "mcpBridgeOrigin": {
+    "originalOrigin": "project",
+    "observedBridgeOrigins": [
+      {
+        "mark": null,
+        "effective": "client"
+      }
+    ]
+  },
+  "mcpSerializedMixedOrigin": {
+    "before": "client",
+    "directAfterParse": "client",
+    "afterJsonThenParse": "project"
+  },
+  "customInputPathHeuristic": [
+    {
+      "value": "/api/v1",
+      "normalized": "../../../../../api/v1",
+      "blocked": true
+    },
+    {
+      "value": "/",
+      "normalized": "../../../../..",
+      "blocked": true
+    },
+    {
+      "value": "/^work$/",
+      "normalized": "../../../../../^work$",
+      "blocked": true
+    },
+    {
+      "value": "hello",
+      "normalized": "hello",
+      "blocked": false
+    }
+  ]
+}

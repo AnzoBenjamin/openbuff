@@ -14,12 +14,20 @@ const inputSchema = z
       .describe(
         'The jobId returned by run_terminal_command with process_type: BACKGROUND.',
       ),
+    cursor: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe(
+        'Optional event sequence cursor from a previous response. Explicit cursors replay independently and do not advance the stored cursor; omit to consume new events using the job’s stored position.',
+      ),
     wait_for: z
       .string()
       .min(1)
       .optional()
       .describe(
-        'Optional substring to wait for in the new output before returning (follow mode). Returns early as soon as it appears (e.g. "Listening on" / "compiled successfully").',
+        'Optional substring to match in new output. With a positive timeout_seconds, follow until it appears; with timeout_seconds 0 or omitted, check only the currently available output.',
       ),
     timeout_seconds: z
       .number()
@@ -46,9 +54,9 @@ const inputSchema = z
 const description = `
 Poll or follow a BACKGROUND run_terminal_command job. Returns new \`events\`, \`nextCursor\`, \`state\`, and \`exitCode\` when finished.
 
-- Poll (no wait_for / timeout_seconds 0): immediate new output since last cursor.
-- Follow (wait_for and/or timeout_seconds > 0): block until match or exit; \`matched\` / \`timedOut\`. Timeout leaves job running unless kill_on_timeout. Poll never kills.
-- Thread nextCursor so events do not repeat; truncated/dropped mark buffer eviction. Prefer read_logs(jobId) for a non-consuming tail snapshot.
+- Poll (timeout_seconds 0 or omitted): immediate new output since the selected cursor; wait_for, if given, checks only those available events.
+- Follow (timeout_seconds > 0): block until match or exit; \`matched\` / \`timedOut\`. Timeout leaves job running unless kill_on_timeout. Poll never kills.
+- Pass cursor: nextCursor for independent replay; an omitted cursor advances the job's stored cursor. truncated/dropped mark buffer eviction. Prefer read_logs(jobId) for a non-consuming tail snapshot.
 
 Example:
 ${$getNativeToolCallExampleString({

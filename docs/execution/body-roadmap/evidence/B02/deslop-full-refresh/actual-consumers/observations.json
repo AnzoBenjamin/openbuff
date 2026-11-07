@@ -1,0 +1,1271 @@
+{
+  "schemaVersion": 1,
+  "bun": "1.3.5",
+  "providerCalls": 0,
+  "providerConfigSha256": "88222b8539ecc86244923ed148592cdadcdab8bd5ade9164c31958bee4ce208f",
+  "invocationDir": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556",
+  "coverageTier": "actual serialized SDK generator → headless → persisted SQLite → CLI completion; local temp shell recovery; no model/provider",
+  "observations": [
+    {
+      "name": "happy_generator",
+      "startedAt": "2026-11-06T20:44:05.726Z",
+      "endedAt": "2026-11-06T20:44:06.307Z",
+      "durationMs": 580.2953310000003,
+      "exitCode": 0,
+      "awaitedCalls": 0,
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "taskAcceptance": {
+        "status": "accepted",
+        "oracle": "fixture-output",
+        "basis": "expected result present"
+      },
+      "actionOutcomes": [],
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "summary": "fixture returned"
+        }
+      },
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "spq3GPf0KYU",
+        "taskId": "spawn-main-agent",
+        "role": "specialist",
+        "agentId": "main-agent",
+        "status": "completed",
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "taskAcceptance": {
+          "status": "accepted",
+          "oracle": "fixture-output",
+          "basis": "expected result present"
+        },
+        "actionOutcomes": [],
+        "outcome": "ok",
+        "workspaceRevision": 0,
+        "workspaceSnapshotId": "workspace.v1.0.00000000",
+        "changedFiles": [],
+        "requirementsAddressed": [],
+        "acceptanceCriteriaAddressed": [],
+        "findingsAddressed": [],
+        "evidence": [],
+        "assumptions": [],
+        "unresolved": [],
+        "requestedValidation": [],
+        "artifacts": [],
+        "errors": [],
+        "output": {
+          "type": "structuredOutput",
+          "value": {
+            "summary": "fixture returned"
+          }
+        },
+        "contextUsage": {
+          "tokens": 3214
+        }
+      },
+      "cliMessage": {
+        "id": "ai",
+        "variant": "ai",
+        "timestamp": "fixture",
+        "content": "",
+        "blocks": [],
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "taskAcceptance": {
+          "status": "accepted",
+          "oracle": "fixture-output",
+          "basis": "expected result present"
+        },
+        "actionOutcomes": [],
+        "isComplete": true
+      },
+      "timerOutcomes": [
+        "success"
+      ],
+      "journalPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/happy_generator/journal-abeecc20-0875-42f7-a4db-7f96d9ccc2bf.sqlite",
+      "terminalEvents": [
+        {
+          "eventType": "step_boundary",
+          "stepNumber": 1,
+          "correlation": "local-run-31520cd0-090b-4089-94d0-94ce7387f32a",
+          "payload": {
+            "status": "completed",
+            "terminal": true,
+            "runOutcome": {
+              "termination": "completed"
+            },
+            "taskAcceptance": {
+              "status": "accepted",
+              "oracle": "fixture-output",
+              "basis": "expected result present"
+            },
+            "actionOutcomes": []
+          },
+          "seq": 0,
+          "createdAt": 1793997846216
+        }
+      ],
+      "stdoutSha256": "eb2e11e45ebf3d7ca2a28c243b8d43f6792451f18a381479be3aa826f0445ae9"
+    },
+    {
+      "name": "fatal_generator",
+      "startedAt": "2026-11-06T20:44:06.316Z",
+      "endedAt": "2026-11-06T20:44:06.571Z",
+      "durationMs": 254.70731799999976,
+      "exitCode": 1,
+      "awaitedCalls": 0,
+      "runOutcome": {
+        "termination": "failed",
+        "cause": {
+          "code": "programmatic_execution_error",
+          "message": "Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator"
+        }
+      },
+      "taskAcceptance": {
+        "status": "unknown"
+      },
+      "actionOutcomes": [],
+      "output": {
+        "type": "error",
+        "message": "Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator"
+      },
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "spq4KPX3wcE",
+        "taskId": "spawn-main-agent",
+        "role": "specialist",
+        "agentId": "main-agent",
+        "status": "failed",
+        "runOutcome": {
+          "termination": "failed",
+          "cause": {
+            "code": "programmatic_execution_error",
+            "message": "Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator"
+          }
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": [],
+        "outcome": "crashed",
+        "workspaceRevision": 0,
+        "workspaceSnapshotId": "workspace.v1.0.00000000",
+        "changedFiles": [],
+        "requirementsAddressed": [],
+        "acceptanceCriteriaAddressed": [],
+        "findingsAddressed": [],
+        "evidence": [],
+        "assumptions": [],
+        "unresolved": [],
+        "requestedValidation": [],
+        "artifacts": [],
+        "errors": [
+          {
+            "code": "programmatic_execution_error",
+            "message": "Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator",
+            "retryable": false
+          }
+        ],
+        "output": {
+          "errorMessage": "Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator",
+          "partial": true
+        },
+        "contextUsage": {
+          "tokens": 2950
+        }
+      },
+      "cliMessage": {
+        "id": "ai",
+        "variant": "ai",
+        "timestamp": "fixture",
+        "content": "",
+        "blocks": [],
+        "runOutcome": {
+          "termination": "failed",
+          "cause": {
+            "code": "programmatic_execution_error",
+            "message": "Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator"
+          }
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": [],
+        "userError": "Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator",
+        "isComplete": true
+      },
+      "timerOutcomes": [
+        "error"
+      ],
+      "journalPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/fatal_generator/journal-9654926d-96d6-43d0-877e-cfc1008209cd.sqlite",
+      "terminalEvents": [
+        {
+          "eventType": "step_boundary",
+          "stepNumber": 2,
+          "correlation": "local-run-3e778b49-1cd2-4e87-9633-11a64deb6e9f",
+          "payload": {
+            "status": "failed",
+            "terminal": true,
+            "runOutcome": {
+              "termination": "failed",
+              "cause": {
+                "code": "programmatic_execution_error",
+                "message": "Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator"
+              }
+            },
+            "taskAcceptance": {
+              "status": "unknown"
+            },
+            "actionOutcomes": []
+          },
+          "seq": 0,
+          "createdAt": 1793997846550
+        }
+      ],
+      "stdoutSha256": "97d96e6253f14db371b7d64a79ac8f76c69a57483663ebcbbde9f29bb93fa557"
+    },
+    {
+      "name": "awaited_rejection",
+      "startedAt": "2026-11-06T20:44:06.583Z",
+      "endedAt": "2026-11-06T20:44:06.825Z",
+      "durationMs": 241.86431900000025,
+      "exitCode": 1,
+      "awaitedCalls": 1,
+      "runOutcome": {
+        "termination": "failed",
+        "cause": {
+          "code": "programmatic_execution_error",
+          "message": "Error executing handleSteps for agent body-runtime-fixture: fixture awaited rejection"
+        }
+      },
+      "taskAcceptance": {
+        "status": "unknown"
+      },
+      "actionOutcomes": [
+        {
+          "actionId": "bc3d53ff-982d-43b5-aa4b-03606e8f0d1a",
+          "attemptId": "spq5CHZrEWk",
+          "runId": "local-run-82f852de-bcf0-4dc2-aea9-7cf3a44be156",
+          "toolName": "fixture_await",
+          "basis": {
+            "inputHash": "sha256:b80d04e295d57ea8f6d47bb15caf7f8a7916920e798e90aec5b5974d599761d3",
+            "workspaceRevision": 0
+          },
+          "outcome": "failed",
+          "cause": {
+            "code": "action_execution_error",
+            "message": "fixture awaited rejection"
+          },
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      ],
+      "output": {
+        "type": "error",
+        "message": "Error executing handleSteps for agent body-runtime-fixture: fixture awaited rejection"
+      },
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "spq5IeyD60A",
+        "taskId": "spawn-main-agent",
+        "role": "specialist",
+        "agentId": "main-agent",
+        "status": "failed",
+        "runOutcome": {
+          "termination": "failed",
+          "cause": {
+            "code": "programmatic_execution_error",
+            "message": "Error executing handleSteps for agent body-runtime-fixture: fixture awaited rejection"
+          }
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": [
+          {
+            "actionId": "bc3d53ff-982d-43b5-aa4b-03606e8f0d1a",
+            "attemptId": "spq5CHZrEWk",
+            "runId": "local-run-82f852de-bcf0-4dc2-aea9-7cf3a44be156",
+            "toolName": "fixture_await",
+            "basis": {
+              "inputHash": "sha256:b80d04e295d57ea8f6d47bb15caf7f8a7916920e798e90aec5b5974d599761d3",
+              "workspaceRevision": 0
+            },
+            "outcome": "failed",
+            "cause": {
+              "code": "action_execution_error",
+              "message": "fixture awaited rejection"
+            },
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        ],
+        "outcome": "crashed",
+        "workspaceRevision": 0,
+        "workspaceSnapshotId": "workspace.v1.0.00000000",
+        "changedFiles": [],
+        "requirementsAddressed": [],
+        "acceptanceCriteriaAddressed": [],
+        "findingsAddressed": [],
+        "evidence": [],
+        "assumptions": [],
+        "unresolved": [],
+        "requestedValidation": [],
+        "artifacts": [],
+        "errors": [
+          {
+            "code": "programmatic_execution_error",
+            "message": "Error executing handleSteps for agent body-runtime-fixture: fixture awaited rejection",
+            "retryable": false
+          }
+        ],
+        "output": {
+          "errorMessage": "Error executing handleSteps for agent body-runtime-fixture: fixture awaited rejection",
+          "partial": true
+        },
+        "contextUsage": {
+          "tokens": 2952
+        }
+      },
+      "cliMessage": {
+        "id": "ai",
+        "variant": "ai",
+        "timestamp": "fixture",
+        "content": "",
+        "blocks": [],
+        "runOutcome": {
+          "termination": "failed",
+          "cause": {
+            "code": "programmatic_execution_error",
+            "message": "Error executing handleSteps for agent body-runtime-fixture: fixture awaited rejection"
+          }
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": [
+          {
+            "actionId": "bc3d53ff-982d-43b5-aa4b-03606e8f0d1a",
+            "attemptId": "spq5CHZrEWk",
+            "runId": "local-run-82f852de-bcf0-4dc2-aea9-7cf3a44be156",
+            "toolName": "fixture_await",
+            "basis": {
+              "inputHash": "sha256:b80d04e295d57ea8f6d47bb15caf7f8a7916920e798e90aec5b5974d599761d3",
+              "workspaceRevision": 0
+            },
+            "outcome": "failed",
+            "cause": {
+              "code": "action_execution_error",
+              "message": "fixture awaited rejection"
+            },
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        ],
+        "userError": "Error executing handleSteps for agent body-runtime-fixture: fixture awaited rejection",
+        "isComplete": true
+      },
+      "timerOutcomes": [
+        "error"
+      ],
+      "journalPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/awaited_rejection/journal-4f036575-99b7-402b-906c-70f430527cb5.sqlite",
+      "terminalEvents": [
+        {
+          "eventType": "step_boundary",
+          "stepNumber": 2,
+          "correlation": "local-run-82f852de-bcf0-4dc2-aea9-7cf3a44be156",
+          "payload": {
+            "status": "failed",
+            "terminal": true,
+            "runOutcome": {
+              "termination": "failed",
+              "cause": {
+                "code": "programmatic_execution_error",
+                "message": "Error executing handleSteps for agent body-runtime-fixture: fixture awaited rejection"
+              }
+            },
+            "taskAcceptance": {
+              "status": "unknown"
+            },
+            "actionOutcomes": [
+              {
+                "actionId": "bc3d53ff-982d-43b5-aa4b-03606e8f0d1a",
+                "attemptId": "spq5CHZrEWk",
+                "runId": "local-run-82f852de-bcf0-4dc2-aea9-7cf3a44be156",
+                "toolName": "fixture_await",
+                "basis": {
+                  "inputHash": "sha256:b80d04e295d57ea8f6d47bb15caf7f8a7916920e798e90aec5b5974d599761d3",
+                  "workspaceRevision": 0
+                },
+                "outcome": "failed",
+                "cause": {
+                  "code": "action_execution_error",
+                  "message": "fixture awaited rejection"
+                },
+                "effect": {
+                  "status": "unobserved",
+                  "receiptIds": [],
+                  "confirmedPaths": []
+                }
+              }
+            ]
+          },
+          "seq": 1,
+          "createdAt": 1793997846809
+        }
+      ],
+      "stdoutSha256": "aada0ae041e626e58b904ec180e6f74233ec115f5f40e01a2660954a1c3a28ae"
+    },
+    {
+      "name": "pre_cancel",
+      "startedAt": "2026-11-06T20:44:06.833Z",
+      "endedAt": "2026-11-06T20:44:06.838Z",
+      "durationMs": 5.781600999999682,
+      "exitCode": 1,
+      "awaitedCalls": 0,
+      "runOutcome": {
+        "termination": "cancelled",
+        "cause": {
+          "code": "run_cancelled",
+          "message": "fixture pre-cancellation"
+        }
+      },
+      "taskAcceptance": {
+        "status": "unknown"
+      },
+      "actionOutcomes": [],
+      "output": {
+        "type": "error",
+        "message": "fixture pre-cancellation"
+      },
+      "cliMessage": {
+        "id": "ai",
+        "variant": "ai",
+        "timestamp": "fixture",
+        "content": "",
+        "blocks": [],
+        "runOutcome": {
+          "termination": "cancelled",
+          "cause": {
+            "code": "run_cancelled",
+            "message": "fixture pre-cancellation"
+          }
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": []
+      },
+      "timerOutcomes": [],
+      "journalPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/pre_cancel/journal-af38c6d2-d899-45b7-839c-ba1ab00d7d07.sqlite",
+      "terminalEvents": [],
+      "stdoutSha256": "c2e9904255263e36a94054586a0e771ed18309d62cae73566bf09d79b8ceb6ae"
+    },
+    {
+      "name": "mid_cancel",
+      "startedAt": "2026-11-06T20:44:06.849Z",
+      "endedAt": "2026-11-06T20:44:07.105Z",
+      "durationMs": 256.57643200000075,
+      "exitCode": 1,
+      "awaitedCalls": 1,
+      "runOutcome": {
+        "termination": "cancelled",
+        "cause": {
+          "code": "programmatic_execution_error",
+          "message": "Error executing handleSteps for agent body-runtime-fixture: fixture mid-cancellation"
+        }
+      },
+      "taskAcceptance": {
+        "status": "unknown"
+      },
+      "actionOutcomes": [
+        {
+          "actionId": "0dd97ac3-1473-4d3b-92ae-c1edbb69a02d",
+          "attemptId": "spq6MFPxX0M",
+          "runId": "local-run-0f49d05f-6b4e-4f1b-a0a8-5da5041443ef",
+          "toolName": "fixture_await",
+          "basis": {
+            "inputHash": "sha256:b80d04e295d57ea8f6d47bb15caf7f8a7916920e798e90aec5b5974d599761d3",
+            "workspaceRevision": 0
+          },
+          "outcome": "cancelled",
+          "cause": {
+            "code": "action_cancelled",
+            "message": "fixture mid-cancellation"
+          },
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      ],
+      "output": {
+        "type": "error",
+        "message": "Error executing handleSteps for agent body-runtime-fixture: fixture mid-cancellation"
+      },
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "spq6QOcJnM0",
+        "taskId": "spawn-main-agent",
+        "role": "specialist",
+        "agentId": "main-agent",
+        "status": "cancelled",
+        "runOutcome": {
+          "termination": "cancelled",
+          "cause": {
+            "code": "programmatic_execution_error",
+            "message": "Error executing handleSteps for agent body-runtime-fixture: fixture mid-cancellation"
+          }
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": [
+          {
+            "actionId": "0dd97ac3-1473-4d3b-92ae-c1edbb69a02d",
+            "attemptId": "spq6MFPxX0M",
+            "runId": "local-run-0f49d05f-6b4e-4f1b-a0a8-5da5041443ef",
+            "toolName": "fixture_await",
+            "basis": {
+              "inputHash": "sha256:b80d04e295d57ea8f6d47bb15caf7f8a7916920e798e90aec5b5974d599761d3",
+              "workspaceRevision": 0
+            },
+            "outcome": "cancelled",
+            "cause": {
+              "code": "action_cancelled",
+              "message": "fixture mid-cancellation"
+            },
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        ],
+        "outcome": "ok",
+        "workspaceRevision": 0,
+        "workspaceSnapshotId": "workspace.v1.0.00000000",
+        "changedFiles": [],
+        "requirementsAddressed": [],
+        "acceptanceCriteriaAddressed": [],
+        "findingsAddressed": [],
+        "evidence": [],
+        "assumptions": [],
+        "unresolved": [],
+        "requestedValidation": [],
+        "artifacts": [],
+        "errors": [
+          {
+            "code": "programmatic_execution_error",
+            "message": "Error executing handleSteps for agent body-runtime-fixture: fixture mid-cancellation",
+            "retryable": false
+          }
+        ],
+        "output": {
+          "errorMessage": "Error executing handleSteps for agent body-runtime-fixture: fixture mid-cancellation",
+          "partial": true
+        },
+        "contextUsage": {
+          "tokens": 2950
+        }
+      },
+      "cliMessage": {
+        "id": "ai",
+        "variant": "ai",
+        "timestamp": "fixture",
+        "content": "",
+        "blocks": [],
+        "runOutcome": {
+          "termination": "cancelled",
+          "cause": {
+            "code": "programmatic_execution_error",
+            "message": "Error executing handleSteps for agent body-runtime-fixture: fixture mid-cancellation"
+          }
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": [
+          {
+            "actionId": "0dd97ac3-1473-4d3b-92ae-c1edbb69a02d",
+            "attemptId": "spq6MFPxX0M",
+            "runId": "local-run-0f49d05f-6b4e-4f1b-a0a8-5da5041443ef",
+            "toolName": "fixture_await",
+            "basis": {
+              "inputHash": "sha256:b80d04e295d57ea8f6d47bb15caf7f8a7916920e798e90aec5b5974d599761d3",
+              "workspaceRevision": 0
+            },
+            "outcome": "cancelled",
+            "cause": {
+              "code": "action_cancelled",
+              "message": "fixture mid-cancellation"
+            },
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        ]
+      },
+      "timerOutcomes": [],
+      "journalPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/mid_cancel/journal-b4a39a21-4c3b-4f79-8fc1-be8b15b0b4c1.sqlite",
+      "terminalEvents": [
+        {
+          "eventType": "step_boundary",
+          "stepNumber": 2,
+          "correlation": "local-run-0f49d05f-6b4e-4f1b-a0a8-5da5041443ef",
+          "payload": {
+            "status": "cancelled",
+            "terminal": true,
+            "runOutcome": {
+              "termination": "cancelled",
+              "cause": {
+                "code": "programmatic_execution_error",
+                "message": "Error executing handleSteps for agent body-runtime-fixture: fixture mid-cancellation"
+              }
+            },
+            "taskAcceptance": {
+              "status": "unknown"
+            },
+            "actionOutcomes": [
+              {
+                "actionId": "0dd97ac3-1473-4d3b-92ae-c1edbb69a02d",
+                "attemptId": "spq6MFPxX0M",
+                "runId": "local-run-0f49d05f-6b4e-4f1b-a0a8-5da5041443ef",
+                "toolName": "fixture_await",
+                "basis": {
+                  "inputHash": "sha256:b80d04e295d57ea8f6d47bb15caf7f8a7916920e798e90aec5b5974d599761d3",
+                  "workspaceRevision": 0
+                },
+                "outcome": "cancelled",
+                "cause": {
+                  "code": "action_cancelled",
+                  "message": "fixture mid-cancellation"
+                },
+                "effect": {
+                  "status": "unobserved",
+                  "receiptIds": [],
+                  "confirmedPaths": []
+                }
+              }
+            ]
+          },
+          "seq": 1,
+          "createdAt": 1793997847092
+        }
+      ],
+      "stdoutSha256": "54ad9de6c7427f0c3bff7d791d1795a82aa720e3aca9d42292317a82b69bb251"
+    },
+    {
+      "name": "zero_cost",
+      "startedAt": "2026-11-06T20:44:07.112Z",
+      "endedAt": "2026-11-06T20:44:07.360Z",
+      "durationMs": 247.37495000000035,
+      "exitCode": 1,
+      "awaitedCalls": 0,
+      "runOutcome": {
+        "termination": "budget_exhausted",
+        "cause": {
+          "code": "cost_budget",
+          "message": "Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed."
+        }
+      },
+      "taskAcceptance": {
+        "status": "unknown"
+      },
+      "actionOutcomes": [],
+      "output": {
+        "type": "error",
+        "message": "Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed."
+      },
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "spq7P20u3H4",
+        "taskId": "spawn-main-agent",
+        "role": "specialist",
+        "agentId": "main-agent",
+        "status": "failed",
+        "runOutcome": {
+          "termination": "budget_exhausted",
+          "cause": {
+            "code": "cost_budget",
+            "message": "Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed."
+          }
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": [],
+        "outcome": "ok",
+        "workspaceRevision": 0,
+        "workspaceSnapshotId": "workspace.v1.0.00000000",
+        "changedFiles": [],
+        "requirementsAddressed": [],
+        "acceptanceCriteriaAddressed": [],
+        "findingsAddressed": [],
+        "evidence": [],
+        "assumptions": [],
+        "unresolved": [],
+        "requestedValidation": [],
+        "artifacts": [],
+        "errors": [
+          {
+            "code": "cost_budget",
+            "message": "Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed.",
+            "retryable": false
+          }
+        ],
+        "output": {
+          "errorMessage": "Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed.",
+          "partial": true
+        },
+        "contextUsage": {
+          "tokens": 0
+        }
+      },
+      "cliMessage": {
+        "id": "ai",
+        "variant": "ai",
+        "timestamp": "fixture",
+        "content": "",
+        "blocks": [],
+        "runOutcome": {
+          "termination": "budget_exhausted",
+          "cause": {
+            "code": "cost_budget",
+            "message": "Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed."
+          }
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": [],
+        "userError": "Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed.",
+        "isComplete": true
+      },
+      "timerOutcomes": [
+        "error"
+      ],
+      "journalPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/zero_cost/journal-6948de20-2ea0-4e0d-a7e0-5e810b1ddda5.sqlite",
+      "terminalEvents": [
+        {
+          "eventType": "step_boundary",
+          "stepNumber": 0,
+          "correlation": "local-run-ffbb3923-53a3-45b0-b2e0-3cd99bf55e5e",
+          "payload": {
+            "status": "budget_exhausted",
+            "terminal": true,
+            "runOutcome": {
+              "termination": "budget_exhausted",
+              "cause": {
+                "code": "cost_budget",
+                "message": "Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed."
+              }
+            },
+            "taskAcceptance": {
+              "status": "unknown"
+            },
+            "actionOutcomes": []
+          },
+          "seq": 0,
+          "createdAt": 1793997847340
+        }
+      ],
+      "stdoutSha256": "9d09a0221762aa257ca24e401dbfbd79c9014c7668cf27031a2218aada2ac461"
+    },
+    {
+      "name": "zero_steps",
+      "startedAt": "2026-11-06T20:44:07.369Z",
+      "endedAt": "2026-11-06T20:44:07.610Z",
+      "durationMs": 241.34682599999996,
+      "exitCode": 1,
+      "awaitedCalls": 0,
+      "runOutcome": {
+        "termination": "step_exhausted",
+        "cause": {
+          "code": "step_limit",
+          "message": "Agent step limit reached before this turn completed. Current work and run state were preserved, so the task can resume safely on the next turn. Increase maxAgentSteps in openbuff.json if this workload routinely needs a larger step budget."
+        }
+      },
+      "taskAcceptance": {
+        "status": "unknown"
+      },
+      "actionOutcomes": [],
+      "output": {
+        "type": "error",
+        "message": "Agent step limit reached before this turn completed. Current work and run state were preserved, so the task can resume safely on the next turn. Increase maxAgentSteps in openbuff.json if this workload routinely needs a larger step budget."
+      },
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "spq8N5xXLZo",
+        "taskId": "spawn-main-agent",
+        "role": "specialist",
+        "agentId": "main-agent",
+        "status": "failed",
+        "runOutcome": {
+          "termination": "step_exhausted",
+          "cause": {
+            "code": "step_limit",
+            "message": "Agent step limit reached before this turn completed. Current work and run state were preserved, so the task can resume safely on the next turn. Increase maxAgentSteps in openbuff.json if this workload routinely needs a larger step budget."
+          }
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": [],
+        "outcome": "ok",
+        "workspaceRevision": 0,
+        "workspaceSnapshotId": "workspace.v1.0.00000000",
+        "changedFiles": [],
+        "requirementsAddressed": [],
+        "acceptanceCriteriaAddressed": [],
+        "findingsAddressed": [],
+        "evidence": [],
+        "assumptions": [],
+        "unresolved": [],
+        "requestedValidation": [],
+        "artifacts": [],
+        "errors": [
+          {
+            "code": "step_limit",
+            "message": "Agent step limit reached before this turn completed. Current work and run state were preserved, so the task can resume safely on the next turn. Increase maxAgentSteps in openbuff.json if this workload routinely needs a larger step budget.",
+            "retryable": false
+          }
+        ],
+        "output": {
+          "errorMessage": "Agent step limit reached before this turn completed. Current work and run state were preserved, so the task can resume safely on the next turn. Increase maxAgentSteps in openbuff.json if this workload routinely needs a larger step budget.",
+          "partial": true
+        },
+        "contextUsage": {
+          "tokens": 0
+        }
+      },
+      "cliMessage": {
+        "id": "ai",
+        "variant": "ai",
+        "timestamp": "fixture",
+        "content": "",
+        "blocks": [],
+        "runOutcome": {
+          "termination": "step_exhausted",
+          "cause": {
+            "code": "step_limit",
+            "message": "Agent step limit reached before this turn completed. Current work and run state were preserved, so the task can resume safely on the next turn. Increase maxAgentSteps in openbuff.json if this workload routinely needs a larger step budget."
+          }
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": [],
+        "userError": "Agent step limit reached before this turn completed. Current work and run state were preserved, so the task can resume safely on the next turn. Increase maxAgentSteps in openbuff.json if this workload routinely needs a larger step budget.",
+        "isComplete": true
+      },
+      "timerOutcomes": [
+        "error"
+      ],
+      "journalPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/zero_steps/journal-de2fe1e3-574b-4d9b-ad18-eb839fe2474e.sqlite",
+      "terminalEvents": [
+        {
+          "eventType": "step_boundary",
+          "stepNumber": 0,
+          "correlation": "local-run-b75324a5-0f72-4092-b292-e0323fdb136c",
+          "payload": {
+            "status": "step_exhausted",
+            "terminal": true,
+            "runOutcome": {
+              "termination": "step_exhausted",
+              "cause": {
+                "code": "step_limit",
+                "message": "Agent step limit reached before this turn completed. Current work and run state were preserved, so the task can resume safely on the next turn. Increase maxAgentSteps in openbuff.json if this workload routinely needs a larger step budget."
+              }
+            },
+            "taskAcceptance": {
+              "status": "unknown"
+            },
+            "actionOutcomes": []
+          },
+          "seq": 0,
+          "createdAt": 1793997847593
+        }
+      ],
+      "stdoutSha256": "5f8ed93d1610e4c410e28326eb1f6a33b1c00e7bca3bab3e399844af684fb24f"
+    },
+    {
+      "name": "recovered_accepted",
+      "startedAt": "2026-11-06T20:44:07.623Z",
+      "endedAt": "2026-11-06T20:44:08.111Z",
+      "durationMs": 488.5463060000002,
+      "exitCode": 0,
+      "awaitedCalls": 0,
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "taskAcceptance": {
+        "status": "accepted",
+        "oracle": "recovery-file-bytes",
+        "basis": "actual terminal result and postimage"
+      },
+      "actionOutcomes": [
+        {
+          "actionId": "c2270066-3269-4ce4-9881-7ce3c7f3cb06",
+          "attemptId": "spq9Fkdql94",
+          "runId": "local-run-d6e208be-dcdc-4450-b554-cd37cbc23d33",
+          "toolName": "run_terminal_command",
+          "basis": {
+            "inputHash": "sha256:b922fcd1cf1c28d8dd97913a3235073e1a0ab3379ba2aa092ca340fbb02ae831",
+            "workspaceRevision": 0
+          },
+          "outcome": "failed",
+          "cause": {
+            "code": "nonzero_exit",
+            "message": "Command exited with code 7."
+          },
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        },
+        {
+          "actionId": "6c43366b-f5f6-4ed7-8b21-cdf3cc8e8c77",
+          "attemptId": "spq9swfXP6M",
+          "runId": "local-run-d6e208be-dcdc-4450-b554-cd37cbc23d33",
+          "toolName": "run_terminal_command",
+          "basis": {
+            "inputHash": "sha256:d207e0ab92e831b23482455e514c8f75f3c076258185986390a5aae230531caf",
+            "workspaceRevision": 0
+          },
+          "outcome": "succeeded",
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      ],
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "summary": "verified recovered bytes"
+        }
+      },
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "spq-Lq_HCos",
+        "taskId": "spawn-main-agent",
+        "role": "specialist",
+        "agentId": "main-agent",
+        "status": "completed",
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "taskAcceptance": {
+          "status": "accepted",
+          "oracle": "recovery-file-bytes",
+          "basis": "actual terminal result and postimage"
+        },
+        "actionOutcomes": [
+          {
+            "actionId": "c2270066-3269-4ce4-9881-7ce3c7f3cb06",
+            "attemptId": "spq9Fkdql94",
+            "runId": "local-run-d6e208be-dcdc-4450-b554-cd37cbc23d33",
+            "toolName": "run_terminal_command",
+            "basis": {
+              "inputHash": "sha256:b922fcd1cf1c28d8dd97913a3235073e1a0ab3379ba2aa092ca340fbb02ae831",
+              "workspaceRevision": 0
+            },
+            "outcome": "failed",
+            "cause": {
+              "code": "nonzero_exit",
+              "message": "Command exited with code 7."
+            },
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          },
+          {
+            "actionId": "6c43366b-f5f6-4ed7-8b21-cdf3cc8e8c77",
+            "attemptId": "spq9swfXP6M",
+            "runId": "local-run-d6e208be-dcdc-4450-b554-cd37cbc23d33",
+            "toolName": "run_terminal_command",
+            "basis": {
+              "inputHash": "sha256:d207e0ab92e831b23482455e514c8f75f3c076258185986390a5aae230531caf",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        ],
+        "outcome": "ok",
+        "workspaceRevision": 0,
+        "workspaceSnapshotId": "workspace.v1.0.00000000",
+        "changedFiles": [],
+        "requirementsAddressed": [],
+        "acceptanceCriteriaAddressed": [],
+        "findingsAddressed": [],
+        "evidence": [],
+        "assumptions": [],
+        "unresolved": [],
+        "requestedValidation": [],
+        "artifacts": [],
+        "errors": [],
+        "output": {
+          "type": "structuredOutput",
+          "value": {
+            "summary": "verified recovered bytes"
+          }
+        },
+        "contextUsage": {
+          "tokens": 3214
+        }
+      },
+      "cliMessage": {
+        "id": "ai",
+        "variant": "ai",
+        "timestamp": "fixture",
+        "content": "",
+        "blocks": [],
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "taskAcceptance": {
+          "status": "accepted",
+          "oracle": "recovery-file-bytes",
+          "basis": "actual terminal result and postimage"
+        },
+        "actionOutcomes": [
+          {
+            "actionId": "c2270066-3269-4ce4-9881-7ce3c7f3cb06",
+            "attemptId": "spq9Fkdql94",
+            "runId": "local-run-d6e208be-dcdc-4450-b554-cd37cbc23d33",
+            "toolName": "run_terminal_command",
+            "basis": {
+              "inputHash": "sha256:b922fcd1cf1c28d8dd97913a3235073e1a0ab3379ba2aa092ca340fbb02ae831",
+              "workspaceRevision": 0
+            },
+            "outcome": "failed",
+            "cause": {
+              "code": "nonzero_exit",
+              "message": "Command exited with code 7."
+            },
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          },
+          {
+            "actionId": "6c43366b-f5f6-4ed7-8b21-cdf3cc8e8c77",
+            "attemptId": "spq9swfXP6M",
+            "runId": "local-run-d6e208be-dcdc-4450-b554-cd37cbc23d33",
+            "toolName": "run_terminal_command",
+            "basis": {
+              "inputHash": "sha256:d207e0ab92e831b23482455e514c8f75f3c076258185986390a5aae230531caf",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        ],
+        "isComplete": true
+      },
+      "timerOutcomes": [
+        "success"
+      ],
+      "journalPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/recovered_accepted/journal-0ac95181-f075-48ed-b98a-a31798369cf0.sqlite",
+      "terminalEvents": [
+        {
+          "eventType": "step_boundary",
+          "stepNumber": 3,
+          "correlation": "local-run-d6e208be-dcdc-4450-b554-cd37cbc23d33",
+          "payload": {
+            "status": "completed",
+            "terminal": true,
+            "runOutcome": {
+              "termination": "completed"
+            },
+            "taskAcceptance": {
+              "status": "accepted",
+              "oracle": "recovery-file-bytes",
+              "basis": "actual terminal result and postimage"
+            },
+            "actionOutcomes": [
+              {
+                "actionId": "c2270066-3269-4ce4-9881-7ce3c7f3cb06",
+                "attemptId": "spq9Fkdql94",
+                "runId": "local-run-d6e208be-dcdc-4450-b554-cd37cbc23d33",
+                "toolName": "run_terminal_command",
+                "basis": {
+                  "inputHash": "sha256:b922fcd1cf1c28d8dd97913a3235073e1a0ab3379ba2aa092ca340fbb02ae831",
+                  "workspaceRevision": 0
+                },
+                "outcome": "failed",
+                "cause": {
+                  "code": "nonzero_exit",
+                  "message": "Command exited with code 7."
+                },
+                "effect": {
+                  "status": "unobserved",
+                  "receiptIds": [],
+                  "confirmedPaths": []
+                }
+              },
+              {
+                "actionId": "6c43366b-f5f6-4ed7-8b21-cdf3cc8e8c77",
+                "attemptId": "spq9swfXP6M",
+                "runId": "local-run-d6e208be-dcdc-4450-b554-cd37cbc23d33",
+                "toolName": "run_terminal_command",
+                "basis": {
+                  "inputHash": "sha256:d207e0ab92e831b23482455e514c8f75f3c076258185986390a5aae230531caf",
+                  "workspaceRevision": 0
+                },
+                "outcome": "succeeded",
+                "effect": {
+                  "status": "unobserved",
+                  "receiptIds": [],
+                  "confirmedPaths": []
+                }
+              }
+            ]
+          },
+          "seq": 6,
+          "createdAt": 1793997848097
+        }
+      ],
+      "stdoutSha256": "d56e271e6e6c2c513fc2cdee6f41a046088bad250515889d3eba49798821855a"
+    },
+    {
+      "name": "completed_rejected",
+      "startedAt": "2026-11-06T20:44:08.118Z",
+      "endedAt": "2026-11-06T20:44:08.308Z",
+      "durationMs": 190.1449480000001,
+      "exitCode": 1,
+      "awaitedCalls": 0,
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "taskAcceptance": {
+        "status": "rejected",
+        "oracle": "fixture-output",
+        "basis": "expected result missing"
+      },
+      "actionOutcomes": [],
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "summary": "fixture returned"
+        }
+      },
+      "receipt": {
+        "schemaVersion": 1,
+        "receiptId": "spq-9Mocumw",
+        "taskId": "spawn-main-agent",
+        "role": "specialist",
+        "agentId": "main-agent",
+        "status": "completed",
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "taskAcceptance": {
+          "status": "rejected",
+          "oracle": "fixture-output",
+          "basis": "expected result missing"
+        },
+        "actionOutcomes": [],
+        "outcome": "ok",
+        "workspaceRevision": 0,
+        "workspaceSnapshotId": "workspace.v1.0.00000000",
+        "changedFiles": [],
+        "requirementsAddressed": [],
+        "acceptanceCriteriaAddressed": [],
+        "findingsAddressed": [],
+        "evidence": [],
+        "assumptions": [],
+        "unresolved": [],
+        "requestedValidation": [],
+        "artifacts": [],
+        "errors": [],
+        "output": {
+          "type": "structuredOutput",
+          "value": {
+            "summary": "fixture returned"
+          }
+        },
+        "contextUsage": {
+          "tokens": 3214
+        }
+      },
+      "cliMessage": {
+        "id": "ai",
+        "variant": "ai",
+        "timestamp": "fixture",
+        "content": "",
+        "blocks": [],
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "taskAcceptance": {
+          "status": "rejected",
+          "oracle": "fixture-output",
+          "basis": "expected result missing"
+        },
+        "actionOutcomes": [],
+        "userError": "Task rejected: expected result missing",
+        "isComplete": true
+      },
+      "timerOutcomes": [
+        "error"
+      ],
+      "journalPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/completed_rejected/journal-33a73506-ac3b-4bf7-afdc-7a9c58b39845.sqlite",
+      "terminalEvents": [
+        {
+          "eventType": "step_boundary",
+          "stepNumber": 1,
+          "correlation": "local-run-2cef84dd-c224-4a03-8e51-d7608838301c",
+          "payload": {
+            "status": "completed",
+            "terminal": true,
+            "runOutcome": {
+              "termination": "completed"
+            },
+            "taskAcceptance": {
+              "status": "rejected",
+              "oracle": "fixture-output",
+              "basis": "expected result missing"
+            },
+            "actionOutcomes": []
+          },
+          "seq": 0,
+          "createdAt": 1793997848289
+        }
+      ],
+      "stdoutSha256": "1a5aadb46c173442aa924d3804b4e1c18c3dc026df20f6a5893002064c1324f8"
+    }
+  ]
+}

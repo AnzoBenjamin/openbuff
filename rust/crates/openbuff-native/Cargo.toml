@@ -1,0 +1,26 @@
+[package]
+name = "openbuff-native"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "openbuff-native"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace-internal path dependency (NOT an external crate): the `version`
+# probe cross-checks the sidecar handshake protocol version against the
+# harness crate so a drift between the two fails loudly in CI, not silently
+# at handshake time.
+openbuff-workspace-harness = { path = "../openbuff-workspace-harness" }
+
+# ExecPlan deserialization plus the one-line JSON status/response/error
+# envelopes. Kept local to this crate (not hoisted to the workspace root) for
+# this self-contained P5-T1 slice.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Linux-only filesystem sandbox for the `exec` role. All call sites are behind
+# `#[cfg(target_os = "linux")]`, so the crate still compiles on macOS/Windows.
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"

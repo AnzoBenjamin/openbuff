@@ -67,7 +67,12 @@ export const handleReadFiles = (async (
     fileProcessingState,
   } = params
   const capabilityIssuer = {
-    projectId: fileContext.projectRoot,
+    // Matches the other handlers (rewrite_symbol / replace_range / str_replace
+    // / edit_transaction): a missing fileContext or projectRoot degrades to an
+    // empty project id, which hasAuthoritativeReadCapabilityScope rejects, so
+    // no read capability is minted instead of the handler throwing a raw
+    // TypeError.
+    projectId: fileContext?.projectRoot ?? '',
     runId: params.runId ?? '',
   }
   const pathInputs = toolCall.input.paths ?? []
@@ -223,6 +228,10 @@ export const handleReadFiles = (async (
         result.complete &&
         typeof result.content === 'string'
       ) {
+        const scope = { ...capabilityIssuer, path: result.path }
+        // Same guard as mintBlockEditAnchor: a non-authoritative scope (empty
+        // projectId/runId) mints no capability instead of throwing.
+        if (!hasAuthoritativeReadCapabilityScope(scope)) return undefined
         const contentHash = getContentHash(result.content)
         const startLine = 1
         const endLine = normalizeLineEndings(result.content).split('\n').length
@@ -230,7 +239,7 @@ export const handleReadFiles = (async (
           startLine,
           endLine,
           hash: contentHash,
-          scope: { ...capabilityIssuer, path: result.path },
+          scope,
         })
         return { startLine, endLine, contentHash, readCapability }
       }
@@ -240,11 +249,13 @@ export const handleReadFiles = (async (
         result.editAnchor &&
         /^sha256:[a-f0-9]{64}$/.test(result.editAnchor.contentHash)
       ) {
+        const scope = { ...capabilityIssuer, path: result.path }
+        if (!hasAuthoritativeReadCapabilityScope(scope)) return undefined
         const readCapability = encodeReadCapabilityToken({
           startLine: result.startLine,
           endLine: result.endLine,
           hash: result.editAnchor.contentHash,
-          scope: { ...capabilityIssuer, path: result.path },
+          scope,
         })
         return {
           startLine: result.startLine,
@@ -257,7 +268,7 @@ export const handleReadFiles = (async (
     })()
     const refs =
       result.selector === 'file'
-        ? fileContext.tokenCallers?.[result.path]
+        ? fileContext?.tokenCallers?.[result.path]
         : undefined
     const resultWithoutCapability = { ...result }
     if ('editAnchor' in resultWithoutCapability) {
@@ -272,7 +283,14 @@ export const handleReadFiles = (async (
 
   const successfulReadPaths = new Set(
     fileResults
-      .filter((result) => result.status !== 'error')
+      // A truncated file/range exposes no edit anchor and cannot establish
+      // that the agent saw the content needed to recover from a failed edit.
+      .filter(
+        (result) =>
+          result.status === 'ok' &&
+          'complete' in result &&
+          result.complete === true,
+      )
       .map((result) => result.path),
   )
 
@@ -599,11 +617,19 @@ export const handleReadFiles = (async (
       continue
     }
 
+    const symbolScope = { ...capabilityIssuer, path: request.path }
     const slices = (
-      await extractSlices(rawContent, request.path, request.names, undefined, {
-        ...capabilityIssuer,
-        path: request.path,
-      })
+      await extractSlices(
+        rawContent,
+        request.path,
+        request.names,
+        undefined,
+        // A non-authoritative scope mints no slice capability instead of
+        // letting encodeReadCapabilityToken throw.
+        hasAuthoritativeReadCapabilityScope(symbolScope)
+          ? symbolScope
+          : undefined,
+      )
     ).map((slice) => {
       if (!slice.readCapability) return slice
       const contentHash = getContentHash(slice.content)
@@ -611,7 +637,7 @@ export const handleReadFiles = (async (
         startLine: slice.startLine,
         endLine: slice.endLine,
         hash: contentHash,
-        scope: { ...capabilityIssuer, path: request.path },
+        scope: symbolScope,
       })
       const sliceWithoutCapability = { ...slice }
       delete sliceWithoutCapability.readCapability
@@ -645,31 +671,45 @@ export const handleReadFiles = (async (
       continue
     }
 
-    successfulReadPaths.add(request.path)
-    // Symbol-only success may clear failed_edit gates but never mints whole-file
-    // auth, so it must not drop context_compacted.
-    const symbolRereadReq = getEditRereadRequirement(
-      fileProcessingState,
-      request.path,
-    )
-    if (symbolRereadReq?.reason !== 'context_compacted') {
-      clearEditRereadRequirement(fileProcessingState, request.path, {
-        clearContextCompacted: true,
-      })
+    // Keep each complete slice and its capability up to the response budget;
+    // never discard already useful slices because a later one is too large.
+    let returnedBytes = 0
+    const returnedSlices: typeof slices = []
+    const omittedSymbols: string[] = []
+    for (const slice of slices) {
+      const bytes = Buffer.byteLength(slice.content, 'utf8')
+      if (bytes > MAX_READ_BLOCK_BYTES || returnedBytes + bytes > MAX_READ_BLOCK_BYTES) {
+        omittedSymbols.push(slice.symbol)
+      } else {
+        returnedSlices.push(slice)
+        returnedBytes += bytes
+      }
     }
-    delete fileProcessingState.promisesByPath[request.path]
-    const slicesTooLarge =
-      slices.reduce((total, slice) => total + slice.content.length, 0) > 100_000
+    if (returnedSlices.length > 0) {
+      successfulReadPaths.add(request.path)
+      const symbolRereadReq = getEditRereadRequirement(
+        fileProcessingState,
+        request.path,
+      )
+      if (symbolRereadReq?.reason !== 'context_compacted') {
+        clearEditRereadRequirement(fileProcessingState, request.path, {
+          clearContextCompacted: true,
+        })
+      }
+      delete fileProcessingState.promisesByPath[request.path]
+    }
     symbolResults.push({
       selector: 'symbols',
       requestIndex,
       path: request.path,
-      status: missingSymbols.length > 0 || slicesTooLarge ? 'partial' : 'ok',
+      status: missingSymbols.length > 0 || omittedSymbols.length > 0 ? 'partial' : 'ok',
       requestedSymbols: request.names,
       missingSymbols,
-      ...(slicesTooLarge
-        ? { slicesOmittedForLength: true as const }
-        : { slices }),
+      slices: returnedSlices,
+      ...(omittedSymbols.length > 0 && {
+        omittedSymbols,
+        recovery: `Some symbol slices exceeded the ${MAX_READ_BLOCK_BYTES}-byte response budget. Request omitted symbols separately, or use smaller ranges/windows for a single oversized symbol.`,
+      }),
     })
   }
 

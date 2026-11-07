@@ -1,6 +1,12 @@
 import type { ChatMessage } from '../types/chat'
 
-export function buildMessageTree(messages: ChatMessage[]): {
+export function buildMessageTree(
+  messages: ChatMessage[],
+  previous?: {
+    tree: Map<string, ChatMessage[]>
+    topLevelMessages: ChatMessage[]
+  },
+): {
   tree: Map<string, ChatMessage[]>
   topLevelMessages: ChatMessage[]
 } {
@@ -17,7 +23,20 @@ export function buildMessageTree(messages: ChatMessage[]): {
     }
   }
 
-  return { tree: messageTree, topLevelMessages }
+  // Keep selectors for unaffected branches stable while another agent streams.
+  const reuse = (next: ChatMessage[], prev?: ChatMessage[]): ChatMessage[] =>
+    prev &&
+    next.length === prev.length &&
+    next.every((message, i) => message === prev[i])
+      ? prev
+      : next
+  for (const [parentId, children] of messageTree) {
+    messageTree.set(parentId, reuse(children, previous?.tree.get(parentId)))
+  }
+  return {
+    tree: messageTree,
+    topLevelMessages: reuse(topLevelMessages, previous?.topLevelMessages),
+  }
 }
 
 export function getDescendantIds(

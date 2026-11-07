@@ -1,0 +1,32 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "method": "initialize",
+  "params": {
+    "protocolVersion": 1,
+    "clientCapabilities": {
+      "fs": {
+        "readTextFile": true,
+        "writeTextFile": true
+      },
+      "terminal": true,
+      "_meta": {
+        "openbuff.dev": {
+          "extVersion": 1,
+          "extensions": [
+            "capabilities",
+            "receipts",
+            "lanes",
+            "gate",
+            "events"
+          ],
+          "events": "acp"
+        }
+      }
+    },
+    "clientInfo": {
+      "name": "openbuff-vscode",
+      "version": "0.1.0"
+    }
+  }
+}

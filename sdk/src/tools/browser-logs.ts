@@ -2,9 +2,10 @@ import { spawn, type ChildProcess } from 'child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
-import net from 'net'
+import type { Readable, Writable } from 'node:stream'
 import { PNG } from 'pngjs'
 import pixelmatch from 'pixelmatch'
+import WebSocket from 'ws'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type {
@@ -14,27 +15,20 @@ import type {
 import type { Log, NetworkEvent } from '@codebuff/common/browser-actions'
 import type { JSONValue } from '@codebuff/common/types/json'
 import { getSdkEnv } from '../env'
+import {
+  CdpPipeTransport,
+  createWebSocketPipeBridge,
+  type CdpPipeMessage,
+  type CdpWebSocket,
+} from './cdp-pipe-transport'
 import { resolveFilePathForOperation } from './path-utils'
-
-type CdpResponse = {
-  id?: number
-  method?: string
-  params?: Record<string, unknown>
-  result?: unknown
-  error?: { message?: string }
-}
-
-type CdpPending = {
-  resolve: (value: unknown) => void
-  reject: (error: Error) => void
-  timeout: ReturnType<typeof setTimeout>
-}
 
 type BrowserPage = {
   targetId: string
-  ws: WebSocket
-  nextId: number
-  pending: Map<number, CdpPending>
+  /** CDP flatten-mode sessionId routing this page's commands on the pipe. */
+  sessionId: string
+  /** Owning session transport used for every command sent from this page. */
+  transport: CdpPipeTransport
   eventWaiters: Map<string, Array<() => void>>
   executionContexts: Map<string, number>
 }
@@ -50,9 +44,23 @@ type BrowserSession = {
   owner?: BrowserSessionOwner
   projectRoot?: string
   child: ChildProcess
-  port: number
+  transport: CdpPipeTransport
   userDataDir: string
+  /**
+   * For sessions spawned on the WebSocket fallback
+   * (--remote-debugging-port=0), closes the underlying ws socket
+   * deterministically at explicit teardown; the pipe transport needs no
+   * extra disposal.
+   */
+  disposeTransport?: () => void
   pages: Map<string, BrowserPage>
+  /**
+   * Pages keyed by flatten-mode sessionId so routeEvent resolves the owning
+   * page with a single map lookup per inbound event instead of allocating a
+   * spread array and scanning every page. Kept in sync with the targetId-keyed
+   * `pages` map at every mutation site.
+   */
+  pagesBySessionId: Map<string, BrowserPage>
   activeTargetId: string
   logs: Log[]
   networks: NetworkEvent[]
@@ -60,6 +68,20 @@ type BrowserSession = {
   logOffset: number
   networkOffset: number
   recording: RecordingState | null
+  /**
+   * CDP events buffered for targets whose page is not registered yet (the
+   * window between Target.attachToTarget resolving and connectPage registering
+   * the page). Keyed by flatten-mode sessionId and drained in order on
+   * registration so no event is dropped or misrouted.
+   */
+  pendingEvents: Map<string, CdpPipeMessage[]>
+  /**
+   * Running total of events buffered across every pendingEvents entry. Kept in
+   * sync by queuePendingEvent and flushPendingEvents so the pending-buffer cap
+   * check is a counter comparison per enqueue instead of rescanning every
+   * buffered sessionId.
+   */
+  pendingEventCount: number
 }
 
 type FrameTarget = {
@@ -108,6 +130,37 @@ export function getBrowserSessionKey(owner: BrowserSessionOwner): string {
     .join('::')
 }
 
+/**
+ * Maximum nesting depth for 'diagnose' actions. A step whose action is itself
+ * a 'diagnose' recurses into browserLogs, so model-controlled or malformed
+ * input without a depth bound would drive unbounded recursion and end in
+ * stack exhaustion surfaced only as the generic catch-all error.
+ */
+export const MAX_DIAGNOSE_NESTING_DEPTH = 3
+
+/**
+ * Whether a diagnose action tree nests deeper than MAX_DIAGNOSE_NESTING_DEPTH.
+ * Checked structurally up front so an over-deep tree is rejected before any
+ * browser session work, and so the diagnose branch's recursion into
+ * browserLogs can never outrun the bound (each nested call re-validates its
+ * own, strictly smaller subtree). The walk itself stops as soon as the bound
+ * is exceeded, so hostile deeply-nested input cannot exhaust the stack here
+ * either. Tolerates malformed step entries (a non-object step yields a
+ * bounded catch-all error instead of a crash).
+ */
+export function diagnoseNestingExceedsLimit(
+  action: BrowserAction,
+  depth: number,
+): boolean {
+  if (action.type !== 'diagnose') return false
+  if (depth > MAX_DIAGNOSE_NESTING_DEPTH) return true
+  if (!Array.isArray(action.steps)) return false
+  return action.steps.some(
+    (step) =>
+      isRecord(step) && diagnoseNestingExceedsLimit(step.action, depth + 1),
+  )
+}
+
 export async function browserLogs(
   action: BrowserAction,
   sessionOwnerOrKey: BrowserSessionOwner | string = DEFAULT_BROWSER_SESSION_KEY,
@@ -123,6 +176,23 @@ export async function browserLogs(
       ? sessionOwnerOrKey
       : getBrowserSessionKey(sessionOwnerOrKey)
   try {
+    // Reject an over-deep diagnose tree before any session work: a step whose
+    // action is itself a 'diagnose' recurses into browserLogs, so without this
+    // bound hostile or malformed input could drive unbounded recursion.
+    if (
+      action.type === 'diagnose' &&
+      diagnoseNestingExceedsLimit(action, 1)
+    ) {
+      return [
+        jsonResult({
+          success: false,
+          action: 'diagnose',
+          error: `diagnose actions may nest at most ${MAX_DIAGNOSE_NESTING_DEPTH} levels deep`,
+          logs: [],
+        }),
+      ]
+    }
+
     if (action.type === 'stop') {
       await stopBrowserSession(sessionKey)
       return [jsonResult({ success: true, action: action.type, logs: [] })]
@@ -549,120 +619,1168 @@ export function buildPdfAttachmentMetadata(data: string) {
   }
 }
 
+/**
+ * Probe seam for the /proc files chromeSandboxArgs reads. Unit tests replace
+ * it to model kernel states (Ubuntu 24.04's apparmor userns restriction,
+ * unreadable procfs, ...) without touching the real filesystem — the same
+ * seam pattern as removeUserDataDirImpl below.
+ */
+export type ChromeSandboxProbe = {
+  existsSync: (path: string) => boolean
+  readFileSync: (path: string, encoding: 'utf8') => string
+}
+
+let sandboxProbeImpl: ChromeSandboxProbe = { existsSync, readFileSync }
+
+/** Test seam: restores the real /proc probes between tests. */
+export function __setChromeSandboxProbeForTest(
+  probe: ChromeSandboxProbe | null,
+): void {
+  sandboxProbeImpl = probe ?? { existsSync, readFileSync }
+}
+
+/**
+ * Diagnostic sink for undeterminable sandbox probes. chromeSandboxArgs has
+ * no logger in scope, so the warn diagnostic goes to console.warn by
+ * default; tests swap in a capturing sink here.
+ */
+let sandboxDiagnosticImpl: (message: string) => void = (message) => {
+  console.warn(message)
+}
+
+/** Test seam: captures (or silences) sandbox-probe diagnostics. */
+export function __setChromeSandboxDiagnosticForTest(
+  sink: ((message: string) => void) | null,
+): void {
+  sandboxDiagnosticImpl =
+    sink ??
+    ((message) => {
+      console.warn(message)
+    })
+}
+
+function warnUndeterminableSandbox(reason: string): void {
+  sandboxDiagnosticImpl(
+    `chromeSandboxArgs: sandbox state undeterminable (${reason}); failing open to --no-sandbox`,
+  )
+}
+
+/**
+ * Decide whether Chrome must be launched with `--no-sandbox`.
+ *
+ * `--no-sandbox` disables Chrome's own OS-level sandbox and is a last resort:
+ * we only pass it when the sandbox genuinely cannot function in the current
+ * environment, otherwise Chrome runs sandboxed. Non-Linux platforms (macOS,
+ * Windows) never need it — Chrome's sandbox works out of the box there, so we
+ * return `[]`. On Linux we probe: running as root can't use the setuid
+ * sandbox without extra setup (common in CI/containers), and unprivileged
+ * user namespaces must be available for the namespace sandbox. Ubuntu 24.04
+ * additionally restricts unprivileged user namespaces with AppArmor
+ * (apparmor_restrict_unprivileged_userns=1) even while max_user_namespaces
+ * stays positive, so that knob is checked FIRST: when it reads '1' the
+ * namespace sandbox cannot create its userns and we treat the host exactly
+ * like one without userns. When the sandbox can't work we fail open with
+ * `['--no-sandbox']`, since a broken sandbox launch would hang the tool; when
+ * availability is UNDETERMINABLE (a probe threw, or no probe file was
+ * readable) the same documented fallback applies but a warn diagnostic names
+ * the reason instead of disabling the sandbox silently.
+ *
+ * Note: no `CHROME_DISABLE_SANDBOX` env escape hatch is wired up here. Adding
+ * one would require surfacing a new key from getSdkEnv() and editing the
+ * SdkEnv type in sdk/src/types/env.ts, which is out of scope per the task
+ * constraints (prefer skipping the hatch over a multi-file change).
+ */
+export function chromeSandboxArgs(): string[] {
+  // Chrome's sandbox works out of the box on macOS/Windows.
+  if (process.platform !== 'linux') return []
+
+  // The setuid sandbox won't work as root without extra setup; disable it.
+  // This matches common CI/container reality. process.getuid is undefined on
+  // non-POSIX platforms, so guard with a typeof check.
+  if (typeof process.getuid === 'function' && process.getuid() === 0) {
+    return ['--no-sandbox']
+  }
+
+  // Linux, non-root: probe unprivileged user-namespace availability.
+  // apparmor_restrict_unprivileged_userns first: on Ubuntu 24.04 it is the
+  // deciding knob and the probes below would otherwise report 'available'.
+  const apparmorPath =
+    '/proc/sys/kernel/apparmor_restrict_unprivileged_userns'
+  try {
+    if (sandboxProbeImpl.existsSync(apparmorPath)) {
+      if (
+        sandboxProbeImpl.readFileSync(apparmorPath, 'utf8').trim() === '1'
+      ) {
+        // AppArmor restricts unprivileged userns: the namespace sandbox
+        // cannot work, so treat the host as no-userns.
+        return ['--no-sandbox']
+      }
+    }
+  } catch (error) {
+    warnUndeterminableSandbox(
+      `could not read ${apparmorPath} (${error instanceof Error ? error.message : String(error)})`,
+    )
+    return ['--no-sandbox']
+  }
+
+  const clonePath = '/proc/sys/kernel/unprivileged_userns_clone'
+  try {
+    if (sandboxProbeImpl.existsSync(clonePath)) {
+      return sandboxProbeImpl.readFileSync(clonePath, 'utf8').trim() === '1'
+        ? []
+        : ['--no-sandbox']
+    }
+  } catch (error) {
+    warnUndeterminableSandbox(
+      `could not read ${clonePath} (${error instanceof Error ? error.message : String(error)})`,
+    )
+    return ['--no-sandbox']
+  }
+
+  const maxPath = '/proc/sys/user/max_user_namespaces'
+  try {
+    if (sandboxProbeImpl.existsSync(maxPath)) {
+      const max = parseInt(
+        sandboxProbeImpl.readFileSync(maxPath, 'utf8').trim(),
+        10,
+      )
+      return Number.isFinite(max) && max > 0 ? [] : ['--no-sandbox']
+    }
+  } catch (error) {
+    warnUndeterminableSandbox(
+      `could not read ${maxPath} (${error instanceof Error ? error.message : String(error)})`,
+    )
+    return ['--no-sandbox']
+  }
+
+  // Undeterminable: fail open so the tool doesn't hang on a broken sandbox,
+  // and name the reason instead of disabling the sandbox silently.
+  warnUndeterminableSandbox(
+    'none of the /proc probes (apparmor_restrict_unprivileged_userns, unprivileged_userns_clone, max_user_namespaces) was present or readable',
+  )
+  return ['--no-sandbox']
+}
+
+/**
+ * Best-effort rollback for a failed browser spawn attempt: closes the pipe
+ * transport (rejecting every pending request), kills the Chrome child, and
+ * removes the temp user-data dir. Each step is individually guarded so the
+ * original spawn failure is what propagates to the caller.
+ *
+ * The user-data dir removal follows the same deferral contract as the stop
+ * path (teardownBrowserSessionResources): the kill above is asynchronous, so
+ * on Windows the dying child can still hold the dir open and an immediate
+ * removal can fail (EBUSY/EPERM). The removal therefore goes through the
+ * shared remover seam, and a failed dir is deferred to
+ * sweepDeferredBrowserUserDataDirs — reclaimed on the next session activity
+ * — instead of leaking one temp dir per failed spawn/probe with no sweep.
+ */
+export function rollbackBrowserSpawn(attempt: {
+  child: Pick<ChildProcess, 'kill'>
+  transport?: Pick<CdpPipeTransport, 'close'>
+  userDataDir: string
+  /** For the WebSocket fallback: closes the underlying socket. */
+  dispose?: () => void
+}): void {
+  try {
+    attempt.dispose?.()
+  } catch {
+    // ignore
+  }
+  try {
+    attempt.transport?.close()
+  } catch {
+    // ignore
+  }
+  try {
+    attempt.child.kill()
+  } catch {
+    // ignore
+  }
+  if (!removeUserDataDirImpl(attempt.userDataDir)) {
+    // The dying child can still hold the dir open (EBUSY/EPERM on Windows):
+    // defer it to the sweep instead of losing the removal silently. The set
+    // dedupes, so a dir deferred by both this rollback and a later teardown
+    // is only swept once.
+    deferredUserDataDirCleanups.add(attempt.userDataDir)
+  }
+}
+
+const pendingBrowserSessions = new Map<string, Promise<unknown>>()
+
+/**
+ * Collapse concurrent spawns for the same sessionKey into a single in-flight
+ * attempt. Without this guard, two concurrent callers that both observe no
+ * live session each spawn a Chrome process; only one wins the registry entry
+ * and the loser's child/transport/user-data dir would leak. Every concurrent
+ * caller shares the winner's promise, and the entry is cleared once it
+ * settles so a failed spawn can be retried.
+ */
+export function shareInFlightBrowserSpawn<T>(
+  sessionKey: string,
+  spawnSession: () => Promise<T>,
+): Promise<T> {
+  const inFlight = pendingBrowserSessions.get(sessionKey)
+  // Every promise stored under a key comes from that key's own spawnSession,
+  // so the assertion preserves the caller's session type.
+  if (inFlight) return inFlight as Promise<T>
+  const spawnPromise = spawnSession()
+  pendingBrowserSessions.set(sessionKey, spawnPromise)
+  const clearIfCurrent = () => {
+    // Only clear our own entry: a newer attempt may already have replaced it.
+    if (pendingBrowserSessions.get(sessionKey) === spawnPromise) {
+      pendingBrowserSessions.delete(sessionKey)
+    }
+  }
+  // Handle both outcomes here so the cleanup chain never rejects unhandled;
+  // callers observe the original promise directly.
+  spawnPromise.then(clearIfCurrent, clearIfCurrent)
+  return spawnPromise
+}
+
+/**
+ * Session keys whose `stop` was requested while a spawn for the same key was
+ * still in flight. The in-flight spawn consults this before registering: a
+ * marked key means the spawn must roll itself back instead of registering a
+ * live session that the already-returned `stop` will never reap.
+ */
+const stoppingSessionKeys = new Set<string>()
+
+/**
+ * Refcount of `stop` calls for each key whose teardown is still in flight.
+ * A stop arms its marker at entry and releases its count only after the
+ * multi-second teardown await, so the fresh-spawn path can tell a stop that
+ * is still tearing the previous session down — whose marker must stay
+ * armed — from a stale marker left behind by a stop that already returned.
+ */
+const activeStopSessionCounts = new Map<string, number>()
+
+/**
+ * Clear a stale stop marker before initiating a fresh spawn. A marker is
+ * stale — and safe to clear — only when nothing is in flight for the key:
+ * no pending spawn (the marker is that spawn's rollback guard) and no stop
+ * still awaiting teardown. Clearing a marker whose stop is inside its
+ * teardown window would let a spawn racing that teardown register a live
+ * session the already-returning stop never reaps (the caller is told the
+ * session stopped while the Chrome child, its transport, and its temp
+ * user-data dir stay live), so the marker is held through the whole
+ * teardown window and a racing spawn is rolled back by
+ * honorStopRequestedDuringSpawn instead. Exported for unit tests, like
+ * rollbackBrowserSpawn.
+ */
+export function clearStaleStopMarkerForFreshSpawn(sessionKey: string): void {
+  if (
+    !pendingBrowserSessions.has(sessionKey) &&
+    !activeStopSessionCounts.has(sessionKey)
+  ) {
+    stoppingSessionKeys.delete(sessionKey)
+  }
+}
+
+/**
+ * Stop-vs-spawn race guard, called by the spawn path just before registering
+ * a freshly assembled session. Returns true when a `stop` was requested while
+ * the spawn was in flight: the session's resources are rolled back (Chrome
+ * child, transport, temp user-data dir, ws disposal) and the caller must not
+ * register it. Returns false when no stop is pending and the session should
+ * be registered normally. Exported for unit tests, like routeEvent and
+ * rollbackBrowserSpawn.
+ */
+export function honorStopRequestedDuringSpawn(
+  sessionKey: string,
+  session: {
+    // Narrowed to exactly the surfaces rollbackBrowserSpawn consumes, so this
+    // guard is unit-testable with a minimal mock (the file's existing
+    // "narrowed for unit tests" pattern, like PageConnectSession).
+    child: Pick<ChildProcess, 'kill'>
+    transport: Pick<CdpPipeTransport, 'close'>
+    userDataDir: string
+    disposeTransport?: () => void
+  },
+): boolean {
+  if (!stoppingSessionKeys.has(sessionKey)) return false
+  rollbackBrowserSpawn({
+    child: session.child,
+    transport: session.transport,
+    userDataDir: session.userDataDir,
+    dispose: session.disposeTransport,
+  })
+  // Consume the marker only once no stop is still awaiting teardown: while
+  // a stop's teardown window is open, EVERY spawn racing it must be rolled
+  // back, so the marker stays armed for the next racing spawn too — a
+  // one-shot consumption here would let a second spawn register live during
+  // the same window and outlive the stop that reported success. The stop's
+  // own completion resolves the marker instead: it is kept while a spawn is
+  // still in flight (that spawn consumes it at registration) and cleared
+  // otherwise, so it can never poison a later legitimate start.
+  if (!activeStopSessionCounts.has(sessionKey)) {
+    stoppingSessionKeys.delete(sessionKey)
+  }
+  return true
+}
+
+/**
+ * Roll back a dead/stale session's resources and drop its registry entry (only
+ * when `session` is still the entry registered under `sessionKey` — a respawn
+ * may already have replaced it). Exported for unit tests, like routeEvent and
+ * rollbackBrowserSpawn.
+ */
+export function rollbackStaleBrowserSession(
+  sessionKey: string,
+  session: Pick<
+    BrowserSession,
+    'child' | 'transport' | 'userDataDir' | 'disposeTransport'
+  >,
+): void {
+  if (browserSessions.get(sessionKey) === session) {
+    browserSessions.delete(sessionKey)
+  }
+  rollbackBrowserSpawn({
+    child: session.child,
+    transport: session.transport,
+    userDataDir: session.userDataDir,
+    dispose: session.disposeTransport,
+  })
+}
+
 async function ensureBrowserSession(
   sessionKey: string,
   owner?: BrowserSessionOwner,
 ): Promise<BrowserSession> {
+  // Reclaim any user-data dirs whose teardown-time removal was deferred (the
+  // dying Chrome child still held them open) before possibly spawning a
+  // fresh session, so a leaked dir is retried on the next session activity.
+  sweepDeferredBrowserUserDataDirs()
   const existingSession = browserSessions.get(sessionKey)
-  if (existingSession && existingSession.child.exitCode === null) {
-    return existingSession
+  if (existingSession) {
+    if (existingSession.child.exitCode === null) {
+      return existingSession
+    }
+    // The Chrome child already exited: roll back everything the dead session
+    // still held (temp user-data dir, pipe transport, and on the port
+    // fallback the ws disposal) before respawning, so each crash/respawn
+    // cycle reclaims rather than leaks the previous session's resources.
+    rollbackStaleBrowserSession(sessionKey, existingSession)
   }
+  // A fresh spawn attempt cancels a stale stop marker (a stop issued when
+  // nothing was in flight). A stop issued during an already-in-flight spawn
+  // arms the marker at stop entry — before this check runs — and that spawn
+  // is still honored by it, so the guard only ever suppresses spawns the
+  // stop actually raced against. A marker whose stop is STILL inside its
+  // teardown window must not be cleared here: clearing it would let a spawn
+  // racing that teardown register a live session the already-returning stop
+  // never reaps, so clearStaleStopMarkerForFreshSpawn holds the marker for
+  // the whole teardown window and the racing spawn is rolled back instead.
+  clearStaleStopMarkerForFreshSpawn(sessionKey)
+  return shareInFlightBrowserSpawn(sessionKey, () =>
+    spawnBrowserSession(sessionKey, owner),
+  )
+}
 
-  const chrome = findChromeExecutable()
-  const port = await getFreePort()
-  const userDataDir = mkdtempSync(path.join(tmpdir(), 'openbuff-browser-'))
+/**
+ * SB-7 compatibility: not every Chromium build honors
+ * `--remote-debugging-pipe` (or flatten-mode attach). Launching such a build
+ * with the pipe flag silently produces no CDP channel at all: without
+ * detection the launch hangs for the full 10s target-discovery budget and
+ * then fails with a generic "did not become ready" error, even though the
+ * pre-SB-7 `--remote-debugging-port` transport would have worked.
+ *
+ * detectPipeSupport probes the installed browser with short, bounded CDP
+ * round-trips over the pipe fds: a Target.getTargets round-trip whose result
+ * carries a usable `targetInfos` entry, then a flatten-mode
+ * Target.attachToTarget round-trip that returns a `sessionId` — the two shapes
+ * the pipe session path actually relies on. Only a successful probe is cached
+ * — as a positive verdict keyed by the resolved browser executable — because a
+ * timeout or failure is not evidence that the browser lacks pipe support (a
+ * slow cold start or contended tmpdir can blow the probe budget on a fully
+ * capable browser), and a cached hard negative would silently route every
+ * session in the TTL window to the fallback. When the probe does not confirm
+ * support, spawnBrowserSession instead launches the session over
+ * `--remote-debugging-port=0` (Chrome binds the debugging listener to
+ * 127.0.0.1 unless --remote-debugging-address says otherwise), reads the
+ * `DevTools listening on ws://...` line from stderr, and drives the same
+ * CdpPipeTransport over a WebSocket bridge — so framing, pending-request
+ * correlation, event routing, and timeouts are shared with the pipe path.
+ */
+
+export type PipeProbeAttempt = {
+  child: Pick<ChildProcess, 'kill'>
+  transport: Pick<CdpPipeTransport, 'send' | 'close'>
+  userDataDir: string
+}
+
+export type PipeProbeHooks = {
+  /**
+   * Resolves the browser binary to probe. The resolved path also keys the
+   * probe cache, so a cached verdict can never be applied to a different
+   * binary than the one that produced it.
+   */
+  executablePath: () => string
+  spawn: (executablePath: string) => PipeProbeAttempt
+  probeTimeoutMs: number
+  cacheTtlMs: number
+  now: () => number
+}
+
+const PIPE_PROBE_TIMEOUT_MS = 3_000
+const PIPE_PROBE_CACHE_TTL_MS = 60_000
+
+/**
+ * Positive-only, per-executable cache: a present entry means "this binary
+ * answered the full pipe probe — a Target.getTargets round-trip carrying
+ * targetInfos plus a flatten-mode Target.attachToTarget round-trip returning
+ * a sessionId". Failed or timed-out probes are
+ * deliberately not cached — a timeout is not evidence that the browser lacks
+ * pipe support, so caching a negative would pin the port fallback for the
+ * whole TTL window on slow machines/CI.
+ */
+const pipeProbeCache = new Map<string, { probedAt: number }>()
+
+/**
+ * Per-executable in-flight probes: a present entry is the single probe
+ * promise every concurrent caller for that binary shares until it settles.
+ */
+const inFlightPipeProbes = new Map<string, Promise<boolean>>()
+
+/**
+ * Collapse concurrent probes for the same executable into a single in-flight
+ * probe, mirroring shareInFlightBrowserSpawn for spawns. Without this guard,
+ * concurrent ensureBrowserSession calls for different session keys (before a
+ * positive verdict is cached) each launch a full probe Chrome and each absorb
+ * up to the probe budget. Every concurrent caller shares the winner's probe
+ * promise; the entry is cleared once it settles so a failed or inconclusive
+ * probe is retried by the next session, exactly like the cache contract.
+ */
+function shareInFlightPipeProbe(
+  executablePath: string,
+  runProbe: () => Promise<boolean>,
+): Promise<boolean> {
+  const inFlight = inFlightPipeProbes.get(executablePath)
+  if (inFlight) return inFlight
+  const probePromise = runProbe()
+  inFlightPipeProbes.set(executablePath, probePromise)
+  const clearIfCurrent = () => {
+    // Only clear our own entry: a newer probe may already have replaced it.
+    if (inFlightPipeProbes.get(executablePath) === probePromise) {
+      inFlightPipeProbes.delete(executablePath)
+    }
+  }
+  // Handle both outcomes here so the cleanup chain never rejects unhandled;
+  // callers observe the original promise directly.
+  probePromise.then(clearIfCurrent, clearIfCurrent)
+  return probePromise
+}
+
+/**
+ * Only the CdpPipeTransport's own per-request timeout rejection
+ * ("<method> timed out after <N>ms") counts as a probe timeout. A timeout is
+ * NOT evidence that the binary lacks pipe support, so it must not trigger the
+ * port fallback: the verdict is inconclusive and the session fails closed
+ * instead of silently reopening an unauthenticated DevTools listener.
+ */
+function isProbeTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error && / timed out after \d+ms$/.test(error.message)
+  )
+}
+
+/**
+ * The targetId the flatten-attach probe attaches to, read from
+ * Target.getTargets' `targetInfos` the same way the session path's
+ * listTargets narrows it. Page-type targets are preferred (that is what the
+ * session path attaches to); any entry with a string targetId is accepted so
+ * a probe browser without a page target still exercises the attach
+ * round-trip.
+ */
+function firstAttachableTargetId(result: unknown): string | undefined {
+  if (!isRecord(result) || !Array.isArray(result.targetInfos)) return undefined
+  let fallback: string | undefined
+  for (const info of result.targetInfos) {
+    if (!isRecord(info) || typeof info.targetId !== 'string') continue
+    if (info.type === 'page') return info.targetId
+    fallback ??= info.targetId
+  }
+  return fallback
+}
+
+export async function detectPipeSupport(
+  overrides?: Partial<PipeProbeHooks>,
+): Promise<boolean> {
+  const hooks: PipeProbeHooks = {
+    executablePath: findChromeExecutable,
+    spawn: spawnPipeProbeAttempt,
+    probeTimeoutMs: PIPE_PROBE_TIMEOUT_MS,
+    cacheTtlMs: PIPE_PROBE_CACHE_TTL_MS,
+    now: Date.now,
+    ...overrides,
+  }
+  // Key the cache by the resolved executable: if findChromeExecutable()
+  // resolves a different Chromium binary within the TTL, the first binary's
+  // verdict must not drive the second one.
+  const executablePath = hooks.executablePath()
+  const cached = pipeProbeCache.get(executablePath)
+  if (cached && hooks.now() - cached.probedAt < hooks.cacheTtlMs) {
+    return true
+  }
+  // Concurrent callers for the same binary share one probe (deduped by
+  // executable) instead of each launching a probe Chrome and each absorbing
+  // the probe budget.
+  return shareInFlightPipeProbe(executablePath, () =>
+    probePipeSupportOnce(hooks, executablePath),
+  )
+}
+
+/**
+ * One full probe attempt for `executablePath`: spawns a probe browser, runs
+ * the two CDP round-trips the pipe session path relies on, caches a positive
+ * verdict, and always rolls the probe browser back. Only reached through
+ * shareInFlightPipeProbe, so concurrent callers share a single attempt.
+ */
+async function probePipeSupportOnce(
+  hooks: PipeProbeHooks,
+  executablePath: string,
+): Promise<boolean> {
+  let attempt: PipeProbeAttempt
+  try {
+    attempt = hooks.spawn(executablePath)
+  } catch {
+    // A synchronous spawn throw (e.g. the pipe fds were missing after spawn,
+    // or the browser exited immediately) is demonstrable evidence the pipe
+    // path cannot work for this binary: fall back to the port transport for
+    // THIS session only. The negative is never cached, so the next session
+    // re-probes.
+    return false
+  }
+  try {
+    const getTargetsResult = await attempt.transport.send(
+      'Target.getTargets',
+      {},
+      { timeoutMs: hooks.probeTimeoutMs },
+    )
+    // Flatten-mode attach needs a real targetId, which the session path reads
+    // from Target.getTargets' `targetInfos`. A build that answers the command
+    // but never returns a usable targetInfos entry cannot support the pipe
+    // session path (listTargets/waitForPageTarget would never find a page),
+    // so this is a demonstrable pipe failure — not a timeout — and the
+    // session falls back to the port transport.
+    const targetId = firstAttachableTargetId(getTargetsResult)
+    if (targetId === undefined) {
+      return false
+    }
+    // Probe the flatten-mode session attach the session path relies on
+    // (connectPage's Target.attachToTarget {flatten:true}): a build that
+    // round-trips Target.getTargets but does not honor flatten attach would
+    // otherwise pass this probe and only fail later, at connectPage, with
+    // "Chrome did not attach to target" and no fallback.
+    const attached = await attempt.transport.send(
+      'Target.attachToTarget',
+      { targetId, flatten: true },
+      { timeoutMs: hooks.probeTimeoutMs },
+    )
+    if (!isRecord(attached) || typeof attached.sessionId !== 'string') {
+      // The attach answered without the sessionId connectPage requires: a
+      // demonstrable flatten-attach failure, not a timeout.
+      return false
+    }
+    // A successful CDP round-trip is durable proof this binary supports
+    // --remote-debugging-pipe (and flatten-mode attach): cache the positive
+    // verdict per executable.
+    pipeProbeCache.set(executablePath, { probedAt: hooks.now() })
+    return true
+  } catch (error) {
+    if (isProbeTimeoutError(error)) {
+      // No framed CDP response within the probe budget. A timeout is NOT
+      // evidence the browser lacks pipe support (a slow start is common on
+      // loaded machines/CI), so fail closed instead of routing this session
+      // to the unauthenticated --remote-debugging-port=0 fallback. The
+      // negative is never cached, so the next session re-probes.
+      throw new Error(
+        `Browser pipe-support probe timed out after ${hooks.probeTimeoutMs}ms without a CDP response; the pipe transport could not be confirmed and the unauthenticated port fallback was not used. Retry the browser action.`,
+      )
+    }
+    // A demonstrable failure (the browser exited without answering, the pipe
+    // errored or closed, or the flatten attach was refused) proves the pipe
+    // path is unusable for this binary:
+    // treat the pipe as unsupported for THIS session only. The negative is
+    // never cached, so a transient failure re-probes on the next session
+    // instead of silently routing every session in the window to the port
+    // fallback.
+    return false
+  } finally {
+    rollbackBrowserSpawn({
+      child: attempt.child,
+      transport: attempt.transport,
+      userDataDir: attempt.userDataDir,
+    })
+  }
+}
+
+/** Test seam: clears the cached pipe-support verdicts between tests. */
+export function __resetPipeSupportProbeCacheForTest(): void {
+  pipeProbeCache.clear()
+}
+
+function spawnPipeProbeAttempt(executablePath: string): PipeProbeAttempt {
+  const userDataDir = mkdtempSync(
+    path.join(tmpdir(), 'openbuff-browser-probe-'),
+  )
   const child = spawn(
-    chrome,
+    // The probed binary is exactly the executable the cache key was derived
+    // from, so the verdict cannot describe a different binary than the one
+    // that was actually probed.
+    executablePath,
     [
       '--headless=new',
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--no-first-run',
       '--no-default-browser-check',
-      '--no-sandbox',
-      `--remote-debugging-port=${port}`,
+      ...chromeSandboxArgs(),
+      '--remote-debugging-pipe',
+      `--user-data-dir=${userDataDir}`,
+      'about:blank',
+    ],
+    { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] },
+  )
+  const commandWritable = child.stdio[3]
+  const responseReadable = child.stdio[4]
+  if (!commandWritable || !responseReadable) {
+    rollbackBrowserSpawn({ child, userDataDir })
+    throw new Error(
+      'Chrome did not expose the remote debugging pipe file descriptors',
+    )
+  }
+  return {
+    child,
+    transport: new CdpPipeTransport({
+      writable: commandWritable as Writable,
+      readable: responseReadable as Readable,
+    }),
+    userDataDir,
+  }
+}
+
+type BrowserConnection = {
+  child: ChildProcess
+  userDataDir: string
+  writable: Writable
+  readable: Readable
+  /** For the WebSocket fallback: closes the underlying socket. */
+  dispose?: () => void
+}
+
+const DEVTOOLS_URL_TIMEOUT_MS = 5_000
+const WEBSOCKET_CONNECT_TIMEOUT_MS = 5_000
+const MAX_DEVTOOLS_STDERR_BYTES = 64 * 1024
+
+const DEVTOOLS_LISTENING_PATTERN = /DevTools listening on (ws:\/\/\S+)/
+
+/** Exported for unit tests, like routeEvent and rollbackBrowserSpawn. */
+export function extractDevtoolsWebSocketUrl(
+  stderrText: string,
+): string | undefined {
+  return stderrText.match(DEVTOOLS_LISTENING_PATTERN)?.[1]
+}
+
+/**
+ * Structural shape readDevtoolsWebSocketUrl needs. Narrowed instead of
+ * Pick<ChildProcess, ...> so a fake child can satisfy it without inheriting
+ * ChildProcess's `this`-returning on/off signatures.
+ */
+type DevtoolsReportingChild = {
+  stderr: Readable | null
+  on(event: string | symbol, listener: (...args: any[]) => void): unknown
+  off(event: string | symbol, listener: (...args: any[]) => void): unknown
+}
+
+/**
+ * Read the `DevTools listening on ws://...` line Chrome prints on stderr when
+ * launched with `--remote-debugging-port=0`. Bounded: resolves with the URL
+ * as soon as the line appears, and rejects on the timeout, on stderr growing
+ * past the accumulation cap, or on the child exiting or erroring first.
+ * Exported for unit tests, like routeEvent and rollbackBrowserSpawn.
+ */
+export async function readDevtoolsWebSocketUrl(
+  child: DevtoolsReportingChild,
+  timeoutMs: number,
+): Promise<string> {
+  const stderr = child.stderr
+  if (!stderr) {
+    throw new Error(
+      'Chrome stderr is not piped; cannot read the DevTools WebSocket URL',
+    )
+  }
+  return new Promise<string>((resolve, reject) => {
+    let accumulated = ''
+    let settled = false
+    const onData = (chunk: Buffer | string) => {
+      accumulated += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+      if (accumulated.length > MAX_DEVTOOLS_STDERR_BYTES) {
+        settle(
+          new Error(
+            'Chrome stderr grew past the bounded window before a DevTools WebSocket URL appeared',
+          ),
+        )
+        return
+      }
+      const url = extractDevtoolsWebSocketUrl(accumulated)
+      if (url !== undefined) settle(undefined, url)
+    }
+    const onExit = () => {
+      settle(
+        new Error('Chrome exited before reporting a DevTools WebSocket URL'),
+      )
+    }
+    const onError = (error: Error) => {
+      settle(error)
+    }
+    const settle = (error: Error | undefined, url?: string) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      stderr.off('data', onData)
+      child.off('exit', onExit)
+      child.off('error', onError)
+      if (error !== undefined || url === undefined) {
+        reject(
+          error ?? new Error('Chrome did not report a DevTools WebSocket URL'),
+        )
+      } else {
+        resolve(url)
+      }
+    }
+    const timer = setTimeout(
+      () =>
+        settle(
+          new Error(
+            `Chrome did not report a DevTools WebSocket URL within ${timeoutMs}ms`,
+          ),
+        ),
+      timeoutMs,
+    )
+    stderr.on('data', onData)
+    child.on('exit', onExit)
+    child.on('error', onError)
+  })
+}
+
+function cdpWebSocketAdapter(ws: WebSocket): CdpWebSocket {
+  return {
+    send: (data) => ws.send(data),
+    close: () => ws.close(),
+    on: (event, listener) => {
+      if (event === 'message') {
+        ws.on('message', (data) => listener(webSocketFrameText(data)))
+      } else if (event === 'open') {
+        ws.on('open', () => listener(undefined))
+      } else if (event === 'close') {
+        ws.on('close', () => listener(undefined))
+      } else {
+        ws.on('error', (error) => listener(error))
+      }
+    },
+  }
+}
+
+function webSocketFrameText(data: unknown): string {
+  if (typeof data === 'string') return data
+  if (Buffer.isBuffer(data)) return data.toString('utf8')
+  if (Array.isArray(data)) {
+    return Buffer.concat(
+      data.map((part) =>
+        Buffer.isBuffer(part)
+          ? part
+          : Buffer.from(part as ArrayBufferLike),
+      ),
+    ).toString('utf8')
+  }
+  return Buffer.from(data as ArrayBufferLike).toString('utf8')
+}
+
+/**
+ * Redacted scheme+host form of a DevTools ws URL for error messages: the full
+ * URL embeds the /devtools/browser/<guid> capability token, which must never
+ * appear in errors surfaced to the model. Exported for unit tests, like
+ * extractDevtoolsWebSocketUrl.
+ */
+export function redactDevtoolsUrl(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return '(redacted DevTools endpoint)'
+  }
+}
+
+async function connectWebSocketTransport(url: string): Promise<{
+  writable: Writable
+  readable: Readable
+  dispose: () => void
+}> {
+  // Only the scheme+host form may appear in surfaced errors: the full URL
+  // carries the browser capability token.
+  const redactedEndpoint = redactDevtoolsUrl(url)
+  const ws = new WebSocket(url)
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false
+      const settle = (error: Error | undefined) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        if (error !== undefined) reject(error)
+        else resolve()
+      }
+      const timer = setTimeout(
+        () =>
+          settle(
+            new Error(
+              `Timed out connecting to the Chrome DevTools WebSocket at ${redactedEndpoint}`,
+            ),
+          ),
+        WEBSOCKET_CONNECT_TIMEOUT_MS,
+      )
+      ws.once('open', () => settle(undefined))
+      ws.once('error', (error: Error) =>
+        settle(
+          new Error(
+            `Failed to connect to the Chrome DevTools WebSocket at ${redactedEndpoint}: ${error.message}`,
+          ),
+        ),
+      )
+    })
+  } catch (error) {
+    try {
+      ws.close()
+    } catch {
+      // ignore
+    }
+    throw error
+  }
+  return createWebSocketPipeBridge(cdpWebSocketAdapter(ws))
+}
+
+function spawnPipeConnection(): BrowserConnection {
+  const userDataDir = mkdtempSync(path.join(tmpdir(), 'openbuff-browser-'))
+  const child = spawn(
+    findChromeExecutable(),
+    [
+      '--headless=new',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--no-first-run',
+      '--no-default-browser-check',
+      ...chromeSandboxArgs(),
+      // SB-7: drive the DevTools protocol over the stdio pipe file
+      // descriptors instead of `--remote-debugging-port`. The old flag opened
+      // an UNAUTHENTICATED HTTP+WebSocket listener on 127.0.0.1 that any
+      // local process could enumerate and drive; the pipe fds are only
+      // reachable by this parent process, so the debugging channel is
+      // private by construction.
+      '--remote-debugging-pipe',
       `--user-data-dir=${userDataDir}`,
       '--window-size=1280,720',
       'about:blank',
     ],
     {
-      stdio: ['ignore', 'ignore', 'ignore'],
+      // fd 3 carries parent->Chrome commands, fd 4 carries Chrome->parent
+      // responses and events. fds 0-2 stay ignored.
+      stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'],
     },
   )
-
-  const target = await waitForPageTarget(port)
-  const session: BrowserSession = {
-    ...(owner ? { owner } : {}),
-    ...(owner?.projectRoot !== undefined
-      ? { projectRoot: owner.projectRoot }
-      : {}),
-    child,
-    port,
-    userDataDir,
-    pages: new Map(),
-    activeTargetId: target.id,
-    logs: [],
-    networks: [],
-    networkRequests: new Map(),
-    logOffset: 0,
-    networkOffset: 0,
-    recording: null,
+  const commandWritable = child.stdio[3]
+  const responseReadable = child.stdio[4]
+  if (!commandWritable || !responseReadable) {
+    rollbackBrowserSpawn({ child, userDataDir })
+    throw new Error(
+      'Chrome did not expose the remote debugging pipe file descriptors',
+    )
   }
-  const page = await connectPage(
-    session,
-    target.id,
-    target.webSocketDebuggerUrl,
-  )
-  session.pages.set(target.id, page)
-
-  child.on('exit', () => {
-    if (browserSessions.get(sessionKey) === session) {
-      browserSessions.delete(sessionKey)
-    }
-  })
-  browserSessions.set(sessionKey, session)
-  return session
+  return {
+    child,
+    userDataDir,
+    writable: commandWritable as Writable,
+    readable: responseReadable as Readable,
+  }
 }
 
-async function connectPage(
-  session: BrowserSession,
+async function spawnPortConnection(): Promise<BrowserConnection> {
+  const userDataDir = mkdtempSync(path.join(tmpdir(), 'openbuff-browser-'))
+  const child = spawn(
+    findChromeExecutable(),
+    [
+      '--headless=new',
+      '--disable-gpu',
+      '--disable-dev-shm-usage',
+      '--no-first-run',
+      '--no-default-browser-check',
+      ...chromeSandboxArgs(),
+      // Compatibility fallback for browsers without --remote-debugging-pipe:
+      // port 0 makes Chrome pick a free port and print the DevTools WebSocket
+      // URL on stderr. Chrome binds the debugging listener to 127.0.0.1
+      // (unless --remote-debugging-address overrides it), so the channel stays
+      // local like the pipe fds, though it is not single-process-restricted
+      // the way the pipe is.
+      '--remote-debugging-port=0',
+      `--user-data-dir=${userDataDir}`,
+      '--window-size=1280,720',
+      'about:blank',
+    ],
+    { stdio: ['ignore', 'ignore', 'pipe'] },
+  )
+  try {
+    const webSocketUrl = await readDevtoolsWebSocketUrl(
+      child,
+      DEVTOOLS_URL_TIMEOUT_MS,
+    )
+    return {
+      child,
+      userDataDir,
+      ...(await connectWebSocketTransport(webSocketUrl)),
+    }
+  } catch (error) {
+    rollbackBrowserSpawn({ child, userDataDir })
+    throw error
+  }
+}
+
+async function spawnBrowserSession(
+  sessionKey: string,
+  owner?: BrowserSessionOwner,
+): Promise<BrowserSession> {
+  // One bounded probe decides the transport for this browser binary; a
+  // positive verdict is cached per executable so repeated sessions do not
+  // re-launch a probe browser. A demonstrable pipe failure falls back to the
+  // port transport for this session, while a probe timeout fails closed (and
+  // nothing negative is cached, so the next session re-probes).
+  const usePipe = await detectPipeSupport()
+  const connection = usePipe
+    ? spawnPipeConnection()
+    : await spawnPortConnection()
+  return assembleBrowserSession(sessionKey, owner, connection)
+}
+
+async function assembleBrowserSession(
+  sessionKey: string,
+  owner: BrowserSessionOwner | undefined,
+  connection: BrowserConnection,
+): Promise<BrowserSession> {
+  const { child, userDataDir, writable, readable } = connection
+  // Register the child exit handler before any await or failure path: if
+  // Chrome dies at any point, the session is reaped from the registry instead
+  // of leaking as an orphan no handler could clean up later.
+  let session: BrowserSession | undefined
+  child.on('exit', () => {
+    if (session && browserSessions.get(sessionKey) === session) {
+      // The session is being reaped because Chrome died: roll back the
+      // resources it still held (temp user-data dir, pipe transport, and on
+      // the port fallback the ws disposal) instead of leaving them to OS tmp
+      // cleanup — once this registry entry is gone, the respawn path can no
+      // longer reclaim them.
+      rollbackStaleBrowserSession(sessionKey, session)
+    }
+  })
+  let transport: CdpPipeTransport | undefined
+  try {
+    transport = new CdpPipeTransport({
+      writable,
+      readable,
+      // Events only start flowing after Target.setDiscoverTargets below;
+      // before the session object exists there is no router yet.
+      onEvent: (message) => {
+        if (session) routeEvent(session, message)
+      },
+      onClose: () => {
+        // The transport already rejected every pending request; the child
+        // 'exit' handler above removes the session from the registry.
+      },
+    })
+    await transport.send('Target.setDiscoverTargets', { discover: true })
+    const targetId = await waitForPageTarget(transport)
+    session = {
+      ...(owner ? { owner } : {}),
+      ...(owner?.projectRoot !== undefined
+        ? { projectRoot: owner.projectRoot }
+        : {}),
+      child,
+      transport,
+      userDataDir,
+      ...(connection.dispose ? { disposeTransport: connection.dispose } : {}),
+      pages: new Map(),
+      pagesBySessionId: new Map(),
+      activeTargetId: targetId,
+      logs: [],
+      networks: [],
+      networkRequests: new Map(),
+      logOffset: 0,
+      networkOffset: 0,
+      recording: null,
+      pendingEvents: new Map(),
+      pendingEventCount: 0,
+    }
+    const page = await connectPage(session, targetId)
+    session.pages.set(targetId, page)
+    session.pagesBySessionId.set(page.sessionId, page)
+    // Stop-vs-spawn race guard: a `stop` issued while this spawn was in
+    // flight must win over this registration, otherwise the freshly spawned
+    // Chrome child, transport, and temp user-data dir would leak past a stop
+    // that already returned success.
+    if (honorStopRequestedDuringSpawn(sessionKey, session)) {
+      throw new Error(
+        `Browser session ${sessionKey} was stopped during startup`,
+      )
+    }
+    browserSessions.set(sessionKey, session)
+    return session
+  } catch (error) {
+    // Roll back everything this attempt created: the open transport, the
+    // spawned Chrome child, and the temp user-data dir. The exit handler above
+    // is already registered, so the child cannot survive as an untracked
+    // orphan either way. For the WebSocket fallback, dispose also closes the
+    // underlying socket before the child is killed. A stop that was requested
+    // during this failed spawn is cleared through the same guarded path the
+    // fresh-spawn entry uses, so a marker held by a stop still inside its
+    // teardown window is never force-cleared here.
+    clearStaleStopMarkerForFreshSpawn(sessionKey)
+    rollbackBrowserSpawn({
+      child,
+      transport,
+      userDataDir,
+      dispose: connection.dispose,
+    })
+    throw error
+  }
+}
+
+/**
+ * The slice of BrowserSession connectPage needs. Narrowed so the reconnect
+ * and domain-enable failure paths can be unit-tested without a live Chrome
+ * child, like RoutableSession for routeEvent.
+ */
+export type PageConnectSession = RoutableSession &
+  Pick<BrowserSession, 'transport'>
+
+/**
+ * In-flight connectPage promises keyed by session object and then targetId.
+ * Two concurrent calls that reconnect the same dead target would otherwise
+ * both pass the existing-page check and each issue a flatten attach: Chrome
+ * hands back two distinct sessionIds, only the last-registered page wins,
+ * and the loser's sessionId stays attached in Chrome — its events then drain
+ * into the bounded pendingEvents buffer until the browser exits. Sharing one
+ * in-flight attach collapses those callers onto a single session, the same
+ * way shareInFlightBrowserSpawn collapses concurrent spawns. Entries clear
+ * on settlement so a failed attach can be retried.
+ */
+const inFlightPageConnects = new WeakMap<
+  PageConnectSession,
+  Map<string, Promise<BrowserPage>>
+>()
+
+export async function connectPage(
+  session: PageConnectSession,
   targetId: string,
-  webSocketDebuggerUrl: string,
 ): Promise<BrowserPage> {
   const existing = session.pages.get(targetId)
-  if (existing && existing.ws.readyState === WebSocket.OPEN) return existing
+  if (existing && !session.transport.isClosed) return existing
 
-  const ws = await openWebSocket(webSocketDebuggerUrl)
+  let inFlightMap = inFlightPageConnects.get(session)
+  if (!inFlightMap) {
+    inFlightMap = new Map<string, Promise<BrowserPage>>()
+    inFlightPageConnects.set(session, inFlightMap)
+  }
+  const inFlight = inFlightMap
+  const pending = inFlight.get(targetId)
+  if (pending) return pending
+
+  const connectPromise = attachPage(session, targetId)
+  inFlight.set(targetId, connectPromise)
+  const clearIfCurrent = () => {
+    // Only clear our own entry: a newer attempt may already have replaced it.
+    if (inFlight.get(targetId) === connectPromise) {
+      inFlight.delete(targetId)
+    }
+  }
+  // Handle both outcomes here so the cleanup chain never rejects unhandled;
+  // callers observe the original promise directly.
+  connectPromise.then(clearIfCurrent, clearIfCurrent)
+  return connectPromise
+}
+
+/**
+ * Issue the flatten attach, register the page, and enable its domains. The
+ * guarded body of connectPage, split out so concurrent callers reconnecting
+ * the same target share a single in-flight attach instead of each issuing
+ * their own.
+ */
+async function attachPage(
+  session: PageConnectSession,
+  targetId: string,
+): Promise<BrowserPage> {
+  // Attach in flatten mode: the returned sessionId routes every command and
+  // event for this target over the single pipe connection.
+  const attached = await session.transport.send('Target.attachToTarget', {
+    targetId,
+    flatten: true,
+  })
+  const sessionId =
+    isRecord(attached) && typeof attached.sessionId === 'string'
+      ? attached.sessionId
+      : undefined
+  if (!sessionId) {
+    throw new Error(`Chrome did not attach to target: ${targetId}`)
+  }
   const page: BrowserPage = {
     targetId,
-    ws,
-    nextId: 1,
-    pending: new Map(),
+    sessionId,
+    transport: session.transport,
     eventWaiters: new Map(),
     executionContexts: new Map(),
   }
-  ws.addEventListener('message', (event) => {
-    handleCdpMessage(session, page, String(event.data))
-  })
-  ws.addEventListener('close', () => {
-    for (const pending of page.pending.values()) {
-      clearTimeout(pending.timeout)
-      pending.reject(new Error('Browser target closed'))
-    }
-    page.pending.clear()
-  })
-  await enablePageDomains(page)
+  // Register the page BEFORE enabling domains: session-scoped events can
+  // arrive as soon as Target.attachToTarget completes, and routeEvent must
+  // find the owning page instead of dropping the event or misrouting it to
+  // the previously active page. Events that arrived during that window are
+  // drained here, in order.
+  session.pages.set(targetId, page)
+  session.pagesBySessionId.set(page.sessionId, page)
+  flushPendingEvents(session, page)
+  try {
+    await enablePageDomains(page)
+  } catch (error) {
+    // The flatten session this attach created is now orphaned: without a
+    // detach Chrome keeps routing its events to a sessionId no page will ever
+    // register again (a reconnect attaches under a fresh sessionId), and
+    // those permanently-unroutable events would fill the bounded pendingEvents
+    // buffer and evict useful buffered events. Drop this session's buffered
+    // events and ask Chrome to detach. The detach is fire-and-forget: if it
+    // fails (e.g. the transport is closing) the original enable error is what
+    // propagates. As before, a page whose domains could not be enabled is not
+    // registered, so the next attempt reconnects cleanly.
+    discardPendingEvents(session, page.sessionId)
+    void session.transport
+      .send('Target.detachFromTarget', { sessionId: page.sessionId })
+      .catch(() => undefined)
+    session.pages.delete(targetId)
+    session.pagesBySessionId.delete(page.sessionId)
+    throw error
+  }
   return page
 }
 
 async function getActivePage(session: BrowserSession): Promise<BrowserPage> {
   const existing = session.pages.get(session.activeTargetId)
-  if (existing && existing.ws.readyState === WebSocket.OPEN) return existing
+  if (existing && !session.transport.isClosed) return existing
 
-  const target = (await listTargets(session.port)).find(
-    (candidate) => candidate.id === session.activeTargetId,
+  const target = (await listTargets(session.transport)).find(
+    (candidate) => candidate.targetId === session.activeTargetId,
   )
-  if (!target?.webSocketDebuggerUrl) {
+  if (!target) {
     throw new Error(
       `Active browser target not found: ${session.activeTargetId}`,
     )
   }
-  const page = await connectPage(
-    session,
-    target.id,
-    target.webSocketDebuggerUrl,
-  )
-  session.pages.set(target.id, page)
+  const page = await connectPage(session, target.targetId)
+  session.pages.set(target.targetId, page)
+  session.pagesBySessionId.set(page.sessionId, page)
   return page
 }
 
@@ -676,32 +1794,199 @@ async function enablePageDomains(page: BrowserPage) {
   ])
 }
 
-export async function stopBrowserSession(sessionKey: string) {
-  const session = browserSessions.get(sessionKey)
-  browserSessions.delete(sessionKey)
-  if (!session) return
-  for (const page of session.pages.values()) {
-    try {
-      page.ws.close()
-    } catch {
-      // ignore
+const browserTeardownTiming = {
+  /** Bounded wait for the killed Chrome child to finish exiting. */
+  childExitTimeoutMs: 2_000,
+  childExitPollMs: 10,
+  /** Retry cadence for removing a user-data dir that is still held open. */
+  userDataDirRetryDelayMs: 25,
+  userDataDirRetries: 4,
+}
+
+export function __setBrowserTeardownTimingForTest(
+  overrides: Partial<typeof browserTeardownTiming>,
+): void {
+  Object.assign(browserTeardownTiming, overrides)
+}
+
+function defaultRemoveUserDataDir(userDataDir: string): boolean {
+  try {
+    rmSync(userDataDir, { recursive: true, force: true })
+    return true
+  } catch {
+    // The dying child can still hold the dir open (EBUSY/EPERM on Windows):
+    // the caller retries and defers rather than leaking silently.
+    return false
+  }
+}
+
+/**
+ * Remover seam for teardown paths: unit tests swap it to simulate a removal
+ * that fails because the dying Chrome child still holds the directory open.
+ */
+let removeUserDataDirImpl: (userDataDir: string) => boolean =
+  defaultRemoveUserDataDir
+
+export function __setBrowserUserDataDirRemoverForTest(
+  remover: ((userDataDir: string) => boolean) | null,
+): void {
+  removeUserDataDirImpl = remover ?? defaultRemoveUserDataDir
+}
+
+/**
+ * Bounded wait for the killed Chrome child to finish exiting. The child's
+ * temp user-data dir cannot be removed while it still holds files open, so
+ * teardown waits for exit before removing. Returns whether the child was
+ * observed to exit within the timeout.
+ */
+async function waitForChildExit(
+  child: Pick<ChildProcess, 'exitCode'>,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (child.exitCode === null && Date.now() < deadline) {
+    await new Promise((resolve) =>
+      setTimeout(resolve, browserTeardownTiming.childExitPollMs),
+    )
+  }
+  return child.exitCode !== null
+}
+
+/**
+ * Temp user-data dirs whose teardown-time removal failed. Swept on session
+ * activity so a dir the dying child held open is reclaimed by a later
+ * spawn/stop instead of leaking one temp dir per stop.
+ */
+const deferredUserDataDirCleanups = new Set<string>()
+
+/**
+ * Retry removal of user-data dirs deferred by failed teardown removals (the
+ * stop path) and failed spawn/probe rollback removals (rollbackBrowserSpawn).
+ * Called from ensureBrowserSession (the respawn path) so a dir that leaked
+ * past either path is reclaimed on the next session activity; exported for
+ * unit tests, like rollbackBrowserSpawn.
+ */
+export function sweepDeferredBrowserUserDataDirs(): void {
+  for (const userDataDir of [...deferredUserDataDirCleanups]) {
+    if (removeUserDataDirImpl(userDataDir)) {
+      deferredUserDataDirCleanups.delete(userDataDir)
     }
-    for (const pending of page.pending.values()) {
-      clearTimeout(pending.timeout)
-      pending.reject(new Error('Browser session closed'))
-    }
-    page.pending.clear()
+  }
+}
+
+/**
+ * Tear down one session's resources: dispose/close the transport, kill the
+ * Chrome child, and remove the temp user-data dir — but only after waiting
+ * (bounded) for the child to exit. Removing the dir while the dying child
+ * still holds it open fails with EBUSY/EPERM on Windows and would leak one
+ * temp dir per stop, so the removal retries briefly and, if it still fails,
+ * defers the dir to sweepDeferredBrowserUserDataDirs instead of losing it:
+ * the registry entry is already gone by then, so the respawn-time
+ * rollbackStaleBrowserSession cleanup can never run for this session.
+ */
+async function teardownBrowserSessionResources(session: {
+  child: ChildProcess
+  transport: Pick<CdpPipeTransport, 'close'>
+  userDataDir: string
+  disposeTransport?: () => void
+}): Promise<void> {
+  try {
+    session.disposeTransport?.()
+  } catch {
+    // ignore
+  }
+  try {
+    session.transport.close()
+  } catch {
+    // ignore
   }
   try {
     session.child.kill()
   } catch {
     // ignore
   }
-  try {
-    rmSync(session.userDataDir, { recursive: true, force: true })
-  } catch {
-    // ignore
+  await waitForChildExit(
+    session.child,
+    browserTeardownTiming.childExitTimeoutMs,
+  )
+  let removed = false
+  for (
+    let attempt = 0;
+    attempt < browserTeardownTiming.userDataDirRetries && !removed;
+    attempt++
+  ) {
+    if (attempt > 0) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, browserTeardownTiming.userDataDirRetryDelayMs),
+      )
+    }
+    removed = removeUserDataDirImpl(session.userDataDir)
   }
+  if (!removed) {
+    deferredUserDataDirCleanups.add(session.userDataDir)
+  }
+}
+
+export async function stopBrowserSession(sessionKey: string) {
+  // Stop-vs-spawn race guard, armed BEFORE the multi-second teardown await:
+  // an in-flight spawn for this key that completes while this stop is still
+  // tearing the previous session down must roll itself back instead of
+  // registering a live session this stop — which only returns once teardown
+  // finishes — will never reap. A stop issued when nothing is in flight also
+  // arms the marker here. The marker is held for the WHOLE teardown window
+  // (tracked by activeStopSessionCounts): the fresh-spawn path cannot clear
+  // it mid-window, and every spawn racing the window is rolled back by
+  // honorStopRequestedDuringSpawn, so no live session can outlive this stop.
+  // When the last stop's teardown finishes, the marker is resolved: kept if
+  // a spawn is still in flight (its registration consumes it — the same
+  // one-shot contract a stop racing an in-flight spawn has always had) and
+  // cleared otherwise, so it cannot poison a later legitimate start.
+  stoppingSessionKeys.add(sessionKey)
+  activeStopSessionCounts.set(
+    sessionKey,
+    (activeStopSessionCounts.get(sessionKey) ?? 0) + 1,
+  )
+  try {
+    const session = browserSessions.get(sessionKey)
+    browserSessions.delete(sessionKey)
+    if (session) {
+      // Closing the transport rejects every pending request (its destroy path
+      // handles that), so there is no per-page teardown left to do: one pipe
+      // connection multiplexes all targets. For sessions spawned on the
+      // WebSocket fallback (--remote-debugging-port=0), disposeTransport also
+      // closes the underlying ws socket deterministically here; the pipe
+      // transport needs no extra disposal.
+      await teardownBrowserSessionResources(session)
+    }
+  } finally {
+    const activeStops = (activeStopSessionCounts.get(sessionKey) ?? 1) - 1
+    if (activeStops <= 0) {
+      activeStopSessionCounts.delete(sessionKey)
+      // The last stop's teardown finished. The marker is stale unless a
+      // spawn is still in flight — that spawn consumes it at registration.
+      if (!pendingBrowserSessions.has(sessionKey)) {
+        stoppingSessionKeys.delete(sessionKey)
+      }
+    } else {
+      activeStopSessionCounts.set(sessionKey, activeStops)
+    }
+  }
+}
+
+/**
+ * Test seam: registers a teardown-shaped session under `sessionKey` so
+ * stopBrowserSession's teardown can be unit-tested without a live Chrome
+ * child. Only the teardown-relevant slice is required; the registry stores the
+ * full session type, so the narrowing cast is contained here.
+ */
+export function __registerBrowserSessionForTest(
+  sessionKey: string,
+  session: Pick<
+    BrowserSession,
+    'owner' | 'child' | 'transport' | 'userDataDir' | 'disposeTransport'
+  >,
+): void {
+  browserSessions.set(sessionKey, session as BrowserSession)
 }
 
 export async function stopBrowserSessionsByPrefix(prefix: string) {
@@ -716,49 +2001,147 @@ export async function stopBrowserSessionsByOwner(
 ) {
   const keys = [...browserSessions.entries()]
     .filter(
-      ([, session]) => session.owner?.clientSessionId === owner.clientSessionId,
+      ([, session]) =>
+        session.owner?.clientSessionId === owner.clientSessionId ||
+        // Ownerless sessions (bare-string keys such as the default session)
+        // store no owner, so without this branch they would never be reaped
+        // at run end and would leak fds, processes, and temp dirs.
+        session.owner === undefined,
     )
     .map(([key]) => key)
   await Promise.all(keys.map((key) => stopBrowserSession(key)))
 }
 
-function handleCdpMessage(
-  session: BrowserSession,
+/**
+ * Upper bound on CDP events buffered for not-yet-registered targets. If a
+ * sessionId never gets a registered page (e.g. a target destroyed before
+ * connectPage finishes), its buffered events are dropped oldest-first instead
+ * of growing without bound.
+ */
+export const MAX_PENDING_ROUTED_EVENTS = 1000
+
+/**
+ * The slice of BrowserSession the multiplexed event router needs. Narrowed so
+ * the routing-window behavior can be unit-tested without a live Chrome child.
+ */
+export type RoutableSession = Pick<
+  BrowserSession,
+  | 'pages'
+  | 'pagesBySessionId'
+  | 'activeTargetId'
+  | 'logs'
+  | 'networks'
+  | 'networkRequests'
+  | 'logOffset'
+  | 'networkOffset'
+  | 'recording'
+  | 'pendingEvents'
+  | 'pendingEventCount'
+>
+
+export function routeEvent(session: RoutableSession, message: CdpPipeMessage) {
+  if (!message.method) return
+  // One pipe connection multiplexes every attached target: resolve the owning
+  // page by sessionId with a single map lookup — no per-event spread array or
+  // linear scan. Browser-level events (e.g.
+  // Target.targetCreated) carry no sessionId and fall back to the active page,
+  // never crashing the router.
+  const page = message.sessionId
+    ? session.pagesBySessionId.get(message.sessionId)
+    : undefined
+  if (page) {
+    deliverEvent(session, page, message)
+    return
+  }
+  if (message.sessionId) {
+    // The page for this sessionId is not registered yet: routeEvent can run
+    // between Target.attachToTarget resolving and connectPage registering the
+    // page. Buffer the event (bounded) so it is delivered in order once the
+    // page registers, instead of being dropped or misrouted to the previously
+    // active page.
+    queuePendingEvent(session, message.sessionId, message)
+    return
+  }
+  const fallback = session.pages.get(session.activeTargetId)
+  if (fallback) deliverEvent(session, fallback, message)
+}
+
+/**
+ * Delivers every event buffered for a page that just registered, in arrival
+ * order. Called by connectPage before domains are enabled so events that
+ * landed in the attach-to-registration window are not lost.
+ */
+export function flushPendingEvents(
+  session: RoutableSession,
   page: BrowserPage,
-  raw: string,
-) {
-  let message: CdpResponse
-  try {
-    message = JSON.parse(raw) as CdpResponse
-  } catch {
-    return
-  }
+): void {
+  const queued = session.pendingEvents.get(page.sessionId)
+  if (!queued) return
+  session.pendingEvents.delete(page.sessionId)
+  session.pendingEventCount -= queued.length
+  for (const message of queued) deliverEvent(session, page, message)
+}
 
-  if (typeof message.id === 'number') {
-    const pending = page.pending.get(message.id)
-    if (!pending) return
-    page.pending.delete(message.id)
-    clearTimeout(pending.timeout)
-    if (message.error) {
-      pending.reject(new Error(message.error.message ?? 'CDP command failed'))
-      return
-    }
-    pending.resolve(message.result)
-    return
-  }
+/**
+ * Drop every event buffered for a sessionId without delivering it, keeping
+ * the running pendingEventCount in sync. Called when a flatten session is
+ * orphaned (e.g. enablePageDomains failed in connectPage): the sessionId will
+ * never get a registered page again, so its buffered events are permanently
+ * unroutable and would otherwise fill the bounded pendingEvents buffer and
+ * evict useful buffered events for live sessions.
+ */
+export function discardPendingEvents(
+  session: Pick<RoutableSession, 'pendingEvents' | 'pendingEventCount'>,
+  sessionId: string,
+): void {
+  const queued = session.pendingEvents.get(sessionId)
+  if (!queued) return
+  session.pendingEvents.delete(sessionId)
+  session.pendingEventCount -= queued.length
+}
 
-  if (message.method) {
-    recordEvent(session, page, message)
-    const waiters = page.eventWaiters.get(message.method)
-    if (waiters) {
-      page.eventWaiters.delete(message.method)
-      for (const resolve of waiters) resolve()
+function queuePendingEvent(
+  session: RoutableSession,
+  sessionId: string,
+  message: CdpPipeMessage,
+): void {
+  const queued = session.pendingEvents.get(sessionId) ?? []
+  queued.push(message)
+  session.pendingEvents.set(sessionId, queued)
+  session.pendingEventCount++
+
+  // Bound the total buffered events; drop the oldest (first-registered
+  // sessionId, then FIFO within it) once the cap is exceeded. The running
+  // pendingEventCount keeps this check to a counter comparison per enqueue
+  // instead of rescanning every buffered sessionId on each event.
+  while (session.pendingEventCount > MAX_PENDING_ROUTED_EVENTS) {
+    for (const [key, entries] of session.pendingEvents) {
+      entries.shift()
+      if (entries.length === 0) session.pendingEvents.delete(key)
+      session.pendingEventCount--
+      break
     }
   }
 }
 
+function deliverEvent(
+  session: RoutableSession,
+  page: BrowserPage,
+  message: CdpPipeMessage,
+): void {
+  recordEvent(session, page, message)
+  // deliverEvent is only invoked for messages that carry a `method` (events);
+  // response messages resolve through the transport's pending map instead.
+  if (typeof message.method !== 'string') return
+  const waiters = page.eventWaiters.get(message.method)
+  if (waiters) {
+    page.eventWaiters.delete(message.method)
+    for (const resolve of waiters) resolve()
+  }
+}
+
 function trimSessionBuffer(
-  session: BrowserSession,
+  session: RoutableSession,
   kind: 'logs' | 'networks',
 ): void {
   if (kind === 'logs') {
@@ -777,9 +2160,9 @@ function trimSessionBuffer(
 }
 
 function recordEvent(
-  session: BrowserSession,
+  session: RoutableSession,
   page: BrowserPage,
-  message: CdpResponse,
+  message: CdpPipeMessage,
 ) {
   const params = message.params ?? {}
   const timestamp = Date.now()
@@ -878,7 +2261,7 @@ function recordEvent(
 export function recordNetworkEvent(
   networks: NetworkEvent[],
   requests: Map<string, { method: string; url: string }>,
-  message: Pick<CdpResponse, 'method' | 'params'>,
+  message: Pick<CdpPipeMessage, 'method' | 'params'>,
   timestamp: number,
 ): void {
   const params = message.params ?? {}
@@ -937,19 +2320,12 @@ function waitForCommand(
   params: Record<string, unknown> = {},
   timeoutMs = 15_000,
 ): Promise<unknown> {
-  const id = page.nextId++
-  const timeout = setTimeout(() => {
-    const pending = page.pending.get(id)
-    if (!pending) return
-    page.pending.delete(id)
-    pending.reject(new Error(`${method} timed out after ${timeoutMs}ms`))
-  }, timeoutMs)
-
-  const promise = new Promise<unknown>((resolve, reject) => {
-    page.pending.set(id, { resolve, reject, timeout })
+  // The pipe transport owns id allocation, framing, and pending correlation;
+  // the page's sessionId routes the command to its attached target.
+  return page.transport.send(method, params, {
+    sessionId: page.sessionId,
+    timeoutMs,
   })
-  page.ws.send(JSON.stringify({ id, method, params }))
-  return promise
 }
 
 async function waitForLoad(
@@ -967,20 +2343,40 @@ async function waitForLoad(
   }
 }
 
-function waitForEvent(
+/**
+ * Exported for unit tests (like routeEvent and rollbackBrowserSpawn) so the
+ * waiter-cleanup contract can be exercised without a live Chrome session.
+ */
+export function waitForEvent(
   page: BrowserPage,
   eventName: string,
   timeoutMs: number,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    let settled = false
+    const waiter = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      resolve()
+    }
     const timeout = setTimeout(() => {
+      if (settled) return
+      settled = true
+      // Remove this waiter on timeout: a waiter left behind would leak its
+      // closure in page.eventWaiters until the same event name happened to
+      // fire later (deliverEvent resolves and clears the whole array then),
+      // keeping every timed-out wait alive for the lifetime of the page.
+      const waiters = page.eventWaiters.get(eventName)
+      if (waiters) {
+        const index = waiters.indexOf(waiter)
+        if (index !== -1) waiters.splice(index, 1)
+        if (waiters.length === 0) page.eventWaiters.delete(eventName)
+      }
       reject(new Error(`${eventName} timed out after ${timeoutMs}ms`))
     }, timeoutMs)
     const waiters = page.eventWaiters.get(eventName) ?? []
-    waiters.push(() => {
-      clearTimeout(timeout)
-      resolve()
-    })
+    waiters.push(waiter)
     page.eventWaiters.set(eventName, waiters)
   })
 }
@@ -1082,20 +2478,60 @@ function collectFrames(value: unknown, frames: Record<string, unknown>[]) {
   }
 }
 
-async function buildResponse(
+/**
+ * Builds the BrowserResponse for one action and consumes the session's
+ * pending log/network window. Exported for unit tests (like routeEvent and
+ * rollbackBrowserSpawn) so the window-consumption contract can be exercised
+ * without a live Chrome session.
+ */
+export async function buildResponse(
   session: BrowserSession,
   page: BrowserPage,
   action: string,
   result?: unknown,
 ): Promise<BrowserResponse> {
+  // Capture the window cursors synchronously BEFORE the first await: the
+  // slice of log/network events this response will report is fixed here, so
+  // a concurrent browserLogs action on the same session cannot advance the
+  // shared cursors between this capture and the slice below and empty (or
+  // steal) this response's window. The advance below only ever moves a
+  // cursor forward and is clamped to the current buffer length, so it can
+  // never regress behind a concurrent consumer or a buffer trim.
+  const startLogOffset = session.logOffset
+  const startNetworkOffset = session.networkOffset
   const pageInfo = await evaluate(
     page,
     '({ url: location.href, title: document.title })',
   ).catch(() => ({}))
-  const newLogs = session.logs.slice(session.logOffset)
-  const newNetworks = session.networks.slice(session.networkOffset)
-  session.logOffset = session.logs.length
-  session.networkOffset = session.networks.length
+  const nextLogOffset = session.logs.length
+  const nextNetworkOffset = session.networks.length
+  // A concurrent trimSessionBuffer during the await above splices overflow
+  // entries off the front of the buffers and pulls the shared cursor down by
+  // exactly the number of spliced entries, so the CURRENT cursor is the
+  // trim-corrected image of the captured one whenever it is lower — slicing
+  // from the stale captured offset would silently skip the unconsumed events
+  // the trim shifted toward the front. min() adopts that corrected start
+  // without ever letting a concurrent consumer's forward cursor advance
+  // (which can only raise the cursor) move this response's start past its
+  // own captured window.
+  const effectiveLogStart = Math.min(startLogOffset, session.logOffset)
+  const effectiveNetworkStart = Math.min(
+    startNetworkOffset,
+    session.networkOffset,
+  )
+  const newLogs = session.logs.slice(effectiveLogStart, nextLogOffset)
+  const newNetworks = session.networks.slice(
+    effectiveNetworkStart,
+    nextNetworkOffset,
+  )
+  session.logOffset = Math.min(
+    Math.max(session.logOffset, nextLogOffset),
+    session.logs.length,
+  )
+  session.networkOffset = Math.min(
+    Math.max(session.networkOffset, nextNetworkOffset),
+    session.networks.length,
+  )
 
   const response: BrowserResponse = {
     success: true,
@@ -1111,14 +2547,17 @@ async function buildResponse(
   return response
 }
 
-async function waitForPageTarget(port: number): Promise<BrowserTarget> {
+async function waitForPageTarget(
+  transport: CdpPipeTransport,
+): Promise<string> {
   const started = Date.now()
   let lastError: unknown
   while (Date.now() - started < 10_000) {
     try {
-      const pages = await listTargets(port)
-      const page = pages.find((candidate) => candidate.type === 'page')
-      if (page?.webSocketDebuggerUrl) return page
+      const targetId = (await listTargets(transport)).find(
+        (candidate) => candidate.type === 'page',
+      )?.targetId
+      if (targetId) return targetId
     } catch (error) {
       lastError = error
     }
@@ -1132,78 +2571,38 @@ async function waitForPageTarget(port: number): Promise<BrowserTarget> {
 }
 
 type BrowserTarget = {
-  id: string
+  targetId: string
   type?: string
   url?: string
   title?: string
-  webSocketDebuggerUrl: string
 }
 
-async function listTargets(port: number): Promise<BrowserTarget[]> {
-  const raw = (await fetchJson(`http://127.0.0.1:${port}/json/list`)) as Array<
-    Record<string, unknown>
-  >
-  return raw
-    .filter(
-      (
-        item,
-      ): item is Record<string, unknown> & {
-        id: string
-        webSocketDebuggerUrl: string
-      } =>
-        typeof item.id === 'string' &&
-        typeof item.webSocketDebuggerUrl === 'string',
-    )
-    .map((item) => ({
-      id: item.id,
-      type: typeof item.type === 'string' ? item.type : undefined,
-      url: typeof item.url === 'string' ? item.url : undefined,
-      title: typeof item.title === 'string' ? item.title : undefined,
-      webSocketDebuggerUrl: item.webSocketDebuggerUrl,
-    }))
-}
-
-async function fetchJson(url: string, init?: RequestInit): Promise<unknown> {
-  const response = await fetch(url, init)
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} from ${url}`)
+/**
+ * Target discovery over the CDP pipe. `Target.getTargets` replaces the old
+ * unauthenticated `http://127.0.0.1:<port>/json/list` HTTP endpoint; note that
+ * the CDP shape uses `targetId` (not `id`) and carries no
+ * `webSocketDebuggerUrl`, since attach happens over the same pipe.
+ */
+async function listTargets(
+  transport: CdpPipeTransport,
+): Promise<BrowserTarget[]> {
+  const result = await transport.send('Target.getTargets')
+  const rawInfos =
+    isRecord(result) && Array.isArray(result.targetInfos)
+      ? result.targetInfos
+      : []
+  const targets: BrowserTarget[] = []
+  for (const info of rawInfos) {
+    if (!isRecord(info)) continue
+    if (typeof info.targetId !== 'string') continue
+    targets.push({
+      targetId: info.targetId,
+      type: typeof info.type === 'string' ? info.type : undefined,
+      url: typeof info.url === 'string' ? info.url : undefined,
+      title: typeof info.title === 'string' ? info.title : undefined,
+    })
   }
-  return response.json()
-}
-
-function openWebSocket(url: string): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url)
-    const timeout = setTimeout(() => {
-      reject(new Error('Timed out connecting to Chrome DevTools'))
-      ws.close()
-    }, 10_000)
-    ws.addEventListener('open', () => {
-      clearTimeout(timeout)
-      resolve(ws)
-    })
-    ws.addEventListener('error', () => {
-      clearTimeout(timeout)
-      reject(new Error('Failed to connect to Chrome DevTools'))
-    })
-  })
-}
-
-function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer()
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address()
-      server.close(() => {
-        if (address && typeof address === 'object') {
-          resolve(address.port)
-        } else {
-          reject(new Error('Could not allocate browser debugging port'))
-        }
-      })
-    })
-    server.on('error', reject)
-  })
+  return targets
 }
 
 function findChromeExecutable(): string {
@@ -1736,59 +3135,49 @@ async function handleTabAction(
     return { tabs: await tabsResult(session) }
   }
   if (action.operation === 'create') {
-    const raw = await fetchJson(
-      `http://127.0.0.1:${session.port}/json/new?${encodeURIComponent(
-        normalizeBrowserUrl(action.url ?? 'about:blank'),
-      )}`,
-      { method: 'PUT' },
-    )
-    if (
-      !isRecord(raw) ||
-      typeof raw.id !== 'string' ||
-      typeof raw.webSocketDebuggerUrl !== 'string'
-    ) {
+    const created = await session.transport.send('Target.createTarget', {
+      url: normalizeBrowserUrl(action.url ?? 'about:blank'),
+    })
+    const createdId =
+      isRecord(created) && typeof created.targetId === 'string'
+        ? created.targetId
+        : undefined
+    if (!createdId) {
       throw new Error('Chrome did not return a new tab target')
     }
-    const page = await connectPage(session, raw.id, raw.webSocketDebuggerUrl)
-    session.pages.set(raw.id, page)
-    session.activeTargetId = raw.id
-    return { targetId: raw.id, tabs: await tabsResult(session) }
+    const page = await connectPage(session, createdId)
+    session.pages.set(createdId, page)
+    session.pagesBySessionId.set(page.sessionId, page)
+    session.activeTargetId = createdId
+    return { targetId: createdId, tabs: await tabsResult(session) }
   }
   const targetId = await resolveTabId(session, action)
   if (!targetId) throw new Error('No matching tab found')
   if (action.operation === 'switch') {
-    const target = (await listTargets(session.port)).find(
-      (item) => item.id === targetId,
-    )
-    if (!target?.webSocketDebuggerUrl)
-      throw new Error('Target has no websocket URL')
-    const page = await connectPage(
-      session,
-      target.id,
-      target.webSocketDebuggerUrl,
-    )
-    session.pages.set(target.id, page)
-    session.activeTargetId = target.id
-    await fetch(
-      `http://127.0.0.1:${session.port}/json/activate/${target.id}`,
-    ).catch(() => undefined)
+    const page = await connectPage(session, targetId)
+    session.pages.set(targetId, page)
+    session.pagesBySessionId.set(page.sessionId, page)
+    session.activeTargetId = targetId
+    await session.transport
+      .send('Target.activateTarget', { targetId })
+      .catch(() => undefined)
     return { targetId, tabs: await tabsResult(session) }
   }
   if (action.operation === 'close') {
     if (session.pages.size <= 1)
       throw new Error('Cannot close the last browser tab')
-    await fetch(
-      `http://127.0.0.1:${session.port}/json/close/${targetId}`,
-    ).catch(() => undefined)
-    const page = session.pages.get(targetId)
-    page?.ws.close()
+    await session.transport
+      .send('Target.closeTarget', { targetId })
+      .catch(() => undefined)
+    const removed = session.pages.get(targetId)
     session.pages.delete(targetId)
+    if (removed) session.pagesBySessionId.delete(removed.sessionId)
     if (session.activeTargetId === targetId) {
-      const nextTarget = (await listTargets(session.port)).find(
+      const nextTarget = (await listTargets(session.transport)).find(
         (item) => item.type === 'page',
       )
       if (!nextTarget) throw new Error('No browser tabs remain')
-      session.activeTargetId = nextTarget.id
+      session.activeTargetId = nextTarget.targetId
     }
     return { closed: targetId, tabs: await tabsResult(session) }
   }
@@ -1796,13 +3185,13 @@ async function handleTabAction(
 }
 
 async function tabsResult(session: BrowserSession) {
-  return (await listTargets(session.port))
+  return (await listTargets(session.transport))
     .filter((target) => target.type === 'page')
     .map((target) => ({
-      targetId: target.id,
+      targetId: target.targetId,
       url: target.url,
       title: target.title,
-      active: target.id === session.activeTargetId,
+      active: target.targetId === session.activeTargetId,
     }))
 }
 
@@ -1811,7 +3200,7 @@ async function resolveTabId(
   action: Extract<BrowserAction, { type: 'tab' }>,
 ): Promise<string | undefined> {
   if (action.targetId) return action.targetId
-  const tabs = await listTargets(session.port)
+  const tabs = await listTargets(session.transport)
   return tabs.find((target) => {
     const titleMatches = action.titleIncludes
       ? (target.title ?? '').includes(action.titleIncludes)
@@ -1820,10 +3209,15 @@ async function resolveTabId(
       ? (target.url ?? '').includes(action.urlIncludes)
       : true
     return target.type === 'page' && titleMatches && urlMatches
-  })?.id
+  })?.targetId
 }
 
-async function handleRecordingAction(
+/**
+ * Exported for unit tests (like routeEvent and rollbackBrowserSpawn) so the
+ * recording state-machine contract can be exercised without a live Chrome
+ * session.
+ */
+export async function handleRecordingAction(
   session: BrowserSession,
   page: BrowserPage,
   action: Extract<BrowserAction, { type: 'recording' }>,
@@ -1837,16 +3231,24 @@ async function handleRecordingAction(
       frameCount: 0,
       frames: [],
     }
-    await waitForCommand(
-      page,
-      'Page.startScreencast',
-      {
-        format: 'png',
-        everyNthFrame: action.everyNthFrame ?? 1,
-        quality: action.quality ?? 80,
-      },
-      action.timeout ?? 15_000,
-    )
+    try {
+      await waitForCommand(
+        page,
+        'Page.startScreencast',
+        {
+          format: 'png',
+          everyNthFrame: action.everyNthFrame ?? 1,
+          quality: action.quality ?? 80,
+        },
+        action.timeout ?? 15_000,
+      )
+    } catch (error) {
+      // Page.startScreencast never started: roll the recording state back so
+      // a future 'start' is not permanently blocked by a phantom active
+      // recording that only a compensating 'stop' could clear.
+      session.recording = null
+      throw error
+    }
     return [
       jsonResult(
         await buildResponse(session, page, action.type, {
@@ -2357,7 +3759,8 @@ function frameDelayMs(
   return DEFAULT_FRAME_DELAY_MS
 }
 
-function buildApng(
+// Exported for unit tests (like routeEvent and rollbackBrowserSpawn).
+export function buildApng(
   frames: Array<{ buffer: Buffer; timestamp: number }>,
 ): Buffer {
   if (frames.length === 0) return Buffer.alloc(0)
@@ -2368,13 +3771,49 @@ function buildApng(
   if (!ihdr || !iend) return frames[0].buffer
   const width = ihdr.data.readUInt32BE(0)
   const height = ihdr.data.readUInt32BE(4)
+  // The global canvas is frame 0's size, so every emitted fcTL must carry
+  // dimensions that match the image data following it. When the viewport
+  // resized between captures, a frame's own IHDR disagrees with frame 0's,
+  // and reusing frame 0's dimensions for its fcTL produces corrupt APNG that
+  // decoders reject or misrender. Skip such frames (and frames without an
+  // IHDR, whose dimensions cannot be checked) instead of emitting them:
+  // dropped frames must not consume fcTL sequence numbers, and acTL counts
+  // only kept frames. When every frame matches, the output is unchanged.
+  const keptFrames: Array<{ frame: PngChunk[]; index: number }> = []
+  parsed.forEach((frame, index) => {
+    if (index === 0) {
+      keptFrames.push({ frame, index })
+      return
+    }
+    const frameIhdr = frame.find((chunk) => chunk.type === 'IHDR')
+    if (
+      !frameIhdr ||
+      frameIhdr.data.readUInt32BE(0) !== width ||
+      frameIhdr.data.readUInt32BE(4) !== height
+    ) {
+      return
+    }
+    keptFrames.push({ frame, index })
+  })
+  // Each kept frame's fcTL delay must cover the wall-clock span up to the
+  // next KEPT frame: dropped frames (dimension mismatches) occupy real time,
+  // and computing the delay from the gap to the next ORIGINAL frame would
+  // lose that span and make the animation play compressed at resize
+  // boundaries.
+  const keptFrameTimings = keptFrames.map(({ index }) => ({
+    timestamp: frames[index]!.timestamp,
+  }))
   const chunks: Buffer[] = [
     PNG_SIGNATURE,
     writePngChunk('IHDR', ihdr.data),
-    writePngChunk('acTL', uint32Pair(frames.length, 0)),
+    writePngChunk('acTL', uint32Pair(keptFrames.length, 0)),
   ]
   let sequence = 0
-  parsed.forEach((frame, index) => {
+  keptFrames.forEach(({ frame, index }, keptIndex) => {
+    // Kept frames' own IHDR dimensions equal the global IHDR dimensions by
+    // the filter above, so each fcTL carries that frame's own dimensions.
+    // Delay is computed over the kept-frame timeline so dropped frames' time
+    // span is preserved rather than collapsed.
     chunks.push(
       writePngChunk(
         'fcTL',
@@ -2382,20 +3821,18 @@ function buildApng(
           sequenceNumber: sequence++,
           width,
           height,
-          delayNum: frameDelayMs(frames, index),
+          delayNum: frameDelayMs(keptFrameTimings, keptIndex),
           delayDen: 1000,
         }),
       ),
     )
-    const imageData = Buffer.concat(
-      frame.filter((chunk) => chunk.type === 'IDAT').map((chunk) => chunk.data),
-    )
+    const imageDataParts = frame
+      .filter((chunk) => chunk.type === 'IDAT')
+      .map((chunk) => chunk.data)
     if (index === 0) {
-      chunks.push(writePngChunk('IDAT', imageData))
+      chunks.push(writePngChunk('IDAT', ...imageDataParts))
     } else {
-      chunks.push(
-        writePngChunk('fdAT', Buffer.concat([uint32(sequence++), imageData])),
-      )
+      chunks.push(writePngChunk('fdAT', uint32(sequence++), ...imageDataParts))
     }
   })
   chunks.push(writePngChunk('IEND', Buffer.alloc(0)))
@@ -2404,7 +3841,7 @@ function buildApng(
 
 type PngChunk = { type: string; data: Buffer }
 
-function parsePngChunks(buffer: Buffer): PngChunk[] {
+export function parsePngChunks(buffer: Buffer): PngChunk[] {
   const chunks: PngChunk[] = []
   let offset = PNG_SIGNATURE.length
   while (offset + 12 <= buffer.length) {
@@ -2418,15 +3855,31 @@ function parsePngChunks(buffer: Buffer): PngChunk[] {
   return chunks
 }
 
-function writePngChunk(type: string, data: Buffer): Buffer {
-  const typeBuffer = Buffer.from(type, 'ascii')
-  const output = Buffer.alloc(12 + data.length)
-  output.writeUInt32BE(data.length, 0)
-  typeBuffer.copy(output, 4)
-  data.copy(output, 8)
+export function writePngChunk(
+  type: string,
+  ...dataParts: Buffer[]
+): Buffer {
+  const dataLength = dataParts.reduce((sum, part) => sum + part.length, 0)
+  // allocUnsafe skips the zero-fill: every byte of the chunk below is
+  // overwritten before the buffer is returned (length, type, payload, CRC),
+  // so zeroing a potentially multi-MB frame payload first would be pure
+  // overhead in the APNG assembly path.
+  const output = Buffer.allocUnsafe(12 + dataLength)
+  output.writeUInt32BE(dataLength, 0)
+  // Pad the type to exactly 4 bytes so the type field is fully written even
+  // if a caller ever passes a shorter type string.
+  output.write(type.padEnd(4, '\0'), 4, 'ascii')
+  let offset = 8
+  for (const part of dataParts) {
+    part.copy(output, offset)
+    offset += part.length
+  }
+  // The type and payload bytes are already assembled in `output`: compute the
+  // CRC over that subarray view instead of concatenating a transient copy of
+  // the (potentially multi-megabyte) frame payload.
   output.writeUInt32BE(
-    crc32(Buffer.concat([typeBuffer, data])),
-    8 + data.length,
+    crc32(output.subarray(4, 8 + dataLength)),
+    8 + dataLength,
   )
   return output
 }

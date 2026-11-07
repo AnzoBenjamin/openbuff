@@ -1,8 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { EventEmitter } from 'node:events'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import * as mainPromptModule from '@codebuff/agent-runtime/main-prompt'
+import * as mcpClientModule from '@codebuff/common/mcp/client'
+import { markMCPConfigOrigin } from '@codebuff/common/mcp/client'
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import {
@@ -22,6 +25,9 @@ import {
 } from 'bun:test'
 
 import { OpenbuffClient } from '../client'
+import { createNodeFileSystem } from '../tools/node-filesystem'
+import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import type { ChildProcess } from 'node:child_process'
 import * as databaseModule from '../impl/database'
 import { handleToolCall } from '../run'
 import { HarnessApprovalService } from '../services/harness-enforcement'
@@ -29,6 +35,12 @@ import { LocalHarnessStore } from '../services/local-harness-store'
 
 import type { FilesystemMutationEvent, OpenbuffClientOptions } from '../run'
 import type { CommitReceiptV1 } from '@codebuff/common/tools/results/filesystem'
+import {
+  fileMutationResultV1Schema,
+  getConfirmedAppliedActionsV1,
+} from '@codebuff/common/tools/results/filesystem'
+import type { HarnessApprovalRequest } from '../services/harness-enforcement'
+import type { MCPConfig } from '@codebuff/common/types/mcp'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
@@ -80,7 +92,7 @@ function mockDatabase() {
  * through the real `handleToolCall` wiring, returning each tool output.
  */
 async function dispatchToolCalls(params: {
-  calls: Array<{ toolName: string; input: Record<string, unknown> }>
+  calls: Array<{ toolName: string; input: unknown }>
   clientOptions: OpenbuffClientOptions
   /**
    * Optional sink for the canonical commit receipt each dispatch returns
@@ -101,7 +113,7 @@ async function dispatchToolCalls(params: {
         const handled = await requestToolCall({
           userInputId: promptId,
           toolName: call.toolName,
-          input: call.input,
+          input: call.input as Parameters<typeof requestToolCall>[0]['input'],
         })
         outputs.push(handled.output)
         params.canonicalReceipts?.push(handled.canonicalReceipt)
@@ -143,6 +155,364 @@ function jsonValue(output: ToolResultOutput[] | undefined): unknown {
 // removed once, after the whole file.
 afterAll(() => {
   rmSync(harnessStateDir, { recursive: true, force: true })
+})
+
+describe('[B36] diagnostic SDK/client projection', () => {
+  afterEach(() => {
+    mock.restore()
+  })
+
+  it.each([
+    ['new-error', 'new_errors', 'before_after'],
+    ['shifted-error', 'passed', 'before_after'],
+    ['failed-baseline', 'unavailable', 'before_after'],
+    ['mismatched-files', 'unknown', 'before_after'],
+    ['foreign-bytes', 'unknown', 'before_after'],
+    ['failed-foreign-baseline', 'unknown', 'before_after'],
+  ] as const)(
+    'retains the correct baseline across actual client calls: %s',
+    async (name, status, basis) => {
+      const workspace = mkdtempSync(path.join(harnessStateDir, 'b36-client-'))
+      const configPath = path.join(harnessStateDir, `b36-${name}.json`)
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          autoFileChangeHooks: false,
+          fileChangeHooks: [{ name: 'fixture-control', command: 'true' }],
+        }),
+      )
+      const previousConfig = process.env.OPENBUFF_PROVIDER_CONFIG
+      process.env.OPENBUFF_PROVIDER_CONFIG = configPath
+      let launches = 0
+      const spawn = ((_file: string) => {
+        if (_file !== 'cargo') {
+          const child = Object.assign(new EventEmitter(), {
+            stdout: new EventEmitter(),
+            stderr: new EventEmitter(),
+          }) as unknown as ChildProcess
+          process.nextTick(() => child.emit('close', 0))
+          return child
+        }
+        launches++
+        const invocation = launches
+        const stdout = new EventEmitter()
+        const child = Object.assign(new EventEmitter(), {
+          stdout,
+          stderr: new EventEmitter(),
+        }) as unknown as ChildProcess
+        process.nextTick(() => {
+          if (
+            name === 'failed-baseline' ||
+            name === 'failed-foreign-baseline'
+          ) {
+            child.emit('close', invocation === 1 ? 127 : 0)
+            return
+          }
+          const hasError =
+            name === 'shifted-error' || (name === 'new-error' && invocation > 1)
+          if (hasError)
+            stdout.emit(
+              'data',
+              JSON.stringify({
+                reason: 'compiler-message',
+                message: {
+                  level: 'error',
+                  message: 'synthetic fixture error',
+                  code: { code: 'E0308' },
+                  spans: [
+                    {
+                      is_primary: true,
+                      file_name: 'src/lib.rs',
+                      line_start: invocation === 1 ? 1 : 5,
+                      column_start: 1,
+                      line_end: invocation === 1 ? 1 : 5,
+                      column_end: 2,
+                    },
+                  ],
+                  children: [],
+                },
+              }) + '\n',
+            )
+          child.emit('close', hasError ? 101 : 0)
+        })
+        return child
+      }) as CodebuffSpawn
+      try {
+        const outputs = await dispatchToolCalls({
+          calls: [
+            {
+              toolName: 'write_file',
+              input: {
+                type: 'file',
+                path: 'src/lib.rs',
+                instructions: 'Create the fixture source',
+                content: 'fn fixture() {}\n',
+              },
+            },
+            {
+              toolName: 'run_file_change_hooks',
+              input: {
+                files: [
+                  name === 'mismatched-files' ? 'src/other.rs' : 'src/lib.rs',
+                ],
+              },
+            },
+          ],
+          clientOptions: {
+            cwd: workspace,
+            fsSource: createNodeFileSystem(),
+            spawnSource: spawn,
+            env: {
+              OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true',
+              OPENBUFF_PROVIDER_CONFIG: configPath,
+            },
+            onFilesystemMutation:
+              name === 'foreign-bytes' || name === 'failed-foreign-baseline'
+                ? () => {
+                    writeFileSync(
+                      path.join(workspace, 'src/lib.rs'),
+                      'foreign bytes\n',
+                    )
+                  }
+                : undefined,
+          },
+        })
+        expect(jsonValue(outputs[0])).toMatchObject({
+          kind: 'file_mutation_result',
+          outcome: 'applied',
+        })
+        const rows = jsonValue(outputs[1]) as Array<Record<string, unknown>>
+        const diagnostic = rows.find(
+          (row) => row.hookName === 'diagnostic-delta',
+        )!
+        console.log(
+          JSON.stringify({
+            b36: 'client-multi-call-observed',
+            name,
+            launches,
+            diagnostic,
+          }),
+        )
+        expect(diagnostic.diagnosticStatus).toBe(status)
+        expect(diagnostic.observations).toMatchObject({ basis })
+        if (
+          name === 'mismatched-files' ||
+          name === 'foreign-bytes' ||
+          name === 'failed-foreign-baseline'
+        ) {
+          expect(diagnostic.observations).toMatchObject({
+            before: {
+              coverage: {
+                status: 'unknown',
+                reasons: expect.arrayContaining([
+                  'baseline_postimage_or_scope_unverified',
+                ]),
+              },
+            },
+            after: { diagnostics: [], coverage: { status: 'complete' } },
+          })
+        }
+        if (name === 'failed-foreign-baseline') {
+          expect(diagnostic.observations).toMatchObject({
+            before: {
+              commands: [
+                expect.objectContaining({
+                  exitCode: 127,
+                  status: 'unavailable',
+                }),
+              ],
+            },
+          })
+        }
+        expect(launches).toBe(2)
+        console.log(
+          JSON.stringify({
+            b36: 'client-multi-call',
+            name,
+            launches,
+            diagnostic,
+          }),
+        )
+      } finally {
+        if (previousConfig === undefined)
+          delete process.env.OPENBUFF_PROVIDER_CONFIG
+        else process.env.OPENBUFF_PROVIDER_CONFIG = previousConfig
+        rmSync(workspace, { recursive: true, force: true })
+        rmSync(configPath, { force: true })
+      }
+    },
+    15_000,
+  )
+
+  it('preserves real command coverage through hooks, SDK wire output and client classification', async () => {
+    const artifact = path.join(harnessStateDir, 'b36-diagnostic-outcomes.json')
+    const fixture = path.resolve(
+      import.meta.dir,
+      '../../../scripts/body-fixtures/diagnostic-outcomes.ts',
+    )
+    const child = Bun.spawn([process.execPath, fixture, artifact], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [exit, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ])
+    if (exit !== 0)
+      throw new Error(`Diagnostic fixture exited ${exit}: ${stdout}\n${stderr}`)
+    const evidence = JSON.parse(readFileSync(artifact, 'utf8'))
+    expect(evidence.records).toHaveLength(12)
+    for (const record of evidence.records) {
+      const row = record.sdkOutput[0].value.find(
+        (entry: Record<string, unknown>) =>
+          entry.hookName === 'diagnostic-delta',
+      )
+      expect(row.diagnosticStatus).toBe(record.expectedStatus)
+      expect(row.observations).toBeDefined()
+      if (record.expectedStatus === 'passed')
+        expect(record.clientClassification).toBe('passed')
+      else expect(record.clientClassification).not.toBe('passed')
+    }
+  }, 20_000)
+})
+
+describe('[B03] SDK confirmed mutation dispatch', () => {
+  afterEach(() => {
+    mock.restore()
+  })
+
+  it('retains a refused receipt after later recovery without publishing the refused edit', async () => {
+    const fs = createMockFs({ files: { '/repo/a.txt': 'before\n' } })
+    const commit = fs.conditionalCommit!.bind(fs)
+    let attempts = 0
+    fs.conditionalCommit = async (filePath, data, options) => {
+      attempts++
+      if (attempts === 1) {
+        await fs.writeFile('/repo/a.txt', 'foreign\r\n')
+        return {
+          applied: false,
+          actualHash: getExactContentHash('foreign\r\n'),
+        }
+      }
+      return commit(filePath, data, options)
+    }
+    const events: FilesystemMutationEvent[] = []
+    const canonicalReceipts: Array<CommitReceiptV1 | undefined> = []
+    const outputs = await dispatchToolCalls({
+      calls: [
+        {
+          toolName: 'edit_transaction',
+          input: [
+            {
+              type: 'file',
+              path: 'a.txt',
+              content: 'after\n',
+              expectedHash: getContentHash('before\n'),
+            },
+          ],
+        },
+        {
+          toolName: 'edit_transaction',
+          input: [
+            {
+              type: 'file',
+              path: 'a.txt',
+              content: 'recovered\n',
+              expectedHash: getContentHash('foreign\r\n'),
+            },
+          ],
+        },
+      ],
+      canonicalReceipts,
+      clientOptions: {
+        cwd: '/repo',
+        fsSource: fs,
+        onFilesystemMutation: (event) => {
+          events.push(event)
+        },
+      },
+    })
+    const refused = fileMutationResultV1Schema.parse(jsonValue(outputs[0]))
+    const recovered = fileMutationResultV1Schema.parse(jsonValue(outputs[1]))
+    expect(refused.outcome).toBe('not_applied')
+    expect(refused.actions[0]?.forward?.outcome).toBe('not_applied')
+    expect(getConfirmedAppliedActionsV1(refused)).toEqual([])
+    expect(canonicalReceipts[0]).toMatchObject({
+      status: 'failed',
+      finalHashes: { 'a.txt': getExactContentHash('foreign\r\n') },
+    })
+    expect(canonicalReceipts[0]?.receiptId).toBe(refused.receiptId)
+    expect(recovered.outcome).toBe('applied')
+    expect(getConfirmedAppliedActionsV1(recovered)).toHaveLength(1)
+    expect(events).toHaveLength(1)
+    expect(events[0]?.operationId).toBe(recovered.operationId)
+    expect(events[0]?.actions[0]?.afterHash).toBe(
+      getExactContentHash('recovered\n'),
+    )
+    expect(attempts).toBe(2)
+    expect(await fs.readFile('/repo/a.txt', 'utf8')).toBe('recovered\n')
+    expect(JSON.parse(JSON.stringify(refused)).authorityReceipt.status).toBe(
+      'failed',
+    )
+  })
+
+  it('publishes only the confirmed surviving forward change when another action throws', async () => {
+    const fs = createMockFs({
+      files: { '/repo/a.txt': 'a-before\n', '/repo/b.txt': 'b-before\n' },
+    })
+    const commit = fs.conditionalCommit!.bind(fs)
+    fs.conditionalCommit = async (filePath, data, options) => {
+      if (String(filePath) === '/repo/b.txt') {
+        await fs.writeFile('/repo/b.txt', 'partial\n')
+        throw new Error('partial write failure')
+      }
+      if (String(data) === 'a-before\n')
+        return { applied: false, actualHash: getExactContentHash('a-after\n') }
+      return commit(filePath, data, options)
+    }
+    const events: FilesystemMutationEvent[] = []
+    const canonicalReceipts: Array<CommitReceiptV1 | undefined> = []
+    const outputs = await dispatchToolCalls({
+      calls: [
+        {
+          toolName: 'edit_transaction',
+          input: [
+            { type: 'file', path: 'a.txt', content: 'a-after\n' },
+            { type: 'file', path: 'b.txt', content: 'b-after\n' },
+          ],
+        },
+      ],
+      canonicalReceipts,
+      clientOptions: {
+        cwd: '/repo',
+        fsSource: fs,
+        onFilesystemMutation: (event) => {
+          events.push(event)
+        },
+      },
+    })
+    const mutation = fileMutationResultV1Schema.parse(jsonValue(outputs[0]))
+    expect(mutation.outcome).toBe('rollback_incomplete')
+    expect(mutation.actions.map((action) => action.outcome)).toEqual([
+      'applied',
+      'rollback_incomplete',
+    ])
+    expect(mutation.actions[1]?.forward).toEqual({
+      outcome: 'unconfirmed',
+      afterHashes: { 'b.txt': getExactContentHash('partial\n') },
+    })
+    expect(events).toHaveLength(1)
+    expect(events[0]?.actions.map((action) => action.path)).toEqual(['a.txt'])
+    expect(events[0]?.actions[0]?.afterHash).toBe(
+      getExactContentHash('a-after\n'),
+    )
+    expect(canonicalReceipts[0]?.actions[1]?.forward?.outcome).toBe(
+      'unconfirmed',
+    )
+    expect(await fs.readFile('/repo/a.txt', 'utf8')).toBe('a-after\n')
+    expect(await fs.readFile('/repo/b.txt', 'utf8')).toBe('partial\n')
+  })
 })
 
 describe('write_audit_findings dispatch advances workspace state', () => {
@@ -590,5 +960,193 @@ describe('handleToolCall compact-receipt mutation wiring', () => {
     expect(await fs.readFile(`/repo/${auditArtifactPath}`, 'utf8')).toBe(
       'existing\n',
     )
+  })
+})
+
+describe('client-origin MCP tool approval gate (P1-T2)', () => {
+  afterEach(() => {
+    mock.restore()
+  })
+
+  /**
+   * Drives `handleToolCall` directly for an MCP tool call, mocking the shared
+   * MCP client so `getMCPClient`/`callMCPTool` never hit the network. Returns
+   * whether the tool actually ran alongside the tool output.
+   */
+  async function dispatchMcpToolCall(params: {
+    mcpConfig: MCPConfig
+    toolName: string
+    requestApproval?: (request: HarnessApprovalRequest) => Promise<boolean>
+    approvedClientMcpTools?: Set<string>
+  }): Promise<{ output: ToolResultOutput[]; callMcpToolCalls: number }> {
+    // Reset any prior spies so `callToolSpy.mock.calls.length` reflects only
+    // THIS dispatch. Without this, a second dispatchMcpToolCall in the same
+    // test (e.g. the same-tool re-call case) re-wraps an already-spied module
+    // method and the call count reads cumulatively across both dispatches.
+    mock.restore()
+    const getClientSpy = spyOn(
+      mcpClientModule,
+      'getMCPClient',
+    ).mockResolvedValue('mock-client-id')
+    const callToolSpy = spyOn(mcpClientModule, 'callMCPTool').mockResolvedValue(
+      [{ type: 'json', value: { ok: true } }],
+    )
+
+    const handled = await handleToolCall({
+      action: {
+        type: 'tool-call-request',
+        requestId: 'call-mcp-1',
+        userInputId: 'input-1',
+        toolName: params.toolName,
+        input: { arg: 1 },
+        mcpConfig: params.mcpConfig,
+      },
+      overrides: {},
+      customToolDefinitions: {},
+      cwd: '/repo',
+      fs: createMockFs(),
+      trustedJobOwner: {
+        clientSessionId: 'session-1',
+        rootRunId: 'run-1',
+        parentRunId: 'run-1',
+        parentAgentId: 'agent-1',
+      },
+      harnessStateDir,
+      approvalReceiptIds: [],
+      approvalMode: 'balanced',
+      requestApproval: params.requestApproval,
+      approvedClientMcpTools: params.approvedClientMcpTools,
+      approvalService: new HarnessApprovalService(
+        new LocalHarnessStore(harnessStateDir),
+      ),
+      getWorkspaceState: () => undefined,
+      setWorkspaceState: () => {},
+    })
+
+    void getClientSpy
+    return {
+      output: handled.output,
+      callMcpToolCalls: callToolSpy.mock.calls.length,
+    }
+  }
+
+  function clientConfig(): MCPConfig {
+    const config: MCPConfig = {
+      type: 'stdio',
+      command: 'untrusted-server',
+      args: [],
+      env: {},
+    }
+    markMCPConfigOrigin(config, 'client')
+    return config
+  }
+
+  it('(a) prompts and runs the tool on the first client-origin call, recording the key', async () => {
+    const requests: HarnessApprovalRequest[] = []
+    const approvedClientMcpTools = new Set<string>()
+    const { output, callMcpToolCalls } = await dispatchMcpToolCall({
+      mcpConfig: clientConfig(),
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval: async (request) => {
+        requests.push(request)
+        return true
+      },
+    })
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({
+      action: 'mcp-tool',
+      risk: 'high',
+    })
+    expect(requests[0]?.target).toContain('search')
+    expect(requests[0]?.reason).toContain('search')
+    expect(callMcpToolCalls).toBe(1)
+    expect(jsonValue([output[0]])).toEqual({ ok: true })
+    // The approved key is recorded so subsequent same-tool calls run freely.
+    expect(approvedClientMcpTools.size).toBe(1)
+  })
+
+  it('(b) does not re-prompt on the second call of the same tool this run', async () => {
+    const approvedClientMcpTools = new Set<string>()
+    const config = clientConfig()
+    let prompts = 0
+    const requestApproval = async () => {
+      prompts++
+      return true
+    }
+
+    const first = await dispatchMcpToolCall({
+      mcpConfig: config,
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval,
+    })
+    const second = await dispatchMcpToolCall({
+      mcpConfig: config,
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval,
+    })
+
+    expect(prompts).toBe(1)
+    expect(first.callMcpToolCalls).toBe(1)
+    expect(second.callMcpToolCalls).toBe(1)
+  })
+
+  it('(c) returns an error output and never calls the tool when denied', async () => {
+    const approvedClientMcpTools = new Set<string>()
+    const { output, callMcpToolCalls } = await dispatchMcpToolCall({
+      mcpConfig: clientConfig(),
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval: async () => false,
+    })
+
+    expect(callMcpToolCalls).toBe(0)
+    expect(jsonValue([output[0]])).toMatchObject({
+      errorMessage: "Client MCP tool 'search' was denied approval.",
+    })
+    // Nothing recorded, so a later approved retry can still gate.
+    expect(approvedClientMcpTools.size).toBe(0)
+  })
+
+  it('(d) fails open and runs when no approver is present', async () => {
+    const approvedClientMcpTools = new Set<string>()
+    const { callMcpToolCalls } = await dispatchMcpToolCall({
+      mcpConfig: clientConfig(),
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval: undefined,
+    })
+
+    expect(callMcpToolCalls).toBe(1)
+    // Fail-open still records the key so subsequent calls run freely.
+    expect(approvedClientMcpTools.size).toBe(1)
+  })
+
+  it('(e) never prompts for a trusted (project) origin config', async () => {
+    const trustedConfig: MCPConfig = {
+      type: 'stdio',
+      command: 'trusted-server',
+      args: [],
+      env: {},
+    }
+    markMCPConfigOrigin(trustedConfig, 'project')
+    let prompts = 0
+    const approvedClientMcpTools = new Set<string>()
+    const { callMcpToolCalls } = await dispatchMcpToolCall({
+      mcpConfig: trustedConfig,
+      toolName: 'search',
+      approvedClientMcpTools,
+      requestApproval: async () => {
+        prompts++
+        return true
+      },
+    })
+
+    expect(prompts).toBe(0)
+    expect(callMcpToolCalls).toBe(1)
+    expect(approvedClientMcpTools.size).toBe(0)
   })
 })

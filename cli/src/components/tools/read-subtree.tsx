@@ -29,18 +29,31 @@ export const ReadSubtreeComponent = defineToolComponent({
       Array.isArray(value) ? value : [],
     ) as Array<Record<string, unknown>>
     const failures = entries.filter(
-      (entry) => typeof entry.errorMessage === 'string',
+      (entry) =>
+        entry &&
+        typeof entry === 'object' &&
+        (typeof entry.errorMessage === 'string' ||
+          (Array.isArray(entry.errors) && entry.errors.length > 0)),
     )
     const truncated = entries.filter(
       (entry) =>
-        entry.liveScanTruncated === true ||
-        (typeof entry.truncationLevel === 'string' &&
-          entry.truncationLevel !== 'none'),
+        entry &&
+        typeof entry === 'object' &&
+        (entry.stale === true ||
+          entry.symbolsMayBeStale === true ||
+          entry.provenance === 'cached' ||
+          entry.variablesSource === 'cached' ||
+          entry.status === 'partial' ||
+          entry.printedTreeOmittedForLength === true ||
+          entry.variablesOmittedForLength === true ||
+          entry.liveScanTruncated === true ||
+          (typeof entry.truncationLevel === 'string' &&
+            entry.truncationLevel !== 'none')),
     )
     const statusName =
       toolBlock.lifecycle === 'cancelled'
         ? 'Subtree cancelled'
-        : failures.length === entries.length && entries.length > 0
+        : entries.length > 0 && entries.every(entry => typeof entry.errorMessage === 'string')
           ? 'Subtree failed'
           : failures.length > 0 || truncated.length > 0
             ? 'Subtree partial'
@@ -49,16 +62,21 @@ export const ReadSubtreeComponent = defineToolComponent({
     // Use a wrapper component to access theme
     const ReadSubtreeContent = () => {
       const theme = useTheme()
+      const notices = [
+        entries.some(entry => entry?.provenance === 'cached' || entry?.variablesSource === 'cached') ? 'cached snapshot' : '',
+        entries.some(entry => entry?.stale === true || entry?.symbolsMayBeStale === true) ? 'stale evidence' : '',
+        entries.some(entry => entry?.printedTreeOmittedForLength === true) ? 'tree omitted for length' : '',
+        entries.some(entry => entry?.variablesOmittedForLength === true) ? 'symbols omitted for length' : '',
+        entries.some(entry => entry?.liveScanTruncated === true) ? 'live scan limited' : '',
+      ].filter(Boolean)
+      const scanErrors = entries.reduce((count, entry) => count + (Array.isArray(entry?.errors) ? entry.errors.length : 0), 0)
+      if (scanErrors) notices.push(`${scanErrors} scan error${scanErrors === 1 ? '' : 's'}`)
+      const scope = paths.length > 1 ? `${paths.length} requested scopes · ${paths.slice(0, 3).join(', ')}${paths.length > 3 ? ' · Inspect for all scopes' : ''}` : finalPath
+      const recovery = failures.find(entry => typeof entry.errorMessage === 'string')?.errorMessage ?? truncated.find(entry => typeof entry.recovery === 'string')?.recovery
       return (
         <SimpleToolCallItem
           name={statusName}
-          description={
-            failures[0]?.errorMessage
-              ? `${finalPath} · ${String(failures[0].errorMessage)}`
-              : truncated[0]?.recovery
-                ? `${finalPath} · ${String(truncated[0].recovery)}`
-                : finalPath
-          }
+          description={[scope, ...notices, recovery].filter(Boolean).join(' · ')}
           descriptionColor={theme.directory}
         />
       )

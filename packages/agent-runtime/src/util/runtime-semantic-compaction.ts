@@ -5,6 +5,7 @@ import {
   CONTEXT_PRUNER_AGENT_ID,
   isContextPrunerAgentId,
 } from './context-pruner-identity'
+import { buildCompactionArchivePointers } from './context-archive'
 
 import type { executeSubagent } from '../tools/handlers/tool/spawn-agent-utils'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
@@ -31,6 +32,7 @@ import type { ToolSet } from 'ai'
  * helper deliberately does not re-check suppression and must not be called
  * from an un-gated site.
  */
+
 export async function runRuntimeSemanticCompaction(
   params: {
     /** Parent state to compact. Its `messageHistory` is replaced in place. */
@@ -181,7 +183,14 @@ export async function runRuntimeSemanticCompaction(
       ancestorRunIds: parentAgentState.ancestorRunIds,
       userInputId: `${userInputId}-inline-${prunerAgentId}${childAgentState.agentId}`,
       prompt: '',
-      spawnParams: undefined,
+      spawnParams: (() => {
+        // D25/CQ-T1: thread the archive eviction-pointer index into the pruner
+        // (the archive was written before this pass), omitted when empty.
+        const archivePointers = buildCompactionArchivePointers(
+          parentAgentState.compactionArchive,
+        )
+        return archivePointers ? { archivePointers } : undefined
+      })(),
       agentTemplate: prunerChildTemplate,
       parentAgentState,
       agentState: childAgentState,
@@ -202,9 +211,11 @@ export async function runRuntimeSemanticCompaction(
       clearUserPromptMessagesAfterResponse: false,
     })
 
-    // Only the transcript propagates back, exactly like the inline path's
-    // `editsParentMessageHistory` branch.
+    // `set_messages` commits the pruner's bounded task memory atomically with
+    // its transcript. Propagate both halves back to the parent; otherwise the
+    // parent keeps compiling stale memory that the child just compacted.
     parentAgentState.messageHistory = result.agentState.messageHistory
+    parentAgentState.taskMemory = result.agentState.taskMemory
   } catch (error) {
     // Non-fatal by design: a pruner failure must never abort the agent turn.
     // The deterministic mechanical brake still runs downstream.

@@ -19,6 +19,23 @@ describe('DynamicAgentDefinitionSchema', () => {
   }
 
   describe('Valid Templates', () => {
+    it('accepts a zero-cost stop and rejects negative or nonfinite budgets', () => {
+      expect(
+        DynamicAgentDefinitionSchema.safeParse({
+          ...validBaseTemplate,
+          maxCostCents: 0,
+        }).success,
+      ).toBe(true)
+      for (const maxCostCents of [-1, NaN, Infinity]) {
+        expect(
+          DynamicAgentDefinitionSchema.safeParse({
+            ...validBaseTemplate,
+            maxCostCents,
+          }).success,
+        ).toBe(false)
+      }
+    })
+
     it('should validate minimal valid template', () => {
       const result = DynamicAgentDefinitionSchema.safeParse(validBaseTemplate)
       expect(result.success).toBe(true)

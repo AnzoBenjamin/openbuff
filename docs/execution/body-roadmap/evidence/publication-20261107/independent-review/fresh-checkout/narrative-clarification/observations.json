@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "type": "historical-staging-narrative-clarification",
+  "recordedAt": "2026-11-06T23:11:43.476666+00:00",
+  "claimWithdrawn": "Git represented the fixture repository as a Gitlink and thereby caused the first omission.",
+  "supportedStatement": "The first materialization omitted 27 required fixture paths. The known fixture stage is empty; no preserved initial Gitlink entry substantiates the historical causal claim.",
+  "protectedEvidence": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/REVIEW.md",
+      "sha256": "4c322e37b6be3edfa655c5f1140003b0010db74c6aa4df8fc490222b3ee352a7",
+      "bytes": 4624
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/review-manifest.json",
+      "sha256": "92b3cbe5345881cddf9efbfbcc9199e48ff96fb0cd9cc2348227c07b2a4eb528",
+      "bytes": 3738
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/supplement-and-checkout-review.json",
+      "sha256": "0dff64e433f84396c5f49025fc6ad27b0ad8b7a6a773c6ebe608ccfbbe09b0e4",
+      "bytes": 23041
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/git-fixture-gap.json",
+      "sha256": "75f1292ba660dec30045250f03359a2adc6e0f421cb7127bfb78f1ede7041e1b",
+      "bytes": 86730
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/independent-review/fresh-checkout/reviewed-index.nul",
+      "sha256": "e8b34416c2c0a29d5867f6712f35677229ec020eff8a5994d1da28805b2fe880",
+      "bytes": 595787
+    }
+  ],
+  "initialFailureLog": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/selection/checkouts/76e411831b1e/ledger-validation.stdout.log",
+    "sha256": "ba28d1dac5947c2919a78fe34d8787c7787a3c5415090b2ee0b37f84a84d0494",
+    "bytes": 19252
+  },
+  "uniqueMissingFixturePaths": [
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/COMMIT_EDITMSG",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/HEAD",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/config",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/description",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/applypatch-msg.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/commit-msg.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/fsmonitor-watchman.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/post-update.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-applypatch.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-commit.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-merge-commit.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-push.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-rebase.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-receive.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/prepare-commit-msg.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/push-to-checkout.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/sendemail-validate.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/update.sample",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/index",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/info/exclude",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/HEAD",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/refs/heads/master",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/15/892e7e5ca82d5b42ef2fc9fb4e1d8494d0a9a7",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/d3/33293bd15fe67ef4372f2ac7ef218501acce7a",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/ee/8c1ee49b4799bbd170233915a897c19e3b55e1",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/refs/heads/master",
+    "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/README.md"
+  ],
+  "knownReviewedIndex": {
+    "entryCount": 4765,
+    "fixtureEntries": [],
+    "gitlinkEntries": []
+  },
+  "readOnlyCurrentFixtureIndexQuery": {
+    "argv": [
+      "git",
+      "ls-files",
+      "--stage",
+      "--",
+      "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo"
+    ],
+    "exitCode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "sourceStagingOrPriorEvidenceEdited": false,
+  "passingValidationRerun": false
+}

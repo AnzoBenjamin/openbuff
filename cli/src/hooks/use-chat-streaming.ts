@@ -58,9 +58,43 @@ export interface UseChatStreamingReturn {
 
   // Queue management
   queuedMessages: QueuedMessage[]
+  queueError: string | null
+  attachmentRemovalCount: number
+  queueAttachmentNotice: string | null
+  hasQueuedAttachmentReads: ReturnType<
+    typeof useMessageQueue
+  >['hasQueuedAttachmentReads']
+  getQueuedAttachmentRevision: ReturnType<
+    typeof useMessageQueue
+  >['getQueuedAttachmentRevision']
+  updateQueuedAttachment: ReturnType<
+    typeof useMessageQueue
+  >['updateQueuedAttachment']
+  cancelQueuedAttachmentRetry: ReturnType<
+    typeof useMessageQueue
+  >['cancelQueuedAttachmentRetry']
+  removeQueuedAttachment: ReturnType<
+    typeof useMessageQueue
+  >['removeQueuedAttachment']
+  undoQueuedAttachmentRemoval: ReturnType<
+    typeof useMessageQueue
+  >['undoQueuedAttachmentRemoval']
+  updateQueuedMessage: (
+    id: string,
+    update: Partial<Pick<QueuedMessage, 'content' | 'agentMode'>>,
+  ) => boolean
+  removeQueuedMessage: (id: string) => QueuedMessage | undefined
+  moveQueuedMessage: (id: string, direction: -1 | 1) => void
+  undoQueueRemoval: () => number
+  queueRemovalCount: number
+  cancelQueuedMessages: (ids?: readonly string[]) => QueuedMessage[]
   queuePaused: boolean
   streamMessageIdRef: MutableRefObject<string | null>
-  addToQueue: (message: string, attachments?: PendingAttachment[]) => void
+  addToQueue: (
+    message: string,
+    attachments: PendingAttachment[],
+    agentMode: AgentMode,
+  ) => void
   stopStreaming: () => void
   setCanProcessQueue: (value: boolean | ((prev: boolean) => boolean)) => void
   pauseQueue: () => void
@@ -144,6 +178,21 @@ export function useChatStreaming({
   // Message queue
   const {
     queuedMessages,
+    queueError,
+    attachmentRemovalCount,
+    queueAttachmentNotice,
+    hasQueuedAttachmentReads,
+    getQueuedAttachmentRevision,
+    updateQueuedAttachment,
+    cancelQueuedAttachmentRetry,
+    removeQueuedAttachment,
+    undoQueuedAttachmentRemoval,
+    queueRemovalCount,
+    cancelQueuedMessages,
+    updateQueuedMessage,
+    removeQueuedMessage,
+    moveQueuedMessage,
+    undoQueueRemoval,
     streamStatus,
     queuePaused,
     streamMessageIdRef,
@@ -177,7 +226,7 @@ export function useChatStreaming({
       }
       return send({
         content: message.content,
-        agentMode,
+        agentMode: message.agentMode,
         attachments: message.attachments,
       })
     },
@@ -195,6 +244,7 @@ export function useChatStreaming({
   } = useQueueUi({
     queuePaused,
     queuedMessages,
+    queueRemovalCount,
     separatorWidth,
     terminalWidth,
   })
@@ -209,7 +259,7 @@ export function useChatStreaming({
   const { handleCtrlC, ensureQueueActiveBeforeSubmit } = useQueueControls({
     queuePaused,
     queuedCount,
-    clearQueue,
+    clearQueue: cancelQueuedMessages,
     resumeQueue,
     inputHasText: Boolean(inputValue),
     baseHandleCtrlC,
@@ -236,6 +286,21 @@ export function useChatStreaming({
 
     // Queue management
     queuedMessages,
+    queueError,
+    attachmentRemovalCount,
+    queueAttachmentNotice,
+    hasQueuedAttachmentReads,
+    getQueuedAttachmentRevision,
+    updateQueuedAttachment,
+    cancelQueuedAttachmentRetry,
+    removeQueuedAttachment,
+    undoQueuedAttachmentRemoval,
+    queueRemovalCount,
+    cancelQueuedMessages,
+    updateQueuedMessage,
+    removeQueuedMessage,
+    moveQueuedMessage,
+    undoQueueRemoval,
     queuePaused,
     streamMessageIdRef,
     addToQueue,

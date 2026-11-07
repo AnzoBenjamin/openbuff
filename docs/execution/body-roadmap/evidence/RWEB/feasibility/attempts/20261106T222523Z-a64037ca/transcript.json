@@ -1,0 +1,169 @@
+[
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "initialize",
+      "id": 1,
+      "params": {
+        "protocolVersion": "2025-11-25",
+        "capabilities": {},
+        "clientInfo": {
+          "name": "openbuff-rweb-local-probe",
+          "version": "0"
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 1,
+      "jsonrpc": "2.0",
+      "result": {
+        "capabilities": {
+          "tools": {}
+        },
+        "instructions": "Use the typed agent_browser_* tools to control a browser. Active MCP tools profile(s): core. Prefer agent_browser_snapshot after navigation to obtain stable element refs before clicking or typing. Use agent_browser_tools_profiles to see available startup profiles.",
+        "protocolVersion": "2025-11-25",
+        "serverInfo": {
+          "name": "agent-browser",
+          "title": "agent-browser",
+          "version": "0.41.2"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "notifications/initialized"
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 2,
+      "params": {
+        "name": "agent_browser_read",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-a64037ca",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000,
+          "url": "http://127.0.0.1:44637/blocked",
+          "readTimeoutMs": 2000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 2,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "Session name 'openbuff-rweb-52f0c3b3c119-a-a64037ca' is too long. Socket path would be 144 bytes (max 103).\nUse a shorter session name or set AGENT_BROWSER_SOCKET_DIR to a shorter path.",
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "exitCode": 1,
+          "response": {
+            "error": "Session name 'openbuff-rweb-52f0c3b3c119-a-a64037ca' is too long. Socket path would be 144 bytes (max 103).\nUse a shorter session name or set AGENT_BROWSER_SOCKET_DIR to a shorter path.",
+            "success": false
+          },
+          "stderr": "",
+          "stdout": "{\"error\":\"Session name 'openbuff-rweb-52f0c3b3c119-a-a64037ca' is too long. Socket path would be 144 bytes (max 103).\\nUse a shorter session name or set AGENT_BROWSER_SOCKET_DIR to a shorter path.\",\"success\":false}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 3,
+      "params": {
+        "name": "agent_browser_close",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-a-a64037ca",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 3,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "Session name 'openbuff-rweb-52f0c3b3c119-a-a64037ca' is too long. Socket path would be 144 bytes (max 103).\nUse a shorter session name or set AGENT_BROWSER_SOCKET_DIR to a shorter path.",
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "exitCode": 1,
+          "response": {
+            "error": "Session name 'openbuff-rweb-52f0c3b3c119-a-a64037ca' is too long. Socket path would be 144 bytes (max 103).\nUse a shorter session name or set AGENT_BROWSER_SOCKET_DIR to a shorter path.",
+            "success": false
+          },
+          "stderr": "",
+          "stdout": "{\"error\":\"Session name 'openbuff-rweb-52f0c3b3c119-a-a64037ca' is too long. Socket path would be 144 bytes (max 103).\\nUse a shorter session name or set AGENT_BROWSER_SOCKET_DIR to a shorter path.\",\"success\":false}\n"
+        }
+      }
+    }
+  },
+  {
+    "direction": "request",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "tools/call",
+      "id": 4,
+      "params": {
+        "name": "agent_browser_close",
+        "arguments": {
+          "session": "openbuff-rweb-52f0c3b3c119-b-a64037ca",
+          "namespace": "openbuff-rweb-52f0c3b3c119",
+          "timeoutMs": 20000
+        }
+      }
+    }
+  },
+  {
+    "direction": "response",
+    "message": {
+      "id": 4,
+      "jsonrpc": "2.0",
+      "result": {
+        "content": [
+          {
+            "text": "Session name 'openbuff-rweb-52f0c3b3c119-b-a64037ca' is too long. Socket path would be 144 bytes (max 103).\nUse a shorter session name or set AGENT_BROWSER_SOCKET_DIR to a shorter path.",
+            "type": "text"
+          }
+        ],
+        "isError": true,
+        "structuredContent": {
+          "exitCode": 1,
+          "response": {
+            "error": "Session name 'openbuff-rweb-52f0c3b3c119-b-a64037ca' is too long. Socket path would be 144 bytes (max 103).\nUse a shorter session name or set AGENT_BROWSER_SOCKET_DIR to a shorter path.",
+            "success": false
+          },
+          "stderr": "",
+          "stdout": "{\"error\":\"Session name 'openbuff-rweb-52f0c3b3c119-b-a64037ca' is too long. Socket path would be 144 bytes (max 103).\\nUse a shorter session name or set AGENT_BROWSER_SOCKET_DIR to a shorter path.\",\"success\":false}\n"
+        }
+      }
+    }
+  }
+]

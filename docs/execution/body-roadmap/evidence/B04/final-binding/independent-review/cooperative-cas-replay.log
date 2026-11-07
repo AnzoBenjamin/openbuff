@@ -1,0 +1,13 @@
+{
+  "allPassed": true,
+  "runtimeRows": 9,
+  "brokerSingleWinner": true,
+  "distinctSerializedBrokerOwners": true,
+  "crashRefusalPreservesBytes": true,
+  "indexPresentAndAbsentSingleWinner": true,
+  "recomputedFullIndexByteHashes": 2,
+  "managerPublicationLoserRefused": true,
+  "snapshotAbsentAndPresentTipCASRefused": true,
+  "snapshotAttributionAndRealProcessRetry": true,
+  "scope": "Cooperative TypeScript fail-closed ownership plus full-document publication CAS and Git expected-tip CAS; no external-writer fencing, mixed-version or automatic crash-reclamation liveness claim."
+}

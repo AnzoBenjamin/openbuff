@@ -23,6 +23,8 @@ export async function listDirectory(params: {
   projectPath: string
   fs: CodebuffFileSystem
   fileFilter?: FileFilter
+  offset?: number
+  limit?: number
 }): Promise<CodebuffToolOutput<'list_directory'>> {
   const { directoryPath, projectPath, fs, fileFilter } = params
 
@@ -47,45 +49,46 @@ export async function listDirectory(params: {
       ]
     }
 
-    const entries = await readBoundedEntries(fs, resolved.operationPath)
-
-    if (entries.length > MAX_LIST_DIRECTORY_ENTRIES) {
+    const offset = params.offset ?? 0
+    const limit = params.limit ?? MAX_LIST_DIRECTORY_ENTRIES
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > MAX_LIST_DIRECTORY_ENTRIES
+    ) {
       return [
         {
           type: 'json',
           value: {
-            // Deliberate text change (no exact total). The "more than" bound
-            // is what the streaming path can prove: it stops at cap + 1 and
-            // never learns the true total. The `readdir` fallback does know
-            // the total, but the message stays uniform so consumers see one
-            // shape either way. See the SDK CHANGELOG [Unreleased] entry for
-            // what consumers matching on text must migrate to.
-            // `fileFilter` is host-supplied, not a tool input, so the guidance
-            // names something the model can actually do.
-            errorMessage: `Directory listing too large: more than ${MAX_LIST_DIRECTORY_ENTRIES} entries. List a specific subdirectory instead.`,
+            errorMessage:
+              'Invalid listing page: offset must be a nonnegative integer and limit must be between 1 and 5000.',
           },
         },
       ]
     }
+    const entries = await readBoundedEntries(fs, resolved.operationPath, {
+      offset,
+      limit,
+      filter: (entry) => {
+        if (!entry.isDirectory() && !entry.isFile()) return false
+        const relativeEntryPath = path.posix.join(
+          resolved.relativePath.replace(/\\/g, '/'),
+          entry.name,
+        )
+        return ![
+          relativeEntryPath,
+          ...getScopedReadPolicyAliases(resolved.scope, entry.name),
+        ].some((alias) => isReadPathBlocked(alias, fileFilter))
+      },
+    })
+    const hasMore = entries.length > limit
 
     const files: string[] = []
     const directories: string[] = []
 
-    for (const entry of entries) {
-      const relativeEntryPath = path.posix.join(
-        resolved.relativePath.replace(/\\/g, '/'),
-        entry.name,
-      )
-      // A non-'project' resolution has an ABSOLUTE relativePath (and therefore
-      // an absolute relativeEntryPath), so the scoped `<scope>/<basename>`
-      // aliases are added for the host fileFilter; without them a filter
-      // written against project-relative globs would silently fail open.
-      const policyAliases = [
-        relativeEntryPath,
-        ...getScopedReadPolicyAliases(resolved.scope, entry.name),
-      ]
-      if (policyAliases.some((alias) => isReadPathBlocked(alias, fileFilter)))
-        continue
+    for (const entry of entries.slice(0, limit)) {
       if (entry.isDirectory()) {
         directories.push(entry.name)
       } else if (entry.isFile()) {
@@ -100,6 +103,7 @@ export async function listDirectory(params: {
           files,
           directories,
           path: directoryPath,
+          ...(hasMore ? { truncated: true, nextOffset: offset + limit } : {}),
         },
       },
     ]

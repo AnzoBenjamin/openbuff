@@ -1,0 +1,45 @@
+-     "kind": "function",
+-     "name": "phpDemo",
+-   },
+- ]
++ null
+
+- Expected  - 6
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/code-map/src/__tests__/structure.test.ts:398:7)
+(fail) parseFileStructure > extracts structures for PHP, Swift, and Kotlin [3.00ms]
+424 |       'signal health_changed(amount: int)', // 14
+425 |     ].join('\n')
+426 | 
+427 |     const syms = (await parseFileStructure(src, 'Player.gd')) ?? []
+428 |     const byName = Object.fromEntries(syms.map((s) => [s.name, s]))
+429 |     expect(byName.PlayerController).toMatchObject({
+                                          ^
+error: expect(received).toMatchObject(expected)
+
+Matcher error: received value must be a non-null object
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/code-map/src/__tests__/structure.test.ts:429:37)
+(fail) parseFileStructure > extracts GDScript functions, classes, and variables (Godot 4.x)
+466 |       '        self.data += 1', // 14
+467 |     ].join('\n')
+468 | 
+469 |     const syms = (await parseFileStructure(src, 'Enums.gd')) ?? []
+470 |     const byName = Object.fromEntries(syms.map((s) => [s.name, s]))
+471 |     expect(byName.Direction).toMatchObject({
+                                   ^
+error: expect(received).toMatchObject(expected)
+
+Matcher error: received value must be a non-null object
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/code-map/src/__tests__/structure.test.ts:471:30)
+(fail) parseFileStructure > extracts GDScript enums and inner class definitions [1.00ms]
+(pass) parseFileStructure > returns empty array (not null) for empty GDScript file
+(pass) parseFileStructure > assigns sibling depths without nesting (interval-stack sweep) [1.00ms]
+(pass) parseFileStructure > assigns transitive depths through class > method > inner function [1.00ms]
+
+ 17 pass
+ 3 fail
+ 62 expect() calls
+Ran 20 tests across 1 file. [361.00ms]

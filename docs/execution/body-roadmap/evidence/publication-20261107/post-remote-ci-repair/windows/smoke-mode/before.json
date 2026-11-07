@@ -1,0 +1,16 @@
+{
+  "scriptBefore": {
+    "path": "rust/scripts/smoke-test-sidecar.sh",
+    "sha256": "3928fef2828a7ab4434431c7fee7ccf82afba0a2d43891e3867982b88cdcb96f"
+  },
+  "worktreeModeBefore": "0o600",
+  "indexBefore": "100644 bdb80de326311d2562b2d6d8e002609ec8c39a05 0\trust/scripts/smoke-test-sidecar.sh\n",
+  "bindingScopeBeforeMutation": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-review/smoke-mode-scope/scope.json",
+    "sha256": "8fdea3ce0346cbc04d27d63badf90880964cd93ce51d89aaba91655669393295"
+  },
+  "workflow": {
+    "path": ".github/workflows/rust-workspace.yml",
+    "sha256": "0b971a487ab44dd0df8e2080d7ab6ab8bfd4f248918655fa9f9803e2f76095f3"
+  }
+}

@@ -1,0 +1,1 @@
+{"commitSha":"fixed","results":[{"agentId":"fixture","taskId":"fixed","repeat":1,"languages":["typescript"],"providerRoute":"offline","experimentId":"fixed","workloadHash":"fixed","measurementConfigHash":"fixed","evaluatorVersion":"fixed","overallScore":8,"cost":1,"durationMs":1,"scoringStatus":"scored","costEvidence":{"status":"reported"}}]}

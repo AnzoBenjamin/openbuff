@@ -16,7 +16,7 @@ const inputSchema = z
       .union([z.string(), z.array(z.string())])
       .optional()
       .describe(
-        `Optional safe ripgrep flags as one string or argv tokens (e.g., "-i -g *.ts -A 2" or ["-i", "-g", "*.ts", "-A", "2"]). Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not, plus context -A/-B/-C (and long forms). JSON quotes delimit the string; do not embed another quote pair around the entire expression. Line numbers are automatic; -n/--line-number are ignored. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, -r/--replace, --exec, and -z/--null are rejected.`,
+        `Optional safe ripgrep flags as one string or argv tokens (e.g., "-i -g *.ts -A 2" or ["-i", "-g", "*.ts", "-A", "2"]). Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not, context -A/-B/-C (and long forms), and -l/--files-with-matches to list matching paths. JSON quotes delimit the string; do not embed another quote pair around the entire expression. Line numbers are automatic; -n/--line-number are ignored. Flags such as -c/--count, --count-matches, -v/--invert-match, -r/--replace, --exec, and -z/--null are rejected.`,
       ),
     cwd: z
       .string()
@@ -77,8 +77,9 @@ Advanced ripgrep flags (use the flags parameter):
 - Word boundaries: "-w" to match whole words only
 - Fixed strings: "-F" to treat pattern as literal string (not regex)
 - Multiline matching: "-U" and "--multiline-dotall"
+- Matching file paths only: "-l" or "--files-with-matches"
 
-Only the flags listed above are accepted (plus the safe base allowlist and context -A/-B/-C). Output-shape-changing or effectful ripgrep flags such as -c/--count, --count-matches, -l, -v/--invert-match, -r/--replace, --exec, and -z/--null are rejected.
+Only the flags listed above are accepted (plus the safe base allowlist and context -A/-B/-C). Other output-shape-changing or effectful ripgrep flags such as -c/--count, --count-matches, -v/--invert-match, -r/--replace, --exec, and -z/--null are rejected.
 Line numbers are enabled internally. Redundant -n/--line-number inputs are ignored for compatibility; omit them from new calls.
 
 cwd / paths runtime notes:

@@ -1,5 +1,10 @@
 import type { ChatTheme } from './theme-system'
 import type { ToolName } from '@openbuff/sdk'
+import type {
+  ActionOutcome,
+  RunOutcome,
+  TaskAcceptance,
+} from '@codebuff/common/types/run-outcome'
 import type { ReactNode } from 'react'
 import type { CompletionSummary } from '../utils/completion-summary'
 
@@ -20,12 +25,16 @@ export type TextContentBlock = {
   marginTop?: number
   marginBottom?: number
   status?: 'running' | 'complete'
-  textType?: 'reasoning' | 'text'
+  textType?: 'reasoning' | 'text' | 'status'
   isCollapsed?: boolean
   thinkingId?: string
   userOpened?: boolean
   /** True if this is a reasoning block from a <think> tag that hasn't been closed yet */
   thinkingOpen?: boolean
+  /** Epoch ms when this reasoning block first received content (duration header). */
+  thinkingStartedAt?: number
+  /** Epoch ms when this reasoning block completed (</think> or message completion). */
+  thinkingEndedAt?: number
   thinkingCollapseState?: ThinkingCollapseState
 }
 /** Renders dynamic React content. NOT serializable - don't use for persistent data. */
@@ -42,6 +51,7 @@ export type ToolContentBlock = {
   input: any
   output?: string
   outputRaw?: unknown
+  actionOutcome?: ActionOutcome
   agentId?: string
   includeToolCall?: boolean
   isCollapsed?: boolean
@@ -83,6 +93,8 @@ export type AgentContentBlock = {
   agentType: string
   content: string
   status: 'running' | 'complete' | 'partial' | 'failed' | 'cancelled'
+  runOutcome?: RunOutcome
+  taskAcceptance?: TaskAcceptance
   blocks?: ContentBlock[]
   initialPrompt?: string
   params?: Record<string, any>
@@ -148,13 +160,13 @@ export type GateStateStatus = 'pending' | 'passed' | 'failed' | 'skipped'
  * PUBLISHED BLOCK SCHEMA (canonical consumer contract, kept in step with the
  * producer `formatGateStateBlock` in agents/base2/base2.ts and the parser
  * `parseGateStateBlock` in cli/src/utils/message-block-helpers.ts): `gate` and
- * `status` are required; `details`, `origin`, `advisories`, and `workflow` are
- * optional and additive, so a block persisted before one of them existed
- * replays unchanged. Any new producer key MUST be added here, to the parser
- * docblock, and to the renderer, or downstream consumers parse a format this
- * contract does not describe. The prose summary in cli/knowledge.md is a
- * pointer to this contract, not a second source of truth; refresh it whenever
- * this enumeration changes.
+ * `status` are required; `details`, `origin`, `advisories`, `workflow`,
+ * `reviewers`, and `skipReason` are optional and additive, so a block persisted
+ * before one of them existed replays unchanged. Any new producer key MUST be
+ * added here, to the parser docblock, and to the renderer, or downstream
+ * consumers parse a format this contract does not describe. The prose summary
+ * in cli/knowledge.md is a pointer to this contract, not a second source of
+ * truth; refresh it whenever this enumeration changes.
  */
 export type GateStateContentBlock = {
   type: 'gate-state'
@@ -196,6 +208,43 @@ export type GateStateContentBlock = {
     totalCount: number
     nextWorkflowAction: string
   }
+  /**
+   * Reviewer-family agent types that produced this gate result (e.g.
+   * `['reliability-reviewer']`), so WHICH reviewer family ran is attributable
+   * from the block itself — the block is post-compaction-durable, so the
+   * attribution survives transcript pruning. Observability only: no gate
+   * phase or finalization decision reads it. Omitted when the producer
+   * reported none.
+   *
+   * Bounded by contract: base2's `formatGateStateBlock` emits at most 4
+   * entries of at most 64 characters each, and the CLI parser
+   * (`parseGateStateReviewers`) enforces the same bounds, dropping the whole
+   * list when arbitrary assistant text violates them — exactly like
+   * `advisories`. Optional, so blocks persisted before the key existed
+   * replay unchanged.
+   */
+  reviewers?: string[]
+  /**
+   * Machine skip/error token attached to skipped AND terminally-failed gate
+   * blocks (e.g. `specialist-rate-limited`), distinct from the human-facing
+   * `details`: a stable token consumers can branch on. Not coupled to
+   * `gateStatus`: base2 attaches the token to `failed` blocks as well as
+   * `skipped` ones (the specialist rate-limit, specialist-terminal-failure,
+   * and edits-detected-without-pending-gate-files paths all emit it on a
+   * `failed` block), so a consumer that guards on
+   * `gateStatus === 'skipped'` before reading it misses the operationally
+   * most important tokens — including `specialist-rate-limited`, which the
+   * producer only ever attaches to a `failed` block. Omitted when the
+   * producer recorded none.
+   *
+   * Bounded by contract: base2's `formatGateStateBlock` caps it at 120
+   * characters (whitespace collapsed, control bytes stripped), and the CLI
+   * parser (`parseGateStateSkipReason`) sanitizes and re-checks the same
+   * bound, dropping the field whole on violation — exactly like the
+   * `workflow` action bound. Optional, so blocks persisted before the key
+   * existed replay unchanged.
+   */
+  skipReason?: string
 }
 
 export type CompletionSummaryContentBlock = {
@@ -510,6 +559,12 @@ export type DoctorContentBlock = {
   mcpCount: number
   diagnostics: Array<{ filePath?: string; agentId?: string; message: string }>
   providerStatus: string
+  /**
+   * Capability-tier rows for the doctor box's capability section (X-4), built
+   * from the CLI's honest default capability map. Optional so doctor blocks
+   * produced before the section existed keep rendering exactly as before.
+   */
+  capabilities?: import('../utils/capability-tiers').DoctorCapabilityRow[]
 }
 
 export type UpdateContentBlock = {
@@ -558,6 +613,7 @@ export type MemoryContentBlock =
       type: 'memory'
       state: 'empty'
       v2Lines?: string[]
+      memoryV2Status?: 'healthy' | 'degraded' | 'unavailable' | 'unknown'
     }
   | {
       type: 'memory'
@@ -588,6 +644,7 @@ export type MemoryContentBlock =
       stalePaths: string[]
       totalStaleCount: number
       v2Lines?: string[]
+      memoryV2Status?: 'healthy' | 'degraded' | 'unavailable' | 'unknown'
     }
   | {
       type: 'memory'
@@ -676,6 +733,9 @@ export type ChatMessage = {
   cacheHitRate?: number
   completionTime?: string
   isComplete?: boolean
+  runOutcome?: RunOutcome
+  taskAcceptance?: TaskAcceptance
+  actionOutcomes?: ActionOutcome[]
   metadata?: ChatMessageMetadata
   validationErrors?: Array<{ id: string; message: string }>
   /**
@@ -772,7 +832,9 @@ export function isDoctorBlock(
   return block.type === 'doctor'
 }
 
-export function isUpdateBlock(block: ContentBlock): block is UpdateContentBlock {
+export function isUpdateBlock(
+  block: ContentBlock,
+): block is UpdateContentBlock {
   return block.type === 'update'
 }
 

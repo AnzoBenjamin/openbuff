@@ -1,0 +1,2 @@
+npm:install
+rm:-rf fixture

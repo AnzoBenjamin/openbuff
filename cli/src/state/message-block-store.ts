@@ -61,9 +61,12 @@ export interface MessageBlockCallbacks {
 interface MessageBlockStoreState {
   context: MessageBlockContext
   callbacks: MessageBlockCallbacks
+  views: Record<string, Record<string, boolean>>
 }
 
 interface MessageBlockStoreActions {
+  setView: (messageId: string, scope: string, value: boolean) => void
+  pruneViews: (messageIds: readonly string[]) => void
   /**
    * Batch update context values. Pass only the values you want to update.
    *
@@ -110,11 +113,25 @@ const initialCallbacks: MessageBlockCallbacks = {
 const initialState: MessageBlockStoreState = {
   context: initialContext,
   callbacks: initialCallbacks,
+  views: {},
 }
 
 export const useMessageBlockStore = create<MessageBlockStore>()(
   immer((set) => ({
     ...initialState,
+
+    setView: (messageId, scope, value) =>
+      set((state) => {
+        state.views[messageId] ??= {}
+        state.views[messageId][scope] = value
+      }),
+
+    pruneViews: (messageIds) =>
+      set((state) => {
+        const retained = new Set(messageIds)
+        for (const id of Object.keys(state.views))
+          if (!retained.has(id)) delete state.views[id]
+      }),
 
     setContext: (updates) =>
       set((state) => {
@@ -130,6 +147,7 @@ export const useMessageBlockStore = create<MessageBlockStore>()(
       set((state) => {
         state.context = { ...initialContext }
         state.callbacks = { ...initialCallbacks }
+        state.views = {}
       }),
   })),
 )

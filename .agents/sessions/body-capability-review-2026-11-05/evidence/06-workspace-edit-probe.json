@@ -1,0 +1,121 @@
+{
+  "fixtureRoot": "/tmp/openbuff-body-review-2026-11-05/evidence/06-truth-fixture-irkzuf",
+  "adapterCalls": [
+    {
+      "content": "intended agent change\n",
+      "expectedHash": "sha256:25718360e05d3c2d0963d1381e9dd4dae5fca789244ee4b9f861adcc0cc96218",
+      "adapterApplied": false
+    },
+    {
+      "content": "original\n",
+      "expectedHash": "sha256:c86d178d9a1651e166a27513491e701cbdf7bedd8122a254639150cdaf94913c",
+      "adapterApplied": false
+    }
+  ],
+  "mutation": {
+    "kind": "file_mutation_result",
+    "version": 1,
+    "operationId": "e23e7dd4-d54e-44cf-bab4-913b4bfd436f",
+    "outcome": "rollback_incomplete",
+    "actions": [
+      {
+        "actionId": "9333b48c-8078-4d77-bb7a-f552544a222b",
+        "index": 0,
+        "action": "update",
+        "path": "a.ts",
+        "outcome": "applied",
+        "beforeHash": "sha256:25718360e05d3c2d0963d1381e9dd4dae5fca789244ee4b9f861adcc0cc96218",
+        "afterHash": "sha256:3148801934784019b20fd01d5ce8cfe40be4e616590d98dd930532593a930c90",
+        "error": {
+          "code": "rollback_incomplete",
+          "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+          "retryable": false,
+          "recovery": "inspect_rollback"
+        },
+        "rollback": {
+          "attempted": true,
+          "succeeded": false,
+          "error": {
+            "code": "rollback_incomplete",
+            "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+            "retryable": false,
+            "recovery": "inspect_rollback"
+          }
+        }
+      }
+    ],
+    "authorityTier": "conditional_commit",
+    "receiptId": "681a7a1f-a35e-40c8-90d0-e21c8f41c93d",
+    "authorityReceipt": {
+      "kind": "commit_receipt",
+      "version": 1,
+      "receiptId": "681a7a1f-a35e-40c8-90d0-e21c8f41c93d",
+      "operationId": "e23e7dd4-d54e-44cf-bab4-913b4bfd436f",
+      "callId": "e23e7dd4-d54e-44cf-bab4-913b4bfd436f",
+      "authorityTier": "conditional_commit",
+      "status": "rollback_incomplete",
+      "actions": [
+        {
+          "actionId": "9333b48c-8078-4d77-bb7a-f552544a222b",
+          "index": 0,
+          "action": "update",
+          "path": "a.ts",
+          "status": "rollback_failed",
+          "beforeHash": "sha256:25718360e05d3c2d0963d1381e9dd4dae5fca789244ee4b9f861adcc0cc96218",
+          "afterHash": "sha256:3148801934784019b20fd01d5ce8cfe40be4e616590d98dd930532593a930c90",
+          "error": {
+            "code": "rollback_incomplete",
+            "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+            "retryable": false,
+            "recovery": "inspect_rollback"
+          }
+        }
+      ],
+      "finalHashes": {
+        "a.ts": "sha256:3148801934784019b20fd01d5ce8cfe40be4e616590d98dd930532593a930c90"
+      }
+    },
+    "errors": [
+      {
+        "code": "rollback_incomplete",
+        "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+        "retryable": false,
+        "recovery": "inspect_rollback"
+      },
+      {
+        "code": "io_error",
+        "message": "STALE_STATE: a.ts changed immediately before commit.",
+        "retryable": false
+      }
+    ],
+    "freshCapabilities": []
+  },
+  "confirmedActions": [
+    {
+      "actionId": "9333b48c-8078-4d77-bb7a-f552544a222b",
+      "index": 0,
+      "action": "update",
+      "path": "a.ts",
+      "outcome": "applied",
+      "beforeHash": "sha256:25718360e05d3c2d0963d1381e9dd4dae5fca789244ee4b9f861adcc0cc96218",
+      "afterHash": "sha256:3148801934784019b20fd01d5ce8cfe40be4e616590d98dd930532593a930c90",
+      "error": {
+        "code": "rollback_incomplete",
+        "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+        "retryable": false,
+        "recovery": "inspect_rollback"
+      },
+      "rollback": {
+        "attempted": true,
+        "succeeded": false,
+        "error": {
+          "code": "rollback_incomplete",
+          "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+          "retryable": false,
+          "recovery": "inspect_rollback"
+        }
+      }
+    }
+  ],
+  "final": "fixture external writer\n"
+}

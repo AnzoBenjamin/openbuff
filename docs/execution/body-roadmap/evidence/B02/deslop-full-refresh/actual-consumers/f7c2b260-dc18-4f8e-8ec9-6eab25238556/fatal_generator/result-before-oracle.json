@@ -1,0 +1,21 @@
+{
+  "output": {
+    "type": "error",
+    "message": "Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator"
+  },
+  "runOutcome": {
+    "termination": "failed",
+    "cause": {
+      "code": "programmatic_execution_error",
+      "message": "Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator"
+    }
+  },
+  "taskAcceptance": {
+    "status": "unknown"
+  },
+  "actionOutcomes": [],
+  "agentId": "main-agent",
+  "runId": "local-run-3e778b49-1cd2-4e87-9633-11a64deb6e9f",
+  "awaitedCalls": 0,
+  "aborted": false
+}

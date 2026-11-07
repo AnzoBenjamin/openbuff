@@ -1,13 +1,14 @@
 import React from 'react'
+import { TextAttributes } from '@opentui/core'
 
 import { SimpleToolCallItem } from './tool-call-item'
 import { defineToolComponent } from './types'
+import { splitPatternSegments, statusGlyph } from './discovery-results'
 import { useTheme } from '../../hooks/use-theme'
 import { wrapTextPreservingNewlines } from '../../utils/text-layout'
 import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
 
 import type { ToolRenderConfig, ToolRenderOptions } from './types'
-import { statusGlyph } from './discovery-results'
 
 type QueryIndexResult = {
   path?: unknown
@@ -63,6 +64,17 @@ const DETAIL_INDENT = 3
 /** Width reserved for the leading numeric prefix (e.g. "1. "). */
 const NUMBER_PREFIX_WIDTH = 3
 
+/**
+ * UI component for `query_index`.
+ *
+ * Layout follows the discovery cards (`code_search` / `glob`): one bold
+ * `Index <summary> <glyph>` header, then the ranked results as the primary
+ * body — numbered path in the directory color with indented dim detail rows
+ * for why it matched — and only then a compact dim footer carrying the index
+ * telemetry (corpus size, snapshot, coverage, diagnostics). Raw score floats
+ * and content hashes are agent-facing telemetry and are never rendered; the
+ * rank order already communicates relevance.
+ */
 export const QueryIndexComponent = defineToolComponent({
   toolName: 'query_index',
 
@@ -125,98 +137,10 @@ export const QueryIndexComponent = defineToolComponent({
             name="Index"
             description={
               <>
-                {description}
-                {' '}
-                <span fg={contentColor}>{contentGlyph}</span>
+                {description} <span fg={contentColor}>{contentGlyph}</span>
               </>
             }
-            descriptionColor={theme.primary}
           />
-          <box
-            style={{
-              flexDirection: 'column',
-              gap: 0,
-              paddingLeft: INDENT_LEFT,
-              width: '100%',
-            }}
-          >
-            {status !== 'ready' ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={error ? theme.error : theme.muted}>
-                  {`State: ${status}`}
-                </span>
-              </text>
-            ) : null}
-            {totalIndexed !== null ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.muted}>
-                  {`Corpus: ${totalIndexed} indexed file${totalIndexed === 1 ? '' : 's'}${indexAge === null ? '' : ` · age ${formatAge(indexAge)}`}`}
-                </span>
-              </text>
-            ) : null}
-            {error || message ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={error ? theme.error : theme.muted}>
-                  {wrapTextPreservingNewlines(error ?? message, detailColWidth)}
-                </span>
-              </text>
-            ) : null}
-            {structuredStatus?.semantic ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span
-                  fg={theme.muted}
-                >{`Vector embeddings: ${structuredStatus.semantic}`}</span>
-              </text>
-            ) : null}
-            {snapshot ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.muted}>
-                  {`Snapshot: ${snapshot.snapshotId.slice(0, 16)}${snapshot.workspaceRevision === undefined ? '' : ` · workspace r${snapshot.workspaceRevision}`}`}
-                </span>
-              </text>
-            ) : null}
-            {structuredStatus?.lastBuildError ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.error}>
-                  {wrapTextPreservingNewlines(
-                    `Build error (${structuredStatus.lastBuildError.stage ?? 'unknown'}): ${structuredStatus.lastBuildError.message ?? 'unknown error'}${structuredStatus.lastBuildError.retryable ? ' · retryable' : ''}`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ) : null}
-            {coverage?.truncated ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.warning}>
-                  {wrapTextPreservingNewlines(
-                    `Partial coverage at ${coverage.maxFiles ?? 'configured limit'} files; skipped ${coverage.skippedFiles ?? 'unknown'} under ${(coverage.skippedPrefixes ?? []).join(', ') || 'unknown prefixes'}.`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ) : null}
-            {coverage?.parser?.truncated ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.warning}>
-                  {wrapTextPreservingNewlines(
-                    `Parser coverage: ${coverage.parser.parsedFiles ?? 'unknown'}/${coverage.parser.requestedFiles ?? 'unknown'} parsed; skipped ${coverage.parser.skippedFiles ?? 'unknown'}${coverage.parser.skippedLanguages?.length ? ` across ${coverage.parser.skippedLanguages.join(', ')}` : ''}.`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ) : null}
-            {diagnostics.slice(0, 5).map((diagnostic, index) => (
-              <text key={`diagnostic-${index}`} style={{ wrapMode: 'word' }}>
-                <span fg={theme.warning}>
-                  {wrapTextPreservingNewlines(
-                    `Diagnostic: ${diagnostic.filePath ?? 'unknown file'} (${diagnostic.stage ?? 'parse'}): ${diagnostic.message ?? 'unknown parser error'}`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ))}
-
-          </box>
           {results.length > 0 ? (
             <box
               style={{
@@ -227,15 +151,12 @@ export const QueryIndexComponent = defineToolComponent({
               }}
             >
               {results.map((result, index) => {
+                // Human-facing detail: WHY this ranked (what it matched on).
+                // Raw score floats and content hashes are agent-facing
+                // telemetry — the rank order already communicates score.
                 const details = [
-                  typeof result.score === 'number'
-                    ? `score ${roundScore(result.score)}`
-                    : '',
                   formatMatchedOn(result)
                     ? `matched: ${formatMatchedOn(result)}`
-                    : '',
-                  typeof result.indexedHash === 'string'
-                    ? `hash ${result.indexedHash.slice(0, 12)}`
                     : '',
                 ].filter(Boolean)
                 const snippet = formatSnippets(result)
@@ -252,9 +173,18 @@ export const QueryIndexComponent = defineToolComponent({
                         detailColWidth,
                       )
                     : ''
-                const snippetDisplay = snippet
-                  ? wrapTextPreservingNewlines(snippet, detailColWidth)
-                  : ''
+                const queryTerms = String(query)
+                  .split(/\s+/)
+                  .filter((word) => word.length > 1)
+                  .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                const emphasisPattern =
+                  queryTerms.length > 0 ? queryTerms.join('|') : ''
+                const snippetSegments = emphasisPattern
+                  ? splitPatternSegments(
+                      wrapTextPreservingNewlines(snippet ?? '', detailColWidth),
+                      emphasisPattern,
+                    )
+                  : []
                 const relatedDisplay = related
                   ? wrapTextPreservingNewlines(related, detailColWidth)
                   : ''
@@ -276,18 +206,37 @@ export const QueryIndexComponent = defineToolComponent({
                       <span fg={theme.muted}>{`${index + 1}. `}</span>
                       <span fg={theme.directory}>{pathDisplay}</span>
                     </text>
+                    {snippet ? (
+                      <text
+                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
+                      >
+                        {snippetSegments.length > 0
+                          ? snippetSegments.map((segment, segIndex) =>
+                              segment.match ? (
+                                <span
+                                  key={segIndex}
+                                  fg={theme.primary}
+                                  attributes={TextAttributes.BOLD}
+                                >
+                                  {segment.text}
+                                </span>
+                              ) : (
+                                <span key={segIndex} fg={theme.foreground}>
+                                  {segment.text}
+                                </span>
+                              ),
+                            )
+                          : null}
+                        {snippetSegments.length === 0
+                          ? wrapTextPreservingNewlines(snippet, detailColWidth)
+                          : null}
+                      </text>
+                    ) : null}
                     {detailsDisplay ? (
                       <text
                         style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
                       >
                         <span fg={theme.muted}>{detailsDisplay}</span>
-                      </text>
-                    ) : null}
-                    {snippetDisplay ? (
-                      <text
-                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
-                      >
-                        <span fg={theme.muted}>{snippetDisplay}</span>
                       </text>
                     ) : null}
                     {relatedDisplay ? (
@@ -309,6 +258,91 @@ export const QueryIndexComponent = defineToolComponent({
               })}
             </box>
           ) : null}
+          {/* Footer: index telemetry, demoted below the results so the ranked
+              paths stay the visual focus. */}
+          {status !== 'ready' ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={error ? theme.error : theme.muted}>
+                {`State: ${status}`}
+              </span>
+            </text>
+          ) : null}
+          {totalIndexed !== null ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.muted}>
+                {`${totalIndexed} indexed file${totalIndexed === 1 ? '' : 's'}${indexAge === null ? '' : ` · age ${formatAge(indexAge)}`}`}
+              </span>
+            </text>
+          ) : null}
+          {error || message ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={error ? theme.error : theme.muted}>
+                {wrapTextPreservingNewlines(error ?? message, detailColWidth)}
+              </span>
+            </text>
+          ) : null}
+          {structuredStatus?.semantic ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.muted}>
+                {`Vector embeddings: ${structuredStatus.semantic}`}
+              </span>
+            </text>
+          ) : null}
+          {snapshot ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.muted}>
+                {`Snapshot: ${snapshot.snapshotId.slice(0, 16)}${snapshot.workspaceRevision === undefined ? '' : ` · workspace r${snapshot.workspaceRevision}`}`}
+              </span>
+            </text>
+          ) : null}
+          {structuredStatus?.lastBuildError ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.error}>
+                {wrapTextPreservingNewlines(
+                  `Build error (${structuredStatus.lastBuildError.stage ?? 'unknown'}): ${structuredStatus.lastBuildError.message ?? 'unknown error'}${structuredStatus.lastBuildError.retryable ? ' · retryable' : ''}`,
+                  detailColWidth,
+                )}
+              </span>
+            </text>
+          ) : null}
+          {coverage?.truncated ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.warning}>
+                {wrapTextPreservingNewlines(
+                  `Partial coverage at ${coverage.maxFiles ?? 'configured limit'} files; skipped ${coverage.skippedFiles ?? 'unknown'} under ${(coverage.skippedPrefixes ?? []).join(', ') || 'unknown prefixes'}.`,
+                  detailColWidth,
+                )}
+              </span>
+            </text>
+          ) : null}
+          {coverage?.parser?.truncated ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.warning}>
+                {wrapTextPreservingNewlines(
+                  `Parser coverage: ${coverage.parser.parsedFiles ?? 'unknown'}/${coverage.parser.requestedFiles ?? 'unknown'} parsed; skipped ${coverage.parser.skippedFiles ?? 'unknown'}${coverage.parser.skippedLanguages?.length ? ` across ${coverage.parser.skippedLanguages.join(', ')}` : ''}.`,
+                  detailColWidth,
+                )}
+              </span>
+            </text>
+          ) : null}
+          {diagnostics.slice(0, 5).map((diagnostic, index) => (
+            <text
+              key={`diagnostic-${index}`}
+              style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}
+            >
+              <span fg={theme.warning}>
+                {wrapTextPreservingNewlines(
+                  `Diagnostic: ${diagnostic.filePath ?? 'unknown file'} (${diagnostic.stage ?? 'parse'}): ${diagnostic.message ?? 'unknown parser error'}`,
+                  detailColWidth,
+                )}
+              </span>
+            </text>
+          ))}
+          {diagnostics.length > 5 ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              {`Showing 5 of ${diagnostics.length} captured diagnostics · Inspect for all`}
+            </text>
+          ) : null}
         </box>
       )
     }
@@ -320,7 +354,7 @@ export const QueryIndexComponent = defineToolComponent({
         from,
         to,
         results,
-      })} ${glyph}`,
+      })} ${glyph}${status === 'ready' ? '' : ` · ${status}`}`,
       content: <QueryIndexContent />,
     }
   },
@@ -372,13 +406,15 @@ function getIndexStatus(input: {
   resultCount: number
 }): string {
   if (input.error) return 'failed'
-  if (input.lifecycle === 'queued') return 'queued'
-  if (input.lifecycle === 'running' || !input.output) return 'building'
   if (input.lifecycle === 'cancelled') return 'cancelled'
+  if (input.lifecycle === 'failed') return 'failed'
+  if (input.lifecycle === 'queued') return 'queued'
+  if (input.lifecycle === 'running') return 'building'
+  if (!input.output) return 'unavailable'
 
   const structured = extractStructuredStatus(input.output.status)
   if (structured) {
-    return `${structured.state}${structured.refreshing ? ' · refreshing' : ''}`
+    return `${structured.state}${structured.stale ? ' · stale evidence' : ''}${structured.coverage?.truncated || structured.coverage?.parser?.truncated ? ' · partial coverage' : ''}${structured.refreshing ? ' · refreshing' : ''}`
   }
 
   const message =
@@ -530,7 +566,9 @@ function formatSnippets(result: QueryIndexResult): string {
   const first = result.matchedSnippets.find((item) => typeof item === 'string')
   if (typeof first !== 'string') return ''
   const snippet = truncate(first, 80)
-  return /^snippet\s*:/i.test(snippet) ? snippet : `snippet: ${snippet}`
+  const shown = /^snippet\s*:/i.test(snippet) ? snippet : `snippet: ${snippet}`
+  const count = result.matchedSnippets.filter(item => typeof item === 'string').length
+  return `${shown}${count > 1 ? ` · 1 of ${count} captured snippets; Inspect for all` : ''}`
 }
 
 function formatRelated(result: QueryIndexResult): string {
@@ -540,11 +578,8 @@ function formatRelated(result: QueryIndexResult): string {
   const first = result.relatedFiles.find(isRecord)
   if (!first || typeof first.path !== 'string') return ''
   const reason = typeof first.reason === 'string' ? `: ${first.reason}` : ''
-  return truncate(`related to ${first.path}${reason}`, 120)
-}
-
-function roundScore(score: number): string {
-  return (Math.round(score * 100) / 100).toString()
+  const count = result.relatedFiles.filter(item => isRecord(item) && typeof item.path === 'string').length
+  return `${truncate(`related to ${first.path}${reason}`, 120)}${count > 1 ? ` · 1 of ${count} captured related files; Inspect for all` : ''}`
 }
 
 function truncate(text: string, maxLength: number): string {

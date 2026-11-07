@@ -582,7 +582,7 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     ])
   })
 
-  it('bounds reviewer evidence before returning it to the parent history', () => {
+  it('preserves reviewer evidence that fits the parent output budget', () => {
     const longEvidence = `prefix-${'x'.repeat(600)}-suffix`
     const normalized = normalizeSpawnedAgentOutput({
       type: 'structuredOutput',
@@ -608,17 +608,15 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     }) as any
 
     const findingEvidence = normalized.value.findings[0].evidence
-    expect(findingEvidence).toHaveLength(3)
-    expect(findingEvidence[0]).toContain('[truncated]')
-    expect(findingEvidence[0]).toContain('prefix-')
-    expect(findingEvidence[0]).toContain('-suffix')
+    expect(findingEvidence).toEqual([longEvidence, 'second', 'third', 'fourth'])
     expect(normalized.value.requirementCoverage[0].evidence).toEqual([
       'one',
       'two',
+      'three',
     ])
   })
 
-  it('bounds ordinary child output before returning it to the parent', () => {
+  it('preserves ordinary child output that fits the parent budget', () => {
     const longAnswer = 'x'.repeat(120_000)
     const normalized = normalizeSpawnedAgentOutput(
       {
@@ -634,14 +632,11 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     )
 
     const serialized = JSON.stringify(normalized)
-    // `text` is an answer-bearing channel, so it keeps the high-fidelity cap
-    // (32k) rather than the 4k default — still bounded far below the input.
-    expect(serialized.length).toBeLessThan(40_000)
-    expect(serialized.length).toBeLessThan(longAnswer.length / 2)
-    expect(serialized).toContain('truncated')
+    expect(serialized).toContain(longAnswer)
+    expect(serialized).not.toContain('[truncated]')
   })
 
-  it('keeps the default cap for incidental fields while answer fields survive', () => {
+  it('preserves both ordinary and answer fields within the parent budget', () => {
     const normalized = normalizeSpawnedAgentOutput(
       {
         type: 'structuredOutput',
@@ -653,10 +648,7 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
       'general-agent',
     ) as { value: { note: string; summary: string } }
 
-    // `note` is incidental metadata: still clipped at the 4k default.
-    expect(normalized.value.note.length).toBeLessThan(5_000)
-    expect(normalized.value.note).toContain('[truncated]')
-    // A same-length answer-bearing field survives intact.
+    expect(normalized.value.note).toHaveLength(20_000)
     expect(normalized.value.summary).toHaveLength(20_000)
   })
 
@@ -698,7 +690,9 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     expect(serialized).toContain('.agents/sessions/a/findings/services.md')
   })
 
-  it('marks a general agent partial when it omits explicit completion', () => {
+  // Relaxed completion contract: a general agent that produced a usable final
+  // answer completes without an explicit task_completed call.
+  it('credits a general agent final answer without explicit task_completed', () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'general-agent',
       agentId: 'general-1',
@@ -710,15 +704,17 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
       },
     })
 
-    expect(receipt.status).toBe('partial')
-    expect(receipt.errors[0]?.message).toContain('task_completed')
+    expect(receipt.status).toBe('completed')
+    expect(
+      receipt.errors.some((error) => error.message.includes('task_completed')),
+    ).toBe(false)
   })
 
   // Early-exit contract: a realistic spawn finish shape often has the final
   // answer only on agentState.messageHistory (not also re-wrapped in output).
-  // Missing task_completed still forces status partial + retryable error so
-  // parents can re-spawn rather than treating prose as completed work.
-  it('marks general agent partial for messageHistory final answer without task_completed (early-exit contract)', () => {
+  // The relaxed contract credits that recoverable answer even without
+  // task_completed.
+  it('credits a messageHistory final answer without task_completed (relaxed contract)', () => {
     const receipt = buildRuntimeAgentReceipt({
       agentType: 'general-agent',
       agentId: 'general-message-history-only',
@@ -741,9 +737,10 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
       } as any,
     })
 
-    expect(receipt.status).toBe('partial')
-    expect(receipt.errors[0]?.message).toContain('task_completed')
-    expect(receipt.errors[0]?.retryable).toBe(true)
+    expect(receipt.status).toBe('completed')
+    expect(
+      receipt.errors.some((error) => error.message.includes('task_completed')),
+    ).toBe(false)
   })
 
   // Completion credit for a harvested-fallback general agent must come from

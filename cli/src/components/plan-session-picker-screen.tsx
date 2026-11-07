@@ -1,9 +1,14 @@
 import { TextAttributes } from '@opentui/core'
-import React, { useCallback, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+
+import stringWidth from 'string-width'
+import { sliceTextCells } from '../utils/text-boundaries'
+import { OutputReaderScreen } from './output-reader-screen'
+import { createTextDocument } from '../utils/output-document'
 
 import { MultilineInput } from './multiline-input'
 import { SelectableList } from './selectable-list'
-import { listPlanSessions } from '../commands/plan-artifacts'
+import { listPlanSessionsAsync } from '../commands/plan-artifacts'
 import { useSearchableList } from '../hooks/use-searchable-list'
 import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
@@ -27,10 +32,7 @@ export function getNextPlanSessionFocusIndex(
   currentIndex: number,
   filteredItemCount: number,
 ): number {
-  const maxIndex = Math.max(
-    0,
-    Math.min(filteredItemCount, LAYOUT.MAX_RENDERED_SESSIONS) - 1,
-  )
+  const maxIndex = Math.max(0, filteredItemCount - 1)
   return Math.min(maxIndex, currentIndex + 1)
 }
 
@@ -38,29 +40,57 @@ interface PlanSessionPickerScreenProps {
   command: string
   onSelectSession: (sessionDir: string) => void
   onCancel: () => void
+  loadSessions?: typeof listPlanSessionsAsync
 }
 
 export const PlanSessionPickerScreen: React.FC<
   PlanSessionPickerScreenProps
-> = ({ command, onSelectSession, onCancel }) => {
+> = ({
+  command,
+  onSelectSession,
+  onCancel,
+  loadSessions = listPlanSessionsAsync,
+}) => {
   const theme = useTheme()
   const { terminalWidth, terminalHeight } = useTerminalLayout()
-  const contentWidth = terminalWidth - LAYOUT.CONTENT_PADDING
+  const contentWidth = Math.max(1, terminalWidth - LAYOUT.CONTENT_PADDING)
   const isCompactMode = terminalHeight < LAYOUT.COMPACT_MODE_THRESHOLD
   const isNarrowWidth = terminalWidth < LAYOUT.NARROW_WIDTH_THRESHOLD
 
-  const sessions = useMemo(() => listPlanSessions(), [])
-
-  const truncateText = (text: string, maxLen: number): string => {
-    if (text.length <= maxLen) return text
-    return text.slice(0, Math.max(0, maxLen - 1)) + '…'
-  }
-
-  const padRight = (text: string, width: number): string => {
-    const len = Array.from(text).length
-    if (len >= width) return text
-    return text + ' '.repeat(width - len)
-  }
+  const [sessions, setSessions] = useState<
+    Awaited<ReturnType<typeof listPlanSessionsAsync>>
+  >([])
+  const [loadState, setLoadState] = useState<'loading' | 'loaded' | 'failed'>(
+    'loading',
+  )
+  const [loadError, setLoadError] = useState('')
+  const [loadRevision, setLoadRevision] = useState(0)
+  const [inspectedId, setInspectedId] = useState<string | null>(null)
+  useEffect(() => {
+    const controller = new AbortController()
+    setLoadState('loading')
+    setLoadError('')
+    void loadSessions({ signal: controller.signal })
+      .then((rows) => {
+        if (!controller.signal.aborted) {
+          setSessions(rows)
+          setLoadState('loaded')
+        }
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setLoadState('failed')
+          setLoadError(error instanceof Error ? error.message : String(error))
+        }
+      })
+    return () => controller.abort()
+  }, [loadRevision, loadSessions])
+  const truncateText = (text: string, width: number) =>
+    stringWidth(text) <= width
+      ? text
+      : sliceTextCells(text, 0, Math.max(0, width - 1)) + '…'
+  const padRight = (text: string, width: number) =>
+    text + ' '.repeat(Math.max(0, width - stringWidth(text)))
 
   const sessionItems: SelectableListItem[] = useMemo(() => {
     const reservedWidth =
@@ -68,7 +98,7 @@ export const PlanSessionPickerScreen: React.FC<
       LAYOUT.ARTIFACTS_COL_WIDTH +
       LAYOUT.GAP_WIDTH * 2 +
       5
-    const maxPathWidth = Math.max(20, contentWidth - reservedWidth)
+    const maxPathWidth = Math.max(1, contentWidth - reservedWidth)
 
     return sessions.map((session) => {
       const slug = padRight(
@@ -86,12 +116,18 @@ export const PlanSessionPickerScreen: React.FC<
 
       return {
         id: session.sessionDir,
-        label: `${slug}${' '.repeat(LAYOUT.GAP_WIDTH)}${artifacts}${' '.repeat(LAYOUT.GAP_WIDTH)}${path}`,
+        label:
+          terminalWidth < 120
+            ? truncateText(
+                `${session.slug} · ${session.status}`,
+                Math.max(1, contentWidth - 5),
+              )
+            : `${slug}${' '.repeat(LAYOUT.GAP_WIDTH)}${artifacts}${' '.repeat(LAYOUT.GAP_WIDTH)}${path}`,
         secondary: `${session.slug} ${session.sessionDir} ${session.artifacts.join(' ')}`,
         hideSecondary: true,
       }
     })
-  }, [contentWidth, sessions])
+  }, [contentWidth, sessions, terminalWidth])
 
   const filterSessions = useCallback(
     (item: SelectableListItem, query: string) => {
@@ -131,6 +167,15 @@ export const PlanSessionPickerScreen: React.FC<
       meta?: boolean
       option?: boolean
     }) => {
+      if (key.ctrl && key.name === 'r') {
+        setLoadRevision((revision) => revision + 1)
+        return true
+      }
+      if (key.ctrl && key.name === 'o') {
+        const selected = filteredItems[focusedIndex]
+        if (selected) setInspectedId(selected.id)
+        return true
+      }
       if (key.name === 'escape') {
         if (searchQuery.length > 0) {
           setSearchQuery('')
@@ -173,6 +218,26 @@ export const PlanSessionPickerScreen: React.FC<
       onCancel,
     ],
   )
+
+  const selectedSession = sessions.find(
+    (session) => session.sessionDir === filteredItems[focusedIndex]?.id,
+  )
+  if (inspectedId) {
+    const session = sessions.find(
+      (session) => session.sessionDir === inspectedId,
+    )
+    return (
+      <OutputReaderScreen
+        messages={[]}
+        initialDocument={createTextDocument({
+          id: inspectedId,
+          title: 'Plan session details',
+          text: `Session: ${session?.slug ?? inspectedId}\nPath: ${inspectedId}\nState: ${session?.status ?? 'unknown'}\nUpdated: ${session?.updatedAt ?? 'unknown'}\nArtifacts: ${session?.artifacts.join(', ') ?? 'unavailable'}\nCurrent task: ${session?.currentTask ?? 'unknown'}`,
+        })}
+        onClose={() => setInspectedId(null)}
+      />
+    )
+  }
 
   return (
     <box
@@ -262,21 +327,34 @@ export const PlanSessionPickerScreen: React.FC<
           border={['top', 'bottom', 'left', 'right']}
         >
           <SelectableList
-            items={filteredItems.slice(0, LAYOUT.MAX_RENDERED_SESSIONS)}
+            items={filteredItems}
             focusedIndex={focusedIndex}
             onSelect={handleSessionSelect}
             onFocusChange={handleFocusChange}
             emptyMessage={
-              sessions.length === 0
-                ? 'No plan sessions found under .agents/sessions'
-                : searchQuery
-                  ? 'No matching plan sessions'
-                  : 'No plan sessions found'
+              loadState === 'loading'
+                ? 'Loading plan sessions…'
+                : loadState === 'failed'
+                  ? `Plan sessions unavailable: ${loadError} · Ctrl+R retry`
+                  : sessions.length === 0
+                    ? 'No plan sessions found under .agents/sessions'
+                    : searchQuery
+                      ? 'No matching plan sessions'
+                      : 'No plan sessions found'
             }
           />
         </box>
       </box>
 
+      {selectedSession && (
+        <text fg={theme.muted} style={{ flexShrink: 0 }} wrapMode="none">
+          {sliceTextCells(
+            `${selectedSession.artifacts.join(', ')} · ${selectedSession.sessionDir}`,
+            0,
+            contentWidth,
+          )}
+        </text>
+      )}
       <box
         style={{
           flexDirection: 'row',
@@ -302,7 +380,7 @@ export const PlanSessionPickerScreen: React.FC<
         >
           <box style={{ flexGrow: 1, flexShrink: 1 }}>
             <text style={{ fg: theme.muted }}>
-              ↑↓ navigate · Enter select · Esc{' '}
+              ↑↓ · Enter select · Ctrl+O details · Ctrl+R retry · Esc{' '}
               {searchQuery ? 'clear search' : 'cancel'} · Ctrl+C cancel
             </text>
           </box>

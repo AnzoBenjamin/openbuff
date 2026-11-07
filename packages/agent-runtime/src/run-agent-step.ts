@@ -3,6 +3,7 @@ import { supportsCacheControl } from '@codebuff/common/old-constants'
 import { TOOLS_WHICH_WONT_FORCE_NEXT_STEP } from '@codebuff/common/tools/constants'
 import { buildArray } from '@codebuff/common/util/array'
 import { MemoryTurnContextV2Schema } from '@codebuff/common/types/memory-v2'
+import { runStatusFromOutcome } from '@codebuff/common/types/run-outcome'
 import {
   AbortError,
   extractApiErrorDetails,
@@ -19,7 +20,13 @@ import { CACHE_DEBUG_FULL_LOGGING } from './constants'
 
 import { getMCPToolData } from './mcp'
 import { getAgentStreamFromTemplate } from './prompt-agent-stream'
+import path from 'node:path'
+
 import { getEffectiveAgentToolNames } from './util/agent-tool-names'
+import {
+  recordTokenObservation,
+  setTokenCalibrationStorePath,
+} from './util/token-calibration'
 import {
   clearAgentGeneratorForRun,
   runProgrammaticStep,
@@ -34,6 +41,22 @@ import { additionalSystemPrompts } from './system-prompt/prompts'
 import { getAgentTemplate } from './templates/agent-registry'
 import { reconcileInterruptedBackgroundAgentIntents } from './util/background-agent-jobs'
 import {
+  buildRunResumeReport,
+  executeReplayActions,
+  isRunResumeReportClean,
+  planReplayActions,
+} from './util/run-journal'
+import type { RunResumeReport } from './util/run-journal'
+// P2-T2b: background-agent resume-from-own-journal engine (pure journal reads
+// plus an injectable launch seam) plus the same-process live re-drive
+// reservation the runtime seam below consults (dedupe against duplicate
+// launches while a re-drive is live).
+import {
+  releaseBackgroundReDrive,
+  reserveBackgroundReDrive,
+  resumeBackgroundFromOwnJournal,
+} from './util/background-resume'
+import {
   buildAgentToolSet,
   getModelVisibleSpawnableAgents,
 } from './templates/prompts'
@@ -41,6 +64,7 @@ import { getAgentPrompt } from './templates/strings'
 import { getToolSet } from './tools/prompts'
 import { processStream } from './tools/stream-parser'
 import { getAgentOutput } from './util/agent-output'
+import { reviewerVerdictIssue } from './util/reviewer-output'
 import {
   initBudgetFromTemplate,
   checkBudgetExceeded,
@@ -63,10 +87,7 @@ import {
   getConfirmedAppliedActionsV1,
   isFileMutationResultV1,
 } from '@codebuff/common/tools/results/filesystem'
-import {
-  countTokensJson,
-  IncrementalTokenCounter,
-} from './util/token-counter'
+import { countTokensJson, IncrementalTokenCounter } from './util/token-counter'
 import {
   COMPACTION_NO_PROGRESS_FRACTION,
   DEFAULT_MAX_CONTEXT_TOKENS,
@@ -78,7 +99,6 @@ import {
   getSemanticRearmBudgetTokens,
   maybePruneContext,
   recordPassAnnounced,
-  recordPassSettled,
   shouldRunSemanticPass,
 } from './util/context-pruning'
 import {
@@ -86,7 +106,10 @@ import {
   evictStaleToolResults,
   EVICTION_KEEP_RECENT_STEPS,
 } from './util/tool-result-eviction'
-import { archivePreCompaction } from './util/context-archive'
+import {
+  archiveEvictedToolResults,
+  archivePreCompaction,
+} from './util/context-archive'
 import { maybeRunBackgroundConsolidation } from './util/context-consolidation-runner'
 import { verifyExtractionCoverage } from './util/compaction-verification'
 import {
@@ -110,6 +133,7 @@ import {
   compileMemoryV2Context,
   countConceptAdvisoryEntries,
 } from './util/memory-v2-context'
+import { compileActivePlaybooksContext } from './memory/playbook-context'
 
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
@@ -144,6 +168,7 @@ import type {
   CustomToolDefinitions,
   ProjectFileContext,
 } from '@codebuff/common/util/file'
+import { realClock, realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 
 /**
  * M1-T5: redact secrets from a message before it reaches a log sink. Handles
@@ -157,7 +182,10 @@ function redactMessageForLog(message: Message): Message {
   if (typeof content === 'string') {
     // Shape-preserving copy: only the string content is rewritten. The union
     // spread needs the two-step cast TS requires for mixed-content unions.
-    return { ...message, content: redactSecretValues(content) } as unknown as Message
+    return {
+      ...message,
+      content: redactSecretValues(content),
+    } as unknown as Message
   }
   if (!Array.isArray(content)) {
     return message
@@ -394,17 +422,23 @@ async function additionalToolDefinitions(
     agentState,
   )
 
+  // `customToolDefinitions` is schema-defaulted, but hand-rolled fileContext
+  // objects (test fixtures, programmatic hosts, new spawn paths) may omit it;
+  // guard locally instead of relying on callers (see the defaulting in
+  // supervision/child-entry.ts, which exists because of this exact site).
   const defs = cloneDeep(
     Object.fromEntries(
-      Object.entries(fileContext.customToolDefinitions).filter(([toolName]) =>
-        effectiveToolNames.includes(toolName),
+      Object.entries(fileContext.customToolDefinitions ?? {}).filter(
+        ([toolName]) => effectiveToolNames.includes(toolName),
       ),
     ),
   )
   return getMCPToolData({
     ...params,
     toolNames: effectiveToolNames,
-    mcpServers: agentTemplate!.mcpServers,
+    // `agentTemplate` is a required non-optional param and `mcpServers` is a
+    // required, schema-defaulted field on AgentTemplate — no assertion needed.
+    mcpServers: agentTemplate.mcpServers,
     writeTo: defs,
   })
 }
@@ -456,6 +490,11 @@ export const runAgentStep = async (
     system: string
     n?: number
 
+    // P2-T2: 1-based step index within the agent loop (loopAgentSteps passes
+    // totalSteps). Optional and additive: omitted → journal stepNumber 0 exactly
+    // as pre-P2-T2, so other callers are unchanged.
+    stepNumber?: number
+
     trackEvent: TrackEventFn
     promptAiSdk: PromptAiSdkFn
   } & ParamsExcluding<
@@ -502,6 +541,8 @@ export const runAgentStep = async (
   // instead of falling through to the validation/reviewer gate, which would
   // re-yield STEP and re-trigger the step-cap, causing an infinite loop.
   hitStepCap?: boolean
+  toolCallErrorSignature?: string
+  toolCallErrorTools?: string[]
   messageId: string | null
   nResponses?: string[]
 }> => {
@@ -530,9 +571,14 @@ export const runAgentStep = async (
 
   const startTime = Date.now()
 
+  // Resolve the injectable id generator once at the runtime entry so replay
+  // (P2-T2) can reproduce identity ids deterministically.
+  const idGen = params.idGen ?? realIdGen
+  const clock = params.clock ?? realClock
+
   // Generates a unique ID for each main prompt run (ie: a step of the agent loop)
   // This is used to link logs within a single agent loop
-  const agentStepId = crypto.randomUUID()
+  const agentStepId = idGen.uuid()
   trackEvent({
     event: AnalyticsEvent.AGENT_STEP,
     userId: userId ?? '',
@@ -557,6 +603,10 @@ export const runAgentStep = async (
     // which was later misreported as "No response from agent".
     agentState = {
       ...agentState,
+      runOutcome: {
+        termination: 'step_exhausted',
+        cause: { code: 'step_limit', message: STEP_CAP_REACHED_MESSAGE },
+      },
       messageHistory: [
         ...expireMessages(agentState.messageHistory, 'userPrompt'),
         assistantMessage({
@@ -627,6 +677,13 @@ export const runAgentStep = async (
     )
     agentState = {
       ...agentState,
+      runOutcome: {
+        termination: 'budget_exhausted',
+        cause: {
+          code: `${preStepBudgetCheck.reason}_budget`,
+          message: preStepBudgetCheck.message,
+        },
+      },
       messageHistory: [
         ...agentState.messageHistory,
         userMessage(withSystemTags(preStepBudgetCheck.message)),
@@ -721,6 +778,7 @@ export const runAgentStep = async (
         runId: agentState.runId,
         userInputId,
         agentStepId,
+        idGen,
         model,
       })
     } catch (err) {
@@ -752,9 +810,25 @@ export const runAgentStep = async (
   // counts into step locals for the runtime aggregate hit-rate metric
   // (P0-3). The cache-debug snapshot enrichment (for CACHE_DEBUG_FULL_LOGGING)
   // is an additional side-effect layered on top, gated by correlation.
+  // P3-T10: set right before each stream call; the usage callback below
+  // records it against the provider-reported actual.
+  let preRequestInputTokenEstimate = 0
   const onCacheDebugUsageReceived = (usage: CacheDebugUsageData) => {
     stepCacheInputTokens += usage.cachedInputTokens ?? 0
     stepCacheTotalInputTokens += usage.inputTokens ?? 0
+    // P3-T10 calibration loop: provider-reported inputTokens vs the step's
+    // pre-request estimate. Deterministic estimator side (same serialized
+    // shape every step), so the converged family factor absorbs the
+    // tokenizer/envelope divergence uniformly across providers.
+    try {
+      recordTokenObservation(
+        model,
+        preRequestInputTokenEstimate,
+        usage.inputTokens,
+      )
+    } catch {
+      // Never let calibration affect the request path.
+    }
     if (cacheDebugCorrelation) {
       enrichCacheDebugSnapshotWithUsage({
         correlation: cacheDebugCorrelation,
@@ -808,7 +882,8 @@ export const runAgentStep = async (
       system: redactSecretValues(system),
       // M1-T5: prompt is a string or undefined here (the params type pins it);
       // array-shaped message content above is redacted per text part.
-      prompt: typeof prompt === 'string' ? redactSecretValues(prompt) : undefined,
+      prompt:
+        typeof prompt === 'string' ? redactSecretValues(prompt) : undefined,
       params: spawnParams,
       agentContext,
       systemTokens,
@@ -828,6 +903,22 @@ export const runAgentStep = async (
 
   // Handle n parameter for generating multiple responses
   if (params.n !== undefined) {
+    // P3-T10: attach the per-project calibration store (fail-open when no
+    // project root) and snapshot the estimator's view of this request's
+    // input BEFORE the call, so usage can be compared when it arrives.
+    setTokenCalibrationStorePath(
+      params.fileContext?.projectRoot
+        ? path.join(
+            params.fileContext.projectRoot,
+            '.openbuff',
+            'token-calibration.json',
+          )
+        : undefined,
+    )
+    preRequestInputTokenEstimate = countTokensJson(
+      { system, messages: agentState.messageHistory },
+      model,
+    )
     const result = await promptAiSdk({
       ...params,
       messages: agentState.messageHistory,
@@ -845,6 +936,17 @@ export const runAgentStep = async (
       return {
         agentState: {
           ...agentState,
+          runOutcome: {
+            termination: 'cancelled',
+            cause: {
+              code: 'provider_request_aborted',
+              message: 'Provider request was aborted',
+            },
+          },
+          stepsRemaining:
+            agentState.stepsRemaining > 0
+              ? agentState.stepsRemaining - 1
+              : agentState.stepsRemaining,
           // Apply any cost accrued before the abort (C2.3: avoid stale-closure
           // mutation; apply on the returned post-spread object).
           creditsUsed: agentState.creditsUsed + stepCreditsUsed,
@@ -888,19 +990,44 @@ export const runAgentStep = async (
       nResponses = [responsesString]
     }
 
+    const candidateAgentState: AgentState = {
+      ...agentState,
+      stepsRemaining:
+        agentState.stepsRemaining > 0
+          ? agentState.stepsRemaining - 1
+          : agentState.stepsRemaining,
+      // Apply the step's accumulated cost on the returned post-spread
+      // object, not via in-place closure mutation (C2.3).
+      creditsUsed: agentState.creditsUsed + stepCreditsUsed,
+      directCreditsUsed: agentState.directCreditsUsed + stepCreditsUsed,
+      cacheInputTokens: agentState.cacheInputTokens + stepCacheInputTokens,
+      cacheTotalInputTokens:
+        agentState.cacheTotalInputTokens + stepCacheTotalInputTokens,
+    }
+    const candidateBudget = checkBudgetExceeded(
+      candidateAgentState,
+      stepCacheTotalInputTokens,
+    )
+    if (candidateBudget.exceeded) {
+      candidateAgentState.runOutcome = {
+        termination: 'budget_exhausted',
+        cause: {
+          code: `${candidateBudget.reason}_budget`,
+          message: candidateBudget.message,
+        },
+      }
+      candidateAgentState.messageHistory = [
+        ...candidateAgentState.messageHistory,
+        userMessage(withSystemTags(candidateBudget.message)),
+      ]
+      onResponseChunk(`${candidateBudget.message}\n\n`)
+    }
     return {
-      agentState: {
-        ...agentState,
-        // Apply the step's accumulated cost on the returned post-spread
-        // object, not via in-place closure mutation (C2.3).
-        creditsUsed: agentState.creditsUsed + stepCreditsUsed,
-        directCreditsUsed: agentState.directCreditsUsed + stepCreditsUsed,
-        cacheInputTokens: agentState.cacheInputTokens + stepCacheInputTokens,
-        cacheTotalInputTokens:
-          agentState.cacheTotalInputTokens + stepCacheTotalInputTokens,
-      },
-      fullResponse: responsesString,
-      shouldEndTurn: false,
+      agentState: candidateAgentState,
+      fullResponse: candidateBudget.exceeded
+        ? candidateBudget.message
+        : responsesString,
+      shouldEndTurn: candidateBudget.exceeded,
       messageId: null,
       nResponses,
     }
@@ -908,6 +1035,37 @@ export const runAgentStep = async (
 
   let fullResponse = ''
   const toolResults: ToolMessage[] = []
+
+  // P2-T2: journal the LLM request BEFORE the stream so a crash mid-stream is
+  // classifiable as an in-flight LLM call on resume (P2-T2-DESIGN §2/§4a).
+  // Slice 1 kept the payload bounded; the journal now stores the FULL request
+  // payload per §8 ('the journal stores FULL payloads ... bound via retention,
+  // not truncation') since replay re-issues recorded requests.
+  if (agentState.runId && params.journalWriter) {
+    // Fail-open like every other journal write point (the step_boundary and
+    // spawn appends are guarded the same way): a journaling outage — e.g. a
+    // closed connection raced by a detached background child that outlived
+    // the turn which closed the journal — must never fail the agent step
+    // itself. The event is simply not journaled.
+    try {
+      params.journalWriter.append(agentState.runId, {
+        eventType: 'llm_request',
+        stepNumber: params.stepNumber ?? 0,
+        correlation: agentStepId,
+        payload: {
+          model: agentTemplate?.model,
+          system,
+          n: params.n ?? null,
+          messages: agentState.messageHistory,
+        },
+      })
+    } catch (journalError) {
+      logger.debug(
+        { error: journalError, agentId: agentState.agentId },
+        'Failed to append llm_request to run journal (non-fatal)',
+      )
+    }
+  }
 
   // Raw stream from AI SDK
   const stream = getAgentStreamFromTemplate({
@@ -941,6 +1099,8 @@ export const runAgentStep = async (
     fullResponse: fullResponseAfterStream,
     fullResponseChunks,
     hadToolCallError,
+    toolCallErrorSignature,
+    toolCallErrorTools,
     messageId,
     toolCalls,
     toolResults: newToolResults,
@@ -960,6 +1120,29 @@ export const runAgentStep = async (
   toolResults.push(...newToolResults)
 
   fullResponse = fullResponseAfterStream
+
+  // P2-T2: journal the LLM response, closing the llm_request boundary. The
+  // journaled request/response pair defaults to re-issuing the recorded
+  // request from the prior agentState checkpoint — messageId is for telemetry
+  // correlation for body-bearing providers.
+  if (agentState.runId && params.journalWriter) {
+    // Fail-open like every other journal write point: a journaling outage
+    // (e.g. the closed-connection race with a detached background child)
+    // must never fail the agent step itself.
+    try {
+      params.journalWriter.append(agentState.runId, {
+        eventType: 'llm_response',
+        stepNumber: params.stepNumber ?? 0,
+        correlation: agentStepId,
+        payload: { messageId: messageId ?? null, fullResponse },
+      })
+    } catch (journalError) {
+      logger.debug(
+        { error: journalError, agentId: agentState.agentId },
+        'Failed to append llm_response to run journal (non-fatal)',
+      )
+    }
+  }
 
   // Credit broker/owned mutations for concurrent-instance gate isolation.
   // processStream mutates agentState.messageHistory in its finally, but the
@@ -1062,6 +1245,7 @@ export const runAgentStep = async (
       current: agentState.taskMemory,
       draft: compactedMemoryDraft,
       expectedRevision: agentState.taskMemory?.revision ?? -1,
+      now: clock.now(),
     })
     agentState.messageHistory = [
       userMessage({
@@ -1153,7 +1337,8 @@ export const runAgentStep = async (
     shouldEndTurn = true
   }
 
-agentState = {    ...agentState,
+  agentState = {
+    ...agentState,
     stepsRemaining:
       agentState.stepsRemaining > 0
         ? agentState.stepsRemaining - 1
@@ -1193,6 +1378,13 @@ agentState = {    ...agentState,
     )
     agentState = {
       ...agentState,
+      runOutcome: {
+        termination: 'budget_exhausted',
+        cause: {
+          code: `${budgetCheck.reason}_budget`,
+          message: budgetCheck.message,
+        },
+      },
       messageHistory: [
         ...agentState.messageHistory,
         userMessage(withSystemTags(budgetCheck.message)),
@@ -1235,6 +1427,8 @@ agentState = {    ...agentState,
     agentState,
     fullResponse,
     shouldEndTurn,
+    toolCallErrorSignature,
+    toolCallErrorTools,
     messageId,
     nResponses: undefined,
   }
@@ -1289,10 +1483,47 @@ export async function loopAgentSteps(
     // contextTokenCount exceeds this threshold, the loop proactively trims
     // message history via trimMessagesToFitTokenLimit. Defaults to 190k.
     maxContextLength?: number
+    // Optional cap on structured-output corrections. When omitted, reviewers
+    // get two retries and other agents remain bounded by the configured step
+    // cap or cancellation. A positive integer overrides that default.
+    maxMissingOutputRetries?: number
     resolveModelContextWindow?: (params: {
       agentId?: string
       model?: string
     }) => number | undefined
+    // P2-T2 replay-driver slice: when wired, ACTS on the resume report built
+    // at loop entry (re-drive children whose journals require live execution,
+    // respawn interrupted background intents). Typically
+    // `(report) => executeRunResumeReport({ report, ... })` from
+    // ./util/run-replay-driver. Additive-optional: undefined (the default)
+    // leaves this path byte-identical; the driver never throws, so a failing
+    // handler is reported in its outcome rather than aborting the loop.
+    resumeDriver?: (report: RunResumeReport) => Promise<unknown>
+    // P2-T2b linkage thread from the background spawn path: present only for
+    // BACKGROUND children of a journaled run. The background launch site
+    // (spawn-agents.ts) journals its durable intent under the PARENT runId with
+    // correlation = jobId because the childRunId is not known until THIS loop
+    // mints it via startAgentRun — so the child itself journals the
+    // job -> childRunId linkage at the mint site below, which is what
+    // resumeBackgroundFromOwnJournal reads back to reconstruct the pre-crash
+    // stream. Additive-optional: omitted (the default, i.e. every foreground
+    // child and every unjournaled parent) appends nothing.
+    backgroundJobLink?: { jobId: string; parentRunId: string }
+    // P2-T2b resume pin: when set, SKIP the startAgentRun call and use this
+    // runId verbatim, so a re-driven background child keeps journaling into
+    // its ORIGINAL pre-crash stream (journal lookups and respawn-marker
+    // settlement both key on it; a re-minted local-run-<uuid> would orphan the
+    // stream and leave the marker permanently unsettled).
+    //
+    // Self-resume trace (verified, intentionally benign): the re-driven child
+    // is handed a state whose runId is pre-stamped to this pin, so its OWN
+    // loop-entry resume block classifies its pre-terminal journal tail and
+    // builds a report. That report is inert here: the reconstructed state
+    // carries backgroundAgentJobs: [] (createAgentState), so
+    // planBackgroundAgentResume plans nothing, and the launch seam passes
+    // resumeDriver: undefined so the entry block stays classify-and-log. No
+    // self-respawn recursion is possible.
+    pinnedRunId?: string
   } & ParamsExcluding<typeof additionalToolDefinitions, 'agentTemplate'> &
     ParamsExcluding<
       typeof runProgrammaticStep,
@@ -1390,6 +1621,9 @@ export async function loopAgentSteps(
   if (!agentTemplate) {
     throw new Error(`Agent template not found for type: ${agentType}`)
   }
+  // Resolve the injectable clock once at the loop entry (mirrors runAgentStep)
+  // so replay (P2-T2) can reproduce persisted-state timestamps deterministically.
+  const clock = params.clock ?? realClock
   const resolvedModelContextWindow = resolveModelContextWindow?.({
     agentId: agentTemplate.id,
     model: agentTemplate.model,
@@ -1397,15 +1631,21 @@ export async function loopAgentSteps(
   // Seed the state before the first programmatic step. The context-pruner runs
   // before the first LLM request, so waiting for the streaming callback would
   // make the first compaction use the legacy fallback even for 500k/1M models.
-  initialAgentState.contextWindowTokens = resolvedModelContextWindow
-  reconcileInterruptedLedgerSpawns(initialAgentState)
-  reconcileInterruptedPathLeases(initialAgentState)
+  // A supervised child receives its window pre-resolved in the transport slice
+  // and has no bridged resolver dep; do not clobber that rehydrated seed with
+  // undefined.
+  if (resolvedModelContextWindow !== undefined) {
+    initialAgentState.contextWindowTokens = resolvedModelContextWindow
+  }
+  reconcileInterruptedLedgerSpawns(initialAgentState, clock.now())
+  reconcileInterruptedPathLeases(initialAgentState, clock.now())
   // Discovery shard claims are durable parent state too: a shard left 'active'
   // by an interrupted spawn would otherwise make claimDiscoveryShard throw for
   // that question forever, failing the whole spawn batch. Nothing of THIS run
   // is in flight yet here, so an 'active' shard belongs to a previous turn.
   initialAgentState.discoveryCoverage = reconcileInterruptedDiscoveryShards(
     initialAgentState.discoveryCoverage,
+    clock.now(),
   )
   if (
     !initialAgentState.orchestrationLedger?.events.some(
@@ -1416,6 +1656,7 @@ export async function loopAgentSteps(
   ) {
     appendOrchestrationEvent({
       state: initialAgentState,
+      now: clock.now(),
       event: {
         type: 'model_selected',
         runId: initialAgentState.runId ?? initialAgentState.agentId,
@@ -1429,27 +1670,403 @@ export async function loopAgentSteps(
       },
     })
   }
-  reconcileInterruptedBackgroundAgentIntents(initialAgentState)
-
-  if (signal.aborted) {
-    return {
-      agentState: initialAgentState,
-      output: {
-        type: 'error',
-        message: 'Run cancelled by user',
-      },
+  reconcileInterruptedBackgroundAgentIntents(initialAgentState, clock.now())
+  // P2-T2: when a journal reader is wired and this state carries a prior
+  // runId, surface what a resume would do (own tail, children, background
+  // intents). P2-audit-fix-8: a caller-injected resumeDriver (production
+  // wiring: sdk/src/services/run-resume-driver.ts) ACTS on the report below;
+  // without one this block stays classify-and-log.
+  if (params.journalReader && initialAgentState.runId) {
+    const resumeReport = buildRunResumeReport({
+      reader: params.journalReader,
+      runId: initialAgentState.runId,
+      intents: initialAgentState.backgroundAgentJobs,
+    })
+    if (!isRunResumeReportClean(resumeReport)) {
+      logger.warn(
+        { resumeReport },
+        'Run journal shows interrupted work from a previous run',
+      )
+      // P2-T2 final REPLAY SLICE: the report is now ACTED ON structurally —
+      // planned (bounded) and executed through caller-injected seams. The
+      // replayChild seam stays LOGGING-ONLY: it records the child's
+      // disposition without touching live state, because a foreground
+      // re-drive is a later slice and reconcileInterruptedBackgroundAgentIntents
+      // above already reconciled the intents. Unwired/confirmed seams skip, so
+      // a clean report fires no actions and this wiring stays byte-identical
+      // for fresh runs.
+      const replayPlan = planReplayActions(resumeReport)
+      if (replayPlan.actions.length > 0) {
+        // P2-T2b: the background respawn seam is REAL when both journal halves
+        // are wired. Captured into consts first so TypeScript's property
+        // narrowing survives the async closure below. Beyond the delegation to
+        // the engine, the seam owns three contracts the engine deliberately
+        // does not:
+        //  - same-process live re-drive dedupe (reviewer finding
+        //    respawn-seam-concurrent-dedupe): while ONE re-drive for a job is
+        //    live, every later parent turn in this process still re-plans the
+        //    intent 'respawn' (the respawn marker settles only on the re-driven
+        //    child's TERMINAL journal tail), so the seam reserves the jobId
+        //    BEFORE any journal read and short-circuits duplicate launches.
+        //  - the minimal settle (reviewer finding resume-result-not-delivered):
+        //    the detached re-drive bypasses the spawn settle chain, so the seam
+        //    folds the re-driven child's receipt into the parent and updates the
+        //    matching intent exactly like the spawn-agents settle chain does.
+        //    The re-drive is deliberately NOT a job-registry entry — the
+        //    original job's registry record died with the crashed process, and
+        //    re-creating one would double-count the per-root background budget;
+        //    the result is delivered through the intent settle instead, and
+        //    check_background_agent keeps reporting the pre-crash record
+        //    (documented residual, same honesty class as the
+        //    supervised-children gap in background-resume.ts).
+        //  - the detached launch itself: fire-and-forget with warn logging, so
+        //    a failed re-drive leaves the journaled marker unsettled and
+        //    re-planning honest instead of dropping the job.
+        const journalReader = params.journalReader
+        const journalWriter = params.journalWriter
+        const resumeParentRunId = initialAgentState.runId
+        const respawnBackground =
+          journalReader && journalWriter && resumeParentRunId
+            ? async (jobId: string, agentType: string) => {
+                // Same-process dedupe: check+reserve in one synchronous step
+                // BEFORE any await, so a concurrent pass cannot slip between
+                // the check and the reservation.
+                if (!reserveBackgroundReDrive(jobId)) {
+                  logger.debug(
+                    { runId: resumeParentRunId, jobId },
+                    'Journal replay: background re-drive already in flight for this job; skipping the duplicate launch',
+                  )
+                  return
+                }
+                let launched = false
+                try {
+                  const template = await getAgentTemplate({
+                    ...params,
+                    agentId: agentType,
+                  })
+                  if (!template) {
+                    logger.debug(
+                      { runId: resumeParentRunId, jobId, agentType },
+                      'Journal replay: background respawn skipped; agent template not found (honest degradation)',
+                    )
+                    return
+                  }
+                  // The engine reads the linkage + the child's own stream back
+                  // out of the journal, rebuilds the child state with its
+                  // ORIGINAL runId pinned, journals the settleable respawn
+                  // marker, then hands the state to the detached launch below.
+                  // no_linkage / unrecoverable degrade honestly: the intent
+                  // simply keeps re-planning on the next resume, exactly as it
+                  // did before this seam existed (and no marker is journaled
+                  // for a launch that never happens).
+                  const outcome = await resumeBackgroundFromOwnJournal({
+                    reader: journalReader,
+                    writer: journalWriter,
+                    parentRunId: resumeParentRunId,
+                    parentAgentState: initialAgentState,
+                    jobId,
+                    agentType,
+                    agentTemplate: template,
+                    logger,
+                    launch: async (childState) => {
+                      // Detached re-drive, NOT awaited inside the seam: the
+                      // seam must never throw into executeReplayActions, and
+                      // the parent turn must not block on the re-driven child.
+                      // (An async call always returns a promise, so the const
+                      // below cannot throw synchronously.)
+                      const drive = loopAgentSteps({
+                        ...params,
+                        agentType,
+                        agentTemplate: template,
+                        agentState: childState,
+                        // prompt:'' + no spawnParams + no content keeps
+                        // hasUserMessage false, so NO duplicate USER_PROMPT is
+                        // appended — the reconstructed history already carries
+                        // the original prompt (the hasUserMessage condition is
+                        // the verified guard for this).
+                        prompt: '',
+                        spawnParams: undefined,
+                        content: undefined,
+                        ancestorRunIds: [
+                          ...(initialAgentState.ancestorRunIds ?? []),
+                          initialAgentState.runId ?? initialAgentState.agentId,
+                        ],
+                        // Re-pass the link so the re-driven child journals its
+                        // linkage again: benign, because the linkage append is
+                        // keyed on jobId and findBackgroundChildLinkage
+                        // resolves the LAST match — and the childRunId is the
+                        // same pin.
+                        backgroundJobLink: {
+                          jobId,
+                          parentRunId: resumeParentRunId,
+                        },
+                        // The pin: loopAgentSteps skips startAgentRun and
+                        // reuses the ORIGINAL runId, so the re-drive keeps
+                        // journaling into the pre-crash stream the marker
+                        // settles against.
+                        pinnedRunId: childState.runId,
+                        // Neutralize every per-turn input the spread carried:
+                        // the re-drive is detached like the original background
+                        // spawn, so an aborted parent turn must not kill the
+                        // resume; the parent turn has moved past, so chunks are
+                        // dropped; and the MAIN agent's checkpoint callback
+                        // must never persist the child state over the main
+                        // agent.
+                        signal: new AbortController().signal,
+                        onResponseChunk: () => {},
+                        onCheckpoint: undefined,
+                        resumeDriver: undefined,
+                        clearUserPromptMessagesAfterResponse: false,
+                        resumeInterruptedTurn: false,
+                      })
+                      launched = true
+                      drive
+                        .then(async (result) => {
+                          // Minimal settle: mirror the spawn-agents settle
+                          // chain — fold the re-driven child's receipt + ledger
+                          // evidence into the parent and update the matching
+                          // intent, so the resume's result is DELIVERED instead
+                          // of dropped. Dynamic import: spawn-agent-utils
+                          // statically imports this module, so a static import
+                          // here would be a cycle; by settle time the module
+                          // graph is fully initialized. Never throws into the
+                          // drive chain: every step is guarded.
+                          try {
+                            const {
+                              buildRuntimeAgentReceiptWithArtifacts,
+                              mergeChildEvidenceIntoParent,
+                              reconcileAgentReceiptIntoParent,
+                            } =
+                              await import('./tools/handlers/tool/spawn-agent-utils')
+                            const receipt =
+                              await buildRuntimeAgentReceiptWithArtifacts({
+                                agentType,
+                                agentId: childState.agentId,
+                                output: result.output,
+                                agentState: result.agentState,
+                              })
+                            mergeChildEvidenceIntoParent({
+                              parentAgentState: initialAgentState,
+                              childAgentState: result.agentState,
+                            })
+                            reconcileAgentReceiptIntoParent({
+                              parentAgentState: initialAgentState,
+                              receipt,
+                              agentType,
+                              // Ledger pairing: the resumed child never went
+                              // through the spawn handler, so no
+                              // `spawn_started` event exists for it. Passing
+                              // the child's OWN agentId as the spawn id keeps
+                              // the receipt reconciliation keyed on a stable
+                              // identity instead of silently defaulting to
+                              // receipt.agentId (which differs on the
+                              // supervised path and dangles the ledger row).
+                              spawnId: childState.agentId,
+                            })
+                            // Fold the resumed child's cost into the parent,
+                            // exactly like the spawn-agents settle chain does
+                            // for a freshly launched background child
+                            // (spawn-agents.ts backgroundCredits). Without
+                            // this the re-drive ran for free: its
+                            // creditsUsed never reached the parent, so
+                            // resumed work was systematically underbilled.
+                            const resumedCredits =
+                              result.agentState.creditsUsed || 0
+                            if (resumedCredits > 0) {
+                              initialAgentState.creditsUsed += resumedCredits
+                            }
+                            const intent =
+                              initialAgentState.backgroundAgentJobs?.find(
+                                (entry) => entry.jobId === jobId,
+                              )
+                            if (intent) {
+                              intent.status = (
+                                receipt.runOutcome
+                                  ? receipt.runOutcome.termination ===
+                                    'cancelled'
+                                  : receipt.status === 'cancelled'
+                              )
+                                ? 'cancelled'
+                                : (
+                                      receipt.runOutcome
+                                        ? receipt.runOutcome.termination !==
+                                          'completed'
+                                        : receipt.status === 'failed'
+                                    )
+                                  ? 'error'
+                                  : 'completed'
+                              intent.completedAt = clock.now()
+                              intent.childRunId = childState.runId
+                              intent.receipt = receipt
+                            }
+                          } catch (settleError) {
+                            logger.warn(
+                              {
+                                jobId,
+                                childRunId: childState.runId,
+                                error: settleError,
+                              },
+                              'Background resume settle failed (non-fatal; the intent keeps its prior status)',
+                            )
+                          }
+                        })
+                        .catch(async (error) => {
+                          logger.warn(
+                            {
+                              runId: childState.runId,
+                              jobId,
+                              agentType,
+                              error,
+                            },
+                            'Background resume re-drive rejected (non-fatal; marker stays unsettled until a terminal child tail)',
+                          )
+                          // Error settle mirroring the spawn chain's
+                          // rejected-promise branch: a failed re-drive must
+                          // not stay reported 'interrupted' forever.
+                          try {
+                            const intent =
+                              initialAgentState.backgroundAgentJobs?.find(
+                                (entry) => entry.jobId === jobId,
+                              )
+                            if (intent) {
+                              intent.status = 'error'
+                              intent.completedAt = clock.now()
+                              intent.childRunId = childState.runId
+                              intent.error =
+                                error instanceof Error
+                                  ? error.message
+                                  : String(error)
+                            }
+                          } catch {
+                            // Never throws into the drive chain.
+                          }
+                        })
+                        .finally(() => {
+                          // The reservation lives exactly as long as the drive:
+                          // releasing on settle keeps a finished re-drive from
+                          // blocking the next legitimate one and keeps the
+                          // reservation set from leaking.
+                          releaseBackgroundReDrive(jobId)
+                        })
+                    },
+                  })
+                  if (outcome.kind === 'resumed') {
+                    logger.debug(
+                      {
+                        runId: resumeParentRunId,
+                        jobId,
+                        childRunId: outcome.childRunId,
+                      },
+                      'Journal replay: background child resumed from its own journal stream',
+                    )
+                  } else if (outcome.kind === 'no_linkage') {
+                    logger.debug(
+                      { runId: resumeParentRunId, jobId, agentType },
+                      'Journal replay: background respawn found no child linkage; leaving the intent to re-plan',
+                    )
+                  } else {
+                    logger.warn(
+                      {
+                        runId: resumeParentRunId,
+                        jobId,
+                        agentType,
+                        reason: outcome.reason,
+                      },
+                      'Journal replay: background child could not be reconstructed from its journal; leaving the intent to re-plan',
+                    )
+                  }
+                } finally {
+                  // No launch happened (template missing, no linkage,
+                  // unrecoverable, or an engine throw): release the reservation
+                  // so later passes re-plan unobstructed.
+                  if (!launched) releaseBackgroundReDrive(jobId)
+                }
+              }
+            : undefined
+        const replayResult = await executeReplayActions(replayPlan.actions, {
+          logger,
+          replayChild: async (childRunId, verdict) => {
+            logger.debug(
+              { runId: initialAgentState.runId, childRunId, verdict },
+              'Journal replay: child disposition planned (logging-only seam)',
+            )
+          },
+          respawnBackground,
+        })
+        logger.debug(
+          {
+            runId: initialAgentState.runId,
+            plannedActions: replayPlan.actions.length,
+            truncated: replayPlan.truncated,
+            attempted: replayResult.attempted,
+            succeeded: replayResult.succeeded,
+            failed: replayResult.failed,
+          },
+          'Journal replay actions executed',
+        )
+      }
+      // P2-T2 replay-driver slice: when a resumeDriver is wired, ACT on the
+      // report — re-drive children and respawn background intents — before
+      // the loop continues. Additive-optional: undefined (the default) keeps
+      // this path byte-identical; executeRunResumeReport never throws, so a
+      // failing handler is reported in its outcome rather than aborting the
+      // loop.
+      if (params.resumeDriver) {
+        await params.resumeDriver(resumeReport)
+      }
     }
   }
 
-  const runId = await startAgentRun({
-    ...params,
-    agentId: agentTemplate.id,
-    ancestorRunIds: initialAgentState.ancestorRunIds,
-  })
+  // These outcomes belong to this run. Action history remains available after
+  // recovery; a previous turn's terminal reason or oracle cannot settle it.
+  initialAgentState.runOutcome = undefined
+  initialAgentState.taskAcceptance = { status: 'unknown' }
+  // P2-T2b: a resume-pinned relaunch (see pinnedRunId on the params type)
+  // skips startAgentRun entirely — reusing the ORIGINAL child runId — while
+  // every other caller keeps the byte-identical mint path.
+  const runId =
+    params.pinnedRunId ??
+    (await startAgentRun({
+      ...params,
+      agentId: agentTemplate.id,
+      ancestorRunIds: initialAgentState.ancestorRunIds,
+    }))
   if (!runId) {
     throw new Error('Failed to start agent run')
   }
   initialAgentState.runId = runId
+
+  // P2-T2b: a BACKGROUND child journals its own job -> childRunId linkage under
+  // the PARENT runId. The launch-time intent (spawn-agents.ts) could only
+  // correlate on jobId because THIS site is where the childRunId first exists;
+  // recording it here is what lets a later resume find the child's own journal
+  // stream (findBackgroundChildLinkage in util/background-resume.ts). The
+  // correlation stays jobId — NOT the childRunId — so a background child never
+  // enters planChildResume's foreground child-resume plan (a parent spawn with
+  // a childRunId correlation would be re-driven as a foreground child).
+  // Fail-open like every other journal write point: a journaling outage must
+  // never fail the run. Guarded on backgroundJobLink so foreground children,
+  // inline agents, and every unjournaled parent append nothing.
+  if (params.backgroundJobLink && params.journalWriter) {
+    try {
+      params.journalWriter.append(params.backgroundJobLink.parentRunId, {
+        eventType: 'spawn',
+        stepNumber: 0,
+        correlation: params.backgroundJobLink.jobId,
+        payload: {
+          backgroundLink: true,
+          jobId: params.backgroundJobLink.jobId,
+          childRunId: runId,
+          agentType: agentTemplate.id,
+        },
+      })
+    } catch (journalError) {
+      logger.debug(
+        { error: journalError, runId, jobId: params.backgroundJobLink.jobId },
+        'Failed to append background job linkage to run journal (non-fatal)',
+      )
+    }
+  }
 
   // Agent/run correlation stamped on every compaction event this loop emits.
   // `loopAgentSteps` runs for the root turn, for foreground subagents, and for
@@ -1728,7 +2345,7 @@ export async function loopAgentSteps(
           role: 'user' as const,
           content: buildUserMessageContent(prompt, spawnParams, content),
           tags: ['USER_PROMPT'],
-          sentAt: Date.now(),
+          sentAt: clock.now(),
 
           // James: Deprecate the below, only use tags, which are not prescriptive.
           keepDuringTruncation: true,
@@ -1742,7 +2359,6 @@ export async function loopAgentSteps(
               ],
             ),
           ),
-        ,
       ],
 
       instructionsPrompt &&
@@ -1804,6 +2420,8 @@ export async function loopAgentSteps(
 
     let shouldEndTurn = false
     let outputSchemaRetryCount = 0
+    let lastToolCallErrorSignature: string | undefined
+    let repeatedToolCallErrors = 0
     let currentPrompt = prompt
     let currentParams = spawnParams
     let totalSteps = 0
@@ -1841,21 +2459,17 @@ export async function loopAgentSteps(
 
     // Anti-thrash compaction telemetry, loop-local so each turn starts clean.
     // `compactionCount` counts every compaction (semantic or mechanical) in
-    // this loop. Two independent signals are tracked:
+    // this loop. One shipped reporting signal is tracked:
     //
     //   - `consecutiveNoProgressCompactions` is the shipped reporting signal
     //     carried on `context_compaction`: a compaction is "no progress" when
     //     it reclaims less than COMPACTION_NO_PROGRESS_FRACTION of the
     //     PREVIOUS compaction's post-compaction history size. Report-only
     //     (telemetry + an honest reason clause); nothing is gated on it.
-    //   - `consecutiveUnproductiveSemanticPasses` is per-pass and
-    //     semantic-only: a pass is unproductive when it reclaimed less than
-    //     COMPACTION_NO_PROGRESS_FRACTION of its OWN pre-compaction history
-    //     size, which also covers an announced pass that returned the
-    //     transcript unchanged. Once it reaches
-    //     COMPACTION_NO_PROGRESS_STREAK_THRESHOLD the loop logs a warning;
-    //     the governor (not the streak) caps further paid passes for the rest
-    //     of this turn via `recordPassSettled`.
+    //   - Per-pass semantic reclaim is no longer tracked or gated at all: a
+    //     progress-based gate was removed because it cut off legitimate
+    //     context reclamation. Only the flat SEMANTIC_MAX_PASSES_PER_TURN
+    //     budget and the governor's cooldown/rearm/emergency pacing apply.
     //
     // Budgets are still never silently lowered and pinned state is never
     // dropped as a reaction: the only remediation is to stop paying for a
@@ -1864,14 +2478,6 @@ export async function loopAgentSteps(
     let consecutiveNoProgressCompactions = 0
     let previousPostCompactionHistoryTokens: number | undefined
     let warnedCompactionNoProgress = false
-    let consecutiveUnproductiveSemanticPasses = 0
-    let warnedSemanticCompactionSuppressed = false
-    // Loop-local streak state backing the persisted advisory. The advisory
-    // field itself is recomputed once per iteration (see the mirror below), so
-    // the streak must live here: a field write inside
-    // registerUnproductiveSemanticPass alone would be overwritten by the next
-    // iteration's recomputation.
-    let streakSuppressionActive = false
     // `suppressSemanticCompaction` is a transient, loop-owned advisory. Reset
     // once here, before the loop, so a persisted or inherited `true` from an
     // earlier turn can never leak in and deadlock a recoverable run.
@@ -1881,38 +2487,6 @@ export async function loopAgentSteps(
     // telemetry locals are: each turn starts clean, and the rearm margin is
     // observable in the token counts themselves, so nothing needs to persist.
     const compactionGovernor = createSemanticCompactionGovernor()
-    const registerUnproductiveSemanticPass = () => {
-      consecutiveUnproductiveSemanticPasses += 1
-      // The governor owns loop pacing: an unproductive pass extends its
-      // cooldown, and a SECOND consecutive unproductive pass spends the
-      // turn's remaining pass budget (bounded denial). The persisted
-      // `suppressSemanticCompaction` advisory keeps its documented
-      // streak-based contract, so crossing the streak threshold also sets
-      // it, making the inline pruner spawn path decline for the rest of the
-      // turn. Eviction and the mechanical trim still respond to pressure,
-      // and next turn starts with a fresh governor and a loop-entry reset.
-      recordPassSettled(compactionGovernor, { productive: false })
-      if (
-        consecutiveUnproductiveSemanticPasses <
-        COMPACTION_NO_PROGRESS_STREAK_THRESHOLD
-      ) {
-        return
-      }
-      // Streak state, not a direct field write: the per-iteration advisory
-      // mirror below is the single writer of the persisted field, so the
-      // streak is folded into that recomputation instead of racing it.
-      streakSuppressionActive = true
-      if (warnedSemanticCompactionSuppressed) return
-      warnedSemanticCompactionSuppressed = true
-      logger.warn(
-        {
-          agentId: currentAgentState.agentId,
-          runId,
-          consecutiveUnproductiveSemanticPasses,
-        },
-        'Semantic compaction passes are not reclaiming space; further passes this turn are capped',
-      )
-    }
     const registerCompaction = (compaction: {
       action: 'semantic_compaction' | 'mechanical_trim'
       preCompactionHistoryTokens: number
@@ -1922,11 +2496,7 @@ export async function loopAgentSteps(
       consecutiveNoProgressCompactions: number
       noProgress: boolean
     } => {
-      const {
-        action,
-        preCompactionHistoryTokens,
-        postCompactionHistoryTokens,
-      } = compaction
+      const { action, postCompactionHistoryTokens } = compaction
       compactionCount += 1
       const previousTokens = previousPostCompactionHistoryTokens
       if (previousTokens !== undefined) {
@@ -1938,29 +2508,6 @@ export async function loopAgentSteps(
         }
       }
       previousPostCompactionHistoryTokens = postCompactionHistoryTokens
-
-      // Per-pass, semantic-only streak: compare this pass's reclaim against
-      // its OWN pre-compaction size, so a healthy long run whose passes each
-      // return history to roughly the same target is not misread as thrash.
-      // `mechanical_trim` registrations neither increment nor reset it.
-      if (action === 'semantic_compaction') {
-        const reclaimed =
-          preCompactionHistoryTokens - postCompactionHistoryTokens
-        if (
-          reclaimed <
-          preCompactionHistoryTokens * COMPACTION_NO_PROGRESS_FRACTION
-        ) {
-          registerUnproductiveSemanticPass()
-        } else {
-          consecutiveUnproductiveSemanticPasses = 0
-          // Clearing the streak flag (not the field directly) is what makes
-          // the documented "cleared by a productive pass" path reachable: the
-          // next iteration's advisory mirror recomputes the field from this
-          // flag plus the current governor decision.
-          streakSuppressionActive = false
-          recordPassSettled(compactionGovernor, { productive: true })
-        }
-      }
 
       const noProgress =
         consecutiveNoProgressCompactions >=
@@ -1996,19 +2543,127 @@ export async function loopAgentSteps(
     // pin anything. One full recount (reset + fresh sum) runs only after a
     // history-rewriting compaction/trim, whose sites below call
     // invalidateHistoryAggregate.
-    const incrementalTokenCounter = new IncrementalTokenCounter()
+    // Audit MEDIUM (token fudge factors dead on the hot path): thread the
+    // routed model so the incremental counter prices NEW messages with the
+    // per-family fudgeFactorForModel factor instead of the Anthropic 1.35
+    // sentinel default. agentTemplate.model is resolved at loop entry — the
+    // same source the model_selected event above records — and may be
+    // undefined when the route is deferred to openbuff.json; undefined keeps
+    // the exact legacy behavior, so this is additive and safe. Every agent
+    // path (root turn, foreground subagents, inline agents) runs through this
+    // single loop entry, so no secondary construction site needs threading.
+    const incrementalTokenCounter = new IncrementalTokenCounter(
+      agentTemplate.model,
+    )
     const invalidateHistoryAggregate = () => {
       // History was rewritten (compaction/trim): the next estimate must
       // recount fully rather than trusting stale per-message memoized counts.
       incrementalTokenCounter.reset()
     }
 
+    // Limit admission before a generator can dispatch tools or a compactor
+    // can spawn an inference request. A hard stop is terminal even if required
+    // output is missing or the generator would otherwise yield another STEP.
+    const stopForSelectedLimit = (checkSteps = true): boolean => {
+      if (currentAgentState.runOutcome) return true
+      Object.assign(
+        currentAgentState,
+        initBudgetFromTemplate(currentAgentState, agentTemplate),
+      )
+      const budget = checkBudgetExceeded(currentAgentState, 0)
+      const stepExhausted = checkSteps && currentAgentState.stepsRemaining === 0
+      if (!stepExhausted && !budget.exceeded) return false
+      const message = stepExhausted
+        ? STEP_CAP_REACHED_MESSAGE
+        : budget.exceeded
+          ? budget.message
+          : ''
+      currentAgentState.runOutcome = {
+        termination: stepExhausted ? 'step_exhausted' : 'budget_exhausted',
+        cause: {
+          code: stepExhausted
+            ? 'step_limit'
+            : budget.exceeded
+              ? `${budget.reason}_budget`
+              : 'budget_limit',
+          message,
+        },
+      }
+      currentAgentState.messageHistory = [
+        ...currentAgentState.messageHistory,
+        stepExhausted
+          ? assistantMessage({
+              content: message,
+              tags: ['STEP_CAP_REACHED'],
+              keepDuringTruncation: true,
+            })
+          : userMessage(withSystemTags(message)),
+      ]
+      onResponseChunk(`${message}\n\n`)
+      maybeCheckpoint(currentAgentState, true)
+      return true
+    }
+
+    const finalizeRun = async () => {
+      currentAgentState.runOutcome ??= { termination: 'completed' }
+      currentAgentState.taskAcceptance ??= { status: 'unknown' }
+      const { termination, cause } = currentAgentState.runOutcome
+      const status = runStatusFromOutcome(currentAgentState.runOutcome)
+      if (currentAgentState.runId && params.journalWriter) {
+        try {
+          params.journalWriter.append(currentAgentState.runId, {
+            eventType: 'step_boundary',
+            stepNumber: totalSteps,
+            correlation: runId,
+            payload: {
+              status: termination,
+              terminal: true,
+              runOutcome: currentAgentState.runOutcome,
+              taskAcceptance: currentAgentState.taskAcceptance,
+              actionOutcomes: currentAgentState.actionOutcomes ?? [],
+            },
+          })
+        } catch (journalError) {
+          logger.debug(
+            { error: journalError, runId },
+            'Failed to append terminal step_boundary to run journal (non-fatal)',
+          )
+        }
+      }
+      try {
+        await finishAgentRun({
+          ...params,
+          runId,
+          status,
+          runOutcome: currentAgentState.runOutcome,
+          taskAcceptance: currentAgentState.taskAcceptance,
+          totalSteps,
+          directCredits: currentAgentState.directCreditsUsed,
+          totalCredits: currentAgentState.creditsUsed,
+          ...(cause ? { errorMessage: cause.message } : {}),
+        })
+      } catch (finishError) {
+        logger.warn(
+          { error: finishError, runId, status },
+          'Failed to finalize agent run (non-fatal)',
+        )
+      }
+    }
+
     try {
       while (true) {
-        totalSteps++
         if (signal.aborted) {
           throw new AbortError()
         }
+        const canSettlePriorWork =
+          (totalSteps > 0 && agentTemplate.handleSteps !== undefined) ||
+          (shouldEndTurn &&
+            (!agentTemplate.outputSchema ||
+              (currentAgentState.output !== undefined &&
+                agentTemplate.outputSchema.safeParse(currentAgentState.output)
+                  .success)))
+        if (stopForSelectedLimit(!canSettlePriorWork)) break
+        totalSteps++
 
         const startTime = new Date()
 
@@ -2029,7 +2684,9 @@ export async function loopAgentSteps(
           ) {
             return undefined
           }
-          const parsed = MemoryTurnContextV2Schema.safeParse(state.memoryV2Context)
+          const parsed = MemoryTurnContextV2Schema.safeParse(
+            state.memoryV2Context,
+          )
           return parsed.success && parsed.data.userInputId === userInputId
             ? parsed.data
             : undefined
@@ -2067,10 +2724,27 @@ export async function loopAgentSteps(
               })
             : false
         }
+        const buildCompiledPlaybooksMessage = (state: AgentState) => {
+          // Validation can empty the set (restored-session garbage), so gate
+          // on the COMPILED result, not the raw array — an empty band message
+          // must never ship.
+          const text = compileActivePlaybooksContext(
+            state.playbookContext ?? [],
+          )
+          return text
+            ? userMessage({
+                content: withSystemTags(text),
+                tags: ['ACTIVE_PLAYBOOKS_CONTEXT'],
+                timeToLive: 'agentStep' as const,
+                keepDuringTruncation: true,
+              })
+            : false
+        }
         let messagesWithStepPrompt = buildArray(
           ...currentAgentState.messageHistory,
           buildCompiledTaskMemoryMessage(currentAgentState),
           buildCompiledMemoryV2Message(currentAgentState),
+          buildCompiledPlaybooksMessage(currentAgentState),
           stepPrompt &&
             userMessage({
               content: stepPrompt,
@@ -2088,14 +2762,11 @@ export async function loopAgentSteps(
         // recounted here. Behavior and every consumed number are unchanged.
         let systemAndToolsTokens =
           countTokensJson(system) + countTokensJson(toolsForTokenCount)
-        incrementalTokenCounter.setSystemAndToolsTokens(
-          systemAndToolsTokens,
-        )
+        incrementalTokenCounter.setSystemAndToolsTokens(systemAndToolsTokens)
 
         const estimateContextTokensLocally = () =>
-          incrementalTokenCounter.messagesTokens(
-            messagesWithStepPrompt,
-          ) + systemAndToolsTokens
+          incrementalTokenCounter.messagesTokens(messagesWithStepPrompt) +
+          systemAndToolsTokens
 
         currentAgentState.contextTokenCount = estimateContextTokensLocally()
         const contextTokensBeforeProgrammatic =
@@ -2152,6 +2823,23 @@ export async function loopAgentSteps(
             // mechanical-trim branches: previously read paths require a
             // fresh read before the next edit.
             revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
+            // History was rewritten by eviction: the per-message price memo must
+            // not carry stale entries for the replaced references, so the
+            // estimate below starts from a fresh memo (M3-T2 full-recall point).
+            invalidateHistoryAggregate()
+            // D26: archive the evicted segments' full content BEFORE the
+            // tombstoned history replaces the originals, so recall_context can
+            // still recover the detail. Cheap in-memory append on agentState;
+            // a no-op when the evictor reported nothing (its `evicted` field is
+            // omitted on the no-op paths).
+            const evictedCandidates = evictionResult.evicted
+            if (evictedCandidates && evictedCandidates.length > 0) {
+              archiveEvictedToolResults(
+                currentAgentState,
+                evictedCandidates,
+                clock.now(),
+              )
+            }
             currentAgentState.messageHistory = evictionResult.messages
             evictedTokensThisIteration = evictionResult.tokensSaved
             evictedCountThisIteration = evictionResult.evictedCount
@@ -2162,6 +2850,7 @@ export async function loopAgentSteps(
               ...currentAgentState.messageHistory,
               buildCompiledTaskMemoryMessage(currentAgentState),
               buildCompiledMemoryV2Message(currentAgentState),
+              buildCompiledPlaybooksMessage(currentAgentState),
               stepPrompt &&
                 userMessage({
                   content: stepPrompt,
@@ -2201,8 +2890,7 @@ export async function loopAgentSteps(
 
         const contextTokensForTrigger = currentAgentState.contextTokenCount
         const exceededSemanticTrigger =
-          contextTokensForTrigger + 1_000 >
-          semanticBudget.triggerBudgetTokens
+          contextTokensForTrigger + 1_000 > semanticBudget.triggerBudgetTokens
         // Governed trigger: the loop-local governor decides whether THIS
         // iteration may announce (and pay for) a semantic pass, replacing the
         // old announce-every-over-trigger-iteration behavior. The `+1_000`
@@ -2217,31 +2905,21 @@ export async function loopAgentSteps(
             activeMaxContextLength ?? DEFAULT_MAX_CONTEXT_TOKENS,
         })
         // The announcement gate is the semantic trigger plus the governor's
-        // per-iteration decision. The persisted `suppressSemanticCompaction`
-        // advisory keeps its documented streak-based contract (owned by the
-        // pass-outcome accounting above), and an OVER-TRIGGER iteration the
-        // governor denies is additionally mirrored into it: the generator-
-        // driven inline spawn path has no other pacing lever, so without the
-        // mirror a handleSteps template could keep spawning pruner children
-        // every iteration while only the announcement was paced.
+        // per-iteration decision. An OVER-TRIGGER iteration the governor
+        // denies is mirrored into the persisted `suppressSemanticCompaction`
+        // advisory: the generator-driven inline spawn path has no other pacing
+        // lever, so without the mirror a handleSteps template could keep
+        // spawning pruner children every iteration while only the announcement
+        // was paced.
         //
         // The mirror is deliberately NON-STICKY: it recomputes the field every
-        // iteration from the CURRENT governor decision plus the loop-local
-        // streak flag. A sticky version (OR-ing the previous field value)
-        // would let the cooldown denials right after an announced pass pin the
-        // advisory for the whole turn, making the documented clearing paths
-        // unreachable — a productive pass could never clear it, and the second
-        // pass the governor re-arms for (context below the rearm budget
-        // regrowing past the trigger) could never spawn. Below the trigger a
-        // quiet iteration clears the field unless the streak holds it. A
-        // denied iteration runs no pass and announces neither half of the
-        // status pair, exactly as before.
+        // iteration from the CURRENT governor decision, so a below-trigger
+        // quiet iteration clears it again. A denied iteration runs no pass and
+        // announces neither half of the status pair, exactly as before.
         const governorWithheldOverTriggerPass =
           exceededSemanticTrigger && !governorDecision.shouldRunSemanticPass
         currentAgentState.suppressSemanticCompaction =
-          governorWithheldOverTriggerPass || streakSuppressionActive
-            ? true
-            : undefined
+          governorWithheldOverTriggerPass ? true : undefined
         const announceSemanticPass =
           exceededSemanticTrigger && governorDecision.shouldRunSemanticPass
         if (announceSemanticPass) {
@@ -2291,6 +2969,7 @@ export async function loopAgentSteps(
             historyBeforeProgrammatic,
             'semantic_compaction',
             EVICTION_KEEP_RECENT_STEPS,
+            clock.now(),
           )
         }
         // M3-T2: incremental accounting — heap allocation for every message in
@@ -2335,6 +3014,11 @@ export async function loopAgentSteps(
           totalSteps = stepNumber
 
           shouldEndTurn = endTurn
+          if (programmaticResult.hitStepCap) {
+            stopForSelectedLimit()
+            break
+          }
+          if (stopForSelectedLimit(!endTurn)) break
 
           // nResponses (from a prior GENERATE_N) is consumed by the generator on
           // this step. Clear it so a later programmatic step can't read the same
@@ -2481,6 +3165,7 @@ export async function loopAgentSteps(
           ...currentAgentState.messageHistory,
           buildCompiledTaskMemoryMessage(currentAgentState),
           buildCompiledMemoryV2Message(currentAgentState),
+          buildCompiledPlaybooksMessage(currentAgentState),
           stepPrompt &&
             userMessage({
               content: stepPrompt,
@@ -2583,17 +3268,6 @@ export async function loopAgentSteps(
                 : 'Resume from the retained <knowledge_memory> and verify exact live files before editing.',
           })
           compactedThisIteration = true
-        } else if (
-          announceSemanticPass &&
-          historyTokensAfterProgrammatic >= historyTokensBeforeProgrammatic
-        ) {
-          // A semantic pass was announced for this iteration, but the pruner
-          // returned the transcript unchanged (or larger) — the actual thrash
-          // case. Register it for the per-pass semantic streak ONLY: nothing
-          // was compacted, so this must not touch the shipped
-          // `compactionCount`/post-vs-post streak and must not emit a
-          // `context_compaction` event.
-          registerUnproductiveSemanticPass()
         }
 
         // Deterministic trimming is now an emergency brake after semantic
@@ -2601,6 +3275,17 @@ export async function loopAgentSteps(
         const pruningResult = maybePruneContext({
           messages: currentAgentState.messageHistory,
           systemTokens: systemAndToolsTokens,
+          // The trim function rewrites only messageHistory, while the request
+          // also contains compiled task memory, Memory V2, and this step's
+          // prompt. Reserve those already-counted tokens or a history that is
+          // individually below the window will be returned unchanged even
+          // though the actual provider request is over budget.
+          nonHistoryMessageTokens: Math.max(
+            0,
+            currentAgentState.contextTokenCount -
+              systemAndToolsTokens -
+              historyTokensAfterProgrammatic,
+          ),
           contextTokenCount: currentAgentState.contextTokenCount,
           maxTotalTokens: activeMaxContextLength,
           logger,
@@ -2613,6 +3298,7 @@ export async function loopAgentSteps(
             currentAgentState.messageHistory,
             'mechanical_trim',
             EVICTION_KEEP_RECENT_STEPS,
+            clock.now(),
           )
           revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
           currentAgentState.messageHistory = pruningResult.messages
@@ -2624,6 +3310,7 @@ export async function loopAgentSteps(
             ...pruningResult.messages,
             buildCompiledTaskMemoryMessage(currentAgentState),
             buildCompiledMemoryV2Message(currentAgentState),
+            buildCompiledPlaybooksMessage(currentAgentState),
             stepPrompt &&
               userMessage({
                 content: stepPrompt,
@@ -2716,17 +3403,84 @@ export async function loopAgentSteps(
           }),
         })
 
-        // Check if output is required but missing
+        // Check the authoritative reviewer schema before ending the child, not
+        // only after the parent receives its receipt. This catches a defined but
+        // invalid output (for example from a degraded or stale handler schema)
+        // while the reviewer still has its reads and findings in context.
+        const outputRecord =
+          currentAgentState.output &&
+          typeof currentAgentState.output === 'object'
+            ? (currentAgentState.output as Record<string, unknown>)
+            : undefined
+        const outputSchemaShape = (
+          agentTemplate.outputSchema as
+            | { shape?: Record<string, unknown> }
+            | undefined
+        )?.shape
+        const isReviewer =
+          agentType.toLowerCase().includes('reviewer') ||
+          outputRecord?.family === 'reviewer' ||
+          (outputSchemaShape !== undefined &&
+            'family' in outputSchemaShape &&
+            'verdict' in outputSchemaShape)
+        let reviewerOutputIssue: string | undefined
         if (
-          agentTemplate.outputSchema &&
+          shouldEndTurn &&
+          !agentTemplate.handleSteps &&
+          agentTemplate.outputMode === 'structured_output' &&
+          isReviewer &&
+          currentAgentState.output !== undefined
+        ) {
+          const output = currentAgentState.output
+          reviewerOutputIssue = reviewerVerdictIssue(agentType, output)
+          if (!reviewerOutputIssue && agentTemplate.outputSchema) {
+            const validation = agentTemplate.outputSchema.safeParse(output)
+            if (!validation.success) {
+              const issues = validation.error.issues
+                .slice(0, 8)
+                .map(
+                  (issue) =>
+                    `${issue.path.join('.') || 'output'}: ${issue.message}`,
+                )
+                .join('; ')
+              reviewerOutputIssue = `The reviewer receipt failed its output schema: ${issues}`
+            }
+          }
+          // A failed correction can leave an earlier valid receipt in state.
+          // The parent treats the outstanding rejection as schema_invalid, so
+          // give this child the same chance to correct it before it exits.
+          reviewerOutputIssue ??= currentAgentState.lastSetOutputError
+          if (reviewerOutputIssue) {
+            currentAgentState.lastSetOutputError ??= reviewerOutputIssue
+          }
+        }
+
+        // Check if output is required but missing or an invalid reviewer
+        // receipt needs correction in the same child.
+        // Default to two correction attempts for reviewers; other agents keep
+        // the existing step-cap/cancellation bound. An explicit retry setting
+        // takes precedence for either family.
+        const maxMissingOutputRetries =
+          params.maxMissingOutputRetries ?? (isReviewer ? 2 : undefined)
+        if (
+          (agentTemplate.outputSchema || reviewerOutputIssue !== undefined) &&
           // Skip for programmatic agents: the generator (not the model) drives
           // behavior, and restarting the loop here would re-run handleSteps from
           // the top (its generator is torn down once it returns). A userMessage
           // reminder also has no effect on a generator-driven agent.
           !agentTemplate.handleSteps &&
-          currentAgentState.output === undefined &&
+          (currentAgentState.output === undefined ||
+            reviewerOutputIssue !== undefined) &&
           shouldEndTurn &&
-          outputSchemaRetryCount < MAX_MISSING_OUTPUT_RETRIES
+          // A turn ended by the STEP CAP must not be nudged back into the
+          // loop: at the cap runAgentStep short-circuits WITHOUT consuming a
+          // step (stepsRemaining === 0 at entry), so resetting shouldEndTurn
+          // here would spin nudge → short-circuit → nudge forever with zero
+          // LLM calls. The step cap is the documented bound for the
+          // unlimited-retry default, so let the loop break below.
+          !hitStepCap &&
+          (maxMissingOutputRetries === undefined ||
+            outputSchemaRetryCount < maxMissingOutputRetries)
         ) {
           outputSchemaRetryCount += 1
           // The set_output handler records its rejection on this same agent
@@ -2747,10 +3501,10 @@ export async function loopAgentSteps(
           )
 
           // Add system message instructing to use set_output
-          const attemptSuffix = `(attempt ${outputSchemaRetryCount} of ${MAX_MISSING_OUTPUT_RETRIES})`
+          const attemptSuffix = `(attempt ${outputSchemaRetryCount})`
           const outputSchemaMessage = withSystemTags(
             rejection
-              ? `Your set_output call was rejected and your output is still unset ${attemptSuffix}. Fix exactly the reported fields and call set_output again with native object/array values. Rejection: ${rejection}`
+              ? `${currentAgentState.output === undefined ? 'Your set_output call was rejected and your output is still unset' : 'Your structured output needs correction'} ${attemptSuffix}. Fix exactly the reported fields and call set_output again with native object/array values. Keep your completed review and existing file reads; do not repeat the review. Rejection: ${rejection}`
               : `You must use the "set_output" tool to provide a result that matches the output schema before ending your turn ${attemptSuffix}. A prose answer or a Markdown JSON block does not populate structured output; the parent receives null.`,
           )
 
@@ -2773,32 +3527,206 @@ export async function loopAgentSteps(
 
         const creditsBefore = currentAgentState.directCreditsUsed
         const childrenBefore = currentAgentState.childRunIds.length
+        // END-OF-STREAM EMPTY-OUTPUT RETRY (ai@5 `NoOutputGeneratedError`).
+        // A provider that opens a stream, emits zero chunks, and closes cleanly
+        // makes `runAgentStep` throw with the ai SDK's message-prefixed error
+        // ('No output generated ...') — this loop has no sdk-layer retry/failover
+        // below it, so without a runtime wrap the child dies on its FIRST empty
+        // stream even though its committed state is untouched. The retry is
+        // strictly bounded and guarded on visible mutations:
+        //  - exactly ONE extra attempt for the SAME step input (a per-iteration
+        //    local counter — no new global mutable state and no retry loop);
+        //  - retried ONLY when the failed attempt committed nothing: no tool
+        //    result was recorded and no tool call was fully executed (a fully
+        //    executed call is mirrored by a tool message + result in history),
+        //    so the second call can never double-charge a tool or duplicate an
+        //    edit receipt;
+        //  - attempt 2 also ending empty rethrows into today's catch below, so
+        //    the surfaced `{type:'error', message:'Agent run error: ...'}` and
+        //    any downstream failover/parent-receipt semantics stay identical.
+        //
+        // Matching is message-text-prefixed ('No output generated') rather than
+        // `instanceof NoOutputGeneratedError` because agent-runtime must not
+        // import from the `ai` package at this layer; the SDK (which DOES import
+        // the class) already retries the same condition via the equivalent
+        // message check before this point ever sees a clean close.
+        const runLlmStep = () =>
+          runAgentStep({
+            ...params,
+
+            agentState: currentAgentState,
+            memoryContextMessages: buildArray(
+              buildCompiledTaskMemoryMessage(currentAgentState),
+              buildCompiledMemoryV2Message(currentAgentState),
+              buildCompiledPlaybooksMessage(currentAgentState),
+            ),
+            // Projected progressive surface so executeToolCall (which gates via
+            // getEffectiveAgentToolNames without agentState) accepts unlocked
+            // model tools and rejects still-locked ones for this step.
+            agentTemplate: effectiveAgentTemplate,
+            n,
+            prompt: currentPrompt,
+            runId,
+            stepNumber: totalSteps,
+            spawnParams: currentParams,
+            system,
+            tools,
+            additionalToolDefinitions: additionalToolDefinitionsWithCache,
+          })
+
+        const stepHistoryBefore = currentAgentState.messageHistory
+        let emptyStreamRetryCount = 0
+        // Definite-assignment assertion: the only exits from the retry loop
+        // below are the try-block's break (after llmStep is assigned) and the
+        // guarded throw, so the post-loop destructure always sees an assigned
+        // value; TS's CFA cannot see through the try/catch merge, so the
+        // assertion encodes the loop invariant instead of a cast.
+        let llmStep!: Awaited<ReturnType<typeof runAgentStep>>
+        while (true) {
+          let stepAttemptError: unknown
+          try {
+            llmStep = await runLlmStep()
+            break
+          } catch (error) {
+            stepAttemptError = error
+          }
+
+          // The retry guard is narrow by design: it matches ONLY the
+          // provider empty-close marker and requires the failed attempt to
+          // have committed NOTHING visible. The committed-state test compares
+          // PERSISTENT messages (no `timeToLive: 'agentStep'`) before and
+          // after the attempt: the step prompt and the compiled memory-context
+          // messages are APPENDED on every attempt and are all step-TTL, so
+          // they are invisible bookkeeping rather than committed state, while
+          // a fully executed tool call (its tool-call assistant part, its tool
+          // result), a recorded tool-call error, or streamed assistant text
+          // all land as persistent messages and VETO the retry, guaranteeing
+          // the second generation can never double-execute the tool.
+          const errorMessage =
+            stepAttemptError instanceof Error
+              ? stepAttemptError.message
+              : String(stepAttemptError)
+          const countPersistentMessages = (messages: Message[]) =>
+            messages.filter((message) => message.timeToLive === undefined)
+              .length
+          const attemptCommittedNothingVisible =
+            countPersistentMessages(currentAgentState.messageHistory) ===
+            countPersistentMessages(stepHistoryBefore)
+          const isCleanEmptyStreamFailure =
+            errorMessage.startsWith('No output generated') &&
+            attemptCommittedNothingVisible
+          if (
+            !isCleanEmptyStreamFailure ||
+            emptyStreamRetryCount >= EMPTY_STREAM_RETRY_ATTEMPTS ||
+            signal.aborted
+          ) {
+            throw stepAttemptError
+          }
+
+          emptyStreamRetryCount += 1
+
+          // Bounded retry backoff: a fixed 1000ms between attempt 1 and 2,
+          // matching the sdk layer's `RETRY_BACKOFF_BASE_DELAY_MS = 1000`
+          // convention in sdk/src/retry-config.ts. NOT imported from the sdk
+          // (cross-layer dependency is forbidden); agent-runtime owns its own
+          // trial-bound constant instead.
+          await new Promise<void>((resolve) => {
+            // Listener-leak symmetry (retry-backoff-listener-leak): the
+            // 'abort' listener sits on the LONG-LIVED run signal shared by
+            // every step of the run, so a long multi-step run hitting
+            // repeated empty-stream retries would otherwise accumulate one
+            // listener per retry (memory growth plus eventual
+            // MaxListenersExceeded warnings) and keep the signal
+            // referentially reachable after cleanup. Both completion paths
+            // (timer fires, abort fires) now remove the listener and clear
+            // the other's timer, and the listener is registered { once: true
+            // } so even an unchanged code path cannot double-fire it.
+            let onAbort: (() => void) | undefined
+            const signal_ = signal
+            const backoffTimer = setTimeout(() => {
+              if (onAbort) signal_.removeEventListener('abort', onAbort)
+              resolve()
+            }, EMPTY_STREAM_RETRY_BACKOFF_MS)
+            onAbort = () => {
+              clearTimeout(backoffTimer)
+              resolve()
+            }
+            signal_.addEventListener('abort', onAbort, { once: true })
+          })
+          if (signal.aborted) {
+            throw new AbortError()
+          }
+
+          // Reclaim context FIRST when this step already sits past 0.7 of the
+          // model window: an empty-closed stream is the classic silently-failing
+          // shape of an over-context provider request, so ONE bounded semantic
+          // compaction pass (today's existing entry point — not a new mechanism)
+          // runs before the retried generation when context allows it. Under 0.7
+          // the step retries unchanged with NO compaction pass and no cost.
+          if (
+            currentAgentState.contextWindowTokens !== undefined &&
+            currentAgentState.contextTokenCount >
+              0.7 * currentAgentState.contextWindowTokens
+          ) {
+            const semanticBudget = getSemanticCompactionBudget(
+              currentAgentState.contextWindowTokens,
+            )
+            onResponseChunk({
+              type: 'context_compaction_status',
+              state: 'started',
+              ...compactionCorrelation,
+              contextTokens: currentAgentState.contextTokenCount,
+              resolvedContextWindowTokens:
+                semanticBudget.resolvedContextWindowTokens,
+              triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
+              targetBudgetTokens: semanticBudget.targetBudgetTokens,
+            })
+            // Same best-effort contract as the loop's own semantic branch:
+            // failures are absorbed by the helper and never abort the step.
+            await runRuntimeSemanticCompaction({
+              ...params,
+              agentState: currentAgentState,
+              agentTemplate,
+              localAgentTemplates,
+              logger,
+              system,
+              tools,
+              userInputId,
+              onCompactionProgress: emitCompactionProgress,
+            })
+            onResponseChunk({
+              type: 'context_compaction_status',
+              state: 'settled',
+              ...compactionCorrelation,
+            })
+          }
+
+          // Same field shape as the sdk/src/impl/llm.ts provider-status
+          // emission (same provider_status channel, same fields), so the CLI's
+          // existing status chunk handler renders this retry natively — no new
+          // chunk contract is introduced. `model` names the agent's routed
+          // model; `attempt` is the 1-based number of the NEXT attempt (2), the
+          // same convention the sdk layer uses for its 'retrying' publishes.
+          // Nothing is emitted on the failure path beyond what today shows.
+          onResponseChunk({
+            type: 'provider_status',
+            status: 'retrying',
+            model: effectiveAgentTemplate.model,
+            attempt: emptyStreamRetryCount + 1,
+            maxAttempts: EMPTY_STREAM_RETRY_ATTEMPTS + 1,
+            delayMs: EMPTY_STREAM_RETRY_BACKOFF_MS,
+          })
+        }
+
         const {
           agentState: newAgentState,
           shouldEndTurn: llmShouldEndTurn,
           hitStepCap: llmHitStepCap,
+          toolCallErrorSignature,
+          toolCallErrorTools,
           messageId,
           nResponses: generatedResponses,
-        } = await runAgentStep({
-          ...params,
-
-          agentState: currentAgentState,
-          memoryContextMessages: buildArray(
-            buildCompiledTaskMemoryMessage(currentAgentState),
-            buildCompiledMemoryV2Message(currentAgentState),
-          ),
-          // Projected progressive surface so executeToolCall (which gates via
-          // getEffectiveAgentToolNames without agentState) accepts unlocked
-          // model tools and rejects still-locked ones for this step.
-          agentTemplate: effectiveAgentTemplate,
-          n,
-          prompt: currentPrompt,
-          runId,
-          spawnParams: currentParams,
-          system,
-          tools,
-          additionalToolDefinitions: additionalToolDefinitionsWithCache,
-        })
+        } = llmStep
 
         if (newAgentState.runId) {
           await addAgentStep({
@@ -2819,6 +3747,24 @@ export async function loopAgentSteps(
 
         Object.assign(initialAgentState, newAgentState)
         currentAgentState = initialAgentState
+        if (toolCallErrorSignature) {
+          repeatedToolCallErrors =
+            toolCallErrorSignature === lastToolCallErrorSignature
+              ? repeatedToolCallErrors + 1
+              : 1
+          lastToolCallErrorSignature = toolCallErrorSignature
+          if (repeatedToolCallErrors >= 3) {
+            const toolDetails = toolCallErrorTools?.length
+              ? ` Tool arguments failed validation for: ${toolCallErrorTools.join(', ')}. See the preceding tool validation feedback for details.`
+              : ''
+            throw new Error(
+              `Stopped after three consecutive identical invalid tool calls.${toolDetails} Check the tool arguments or provider configuration and retry.`,
+            )
+          }
+        } else {
+          lastToolCallErrorSignature = undefined
+          repeatedToolCallErrors = 0
+        }
         shouldEndTurn = llmShouldEndTurn
         // Preserve the step-cap flag so the next programmatic-step invocation
         // can forward it to the generator (orchestrators like base2 use it to
@@ -2871,26 +3817,20 @@ export async function loopAgentSteps(
         )
       }
 
-      try {
-        await finishAgentRun({
-          ...params,
-          runId,
-          status: 'completed',
-          totalSteps,
-          directCredits: currentAgentState.directCreditsUsed,
-          totalCredits: currentAgentState.creditsUsed,
-        })
-      } catch (finishError) {
-        // Finalization must not replace the successful run result.
-        logger.warn(
-          { error: finishError, runId },
-          'Failed to finalize agent run after completion (non-fatal)',
-        )
-      }
+      await finalizeRun()
 
       return {
         agentState: currentAgentState,
-        output: getAgentOutput(currentAgentState, agentTemplate),
+        output:
+          currentAgentState.runOutcome?.termination === 'failed' ||
+          currentAgentState.runOutcome?.termination === 'cancelled'
+            ? {
+                type: 'error',
+                message:
+                  currentAgentState.runOutcome.cause?.message ??
+                  `Agent run ${currentAgentState.runOutcome.termination}`,
+              }
+            : getAgentOutput(currentAgentState, agentTemplate),
       }
     } catch (error) {
       // Handle user-initiated aborts separately - don't log as errors
@@ -2925,23 +3865,11 @@ export async function loopAgentSteps(
           'Agent run cancelled by user (abort error)',
         )
 
-        try {
-          await finishAgentRun({
-            ...params,
-            runId,
-            status: 'cancelled',
-            totalSteps,
-            directCredits: currentAgentState.directCreditsUsed,
-            totalCredits: currentAgentState.creditsUsed,
-          })
-        } catch (finishError) {
-          // Preserve the abort flow; a finalization failure at this point must
-          // not replace the original cancellation with a different error.
-          logger.warn(
-            { error: finishError, runId },
-            'Failed to finalize agent run after cancellation (non-fatal)',
-          )
+        currentAgentState.runOutcome = {
+          termination: 'cancelled',
+          cause: { code: 'user_cancelled', message: 'Run cancelled by user' },
         }
+        await finalizeRun()
 
         return {
           agentState: currentAgentState,
@@ -2977,25 +3905,14 @@ export async function loopAgentSteps(
       const errorMessage = apiErrorDetails.message ?? fallbackMessage
       const statusCode = apiErrorDetails.statusCode
 
-      const status = signal.aborted ? 'cancelled' : 'failed'
-      try {
-        await finishAgentRun({
-          ...params,
-          runId,
-          status,
-          totalSteps,
-          directCredits: currentAgentState.directCreditsUsed,
-          totalCredits: currentAgentState.creditsUsed,
-          errorMessage,
-        })
-      } catch (finishError) {
-        // Propagate the ORIGINAL error, not a finalization failure that would
-        // mask it.
-        logger.warn(
-          { error: finishError, runId, status },
-          'Failed to finalize agent run after error (non-fatal)',
-        )
+      currentAgentState.runOutcome = {
+        termination: signal.aborted ? 'cancelled' : 'failed',
+        cause: {
+          code: signal.aborted ? 'user_cancelled' : 'agent_execution_error',
+          message: errorMessage,
+        },
       }
+      await finalizeRun()
 
       // Payment required errors (402) should propagate
       if (statusCode === 402) {
@@ -3051,12 +3968,10 @@ const STEP_CAP_REACHED_MESSAGE = [
 
 /**
  * How many consecutive unproductive compactions must occur before the emitted
- * `reason` calls out compaction thrash, and — for the per-pass semantic-only
- * streak — before the loop stops spawning the semantic pruner for the rest of
- * the turn. One threshold for both signals. The loop still never reacts by
- * lowering budgets or dropping pinned state; suppression only avoids paying
- * for a pass that was measured not to reclaim space, and an announced pass is
- * still announced and still settled.
+ * `reason` calls out compaction thrash. Purely a reporting threshold: the loop
+ * never reacts by lowering budgets, dropping pinned state, or suppressing a
+ * pass, so no-progress telemetry can never bound the agent's ability to gather
+ * or reclaim context.
  */
 const COMPACTION_NO_PROGRESS_STREAK_THRESHOLD = 2
 
@@ -3068,15 +3983,6 @@ const buildCompactionNoProgressClause = (
   )}%.`
 
 /**
- * Bounded retries for a structured-output agent that ended its turn without
- * setting required output. A failed `set_output` ends the turn (set_output is in
- * TOOLS_WHICH_WONT_FORCE_NEXT_STEP), so a single retry left a reviewer that
- * botched one field with no step to act on the validation error, and the parent
- * received `value: null`. Bounded, not unlimited: each retry is one more LLM step.
- */
-const MAX_MISSING_OUTPUT_RETRIES = 3
-
-/**
  * How many steps before the cap the one-time near-cap checkpoint nudge fires.
  * Compared with `===` against the per-step-decrementing stepsRemaining, so it
  * triggers at most once and only for runs whose budget exceeds this threshold.
@@ -3084,6 +3990,24 @@ const MAX_MISSING_OUTPUT_RETRIES = 3
  * fixed caps that begin above 30 steps.
  */
 const NEAR_STEP_CAP_WARNING_THRESHOLD = 30
+
+/**
+ * How many EXTRA attempts the loop makes for an end-of-stream empty-output
+ * failure ('No output generated', the ai@5 provider closed-with-zero-chunks
+ * case). Exactly 1: max 2 generations total for the same step input, so the
+ * bound is reached with no loop and no unbounded growth on a provider that
+ * fails the same way every turn.
+ */
+const EMPTY_STREAM_RETRY_ATTEMPTS = 1
+
+/**
+ * Retry backoff between attempt 1 and 2 for an end-of-stream empty-output
+ * failure: a fixed 1000ms. Matches the sdk layer's
+ * `RETRY_BACKOFF_BASE_DELAY_MS = 1000` convention (sdk/src/retry-config.ts)
+ * WITHOUT importing it — cross-layer (agent-runtime → sdk) imports are
+ * forbidden, so the trial-bound constant is re-owned here rather than shared.
+ */
+const EMPTY_STREAM_RETRY_BACKOFF_MS = 1_000
 
 const NEAR_STEP_CAP_WARNING_MESSAGE = [
   'Heads up: this turn is approaching its maximum number of agent steps.',

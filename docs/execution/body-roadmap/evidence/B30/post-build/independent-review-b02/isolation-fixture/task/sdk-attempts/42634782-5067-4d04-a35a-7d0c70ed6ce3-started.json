@@ -1,0 +1,24 @@
+{
+  "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+  "experimentId": "unreported",
+  "taskId": "isolation-task",
+  "repeat": 0,
+  "languages": [
+    "typescript"
+  ],
+  "executionScope": "key_free_environment",
+  "attemptId": "42634782-5067-4d04-a35a-7d0c70ed6ce3",
+  "agentId": "judge-gemini",
+  "providerRoute": "unreported",
+  "requestedModel": "google/gemini-3.1-pro-preview",
+  "role": "auxiliary",
+  "phase": "running",
+  "startedAt": "2026-11-06T21:45:49.404Z",
+  "durationMs": 0,
+  "events": [],
+  "costUsd": null,
+  "costComplete": false,
+  "costEvidence": {
+    "status": "unknown"
+  }
+}

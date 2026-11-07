@@ -57,6 +57,10 @@ export const BUDGET_CANONICAL_NAMES: readonly string[] = [
   'DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS',
   'DEFAULT_SEMANTIC_COMPACTION_TARGET_TOKENS',
   'SEMANTIC_COMPACTION_TRIGGER_FRACTION',
+  // The deterministic eviction floor is mirrored alongside the trigger it must
+  // stay strictly below: the "arm before the LLM pass, but only under real
+  // pressure" invariant is only checkable if both fractions live in one place.
+  'SEMANTIC_EVICTION_FRACTION',
   'SEMANTIC_COMPACTION_TARGET_FRACTION',
   'SEMANTIC_COMPACTION_HEADROOM_FRACTION',
   'SEMANTIC_COMPACTION_MIN_HEADROOM_TOKENS',
@@ -80,6 +84,7 @@ export function isBudgetPatternName(name: string): boolean {
   return (
     name.startsWith('DEFAULT_SEMANTIC_COMPACTION_') ||
     name.startsWith('SEMANTIC_COMPACTION_') ||
+    name === 'SEMANTIC_EVICTION_FRACTION' ||
     name.startsWith('MODEL_CONTEXT_')
   )
 }
@@ -91,12 +96,18 @@ export function isBudgetPatternName(name: string): boolean {
  *
  * Conventions:
  *   - `MODEL_CONTEXT_*` keeps its name (no change).
+ *   - `SEMANTIC_EVICTION_FRACTION` keeps its name (no change).
  *   - `DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS` -> `DEFAULT_MAX_CONTEXT_LENGTH`.
  *   - `DEFAULT_SEMANTIC_COMPACTION_TARGET_TOKENS` -> `DEFAULT_TARGET_CONTEXT_LENGTH`.
  *   - `SEMANTIC_COMPACTION_<REST>` -> `SEMANTIC_<REST>` (strip `COMPACTION_`).
  */
 export function derivePrunerLocalName(canonicalName: string): string {
   if (canonicalName.startsWith('MODEL_CONTEXT_')) {
+    return canonicalName
+  }
+  // Identity mapping: the pruner uses the eviction floor under its canonical
+  // name, so the mirror keeps the same identifier (like MODEL_CONTEXT_*).
+  if (canonicalName === 'SEMANTIC_EVICTION_FRACTION') {
     return canonicalName
   }
   if (canonicalName === 'DEFAULT_SEMANTIC_COMPACTION_TRIGGER_TOKENS') {

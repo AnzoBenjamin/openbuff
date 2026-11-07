@@ -1,0 +1,674 @@
+{
+  "shardId": "06-edits",
+  "question": "Where do read capabilities and exact-byte authority, BOM/EOL/Unicode preservation, edit_transaction and multi-file atomicity, semantic rename/rewrite/code-actions, mutation broker/receipt/recovery, and external-editor concurrency actually run from SDK/filesystem/tool through runtime/CLI?",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "subsystemIds": [
+    "sdk",
+    "packages",
+    "common",
+    "cli",
+    "docs"
+  ],
+  "selectedFiles": [
+    {
+      "path": "common/src/types/filesystem.ts",
+      "from": 1,
+      "to": 179,
+      "reason": "Public adapter contract: byte and line ranges, explicit optional CAS/delete/move/create capabilities, authority tier, and directory-stream guarantees."
+    },
+    {
+      "path": "common/src/util/content-hash.ts",
+      "from": 1,
+      "to": 215,
+      "reason": "Separates exact and LF-normalized hashes; authenticates cap.v3 tokens with project/path/run scope and inclusive line bounds."
+    },
+    {
+      "path": "packages/agent-runtime/src/process-str-replace.ts",
+      "from": 1338,
+      "to": 1414,
+      "reason": "Dominant and original line-ending restoration after normalized matching; inspect mixed EOL, final newline, and inserted-line behavior."
+    },
+    {
+      "path": "sdk/src/tools/read-files.ts",
+      "from": 263,
+      "to": 837,
+      "reason": "Actual byte decode/refusal, bounded oversized reads, cancellation and adapter checks, whole-file/range rendering, sourceContent, and complete-only editAnchor minting."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/read-files.ts",
+      "from": 170,
+      "to": 381,
+      "reason": "Model-visible read result normalization and reminting; whole-file authorization ladder, stored hashes, stale reads, and clearing per-path edit state."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts",
+      "from": 621,
+      "to": 990,
+      "reason": "Strict edit authorization: whole-file capability validation, stored authorization freshness, scoped range/symbol requirements, auto-reread behavior, and precise rejection recovery."
+    },
+    {
+      "path": "packages/agent-runtime/src/process-edit-transaction.ts",
+      "from": 182,
+      "to": 457,
+      "reason": "Pure transaction preflight over shared per-path snapshots, ordered in-memory changes, stop-on-failure attribution, no-op handling, and prepared patches."
+    },
+    {
+      "path": "sdk/src/tools/change-file.ts",
+      "from": 421,
+      "to": 919,
+      "reason": "Production multi-file coordinator: preparation/resource/adapter checks, path leases, durable intent begin/commit/abort, per-action receipt verification, cancellation, and rolled_back/rollback_incomplete results."
+    },
+    {
+      "path": "sdk/src/tools/change-file.ts",
+      "from": 950,
+      "to": 1268,
+      "reason": "Text pre-images and expected hash comparison; actual conditional commit/delete/move/exclusive create, mode retention, and conflict-checked rollback primitives."
+    },
+    {
+      "path": "sdk/src/tools/filesystem-authority.ts",
+      "from": 633,
+      "to": 777,
+      "reason": "Raw-byte snapshots versus normalized edit freshness; authority delegation and explicit unsupported returns for byte ranges and guarded mutations."
+    },
+    {
+      "path": "sdk/src/services/workspace-mutation-broker.ts",
+      "from": 216,
+      "to": 350,
+      "reason": "Default broker construction, workspace identity initialization, exact-byte conditional commit under cooperative lock, staged replacement and pending/finalized receipt transitions."
+    },
+    {
+      "path": "sdk/src/services/workspace-mutation-broker.ts",
+      "from": 554,
+      "to": 770,
+      "reason": "Durable-state initialization, workspace lock timeout/liveness recovery, incomplete receipt reconciliation, ambiguous recovery, and filesystem identity checks for interrupted moves."
+    },
+    {
+      "path": "sdk/src/tools/transaction-intent-log.ts",
+      "from": 1357,
+      "to": 1534,
+      "reason": "Startup pre-image restoration and interrupted multi-file recovery consumers; adapter fallbacks, mode restoration, ambiguous-commit classification, and reported recovery failures."
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 202,
+      "to": 448,
+      "reason": "1-based tool to 0-based LSP positions; raw JS-string offset calculation, normalized WorkspaceEdit application to current disk text, overlap/refusal checks, and partial per-file splice results."
+    },
+    {
+      "path": "sdk/src/tools/semantic-edit-apply.ts",
+      "from": 1,
+      "to": 189,
+      "reason": "Shared semantic mutation apply path: consumes service results, routes changed contents through changeFiles, preserves service errors, and reduces verified results into compact tool receipts."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 930,
+      "to": 985,
+      "reason": "Real run initialization: injected filesystem versus broker-backed default, fail-closed adapter fallback, workspace intent-log construction, and once-per-process startup recovery."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 3024,
+      "to": 3300,
+      "reason": "Real semantic tool dispatch, compact mutation result propagation, confirmed applied actions, workspace revision/snapshot journaling, language-server sync, and host mutation observers."
+    },
+    {
+      "path": "cli/src/utils/index-workspace-watcher.ts",
+      "from": 106,
+      "to": 253,
+      "reason": "External editor observation boundary: debounce and path delta classification, Linux worker/recursive watcher alternatives, unknown-event stale fallback, and watcher failure behavior."
+    }
+  ],
+  "secondaryFiles": [
+    {
+      "path": "sdk/src/tools/node-filesystem.ts",
+      "from": 1,
+      "to": 180,
+      "reason": "Default adapter wiring to broker plus bounded streaming text ranges; no conditional mutation capability without a broker."
+    },
+    {
+      "path": "common/src/util/line-coordinates.ts",
+      "from": 1,
+      "to": 245,
+      "reason": "Inclusive line semantics, terminal empty-line handling, LF normalization, whole-file coverage, and bounded reanchoring."
+    },
+    {
+      "path": "common/src/tools/params/tool/edit-transaction.ts",
+      "from": 1,
+      "to": 729,
+      "reason": "Public/provider discriminators, capability call shape, normalization, edit limits, lifecycle variants, and optional block payload compatibility; read the relevant variants only."
+    },
+    {
+      "path": "common/src/tools/params/tool/rename-symbol.ts",
+      "from": 1,
+      "to": 49,
+      "reason": "Published rename inputs and outputs, particularly character coordinate semantics"
+    },
+    {
+      "path": "common/src/tools/params/tool/code-action.ts",
+      "from": 1,
+      "to": 51,
+      "reason": "Published action inputs/output and supported kind"
+    },
+    {
+      "path": "common/src/tools/results/filesystem.ts",
+      "from": 173,
+      "to": 488,
+      "reason": "Canonical mutation and CommitReceiptV1 schemas, action/aggregate correlation, exact bytes authority, and truthful outcome constraints."
+    },
+    {
+      "path": "sdk/src/tools/mutation-capabilities.ts",
+      "from": 1,
+      "to": 92,
+      "reason": "Post-commit authority built from exact committed bytes with separately normalized edit hash and bounded anchors."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts",
+      "from": 421,
+      "to": 620,
+      "reason": "Entrypoint/request limits/path normalization, authoritative project/run scope guard, and initial snapshots before the primary strict-authorization section."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts",
+      "from": 1445,
+      "to": 1603,
+      "reason": "Runtime client application, positive-evidence coordination, confirmed post-edit state, capability refresh, and sanitized apply errors."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/edit-application-coordinator.ts",
+      "from": 127,
+      "to": 223,
+      "reason": "Positive mutation evidence: action/path/receipt confirmation and rejection of outputs without verified applied evidence."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/edit-application-coordinator.ts",
+      "from": 328,
+      "to": 609,
+      "reason": "Authorization invalidation and commit after client results; post-edit anchors, path leases, stale/unconfirmed/throw outcomes."
+    },
+    {
+      "path": "packages/agent-runtime/src/process-edit-transaction.ts",
+      "from": 726,
+      "to": 885,
+      "reason": "Capability-covered replace_range resolution and original-to-working span mapping after earlier transaction edits."
+    },
+    {
+      "path": "packages/agent-runtime/src/process-edit-transaction.ts",
+      "from": 1073,
+      "to": 1376,
+      "reason": "Variant implementations: str_replace, scoped replace_range, comment-aware rewrite_symbol, patch, and write_file."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/rewrite-symbol.ts",
+      "from": 1,
+      "to": 195,
+      "reason": "Standalone compatibility semantic rewrite entrypoint and handoff to str_replace; unavailable symbol and strict capability handling."
+    },
+    {
+      "path": "packages/agent-runtime/src/structural-read.ts",
+      "from": 76,
+      "to": 193,
+      "reason": "Comment-aware symbol bounds, slice capabilities, and exact replacement-span validation."
+    },
+    {
+      "path": "packages/agent-runtime/src/structural-read.ts",
+      "from": 345,
+      "to": 525,
+      "reason": "AST symbol extraction and heuristic fallback across target languages; ambiguity/occurrence and Python indentation boundaries."
+    },
+    {
+      "path": "packages/agent-runtime/src/process-str-replace.ts",
+      "from": 310,
+      "to": 572,
+      "reason": "Atomic versus partial batches, exact/normalized content, malformed/stale/scoped capability validation, and syntax safeguards."
+    },
+    {
+      "path": "packages/agent-runtime/src/process-str-replace.ts",
+      "from": 976,
+      "to": 1004,
+      "reason": "Actual call of original EOL restoration after replacement processing."
+    },
+    {
+      "path": "sdk/src/services/workspace-mutation-broker.ts",
+      "from": 350,
+      "to": 527,
+      "reason": "Exclusive create, conditional delete and no-clobber move primitives, rollback/recovery state, destination collisions."
+    },
+    {
+      "path": "sdk/src/services/workspace-mutation-broker.ts",
+      "from": 771,
+      "to": 849,
+      "reason": "Durable prepare/update/finalize receipt methods and state advancement."
+    },
+    {
+      "path": "sdk/src/services/workspace-mutation-broker.ts",
+      "from": 884,
+      "to": 1042,
+      "reason": "Canonical path containment, raw-byte hashes, file identity, staged file writes and fsync behavior."
+    },
+    {
+      "path": "sdk/src/tools/transaction-intent-log.ts",
+      "from": 993,
+      "to": 1301,
+      "reason": "Durable begin/commit/abort and owner-aware interrupted-transaction scan/revert; classify live processes, lost commit append, and partial divergence."
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 736,
+      "to": 816,
+      "reason": "Actual rename prepare/execute and organize-imports-only code-action consumers; unavailable and empty result behavior."
+    },
+    {
+      "path": "sdk/src/tools/rename-symbol.ts",
+      "from": 1,
+      "to": 33,
+      "reason": "Thin SDK semantic rename wrapper to the shared apply core."
+    },
+    {
+      "path": "sdk/src/tools/code-action.ts",
+      "from": 1,
+      "to": 31,
+      "reason": "Thin SDK organize-imports wrapper to the shared apply core."
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 1057,
+      "to": 1193,
+      "reason": "Only the edit contract boundary: WorkspaceEdit normalization, documentChanges versions/resource operations and omitted unsupported entries; lifecycle belongs to pair07."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2588,
+      "to": 2601,
+      "reason": "Actual edit_transaction client dispatch to changeFiles with the same fs, issuer, policy, signal and intent log as semantic tools."
+    },
+    {
+      "path": "cli/src/utils/create-run-config.ts",
+      "from": 217,
+      "to": 330,
+      "reason": "Real CLI watcher startup, confirmed mutation delta consumer, unknown mutation invalidation and read policy injection."
+    },
+    {
+      "path": "cli/src/components/tools/edit-transaction.tsx",
+      "from": 309,
+      "to": 587,
+      "reason": "CLI rendering of prepared results, residual recovery and receipt-backed lifecycle outcomes."
+    },
+    {
+      "path": "cli/src/components/tools/semantic-edit-tools.tsx",
+      "from": 40,
+      "to": 272,
+      "reason": "User-visible unavailable/partial/failure/success and per-file semantic mutation outcomes."
+    },
+    {
+      "path": "sdk/src/__tests__/workspace-mutation-broker.test.ts",
+      "from": 37,
+      "to": 283,
+      "reason": "Exact-byte/stale receipts, cross-process CAS, create/delete/no-clobber move, and brokered CRLF rollback."
+    },
+    {
+      "path": "sdk/src/__tests__/workspace-mutation-broker.test.ts",
+      "from": 284,
+      "to": 468,
+      "reason": "Stale owner locks, committed incomplete receipts, workspace isolation and ambiguous recovery refusal."
+    },
+    {
+      "path": "sdk/src/__tests__/change-file.test.ts",
+      "from": 349,
+      "to": 604,
+      "reason": "Multi-file preflight failure, verified commit/rollback, incomplete rollback and external edit preservation probes."
+    },
+    {
+      "path": "sdk/src/__tests__/change-file.test.ts",
+      "from": 860,
+      "to": 1166,
+      "reason": "Intent-log integration and cancellation during production coordinated commit/rollback."
+    },
+    {
+      "path": "sdk/src/tools/__tests__/transaction-intent-log.test.ts",
+      "from": 1,
+      "to": 1644,
+      "reason": "Targeted follow-up only: durable bounds/ownership/mode/ambiguous-commit recovery tests; select matching describe blocks rather than read all."
+    },
+    {
+      "path": "sdk/src/__tests__/read-files.test.ts",
+      "from": 441,
+      "to": 469,
+      "reason": "Binary and unsupported encoding refusal with no capabilities."
+    },
+    {
+      "path": "sdk/src/__tests__/read-files.test.ts",
+      "from": 644,
+      "to": 838,
+      "reason": "Proper subset/whole-file/oversized range anchor scope and unsupported adapter behavior."
+    },
+    {
+      "path": "sdk/src/__tests__/mutation-capabilities.test.ts",
+      "from": 1,
+      "to": 92,
+      "reason": "Exact committed byte authority versus normalized read hash and anchor size limits."
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/process-str-replace.test.ts",
+      "from": 69,
+      "to": 111,
+      "reason": "Mixed line-ending preservation probe."
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/read-files-capability-authorization.test.ts",
+      "from": 1389,
+      "to": 1570,
+      "reason": "Strict create/delete authorization and externally modified created file refusal."
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/edit-transaction-multi-file-recovery.e2e.test.ts",
+      "from": 232,
+      "to": 437,
+      "reason": "Runtime end-to-end no-match transaction abort, failing-path recovery selection, model-visible reread, and successful retry."
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/rewrite-symbol.test.ts",
+      "from": 431,
+      "to": 589,
+      "reason": "Python/Rust/Go scoped rewrite semantics and strict standalone caller authorization."
+    },
+    {
+      "path": "sdk/src/__tests__/language-intelligence.test.ts",
+      "from": 235,
+      "to": 705,
+      "reason": "Renameability, unsupported action kind, empty edits, 1-based line conversion, multi-file splicing, partial disk failures and overlap."
+    },
+    {
+      "path": "sdk/src/__tests__/language-intelligence.test.ts",
+      "from": 1239,
+      "to": 1324,
+      "reason": "Real shared apply-core use by rename/code-action wrappers and unavailable no-mutation behavior."
+    },
+    {
+      "path": "sdk/src/__tests__/run-mutation-dispatch.test.ts",
+      "from": 333,
+      "to": 593,
+      "reason": "Run-scoped capability issuer, applied range notification, workspace journal advance and no observer notification on rejected apply."
+    },
+    {
+      "path": "cli/src/utils/__tests__/index-workspace-watcher.test.ts",
+      "from": 1,
+      "to": 100,
+      "reason": "Watcher contract tests; matching fallback/platform cases may require later sections."
+    },
+    {
+      "path": "docs/deterministic-edit-system.md",
+      "from": 30,
+      "to": 160,
+      "reason": "Documented strict authority, whole-file versus scoped read, cross-turn freshness and external activity claims."
+    },
+    {
+      "path": "docs/deterministic-edit-system.md",
+      "from": 302,
+      "to": 443,
+      "reason": "Transaction abort recovery, post-edit anchors, capability minting and structural block selectors."
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 218,
+      "to": 253,
+      "reason": "Documented authenticated cap.v3 scope and exact recovery selector lifecycle."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 998,
+      "to": 1224,
+      "reason": "User-facing read selector, canonical mutation surface, compatibility, preservation and coordinated transaction guarantees."
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 49,
+      "to": 55,
+      "reason": "Default SDK broker architecture and explicit external-editor authority boundary."
+    }
+  ],
+  "capabilityCandidates": [
+    {
+      "id": "read-authority",
+      "name": "Complete-only authenticated read authority",
+      "trace": [
+        "common/src/util/content-hash.ts",
+        "sdk/src/tools/read-files.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/read-files.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts"
+      ],
+      "inspect": [
+        "whole-file versus range/symbol grants",
+        "issuer project/path/run scope and reminting",
+        "partial/unsupported/binary/encoding/cancelled reads",
+        "stale stored hashes and exact reread selectors",
+        "post-edit and cross-turn authorization evidence"
+      ],
+      "tests": [
+        "sdk/src/__tests__/read-files.test.ts",
+        "packages/agent-runtime/src/__tests__/read-files-capability-authorization.test.ts"
+      ]
+    },
+    {
+      "id": "byte-preservation",
+      "name": "Byte authority and text preservation across mutation paths",
+      "trace": [
+        "common/src/types/filesystem.ts",
+        "common/src/util/content-hash.ts",
+        "sdk/src/tools/read-files.ts",
+        "sdk/src/tools/change-file.ts",
+        "sdk/src/tools/filesystem-authority.ts",
+        "sdk/src/services/workspace-mutation-broker.ts",
+        "packages/agent-runtime/src/process-str-replace.ts"
+      ],
+      "inspect": [
+        "raw byte versus normalized text freshness",
+        "UTF-8 BOM treatment at TextDecoder/Buffer boundaries",
+        "UTF-16 and invalid UTF-8 refusal versus NUL binary detection",
+        "mixed CRLF/LF, lone CR, final newline and inserted text",
+        "Unicode JS code units and lossless pre-image restoration",
+        "adapters returning strings versus original bytes"
+      ],
+      "tests": [
+        "sdk/src/__tests__/workspace-mutation-broker.test.ts",
+        "sdk/src/__tests__/mutation-capabilities.test.ts",
+        "packages/agent-runtime/src/__tests__/process-str-replace.test.ts"
+      ]
+    },
+    {
+      "id": "edit-transaction",
+      "name": "Bounded coordinated multi-file edits",
+      "trace": [
+        "common/src/tools/params/tool/edit-transaction.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts",
+        "packages/agent-runtime/src/process-edit-transaction.ts",
+        "sdk/src/run.ts",
+        "sdk/src/tools/change-file.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-application-coordinator.ts"
+      ],
+      "inspect": [
+        "same original snapshot and ordered same-path transformations",
+        "all-or-nothing preflight versus observable coordinated commit",
+        "supported adapter primitives and fail-closed guarded mutation",
+        "receipt verification and confirmed post-edit state",
+        "resource limits and cancellation",
+        "rolled_back/rollback_incomplete outcomes and stale external state"
+      ],
+      "tests": [
+        "packages/agent-runtime/src/__tests__/edit-transaction-multi-file-recovery.e2e.test.ts",
+        "sdk/src/__tests__/change-file.test.ts"
+      ]
+    },
+    {
+      "id": "cooperative-mutation-broker",
+      "name": "Worktree cooperative CAS and durable per-file receipts",
+      "trace": [
+        "sdk/src/run.ts",
+        "sdk/src/tools/node-filesystem.ts",
+        "sdk/src/services/workspace-mutation-broker.ts",
+        "sdk/src/tools/filesystem-authority.ts"
+      ],
+      "inspect": [
+        "worktree identity and state root availability",
+        "participating process serialization and lock liveness",
+        "exact-byte hash comparison under lock",
+        "durable staging/state/receipt fsync order",
+        "exclusive create/no-clobber move",
+        "prepared and ambiguous receipt recovery",
+        "scope of guarantees against arbitrary external editors"
+      ],
+      "tests": [
+        "sdk/src/__tests__/workspace-mutation-broker.test.ts",
+        "sdk/src/__tests__/node-filesystem.test.ts"
+      ]
+    },
+    {
+      "id": "transaction-recovery",
+      "name": "Multi-file crash recovery from durable intent pre-images",
+      "trace": [
+        "sdk/src/run.ts",
+        "sdk/src/tools/change-file.ts",
+        "sdk/src/tools/transaction-intent-log.ts"
+      ],
+      "inspect": [
+        "durable begin/commit/abort and journaling failure behavior",
+        "once-per-process startup retry behavior",
+        "live transaction owner identity and stale state",
+        "all-diverged versus half-applied recovery classification",
+        "current-byte/hash validation during restoration",
+        "adapter write and mode preservation",
+        "interaction with per-file broker recovery"
+      ],
+      "tests": [
+        "sdk/src/tools/__tests__/transaction-intent-log.test.ts",
+        "sdk/src/__tests__/change-file.test.ts"
+      ]
+    },
+    {
+      "id": "semantic-workspace-edit",
+      "name": "Semantic rename and organize-imports application",
+      "trace": [
+        "common/src/tools/params/tool/rename-symbol.ts",
+        "common/src/tools/params/tool/code-action.ts",
+        "sdk/src/services/language-intelligence.ts",
+        "sdk/src/tools/semantic-edit-apply.ts",
+        "sdk/src/run.ts",
+        "cli/src/components/tools/semantic-edit-tools.tsx"
+      ],
+      "inspect": [
+        "prepareRename and empty/unavailable/code-action kind behavior",
+        "tool 1-based lines versus LSP 0-based lines/characters",
+        "position encoding assumptions and CRLF/astral character ranges",
+        "server document version/resource operations at normalization boundary",
+        "raw current-disk splice and overlap/partial-file behavior",
+        "read snapshot to commit expected hash propagation",
+        "named compact receipts and journal/UI consumers"
+      ],
+      "tests": [
+        "sdk/src/__tests__/language-intelligence.test.ts",
+        "sdk/src/__tests__/lsp-multiplexer.test.ts"
+      ]
+    },
+    {
+      "id": "structural-rewrite",
+      "name": "Comment-aware polyglot symbol rewrite",
+      "trace": [
+        "packages/agent-runtime/src/structural-read.ts",
+        "packages/agent-runtime/src/process-edit-transaction.ts",
+        "packages/agent-runtime/src/tools/handlers/tool/rewrite-symbol.ts",
+        "packages/agent-runtime/src/process-str-replace.ts"
+      ],
+      "inspect": [
+        "AST versus heuristic extraction and language limits",
+        "exact symbol slice capability coverage",
+        "preceding documentation and Python indentation semantics",
+        "same-file original span remapping and overlap refusal",
+        "compatibility handler wiring to canonical mutation path"
+      ],
+      "tests": [
+        "packages/agent-runtime/src/__tests__/rewrite-symbol.test.ts",
+        "packages/agent-runtime/src/__tests__/process-edit-transaction.test.ts"
+      ]
+    },
+    {
+      "id": "external-editor-concurrency",
+      "name": "Observed workspace changes and mutation result consumption",
+      "trace": [
+        "sdk/src/run.ts",
+        "cli/src/utils/create-run-config.ts",
+        "cli/src/utils/index-workspace-watcher.ts",
+        "sdk/src/tools/change-file.ts",
+        "sdk/src/services/workspace-mutation-broker.ts"
+      ],
+      "inspect": [
+        "confirmed precise delta versus unknown mutation full invalidation",
+        "workspace revision/snapshot and inline language-server sync",
+        "watcher gaps/debounce/platform fallbacks",
+        "SDK host without CLI watcher behavior",
+        "cooperative locks versus external editor races",
+        "read-before-edit revalidation and conditional rollback",
+        "UI rendering of unknown/partial/failure/receipt states"
+      ],
+      "tests": [
+        "cli/src/utils/__tests__/index-workspace-watcher.test.ts",
+        "sdk/src/__tests__/run-mutation-dispatch.test.ts",
+        "sdk/src/__tests__/change-file.test.ts"
+      ]
+    }
+  ],
+  "searchCoverage": {
+    "primarySections": 18,
+    "primaryUniqueFiles": 15,
+    "primaryLines": 4314,
+    "inventoryFiles": 3056,
+    "retrieval": "Read pinned INVENTORY.json and persisted RETRIEVAL.json. Native query_index/read_files/read_subtree tools are not exposed in this Codex session; discovery used rg and exact sed reads instead. Persisted language-capability retrieval identified language-intelligence as a boundary.",
+    "rootsSearched": [
+      "sdk/src",
+      "packages/agent-runtime/src",
+      "common/src",
+      "cli/src",
+      "docs"
+    ],
+    "queries": [
+      "readCapability/readCapabilities/cap.v3/whole-file authorization",
+      "edit_transaction/processEditTransaction/changeFiles/coordinateEditApplication",
+      "exact-byte/hashFileContent/getContentHash/BOM/CRLF/EOL/UTF-16/Unicode",
+      "WorkspaceMutationBroker/conditionalCommit/conditionalDelete/conditionalMove/receipt",
+      "transaction-intent-log/recoverInterruptedTransactions/revertTransaction",
+      "rename_symbol/rewrite_symbol/code_action/semantic-edit-apply",
+      "LspPosition/WorkspaceEdit/documentChanges/positionEncoding/overlap",
+      "onFilesystemMutation/onFilesChanged/workspaceState/index-workspace-watcher"
+    ],
+    "docsRead": [
+      "agents/patterns/audit-codebase.md",
+      "docs/architecture.md selected sections",
+      "docs/request-flow.md selected sections",
+      "docs/agents-and-tools.md 998-1224",
+      "docs/deterministic-edit-system.md headings and selected statements"
+    ],
+    "testsDiscovered": [
+      "exact-byte and cross-process CAS receipts",
+      "guarded adapter capability refusal",
+      "CRLF and mixed EOL preservation",
+      "stale/wrong-scope/truncated read capabilities",
+      "multi-file abort and failing-path reread/retry",
+      "conditional rollback conflict with external edits",
+      "durable intent/owner/ambiguous-commit recovery",
+      "rename/code-action unavailable, multi-file/overlap and shared apply core",
+      "workspace journal and mutation observer outcomes"
+    ],
+    "sampling": "Primary sections are the required bounded audit slice. Secondary sections are adaptive follow-up references for unresolved consumer, schema, receipt, recovery, preservation or test questions, not a claim of full-line inspection. Discovery inspected selected exact ranges and searched symbols/test names; it did not execute tests or assert capability maturity.",
+    "excluded": [
+      "Language-server launch/lifecycle/version synchronization implementation belongs to pair07, except the position/WorkspaceEdit mutation contract boundary.",
+      "OS execution sandbox and terminal permission enforcement belong to pair09.",
+      "Indexer ranking/retrieval correctness belongs to its assigned shard; pair06 only traces mutation/watcher invalidation consumers.",
+      "Credentials/private configuration and all source mutation were excluded."
+    ],
+    "remainingQuestions": [
+      "Preservation assurance must distinguish UTF-8 text from exact original byte encoding, including BOM.",
+      "External editor exclusion cannot be inferred from participating Openbuff process locks.",
+      "Semantic edits require checking the service read snapshot against the later transaction commit snapshot.",
+      "Per-file broker recovery and multi-file intent recovery are different authority paths; inspect both failure behavior and real startup wiring."
+    ]
+  }
+}

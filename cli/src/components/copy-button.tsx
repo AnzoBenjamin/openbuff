@@ -1,9 +1,7 @@
-import { TextAttributes } from '@opentui/core'
-import React, { useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 
-import { Clickable } from './clickable'
+import { Button } from './button'
 import { useTheme } from '../hooks/use-theme'
-import { useTimeout } from '../hooks/use-timeout'
 import { copyTextToClipboard } from '../utils/clipboard'
 
 import type { ReactNode } from 'react'
@@ -60,123 +58,109 @@ export const copyButtonHandlers = {
   },
 }
 
-// ============================================================================
-// Internal component
-// ============================================================================
-
-interface CopyIconProps {
-  isCopied: boolean
-  isHovered: boolean
-  leadingSpace: boolean
-}
-
-/**
- * Internal presentational component for the copy icon.
- * Displays a dimmed icon that expands on hover and changes to a checkmark when copied.
- */
-const CopyIcon: React.FC<CopyIconProps> = ({
-  isCopied,
-  isHovered,
-  leadingSpace,
-}) => {
-  const theme = useTheme()
-  const text = getCopyIconText(isCopied, isHovered, leadingSpace)
-
-  if (isCopied) {
-    return <span fg="green">{text}</span>
-  }
-
-  if (isHovered) {
-    return <span fg={theme.foreground}>{text}</span>
-  }
-
-  return (
-    <span fg={theme.muted} attributes={TextAttributes.DIM}>
-      {text}
-    </span>
-  )
-}
-
 interface CopyButtonProps {
-  /** The text to copy to clipboard when clicked */
-  textToCopy: string
-  /** Optional content to display before the copy icon */
+  /** Source is materialized only on deliberate activation. */
+  textToCopy: string | (() => string)
   children?: ReactNode
-  /** Whether to include a leading space before the icon (default: true) */
   leadingSpace?: boolean
-  /** Style props passed to the underlying Clickable */
   style?: Record<string, unknown>
+  label?: string
+  copy?: typeof copyTextToClipboard
 }
 
-/**
- * A clickable copy button that copies text to clipboard.
- *
- * Can be used standalone (just the icon) or with children (content + trailing icon).
- *
- * @example
- * ```tsx
- * // Standalone copy button
- * <CopyButton textToCopy="some text" leadingSpace={false} />
- *
- * // With content (icon appears after children)
- * <CopyButton textToCopy={content} style={{ wrapMode: 'word' }}>
- *   <span>Content to display</span>
- * </CopyButton>
- * ```
- */
+/** Prose stays selectable; only the named button performs a complete source copy. */
 export const CopyButton: React.FC<CopyButtonProps> = ({
   textToCopy,
   children,
   leadingSpace = true,
   style,
+  label = 'Copy',
+  copy = copyTextToClipboard,
 }) => {
-  const [isCopied, setIsCopied] = useState(false)
-  const [isHovered, setIsHovered] = useState(false)
-  const { setTimeout } = useTimeout()
-
-  const handleCopy = async () => {
+  const theme = useTheme()
+  const [state, setState] = useState<'idle' | 'copying' | 'copied' | 'failed'>(
+    'idle',
+  )
+  const [failure, setFailure] = useState('')
+  const pending = useRef(false)
+  const mounted = useRef(true)
+  const sourceRef = useRef(textToCopy)
+  sourceRef.current = textToCopy
+  const timer = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      if (timer.current) clearTimeout(timer.current)
+    }
+  }, [])
+  useEffect(() => {
+    setState((current) => (current === 'failed' ? 'failed' : 'idle'))
+  }, [textToCopy])
+  const activate = async () => {
+    if (pending.current) return
+    pending.current = true
+    const source = textToCopy
+    if (timer.current) clearTimeout(timer.current)
+    setState('copying')
+    setFailure('')
     try {
-      await copyTextToClipboard(textToCopy, {
-        suppressGlobalMessage: true,
-      })
-      const newState = copyButtonHandlers.handleCopy()
-      setIsCopied(newState.isCopied)
-      setIsHovered(newState.isHovered)
-      setTimeout(
-        'reset-copied',
-        () => setIsCopied(false),
-        COPIED_RESET_DELAY_MS,
-      )
-    } catch (_error) {
-      // Error is already logged and displayed by copyTextToClipboard
+      const text = typeof source === 'function' ? source() : source
+      if (!text.length) throw new Error('No captured text is available')
+      await copy(text, { suppressGlobalMessage: true })
+      if (!mounted.current || sourceRef.current !== source) return
+      setState('copied')
+      timer.current = globalThis.setTimeout(() => {
+        if (mounted.current)
+          setState((current) => (current === 'copied' ? 'idle' : current))
+      }, COPIED_RESET_DELAY_MS)
+    } catch (error) {
+      if (mounted.current && sourceRef.current === source) {
+        setState('failed')
+        setFailure(error instanceof Error ? error.message : String(error))
+      }
+    } finally {
+      pending.current = false
     }
   }
-
-  const handleMouseOver = () => {
-    const shouldHover = copyButtonHandlers.handleMouseOver(isCopied)
-    if (shouldHover) {
-      setIsHovered(true)
-    }
-  }
-
-  const handleMouseOut = () => {
-    setIsHovered(copyButtonHandlers.handleMouseOut())
-  }
-
+  const scope = label.replace(/^copy\s*/i, '')
   return (
-    <Clickable
-      as="text"
-      style={style}
-      onMouseDown={handleCopy}
-      onMouseOver={handleMouseOver}
-      onMouseOut={handleMouseOut}
-    >
-      {children}
-      <CopyIcon
-        isCopied={isCopied}
-        isHovered={isHovered}
-        leadingSpace={leadingSpace}
-      />
-    </Clickable>
+    <box style={{ flexDirection: 'column', ...style }}>
+      {children !== undefined && (
+        <text selectable={true} style={style}>
+          {children}
+        </text>
+      )}
+      <Button
+        onClick={activate}
+        style={{ alignSelf: children === undefined ? undefined : 'flex-end' }}
+      >
+        <text
+          fg={
+            state === 'failed'
+              ? theme.error
+              : state === 'copied'
+                ? theme.success
+                : theme.muted
+          }
+          wrapMode="none"
+        >
+          {leadingSpace ? ' ' : ''}
+          {state === 'copied'
+            ? `Copied${scope ? ` ${scope}` : ''}`
+            : state === 'copying'
+              ? `Copying${scope ? ` ${scope}` : ''}…`
+              : state === 'failed'
+                ? `Retry copy${scope ? ` ${scope}` : ''}`
+                : label}
+        </text>
+      </Button>
+      {state === 'failed' && (
+        <text fg={theme.error} style={{ wrapMode: 'word' }}>
+          Copy failed: {failure}. Select text and copy manually, or activate
+          again to retry.
+        </text>
+      )}
+    </box>
   )
 }

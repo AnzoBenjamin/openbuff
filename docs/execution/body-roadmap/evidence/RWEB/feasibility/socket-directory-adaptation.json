@@ -1,0 +1,13 @@
+{
+  "type": "researcher-browser-probe-socket-directory-adaptation",
+  "priorScript": {
+    "path": "docs/execution/body-roadmap/evidence/RWEB/feasibility/run-local-probes.before-socketdir.py",
+    "sha256": "c647c027e356c27ae8508d3a255e0c3ef9d28bfe4b9bcdad580f383d79230e60"
+  },
+  "priorAttempts": [
+    "attempts/20261106T222357Z-f625afa8/result.json",
+    "attempts/20261106T222523Z-a64037ca/result.json"
+  ],
+  "observedReason": "Sandbox denied loopback bind first; authorized retry then hit upstream UNIX socket path length refusal (144 bytes, maximum 103) before any HTTP request.",
+  "change": "Select a short private 0700 AGENT_BROWSER_SOCKET_DIR in /tmp; preserve session/namespace and source fixtures."
+}

@@ -1047,6 +1047,34 @@ describe('trimMessagesToFitTokenLimit', () => {
   })
 
   describe('keepDuringTruncation functionality', () => {
+    it('allows stale user prompts to yield to the newest request', () => {
+      const oldPrompt = 'old-user-prompt-must-not-pin-forever '.repeat(1_000)
+      const messages: Message[] = [
+        userMessage({
+          content: oldPrompt,
+          tags: ['USER_PROMPT'],
+          keepDuringTruncation: true,
+        }),
+        userMessage({
+          content: 'current user request must survive',
+          tags: ['USER_PROMPT'],
+          keepDuringTruncation: true,
+        }),
+      ]
+
+      const report = trimMessagesToFitTokenLimitWithReport({
+        messages,
+        systemTokens: 0,
+        maxTotalTokens: 2_000,
+        logger,
+      })
+      const rendered = JSON.stringify(report.messages)
+
+      expect(rendered).not.toContain('old-user-prompt-must-not-pin-forever')
+      expect(rendered).toContain('current user request must survive')
+      expect(report.fitsBudget).toBe(true)
+    })
+
     it('retains compact pinned knowledge memory during emergency trimming', () => {
       const fingerprint = 'd'.repeat(64)
       const semanticSummary = userMessage({

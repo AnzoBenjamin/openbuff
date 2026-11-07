@@ -1,0 +1,2 @@
+$ bun run project-root-guard.ts
+Project-root guard passed: no unguarded fileContext.projectRoot dereferences found.

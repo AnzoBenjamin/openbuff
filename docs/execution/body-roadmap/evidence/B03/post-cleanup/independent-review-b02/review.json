@@ -1,0 +1,519 @@
+{
+  "schemaVersion": 1,
+  "nodeId": "B03",
+  "reviewer": "/root/b02_runtime_outcomes",
+  "implementationOwners": [
+    "/root/b03_mutation_evidence",
+    "/root",
+    "/root/b04_lock_cas"
+  ],
+  "independent": true,
+  "decision": "approve",
+  "scope": "B03 full current source SDK mutation authority, controlled filesystem, journal, JSON/headless/CLI/ACP consumer evidence tier after event-bridge two-line dead assignment removal; unchanged limits and no unrelated prerequisite approval.",
+  "sourceContractHashes": {
+    ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+    ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+    "bun.lock": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6",
+    "cli/package.json": "cb6557b3cdbc58e38dc9eeb9c2a4c073325c6dd06891e7f8ba81f88e105a3de4",
+    "cli/scripts/preload-opentui.ts": "6a83c323664f2406c2b839aa22100779e22d3cf571151e3dc6b9f76d9dc2c301",
+    "cli/src/components/__tests__/completion-summary-box.test.tsx": "ccaca73eb12b6874983e62e782ef133e553bc1e07364834d0f3050ee9afe90de",
+    "cli/src/components/tools/__tests__/apply-patch.test.tsx": "5a2b9048cf4445ee82714065e944521d00dd75030b18e0fb19d76ab19d0b0e5a",
+    "cli/src/components/tools/__tests__/edit-transaction.test.ts": "8e1059145af472fc4eb5e572a64cf89ec58693432795021691fe16d9cc234d31",
+    "cli/src/components/tools/__tests__/edit-transaction.test.tsx": "34b020ba23faa10e8b4fcd55e4be8640ce50d0637fc0d9dd74cbeb0e8f34faf0",
+    "cli/src/components/tools/__tests__/str-replace.test.tsx": "d40c66290287e4cdde2f6058f320b40832d4d7fc866e0e6d0533146f6917d283",
+    "cli/src/components/tools/apply-patch.tsx": "dbca8b26f17bebac700184ec56c17b4d97685a76a24ec00c0bfbdfcfdf8ebbcd",
+    "cli/src/components/tools/edit-transaction.tsx": "f4e0876e20c545859a61de3c76cb5c8d33dd925d1c6946f5a37f418fc83af159",
+    "cli/src/components/tools/str-replace.tsx": "df4c99647f8a08e93dfc765c3999d92f94fdbad713fd49c42460bebf791e86f7",
+    "cli/src/types/chat.ts": "7992abfd4988dc1da67b5ef79104e3cb27ce356a6e5f15916fcad0000219b436",
+    "cli/src/utils/__tests__/completion-summary.test.ts": "1c99e3d334bf60cd87d343e7ab44c08838ec6e1d01f11474c89669a71fcf3489",
+    "cli/src/utils/__tests__/implementor-helpers.test.ts": "5bdd986ce0fa09e442c301fd356fb682b49026736d102a5520077877d4fe6a94",
+    "cli/src/utils/__tests__/output-outcome.test.ts": "6841d88d75227291c3a253210d85117da03cd896026fa765c3ef33c3c8ab07a4",
+    "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "e8b7d57647c884525be4f6ca117772601bac42cc62082362905512e6513ad5b9",
+    "cli/src/utils/__tests__/tool-result-normalizer.test.ts": "47909dc00c902c92a16ad723e6f235e64789e559c9f2443e65474e124b08f34a",
+    "cli/src/utils/completion-summary.ts": "4bab8611ffbc7437beb9dfc13d1062582d5be3d378c4ec01852f8aa4ddadf551",
+    "cli/src/utils/implementor-helpers.ts": "89c1364732ccbe9ee0f7788b0a6ba27ec371aae6c93f8570cc20fa16b27f47d4",
+    "cli/src/utils/output-outcome.ts": "0a63e14e7f447187599d0fda4c322edcb83694460900f7d547e3cfe26390f8c4",
+    "cli/src/utils/sdk-event-handlers.ts": "e44e11f88b8655b45c29542491b3bdd1ad5bdbe15fdd4d624528be6e909ee236",
+    "cli/src/utils/tool-result-normalizer.ts": "8169822411e71ff8df0f4992149bdc468863f8c8ab06af87448a3a9a6bd8b018",
+    "cli/tsconfig.json": "ac970656163e4a82300b0bce1d19260654eaf2876ff983e3559c654014dd4c3f",
+    "common/package.json": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c",
+    "common/src/protocol/__tests__/acp-ext-v1.golden.test.ts": "718b0cd2ea4da8c813035408dceb4482403cb9f19c407327a14a0b2eb41c8ab5",
+    "common/src/protocol/acp-ext-v1.ts": "7e5c4922e5c46101a4da2aaa17f61881493cbe023337154f62d0bd7ed3ee7b27",
+    "common/src/testing/fixtures/file-mutation.ts": "037b7af51cd940d804ac873500cc5b781a11a3f4a8290f27148ca7b421a76e7d",
+    "common/src/testing/mocks/filesystem.ts": "34887e3ebce8aebb09821a3c74ebb579599ec222a7f9a4f2c98779fddd716f50",
+    "common/src/tools/params/tool/edit-transaction.ts": "522011c0aec188159cd601fa823c93e0f4f7f59be80593fdfeca6ab480d2ca4e",
+    "common/src/tools/params/tool/str-replace.ts": "e17fef5c2ddbc69c44f5a232ba36b10d06570d101cdd0966ef8603c9076d8365",
+    "common/src/tools/results/__tests__/filesystem.test.ts": "9ddda93fd37dfa9687c345962bdeb0d5d8a2f81a46aeb7fe212ca58302ecfe2f",
+    "common/src/tools/results/filesystem.ts": "e70350e56f10b251b8a243a1a4bcebf5e61cd76d033fd622413c4e1a804b8a61",
+    "common/src/types/dynamic-agent-template.ts": "542ca3708e6a3febe581f9e99e3e2d9910af802363e1eaec99f32f8e1a82839e",
+    "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
+    "common/src/util/__tests__/action-outcomes.test.ts": "6ad7eb58f254061d8ae8257cc2fa1dc2780a89d41dd290e85994e1b2420deacb",
+    "common/src/util/action-outcomes.ts": "c3f9776e96ca92a7f3d44df8b50b6fcec93b694564466e5a6e58fa1580ca95fe",
+    "common/src/util/content-hash.ts": "0edd44426e18f18bea429ecf19c1f3634a6e7879d106f2dc9c9210eb09e50ae7",
+    "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
+    "evals/buffbench/evaluation-environment.ts": "5b5a310fd3ac13164fb874e2f31e823c8c507ed33a12cc83137835a7c74b0626",
+    "package.json": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8",
+    "packages/agent-runtime/package.json": "0ecb330281d325d02c339c86fb2f52a2875b0d957abdd0b097b1ab959d281d3d",
+    "packages/agent-runtime/src/__tests__/tool-validation-error.test.ts": "a55428528a127b78d96df0295f77a4125922ece1096126fedd3998a331627bc3",
+    "packages/agent-runtime/src/run-programmatic-step.ts": "6a405a2ea01ccb3fa4ef005bbf4c45f4b91acd96b836ba818f221965165a42db",
+    "packages/agent-runtime/src/tools/tool-executor.ts": "2865e32af22ec49c57bc396ea6b1ba491c1ca3c466842343c9a181387d3208db",
+    "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
+    "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts": "58fbe85769982c8be114fa457a509df15477e5ebcf119101f4997d24d26fabaf",
+    "packages/internal/src/openai-compatible/openai-compatible-error.ts": "a696f1cfeafb07fa10dea86e4b41fb11d15e87d484d0445668a2195233f3daca",
+    "sdk/package.json": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d",
+    "sdk/src/__tests__/acp-outcomes.test.ts": "afef7a65bb163d70a41d95a64c0c82eac5cc1501690a498b415328740fe243e5",
+    "sdk/src/__tests__/change-file.test.ts": "211b6e47dcf8afcdf73861a61da1d698d1d86c1d40efd7ca6004076bcc608c51",
+    "sdk/src/__tests__/filesystem-authority.test.ts": "3843376251f7550f33005ef6bd436133740d974828762f3bf320d376b7b18e7f",
+    "sdk/src/__tests__/language-intelligence.test.ts": "221e53e9c26f89b422b43305dc1d32c876154ce52b2a5d08d72cbc7e2fea3c90",
+    "sdk/src/__tests__/mutation-capabilities.test.ts": "5f9a505090d7609b5593952033df49d23ce2d969ba3c7abd7dcc29b1b7547455",
+    "sdk/src/__tests__/run-mutation-dispatch.test.ts": "308e7436fb7340dbfbdc02ac7058a9d4420ae4008c8ea3907334fd706b9b0ffa",
+    "sdk/src/client.ts": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7",
+    "sdk/src/client/acp-client.ts": "117452e520084f72791314bc23d39f96e38d121044b5445dc3e24722c1ca03d8",
+    "sdk/src/error-utils.ts": "11565db8d9f430fcbb617f040a7807beafac0e521dd2ec9341bf35a371743b29",
+    "sdk/src/impl/failover.ts": "62930f709bc5be8975375b50ec1e200eec7dd46ce4df5482da4c46ba06b2e793",
+    "sdk/src/impl/llm.ts": "76b1b88454eb1471eeb3a71ae2ec60e97b83603c40799d3ce3cdbc6abe226be5",
+    "sdk/src/impl/model-provider.ts": "2e14b4aa5534c0e8761b16c234eca300052f4419178ed3ab1d3137af82b2c11e",
+    "sdk/src/index.ts": "36bfe777b384462ac3a4740751579a3a8b4d8508b4bf90f7a1458d14774adae1",
+    "sdk/src/provider-config.ts": "6a659575360e14a8fba319cf6e7e406faa8505d681342a6911835bc870dd8922",
+    "sdk/src/retry-config.ts": "fab975fea396f8333ca7ed9787515dfa858a445056409daffee5ea0f6f50c91b",
+    "sdk/src/run-state.ts": "131d5e2a0fe1470dd26312952b199db3ef481386cb03fa3593035129589b2a68",
+    "sdk/src/run.ts": "c80be3b62a436b92b851cde37d00ae569b860b33ffee597016e0462715fa7562",
+    "sdk/src/serve/__tests__/event-bridge.test.ts": "ba3153d009a9735210a1bfe46fa47b4c9c49ea32089a81bf61eab3a88253df76",
+    "sdk/src/serve/bridge.ts": "7e77aac98fde3882aa471dfa0e897acdc3de8098a0f6eebc7286f9f8ccc2560d",
+    "sdk/src/serve/event-bridge.ts": "20daae14096a76c175ec2478219c9cf4a0aa0ba071c1533d6be6bcfbca824768",
+    "sdk/src/services/diagnostic-baseline.ts": "a4b1a4c3447dfb315b0fae4ebcd2eb12140619a41ce1aa9685d9db82a1c49015",
+    "sdk/src/services/harness-enforcement.ts": "0391312e7311a1f42f862a5f41d255cb1e55b52455d973c5be0672c4e0900f73",
+    "sdk/src/services/language-intelligence.ts": "0cd54de453fe1c048aa8950528fe1ed39192ab1b7a0a5bd90ba7ac4db2926bed",
+    "sdk/src/tools/change-file.ts": "35f509db6d220b07efaed3caecfefdc06e2bcfb1607a7cc813e8e29eecf45569",
+    "sdk/src/tools/filesystem-authority.ts": "0d582e5fe8988a813c101b04d169ed8b8a6ce646773b647ccbe2ce20dfa9e64e",
+    "sdk/src/tools/node-filesystem.ts": "1044dad8b2b4d89112aa7648ef62d4210ee9e426aca3f7885b5c1482a114c46f",
+    "sdk/src/tools/run-terminal-command.ts": "0ad82faa2597d6b9d4d1b7e1420f75a8ee3c5961b3bf276d77f70cd4c1b5db74",
+    "sdk/src/tools/semantic-edit-apply.ts": "db96219babbd190dbea0ffe4ec62aae8d11b1374893612978f4d3d2ad1e07df0",
+    "sdk/src/tools/transaction-intent-log.ts": "b8d477968c7761f04dfe63050ae1d7044ddd46192f833b712222c4235dd17539",
+    "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
+    "test/fixtures/body/mutation-evidence.ts": "96876b4629678eb33a439ac26f0a7364d7d795975f8f7ab661557b478979352e",
+    "tsconfig.base.json": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d",
+    "sdk/src/__tests__/provider-contract-regressions.test.ts": "904140141f77414577f46b498c71c64dca1c83dfd1a44eb1d559b7c23fde323b"
+  },
+  "commandReceipts": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/affected-runtime-acp-tests.json",
+      "sha256": "7e1235ae84c8e676d459bb4386a6982f9c28823bb79d9f2ea4aa45d87c07f0ef"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/leader-vision-route-regression.json",
+      "sha256": "48262607ecfaf7eaac02239dc053c2627c27a3c512634156d88eecfe795d92bf"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/actual-sdk-fixture.json",
+      "sha256": "1e74dd9dbc76bc4444183e27d128d124bd3cdc8dcf6a8f1da682699f65c5ae82"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/consumer-probe.json",
+      "sha256": "5336e300c3dae57958e48b7648c52783d54a44a6ad80898444a1acbd06bacdfe"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/node-broker-probe.json",
+      "sha256": "c8eb5d304288cab8e3efdbcca00c1b7e7514907eb52e96c60256e6f6d6d69e84"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/byte-observer-replay.json",
+      "sha256": "80e52ebe0413f1eadb13e6dac43477d68196d2e2ea68666588b289f41da6cbf2"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/PLAN.md",
+      "sha256": "5be0de710b63c735c998fdb3260d76d6f92f62ea668a14c9380925874f61091c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/SOURCE-REVIEW.md",
+      "sha256": "601df5e0965a88747b323c98eb076afa8d11b6842f69a72b19935fda4703cf1f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/actual-sdk-fixture-fetch.jsonl",
+      "sha256": "a7cbad2c31bab4f1da2dc3fe42b9e338f9bd170e4640bc306ff4eae019e75c67"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/actual-sdk-fixture.command.json",
+      "sha256": "3f13918767cd59e5d0244072bebcde3260c7574024ec87aa81f47fd53924edb5"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/actual-sdk-fixture.log",
+      "sha256": "7db3b466a533583c6f355c9cc18f13a7956d07f9bd66cbbe577bc48c9ca3ae91"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/affected-runtime-acp-tests-fetch.jsonl",
+      "sha256": "a8f13c574d07ab21ebf7c902e7fc3548f126dd982279ff4c9402a5570711fb9b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/affected-runtime-acp-tests.command.json",
+      "sha256": "8515a69d1985cda3aee51696c28c6f4eb71f289ec5428e7b57d26723deb05dc6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/affected-runtime-acp-tests.log",
+      "sha256": "fccb022b5e72f395625f6a4c51fc1a184d993a63348e8d8256af5bfd3b64146d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/assess.py",
+      "sha256": "d3a9180e4a843fdf5034fbd9530ca201a8faa97fc275b2a2f9eab3a4cf1ba68c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/assessment.json",
+      "sha256": "27eaef3ed964bf91d84048628f7aec1d6432a500e15a28b0f1a04abf2c596cc0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/byte-observer-replay.command.json",
+      "sha256": "138c28687bca648699a5d47c7a8e13433c09227fe458a738518888d74c945940"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/byte-observer-replay.log",
+      "sha256": "27eaef3ed964bf91d84048628f7aec1d6432a500e15a28b0f1a04abf2c596cc0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/actual-sdk-fixture.json",
+      "sha256": "1e74dd9dbc76bc4444183e27d128d124bd3cdc8dcf6a8f1da682699f65c5ae82"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/affected-runtime-acp-tests.json",
+      "sha256": "7e1235ae84c8e676d459bb4386a6982f9c28823bb79d9f2ea4aa45d87c07f0ef"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/byte-observer-replay.json",
+      "sha256": "80e52ebe0413f1eadb13e6dac43477d68196d2e2ea68666588b289f41da6cbf2"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/consumer-probe.json",
+      "sha256": "5336e300c3dae57958e48b7648c52783d54a44a6ad80898444a1acbd06bacdfe"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/leader-vision-route-regression.json",
+      "sha256": "48262607ecfaf7eaac02239dc053c2627c27a3c512634156d88eecfe795d92bf"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/commands/node-broker-probe.json",
+      "sha256": "c8eb5d304288cab8e3efdbcca00c1b7e7514907eb52e96c60256e6f6d6d69e84"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/consumer-probe-fetch.jsonl",
+      "sha256": "065d8842f644f1a9cf126be2a0a8ac7250cad6dc894da00d19a6466cb2d3fa2d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/consumer-probe.command.json",
+      "sha256": "9e8c7492b292d0344912ec3d232fb0409536db9b8ab1e5553e7fc574f951067e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/consumer-probe.json",
+      "sha256": "b1e19888dc8d800449bd3a96d74d199c49b4c6e120aad7a05304afd123280b61"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/consumer-probe.log",
+      "sha256": "9ea29d3d21af7631efc8bd1888c7994bb869cb3911df100899b65505ebe4c14c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/consumer-probe.ts",
+      "sha256": "4d119b0418abd1787c7e2d1732c0a3e108b335debd6897a3764c2689229b5f3f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/fetch-guard-harness/cbbb40b0c3174c78bfe60ec7/mutation-brokers/cbbb40b0c3174c78bfe60ec7/receipts/0000000000000001-94e4f0a4-8542-4a3f-9a1c-1e537a863174.json",
+      "sha256": "bd72c8b160743187990ea0153ef374fe9332254e93cb5aec9b9430a97236486e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/fetch-guard-harness/cbbb40b0c3174c78bfe60ec7/mutation-brokers/cbbb40b0c3174c78bfe60ec7/state.json",
+      "sha256": "ea5b8ec976e6e1dd968c79b43745da6c6b3982d9da6ebdb5fa709158942c095e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/mutation-report.json",
+      "sha256": "cab8f981606ef8ce5542323d138a32895b6be4b02168cb56b1f3f2a047c15f57"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/rejected-then-recovered/harness/816fc349d3faebf805d1bed7/workspace-journals/workspace.json",
+      "sha256": "4ba84f33eb76b25a401599b144710146955a743832c8b43b95920e492c3eec49"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/rejected-then-recovered/sdk-output.json",
+      "sha256": "f3b63fd3d7a0e3200c96f01c84463691c51b3e06f8b8652a9015eecdd3b7a302"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/retained-partial-forward/harness/816fc349d3faebf805d1bed7/workspace-journals/workspace.json",
+      "sha256": "a5123d2cabedacc5b5eb3341125a035b23698a9576878eb9d20cc933a70399ec"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/retained-partial-forward/harness/transaction-intents-81f9fa62.jsonl",
+      "sha256": "49f71bea20ec5d21cdbd2750d4144d772aa243b8bc2a79182ad5c2da4825ce64"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/retained-partial-forward/harness/transaction-intents-81f9fa62.jsonl.live-384",
+      "sha256": "044a6437d7833cdf43707cc1843bf027a1d3960d8e67820732febf5c1e9c18f2"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/retained-partial-forward/sdk-output.json",
+      "sha256": "86e1313f343fd31a211112bc5fb442e6650145b8e16591267271587114d9aa84"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/successful-edit/harness/816fc349d3faebf805d1bed7/workspace-journals/workspace.json",
+      "sha256": "d60e49dd0462e29540a9319423817a06c1e47892a15ee9ccbff433c77b60613e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/successful-edit/sdk-output.json",
+      "sha256": "eb238e5cf3297a48489cddd09416406d2388d7c1c60e833c9a5f2ae2ff0f8e2d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/fixture/thrown-partial/sdk-output.json",
+      "sha256": "95dddf669df750eea0107486689977a335e78f26e7be7e34bcd17bbd50dbe125"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/inspect.py",
+      "sha256": "bcb065aee13804d50062c804501ef64ce229e8e593a1a600960e1949096992a6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/inspection.json",
+      "sha256": "ca2fd8f6614be7b70a76cc29bb329588e69a3a35cac0cea6cf46756591a710b9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/leader-vision-route-regression-fetch.jsonl",
+      "sha256": "f7439a71276dfb50fb8fca17113ce8f34111962c9ae359acef63a2c7bcef6a75"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/leader-vision-route-regression.command.json",
+      "sha256": "edd272b43c36cac132a75824bf24b4bafd43dbf4c956243b06b8a22ae9ffacc9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/leader-vision-route-regression.log",
+      "sha256": "925a4bc16b1e9b0170e7bce80965c5d087b08e00fcb51f64d32f7cbbf69daefb"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/node-broker-probe-fetch.jsonl",
+      "sha256": "36fcca7798b2865400ade858789a16e46b0a0c59e79b26a82850f9c35081db80"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/node-broker-probe.command.json",
+      "sha256": "56045687c03baab192043f89f4acd9a542433e48f616efd5f4a14c127f22dd2c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/node-broker-probe.json",
+      "sha256": "59ea660ffdc05680bf1ce634157a92dbeb096192f4086621e9d5ca4e88efdd8d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/node-broker-probe.log",
+      "sha256": "88c7e77fb0bc0ca348fa668d60070044a41aad2de483d87d54906c49508fd123"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/node-broker-probe.ts",
+      "sha256": "02b9231cca69ea5f215d12c8caf6d82892d990fe2ed5bfada0938d6ffaa2145a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/node-broker-state/bdef74ea8230d47b77f2c561/mutation-brokers/bdef74ea8230d47b77f2c561/receipts/0000000000000001-d837c491-3459-46a5-830a-44de64cb769c.json",
+      "sha256": "f7343d2e0a217d153bf70049cfce5a15d4cffbca9124873507f675631907394b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/node-broker-state/bdef74ea8230d47b77f2c561/mutation-brokers/bdef74ea8230d47b77f2c561/state.json",
+      "sha256": "dd70d6b13f72b62cda6a54146686d3105fbbb7ebd748bd45dc33c4623ce9d13a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/offline-preload.ts",
+      "sha256": "23d0044fafa75f2ca5cb816fd29ecc1e7df7d23a6c6bd90431bae758a47cbaec"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/offline-test-preload.ts",
+      "sha256": "47bfe1107fe254310a80b36c3ef7d8fa4b575c64d66a1359807fd65fd2a7668e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/provider-config.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/run-results.json",
+      "sha256": "8e8338871c0edc3d116220caf294292af3f61820ecc84635c4a1f5cea52082e1"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/run.py",
+      "sha256": "fded1382da37894c636f5b54cab75ff40cf54dd750d27ad397ddc2ed86c3556b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/shared-lessons-after.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/shared-lessons-before.json",
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/source-inputs.json",
+      "sha256": "2ccecca19ff66f40be793b13569931f01627c4ca5bd59e21d6c926640c1a46ec"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/approval.json",
+      "sha256": "0ae9fc3d9952a85e93dbb4c3a7b1239f18789ef005a9eeeae85761aeb3f01617"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/actual-sdk-fixture.json",
+      "sha256": "72db19e2d0ea0543e5a0976c0f3386dce72303dd2190c25b9ec58627249ffb8d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/affected-runtime-acp-tests.json",
+      "sha256": "5c295af786c9b147fdaebebf6d3283c8aa3459b2c2f6011750e2257c0b25821c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/byte-observer-replay.json",
+      "sha256": "be441be5edb40b72a987883cda2e7f4515c03baf301bd7195646026492fede26"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/consumer-probe.json",
+      "sha256": "90de1b3f68cc4fbb545e7dca0fbdac6dfcd8e0256dfb09832650731f98ef8d87"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/leader-vision-route-regression.json",
+      "sha256": "58408984616f099a3ef2d7628c7dfa98a02d4f29fd61ec331ae86287b587b866"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/node-broker-probe.json",
+      "sha256": "0dd4d86df955c8698388c926e3b2c3386fa0d669e947745fe3502bc69ad65083"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/inputs.json",
+      "sha256": "a5877a153063f0ab383cbf55da70b56bd4c195c5f010f668d88bbfe4262650e1"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/inspection.json",
+      "sha256": "9049d9862e3475461d968901086e2793102daee0f5324a6457847537fbd3e4c0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/review.json",
+      "sha256": "4fba032fa1222488342ae14feaf41d0b06a02cc5bdf89bcf77eb682c7a7fa29b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-sdk-indexer-internal/bridge-after-network.3.json",
+      "sha256": "d0df0ee0c923eb45867fc889f2396dac3b97151a750e75dcb90e1988657e3b4d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-sdk-indexer-internal/bridge-after.json",
+      "sha256": "d87ebb926f5fdf7827769ea1eb0799f63e40bf27c11a6ea77884e9fa9c308078"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-sdk-indexer-internal/bridge-after.log",
+      "sha256": "4dd7f4288085b79c7affc5b26f41d9c137f3654182d2e14bdfca6e505e864b23"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-sdk-indexer-internal/bridge-before-network.5.json",
+      "sha256": "d0df0ee0c923eb45867fc889f2396dac3b97151a750e75dcb90e1988657e3b4d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-sdk-indexer-internal/bridge-before.json",
+      "sha256": "c4d3b9a28ead63c19647fbf96770ad698e92a831f5d516fc0cf6a8e0bf84895d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-sdk-indexer-internal/bridge-before.log",
+      "sha256": "5e10289d311f39cdfbea16dec32a60349ab5e517704dfe90be700126d160ae2b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-sdk-indexer-internal/cleanup-delta.diff",
+      "sha256": "6a4b441a18834fa880a8d21ef61cccf37ca2b2a542e6fc7ab7f565ca5665b48e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-sdk-indexer-internal/manifest.json",
+      "sha256": "eb605fb73cb1825e1349f4284da7cc3957dea2e11589e0ed12e468db06d78eb7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-sdk-indexer-internal/scope-after.json",
+      "sha256": "772fd5be82186703ca1ae9ace6d0f0eb0a743d818ef5b63d828354b987c6951d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/integration/deslop-sdk-indexer-internal/scope-before.json",
+      "sha256": "af0dadeed9fa76b0654c86bec35a9c3ea3d2cda202f365fa9594ceb32896595d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/validate-ledger.py",
+      "sha256": "6aa69375eeeae93f4850a6a068e1c17d39ba08b7a7b4d14c8ebe10e552d36c4c"
+    }
+  ],
+  "scopeLimits": [
+    "No independent approval of reviewer-authored B02/B08 prerequisites or unrelated guard/perf/indexer implementations; hashes bind command/dependency context only.",
+    "B01 shipped-base2 integration and leader-owned ledger/card promotion are excluded.",
+    "No universal arbitrary-host receipt authentication, OS exclusion/crash reclamation, installed/native behavior, real provider/billing operation or task-acceptance claim.",
+    "Broad fresh source maps bind dependency context, not implementation approval of every included subsystem.",
+    "Historical stale maps/approvals and failed orchestration attempts receive no current passing-command credit."
+  ],
+  "supportingEvidence": [
+    {
+      "role": "Current independently reconstructed cleanup/source/command and raw byte/observer/journal inspection",
+      "evidence": {
+        "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/inspection.json",
+        "sha256": "ca2fd8f6614be7b70a76cc29bb329588e69a3a35cac0cea6cf46756591a710b9"
+      }
+    },
+    {
+      "role": "Current independent source findings, actual fresh results and unchanged limits",
+      "evidence": {
+        "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/SOURCE-REVIEW.md",
+        "sha256": "601df5e0965a88747b323c98eb076afa8d11b6842f69a72b19935fda4703cf1f"
+      }
+    },
+    {
+      "role": "Fresh persisted source SDK/Node mutation byte-observer replay",
+      "evidence": {
+        "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/assessment.json",
+        "sha256": "27eaef3ed964bf91d84048628f7aec1d6432a500e15a28b0f1a04abf2c596cc0"
+      }
+    }
+  ],
+  "independenceDisclosure": "Reviewer made no B03 implementation or test edits, did not author event-bridge cleanup and remains outside all three implementation owners. Earlier reviewer-authored B02/B08 and unrelated repairs receive no independent implementation approval here.",
+  "historicalFailedAttemptDisclosures": [
+    "Former /tmp evidence was unavailable after restore; only preserved source-bound repository evidence receives credit.",
+    "Prior post-route command receipts overwrote consumer/Node probe JSON; corrected old runner and initial failed artifacts remain preserved. This refresh uses distinct raw probe and .command.json output paths."
+  ],
+  "uncreditedHistoricalContext": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/approval.json",
+      "sha256": "0ae9fc3d9952a85e93dbb4c3a7b1239f18789ef005a9eeeae85761aeb3f01617"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/review.json",
+      "sha256": "4fba032fa1222488342ae14feaf41d0b06a02cc5bdf89bcf77eb682c7a7fa29b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/inputs.json",
+      "sha256": "a5877a153063f0ab383cbf55da70b56bd4c195c5f010f668d88bbfe4262650e1"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/inspection.json",
+      "sha256": "9049d9862e3475461d968901086e2793102daee0f5324a6457847537fbd3e4c0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/leader-vision-route-regression.json",
+      "sha256": "58408984616f099a3ef2d7628c7dfa98a02d4f29fd61ec331ae86287b587b866"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/affected-runtime-acp-tests.json",
+      "sha256": "5c295af786c9b147fdaebebf6d3283c8aa3459b2c2f6011750e2257c0b25821c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/actual-sdk-fixture.json",
+      "sha256": "72db19e2d0ea0543e5a0976c0f3386dce72303dd2190c25b9ec58627249ffb8d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/consumer-probe.json",
+      "sha256": "90de1b3f68cc4fbb545e7dca0fbdac6dfcd8e0256dfb09832650731f98ef8d87"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/node-broker-probe.json",
+      "sha256": "0dd4d86df955c8698388c926e3b2c3386fa0d669e947745fe3502bc69ad65083"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B03/post-route/independent-countersignature/commands/byte-observer-replay.json",
+      "sha256": "be441be5edb40b72a987883cda2e7f4515c03baf301bd7195646026492fede26"
+    }
+  ],
+  "requiredProductReruns": [],
+  "reviewBasis": "New attributable independent full current bounded B03 source inspection, exact inverse two-line delta verification, six fresh key-free exact original-map controls and independent raw byte/authority/observer/journal/consumer oracle recomputation.",
+  "productEditsMade": false,
+  "productCommandsRerun": true,
+  "issuedUtc": "2026-11-06T21:07:55.078777+00:00",
+  "type": "body-implementation-review",
+  "provenance": {
+    "path": "docs/execution/body-roadmap/evidence/B03/post-cleanup/independent-review-b02/approval.json",
+    "sha256": "22ea8ffb9ab92e5cafe60363c5d9b9b55844887f5f399b9aa77a07e78198f660"
+  },
+  "normalizationOnly": false,
+  "approvalAuthority": "Referenced body-independent-approval is the new authoritative reviewer decision; source/owner/scope/command fields match exactly."
+}

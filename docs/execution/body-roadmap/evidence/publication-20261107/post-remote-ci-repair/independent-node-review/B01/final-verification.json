@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "nodeId": "B01",
+  "checkedAt": "2026-11-07T00:36:48.982938+00:00",
+  "approval": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-node-review/B01/approval.json",
+    "sha256": "fff07eb40942861338c9c4dc88e5ea7035009597f3d998d0805cc70d3fe920c7"
+  },
+  "review": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-node-review/B01/review.json",
+    "sha256": "3a1e33ff35f3f0f83d8f135900b8bcee7fc6d218876a5370b3e0188476243e8f"
+  },
+  "formatValidation": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-node-review/B01/format-validation.json",
+    "sha256": "2a749c137964320a5dc3165c5ff38e1cd7d999dba343d8c9b50e6df5203df9c7"
+  },
+  "mainRequiredCommands": 7,
+  "sourceContracts": 11,
+  "rawInputs": 193,
+  "canonicalFieldsAndProvenanceValid": true,
+  "sourceDependencyConfigArtifactsOraclesAndScopedCommandsCurrent": true,
+  "productCommandsRerun": [],
+  "scopeOwnersContractsOraclesAndLimitsPreserved": true,
+  "liveLedgerUnchanged": true,
+  "formatOnlyNoRealAcceptance": true
+}

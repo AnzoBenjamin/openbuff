@@ -5,13 +5,28 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 
 const OUTPUT_EXCERPT_LIMIT = 2_000
 
-function getOutputExcerpt(value: unknown): string | undefined {
+// Dual-window excerpt proportions: 70% head / 30% tail so both the start and
+// the end of oversized output survive, and the dropped middle is reported
+// with the repo-standard `…[N chars truncated]…` marker. Proportions are
+// fixed (not content-dependent) so excerpts stay deterministic.
+const EXCERPT_HEAD_PROPORTION = 0.7
+
+function getOutputExcerpt(
+  value: unknown,
+  maxExcerptChars: number = OUTPUT_EXCERPT_LIMIT,
+): string | undefined {
   if (typeof value !== 'string') return undefined
   const trimmed = value.trim()
   if (!trimmed) return undefined
-  return trimmed.length > OUTPUT_EXCERPT_LIMIT
-    ? `${trimmed.slice(0, OUTPUT_EXCERPT_LIMIT)}...`
-    : trimmed
+  const limit =
+    typeof maxExcerptChars === 'number' && Number.isFinite(maxExcerptChars)
+      ? Math.max(1, Math.floor(maxExcerptChars))
+      : OUTPUT_EXCERPT_LIMIT
+  if (trimmed.length <= limit) return trimmed
+  const headLength = Math.floor(limit * EXCERPT_HEAD_PROPORTION)
+  const tailLength = limit - headLength
+  const truncatedChars = trimmed.length - headLength - tailLength
+  return `${trimmed.slice(0, headLength)}…[${truncatedChars} chars truncated]…${trimmed.slice(-tailLength)}`
 }
 
 function summarizeCommandStatus(
@@ -70,8 +85,9 @@ export function simplifyReadFileResults(
 export function simplifyTerminalCommandResults(params: {
   messageContent: CodebuffToolOutput<'run_terminal_command'>
   logger: Logger
+  maxExcerptChars?: number
 }): CodebuffToolOutput<'run_terminal_command'> {
-  const { messageContent, logger } = params
+  const { messageContent, logger, maxExcerptChars } = params
   try {
     const clone = structuredClone(messageContent)
     const content = clone[0].value
@@ -81,9 +97,11 @@ export function simplifyTerminalCommandResults(params: {
     const { command, message, exitCode, stderr } = content
     const stdout = 'stdout' in content ? content.stdout : undefined
     const status = summarizeCommandStatus(exitCode)
-    const stderrExcerpt = getOutputExcerpt(stderr)
+    const stderrExcerpt = getOutputExcerpt(stderr, maxExcerptChars)
     const stdoutExcerpt =
-      status === 'failed' ? getOutputExcerpt(stdout) : undefined
+      status === 'failed'
+        ? getOutputExcerpt(stdout, maxExcerptChars)
+        : undefined
 
     return [
       {
@@ -124,6 +142,7 @@ export function simplifyTerminalCommandResults(params: {
  */
 export function simplifyCodeSearchResults(
   messageContent: CodebuffToolOutput<'code_search'>,
+  maxExcerptChars?: number,
 ): CodebuffToolOutput<'code_search'> {
   const clone = structuredClone(messageContent)
   const content = clone[0].value
@@ -133,8 +152,8 @@ export function simplifyCodeSearchResults(
   const { message, exitCode, stderr } = content
   const stdout = 'stdout' in content ? content.stdout : undefined
   const status = summarizeCommandStatus(exitCode)
-  const stdoutExcerpt = getOutputExcerpt(stdout)
-  const stderrExcerpt = getOutputExcerpt(stderr)
+  const stdoutExcerpt = getOutputExcerpt(stdout, maxExcerptChars)
+  const stderrExcerpt = getOutputExcerpt(stderr, maxExcerptChars)
 
   return [
     {
@@ -229,6 +248,7 @@ export function simplifyQueryIndexResults(
  */
 export function simplifyWebSearchResults(
   messageContent: CodebuffToolOutput<'web_search'>,
+  maxExcerptChars?: number,
 ): CodebuffToolOutput<'web_search'> {
   const clone = structuredClone(messageContent)
   const content = clone[0].value
@@ -236,7 +256,7 @@ export function simplifyWebSearchResults(
     return clone
   }
   const { result, links } = content
-  const resultExcerpt = getOutputExcerpt(result)
+  const resultExcerpt = getOutputExcerpt(result, maxExcerptChars)
 
   return [
     {
@@ -268,23 +288,28 @@ export const SUMMARIZABLE_TOOL_NAMES: Set<string> = new Set([
  * Returns the original content if the tool is not summarizable or if
  * simplification fails (with an error log). Each per-tool simplifier is
  * idempotent, so calling this on already-simplified content is safe.
+ * Pass maxExcerptChars to raise the per-excerpt character budget above the
+ * default 2_000 (excerpts always stay bounded, never un-bounded).
  */
 export function simplifyToolResultContent(params: {
   toolName: string
   content: CodebuffToolOutput
   logger: Logger
+  maxExcerptChars?: number
 }): CodebuffToolOutput {
-  const { toolName, content, logger } = params
+  const { toolName, content, logger, maxExcerptChars } = params
   try {
     switch (toolName) {
       case 'run_terminal_command':
         return simplifyTerminalCommandResults({
           messageContent: content as CodebuffToolOutput<'run_terminal_command'>,
           logger,
+          maxExcerptChars,
         })
       case 'code_search':
         return simplifyCodeSearchResults(
           content as CodebuffToolOutput<'code_search'>,
+          maxExcerptChars,
         )
       case 'read_subtree':
         return simplifyReadSubtreeResults(
@@ -297,6 +322,7 @@ export function simplifyToolResultContent(params: {
       case 'web_search':
         return simplifyWebSearchResults(
           content as CodebuffToolOutput<'web_search'>,
+          maxExcerptChars,
         )
       case 'read_files':
         return simplifyReadFileResults(

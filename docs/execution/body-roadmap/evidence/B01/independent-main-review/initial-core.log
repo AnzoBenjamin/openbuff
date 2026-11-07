@@ -1,0 +1,257 @@
+bun test v1.3.5 (1e86cebd)
+
+agents/__tests__/audit-contracts.test.ts:
+(pass) audited specialist contracts > browser-use defaults to allow-interactions and workspace-write terminal profile
+(pass) audited specialist contracts > researcher-docs exposes structured source, version, and failure state
+
+agents/__tests__/code-reviewer.test.ts:
+(pass) code-reviewer prompt isolation > uses structured output when an output schema is declared [1.00ms]
+(pass) code-reviewer prompt isolation > allows receipt corrections and names the actual required fields [1.00ms]
+(pass) code-reviewer prompt isolation > does not inherit parent orchestration instructions
+(pass) code-reviewer prompt isolation > instructs reviewer to read exact final files instead of diff fragments
+(pass) code-reviewer prompt isolation > includes anti-loop attestation and single-pass instructions
+(pass) code-reviewer prompt isolation > bounds the finding generator with a finite completeness criterion
+(pass) code-reviewer prompt isolation > accepts optional finding metadata objects alongside plain strings [1.00ms]
+(pass) code-reviewer prompt isolation > documents id-stable finding correlation across repair rounds
+(pass) code-reviewer prompt isolation > requires set_output instead of an ambiguous textual verdict
+(pass) code-reviewer prompt isolation > forbids stringified or oversized reviewer receipts
+(pass) code-reviewer prompt isolation > names the block prefix a failing dimension must use
+(pass) code-reviewer prompt isolation > treats missing parallel validation output as unavailable
+(pass) code-reviewer prompt isolation > includes a 3-item security checklist
+(pass) code-reviewer prompt isolation > includes a coverage-adequacy guideline
+(pass) code-reviewer prompt isolation > promotes coverage-adequacy into the verdict contract [1.00ms]
+(pass) code-reviewer prompt isolation > forces BLOCKING when any in-scope requirementCoverage status is missing or uncertain
+(pass) code-reviewer prompt isolation > documents LOOKS_GOOD-only finalization and NON_BLOCKING re-review loop
+(pass) code-reviewer prompt isolation > declares an optional advisories channel alongside findings
+(pass) code-reviewer prompt isolation > documents advisories as additive and family-optional
+(pass) code-reviewer prompt isolation > routes cosmetic observations to advisories instead of blocking on them
+
+agents/__tests__/gate-reviewer-parity.test.ts:
+(pass) gate-reviewer helpers — inline copies match canonical exports > isTestCoverageReviewerFinding parity across representative inputs [18.00ms]
+(pass) gate-reviewer helpers — canonical export behavior > isTestCoverageReviewerFinding keys on the test-coverage bigram or coverage plus a .test.* token [1.00ms]
+(pass) gate-reviewer helpers — canonical export behavior > isTestCoverageReviewerFinding stays conservative for generic test/coverage mentions
+(pass) gate-reviewer helpers — canonical export behavior > isTestCoverageReviewerFinding rejects non-string inputs
+
+agents/__tests__/gate-reviewer.test.ts:
+(pass) gate-reviewer helpers > stripReviewerPreamble removes closed leading think blocks only [1.00ms]
+(pass) gate-reviewer helpers > collectReviewerBlockers returns structured blocking findings first
+(pass) gate-reviewer helpers > preserves stable structured finding metadata [1.00ms]
+(pass) gate-reviewer helpers > collectReviewerAdvisories extracts and de-dupes advisories without blocking [1.00ms]
+(pass) gate-reviewer helpers > the inline base2 collectReviewerAdvisories mirror matches the export [21.00ms]
+(pass) gate-reviewer helpers > collectReviewerAdvisories ignores a trailing quoted example receipt [19.00ms]
+(pass) gate-reviewer helpers > the base2 gate-pass advisory lookup is bound to this gate receipt [3.00ms]
+(pass) gate-reviewer helpers > collectReviewerBlockers falls back to text line verdicts
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict accepts only structured LOOKS_GOOD finalization
+(pass) gate-reviewer helpers > finalization credit ignores unshaped entries when the receipt carries shaped ones [18.00ms]
+(pass) gate-reviewer helpers > a colliding quoted example path no longer credits coverage [21.00ms]
+(pass) gate-reviewer helpers > collectReviewerBlockers elevates NON_BLOCKING findings to repair strings
+(pass) gate-reviewer helpers > collectReviewerBlockers surfaces missing coverage as BLOCKING
+(pass) gate-reviewer helpers > collectReviewerBlockers surfaces both BLOCKING findings and missing coverage
+(pass) gate-reviewer helpers > collectReviewerBlockers blocks failed dimensions and incomplete requirements
+(pass) gate-reviewer helpers > collectReviewerBlockers de-dupes identical blockers from nested structured receipts [1.00ms]
+(pass) gate-reviewer helpers > keeps the synthetic placeholder when the only requirement gap is parent-owned
+(pass) gate-reviewer helpers > parent-owned process requirements stay in raw blockers but do not block LOOKS_GOOD finalization [1.00ms]
+(pass) gate-reviewer helpers > collectParentOwnedRequirementBlockers re-checks structured evidence at call sites
+(pass) gate-reviewer helpers > collectParentOwnedRequirementBlockers matches the per-blocker reference for a whole list [1.00ms]
+(pass) gate-reviewer helpers > classifies padded and multi-line requirement text from structured evidence
+(pass) gate-reviewer helpers > an in-scope duplicate row wins over a parent-owned row with the same status and text [1.00ms]
+(pass) gate-reviewer helpers > quoted process prose in evidence keeps an in-scope requirement gap open
+(pass) gate-reviewer helpers > the inline base2 collectParentOwnedRequirementBlockers mirror matches the export [20.00ms]
+(pass) gate-reviewer helpers > rejects a multi-entry receipt whose structured verdicts disagree [1.00ms]
+(pass) gate-reviewer helpers > ignores a quoted example receipt without schemaVersion in the conflict check
+(pass) gate-reviewer helpers > a quoted BLOCKING example without schemaVersion still elevates a fail-closed blocker [20.00ms]
+(pass) gate-reviewer helpers > a quoted example carrying schemaVersion stays in the conflict check [19.00ms]
+(pass) gate-reviewer helpers > reads the attestation from the attesting entry when a schemaVersion-carrying quote trails it [18.00ms]
+(pass) gate-reviewer helpers > keeps the attestation on the real receipt when a trailing quote also reports payload [18.00ms]
+(pass) gate-reviewer helpers > keeps the attestation on the real receipt when a leading quote precedes a drifted fingerprint [19.00ms]
+(pass) gate-reviewer helpers > rejects a spliced attestation: coverage from one entry, fingerprint from another [20.00ms]
+(pass) gate-reviewer helpers > entry-scopes past a foreign sibling fingerprint and rejects the ambiguous case [22.00ms]
+(pass) gate-reviewer helpers > a deletions-only receipt with an empty reviewedFiles still attests [17.00ms]
+(pass) gate-reviewer helpers > rejects a receipt whose sibling entry claims a non-1 schemaVersion [17.00ms]
+(pass) gate-reviewer helpers > structured v1 reviews require file coverage; fingerprint mismatch only blocks when coverage is incomplete
+(pass) gate-reviewer helpers > rejects every non-1 attestation schema version
+(pass) gate-reviewer helpers > normalizes reviewed file paths before attestation comparison
+(pass) gate-reviewer helpers > rejects a coverage-complete review with an obsolete same-path fingerprint [1.00ms]
+(pass) gate-reviewer helpers > collectReviewerFingerprintDrift reports a rejected non-matching basis [16.00ms]
+(pass) gate-reviewer helpers > reads the attestation and the drift from the schemaVersion-carrying entry when a quoted example trails it [17.00ms]
+(pass) gate-reviewer helpers > the inline base2 collectReviewerAttestationIssues mirror matches the export [18.00ms]
+(pass) gate-reviewer helpers > fails closed when a coverage-complete review reports no fingerprint
+(pass) gate-reviewer helpers > fails closed when a coverage-complete review reports a non-attestable sentinel fingerprint
+(pass) gate-reviewer helpers > fails closed when a coverage-complete manual review echoes an empty snapshotFingerprint [16.00ms]
+(pass) gate-reviewer helpers > blocks a coverage gap with an attestable-but-wrong fingerprint on both issues
+(pass) gate-reviewer helpers > exact-match attestable fingerprint with full coverage yields no issues
+(pass) gate-reviewer helpers > empty reviewable subset yields no attestation issues even with missing reviewer output
+(pass) gate-reviewer helpers > non-empty pending list with missing structured output still blocks
+(pass) gate-reviewer helpers > deleted pending paths are excluded from missing attestation
+(pass) gate-reviewer helpers > deletions-only pending set still requires an attestable fingerprint
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict blocks finalization when coverage is missing
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict blocks finalization when requirements are missing or uncertain
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict finalizes only LOOKS_GOOD when coverage is covered or n/a
+(pass) gate-reviewer helpers > detectReviewerCrash identifies errorMessage / type:error / json-wrapped crashes and ignores normal results [1.00ms]
+(pass) gate-reviewer helpers > detectReviewerCrash skips inner tool-result envelopes (inner tool errors are not agent crashes)
+(pass) gate-reviewer helpers > isTransientReviewerCrash and classifyReviewerCrash taxonomy
+(pass) gate-reviewer helpers > classifyReviewerCrash classifies a bare 64-hex run as protocol
+(pass) gate-reviewer helpers > classifyReviewerCrash classifies a mixed v3 + bare-hex message as protocol
+(pass) gate-reviewer helpers > classifyReviewerCrash does not treat a v3 token as a bare hex run
+(pass) gate-reviewer helpers > detectReviewerCrash respects depth cap to avoid pathological recursion
+(pass) gate-reviewer helpers > visitForStructuredVerdict respects the depth cap for over-nested structured verdicts
+(pass) gate-reviewer helpers > collectStrings respects the depth cap for over-nested reviewer text
+(pass) gate-reviewer helpers > both reviewer walkers terminate on a self-referential envelope
+(pass) gate-reviewer helpers > exported helpers match inline base2 mirror behavior [17.00ms]
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict rejects prose containing JSON LOOKS_GOOD
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict rejects prose containing JSON NON_BLOCKING
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict still blocks when embedded JSON verdict has coverage missing
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict still blocks when embedded JSON verdict is BLOCKING
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict rejects multiple embedded prose verdicts
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict does not false-positive on prose mentioning LOOKS_GOOD with no JSON object
+(pass) gate-reviewer helpers > inline base2 mirror recognizes prose preamble followed by JSON verdict (parity) [19.00ms]
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict rejects JSON embedded in prose even with braces in strings
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict rejects prose JSON with escaped quotes
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict returns empty when embedded JSON is truncated (no closing brace)
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict rejects three embedded objects in prose
+(pass) gate-reviewer helpers > getReviewerFinalizationVerdict rejects embedded JSON with an unknown verdict value
+(pass) gate-reviewer helpers > isTestCoverageReviewerFinding keys on the test-coverage bigram or coverage plus a .test.* token
+(pass) gate-reviewer helpers > isTestCoverageReviewerFinding stays conservative for generic test/coverage mentions
+(pass) gate-reviewer helpers > isTestCoverageReviewerFinding rejects non-string inputs
+(pass) collectReviewerHardBlockers > returns the coverage-missing hard rule for coverage: missing
+(pass) collectReviewerHardBlockers > returns one hard rule per blocked review dimension
+(pass) collectReviewerHardBlockers > returns one hard rule per missing/uncertain requirement
+(pass) collectReviewerHardBlockers > returns nothing for a clean LOOKS_GOOD result or prose-only findings
+(pass) collectReviewerHardBlockers > treats a "block: <clause>" dimension as failing in both collectors [1.00ms]
+(pass) collectReviewerHardBlockers > keeps "blocked" and "pass: <clause>" dimension values non-failing
+(pass) collectReviewerHardBlockers > every hard-rule string is byte-identical to a collectReviewerBlockers string
+(pass) collectReviewerHardBlockers > the inline base2 collectReviewerHardBlockers mirror matches the export [18.00ms]
+(pass) collectReviewerHardBlockers > the inline base2 collectReviewerFindingRecords mirror matches the export [15.00ms]
+(pass) collectReviewerHardBlockers > recognizes a schemaVersion-inheriting receipt envelope review and attests [15.00ms]
+(pass) getSecurityReviewerFinalizationVerdict > credits NON_BLOCKING for a clean security review with matching fingerprint
+(pass) getSecurityReviewerFinalizationVerdict > still credits LOOKS_GOOD for the security-reviewer family
+(pass) getSecurityReviewerFinalizationVerdict > never credits a BLOCKING verdict
+(pass) getSecurityReviewerFinalizationVerdict > missing coverage still blocks finalization even with NON_BLOCKING
+(pass) getSecurityReviewerFinalizationVerdict > the default finalization verdict still rejects a NON_BLOCKING entry
+(pass) gate-reviewer Wave 3 helpers > recoverStructuredReviewerOutputs repairs a verdict JSON embedded in prose [1.00ms]
+(pass) gate-reviewer Wave 3 helpers > recoverStructuredReviewerOutputs normalizes a non-slot verdict key
+(pass) gate-reviewer Wave 3 helpers > recoverStructuredReviewerOutputs never synthesizes attestation payload
+(pass) gate-reviewer Wave 3 helpers > recoverStructuredReviewerOutputs returns an already-shaped receipt verbatim
+(pass) gate-reviewer Wave 3 helpers > recoverStructuredReviewerOutputs returns the input unchanged when nothing is recoverable
+(pass) gate-reviewer Wave 3 helpers > diagnoseReviewerVerdictRejection pins the exact rejection codes
+(pass) gate-reviewer Wave 3 helpers > diagnoseReviewerVerdictRejection surfaces an invalid schemaVersion before crediting
+(pass) gate-reviewer Wave 3 helpers > buildReviewerVerdictRetryNotice embeds the code, summary, step, and set_output instruction
+(pass) gate-reviewer Wave 3 helpers > the diagnose + retry-notice round trip tolerates non-string tool results [1.00ms]
+(pass) gate-reviewer Wave 3 helpers > planGateReviewWaves covers every uncredited pending file exactly once
+(pass) gate-reviewer Wave 3 helpers > planGateReviewWaves skips credited files and plans deletions separately
+(pass) gate-reviewer Wave 3 helpers > waveKey is deterministic, order-independent, and distinguishes different waves [1.00ms]
+(pass) gate-reviewer lightweight tier and prose recovery helpers > recoverProseVerdictWithAttestation credits a prose verdict with both attestation signals [1.00ms]
+(pass) gate-reviewer lightweight tier and prose recovery helpers > recoverProseVerdictWithAttestation is a no-op when the fingerprint is absent
+(pass) gate-reviewer lightweight tier and prose recovery helpers > recoverProseVerdictWithAttestation is a no-op when no pending file path appears
+(pass) gate-reviewer lightweight tier and prose recovery helpers > recoverProseVerdictWithAttestation is a no-op when there is no prose verdict line
+(pass) gate-reviewer lightweight tier and prose recovery helpers > recoverProseVerdictWithAttestation returns an already-shaped receipt byte-identical
+(pass) gate-reviewer lightweight tier and prose recovery helpers > recoverProseVerdictWithAttestation never synthesizes attestation or evidence fields
+(pass) gate-reviewer lightweight tier and prose recovery helpers > isLightweightReceiptEligible accepts one to five ordinary source files
+(pass) gate-reviewer lightweight tier and prose recovery helpers > isLightweightReceiptEligible rejects empty and oversized pending sets
+(pass) gate-reviewer lightweight tier and prose recovery helpers > isLightweightReceiptEligible rejects contract-bearing paths
+(pass) gate-reviewer lightweight tier and prose recovery helpers > buildLightweightReviewContract assembles the reduced or full contract
+(pass) gate-reviewer lightweight tier and prose recovery helpers > shouldEscalateToFullContract escalates everything but a clean lightweight LOOKS_GOOD
+
+sdk/src/__tests__/write-audit-findings.test.ts:
+(pass) writeAuditFindings > derives and renders the findings artifact path [1.00ms]
+(pass) writeAuditFindings > omits the Domains block when coverage.domains is omitted
+(pass) writeAuditFindings > omits the snapshot attestation line when snapshotId is omitted [1.00ms]
+(pass) writeAuditFindings > cannot forge a heading with a bare CR in a finding field
+(pass) writeAuditFindings > cannot forge a coverage bullet or heading with a bare CR
+(pass) writeAuditFindings > creates once and returns a compact receipt [33.00ms]
+(pass) writeAuditFindings > preserves the legacy receipt shape when snapshotId is omitted [2.00ms]
+(pass) writeAuditFindings > does not attest to domain coverage when domains are omitted [2.00ms]
+(pass) writeAuditFindings > rewrites the legacy api-abi domain alias to api-contract [1.00ms]
+(pass) writeAuditFindings > rejects noIssuesFound=true when findings are reported [2.00ms]
+(pass) writeAuditFindings > rejects noIssuesFound=false when findings are empty
+(pass) writeAuditFindings > rejects a zero-findings call that omits noIssuesFound [1.00ms]
+(pass) writeAuditFindings > accepts a non-empty findings call that omits noIssuesFound [2.00ms]
+(pass) writeAuditFindings > rejects the legacy api-abi alias in coverage.domains [2.00ms]
+(pass) writeAuditFindings > rejects a repeated coverage entry at the writer boundary [1.00ms]
+(pass) writeAuditFindings > rejects a control character in a coverage list at the writer boundary [1.00ms]
+(pass) writeAuditFindings > rejects control and format characters in every string coverage list [5.00ms]
+(pass) writeAuditFindings > rejects a coverage entry longer than its length bound [1.00ms]
+(pass) writeAuditFindings > rejects coverage entries that differ only in surrounding whitespace
+(pass) writeAuditFindings > trims a coverage entry before rendering and echoing it [2.00ms]
+(pass) writeAuditFindings > rejects a whitespace-only coverage entry
+(pass) writeAuditFindings > rejects an explicitly empty coverage.domains list [1.00ms]
+(pass) writeAuditFindings > names the offending list when a coverage entry is repeated [1.00ms]
+(pass) writeAuditFindings > keeps accepting duplicate-free shard payloads after the uniqueness tightening
+(pass) writeAuditFindings > rejects a snapshotId that is over-long or control-bearing [2.00ms]
+(pass) writeAuditFindings > rejects control and format characters in the finding text fields [3.00ms]
+(pass) writeAuditFindings > holds findings[].path to the single-line coverage entry rule [1.00ms]
+(pass) writeAuditFindings > accepts a realistic sha256 snapshotId at the identifier bound
+(pass) writeAuditFindings > rejects an empty subsystemIds or files list on a snapshot-bound call [1.00ms]
+(pass) writeAuditFindings > keeps accepting empty coverage lists on calls that get no structuralReceipt
+(pass) writeAuditFindings > states the noIssuesFound and coverage rules on the fields they govern [1.00ms]
+(pass) writeAuditFindings > attests to the declared domain count when no issues are found
+(pass) writeAuditFindings > claims no domain count when coverage.domains is omitted and no issues are found
+(pass) writeAuditFindings > returns the declared error shape instead of throwing on invalid input [1.00ms]
+(pass) writeAuditFindings > does not echo unusable identifiers into the reported artifact path
+(pass) writeAuditFindings > does not echo bare dot-segment identifiers into the reported artifact path [1.00ms]
+(pass) writeAuditFindings > does not echo an over-long identifier into the reported artifact path
+(pass) writeAuditFindings > marks an already-existing artifact as durably persisted for its snapshot [5.00ms]
+(pass) writeAuditFindings > omits the snapshot binding from the marker when the caller sent no snapshotId [3.00ms]
+(pass) writeAuditFindings > does not mark an ordinary rejected write as durably persisted [1.00ms]
+(pass) writeAuditFindings > does not bind the collision marker to a snapshot the persisted artifact never attested to [4.00ms]
+(pass) writeAuditFindings > leaves the collision marker unbound when the persisted artifact attests to no snapshot [1.00ms]
+
+sdk/src/__tests__/audit-intelligence.test.ts:
+(pass) native audit intelligence > creates a snapshot-bound structural and capability inventory [3.00ms]
+(pass) native audit intelligence > keeps SDK and tool-schema audit domains aligned
+(pass) native audit intelligence > returns a snapshot-bound feature coverage receipt [5.00ms]
+(pass) native audit intelligence > evaluates vertical feature evidence and blocks uncovered structure [2.00ms]
+(pass) native audit intelligence > rejects string attestations and an empty feature inventory [2.00ms]
+(pass) native audit intelligence > normalizes composable audit receipts and keeps heuristic evidence incomplete [3.00ms]
+(pass) native audit intelligence > rejects receipts that do not carry their own snapshot identity
+(pass) native audit intelligence > requires snapshot-bound files, all domains, and verified feature evidence [2.00ms]
+(pass) native audit intelligence > excludes live-state paths from the snapshot [1.00ms]
+(pass) native audit intelligence > probes survive live-state churn between calls with a cached inventory [4.00ms]
+(pass) native audit intelligence > evaluate_audit_coverage validates receipts against the stored inventory after findings writes [2.00ms]
+(pass) native audit intelligence > full source identity changes for equal-length mutations after 256KB [3.00ms]
+(pass) native audit intelligence > promoteFeatureEvidence flips to verified only with full attestation [1.00ms]
+(pass) native audit intelligence > cached tools reattest source bytes and retain findings-only snapshot stability [2.00ms]
+(pass) native audit intelligence > release source membership and full tail bytes participate in attestation [3.00ms]
+(pass) native audit intelligence > nested feature identity cannot borrow the enclosing snapshot [2.00ms]
+(pass) native audit intelligence > complete source inspection preserves partial, unwired, absent and unknown maturity [3.00ms]
+(pass) native audit intelligence > a subsystem receipt cannot hide an omitted source file [2.00ms]
+
+common/src/util/__tests__/audit-receipt.test.ts:
+(pass) containsStructuralAuditReceipt > returns true when a nested structuralReceipt.snapshot_id matches the expected id [3.00ms]
+(pass) containsStructuralAuditReceipt > returns true for any structuralReceipt with a string snapshot_id when expected id is undefined or empty
+(pass) containsStructuralAuditReceipt > returns false when the expected id does not match any present receipt
+(pass) containsStructuralAuditReceipt > returns false when there is no structuralReceipt anywhere
+(pass) containsStructuralAuditReceipt > terminates and returns false for a cyclic object graph without a receipt
+(pass) containsStructuralAuditReceipt > returns true for a receipt nested deeper than the old depth limit
+(pass) containsStructuralAuditReceipt > returns false for non-object inputs
+(pass) containsStructuralAuditReceipt > finds a receipt via a shorter path even after the shared node was first reached deeper
+(pass) containsStructuralAuditReceipt > returns false when structuralReceipt exists but snapshot_id is missing or non-string
+(pass) containsStructuralAuditReceipt > accepts an already-persisted collision marker bound to the expected snapshot
+(pass) containsStructuralAuditReceipt > rejects an already-persisted marker bound to a different snapshot
+(pass) containsStructuralAuditReceipt > rejects an already-persisted marker with no snapshot binding when one is expected
+(pass) containsStructuralAuditReceipt > rejects an ordinary rejection that carries no already-persisted marker
+
+common/src/tools/params/__tests__/write-audit-findings.test.ts:
+(pass) write_audit_findings input > accepts one safe derived-artifact identity
+(pass) write_audit_findings input > keeps legacy calls without snapshotId valid [1.00ms]
+(pass) write_audit_findings input > keeps legacy calls without explicit domains valid
+(pass) write_audit_findings input > rejects an explicitly empty coverage.domains list
+(pass) write_audit_findings input > rejects a snapshot-bound call with an empty coverage.subsystemIds
+(pass) write_audit_findings input > rejects a snapshot-bound call with an empty coverage.files
+(pass) write_audit_findings input > recovers findings entries serialized as individual JSON strings [1.00ms]
+(pass) write_audit_findings input > leaves a genuinely malformed findings string as a validation error
+(pass) write_audit_findings input > normalizes the legacy api-abi finding domain [1.00ms]
+(pass) write_audit_findings input > AuditFindingsInput accepts the api-abi alias and omittable noIssuesFound
+(pass) write_audit_findings input > rejects traversal and dot path segments [1.00ms]
+(pass) write_audit_findings input > requires noIssuesFound to agree with the findings array
+(pass) write_audit_findings input > rejects a snapshot-bound call whose subsystemIds or files list is empty
+(pass) write_audit_findings input > rejects an explicitly empty coverage.domains list [1.00ms]
+(pass) write_audit_findings provider input > accepts a minimal valid payload on the pattern-free surface [1.00ms]
+(pass) write_audit_findings provider input > accepts finding text with em dashes and curly quotes
+(pass) write_audit_findings provider input > still rejects a control character in a finding title on inputSchema
+(pass) write_audit_findings provider input > still rejects duplicate coverage entries on inputSchema [1.00ms]
+
+ 235 pass
+ 0 fail
+ 1185 expect() calls
+Ran 235 tests across 8 files. [873.00ms]

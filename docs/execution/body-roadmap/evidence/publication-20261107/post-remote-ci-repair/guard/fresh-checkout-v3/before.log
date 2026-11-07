@@ -1,0 +1,8 @@
+$ bun run memory-drift-guard.ts
+Memory drift guard: 4 finding(s) across 12 checker(s)
+## path (4)
+docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/full-suite-review/REVIEW.md:11: referenced path `sdk/dist/index.mjs` does not exist
+docs/execution/body-roadmap/evidence/publication-20261107/README.md:45: referenced path `cli/src/agents/bundled-agents.generated.ts` does not exist
+docs/execution/body-roadmap/evidence/integration/architect-first-wave/post-comparator-repair/REVIEW.md:17: referenced path `cli/src/agents/bundled-agents.generated.ts` does not exist
+docs/execution/body-roadmap/evidence/integration/architect-first-wave/post-comparator-repair/REVIEW.md:17: referenced path `sdk/dist/index.d.ts` does not exist
+error: script "guard:memory-drift" exited with code 1

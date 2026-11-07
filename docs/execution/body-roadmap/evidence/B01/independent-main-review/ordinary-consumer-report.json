@@ -1,0 +1,431 @@
+{
+  "createdAt": "2026-11-06T16:33:39.664Z",
+  "allAssertionsPassed": true,
+  "runtime": {
+    "executable": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+    "bun": "1.3.5"
+  },
+  "reports": [
+    {
+      "kind": "complete",
+      "beforeBytesSha256": "42d8d6a87cfe2c50f307301008279f506dde6d23eb372b35bba5150410723cf3",
+      "afterBytesSha256": "6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7",
+      "reviewerSpawns": 1,
+      "currentFingerprint": "v3:1f92fa63bdcc39803440c9b1ee1f2a80d9ab5cd8ab827aa9eb166ce18d222224",
+      "phase": "final_response_allowed",
+      "protocolFailed": false,
+      "openBlockers": [],
+      "gatePassedFiles": [
+        "src/a.ts"
+      ],
+      "reviewerVerdict": "LOOKS_GOOD",
+      "reviewReceipts": [
+        {
+          "gateId": "code-reviewer:v3:1f92fa63bdcc39803440c9b1ee1f2a80d9ab5cd8ab827aa9eb166ce18d222224",
+          "reviewer": "code-reviewer",
+          "verdict": "LOOKS_GOOD",
+          "snapshotFingerprint": "v3:1f92fa63bdcc39803440c9b1ee1f2a80d9ab5cd8ab827aa9eb166ce18d222224",
+          "reviewedFiles": [
+            "src/a.ts"
+          ],
+          "reviewedFileCount": 1,
+          "reviewedFileHashes": [
+            {
+              "path": "src/a.ts",
+              "hash": "sha256:6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7:24"
+            }
+          ],
+          "coverage": "covered",
+          "dimensions": {
+            "correctness": "pass: final bytes read",
+            "security": "pass: no external inputs",
+            "tests": "pass: fixture assertion observed",
+            "apiCompatibility": "pass: export unchanged",
+            "performance": "pass: constant expression"
+          },
+          "findings": [],
+          "findingCount": 0,
+          "requirementCoverage": [
+            {
+              "requirement": "Set answer to 2",
+              "status": "satisfied",
+              "evidence": [
+                "src/a.ts:answer = 2"
+              ],
+              "evidenceCount": 1
+            }
+          ],
+          "requirementCoverageCount": 1,
+          "recordedAt": "2026-11-06T16:33:39.656Z"
+        }
+      ],
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "run_file_change_hooks"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agentTypes": [
+            "code-reviewer"
+          ]
+        },
+        {
+          "toolName": "git_status"
+        }
+      ],
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "reviewedFiles": [
+              "src/a.ts"
+            ],
+            "snapshotFingerprint": "v3:1f92fa63bdcc39803440c9b1ee1f2a80d9ab5cd8ab827aa9eb166ce18d222224",
+            "dimensions": {
+              "correctness": "pass: final bytes read",
+              "security": "pass: no external inputs",
+              "tests": "pass: fixture assertion observed",
+              "apiCompatibility": "pass: export unchanged",
+              "performance": "pass: constant expression"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Set answer to 2",
+                "status": "satisfied",
+                "evidence": [
+                  "src/a.ts:answer = 2"
+                ]
+              }
+            ]
+          },
+          "actualContentSha256": "6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7"
+        }
+      ]
+    },
+    {
+      "kind": "empty-requirements",
+      "beforeBytesSha256": "42d8d6a87cfe2c50f307301008279f506dde6d23eb372b35bba5150410723cf3",
+      "afterBytesSha256": "6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7",
+      "reviewerSpawns": 2,
+      "currentFingerprint": "v3:1f92fa63bdcc39803440c9b1ee1f2a80d9ab5cd8ab827aa9eb166ce18d222224",
+      "phase": "blocked",
+      "protocolFailed": true,
+      "openBlockers": [
+        "BLOCKING: code-reviewer failed snapshot/file attestation twice.",
+        "BLOCKING: reviewer did not provide nonempty requirement evidence"
+      ],
+      "gatePassedFiles": [],
+      "reviewerVerdict": "",
+      "reviewReceipts": [],
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "run_file_change_hooks"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agentTypes": [
+            "code-reviewer"
+          ]
+        },
+        {
+          "toolName": "spawn_agents",
+          "agentTypes": [
+            "code-reviewer"
+          ]
+        }
+      ],
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "reviewedFiles": [
+              "src/a.ts"
+            ],
+            "snapshotFingerprint": "v3:1f92fa63bdcc39803440c9b1ee1f2a80d9ab5cd8ab827aa9eb166ce18d222224",
+            "dimensions": {
+              "correctness": "pass: final bytes read",
+              "security": "pass: no external inputs",
+              "tests": "pass: fixture assertion observed",
+              "apiCompatibility": "pass: export unchanged",
+              "performance": "pass: constant expression"
+            },
+            "requirementCoverage": []
+          },
+          "actualContentSha256": "6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7"
+        },
+        {
+          "reviewerSpawns": 2,
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "reviewedFiles": [
+              "src/a.ts"
+            ],
+            "snapshotFingerprint": "v3:1f92fa63bdcc39803440c9b1ee1f2a80d9ab5cd8ab827aa9eb166ce18d222224",
+            "dimensions": {
+              "correctness": "pass: final bytes read",
+              "security": "pass: no external inputs",
+              "tests": "pass: fixture assertion observed",
+              "apiCompatibility": "pass: export unchanged",
+              "performance": "pass: constant expression"
+            },
+            "requirementCoverage": []
+          },
+          "actualContentSha256": "6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7"
+        }
+      ]
+    },
+    {
+      "kind": "empty-dimensions",
+      "beforeBytesSha256": "42d8d6a87cfe2c50f307301008279f506dde6d23eb372b35bba5150410723cf3",
+      "afterBytesSha256": "6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7",
+      "reviewerSpawns": 2,
+      "currentFingerprint": "v3:1f92fa63bdcc39803440c9b1ee1f2a80d9ab5cd8ab827aa9eb166ce18d222224",
+      "phase": "blocked",
+      "protocolFailed": true,
+      "openBlockers": [
+        "BLOCKING: code-reviewer failed snapshot/file attestation twice.",
+        "BLOCKING: reviewer did not assess correctness",
+        "BLOCKING: reviewer did not assess security",
+        "BLOCKING: reviewer did not assess tests",
+        "BLOCKING: reviewer did not assess apiCompatibility",
+        "BLOCKING: reviewer did not assess performance"
+      ],
+      "gatePassedFiles": [],
+      "reviewerVerdict": "",
+      "reviewReceipts": [],
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "run_file_change_hooks"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agentTypes": [
+            "code-reviewer"
+          ]
+        },
+        {
+          "toolName": "spawn_agents",
+          "agentTypes": [
+            "code-reviewer"
+          ]
+        }
+      ],
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "reviewedFiles": [
+              "src/a.ts"
+            ],
+            "snapshotFingerprint": "v3:1f92fa63bdcc39803440c9b1ee1f2a80d9ab5cd8ab827aa9eb166ce18d222224",
+            "dimensions": {},
+            "requirementCoverage": [
+              {
+                "requirement": "Set answer to 2",
+                "status": "satisfied",
+                "evidence": [
+                  "src/a.ts:answer = 2"
+                ]
+              }
+            ]
+          },
+          "actualContentSha256": "6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7"
+        },
+        {
+          "reviewerSpawns": 2,
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "reviewedFiles": [
+              "src/a.ts"
+            ],
+            "snapshotFingerprint": "v3:1f92fa63bdcc39803440c9b1ee1f2a80d9ab5cd8ab827aa9eb166ce18d222224",
+            "dimensions": {},
+            "requirementCoverage": [
+              {
+                "requirement": "Set answer to 2",
+                "status": "satisfied",
+                "evidence": [
+                  "src/a.ts:answer = 2"
+                ]
+              }
+            ]
+          },
+          "actualContentSha256": "6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7"
+        }
+      ]
+    },
+    {
+      "kind": "obsolete-basis",
+      "beforeBytesSha256": "42d8d6a87cfe2c50f307301008279f506dde6d23eb372b35bba5150410723cf3",
+      "afterBytesSha256": "6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7",
+      "reviewerSpawns": 2,
+      "currentFingerprint": "v3:1f92fa63bdcc39803440c9b1ee1f2a80d9ab5cd8ab827aa9eb166ce18d222224",
+      "phase": "blocked",
+      "protocolFailed": true,
+      "openBlockers": [
+        "BLOCKING: code-reviewer failed snapshot/file attestation twice.",
+        "BLOCKING: reviewer snapshot fingerprint did not match the reviewed working tree"
+      ],
+      "gatePassedFiles": [],
+      "reviewerVerdict": "",
+      "reviewReceipts": [],
+      "calls": [
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agent_inline"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "run_file_change_hooks"
+        },
+        {
+          "toolName": "git_status"
+        },
+        {
+          "toolName": "spawn_agents",
+          "agentTypes": [
+            "code-reviewer"
+          ]
+        },
+        {
+          "toolName": "spawn_agents",
+          "agentTypes": [
+            "code-reviewer"
+          ]
+        }
+      ],
+      "observations": [
+        {
+          "reviewerSpawns": 1,
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "reviewedFiles": [
+              "src/a.ts"
+            ],
+            "snapshotFingerprint": "v3:ce2056e628b7a881a8b3d5908240bdc4e552e8fd4bee30a1c6d081000b91f016",
+            "dimensions": {
+              "correctness": "pass: final bytes read",
+              "security": "pass: no external inputs",
+              "tests": "pass: fixture assertion observed",
+              "apiCompatibility": "pass: export unchanged",
+              "performance": "pass: constant expression"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Set answer to 2",
+                "status": "satisfied",
+                "evidence": [
+                  "src/a.ts:answer = 2"
+                ]
+              }
+            ]
+          },
+          "actualContentSha256": "6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7"
+        },
+        {
+          "reviewerSpawns": 2,
+          "receipt": {
+            "schemaVersion": 1,
+            "family": "reviewer",
+            "verdict": "LOOKS_GOOD",
+            "findings": [],
+            "coverage": "covered",
+            "reviewedFiles": [
+              "src/a.ts"
+            ],
+            "snapshotFingerprint": "v3:ce2056e628b7a881a8b3d5908240bdc4e552e8fd4bee30a1c6d081000b91f016",
+            "dimensions": {
+              "correctness": "pass: final bytes read",
+              "security": "pass: no external inputs",
+              "tests": "pass: fixture assertion observed",
+              "apiCompatibility": "pass: export unchanged",
+              "performance": "pass: constant expression"
+            },
+            "requirementCoverage": [
+              {
+                "requirement": "Set answer to 2",
+                "status": "satisfied",
+                "evidence": [
+                  "src/a.ts:answer = 2"
+                ]
+              }
+            ]
+          },
+          "actualContentSha256": "6aff31f9bc3e0b0bfef93105cf6ed795a541a687d100794ce9d55ba989f67ae7"
+        }
+      ]
+    }
+  ],
+  "codingFetch": {
+    "attempted": 0,
+    "forwarded": 0
+  },
+  "boundary": "Actual source base2 handleSteps and real file markers; injected model/reviewer/tool feeds. No model/provider request and no approval of tail/store implementations."
+}

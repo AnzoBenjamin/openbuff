@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "type": "partial-managed-pre-push-output-observation",
+  "captureComplete": false,
+  "captureKind": "Tool-returned text; retained truncation markers. Not an original complete command log or acceptance receipt.",
+  "observedSummary": {
+    "pass": 1346,
+    "skip": 5,
+    "fail": 13,
+    "tests": 1364,
+    "files": 56
+  },
+  "pushCompleted": false,
+  "rawExitCodeRetained": false,
+  "capture": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/push-capture.partial.log",
+    "sha256": "4dff23ba01c954ce87a450d289f6dd9a8a7d04852e4d2a1191fc7a4ed4e98735"
+  },
+  "scope": "Preserve the visible managed pre-push failure before the targeted fixture repair; new targeted/broader command receipts supply independent full logs."
+}

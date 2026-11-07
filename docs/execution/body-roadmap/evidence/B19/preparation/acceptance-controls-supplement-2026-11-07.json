@@ -1,0 +1,216 @@
+{
+  "schemaVersion": 1,
+  "card": "B19",
+  "status": "proposal_only_not_executed",
+  "author": "/root/b04_lock_cas",
+  "prerequisites": "Leader-recorded B02/B18 acceptance and explicit file ownership before implementation",
+  "originalProposal": "proposed-validation.json",
+  "matrix": {
+    "familyCount": 10,
+    "branches": {
+      "sync_shell": [
+        "git_preflight",
+        "target",
+        "approved_one_shot_rerun"
+      ],
+      "background_job": [
+        "launch",
+        "request_owned_abort",
+        "explicit_detach_handoff"
+      ],
+      "supervised_child": [
+        "initial_attempt",
+        "retry_attempt",
+        "compiled_posix_self_exec",
+        "unsupported_fallback"
+      ],
+      "configured_hook": [
+        "configured_hook",
+        "inferred_hook_opt_in",
+        "targeted_validation"
+      ],
+      "diagnostic_build_version_scip": [
+        "diagnostic_command",
+        "semgrep_version",
+        "semgrep_scan",
+        "cargo_metadata",
+        "go_list",
+        "scip_sync_probe",
+        "scip_sync_index",
+        "scip_async_probe",
+        "scip_async_index",
+        "version_git",
+        "version_bun",
+        "version_node",
+        "version_python3",
+        "version_rustc",
+        "version_go",
+        "version_k6",
+        "version_cargo",
+        "version_uv",
+        "version_poetry",
+        "version_mvn",
+        "version_gradle",
+        "version_dotnet",
+        "version_blender"
+      ],
+      "lsp": [
+        "primary_sdk_constructor",
+        "fallback_sdk_constructor",
+        "actual_server_spawn",
+        "context_compatible_reuse"
+      ],
+      "mcp_stdio": [
+        "discovery_connect",
+        "tool_connect",
+        "context_compatible_reuse",
+        "actual_transport_env"
+      ],
+      "chrome": [
+        "pipe_probe",
+        "pipe_launch",
+        "port_fallback"
+      ],
+      "blender_render_helper": [
+        "blend_inspection",
+        "imported_inspection",
+        "preview_render",
+        "edit",
+        "post_edit_validation"
+      ],
+      "native_role": [
+        "required_unavailable_refusal",
+        "optional_truthful_degradation",
+        "generic_unintegrated_sidecar_surface"
+      ]
+    },
+    "branchMeaning": "Named launch branches and distinct dispatch/reuse/refusal controls, not a count of unique spawn call sites",
+    "requiredPerRow": [
+      "sourcePathAndHash",
+      "actualProducerAndConsumer",
+      "launcherBranch",
+      "hostOwnerAndActionIdentity",
+      "resourceOwnerOrExplicitTransfer",
+      "environmentDigestAndAllowedKeyNamesOnly",
+      "delegationDestinationAndProvenance",
+      "requestedProfile",
+      "availableCapabilities",
+      "activeBackendAndProfile",
+      "enforcedCapabilities",
+      "admissionOutcomeAndBasis",
+      "deadlineClockAndRemainingBudget",
+      "signalStateAtLaunch",
+      "actualLaunchCount",
+      "actualSpawnOrTransportOptions",
+      "typedConsumerResult",
+      "cleanupObservationOrExplicitUnobserved",
+      "evidenceTier"
+    ]
+  },
+  "controls": [
+    {
+      "id": "ctx-matrix",
+      "evidenceRequired": "capture_and_consumer",
+      "oracle": "Each named branch carries owner, captured env, profile tiers, admission, deadline/signal and receipt to the actual producer and consumer; constructor-only or unread fields fail.",
+      "executed": false
+    },
+    {
+      "id": "env-merge-scrub",
+      "evidenceRequired": "real_child_and_capture",
+      "oracle": "Canonical and configured credential sentinels are absent after override merge; ordinary project vars and PATH survive; inheritance off is replacement; later ambient mutation cannot alter approved retry env.",
+      "executed": false
+    },
+    {
+      "id": "destination-delegation",
+      "evidenceRequired": "real_local_stdio",
+      "oracle": "An explicit synthetic delegated credential reaches only its intended trusted MCP destination; all other children strip it; upstream transport default-env merge is observed rather than assumed absent.",
+      "executed": false
+    },
+    {
+      "id": "admission-zero-launch",
+      "evidenceRequired": "actual_spawn_counter",
+      "oracle": "Missing required authorizer, denied, unavailable required profile, pre-aborted signal, expired deadline and abort during delayed approval each cause zero target/probe/discovery launches. Explicit allow-all remains allowed.",
+      "executed": false
+    },
+    {
+      "id": "profile-tiers",
+      "evidenceRequired": "consumer_receipt",
+      "oracle": "Requested, available, active and enforced are separate; deliberate full access is reported as full access; optional degradation is explicit; lexical permission labels cannot become OS enforcement.",
+      "executed": false
+    },
+    {
+      "id": "hooks-trust-timeout",
+      "evidenceRequired": "real_hook_and_capture",
+      "oracle": "Omitted and false inference are disabled; true enables inference; configured origin/trust/profile and authorizer outcomes survive; actual timeout/default matches documented selection and tighter parent budget.",
+      "executed": false
+    },
+    {
+      "id": "deadline-retry",
+      "evidenceRequired": "capture_and_harmless_child",
+      "oracle": "Probes, target and retries consume one remaining parent budget; omitted limits remain explicitly unbounded; sync callers declare or resolve unavailable cancellation rather than ignore a signal.",
+      "executed": false
+    },
+    {
+      "id": "resource-owner-cache",
+      "evidenceRequired": "concurrent_capture",
+      "oracle": "Compatible reusable LSP/MCP/probe resources retain resource owner and request leases; incompatible env/profile context cannot reuse stale resources; caller cancellation is distinct from resource cancellation.",
+      "executed": false
+    },
+    {
+      "id": "sdk-custom-strategy",
+      "evidenceRequired": "real_sdk_no_provider",
+      "oracle": "A trusted self-contained strategy independently chooses and performs read/edit/terminal through real SDK under full access; a required unavailable profile refuses before the affected target launch; action/run evidence reaches the consumer.",
+      "executed": false
+    },
+    {
+      "id": "selected-route-wins",
+      "evidenceRequired": "real_sdk_no_provider",
+      "oracle": "Explicit selected user/model/agent route remains selected with conflicting recommendation; lifecycle context does not prescribe the strategy next task action.",
+      "executed": false
+    },
+    {
+      "id": "evaluator-boundaries",
+      "evidenceRequired": "real_local_evaluator_and_capture",
+      "oracle": "Capture setup clone/fetch/checkout/init, isolated SDK worker, final check and post-run Git add/diff. Preserve typed B30 output and environment-only scope; bind actual env/owner/admission/remaining budget at each launch.",
+      "executed": false
+    },
+    {
+      "id": "detached-parent",
+      "evidenceRequired": "controlled_parent_child_capture",
+      "oracle": "Hold a child across parent return; retain original root/action identity and resource owner/lease. Explicit shell detach records receiving owner/deadline; background agent parent-linked abort remains distinguishable. Parent return never proves cleanup.",
+      "executed": false
+    },
+    {
+      "id": "source-binding",
+      "evidenceRequired": "artifact_integrity",
+      "oracle": "Before acceptance rebind changed sources, fixture roster, consumer outputs and independent review; preparation and pre-B19 CI do not constitute B19 acceptance.",
+      "executed": false
+    }
+  ],
+  "additionalSelectedExistingTests": [
+    "evals/buffbench/__tests__/agent-runner.test.ts",
+    "evals/buffbench/__tests__/isolated-sdk-client.test.ts",
+    "sdk/src/__tests__/run-programmatic-outcomes.test.ts",
+    "sdk/src/__tests__/load-agents.test.ts",
+    "packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts",
+    "packages/agent-runtime/src/__tests__/sandbox-generator.test.ts",
+    "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts",
+    "packages/agent-runtime/src/util/__tests__/workspace-path-leases.test.ts"
+  ],
+  "testsExecuted": false,
+  "checksAfterImplementation": [
+    "affected selected regressions",
+    "affected package typechecks",
+    "affected packages exact sorted CI invocation",
+    "source-bound independent non-author review"
+  ],
+  "environment": "Pinned Bun 1.3.5; replacement environment, owned empty HOME/XDG, synthetic configuration/sentinels and zero provider calls",
+  "excludedProofs": {
+    "B20": "Actual descendant cleanup, deadline/TERM/KILL/reap envelope, stream drain and no late marker writes",
+    "B21": "Installed checksummed native execution and OS enforcement",
+    "B16_M22_CHILD": "Durable detached child result retention, authority migration and restart ownership",
+    "B25_B28": "Deeper LSP/MCP lifecycle and complete protocol semantics",
+    "B29_B15": "Trusted dependency bundle fidelity and replay eligibility"
+  },
+  "nativeDisposition": "Unavailable-to-SDK is explicit; no injected capture counts as native execution or enforcement."
+}

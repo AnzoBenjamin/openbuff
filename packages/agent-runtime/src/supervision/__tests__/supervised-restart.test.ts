@@ -1,0 +1,646 @@
+/**
+ * P2-T8c: supervised-spawn RESTART POLICY fault-injection suite for
+ * supervision/supervised-spawn.ts (`buildDefaultSpawnSupervised` third
+ * `options` argument: `restart: SupervisedRestartPolicy` + the test-only
+ * `_scheduleRestart` backoff sleep hook).
+ *
+ * The seam's per-attempt body dynamically imports './process-supervisor' and
+ * calls `spawnSettledSubagent` / `buildSupervisedChildEnv` there, so the
+ * settled outcome SEQUENCE is injected through the TEST-ONLY
+ * `_spawnSettledSubagent` option (see SupervisedSpawnOptions) — no production
+ * file is modified and no real child process is spawned here (exception: the
+ * free-form non-JSON-serializable-request case, which settles inside the seam
+ * itself before any spawn). Backoff waits are
+ * replaced by the `_scheduleRestart` recording hook (no real sleeps), and
+ * every seam call is bounded by a wall-clock race so a restart-loop bug
+ * shows as a timeout failure, never a hung run. No unbounded loops.
+ *
+ * cancel-softlock fix: the final describe also pins the DEFAULT seam's
+ * per-call parent-abort signal wiring — the signal threads VERBATIM into
+ * spawnSettledSubagent (the supervisor's abort listener is the kill
+ * channel), and the restart loop never respawns a child the parent just
+ * cancelled (an abort kill settles as a restartable transport crash).
+ */
+import { describe, expect, it } from 'bun:test'
+import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
+import type {
+  SettledSubagentResult,
+  SupervisedSpawnRequest,
+} from '@codebuff/common/types/contracts/agent-runtime'
+
+import type { SpawnSettledSubagentParams } from '../process-supervisor'
+import {
+  buildDefaultSpawnSupervised,
+  type SpawnSupervisedFn,
+} from '../supervised-spawn'
+
+// ---- outcome-sequence injection (the only test-side seam available) ------
+
+const spawnQueue: SettledSubagentResult[] = []
+const spawnCallParams: unknown[] = []
+
+// The queue-driven stub injected via the TEST-ONLY `_spawnSettledSubagent`
+// option (see SupervisedSpawnOptions): it matches the REAL
+// spawnSettledSubagent signature, records each call's params, and returns the
+// next queued settled outcome — so no production file is modified (no bun
+// process-global mock.module leak) and no real child process is spawned.
+const spawnSettledSubagentStub = async (
+  params: SpawnSettledSubagentParams,
+): Promise<SettledSubagentResult> => {
+  spawnCallParams.push(params)
+  const next = spawnQueue.shift()
+  if (next === undefined) {
+    throw new Error('spawn-settle stub queue exhausted — restart loop unbounded')
+  }
+  return next
+}
+
+/** Resets the injected settled-outcome queue + call log between tests. */
+function resetSpawnQueue(): void {
+  spawnQueue.length = 0
+  spawnCallParams.length = 0
+}
+
+// ---- fixture envelopes ---------------------------------------------------
+
+const OK_RECEIPT: AgentReceipt = {
+  schemaVersion: 1,
+  receiptId: 'restart-fixture-receipt',
+  taskId: 'restart-fixture-task',
+  role: 'specialist',
+  agentId: 'restart-fixture-agent',
+  status: 'completed',
+  outcome: 'ok',
+  changedFiles: [],
+  requirementsAddressed: [],
+  acceptanceCriteriaAddressed: [],
+  findingsAddressed: [],
+  evidence: [],
+  assumptions: [],
+  unresolved: [],
+  requestedValidation: [],
+  artifacts: [],
+  errors: [],
+}
+
+function settledOk(): SettledSubagentResult {
+  return {
+    outcome: 'ok',
+    receipt: OK_RECEIPT,
+    exitCode: 0,
+    durationMs: 5,
+    stdoutBytes: 256,
+    killed: false,
+    stderrTail: '',
+  }
+}
+
+function settledCrash(
+  crashReason: string,
+  overrides: Partial<SettledSubagentResult> = {},
+): SettledSubagentResult {
+  return {
+    outcome: 'crashed',
+    crashReason,
+    exitCode: 1,
+    durationMs: 5,
+    stdoutBytes: 0,
+    killed: false,
+    stderrTail: `crash: ${crashReason}`,
+    ...overrides,
+  }
+}
+
+/** Queue a settled-outcome sequence for the next seam run. */
+function queueSpawns(...results: SettledSubagentResult[]): void {
+  spawnQueue.push(...results)
+}
+
+// ---- harness -------------------------------------------------------------
+
+const SETTLE_TIMEOUT_MS = 5_000
+
+/** Fails the test (instead of hanging) when the seam does not settle in time. */
+async function settleBounded(
+  seam: SpawnSupervisedFn,
+  request: SupervisedSpawnRequest,
+  options?: { signal?: AbortSignal },
+): Promise<SettledSubagentResult> {
+  return Promise.race([
+    seam(request, options),
+    Bun.sleep(SETTLE_TIMEOUT_MS).then(() => {
+      throw new Error(
+        `supervised restart test did not settle within ${SETTLE_TIMEOUT_MS}ms — an unbounded restart loop would hang here`,
+      )
+    }),
+  ])
+}
+
+const REQUEST: SupervisedSpawnRequest = {
+  agentType: 'test-restart-policy',
+  prompt: 'Probe',
+  spawnParams: undefined,
+  child: { agentId: 'restart-fixture-agent-child' },
+  timeoutMs: 10_000,
+}
+
+interface RecordedRestart {
+  delays: number[]
+  observes: Array<{ attempt: number; crashReason: string }>
+}
+
+/** Builds a seam with restart enabled + recorded backoffs/observations. */
+function buildRestartingSeam(policy: {
+  maxAttempts: number
+  backoffMs?: number
+  backoffMultiplier?: number
+  onRestart?: (info: { attempt: number; crashReason: string }) => void
+}): {
+  seam: SpawnSupervisedFn
+  record: RecordedRestart
+} {
+  const record: RecordedRestart = { delays: [], observes: [] }
+  const seam = buildDefaultSpawnSupervised({}, undefined, {
+    restart: {
+      maxAttempts: policy.maxAttempts,
+      ...(policy.backoffMs !== undefined
+        ? { backoffMs: policy.backoffMs }
+        : {}),
+      ...(policy.backoffMultiplier !== undefined
+        ? { backoffMultiplier: policy.backoffMultiplier }
+        : {}),
+      onRestart:
+        policy.onRestart ??
+        ((info: { attempt: number; crashReason: string }) => {
+          record.observes.push(info)
+        }),
+    },
+    _spawnSettledSubagent: spawnSettledSubagentStub,
+    _scheduleRestart: async (delayMs) => {
+      record.delays.push(delayMs)
+    },
+  })
+  return { seam, record }
+}
+
+/**
+ * Runs one bounded seam call with the given (partial) restart policy and
+ * returns the recorded restart delays — the reference schedule the
+ * normalization clamp cases below assert against. Omitting `backoffMs` /
+ * `backoffMultiplier` exercises the seam's own module-private defaults with
+ * no test-side mirror. Resets and reuses the shared spawn queue; a caller
+ * must make its own spawnCallParams assertions BEFORE calling this.
+ */
+async function referenceDelays(policy: {
+  maxAttempts: number
+  backoffMs?: number
+  backoffMultiplier?: number
+}): Promise<number[]> {
+  const okResult = settledOk()
+  queueSpawns(
+    ...Array.from({ length: policy.maxAttempts }, () =>
+      settledCrash('spawn_failed'),
+    ),
+    okResult,
+  )
+  const { seam, record } = buildRestartingSeam(policy)
+  const result = await settleBounded(seam, REQUEST)
+  expect(result).toBe(okResult)
+  return record.delays
+}
+
+describe('supervised-spawn restart policy (P2-T8c)', () => {
+  it(
+    'crash→respawn fault injection: up to maxAttempts restarts, then settles ok',
+    async () => {
+      resetSpawnQueue()
+      const firstCrash = settledCrash('spawn_failed')
+      const secondCrash = settledCrash('internal_error')
+      const okResult = settledOk()
+      // Two restartable crashes, then the good attempt. maxAttempts 2 →
+      // up to 3 total spawns.
+      queueSpawns(firstCrash, secondCrash, okResult)
+      const { seam, record } = buildRestartingSeam({
+        maxAttempts: 2,
+        backoffMs: 10,
+        backoffMultiplier: 2,
+      })
+      const result = await settleBounded(seam, REQUEST)
+      // 3 spawns consumed the whole queue; the ok attempt is LAST.
+      expect(spawnCallParams).toHaveLength(3)
+      expect(result).toBe(okResult)
+      expect(result.outcome).toBe('ok')
+      expect((result.receipt as AgentReceipt)?.taskId).toBe(
+        OK_RECEIPT.taskId,
+      )
+      // onRestart fired exactly maxAttempts times, 1-based restart numbers,
+      // each carrying the PREVIOUS attempt's crashReason.
+      expect(record.observes).toEqual([
+        { attempt: 1, crashReason: 'spawn_failed' },
+        { attempt: 2, crashReason: 'internal_error' },
+      ])
+      // Exponential backoff per recorded _scheduleRestart call:
+      // 10 * 2^0 = 10, 10 * 2^1 = 20.
+      expect(record.delays).toEqual([10, 20])
+    },
+  )
+
+  it(
+    'exhausted restarts: every attempt crashes → the LAST crashed result is returned UNCHANGED',
+    async () => {
+      resetSpawnQueue()
+      const lastCrash = settledCrash('nonzero_exit', {
+        stderrTail: 'final attempt stderr',
+      })
+      queueSpawns(
+        settledCrash('nonzero_exit'),
+        settledCrash('nonzero_exit'),
+        lastCrash,
+      )
+      const { seam, record } = buildRestartingSeam({ maxAttempts: 2 })
+      const result = await settleBounded(seam, REQUEST)
+      expect(spawnCallParams).toHaveLength(3)
+      expect(result).toBe(lastCrash)
+      expect(result.outcome).toBe('crashed')
+      expect(result.crashReason).toBe('nonzero_exit')
+      expect(result.stderrTail).toBe('final attempt stderr')
+      // Both budgeted restarts fired before exhaustion.
+      expect(record.observes).toEqual([
+        { attempt: 1, crashReason: 'nonzero_exit' },
+        { attempt: 2, crashReason: 'nonzero_exit' },
+      ])
+    },
+  )
+
+  it('maxAttempts: 0 keeps the inert single-spawn path with zero restarts', async () => {
+    resetSpawnQueue()
+    const okResult = settledOk()
+    // Only ONE spawn may be queued — a second call would throw.
+    queueSpawns(okResult)
+    const { seam, record } = buildRestartingSeam({ maxAttempts: 0 })
+    const result = await settleBounded(seam, REQUEST)
+    expect(spawnCallParams).toHaveLength(1)
+    expect(result).toBe(okResult)
+    expect(record.delays).toEqual([])
+    expect(record.observes).toEqual([])
+  })
+
+  it('bounded queue: a runaway restart loop drains the queue and timeouts, never hangs', async () => {
+    resetSpawnQueue()
+    // Two queue entries but maxAttempts 3 would demand a 4th spawn: the
+    // stub throws → the settle race surfaces a failure, not a hang.
+    queueSpawns(
+      settledCrash('spawn_failed'),
+      settledCrash('spawn_failed'),
+      settledCrash('spawn_failed'),
+    )
+    const { seam } = buildRestartingSeam({ maxAttempts: 3 })
+    const settled = await settleBounded(seam, REQUEST).then(
+      () => 'settled-ok',
+      (error: unknown) =>
+        error instanceof Error
+          ? error.message
+          : 'rejected with a non-Error',
+    )
+    expect(settled).toBe(
+      'spawn-settle stub queue exhausted — restart loop unbounded',
+    )
+    expect(spawnCallParams).toHaveLength(4)
+  })
+
+  it('crashed with crashReason timeout is NOT restartable — settles as-is', async () => {
+    resetSpawnQueue()
+    const timeoutCrash = settledCrash('timeout', {
+      exitCode: null,
+      killed: true,
+    })
+    queueSpawns(timeoutCrash)
+    const { seam, record } = buildRestartingSeam({ maxAttempts: 2 })
+    const result = await settleBounded(seam, REQUEST)
+    expect(spawnCallParams).toHaveLength(1)
+    expect(result).toBe(timeoutCrash)
+    expect(record.delays).toEqual([])
+    expect(record.observes).toEqual([])
+  })
+
+  it(
+    'free-form crashReason (non-JSON-serializable request) is NOT restartable — settles as-is',
+    async () => {
+      resetSpawnQueue()
+      const { seam, record } = buildRestartingSeam({ maxAttempts: 2 })
+      // Nothing is queued: a restartable crash would drain the queue and
+      // throw inside the stub instead of restarting.
+      // A circular reference can never survive JSON.stringify, so the seam
+      // must settle the structured free-form input-bug crash instead of
+      // spawning — and never restart.
+      const circular: Record<string, unknown> = {}
+      circular.self = circular
+      const result = await settleBounded(seam, {
+        ...REQUEST,
+        child: {
+          agentId: 'restart-fixture-agent-child',
+          messageHistory: circular,
+        },
+      })
+      expect(result.outcome).toBe('crashed')
+      expect(
+        result.crashReason?.startsWith(
+          'supervised request is not JSON-serializable',
+        ),
+      ).toBe(true)
+      expect(spawnCallParams).toHaveLength(0)
+      expect(record.delays).toEqual([])
+      expect(record.observes).toEqual([])
+    },
+  )
+
+  it(
+    'nonzero_exit WITH a valid receipt envelope is NOT restartable (agent-level failure)',
+    async () => {
+      resetSpawnQueue()
+      const withReceipt = settledCrash('nonzero_exit', {
+        exitCode: 1,
+        receipt: OK_RECEIPT,
+      })
+      queueSpawns(withReceipt)
+      const { seam, record } = buildRestartingSeam({ maxAttempts: 2 })
+      const result = await settleBounded(seam, REQUEST)
+      expect(spawnCallParams).toHaveLength(1)
+      expect(result).toBe(withReceipt)
+      expect(result.receipt).toBe(OK_RECEIPT)
+      expect(record.delays).toEqual([])
+      expect(record.observes).toEqual([])
+    },
+  )
+
+  it(
+    'nonzero_exit WITHOUT a receipt envelope IS restartable and respawns',
+    async () => {
+      resetSpawnQueue()
+      const okResult = settledOk()
+      queueSpawns(settledCrash('nonzero_exit'), okResult)
+      const { seam, record } = buildRestartingSeam({ maxAttempts: 2 })
+      const result = await settleBounded(seam, REQUEST)
+      expect(spawnCallParams).toHaveLength(2)
+      expect(result).toBe(okResult)
+      expect(record.observes).toEqual([
+        { attempt: 1, crashReason: 'nonzero_exit' },
+      ])
+    },
+  )
+})
+
+describe('supervised-spawn restart policy normalization (P2-T8c)', () => {
+  // RESTART_DEFAULT_BACKOFF_MS / RESTART_DEFAULT_BACKOFF_MULTIPLIER are
+  // module-private in supervised-spawn.ts (not exported), so the clamp
+  // defaults are pinned via the seam's BEHAVIOR instead of mirrored
+  // literals: each junk-value case runs an otherwise-identical reference
+  // call that OMITS the scalar under test (the clamp default applies) and
+  // asserts the recorded delays match that reference element-for-element.
+  // If the production defaults change, these tests track the new value
+  // instead of failing with a stale literal diff; if the clamp breaks, the
+  // junk-value run diverges from its reference and fails.
+  const NON_FINITE_VALUES: Array<[string, number]> = [
+    ['NaN', Number.NaN],
+    ['Infinity', Number.POSITIVE_INFINITY],
+    ['-Infinity', Number.NEGATIVE_INFINITY],
+  ]
+
+  for (const [label, value] of NON_FINITE_VALUES) {
+    it(`non-finite backoffMs (${label}) clamps to the seam's default backoff`, async () => {
+      resetSpawnQueue()
+      const okResult = settledOk()
+      queueSpawns(settledCrash('spawn_failed'), okResult)
+      const { seam, record } = buildRestartingSeam({
+        maxAttempts: 1,
+        backoffMs: value,
+        backoffMultiplier: 2,
+      })
+      const result = await settleBounded(seam, REQUEST)
+      expect(spawnCallParams).toHaveLength(2)
+      expect(result).toBe(okResult)
+      // First restart waits exactly backoffMs → the clamped default, proven
+      // equal to the omit-backoffMs reference run's recorded delay.
+      expect(record.delays).toEqual(
+        await referenceDelays({ maxAttempts: 1, backoffMultiplier: 2 }),
+      )
+    })
+  }
+
+  it(`negative backoffMs clamps to the seam's default backoff`, async () => {
+    resetSpawnQueue()
+    const okResult = settledOk()
+    queueSpawns(settledCrash('spawn_failed'), okResult)
+    const { seam, record } = buildRestartingSeam({
+      maxAttempts: 1,
+      backoffMs: -5,
+      backoffMultiplier: 2,
+    })
+    const result = await settleBounded(seam, REQUEST)
+    expect(spawnCallParams).toHaveLength(2)
+    expect(result).toBe(okResult)
+    expect(record.delays).toEqual(
+      await referenceDelays({ maxAttempts: 1, backoffMultiplier: 2 }),
+    )
+  })
+
+  for (const [label, value] of NON_FINITE_VALUES) {
+    it(`non-finite backoffMultiplier (${label}) clamps to the seam's default multiplier`, async () => {
+      resetSpawnQueue()
+      const okResult = settledOk()
+      queueSpawns(
+        settledCrash('spawn_failed'),
+        settledCrash('internal_error'),
+        okResult,
+      )
+      const { seam, record } = buildRestartingSeam({
+        maxAttempts: 2,
+        backoffMs: 10,
+        backoffMultiplier: value,
+      })
+      const result = await settleBounded(seam, REQUEST)
+      expect(spawnCallParams).toHaveLength(3)
+      expect(result).toBe(okResult)
+      // 10 * m^0 = 10, 10 * m^1 = 10m with the clamped default multiplier,
+      // proven element-equal to the omit-backoffMultiplier reference run.
+      expect(record.delays).toEqual(
+        await referenceDelays({ maxAttempts: 2, backoffMs: 10 }),
+      )
+    })
+  }
+
+  it(`negative backoffMultiplier clamps to the seam's default multiplier`, async () => {
+    resetSpawnQueue()
+    const okResult = settledOk()
+    queueSpawns(
+      settledCrash('spawn_failed'),
+      settledCrash('internal_error'),
+      okResult,
+    )
+    const { seam, record } = buildRestartingSeam({
+      maxAttempts: 2,
+      backoffMs: 10,
+      backoffMultiplier: -3,
+    })
+    const result = await settleBounded(seam, REQUEST)
+    expect(spawnCallParams).toHaveLength(3)
+    expect(result).toBe(okResult)
+    expect(record.delays).toEqual(
+      await referenceDelays({ maxAttempts: 2, backoffMs: 10 }),
+    )
+  })
+
+  it('fractional maxAttempts (2.7) floors to 2 restarts — 3 total spawns', async () => {
+    resetSpawnQueue()
+    const thirdCrash = settledCrash('spawn_failed', {
+      stderrTail: 'third attempt stderr',
+    })
+    const unusedFourth = settledOk()
+    // A 4th entry is queued so that a ceil/round bug (3 restarts) would
+    // consume it and settle ok instead of returning the 3rd crash.
+    queueSpawns(
+      settledCrash('spawn_failed'),
+      settledCrash('spawn_failed'),
+      thirdCrash,
+      unusedFourth,
+    )
+    const { seam, record } = buildRestartingSeam({
+      maxAttempts: 2.7,
+      backoffMs: 10,
+      backoffMultiplier: 2,
+    })
+    const result = await settleBounded(seam, REQUEST)
+    expect(spawnCallParams).toHaveLength(3)
+    expect(result).toBe(thirdCrash)
+    expect(spawnQueue).toEqual([unusedFourth])
+    expect(record.observes).toEqual([
+      { attempt: 1, crashReason: 'spawn_failed' },
+      { attempt: 2, crashReason: 'spawn_failed' },
+    ])
+    expect(record.delays).toEqual([10, 20])
+  })
+})
+
+describe('supervised-spawn settle deadline wiring (absolute lifetime cap)', () => {
+  /**
+   * The default seam (no restart policy) driven through the settle-stub
+   * injection: the stub records the params it received, so these tests
+   * assert the DEADLINE WIRING `runSettledAttempt` hands to the supervisor
+   * — without spawning a real child process.
+   */
+  it('arms idleTimeoutMs AND maxLifetimeMs (plus timeoutMs) at the request deadline', async () => {
+    resetSpawnQueue()
+    const okResult = settledOk()
+    queueSpawns(okResult)
+    const seam = buildDefaultSpawnSupervised({}, undefined, {
+      _spawnSettledSubagent: spawnSettledSubagentStub,
+    })
+    const result = await settleBounded(seam, REQUEST)
+    expect(result).toBe(okResult)
+    const settleParams = spawnCallParams[0] as SpawnSettledSubagentParams
+    expect(settleParams.timeoutMs).toBe(REQUEST.timeoutMs)
+    expect(settleParams.idleTimeoutMs).toBe(REQUEST.timeoutMs)
+    // The absolute lifetime cap MUST ride along with the idle window: with
+    // only the idle window armed (the regressions this guards against), a
+    // child that keeps emitting stdout/bridge activity resets the window
+    // forever and NEVER settles — the supervisor's single wall-clock
+    // termTimer branch is skipped whenever idleTimeoutMs is present.
+    expect(settleParams.maxLifetimeMs).toBe(REQUEST.timeoutMs)
+  })
+
+  it(
+    `arms NO deadline when the request omits timeoutMs (documented unbounded contract)`,
+    async () => {
+      resetSpawnQueue()
+      const okResult = settledOk()
+      queueSpawns(okResult)
+      const seam = buildDefaultSpawnSupervised({}, undefined, {
+        _spawnSettledSubagent: spawnSettledSubagentStub,
+      })
+      await settleBounded(seam, { ...REQUEST, timeoutMs: undefined })
+      const settleParams = spawnCallParams[0] as SpawnSettledSubagentParams
+      // No implicit default: SETTLE_DEFAULT_TIMEOUT_MS is only applied when a
+      // caller chooses it explicitly. With no request deadline the seam passes
+      // NO timeout/idle/lifetime bound and the child runs unbounded with zero
+      // timers armed, matching the in-process path.
+      expect(settleParams.timeoutMs).toBeUndefined()
+      expect(settleParams.idleTimeoutMs).toBeUndefined()
+      expect(settleParams.maxLifetimeMs).toBeUndefined()
+    },
+  )
+})
+
+// cancel-softlock fix: the per-call parent-abort signal wiring through the
+// DEFAULT seam. The tool-handler tests assert the FAKE seam receives the
+// signal and the supervisor tests pass the signal directly; these cases pin
+// the wrapper in between — the signal is threaded VERBATIM into
+// spawnSettledSubagent, and the restart loop never respawns a child the
+// parent just cancelled (an abort kill settles as a restartable transport
+// crash, so only the guard stops the respawn).
+describe(
+  'supervised-spawn parent-abort signal wiring (cancel-softlock fix)',
+  () => {
+    it('threads the per-call signal into spawnSettledSubagent verbatim', async () => {
+      resetSpawnQueue()
+      const okResult = settledOk()
+      queueSpawns(okResult)
+      const seam = buildDefaultSpawnSupervised({}, undefined, {
+        _spawnSettledSubagent: spawnSettledSubagentStub,
+      })
+      const controller = new AbortController()
+      const result = await settleBounded(seam, REQUEST, {
+        signal: controller.signal,
+      })
+      expect(result).toBe(okResult)
+      const settleParams = spawnCallParams[0] as SpawnSettledSubagentParams
+      // The signal rides into the supervisor — its abort listener is the
+      // kill channel that group-kills the child.
+      expect(settleParams.signal).toBe(controller.signal)
+    })
+
+    it(
+      'omits the signal key entirely when no per-call options are passed (byte-identical older callers)',
+      async () => {
+        resetSpawnQueue()
+        const okResult = settledOk()
+        queueSpawns(okResult)
+        const seam = buildDefaultSpawnSupervised({}, undefined, {
+          _spawnSettledSubagent: spawnSettledSubagentStub,
+        })
+        const result = await settleBounded(seam, REQUEST)
+        expect(result).toBe(okResult)
+        const settleParams = spawnCallParams[0] as SpawnSettledSubagentParams
+        // Additive contract: a signal-less call carries no signal key at all,
+        // exactly the pre-fix supervisor params shape.
+        expect('signal' in settleParams).toBe(false)
+      },
+    )
+
+    it(
+      'never respawns a child the parent just cancelled (restartable crash + aborted signal)',
+      async () => {
+        resetSpawnQueue()
+        const abortKillCrash = settledCrash('nonzero_exit', {
+          exitCode: null,
+          killed: true,
+        })
+        // ONLY one entry is queued: a respawn (the pre-fix behavior — the
+        // abort kill settles as a RESTARTABLE transport crash) would consume
+        // a second spawn and throw 'queue exhausted', failing this test.
+        queueSpawns(abortKillCrash)
+        const { seam, record } = buildRestartingSeam({ maxAttempts: 3 })
+        const controller = new AbortController()
+        controller.abort()
+        const result = await settleBounded(seam, REQUEST, {
+          signal: controller.signal,
+        })
+        expect(spawnCallParams).toHaveLength(1)
+        expect(result).toBe(abortKillCrash)
+        // No backoff was scheduled and no restart observed: the loop ended
+        // on the cancelled-signal guard, not after burning the budget.
+        expect(record.delays).toEqual([])
+        expect(record.observes).toEqual([])
+      },
+    )
+  },
+)

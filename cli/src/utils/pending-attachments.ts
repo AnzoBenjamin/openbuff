@@ -6,8 +6,13 @@ import { isMandatorySensitiveReadPath } from '@codebuff/common/util/sensitive-pa
 
 import { processImageFile, resolveFilePath, isImageFile } from './image-handler'
 import { useChatStore } from '../state/chat-store'
+import type { ImageUploadResult } from './image-handler'
 import type { FileAttachment } from '../types/chat'
-import type { PendingAttachment, PendingFileAttachment } from '../types/store'
+import type {
+  PendingAttachment,
+  PendingFileAttachment,
+  PendingImageAttachment,
+} from '../types/store'
 
 /**
  * Exit image input mode if currently active.
@@ -30,34 +35,74 @@ export async function addPendingImageFromFile(
   imagePath: string,
   cwd: string,
   replacePlaceholder?: string,
-): Promise<void> {
+): Promise<{ success: boolean; error?: string }> {
   const filename = path.basename(imagePath)
+  const id = crypto.randomUUID()
 
   if (replacePlaceholder) {
     // Replace existing placeholder with actual image info (still processing)
     useChatStore.setState((state) => ({
       pendingAttachments: state.pendingAttachments.map((att) =>
         att.kind === 'image' && att.path === replacePlaceholder
-          ? { ...att, path: imagePath, filename }
+          ? {
+              ...att,
+              id,
+              path: imagePath,
+              filename,
+              sourcePath: imagePath,
+              sourceRoot: cwd,
+            }
           : att,
       ),
     }))
   } else {
-    // Add to pending state immediately with processing status so user sees loading state
-    useChatStore.getState().addPendingImage({
+    const nextImage: PendingImageAttachment = {
+      kind: 'image',
+      id,
       path: imagePath,
+      sourcePath: imagePath,
+      sourceRoot: cwd,
       filename,
       status: 'processing',
-    })
+    }
+    useChatStore.setState((state) => ({
+      pendingAttachments: state.pendingAttachments.some(
+        (attachment) =>
+          attachment.kind === 'image' && attachment.path === imagePath,
+      )
+        ? state.pendingAttachments.map((attachment) =>
+            attachment.kind === 'image' && attachment.path === imagePath
+              ? { ...attachment, ...nextImage }
+              : attachment,
+          )
+        : [...state.pendingAttachments, nextImage],
+    }))
   }
 
   // Process the image in background
-  const result = await processImageFile(imagePath, cwd)
+  const result = await processImageFile(imagePath, cwd).catch(
+    (error): ImageUploadResult => ({
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    }),
+  )
+  if (
+    !useChatStore
+      .getState()
+      .pendingAttachments.some(
+        (attachment) => attachment.kind === 'image' && attachment.id === id,
+      )
+  ) {
+    return {
+      success: false,
+      error: 'Image attachment was removed or replaced while processing',
+    }
+  }
 
   // Update the pending image with processed data
   useChatStore.setState((state) => ({
     pendingAttachments: state.pendingAttachments.map((att) => {
-      if (att.kind !== 'image' || att.path !== imagePath) return att
+      if (att.kind !== 'image' || att.id !== id) return att
 
       if (result.success && result.imagePart) {
         return {
@@ -86,6 +131,9 @@ export async function addPendingImageFromFile(
   if (result.success) {
     exitImageModeIfActive()
   }
+  return result.success
+    ? { success: true }
+    : { success: false, error: result.error ?? 'Failed to process image' }
 }
 
 /**
@@ -102,6 +150,7 @@ export async function addPendingImageFromBase64(
   const size = Math.round((base64Data.length * 3) / 4) // Approximate decoded size
 
   useChatStore.getState().addPendingImage({
+    id: crypto.randomUUID(),
     path: tempPath || `clipboard:${filename}`,
     filename,
     status: 'ready',
@@ -113,14 +162,8 @@ export async function addPendingImageFromBase64(
   })
 }
 
-const AUTO_REMOVE_ERROR_DELAY_MS = 3000
-
 // Counter for generating unique placeholder IDs
 let clipboardPlaceholderCounter = 0
-
-// Map to store cleanup timers for error images, keyed by image path
-// This allows clearing the timer if the image is removed before the delay expires
-const errorImageTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 /**
  * Add a placeholder for a clipboard image immediately and return its path.
@@ -129,6 +172,7 @@ const errorImageTimers = new Map<string, ReturnType<typeof setTimeout>>()
 export function addClipboardPlaceholder(): string {
   const placeholderPath = `clipboard:pending-${++clipboardPlaceholderCounter}`
   useChatStore.getState().addPendingImage({
+    id: crypto.randomUUID(),
     path: placeholderPath,
     filename: 'clipboard image',
     status: 'processing',
@@ -139,9 +183,7 @@ export function addClipboardPlaceholder(): string {
 /**
  * Add a pending image with an error note (e.g., unsupported format, not found).
  * Used when we want to show the image in the banner with an error state.
- * Error images are automatically removed after a short delay.
- *
- * Error images are automatically removed after AUTO_REMOVE_ERROR_DELAY_MS.
+ * Errors remain visible until the user removes or retries the attachment.
  */
 export function addPendingImageWithError(
   imagePath: string,
@@ -149,37 +191,21 @@ export function addPendingImageWithError(
 ): void {
   const filename = path.basename(imagePath)
   useChatStore.getState().addPendingImage({
+    id: crypto.randomUUID(),
     path: imagePath,
+    sourcePath: imagePath,
     filename,
     status: 'error',
     note,
   })
-
-  // Clear any existing timer for this path (shouldn't happen, but be safe)
-  const existingTimer = errorImageTimers.get(imagePath)
-  if (existingTimer) {
-    clearTimeout(existingTimer)
-  }
-
-  // Auto-remove error images after a delay
-  const timer = setTimeout(() => {
-    errorImageTimers.delete(imagePath)
-    useChatStore.getState().removePendingImage(imagePath)
-  }, AUTO_REMOVE_ERROR_DELAY_MS)
-
-  errorImageTimers.set(imagePath, timer)
 }
 
 /**
  * Clear the auto-remove timer for an error image.
  * Call this when manually removing an image to prevent memory leaks.
  */
-export function clearErrorImageTimer(imagePath: string): void {
-  const timer = errorImageTimers.get(imagePath)
-  if (timer) {
-    clearTimeout(timer)
-    errorImageTimers.delete(imagePath)
-  }
+export function clearErrorImageTimer(_imagePath: string): void {
+  // Kept for existing callers; errors now remain until explicit removal.
 }
 
 /**
@@ -209,8 +235,10 @@ export async function validateAndAddImage(
   }
 
   // Process and add the image (addPendingImageFromFile handles exiting image mode on success)
-  await addPendingImageFromFile(resolvedPath, cwd)
-  return { success: true }
+  const processed = await addPendingImageFromFile(resolvedPath, cwd)
+  return processed.success
+    ? { success: true }
+    : { success: false, error: processed.error ?? 'Failed to process image' }
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +314,114 @@ function isBinaryBuffer(buffer: Buffer): boolean {
   return false
 }
 
+export async function loadFileAttachmentContent(
+  filePath: string,
+  isDirectory: boolean,
+  provenance: FileAttachmentProvenance = 'attachment',
+): Promise<
+  Pick<PendingFileAttachment, 'content' | 'status' | 'note'> &
+    FileAttachmentContextMetadata
+> {
+  let content: string
+  let note: string
+  let contextMetadata: FileAttachmentContextMetadata
+
+  if (isDirectory) {
+    const entries = await fs.readdir(filePath, { withFileTypes: true })
+    const count = entries.length
+    const included = Math.min(count, MAX_DIR_ENTRIES)
+    note = `shallow · ${included}/${count} item${count !== 1 ? 's' : ''}`
+    contextMetadata = {
+      completeness: 'shallow-directory',
+      provenance,
+      entriesIncluded: included,
+      totalEntries: count,
+    }
+
+    if (count === 0) {
+      content = '(empty directory)'
+    } else {
+      // Sort: directories first, then files, alphabetically within each group
+      const sorted = [...entries].sort((a, b) => {
+        const aIsDir = a.isDirectory()
+        const bIsDir = b.isDirectory()
+        if (aIsDir !== bIsDir) return aIsDir ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
+      const listing = sorted
+        .slice(0, MAX_DIR_ENTRIES)
+        .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
+        .join('\n')
+      content = listing
+      if (count > MAX_DIR_ENTRIES) {
+        content += `\n… and ${count - MAX_DIR_ENTRIES} more`
+      }
+    }
+  } else {
+    const stats = await fs.stat(filePath)
+
+    if (stats.size === 0) {
+      content = '(empty file)'
+      note = 'full · 0 B'
+      contextMetadata = {
+        completeness: 'full',
+        provenance,
+        bytesRead: 0,
+        totalBytes: 0,
+      }
+    } else if (stats.size > MAX_FILE_READ_SIZE) {
+      content = `(file too large to preview: ${formatFileSize(stats.size)})`
+      note = `metadata only · ${formatFileSize(stats.size)}`
+      contextMetadata = {
+        completeness: 'metadata-only',
+        provenance,
+        bytesRead: 0,
+        totalBytes: stats.size,
+      }
+    } else {
+      const buffer = await fs.readFile(filePath)
+      if (isBinaryBuffer(buffer)) {
+        content = '(binary file)'
+        note = `metadata only · ${formatFileSize(stats.size)} · binary`
+        contextMetadata = {
+          completeness: 'metadata-only',
+          provenance,
+          bytesRead: 0,
+          totalBytes: stats.size,
+        }
+      } else {
+        const text = buffer.toString('utf-8')
+        if (text.length > MAX_CONTENT_CHARS) {
+          content = text.slice(0, MAX_CONTENT_CHARS) + '\n… (truncated)'
+          note = `truncated · first ${formatFileSize(MAX_CONTENT_CHARS)} of ${formatFileSize(stats.size)}`
+          contextMetadata = {
+            completeness: 'truncated',
+            provenance,
+            bytesRead: Buffer.byteLength(text.slice(0, MAX_CONTENT_CHARS)),
+            totalBytes: stats.size,
+          }
+        } else {
+          content = text
+          note = `full · ${formatFileSize(stats.size)}`
+          contextMetadata = {
+            completeness: 'full',
+            provenance,
+            bytesRead: stats.size,
+            totalBytes: stats.size,
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    ...contextMetadata,
+    content,
+    status: 'ready',
+    note: provenance === '@file selection' ? `@file · ${note}` : note,
+  }
+}
+
 /**
  * Add a file or folder as a pending attachment.
  * Reads the content in the background and updates the store.
@@ -296,6 +432,7 @@ export function addPendingFileFromPath(
   options: {
     displayPath?: string
     provenance?: FileAttachmentProvenance
+    sourceRoot?: string
   } = {},
 ): void {
   const displayPath = options.displayPath ?? filePath
@@ -334,6 +471,8 @@ export function addPendingFileFromPath(
     FileAttachmentContextMetadata = {
     id,
     path: displayPath,
+    sourcePath: filePath,
+    sourceRoot: options.sourceRoot,
     filename,
     isDirectory,
     content: '',
@@ -348,117 +487,29 @@ export function addPendingFileFromPath(
   // block the OpenTUI renderer thread.
   setTimeout(async () => {
     try {
-      let content: string
-      let note: string
-      let contextMetadata: FileAttachmentContextMetadata
-
-      if (isDirectory) {
-        const entries = await fs.readdir(filePath, { withFileTypes: true })
-        const count = entries.length
-        const included = Math.min(count, MAX_DIR_ENTRIES)
-        note = `shallow · ${included}/${count} item${count !== 1 ? 's' : ''}`
-        contextMetadata = {
-          completeness: 'shallow-directory',
-          provenance,
-          entriesIncluded: included,
-          totalEntries: count,
-        }
-
-        if (count === 0) {
-          content = '(empty directory)'
-        } else {
-          // Sort: directories first, then files, alphabetically within each group
-          const sorted = [...entries].sort((a, b) => {
-            const aIsDir = a.isDirectory()
-            const bIsDir = b.isDirectory()
-            if (aIsDir !== bIsDir) return aIsDir ? -1 : 1
-            return a.name.localeCompare(b.name)
-          })
-          const listing = sorted
-            .slice(0, MAX_DIR_ENTRIES)
-            .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
-            .join('\n')
-          content = listing
-          if (count > MAX_DIR_ENTRIES) {
-            content += `\n… and ${count - MAX_DIR_ENTRIES} more`
-          }
-        }
-      } else {
-        const stats = await fs.stat(filePath)
-
-        if (stats.size === 0) {
-          content = '(empty file)'
-          note = 'full · 0 B'
-          contextMetadata = {
-            completeness: 'full',
-            provenance,
-            bytesRead: 0,
-            totalBytes: 0,
-          }
-        } else if (stats.size > MAX_FILE_READ_SIZE) {
-          content = `(file too large to preview: ${formatFileSize(stats.size)})`
-          note = `metadata only · ${formatFileSize(stats.size)}`
-          contextMetadata = {
-            completeness: 'metadata-only',
-            provenance,
-            bytesRead: 0,
-            totalBytes: stats.size,
-          }
-        } else {
-          const buffer = await fs.readFile(filePath)
-          if (isBinaryBuffer(buffer)) {
-            content = '(binary file)'
-            note = `metadata only · ${formatFileSize(stats.size)} · binary`
-            contextMetadata = {
-              completeness: 'metadata-only',
-              provenance,
-              bytesRead: 0,
-              totalBytes: stats.size,
-            }
-          } else {
-            const text = buffer.toString('utf-8')
-            if (text.length > MAX_CONTENT_CHARS) {
-              content = text.slice(0, MAX_CONTENT_CHARS) + '\n… (truncated)'
-              note = `truncated · first ${formatFileSize(MAX_CONTENT_CHARS)} of ${formatFileSize(stats.size)}`
-              contextMetadata = {
-                completeness: 'truncated',
-                provenance,
-                bytesRead: Buffer.byteLength(text.slice(0, MAX_CONTENT_CHARS)),
-                totalBytes: stats.size,
-              }
-            } else {
-              content = text
-              note = `full · ${formatFileSize(stats.size)}`
-              contextMetadata = {
-                completeness: 'full',
-                provenance,
-                bytesRead: stats.size,
-                totalBytes: stats.size,
-              }
-            }
-          }
-        }
-      }
-
+      const loaded = await loadFileAttachmentContent(
+        filePath,
+        isDirectory,
+        provenance,
+      )
       useChatStore.setState((state) => ({
         pendingAttachments: state.pendingAttachments.map((att) => {
           if (att.kind !== 'file' || att.id !== id) return att
-          const displayNote =
-            provenance === '@file selection' ? `@file · ${note}` : note
           return {
             ...att,
-            ...contextMetadata,
-            content,
-            status: 'ready' as const,
-            note: displayNote,
+            ...loaded,
           }
         }),
       }))
-    } catch {
+    } catch (error) {
       useChatStore.setState((state) => ({
         pendingAttachments: state.pendingAttachments.map((att) => {
           if (att.kind !== 'file' || att.id !== id) return att
-          return { ...att, status: 'error' as const, note: 'Failed to read' }
+          return {
+            ...att,
+            status: 'error' as const,
+            note: `Failed to read: ${error instanceof Error ? error.message : String(error)}`,
+          }
         }),
       }))
     }
@@ -495,6 +546,7 @@ export function addPendingFileMention(
   addPendingFileFromPath(resolved.realFullPath, isDirectory, {
     displayPath: resolved.relativePath,
     provenance: '@file selection',
+    sourceRoot: projectRoot,
   })
 }
 
@@ -530,4 +582,76 @@ export function capturePendingAttachments(): PendingAttachment[] {
     useChatStore.getState().clearPendingAttachments()
   }
   return pendingAttachments
+}
+
+/** Stable IDs are additive; old image captures retain their path identity. */
+export function getPendingAttachmentId(attachment: PendingAttachment): string {
+  return attachment.kind === 'image'
+    ? (attachment.id ?? attachment.path)
+    : attachment.id
+}
+
+/** Retry reads a fresh source snapshot; failures preserve previously captured content. */
+export async function retryPendingAttachment(
+  attachment: PendingAttachment,
+  cwd: string,
+  signal?: AbortSignal,
+  dependencies = { image: processImageFile, file: loadFileAttachmentContent },
+): Promise<PendingAttachment> {
+  if (attachment.kind === 'text') return attachment
+  signal?.throwIfAborted()
+  const sourcePath = attachment.sourcePath ?? attachment.path
+  const sourceRoot = attachment.sourceRoot ?? cwd
+  try {
+    if (sourcePath.startsWith('clipboard:'))
+      throw new Error(
+        'Clipboard source is no longer available. Remove this item and attach the image again.',
+      )
+    const resolved = resolveFilePath(sourcePath, sourceRoot)
+    if (
+      isMandatorySensitiveReadPath(sourcePath) ||
+      isMandatorySensitiveReadPath(resolved)
+    )
+      throw new Error('Blocked by mandatory sensitive-file policy')
+    if (attachment.kind === 'file') {
+      const metadata = getFileAttachmentContextMetadata(attachment)
+      if (metadata.provenance === '@file selection') {
+        const selected = resolveProjectPath(sourceRoot, sourcePath)
+        if (!selected)
+          throw new Error('Failed to resolve inside the original project')
+      }
+      const loaded = await dependencies.file(
+        resolved,
+        attachment.isDirectory,
+        metadata.provenance,
+      )
+      signal?.throwIfAborted()
+      return { ...attachment, ...loaded, sourcePath: resolved, sourceRoot }
+    }
+    const result = await dependencies.image(resolved, sourceRoot)
+    signal?.throwIfAborted()
+    if (!result.success || !result.imagePart)
+      throw new Error(result.error ?? 'Failed to process image')
+    return {
+      ...attachment,
+      status: 'ready',
+      note: result.wasCompressed ? 'compressed' : undefined,
+      sourcePath: resolved,
+      sourceRoot,
+      size: result.imagePart.size,
+      width: result.imagePart.width,
+      height: result.imagePart.height,
+      processedImage: {
+        base64: result.imagePart.image,
+        mediaType: result.imagePart.mediaType,
+      },
+    }
+  } catch (error) {
+    signal?.throwIfAborted()
+    return {
+      ...attachment,
+      status: 'error',
+      note: `Retry failed: ${error instanceof Error ? error.message : String(error)} · previous capture retained`,
+    }
+  }
 }

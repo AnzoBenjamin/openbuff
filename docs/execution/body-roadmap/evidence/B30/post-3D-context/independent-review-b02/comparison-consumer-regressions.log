@@ -1,0 +1,796 @@
+bun test v1.3.5 (1e86cebd)
+
+evals/buffbench/__tests__/statistics.test.ts:
+(pass) measured score eligibility > rejects present error strings, including an empty string
+(pass) measured score eligibility > preserves healthy absent/null errors and measured zero or low scores
+(pass) measured score eligibility > keeps execution outcomes and synthetic judging separate
+(pass) finite monetary aggregation > preserves zero, ordinary costs and a finite maximum singleton
+(pass) finite monetary aggregation > rejects nonfinite input and finite-input overflow [1.00ms]
+(pass) invalid evidence rejection > rejects nonfinite samples and invalid bootstrap controls [1.00ms]
+(pass) mean > returns 0 for empty input
+(pass) mean > returns the single value for a singleton
+(pass) mean > computes the mean of a known vector
+(pass) sampleStandardDeviation > returns 0 for empty and singleton input
+(pass) sampleStandardDeviation > uses the n-1 denominator on a known vector
+(pass) standardError > returns 0 for empty and singleton input
+(pass) standardError > is sampleSD / sqrt(n)
+(pass) makeSeededRng > is deterministic for a given seed
+(pass) makeSeededRng > produces values in [0, 1)
+(pass) makeSeededRng > produces different sequences for different seeds
+(pass) pairedBootstrapMeanDiffCI > rejects empty paired evidence
+(pass) pairedBootstrapMeanDiffCI > computes the observed meanDiff correctly [1.00ms]
+(pass) pairedBootstrapMeanDiffCI > is reproducible under a fixed seed and brackets meanDiff [2.00ms]
+(pass) pairedBootstrapMeanDiffCI > produces a centered CI for a symmetric sample (symmetric paired indices) [2.00ms]
+(pass) wilcoxonSignedRankTest > returns a not-applicable verdict when all diffs are zero
+(pass) wilcoxonSignedRankTest > returns a small p for a clearly-shifted set at adequate sample size
+(pass) wilcoxonSignedRankTest > returns a not-applicable verdict below the P8-T4a minimum n (n < 10) [1.00ms]
+(pass) wilcoxonSignedRankTest > applies the normal approximation exactly at the minimum n
+(pass) wilcoxonSignedRankTest > reports not-applicable for a symmetric/no-effect set below the minimum n
+
+evals/buffbench/__tests__/run-buffbench.test.ts:
+Using environment: test
+(pass) EvalDataV2Schema (M5-T7 eval-file validation) > accepts the in-repo eval fixture and preserves optional config keys [7.00ms]
+(pass) EvalDataV2Schema (M5-T7 eval-file validation) > rejects a version-drifted file with aggregated, path-bearing issues [2.00ms]
+(pass) EvalDataV2Schema (M5-T7 eval-file validation) > rejects a file missing the required top-level keys entirely
+(pass) EvalDataV2Schema (M5-T7 eval-file validation) > validates generationDate when present but does not require it [1.00ms]
+(pass) eval-idioms-v1 fixture > contains python, rust, and go idiom seed tasks with useful validation
+(pass) generateEvalTask > registers helper agents required by eval task exploration agents [1.00ms]
+(pass) parseInstallScriptArgv > splits valid npm/bun one-liners into an argv array [7.00ms]
+(pass) parseInstallScriptArgv > rejects anything that is not a plain npm/bun install one-liner
+✓ left-pad installed at /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/codebuff-bins-AAjG4n/node_modules/.bin/left-pad
+(pass) installBinaries > executes a valid npm install script via the argv path, never through a shell string [2.00ms]
+(pass) installBinaries > never executes an install script that is not a plain npm/bun one-liner
+(pass) installBinaries > never executes or PATH-adds a binPath that escapes the install directory
+✓ left-pad installed at /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/codebuff-bins-JHWuuD/node_modules/.bin/left-pad
+(pass) installBinaries > passes only a minimal allowlist env to the untrusted install process [1.00ms]
+Judging results overall score: 5.0 (individual scores: 5.0, 5.0)
+(pass) judgeCommitResult > includes the generated task spec in every judge prompt [4.00ms]
+Judge judge-gpt - structured output failed schema validation: [
+  {
+    "expected": "number",
+    "code": "invalid_type",
+    "path": [
+      "completionScore"
+    ],
+    "message": "Invalid input: expected number, received string"
+  }
+]
+Judge judge-gemini - structured output failed schema validation: [
+  {
+    "expected": "number",
+    "code": "invalid_type",
+    "path": [
+      "completionScore"
+    ],
+    "message": "Invalid input: expected number, received string"
+  }
+]
+All judges failed to provide results
+(pass) judgeCommitResult > treats schema-violating judge output as a failed judge (all_judges_failed) [1.00ms]
+Judge judge-gpt - not structured output {
+  "type": "text",
+  "value": "judge did not produce structured output"
+}
+Judge agent output: {
+  "type": "text",
+  "value": "judge did not produce structured output"
+} Judge agent output trace: 
+Judge judge-gemini - not structured output {
+  "type": "text",
+  "value": "judge did not produce structured output"
+}
+Judge agent output: {
+  "type": "text",
+  "value": "judge did not produce structured output"
+} Judge agent output trace: 
+All judges failed to provide results
+(pass) judgeCommitResult > sanitizes the commit id in the judge-error debug artifact path [1.00ms]
+Judging results overall score: 6.0 (individual scores: 5.0, 7.0)
+(pass) judgeCommitResult > averages optional idiom rubric fields without requiring old judge outputs
+Judging results overall score: 5.0 (individual scores: 2.0, 8.0)
+(pass) judgeCommitResult > median-of-2 returns the lower-scoring judge analysis, not the higher [1.00ms]
+Judging results overall score: 5.0 (individual scores: 5.0, 5.0)
+(pass) judgeCommitResult > fences untrusted sections: marker appears exactly once, at the very end
+Judging results overall score: 5.0 (individual scores: 5.0, 5.0)
+(pass) judgeCommitResult > injection payload in the diff stays fenced data and does not move scores [1.00ms]
+(pass) formatAgentResult > prints optional idiom rubric fields when present
+(pass) formatAgentResult > prints THINKER HARVEST when thinkerHarvest is set
+(pass) formatAgentResult > prints deterministic idiom pattern findings merged into judging output
+
+=== Task 1/1: python-proposal-task (abcdef1) ===
+Judging results overall score: 6.0 (individual scores: 6.0, 6.0)
+[python-proposal-task] Extracting lessons for agent-a...
+Agent output: 
+
+================================================================================
+RESULTS FOR TASK 1/1: python-proposal-task (abcdef1)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+Make Python file handling idiomatic.
+
+
+--------------------------------------------------------------------------------
+AGENT 1/1: [agent-a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       6.0/10
+  Completion Score:    6.0/10
+  Code Quality Score:  6.0/10
+  Idiom Score:         4.0/10
+
+Analysis:
+ok
+
+Non-Idiomatic Patterns:
+  1. manual open()
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $0.0000
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-test-Lc3QW0/1-python-proposal-task-agent-a-abcdef1-163cbdf2-0cbe-4718-991e-9be01a95d356.json
+
+(pass) runTask proposal dry-run reporting > stores lessons-extractor proposals as review-only dry-run reports [9.00ms]
+
+=== Task 1/1: python-pattern-task (abcdef1) ===
+Judging results overall score: 7.0 (individual scores: 7.0, 7.0)
+
+================================================================================
+RESULTS FOR TASK 1/1: python-pattern-task (abcdef1)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+Make Python file handling idiomatic.
+
+
+--------------------------------------------------------------------------------
+AGENT 1/1: [agent-a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       7.0/10
+  Completion Score:    8.0/10
+  Code Quality Score:  7.0/10
+
+Analysis:
+ok
+
+Non-Idiomatic Patterns:
+  1. python-manual-open-close (tool.py:2): Use a context manager when opening files.
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $0.0000
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-test-Nd0Wg9/1-python-pattern-task-agent-a-abcdef1-43725c6d-1201-417b-a070-35847a6e1791.json
+
+(pass) runTask idiom pattern reporting > persists deterministic idiom pattern findings from agent diffs [3.00ms]
+(pass) cache recall eval > passes when cache ratio and required recall substrings meet thresholds
+(pass) cache recall eval > fails when cache ratio is unavailable or recall substrings are missing
+(pass) cache recall eval > exposes cache recall as a deterministic final check output [1.00ms]
+(pass) cache recall eval > fails closed when recall assertions are required but missing
+(pass) summarizeAgentRuns > excludes empty errors but preserves absent/null legacy errors
+(pass) summarizeAgentRuns > excludes only the failing agent run instead of every run from that commit
+(pass) summarizeAgentRuns > keeps genuine low measured scores in every bucket (no magic 1.0 threshold)
+(pass) summarizeAgentRuns > excludes synthetic all_judges_failed runs from measuredRuns only
+Loaded 1 eval file(s) with 1 total tasks
+  - eval.json: 1 tasks
+Repeats: 2 (seed 1)
+
+=== Task 1/2: fixed (fixed) ===
+Judging results overall score: 8.0 (individual scores: 8.0, 8.0)
+
+================================================================================
+RESULTS FOR TASK 1/2: fixed (fixed)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/1: [a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       8.0/10
+  Completion Score:    8.0/10
+  Code Quality Score:  8.0/10
+
+Analysis:
+fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.2500
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-4LMMtj/artifacts/2026-11-06T21-34-36-505Z-d3exiO/1-fixed-a-fixed-7dc31b71-7a1b-4a1a-b611-190c679a15b9.json
+
+
+=== Task 2/2: fixed (fixed) ===
+Judging results overall score: 8.0 (individual scores: 8.0, 8.0)
+
+================================================================================
+RESULTS FOR TASK 2/2: fixed (fixed)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/1: [a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       8.0/10
+  Completion Score:    8.0/10
+  Code Quality Score:  8.0/10
+
+Analysis:
+fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.2500
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-4LMMtj/artifacts/2026-11-06T21-34-36-505Z-d3exiO/2-fixed-a-fixed-4537aa4c-0259-48bf-8a4c-07dceb809de5.json
+
+Traces saved to /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-4LMMtj/artifacts/2026-11-06T21-34-36-505Z-d3exiO
+
+=== Summary ===
+
+a:
+  Average Score: 8.00/10
+  Score: 8.00 ± 0.00 SE (2 measured)
+  Score/Cost: 6.40
+  Average Score (measured, excluding failed judges): 8.00/10 (2/2 runs)
+  Average Cost: 1.2500
+  Average Duration: 0.0s
+  Valid runs: 2/2 (excluding 0 agent error(s))
+
+=== Score Distribution ===
+
+a:
+  Scores: 8.0, 8.0
+(pass) runBuffBench finite monetary aggregates > retains finite paid totals and unknown auxiliary cost semantics [117.00ms]
+Loaded 1 eval file(s) with 1 total tasks
+  - eval.json: 1 tasks
+
+=== Task 1/1: fixed (fixed) ===
+Judging results overall score: 8.0 (individual scores: 8.0, 8.0)
+
+================================================================================
+RESULTS FOR TASK 1/1: fixed (fixed)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/1: [a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       8.0/10
+  Completion Score:    8.0/10
+  Code Quality Score:  8.0/10
+
+Analysis:
+fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-7xGeo1/artifacts/2026-11-06T21-34-36-514Z-PtzeWp/1-fixed-a-fixed-884f1798-36a7-4666-bd08-955f49569377.json
+
+Traces saved to /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-7xGeo1/artifacts/2026-11-06T21-34-36-514Z-PtzeWp
+
+=== Summary ===
+
+a:
+  Average Score: 8.00/10
+  Score: 8.00 ± 0.00 SE (1 measured)
+  Score/Cost: 8.00
+  Average Score (measured, excluding failed judges): 8.00/10 (1/1 runs)
+  Average Cost: 1.0000
+  Average Duration: 0.0s
+  Valid runs: 1/1 (excluding 0 agent error(s))
+
+=== Score Distribution ===
+
+a:
+  Scores: 8.0
+(pass) runBuffBench finite monetary aggregates > retains finite available unsettled task costs without claiming completeness [6.00ms]
+Loaded 1 eval file(s) with 1 total tasks
+  - eval.json: 1 tasks
+
+=== Task 1/1: fixed (fixed) ===
+Judging results overall score: 8.0 (individual scores: 8.0, 8.0)
+
+================================================================================
+RESULTS FOR TASK 1/1: fixed (fixed)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/1: [a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       8.0/10
+  Completion Score:    8.0/10
+  Code Quality Score:  8.0/10
+
+Analysis:
+fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-NU8uJM/artifacts/2026-11-06T21-34-36-519Z-hIFs0a/1-fixed-a-fixed-95dec838-599e-446d-b838-c2a331936eab.json
+
+Traces saved to /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-NU8uJM/artifacts/2026-11-06T21-34-36-519Z-hIFs0a
+
+=== Summary ===
+
+a:
+  Average Score: 8.00/10
+  Score: 8.00 ± 0.00 SE (1 measured)
+  Score/Cost: 8.00
+  Average Score (measured, excluding failed judges): 8.00/10 (1/1 runs)
+  Average Cost: 1.0000
+  Average Duration: 0.0s
+  Valid runs: 1/1 (excluding 0 agent error(s))
+
+=== Score Distribution ===
+
+a:
+  Scores: 8.0
+(pass) runBuffBench finite monetary aggregates > retains reported finite auxiliary monetary evidence [4.00ms]
+Loaded 1 eval file(s) with 1 total tasks
+  - eval.json: 1 tasks
+Repeats: 2 (seed 1)
+
+=== Task 1/2: fixed (fixed) ===
+Judging results overall score: 8.0 (individual scores: 8.0, 8.0)
+
+================================================================================
+RESULTS FOR TASK 1/2: fixed (fixed)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/1: [a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       8.0/10
+  Completion Score:    8.0/10
+  Code Quality Score:  8.0/10
+
+Analysis:
+fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.7976931348623157e+308
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-Xrqh5o/artifacts/2026-11-06T21-34-36-525Z-BmwHax/1-fixed-a-fixed-f8e54b67-7851-4fbe-8157-316206046bb0.json
+
+
+=== Task 2/2: fixed (fixed) ===
+Judging results overall score: 8.0 (individual scores: 8.0, 8.0)
+
+================================================================================
+RESULTS FOR TASK 2/2: fixed (fixed)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/1: [a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       8.0/10
+  Completion Score:    8.0/10
+  Code Quality Score:  8.0/10
+
+Analysis:
+fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.7976931348623157e+308
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-Xrqh5o/artifacts/2026-11-06T21-34-36-525Z-BmwHax/2-fixed-a-fixed-d20e6fd5-999c-4eb2-a39e-66449f8630a3.json
+
+(pass) runBuffBench finite monetary aggregates > rejects finite-input aggregate overflow: {"agents":["a"],"repeats":2,"cost":1.7976931348623157e+308} [11.00ms]
+Loaded 1 eval file(s) with 1 total tasks
+  - eval.json: 1 tasks
+
+=== Task 1/1: fixed (fixed) ===
+Judging results overall score: 8.0 (individual scores: 8.0, 8.0)
+Judging results overall score: 8.0 (individual scores: 8.0, 8.0)
+
+================================================================================
+RESULTS FOR TASK 1/1: fixed (fixed)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/2: [a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       8.0/10
+  Completion Score:    8.0/10
+  Code Quality Score:  8.0/10
+
+Analysis:
+fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.7976931348623157e+308
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-o3KS32/artifacts/2026-11-06T21-34-36-534Z-GkLYVk/1-fixed-a-fixed-1c8e0728-4b18-4bf8-b685-1aed85106088.json
+
+
+--------------------------------------------------------------------------------
+AGENT 2/2: [b]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       8.0/10
+  Completion Score:    8.0/10
+  Code Quality Score:  8.0/10
+
+Analysis:
+fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.7976931348623157e+308
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-o3KS32/artifacts/2026-11-06T21-34-36-534Z-GkLYVk/1-fixed-b-fixed-6b085116-8544-466f-abf1-cb031d1af559.json
+
+(pass) runBuffBench finite monetary aggregates > rejects finite-input aggregate overflow: {"agents":["a","b"],"repeats":1,"cost":1.7976931348623157e+308} [6.00ms]
+Loaded 1 eval file(s) with 1 total tasks
+  - eval.json: 1 tasks
+
+=== Task 1/1: fixed (fixed) ===
+Judging results overall score: 8.0 (individual scores: 8.0, 8.0)
+
+================================================================================
+RESULTS FOR TASK 1/1: fixed (fixed)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/1: [a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       8.0/10
+  Completion Score:    8.0/10
+  Code Quality Score:  8.0/10
+
+Analysis:
+fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-dcEHiW/artifacts/2026-11-06T21-34-36-540Z-5RWhmE/1-fixed-a-fixed-b3391967-10ec-44ab-ad03-8d7cc3411793.json
+
+(pass) runBuffBench finite monetary aggregates > rejects finite-input aggregate overflow: {"agents":["a"],"repeats":1,"cost":1,"auxiliaryFinishCount":60} [12.00ms]
+Loaded 1 eval file(s) with 1 total tasks
+  - eval.json: 1 tasks
+
+=== Task 1/1: fixed (fixed) ===
+Judging results overall score: 8.0 (individual scores: 8.0, 8.0)
+
+================================================================================
+RESULTS FOR TASK 1/1: fixed (fixed)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+fixture
+
+
+--------------------------------------------------------------------------------
+AGENT 1/1: [a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       8.0/10
+  Completion Score:    8.0/10
+  Code Quality Score:  8.0/10
+
+Analysis:
+fixture
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $1.0000
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-costs-unYLtM/artifacts/2026-11-06T21-34-36-552Z-g0MJMC/1-fixed-a-fixed-081aca31-e08c-4aa4-a423-5fadebf2050b.json
+
+(pass) runBuffBench finite monetary aggregates > rejects finite-input aggregate overflow: {"agents":["a"],"repeats":1,"cost":1,"unsettledFinishCount":60} [10.00ms]
+
+=== Task 1/1: promotion-gate-task (abcdef1) ===
+Judging results overall score: 6.0 (individual scores: 6.0, 6.0)
+[promotion-gate-task] Extracting lessons for agent-a...
+Agent output: 
+
+================================================================================
+RESULTS FOR TASK 1/1: promotion-gate-task (abcdef1)
+================================================================================
+
+TASK:
+--------------------------------------------------------------------------------
+Make Python file handling idiomatic.
+
+
+--------------------------------------------------------------------------------
+AGENT 1/1: [agent-a]
+--------------------------------------------------------------------------------
+
+JUDGING RESULTS:
+--------------------------------------------------------------------------------
+
+Scores:
+  Overall Score:       6.0/10
+  Completion Score:    6.0/10
+  Code Quality Score:  6.0/10
+
+Analysis:
+ok
+
+IDIOM TRACEABILITY:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No non-TypeScript supported-language edits were detected.
+
+THINKER HARVEST:
+--------------------------------------------------------------------------------
+  Verdict: skip
+  - No thinker subagents in trace.
+
+METRICS:
+--------------------------------------------------------------------------------
+  Duration: 0.0s
+  Cost:     $0.0000
+
+Trace saved to: /tmp/b30-independent-comparison-consumer-regressions-ibs5a9zo/buffbench-test-PD4v5N/1-promotion-gate-task-agent-a-abcdef1-11babc8a-4dda-4c91-9a59-d2af83a40036.json
+
+(pass) runTask proposal promotion gate (audit: gate never invoked in the live pipeline) > fires the promotion gate once per run with proposals and persists the decision [3.00ms]
+
+scripts/__tests__/compare-buffbench-runs.test.ts:
+Complete attempt populations: {"before":{"attempts":2,"eligibleScores":2,"totalCost":2,"unknownCostAttempts":0},"after":{"attempts":2,"eligibleScores":2,"totalCost":2,"unknownCostAttempts":0}}
+fixture: Overall Score: 4.00 → 4.00 (0.00); paired repeats=2
+  Significance: rejected (n < 10; normal approximation unreliable)
+(pass) compareBuffbenchRuns measured populations and monetary totals > preserves healthy legacy/error compatibility: {} [2.00ms]
+Complete attempt populations: {"before":{"attempts":2,"eligibleScores":2,"totalCost":2,"unknownCostAttempts":0},"after":{"attempts":2,"eligibleScores":2,"totalCost":2,"unknownCostAttempts":0}}
+fixture: Overall Score: 4.00 → 4.00 (0.00); paired repeats=2
+  Significance: rejected (n < 10; normal approximation unreliable)
+(pass) compareBuffbenchRuns measured populations and monetary totals > preserves healthy legacy/error compatibility: {} [2.00ms]
+Complete attempt populations: {"before":{"attempts":2,"eligibleScores":2,"totalCost":2,"unknownCostAttempts":0},"after":{"attempts":2,"eligibleScores":2,"totalCost":2,"unknownCostAttempts":0}}
+fixture: Overall Score: 4.00 → 4.00 (0.00); paired repeats=2
+  Significance: rejected (n < 10; normal approximation unreliable)
+(pass) compareBuffbenchRuns measured populations and monetary totals > preserves healthy legacy/error compatibility: {"error":null} [2.00ms]
+Complete attempt populations: {"before":{"attempts":4,"eligibleScores":2,"totalCost":8,"unknownCostAttempts":1},"after":{"attempts":4,"eligibleScores":2,"totalCost":8,"unknownCostAttempts":1}}
+fixture: Overall Score: 4.00 → 4.00 (0.00); paired repeats=2
+  Significance: rejected (n < 10; normal approximation unreliable)
+(pass) compareBuffbenchRuns measured populations and monetary totals > excludes empty-error scores from pairs while retaining paid attempts [1.00ms]
+Complete attempt populations: {"before":{"attempts":2,"eligibleScores":0,"totalCost":2,"unknownCostAttempts":0},"after":{"attempts":2,"eligibleScores":0,"totalCost":2,"unknownCostAttempts":0}}
+(pass) compareBuffbenchRuns measured populations and monetary totals > rejects comparisons without eligible pairs [1.00ms]
+(pass) compareBuffbenchRuns measured populations and monetary totals > rejects finite-input monetary overflow on before
+(pass) compareBuffbenchRuns measured populations and monetary totals > rejects finite-input monetary overflow on after [1.00ms]
+(pass) compareBuffbenchRuns measured populations and monetary totals > rejects finite-input monetary overflow on both
+
+ 73 pass
+ 0 fail
+ 471 expect() calls
+Ran 73 tests across 3 files. [1458.00ms]

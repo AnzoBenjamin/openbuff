@@ -176,6 +176,7 @@ describe('gate-paths helpers', () => {
       'docs/architecture.ts',
       'evals/run.ts',
       '.agents/sessions/x/STATE.json',
+      '.openbuff/scratch/probe.ts',
       'assets/logo.png',
       'Makefile',
     ]) {

@@ -1,0 +1,6 @@
+$ bun run memory-drift-guard.ts
+Memory drift guard: 2 finding(s) across 12 checker(s)
+## path (2)
+docs/generated-output-negative-control.md:1: referenced path `sdk/dist/unlisted.mjs` does not exist
+docs/generated-output-negative-control.md:1: referenced path `cli/src/agents/unlisted.generated.ts` does not exist
+error: script "guard:memory-drift" exited with code 1

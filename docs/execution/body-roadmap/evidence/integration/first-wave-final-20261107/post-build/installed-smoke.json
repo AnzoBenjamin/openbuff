@@ -1,0 +1,178 @@
+{
+  "schemaVersion": 1,
+  "binarySha256": "5597a243d8676c345ba7cece90565705adb2a384d621436482084937a42d6241",
+  "checks": [
+    {
+      "name": "help",
+      "argv": [
+        "/home/ben/.local/share/openbuff-test/openbuff-branch",
+        "--help"
+      ],
+      "cwd": "/tmp/openbuff-installed-smoke-hmnhwj0t/workspace",
+      "startedAt": "2026-11-06T21:46:21.912884+00:00",
+      "elapsedSeconds": 1.3955342529989139,
+      "exitCode": 0,
+      "expectedMarker": "Usage: openbuff",
+      "markerPresent": true,
+      "binarySha256": "5597a243d8676c345ba7cece90565705adb2a384d621436482084937a42d6241",
+      "binaryUnchanged": true,
+      "log": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-help.log",
+      "logSha256": "2bfe4b04ce0702cbcd72c59a5a12401cc97e04590459442e3049893790c66261",
+      "environment": {
+        "replacement": true,
+        "ephemeralHome": true,
+        "providerConfig": "empty synthetic providers",
+        "keys": [
+          "DO_NOT_TRACK",
+          "HOME",
+          "LANG",
+          "OPENBUFF_LOCAL_MODE",
+          "OPENBUFF_PROVIDER_CONFIG",
+          "OPENBUFF_TELEMETRY",
+          "PATH",
+          "TERM",
+          "TMPDIR",
+          "XDG_CONFIG_HOME"
+        ]
+      }
+    },
+    {
+      "name": "version",
+      "argv": [
+        "/home/ben/.local/share/openbuff-test/openbuff-branch",
+        "--version"
+      ],
+      "cwd": "/tmp/openbuff-installed-smoke-hmnhwj0t/workspace",
+      "startedAt": "2026-11-06T21:46:23.491500+00:00",
+      "elapsedSeconds": 1.4615475709979364,
+      "exitCode": 0,
+      "expectedMarker": "1.0.0",
+      "markerPresent": true,
+      "binarySha256": "5597a243d8676c345ba7cece90565705adb2a384d621436482084937a42d6241",
+      "binaryUnchanged": true,
+      "log": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-version.log",
+      "logSha256": "a65afd004bf9ae33d12bf95fe27008d35140aa3518c9818af71a3c5deb4bba9d",
+      "environment": {
+        "replacement": true,
+        "ephemeralHome": true,
+        "providerConfig": "empty synthetic providers",
+        "keys": [
+          "DO_NOT_TRACK",
+          "HOME",
+          "LANG",
+          "OPENBUFF_LOCAL_MODE",
+          "OPENBUFF_PROVIDER_CONFIG",
+          "OPENBUFF_TELEMETRY",
+          "PATH",
+          "TERM",
+          "TMPDIR",
+          "XDG_CONFIG_HOME"
+        ]
+      }
+    },
+    {
+      "name": "run-help",
+      "argv": [
+        "/home/ben/.local/share/openbuff-test/openbuff-branch",
+        "run",
+        "--help"
+      ],
+      "cwd": "/tmp/openbuff-installed-smoke-hmnhwj0t/workspace",
+      "startedAt": "2026-11-06T21:46:25.143213+00:00",
+      "elapsedSeconds": 1.4837760129994422,
+      "exitCode": 0,
+      "expectedMarker": "run",
+      "markerPresent": true,
+      "binarySha256": "5597a243d8676c345ba7cece90565705adb2a384d621436482084937a42d6241",
+      "binaryUnchanged": true,
+      "log": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-run-help.log",
+      "logSha256": "022f6d49d62aa567dcf2f2355c36d258fd7fed7bc5f08958be5a22ee26f3e759",
+      "environment": {
+        "replacement": true,
+        "ephemeralHome": true,
+        "providerConfig": "empty synthetic providers",
+        "keys": [
+          "DO_NOT_TRACK",
+          "HOME",
+          "LANG",
+          "OPENBUFF_LOCAL_MODE",
+          "OPENBUFF_PROVIDER_CONFIG",
+          "OPENBUFF_TELEMETRY",
+          "PATH",
+          "TERM",
+          "TMPDIR",
+          "XDG_CONFIG_HOME"
+        ]
+      }
+    },
+    {
+      "name": "opentui",
+      "argv": [
+        "/home/ben/.local/share/openbuff-test/openbuff-branch",
+        "--smoke-opentui"
+      ],
+      "cwd": "/tmp/openbuff-installed-smoke-hmnhwj0t/workspace",
+      "startedAt": "2026-11-06T21:46:26.817499+00:00",
+      "elapsedSeconds": 1.5319587039994076,
+      "exitCode": 0,
+      "expectedMarker": "opentui smoke ok",
+      "markerPresent": true,
+      "binarySha256": "5597a243d8676c345ba7cece90565705adb2a384d621436482084937a42d6241",
+      "binaryUnchanged": true,
+      "log": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-opentui.log",
+      "logSha256": "f2fecf4616a22b9a73d48443a2b8649c13e6e781502190e0a6f846295324a660",
+      "environment": {
+        "replacement": true,
+        "ephemeralHome": true,
+        "providerConfig": "empty synthetic providers",
+        "keys": [
+          "DO_NOT_TRACK",
+          "HOME",
+          "LANG",
+          "OPENBUFF_LOCAL_MODE",
+          "OPENBUFF_PROVIDER_CONFIG",
+          "OPENBUFF_TELEMETRY",
+          "PATH",
+          "TERM",
+          "TMPDIR",
+          "XDG_CONFIG_HOME"
+        ]
+      }
+    },
+    {
+      "name": "tree-sitter",
+      "argv": [
+        "/home/ben/.local/share/openbuff-test/openbuff-branch",
+        "--smoke-tree-sitter"
+      ],
+      "cwd": "/tmp/openbuff-installed-smoke-hmnhwj0t/workspace",
+      "startedAt": "2026-11-06T21:46:28.535094+00:00",
+      "elapsedSeconds": 1.5601343950002047,
+      "exitCode": 0,
+      "expectedMarker": "tree-sitter smoke ok",
+      "markerPresent": true,
+      "binarySha256": "5597a243d8676c345ba7cece90565705adb2a384d621436482084937a42d6241",
+      "binaryUnchanged": true,
+      "log": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/integration/first-wave-final-20261107/post-build/installed-tree-sitter.log",
+      "logSha256": "0aee7c49b9853c8cac57cea34e03273973fb0b7dd671e82af9972d8a4f5654ba",
+      "environment": {
+        "replacement": true,
+        "ephemeralHome": true,
+        "providerConfig": "empty synthetic providers",
+        "keys": [
+          "DO_NOT_TRACK",
+          "HOME",
+          "LANG",
+          "OPENBUFF_LOCAL_MODE",
+          "OPENBUFF_PROVIDER_CONFIG",
+          "OPENBUFF_TELEMETRY",
+          "PATH",
+          "TERM",
+          "TMPDIR",
+          "XDG_CONFIG_HOME"
+        ]
+      }
+    }
+  ],
+  "passed": true
+}

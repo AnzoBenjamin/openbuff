@@ -1156,6 +1156,24 @@ describe('mutation receipts and reconciliation', () => {
     ).toBe(false)
   })
 
+  it('accepts an optional transactionId on commit receipts as a versioned addition', () => {
+    expect(
+      commitReceiptV1Schema.safeParse({
+        ...portableReceipt,
+        transactionId: 'tx-1',
+      }).success,
+    ).toBe(true)
+    // Receipts without the new field keep parsing byte-identically.
+    expect(commitReceiptV1Schema.safeParse(portableReceipt).success).toBe(true)
+    // The field, when present, must still be a nonempty id.
+    expect(
+      commitReceiptV1Schema.safeParse({
+        ...portableReceipt,
+        transactionId: '',
+      }).success,
+    ).toBe(false)
+  })
+
   it('rejects mutation inputs at per-action, aggregate, and array bounds before reconciliation', () => {
     expect(
       mutationResultExceedsCheapBoundsV1({
@@ -1318,7 +1336,174 @@ describe('mutation receipts and reconciliation', () => {
     expect(rolledBack.outcome).toBe('rolled_back')
     expect(getConfirmedAppliedActionsV1(rolledBack)).toEqual([])
     expect(rollbackIncomplete.outcome).toBe('rollback_incomplete')
-    expect(getConfirmedAppliedActionsV1(rollbackIncomplete)).toHaveLength(1)
+    // Legacy rollback status has no independent forward evidence.
+    expect(getConfirmedAppliedActionsV1(rollbackIncomplete)).toEqual([])
+    expect(rollbackIncomplete.actions[0]?.outcome).toBe('rollback_incomplete')
     expect(rollbackIncomplete.actions[0]?.rollback?.succeeded).toBe(false)
+
+    const confirmedPartial = buildFileMutationResultFromReceiptV1({
+      ...rollbackIncomplete.authorityReceipt!,
+      actions: rollbackIncomplete.authorityReceipt!.actions.map((action) => ({
+        ...action,
+        forward: {
+          outcome: 'applied' as const,
+          afterHashes: { [action.path]: action.afterHash },
+        },
+      })),
+    })
+    expect(getConfirmedAppliedActionsV1(confirmedPartial)).toHaveLength(1)
+    expect(confirmedPartial.actions[0]?.outcome).toBe('applied')
+    const foreignDiverged = buildFileMutationResultFromReceiptV1({
+      ...confirmedPartial.authorityReceipt!,
+      actions: confirmedPartial.authorityReceipt!.actions.map((action) => ({
+        ...action,
+        afterHash: 'sha256:foreign',
+      })),
+      finalHashes: { 'src/a.ts': 'sha256:foreign' },
+    })
+    expect(getConfirmedAppliedActionsV1(foreignDiverged)).toEqual([])
+    expect(foreignDiverged.actions[0]).toMatchObject({
+      outcome: 'rollback_incomplete',
+      afterHash: 'sha256:foreign',
+      forward: {
+        outcome: 'applied',
+        afterHashes: { 'src/a.ts': 'sha256:after' },
+      },
+    })
+  })
+
+  it('[B03] ignores forged applied handler outcomes when the receipt lacks forward authority', () => {
+    const receipt = {
+      ...portableReceipt,
+      status: 'rollback_incomplete' as const,
+      actions: [
+        { ...portableReceipt.actions[0], status: 'rollback_failed' as const },
+      ],
+    }
+    const mutation = buildFileMutationResultFromReceiptV1(receipt)
+    const forged = {
+      ...mutation,
+      actions: mutation.actions.map((action) => ({
+        ...action,
+        outcome: 'applied' as const,
+      })),
+    }
+    expect(getConfirmedAppliedActionsV1(forged)).toEqual([])
+    const reconciled = reconcileFileMutationResultV1({
+      lifecycle: {
+        kind: 'tool_lifecycle',
+        version: 1,
+        callId: receipt.callId,
+        sequence: 2,
+        state: 'failed',
+      },
+      operationId: receipt.operationId,
+      handlerResult: forged,
+      receipt,
+    })
+    expect(reconciled.mutation.actions[0]?.outcome).toBe('rollback_incomplete')
+    expect(getConfirmedAppliedActionsV1(reconciled.mutation)).toEqual([])
+  })
+
+  it('[B03] preserves historical refused forward plus refused rollback without applied authority', () => {
+    const mutation = buildFileMutationResultFromReceiptV1({
+      ...portableReceipt,
+      status: 'rollback_incomplete',
+      actions: [
+        {
+          ...portableReceipt.actions[0],
+          status: 'rollback_failed',
+          afterHash: 'sha256:foreign',
+          forward: {
+            outcome: 'not_applied',
+            afterHashes: { 'src/a.ts': 'sha256:foreign' },
+          },
+          error: {
+            code: 'rollback_incomplete',
+            message: 'rollback refused',
+            retryable: false,
+          },
+        },
+      ],
+      finalHashes: { 'src/a.ts': 'sha256:foreign' },
+    })
+    expect(mutation.outcome).toBe('rollback_incomplete')
+    expect(mutation.actions[0]).toMatchObject({
+      outcome: 'not_applied',
+      forward: { outcome: 'not_applied' },
+      rollback: { attempted: true, succeeded: false },
+    })
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(mutation.errors[0]?.code).toBe('rollback_incomplete')
+    expect(
+      JSON.parse(JSON.stringify(mutation)).actions[0].forward.outcome,
+    ).toBe('not_applied')
+  })
+
+  it('[B03] requires both retained move paths before confirming a failed rollback', () => {
+    const receipt = {
+      ...portableReceipt,
+      status: 'rollback_incomplete' as const,
+      actions: [
+        {
+          ...portableReceipt.actions[0],
+          action: 'move' as const,
+          destinationPath: 'src/b.ts',
+          status: 'rollback_failed' as const,
+          forward: {
+            outcome: 'applied' as const,
+            afterHashes: { 'src/a.ts': null, 'src/b.ts': 'sha256:after' },
+          },
+        },
+      ],
+      finalHashes: { 'src/a.ts': 'sha256:foreign', 'src/b.ts': 'sha256:after' },
+    }
+    const mutation = buildFileMutationResultFromReceiptV1(receipt)
+    expect(mutation.actions[0]?.outcome).toBe('rollback_incomplete')
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    const retained = buildFileMutationResultFromReceiptV1({
+      ...receipt,
+      finalHashes: { 'src/a.ts': null, 'src/b.ts': 'sha256:after' },
+    })
+    expect(getConfirmedAppliedActionsV1(retained)).toHaveLength(1)
+  })
+
+  it('[B03] rejects contradictory forward evidence and retains unavailable observations', () => {
+    for (const forward of [
+      { outcome: 'not_applied', afterHashes: { 'src/a.ts': 'sha256:after' } },
+      { outcome: 'applied', afterHashes: {} },
+      { outcome: 'applied', afterHashes: { 'foreign.ts': 'sha256:after' } },
+    ]) {
+      expect(
+        commitReceiptV1Schema.safeParse({
+          ...portableReceipt,
+          actions: [{ ...portableReceipt.actions[0], forward }],
+        }).success,
+      ).toBe(false)
+    }
+    const unavailable = buildFileMutationResultFromReceiptV1({
+      ...portableReceipt,
+      status: 'rollback_incomplete',
+      actions: [
+        {
+          ...portableReceipt.actions[0],
+          status: 'rollback_failed',
+          forward: { outcome: 'unconfirmed', afterHashes: {} },
+        },
+      ],
+    })
+    expect(unavailable.actions[0]?.forward).toEqual({
+      outcome: 'unconfirmed',
+      afterHashes: {},
+    })
+    expect(unavailable.actions[0]?.outcome).toBe('rollback_incomplete')
+    expect(getConfirmedAppliedActionsV1(unavailable)).toEqual([])
+    const successful = buildFileMutationResultFromReceiptV1(portableReceipt)
+    expect(
+      getConfirmedAppliedActionsV1({
+        ...successful,
+        operationId: 'different-operation',
+      }),
+    ).toEqual([])
   })
 })

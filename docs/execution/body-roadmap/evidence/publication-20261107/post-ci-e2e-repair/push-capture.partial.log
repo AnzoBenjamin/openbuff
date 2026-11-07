@@ -1,0 +1,250 @@
+Warning: truncated output (original token count: 66611)
+Total output lines: 2425
+
+$ bun scripts/check-ci-local.ts
+→ Step A: bun run generate-tool-definitions
+$ bun scripts/generate-tool-definitions.ts
+🔧 Generating tool definitions...
+🎨 Formatting generated files...
+common/src/templates/initial-agents-dir/types/tools.ts 284ms
+agents/types/tools.ts 117ms
+.agents/types/tools.ts 136ms
+Generated /home/ben/Code/CLI/openbuff/cli/src/data/initial-agent-type-sources.generated.ts
+✅ Successfully generated tools.ts
+📁 Output: /home/ben/Code/CLI/openbuff/common/src/templates/initial-agents-dir/types/tools.ts
+📁 Output: /home/ben/Code/CLI/openbuff/agents/types/tools.ts
+📁 Output: /home/ben/Code/CLI/openbuff/.agents/types/tools.ts
+→ Step B: git diff --exit-code HEAD (tracked tool definition files)
+→ Step C: bun --cwd=scripts run guard:memory-drift
+$ bun run memory-drift-guard.ts
+Memory drift guard passed: 0 findings across 12 checkers.
+→ Step D: bun --cwd=scripts run guard:sync-agent-config
+$ bun run sync-agent-config.ts
+Agent config sync guard passed: all 4 canonical config files are consistent with repo structure.
+→ Step E: bun --cwd=scripts run guard:determinism
+$ bun run determinism-guard.ts
+Determinism guard passed: 0 findings.
+→ Step F: bun --cwd=scripts run guard:mock-module
+$ bun run mock-module-guard.ts
+Mock-module guard passed: 0 findings.
+→ Step G: bun --cwd=scripts run guard:project-root
+$ bun run project-root-guard.ts
+Project-root guard passed: no unguarded fileContext.projectRoot dereferences found.
+→ Step H: bun --cwd=scripts run guard:byok-wording
+$ bun run byok-wording-guard.ts
+Focused BYOK wording guard passed: no unallowlisted hosted-product wording found.
+→ Step I: bun --cwd=scripts run guard:dependency-provenance
+$ bun run dependency-provenance-guard.ts
+Dependency provenance guard passed: 108 dependency releases reconcile with the checked-in upstream provenance record.
+Accepted deprecations (DEPRECATION_EXCEPTIONS): @oclif/parser@3.8.17, @types/diff@8.0.0, @types/parse-path@7.1.0
+→ Step J: bun --cwd=scripts run guard:types-declaration
+$ bun run types-declaration-guard.ts
+Type declaration guard passed: every runtime dependency of every workspace manifest declares its typings in that same manifest, and every declared @types package has the runtime dependency it types in that same manifest, or is recorded in NO_TYPES_PACKAGE / ORPHANED_TYPES_EXEMPT with the package that supplies them.
+Note: 3 runtime dependency release(s) rely on a NO_TYPES_PACKAGE exemption; confirm each still has no conventional @types sibling:
+  - evals/package.json: @anthropic-ai/claude-code
+  - package.json: gif-encoder-2
+  - packages/code-map/package.json: tree-sitter-wasms
+→ Step K: full agents + common test suites
+bun test v1.3.14 (0d9b296a)
+
+tool-reachability.test.ts:
+(pass) agent tool reachability > base2 (default) exposes its intended read/mutation surface [5.73ms]
+(pass) agent tool reachability > base2 (fast) exposes its intended read/mutation surface [0.56ms]
+(pass) agent tool reachability > execute-plan exposes direct execution without proposal indirection [0.92ms]
+(pass) agent tool reachability > plan-only excludes project execution and proposal actions [0.56ms]
+(pass) agent tool reachability > code editor exposes structural edit + read tools [0.10ms]
+(pass) agent tool reachability > test-writer and doc-writer expose edit_transaction without legacy direct edits [0.08ms]
+(pass) agent tool reachability > audit shards receive only derived findings-artifact write authority [0.40ms]
+(pass) agent tool reachability > shipped primary agents do not expose quarantined compatibility tools [0.80ms]
+(pass) tool metadata reachability contract > registered metadata is never shadowed by removed-tool metadata [0.36ms]
+(pass) tool metadata reachability contract > live custom/MCP tool names are not reported as removed or deprecated [0.18ms]
+(pass) agent prompt/tool availability alignment > prompts and docs align restored compatibility tools [1.03ms]
+(pass) agent prompt/tool availability alignment > structured-output agents without set_output do not prompt the model to call it [0.98ms]
+(pass) agent registry/reference cleanup > base2 (default+fast) does not reference removed agent ids [1.08ms]
+(pass) agent registry/reference cleanup > code editor does not list removed agent ids as spawnable [0.19ms]
+
+e2e/context-pruning-threshold.e2e.test.ts:
+Using environment: dev
+(pass) Context Pruning Threshold E2E > should NOT prune when token count is well below the limit [290.61ms]
+(pass) Context Pruning Threshold E2E > should prune when token count exceeds the limit [131.35ms]
+(pass) Context Pruning Threshold E2E > should verify token counting accuracy: no premature 30% buffer for Anthropic models [129.64ms]
+
+e2e/context-pruner.e2e.test.ts:
+(pass) Context Pruner Agent Integration > should prune large message history and maintain tool-call/tool-result pairs [53.12ms]
+(pass) Context Pruner Agent Integration > should prune context with small token limit and preserve tool pairs [35.95ms]
+
+e2e/gate-aux-ordering.e2e.test.ts:
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"validationStatus":"passed","reviewerStatus":"passed","reuseReason":"aux-gate:test-writer","event":"base2.gate"}
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"validationStatus":"passed","reviewerStatus":"passed","reuseReason":"aux-gate:doc-writer","event":"base2.gate"}
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"reviewerStatus":"passed","validationStatus":"passed","reuseReason":"aux-gate:security-reviewer","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+495 |       reviewerSpawn.value,
+496 |     )
+497 |     const finalGateStatus = gen.next(
+498 |       reviewerResult(finalReviewerFingerprint, [AUX_TRIPLE_FILE]),
+499 |     )
+500 |     expect(finalGateStatus.value).toMatchObject({
+                                        ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "input": {},
+-   "toolName": "git_status",
++   "input": {
++     "agents": [
++       {
++         "agent_type": "code-reviewer",
++         "prompt": 
++ "Retry the completed code-reviewer review because the prior response failed the reviewer protocol contract.
++ 
++ Gate-scope changed files: cli/src/auth/token-store.ts
++ Snapshot fingerprint (echo exactly): v3:44a813bfc5a44e4667224216d9bd27b3ee12fc161685319a361b4df6da23ea5b
++ Snapshot details (read for file membership; do not echo):
++ files-v4
++ cli/src/auth/token-store.ts	missing
++ --
++ 
++ Validation gate summary: Configured file-change hooks passed: typecheck.
++ 
++ Protocol errors from the prior response:
++ BLOCKING: reviewer did not assess correctness
++ BLOCKING: reviewer did not assess security
++ BLOCKING: reviewer did not assess tests
++ BLOCKING: reviewer did not assess apiCompatibility
++ BLOCKING: reviewer did not assess performance
++ BLOCKING: reviewer did not provide nonempty requirement evidence
++ 
++ Return a fresh structured review object. Correct snapshotFingerprint and reviewedFiles directly; do not ask repair-editor to change source code for these protocol errors."
++ ,
++       },
++     ],
++   },
++   "toolName": "spawn_agents",
+  }
+
+- Expected  - 2
++ Received  + 30
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/e2e/gate-aux-ordering.e2e.test.ts:500:35)
+(fail) base2 pre-reviewer aux gate ordering e2e > fires test-writer -> doc-writer -> security-reviewer before validation hooks + code-reviewer, then does not re-spawn [99.60ms]
+(pass) base2 pre-reviewer aux gate ordering e2e > blocks without finalization when a routed specialist returns stale attestations twice [14.21ms]
+(pass) base2 pre-reviewer aux gate ordering e2e > a coverage-complete routed specialist review with a matching gate fingerprint does not block the gate [7.13ms]
+(pass) base2 pre-reviewer aux gate ordering e2e > fails closed when a routed specialist crashes alongside a valid LOOKS_GOOD attestation [4.88ms]
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"validationStatus":"passed","reviewerStatus":"passed","reuseReason":"aux-gate:test-writer","event":"base2.gate"}
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"validationStatus":"passed","reviewerStatus":"passed","reuseReason":"aux-gate:doc-writer","event":"base2.gate"}
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"reviewerStatus":"passed","validationStatus":"passed","reuseReason":"aux-gate:security-reviewer","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 pre-reviewer aux gate ordering e2e > does not re-spawn any aux gate on a second iteration with the same aux-relevant pending file set [4.05ms]
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"reviewerStatus":"passed","validationStatus":"passed","reuseReason":"aux-gate:security-reviewer","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":2,"pendingFiles":["cli/src/auth/token-store.ts",".agents/sessions/thrash-e2e/STATUS.md"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","event":"base2.gate"}
+(pass) base2 pre-reviewer aux gate ordering e2e > security LOOKS_GOOD credit stays fresh when only a plan-session STATUS path is newly dirty [2.62ms]
+{"currentPhase":"awaiting_validation","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"reviewerStatus":"passed","validationStatus":"passed","reuseReason":"aux-gate:security-reviewer","event":"base2.gate"}
+{"currentPhase":"final_response_allowed","pendingFileCount":1,"pendingFiles":["cli/src/auth/token-store.ts"],"reviewerStatus":"skipped","validationStatus":"skipped","reuseReason":"no-specialists-routed","ev…61111 tokens truncated…iews as refresh signals, not blockers [0.32ms]
+(pass) context-pruner str_replace and write_file tool results > includes str_replace result in summary [0.49ms]
+(pass) context-pruner str_replace and write_file tool results > includes write_file result in summary [0.41ms]
+(pass) context-pruner str_replace and write_file tool results > truncates very long str_replace results [0.63ms]
+(pass) context-pruner str_replace and write_file tool results > truncates very large tool entries to 2k token limit [1.65ms]
+(pass) context-pruner str_replace and write_file tool results > includes all result properties even without unifiedDiff [0.51ms]
+(pass) context-pruner str_replace and write_file tool results > preserves bounded head-and-tail diagnostics for every edit tool [1.58ms]
+(pass) context-pruner glob and list_directory tools > summarizes glob tool with pattern [0.71ms]
+(pass) context-pruner glob and list_directory tools > summarizes list_directory tool with path [0.53ms]
+(pass) context-pruner glob and list_directory tools > summarizes read_subtree tool with paths [0.55ms]
+(pass) context-pruner dual-budget behavior > includes recent messages in summary and drops older ones [0.82ms]
+(pass) context-pruner dual-budget behavior > summarizes all messages when they fit within budgets [0.47ms]
+(pass) context-pruner dual-budget behavior > skips an oversized recent entry and retains older compact evidence from the same role [0.31ms]
+(pass) context-pruner dual-budget behavior > respects user budget separately from assistant+tool budget [0.43ms]
+(pass) context-pruner dual-budget behavior > drops tool entries beyond budget at the cutoff boundary [0.55ms]
+(pass) context-pruner dual-budget behavior > reserves tool-facts budget independent of assistant budget (SPEC R7) [0.48ms]
+(pass) context-pruner dual-budget behavior > drops tool-facts entries when the reserved tool-facts budget is exceeded [0.33ms]
+(pass) context-pruner dual-budget behavior > drops older messages and includes recent ones in summary [0.28ms]
+(pass) context-pruner dual-budget behavior > excludes STEP_PROMPT tagged messages from budget calculation [0.30ms]
+(pass) context-pruner dual-budget behavior > excludes SUBAGENT_SPAWN tagged messages from budget calculation [0.70ms]
+(pass) context-pruner dual-budget behavior > charges old summary entries against their correct budgets [0.47ms]
+(pass) context-pruner dual-budget behavior > drops old summary entries individually based on budget walk [0.42ms]
+(pass) context-pruner dual-budget behavior > handles complex scenario with long messages of all types and previous summary [3.92ms]
+(pass) context-pruner dual-budget behavior > with tight budgets, backfills compact old summary evidence around oversized entries [1.29ms]
+(pass) context-pruner dual-budget behavior > fully includes conversation summary when it fits within user budget [0.71ms]
+(pass) context-pruner dual-budget behavior > retains strictly more Files Inspected entries as the semantic target scales up [10.56ms]
+(pass) context-pruner dual-budget behavior > bounds the pinned knowledge_memory block on a small window but never drops Goal or Next Action [6.99ms]
+(pass) context-pruner dual-budget behavior > keeps legacy 100k-target retention counts unchanged [3.84ms]
+(pass) context-pruner non-object JSON part values (D24/PR-T6 crash regression) > completes when an ask_user tool result carries a string-valued JSON part [0.95ms]
+(pass) context-pruner non-object JSON part values (D24/PR-T6 crash regression) > completes when an ask_user tool result carries a non-zero numeric JSON part value [0.48ms]
+(pass) context-pruner non-object JSON part values (D24/PR-T6 crash regression) > completes when an ask_user tool result carries a boolean JSON part value [0.51ms]
+(pass) context-pruner non-object JSON part values (D24/PR-T6 crash regression) > completes when a run_terminal_command result carries a string-valued JSON part [0.51ms]
+(pass) context-pruner archive eviction pointers (D25/CQ-T1) > threads a seeded archivePointers param verbatim into the pinned block [0.66ms]
+(pass) context-pruner archive eviction pointers (D25/CQ-T1) > a legacy parser without the Archive Pointers header drops the leading section [0.35ms]
+(pass) context-pruner archive eviction pointers (D25/CQ-T1) > keeps archive pointers verbatim under a small-window budget [3.05ms]
+
+__tests__/general-agent.test.ts:
+(pass) general-agent programmatic tools > declares the hidden context-pruner tool used by handleSteps [0.36ms]
+(pass) general-agent programmatic tools > gpt-5 branch adds reasoningOptions and drops file-picker from spawnableAgents [0.16ms]
+(pass) general-agent programmatic tools > routes directory-like bootstrap paths through read_subtree [1.57ms]
+(pass) general-agent programmatic tools > does not fire query_index proactively on a qualifying prompt with no paths [0.19ms]
+(pass) general-agent programmatic tools > calls code_search directly instead of delegating search [0.09ms]
+(pass) general-agent programmatic tools > binds durable audit shards to composable snapshot receipts [0.17ms]
+(pass) general-agent programmatic tools > rejects audit completion without a structural receipt [0.51ms]
+(pass) general-agent programmatic tools > breaks the audit loop once a matching structural receipt is present [0.90ms]
+(pass) general-agent programmatic tools > clears the audit gate for receipts nested deeper than the old mirror cap [0.71ms]
+(pass) general-agent programmatic tools > keeps rejecting when the present receipt is for a different snapshot [0.29ms]
+(pass) general-agent programmatic tools > unbound shard without snapshotId skips the audit gate even when a receipt exists [0.35ms]
+(pass) general-agent programmatic tools > breaks the audit loop after exhausting completion retries [0.37ms]
+(pass) general-agent programmatic tools > grants the path-discovery and structured-output tools it names [0.17ms]
+(pass) general-agent programmatic tools > reports through structured output instead of a truncated last message [0.10ms]
+(pass) general-agent programmatic tools > persists audit findings even when snapshotId is absent [0.18ms]
+(pass) general-agent programmatic tools > harvests a text-only final answer into set_output [0.29ms]
+(pass) general-agent programmatic tools > harvests a text-only answer on the step-cap exit too [0.27ms]
+(pass) general-agent programmatic tools > does not harvest when the agent already produced structured output [0.24ms]
+(pass) general-agent programmatic tools > harvests the whole contiguous trailing assistant turn [0.24ms]
+(pass) general-agent programmatic tools > never harvests a runtime terminal notice as the answer [0.21ms]
+(pass) general-agent programmatic tools > emits set_output with a non-empty summary when the harvest is empty [0.33ms]
+(pass) general-agent programmatic tools > emits set_output at the step cap even when only a runtime notice remains [0.20ms]
+(pass) general-agent programmatic tools > treats an already-existing audit artifact as an idempotent success [0.15ms]
+(pass) general-agent programmatic tools > breaks the audit loop on an already-persisted collision result [0.31ms]
+(pass) general-agent programmatic tools > keeps rejecting an already-persisted marker for a different snapshot [0.24ms]
+(pass) general-agent programmatic tools > harvests over an error-only output and preserves the recorded error [0.29ms]
+(pass) general-agent programmatic tools > harvests over an error-only output on the step-cap exit too [0.31ms]
+(pass) general-agent programmatic tools > harvests when the output object has a blank or non-string summary [0.34ms]
+(pass) general-agent programmatic tools > declares the harvest error field so set_output accepts it [0.16ms]
+(pass) general-agent programmatic tools > declares the no-answer marker and omits it from a real-text harvest [0.31ms]
+(pass) general-agent programmatic tools > serialized handleSteps clears the audit gate on a snapshot-bound receipt [2.00ms]
+(pass) general-agent programmatic tools > serialized handleSteps still nudges on a wrong-snapshot receipt [0.27ms]
+(pass) general-agent programmatic tools > serialized handleSteps marks the shard unresolved when retries are exhausted without a receipt [0.67ms]
+
+browser-use/browser-use.test.ts:
+
+librarian/librarian.test.ts:
+
+5 tests skipped:
+(skip) Base Deep Agent Integration > spawns thinker when requested
+(skip) Base Deep Agent Integration > can edit a file with the base-deep agent
+(skip) Base Deep Agent Integration > handles a deeper multi-file integration on a realistic TypeScript project
+(skip) Base Deep Agent Integration > works on a shallow-cloned codebuff repo for a commit-inspired focused task
+(skip) Base Deep Agent Integration > handles a complex shallow-clone repo task with 200+ changed lines
+
+
+13 tests failed:
+(fail) base2 pre-reviewer aux gate ordering e2e > fires test-writer -> doc-writer -> security-reviewer before validation hooks + code-reviewer, then does not re-spawn [99.60ms]
+(fail) base2 pre-reviewer aux gate ordering e2e > revalidates an owed specialist reviewer as aux-owned across turns before the final code-reviewer [4.50ms]
+(fail) base2 specialist reviewer-gate state machine e2e > collects fresh batch findings from each attested specialist (second attested: %s) [2.42ms]
+(fail) base2 specialist reviewer-gate state machine e2e > a passing gate leaves no stale owed reviewer and restores the full specialist repair budget (G6) [6.83ms]
+(fail) base2 specialist reviewer-gate state machine e2e > a reviewer repair round that changes no on-disk bytes blocks as no-progress instead of looping (G8) [3.78ms]
+(fail) base2 deterministic gate lifecycle e2e > recovers across validation and reviewer blockers before allowing finalization [5.23ms]
+(fail) base2 deterministic gate lifecycle e2e > condoned re-review findings cannot bypass the coverage-missing hard rule [3.04ms]
+(fail) base2 deterministic gate lifecycle e2e > validates and credits the cumulative dirty scope for a multi-batch task [3.80ms]
+(fail) base2 deterministic gate lifecycle e2e > a happy-path single-edit turn injects the post-gate finalization notice exactly once [2.90ms]
+(fail) base2 deterministic gate lifecycle e2e > authorizes a deletion through review, credits it with missing, and does not re-arm the gate on the next turn [3.78ms]
+(fail) base2 deterministic gate lifecycle e2e > tolerates a well-formed non-matching reviewer fingerprint and records the drift once [3.89ms]
+(fail) base2 deterministic gate lifecycle e2e > credits LOOKS_GOOD when every requirement gap is parent-owned process work [3.24ms]
+(fail) base2 deterministic gate lifecycle e2e > keeps the gate closed when one requirement gap is in-scope work [4.38ms]
+
+ 1346 pass
+ 5 skip
+ 13 fail
+ 2 snapshots, 8969 expect() calls
+Ran 1364 tests across 56 files. [13.12s]
+❌ agents test suite failed (exit 1). Fix failures before pushing.
+error: script "check:ci-local" exited with code 1
+error: failed to push some refs to 'https://github.com/AnzoBenjamin/openbuff.git'

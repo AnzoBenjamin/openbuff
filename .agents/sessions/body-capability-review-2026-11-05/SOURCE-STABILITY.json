@@ -1,0 +1,505 @@
+{
+  "schemaVersion": 1,
+  "checkedAt": "2026-11-06T05:59:48.726663+00:00",
+  "originalHashMapRecovered": false,
+  "originalWholeFileHashCountRecorded": 558,
+  "originalWholeFileHashesRecovered": 0,
+  "originalWholeFileHashComparisonPossible": false,
+  "currentHEAD": "e65c06c0ae783130998bd9ab18c8d35320e40ea8",
+  "recordedReviewHEAD": "e65c06c0ae783130998bd9ab18c8d35320e40ea8",
+  "currentHEADMatchesRecorded": true,
+  "currentGitStatus": [
+    "MM cli/knowledge.md",
+    "M  common/knowledge.md",
+    "MM sdk/knowledge.md",
+    "?? .agents/sessions/error-root-cause-2026-10/"
+  ],
+  "recordedSnapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "historicalHashComparisons": [
+    {
+      "recordedResult": {
+        "plan": "PLAN-DRAFT.md",
+        "cards": 35,
+        "graphRows": 35,
+        "readyCards": [
+          "B01",
+          "B02",
+          "B03",
+          "B04",
+          "B08",
+          "B11",
+          "B18",
+          "B23",
+          "B28",
+          "B30",
+          "B32"
+        ],
+        "historicalDeclarations": 120,
+        "historicalMappings": 120,
+        "historicallyChecked": 58,
+        "findingRecords": 118,
+        "referencedFindings": 118,
+        "capabilityRecords": 144,
+        "catalogCapabilities": 45,
+        "catalogLineageRecords": 144,
+        "existingTestPaths": 97,
+        "baselineSourceHashes": 558,
+        "changedSource": [],
+        "documentHashes": {
+          "PLAN-DRAFT.md": "f5da08c6ad6388b12a05897ec5ee18f9cab28120eafcd9a4ec3580c0cedf1163",
+          "SPEC.md": "9a9b58a7d8fcc91c7c5c80ffd678ac6a4e13dd0cdcc642ecb1ca305bbcdc4d30",
+          "OLD-TASK-MIGRATION.md": "0cce04a196aeaa54e60c83c529b92e4eab3ba20e61dee2c28dd0a0efa695e7af",
+          "CAPABILITIES.md": "f0967f9214c7a1133281c30e32e996f2061bf96fcdfc7d853f7198fc14afa31c"
+        },
+        "errors": [
+          {
+            "missingListedTestPaths": [
+              "__tests__/run-buffbench.test.ts",
+              "src/commands/__tests__/prompt-dispatch.test.ts",
+              "src/components/__tests__/attachment-recovery.test.tsx",
+              "src/components/__tests__/session-route-recovery.test.tsx",
+              "src/hooks/__tests__/use-ask-user-bridge.test.ts",
+              "src/hooks/__tests__/use-send-message-ownership.test.ts"
+            ]
+          }
+        ],
+        "qualification": "Mechanical consistency and source stability only; semantic dependencies and prospective acceptance remain dedicated-review responsibilities. No implementation acceptance tests are run by this script."
+      },
+      "provenance": {
+        "capture": "b14f3e99271499741a72fcc1f9bd0fb23e74cbe14497c815273a62be1d8f333e.json",
+        "sha256": "b14f3e99271499741a72fcc1f9bd0fb23e74cbe14497c815273a62be1d8f333e",
+        "bytes": 1807,
+        "timestamp": "2026-11-06T00:12:38.122Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_u2iie8va98cb3Z1GqAbRliUn",
+        "transformation": "exact recorded output",
+        "location": "$.output[decoded-json]"
+      },
+      "qualification": "Historical comparison result only; original 558-file whole-byte baseline is unavailable."
+    },
+    {
+      "recordedResult": {
+        "plan": "PLAN-DRAFT.md",
+        "cards": 35,
+        "graphRows": 35,
+        "readyCards": [
+          "B01",
+          "B02",
+          "B03",
+          "B04",
+          "B08",
+          "B11",
+          "B18",
+          "B23",
+          "B28",
+          "B30",
+          "B32"
+        ],
+        "historicalDeclarations": 120,
+        "historicalMappings": 120,
+        "historicallyChecked": 58,
+        "findingRecords": 118,
+        "referencedFindings": 118,
+        "capabilityRecords": 144,
+        "catalogCapabilities": 45,
+        "catalogLineageRecords": 144,
+        "existingTestPaths": 97,
+        "shorthandTestResolution": [
+          {
+            "reference": "__tests__/run-buffbench.test.ts",
+            "uniqueRepositoryPath": "evals/buffbench/__tests__/run-buffbench.test.ts"
+          },
+          {
+            "reference": "src/commands/__tests__/prompt-dispatch.test.ts",
+            "uniqueRepositoryPath": "cli/src/commands/__tests__/prompt-dispatch.test.ts"
+          },
+          {
+            "reference": "src/components/__tests__/attachment-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/attachment-recovery.test.tsx"
+          },
+          {
+            "reference": "src/components/__tests__/session-route-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/session-route-recovery.test.tsx"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-ask-user-bridge.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-ask-user-bridge.test.ts"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-send-message-ownership.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts"
+          }
+        ],
+        "baselineSourceHashes": 558,
+        "changedSource": [],
+        "documentHashes": {
+          "PLAN-DRAFT.md": "f5da08c6ad6388b12a05897ec5ee18f9cab28120eafcd9a4ec3580c0cedf1163",
+          "SPEC.md": "9a9b58a7d8fcc91c7c5c80ffd678ac6a4e13dd0cdcc642ecb1ca305bbcdc4d30",
+          "OLD-TASK-MIGRATION.md": "0cce04a196aeaa54e60c83c529b92e4eab3ba20e61dee2c28dd0a0efa695e7af",
+          "CAPABILITIES.md": "f0967f9214c7a1133281c30e32e996f2061bf96fcdfc7d853f7198fc14afa31c"
+        },
+        "errors": [],
+        "qualification": "Mechanical consistency and source stability only; semantic dependencies and prospective acceptance remain dedicated-review responsibilities. No implementation acceptance tests are run by this script."
+      },
+      "provenance": {
+        "capture": "4f358338f5213778aeb06dc25269ccec3c6d8947541d60d58b28d6ae963294ce.json",
+        "sha256": "4f358338f5213778aeb06dc25269ccec3c6d8947541d60d58b28d6ae963294ce",
+        "bytes": 2205,
+        "timestamp": "2026-11-06T00:14:36.092Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_YnpLrQvJFoHQNl08DFQ7T6za",
+        "transformation": "exact recorded output",
+        "location": "$"
+      },
+      "qualification": "Historical comparison result only; original 558-file whole-byte baseline is unavailable."
+    },
+    {
+      "recordedResult": {
+        "plan": "PLAN-DRAFT.md",
+        "cards": 36,
+        "graphRows": 39,
+        "milestoneNodes": [
+          "M22-CHILD",
+          "M22-CORE",
+          "M22-TXN"
+        ],
+        "completionGraph": {
+          "B01": [],
+          "B02": [],
+          "B03": [],
+          "B04": [],
+          "B05": [
+            "B03"
+          ],
+          "B06": [
+            "B03",
+            "B04",
+            "B05",
+            "B07"
+          ],
+          "B07": [
+            "B03",
+            "B04",
+            "B05"
+          ],
+          "B08": [],
+          "B09": [
+            "B02",
+            "B08"
+          ],
+          "B10": [
+            "B02"
+          ],
+          "B11": [],
+          "B12": [
+            "B02"
+          ],
+          "B13": [
+            "B12"
+          ],
+          "B14": [
+            "B12"
+          ],
+          "B15": [
+            "B02",
+            "B03",
+            "B04"
+          ],
+          "B16": [
+            "B04",
+            "B15"
+          ],
+          "B17": [
+            "B02",
+            "B15"
+          ],
+          "B18": [],
+          "B19": [
+            "B02",
+            "B18"
+          ],
+          "B20": [
+            "B02",
+            "B19"
+          ],
+          "B21": [
+            "B19",
+            "B20"
+          ],
+          "B22": [
+            "M22-CORE",
+            "M22-TXN",
+            "M22-CHILD"
+          ],
+          "B23": [],
+          "B24": [
+            "B23"
+          ],
+          "B25": [
+            "B05",
+            "B19",
+            "B20",
+            "B23"
+          ],
+          "B26": [
+            "B04",
+            "B23"
+          ],
+          "B27": [
+            "B06",
+            "B19",
+            "B23",
+            "B24",
+            "B25",
+            "B26",
+            "B36"
+          ],
+          "B28": [],
+          "B29": [
+            "B15",
+            "B19",
+            "B28"
+          ],
+          "B30": [],
+          "B31": [
+            "B02",
+            "B09",
+            "B12",
+            "B13",
+            "B14",
+            "B27",
+            "B30"
+          ],
+          "B32": [],
+          "B33": [
+            "B03",
+            "B05",
+            "B19",
+            "B20",
+            "B28"
+          ],
+          "B34": [
+            "B06",
+            "B07",
+            "B16",
+            "B17",
+            "B22",
+            "B27"
+          ],
+          "B35": [
+            "B03",
+            "B05",
+            "B19",
+            "B20"
+          ],
+          "B36": [],
+          "M22-CORE": [
+            "B04",
+            "B15",
+            "B21"
+          ],
+          "M22-TXN": [
+            "M22-CORE",
+            "B05",
+            "B07"
+          ],
+          "M22-CHILD": [
+            "M22-CORE",
+            "M22-TXN",
+            "B16"
+          ]
+        },
+        "canonicalJsonGraphValidated": true,
+        "readyCards": [
+          "B01",
+          "B02",
+          "B03",
+          "B04",
+          "B08",
+          "B11",
+          "B18",
+          "B23",
+          "B28",
+          "B30",
+          "B32",
+          "B36"
+        ],
+        "historicalDeclarations": 120,
+        "historicalMappings": 120,
+        "historicallyChecked": 58,
+        "findingRecords": 118,
+        "referencedFindings": 118,
+        "capabilityRecords": 144,
+        "catalogCapabilities": 45,
+        "catalogLineageRecords": 144,
+        "existingTestPaths": 97,
+        "shorthandTestResolution": [
+          {
+            "reference": "__tests__/run-buffbench.test.ts",
+            "uniqueRepositoryPath": "evals/buffbench/__tests__/run-buffbench.test.ts"
+          },
+          {
+            "reference": "src/commands/__tests__/prompt-dispatch.test.ts",
+            "uniqueRepositoryPath": "cli/src/commands/__tests__/prompt-dispatch.test.ts"
+          },
+          {
+            "reference": "src/components/__tests__/attachment-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/attachment-recovery.test.tsx"
+          },
+          {
+            "reference": "src/components/__tests__/session-route-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/session-route-recovery.test.tsx"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-ask-user-bridge.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-ask-user-bridge.test.ts"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-send-message-ownership.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts"
+          }
+        ],
+        "baselineSourceHashes": 558,
+        "changedSource": [],
+        "documentHashes": {
+          "PLAN-DRAFT.md": "e9fa084036c0b99d17b5e173afe237804ff5306c971dcb5aff780aefc6dba34e",
+          "SPEC.md": "9baced80a7ff1c35ff3e41e4fb81d4a74efa1bd93364723ed3c4c05a4b6619e3",
+          "OLD-TASK-MIGRATION.md": "e227904717f54ac415d57e9b43d85a86914f9a0d031a5f1e79b088bcac548ba1",
+          "CAPABILITIES.md": "c062b5530cc7efde5c4d0e995982f3a2c4fc1a15467a5153c015b075d79c5818"
+        },
+        "errors": [],
+        "qualification": "Mechanical consistency and source stability only; semantic dependencies and prospective acceptance remain dedicated-review responsibilities. No implementation acceptance tests are run by this script."
+      },
+      "provenance": {
+        "capture": "84019aaed178b823e1e99b18d446f1dac6745c7953a9c508ce1590c2b5630b68.json",
+        "sha256": "84019aaed178b823e1e99b18d446f1dac6745c7953a9c508ce1590c2b5630b68",
+        "bytes": 4806,
+        "timestamp": "2026-11-06T00:40:01.698Z",
+        "session": "rollout-2026-11-05T23-43-00-01a1ad73-586c-7c40-8834-65305ebc251e.jsonl",
+        "callId": "call_Xxl7BPGEgqrB6nFUCP6tlsGO",
+        "transformation": "exact recorded output",
+        "location": "$.output[decoded-json]"
+      },
+      "qualification": "Historical comparison result only; original 558-file whole-byte baseline is unavailable."
+    },
+    {
+      "recordedResult": {
+        "plan": "PLAN-DRAFT.md",
+        "cards": 36,
+        "graphRows": 39,
+        "milestoneNodes": [
+          "M22-CHILD",
+          "M22-CORE",
+          "M22-TXN"
+        ],
+        "readyCards": [
+          "B01",
+          "B02",
+          "B03",
+          "B04",
+          "B08",
+          "B11",
+          "B18",
+          "B23",
+          "B28",
+          "B30",
+          "B32",
+          "B36"
+        ],
+        "historicalDeclarations": 120,
+        "historicalMappings": 120,
+        "historicallyChecked": 58,
+        "findingRecords": 118,
+        "referencedFindings": 118,
+        "capabilityRecords": 144,
+        "catalogCapabilities": 45,
+        "catalogLineageRecords": 144,
+        "existingTestPaths": 97,
+        "shorthandTestResolution": [
+          {
+            "reference": "__tests__/run-buffbench.test.ts",
+            "uniqueRepositoryPath": "evals/buffbench/__tests__/run-buffbench.test.ts"
+          },
+          {
+            "reference": "src/commands/__tests__/prompt-dispatch.test.ts",
+            "uniqueRepositoryPath": "cli/src/commands/__tests__/prompt-dispatch.test.ts"
+          },
+          {
+            "reference": "src/components/__tests__/attachment-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/attachment-recovery.test.tsx"
+          },
+          {
+            "reference": "src/components/__tests__/session-route-recovery.test.tsx",
+            "uniqueRepositoryPath": "cli/src/components/__tests__/session-route-recovery.test.tsx"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-ask-user-bridge.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-ask-user-bridge.test.ts"
+          },
+          {
+            "reference": "src/hooks/__tests__/use-send-message-ownership.test.ts",
+            "uniqueRepositoryPath": "cli/src/hooks/__tests__/use-send-message-ownership.test.ts"
+          }
+        ],
+        "baselineSourceHashes": 558,
+        "changedSource": [],
+        "documentHashes": {
+          "PLAN-DRAFT.md": "e9fa084036c0b99d17b5e173afe237804ff5306c971dcb5aff780aefc6dba34e",
+          "SPEC.md": "9baced80a7ff1c35ff3e41e4fb81d4a74efa1bd93364723ed3c4c05a4b6619e3",
+          "OLD-TASK-MIGRATION.md": "e227904717f54ac415d57e9b43d85a86914f9a0d031a5f1e79b088bcac548ba1",
+          "CAPABILITIES.md": "c062b5530cc7efde5c4d0e995982f3a2c4fc1a15467a5153c015b075d79c5818"
+        },
+        "errors": [],
+        "qualification": "Mechanical consistency and source stability only; semantic dependencies and prospective acceptance remain dedicated-review responsibilities. No implementation acceptance tests are run by this script."
+      },
+      "provenance": {
+        "capture": "05a88dcdc787600c41b34d8c7f1e523ebc468f60f40f92fd06e82b0d0f0287c1.json",
+        "sha256": "05a88dcdc787600c41b34d8c7f1e523ebc468f60f40f92fd06e82b0d0f0287c1",
+        "bytes": 2603,
+        "timestamp": "2026-11-06T00:31:28.697Z",
+        "session": "rollout-2026-11-06T02-08-44-01a1adf8-c4f8-7f60-8efd-a4619c4f5157.jsonl",
+        "callId": "call_hjCGPhtuWPHEc0GL5c8zBdOz",
+        "transformation": "exact recorded output",
+        "location": "$.output[decoded-json]"
+      },
+      "qualification": "Historical comparison result only; original 558-file whole-byte baseline is unavailable."
+    }
+  ],
+  "historicalComparisonQualification": "Four captured prior validator results reported 558 source hashes and changedSource=[]. Their original whole-byte map was not retained; those past comparisons do not permit a new byte comparison.",
+  "currentBindingMode": "present HEAD plus exact recovered numbered line windows; future CURRENT-FILE-HASHES is a fresh independent baseline",
+  "capturedLineComparison": {
+    "sourceFileCount": 173,
+    "windowCount": 258,
+    "uniqueCapturedLineCount": 38692,
+    "matchingWindowCount": 258,
+    "changedLines": [],
+    "conflictingCapturedLines": [],
+    "normalization": "Original numbered output prefixes are removed. Source lines use Python splitlines and LF joining with one final newline; original whole-file bytes, line endings, final-newline presence, and uninspected tails are not certified.",
+    "excludedKnowledgeFiles": [
+      "cli/knowledge.md",
+      "common/knowledge.md",
+      "sdk/knowledge.md"
+    ]
+  },
+  "capturedLineBindingArtifact": {
+    "path": "evidence/recovered-source-line-bindings.json",
+    "bytes": 423445,
+    "sha256": "bef59f8d8b298950bf92dbe97b8413558ebdf4605f8d6e48dfae165d1ea0e1fb"
+  },
+  "currentWholeFileHashes": {
+    "path": "CURRENT-FILE-HASHES.json",
+    "ownership": "root validator",
+    "status": "fresh current binding generated by root validator",
+    "originalBaseline": false,
+    "bytes": 63541,
+    "sha256": "06d3b1025ffacb25c85e306666314ce6668352b9b25d8460a1c9156a717d2d29",
+    "files": 558,
+    "checkedAt": "2026-11-06T06:16:14.704150+00:00"
+  },
+  "limits": [
+    "Same HEAD does not prove uncommitted working bytes match the original review.",
+    "Line-window agreement does not bind bytes outside recovered windows, EOL encoding, or original whole-file hashes.",
+    "User-modified cli/common/sdk knowledge files are deliberately excluded from recovered byte or line stability claims.",
+    "No original source hashes were inferred from present files or the native prefix snapshot."
+  ]
+}

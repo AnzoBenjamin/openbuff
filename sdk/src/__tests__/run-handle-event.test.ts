@@ -924,4 +924,126 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
       'event:subagent_finish:end',
     ])
   })
+
+  it('forwards subagent reasoning chunks as reasoning_chunk events (and keeps plain chunks as subagent_chunk)', async () => {
+    spyOn(databaseModule, 'getUserInfoFromApiKey').mockResolvedValue({
+      id: 'user-123',
+      email: 'test@example.com',
+      discord_id: null,
+      stripe_customer_id: null,
+      banned: false,
+      created_at: new Date('2024-01-01T00:00:00Z'),
+    })
+    spyOn(databaseModule, 'fetchAgentFromDatabase').mockResolvedValue(null)
+    spyOn(databaseModule, 'startAgentRun').mockResolvedValue('run-1')
+    spyOn(databaseModule, 'finishAgentRun').mockResolvedValue(undefined)
+    spyOn(databaseModule, 'addAgentStep').mockResolvedValue('step-1')
+
+    spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
+      async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
+        const { sendAction, action: promptAction, promptId } = params
+        const sessionState = getInitialSessionState(getStubProjectFileContext())
+
+        // A reasoning chunk WITHOUT ancestorRunIds: must still reach
+        // handleStreamChunk as reasoning_chunk (missing ids fall back to []).
+        await sendAction({
+          action: {
+            type: 'subagent-response-chunk',
+            userInputId: promptId,
+            agentId: 'sub-1',
+            agentType: 'commander',
+            chunk: 'thinking part one',
+            chunkKind: 'reasoning',
+          },
+        })
+
+        // A reasoning chunk WITH ancestorRunIds: must carry the chain
+        // verbatim onto the reasoning_chunk event.
+        await sendAction({
+          action: {
+            type: 'subagent-response-chunk',
+            userInputId: promptId,
+            agentId: 'sub-1',
+            agentType: 'commander',
+            chunk: 'thinking part two',
+            chunkKind: 'reasoning',
+            ancestorRunIds: ['run-parent', 'run-child'],
+          },
+        })
+
+        // No chunkKind: the existing subagent_chunk text semantics are
+        // unchanged.
+        await sendAction({
+          action: {
+            type: 'subagent-response-chunk',
+            userInputId: promptId,
+            agentId: 'sub-1',
+            agentType: 'commander',
+            chunk: 'plain text from subagent',
+          },
+        })
+
+        await sendAction({
+          action: {
+            type: 'prompt-response',
+            promptId,
+            sessionState,
+            output: {
+              type: 'lastMessage',
+              value: [],
+            },
+          },
+        })
+
+        return {
+          sessionState,
+          output: {
+            type: 'lastMessage' as const,
+            value: [],
+          },
+        }
+      },
+    )
+
+    type StreamChunk = Parameters<
+      NonNullable<OpenbuffClientOptions['handleStreamChunk']>
+    >[0]
+
+    const streamChunks: StreamChunk[] = []
+
+    const client = new OpenbuffClient({
+      apiKey: 'test-key',
+    })
+
+    const result = await client.run({
+      agent: 'base2',
+      prompt: 'hello world',
+      handleStreamChunk: async (chunk) => {
+        streamChunks.push(chunk)
+      },
+    })
+
+    expect(streamChunks).toEqual([
+      {
+        type: 'reasoning_chunk',
+        agentId: 'sub-1',
+        ancestorRunIds: [],
+        chunk: 'thinking part one',
+      },
+      {
+        type: 'reasoning_chunk',
+        agentId: 'sub-1',
+        ancestorRunIds: ['run-parent', 'run-child'],
+        chunk: 'thinking part two',
+      },
+      {
+        type: 'subagent_chunk',
+        agentId: 'sub-1',
+        agentType: 'commander',
+        chunk: 'plain text from subagent',
+      },
+    ])
+
+    expect(result.output.type).toBe('lastMessage')
+  })
 })

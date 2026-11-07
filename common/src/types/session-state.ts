@@ -10,6 +10,7 @@ import type { TaskMemoryV1 } from './task-memory'
 import type { OrchestrationLedgerV1 } from './orchestration-ledger'
 import type { DiscoveryCoverageV1 } from './discovery-coverage'
 import type { AgentReceipt } from './agent-handoff'
+import type { ActionOutcome, RunOutcome, TaskAcceptance } from './run-outcome'
 import type { WorkspaceStateV1 } from './workspace-state'
 import { createInitialWorkspaceState } from './workspace-state'
 import type {
@@ -25,6 +26,7 @@ import type {
   TaskId,
   TaskStatus,
 } from './memory-v2'
+import type { MemoryPlaybook } from './memory-playbook'
 
 export const toolCallSchema = z.object({
   toolName: z.string(),
@@ -90,7 +92,11 @@ export const confirmedPostEditAnchorSchema = z
     startLine: z.number().int().min(1),
     endLine: z.number().int().min(1),
     contentHash: z.string().regex(SHA256_CONTENT_HASH_PATTERN),
-    readCapability: z.string().min(1).max(4096).regex(/^cap\.v3\./),
+    readCapability: z
+      .string()
+      .min(1)
+      .max(4096)
+      .regex(/^cap\.v3\./),
     projectId: z.string().optional(),
     runId: z.string().optional(),
   })
@@ -381,6 +387,12 @@ export interface MemoryRuntimeStateV2 {
 }
 
 export type AgentState = {
+  /** Runtime terminal reason for this run; never inferred from task output. */
+  runOutcome?: RunOutcome
+  /** A named task oracle may accept a recovered task or reject a completed run. */
+  taskAcceptance?: TaskAcceptance
+  /** Earlier failed/refused attempts survive subsequent recovery. */
+  actionOutcomes?: ActionOutcome[]
   /**
    * @deprecated agentId is replaced by runId
    */
@@ -496,6 +508,8 @@ export type AgentState = {
    * `packages/agent-runtime/src/util/context-archive.ts`).
    */
   compactionArchive?: Array<ContextArchiveSnapshot>
+  /** Edited conversation branches must not hydrate later project-wide transcripts. */
+  contextArchiveHydration?: 'project' | 'in-memory-only'
   /**
    * Capped list of background LLM consolidations of archived snapshots (the
    * canary-gated prototype leg of the compaction fidelity pipeline). Written
@@ -532,6 +546,8 @@ export type AgentState = {
   memoryAuthority?: MemoryAuthorityStateV2
   /** Validated retrieval context for the current trusted turn only. */
   memoryV2Context?: MemoryTurnContextV2
+  /** Active procedural playbooks for the turn: loaded by the coordinator, consumed by the runtime playbook gate. */
+  playbookContext?: MemoryPlaybook[]
   /** Per-turn memory-cover reuse accumulator (S2 reuse receipt). Reset each turn. */
   memoryReuse?: MemoryReuseReceiptV1
   /** Snapshot of the completed turn's reuse receipt handed to the SDK coordinator for usage correlation; cleared by coordinator finishTurn. */

@@ -1,0 +1,11 @@
+{
+  "attemptId": "3c7f1c8e-2a45-41d2-a958-187975e41657",
+  "event": {
+    "type": "start",
+    "messageHistoryLength": 0
+  },
+  "costUsd": null,
+  "costEvidence": {
+    "status": "unknown"
+  }
+}

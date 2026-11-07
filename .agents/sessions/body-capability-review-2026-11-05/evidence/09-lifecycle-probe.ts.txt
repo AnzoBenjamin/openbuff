@@ -1,0 +1,70 @@
+import fs from 'node:fs'
+import path from 'node:path'
+
+const evidence = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const work = path.join(evidence, '09-work')
+const tmp = path.join(work, '09-job-temp')
+fs.mkdirSync(tmp, { recursive: true })
+// Isolate every Openbuff job log and orphan sweep from real user artifacts.
+process.env.TMPDIR = tmp
+const { runTerminalCommand } = await import('/home/ben/Code/CLI/openbuff/sdk/src/tools/run-terminal-command.ts')
+const { getBackgroundJob, killBackgroundJob } = await import('/home/ben/Code/CLI/openbuff/sdk/src/tools/background-jobs.ts')
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const script = path.join(work, '09-resistant-child.py')
+fs.writeFileSync(script, "import os,sys,time,signal\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\nopen(sys.argv[1],'w').write(str(os.getpid()))\nif len(sys.argv)>2: sys.stdout.write('x'*(11*1024*1024));sys.stdout.flush()\ntime.sleep(9)\n")
+const owned = new Map<number, string>()
+function state(pid: number): string | null {
+  try {
+    const cmdline = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8')
+    if (!cmdline.includes(script)) return null
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8')
+    return stat.slice(stat.lastIndexOf(')') + 1).trim().split(/\s+/)[0]
+  } catch { return null }
+}
+async function getPid(file: string): Promise<number> {
+  const end = Date.now() + 3000
+  while (!fs.existsSync(file) && Date.now() < end) await sleep(10)
+  const pid = Number(fs.readFileSync(file, 'utf8'))
+  if (!Number.isInteger(pid) || pid <= 1 || !state(pid)) throw new Error('Owned fixture pid was not established.')
+  owned.set(pid, file)
+  return pid
+}
+async function cleanup(pid: number) {
+  if (state(pid) && owned.has(pid)) { try { process.kill(pid, 'SIGKILL') } catch {} }
+  await sleep(30)
+}
+const owner = { clientSessionId: '09-audit', rootRunId: '09-audit', parentRunId: '09-audit', parentAgentId: '09-audit' }
+const observations: any[] = []
+try {
+  const syncPidFile = path.join(work, '09-sync-pid.txt')
+  const sync = await runTerminalCommand({command: `python3 '${script}' '${syncPidFile}' >/dev/null 2>&1 & wait`, process_type: 'SYNC', mode: 'assistant', permission_profile: 'full-access', cwd: work, projectRoot: work, timeout_seconds: 0.25})
+  const syncPid = await getPid(syncPidFile)
+  await sleep(5500)
+  observations.push({ case: 'SYNC timeout: leader exits, redirected child ignores TERM', result: sync, descendantStateAfterGrace: state(syncPid) })
+  await cleanup(syncPid)
+
+  const bgPidFile = path.join(work, '09-bg-pid.txt')
+  const bg = await runTerminalCommand({command: `python3 '${script}' '${bgPidFile}' >/dev/null 2>&1 & wait`, process_type: 'BACKGROUND', mode: 'assistant', permission_profile: 'full-access', cwd: work, projectRoot: work, timeout_seconds: -1, owner})
+  const bgId = (bg[0] as any).value.jobId as string
+  const bgPid = await getPid(bgPidFile)
+  const kill = killBackgroundJob(bgId, 'SIGTERM')
+  await sleep(5500)
+  observations.push({ case: 'BACKGROUND kill: leader exits, redirected child ignores TERM', firstKill: kill, statusAfterGrace: getBackgroundJob(bgId)?.status, descendantStateAfterGrace: state(bgPid), secondKill: killBackgroundJob(bgId, 'SIGKILL') })
+  await cleanup(bgPid)
+
+  const quotaPidFile = path.join(work, '09-quota-pid.txt')
+  const quota = await runTerminalCommand({command: `python3 '${script}' '${quotaPidFile}' flood`, process_type: 'BACKGROUND', mode: 'assistant', permission_profile: 'full-access', cwd: work, projectRoot: work, timeout_seconds: -1, owner})
+  const quotaId = (quota[0] as any).value.jobId as string
+  const quotaPid = await getPid(quotaPidFile)
+  const deadline = Date.now() + 3000
+  while (getBackgroundJob(quotaId)?.status === 'running' && Date.now() < deadline) await sleep(20)
+  await sleep(5500)
+  const quotaJob = getBackgroundJob(quotaId)
+  observations.push({ case: 'BACKGROUND output quota: TERM-ignoring process', statusAfterGrace: quotaJob?.status, processStateAfterGrace: state(quotaPid), killAfterQuota: killBackgroundJob(quotaId, 'SIGKILL'), logBytes: quotaJob ? fs.statSync(quotaJob.logFile).size : null })
+  await cleanup(quotaPid)
+} finally {
+  for (const pid of owned.keys()) await cleanup(pid)
+}
+const result = { observations, constraints: 'Only three temporary Python fixture children; fixed nine-second self-exit plus verified argv/PID cleanup; all job logs/sweeps isolated by TMPDIR under evidence/09-work. State S means still sleeping, excluding zombie/dead children.' }
+fs.writeFileSync(path.join(evidence, '09-lifecycle-probe.json'), JSON.stringify(result, null, 2))
+console.log(JSON.stringify(result, null, 2))

@@ -579,7 +579,7 @@ describe('sweep renderers', () => {
     expect(markup).toContain('vectors ok')
     expect(markup).toContain('hint: run reindex')
     expect(markup).toContain('coverage low')
-    expect(markup).toContain('Diagnostics (2)')
+    expect(markup).toContain('showing 2 of 2 captured details')
     expect(markup).toContain('diag 1')
   })
 

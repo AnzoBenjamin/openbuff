@@ -1,21 +1,58 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  mock,
+  test,
+} from 'bun:test'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { enableMapSet } from 'immer'
 
 import { initializeThemeStore } from '../../hooks/use-theme'
-import { computeTerminalLayout } from '../../hooks/use-terminal-layout'
 import { useChatStore } from '../../state/chat-store'
 import { useMessageBlockStore } from '../../state/message-block-store'
 import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
 
 import type { ChatMessage } from '../../types/chat'
+import type { TerminalLayout } from '../../hooks/use-terminal-layout'
 import type { MarkdownPalette } from '../../utils/markdown-renderer'
 
 type CapturedButton = {
   text: string
   onClick?: (event?: unknown) => void | Promise<unknown>
 }
+
+// bun's mock.module is registry-wide for the whole test process (afterAll
+// mock.restore does not undo it), so capture the REAL modules before any
+// mock.module registration. The `?real` query bypasses the registry so a
+// previously leaked mock cannot shadow the real module.
+const realLayoutModule = (await import(
+  '../../hooks/use-terminal-layout?real' as string
+)) as unknown as typeof import('../../hooks/use-terminal-layout')
+
+const realButtonModule = (await import(
+  '../button?real' as string
+)) as unknown as typeof import('../button')
+
+const realSyntaxStyleModule = (await import(
+  '../../utils/opentui-syntax-style?real' as string
+)) as unknown as typeof import('../../utils/opentui-syntax-style')
+
+const realTreeSitterModule = (await import(
+  '../../utils/tree-sitter-client?real' as string
+)) as unknown as typeof import('../../utils/tree-sitter-client')
+
+const { computeTerminalLayout } = realLayoutModule
+
+// Allow per-test override of the terminal layout; when unset, the factory
+// falls through to the real hook so no stale layout can leak to later files
+// in the same process. beforeEach seeds the fixed 80x24 layout this suite's
+// assertions were written against; tests that override it keep their
+// override.
+let mockLayout: TerminalLayout | undefined
 
 const capturedButtons: CapturedButton[] = []
 
@@ -35,16 +72,36 @@ const textFromReactNode = (node: React.ReactNode): string => {
   return ''
 }
 
+// Armed at module scope (this suite's own tests capture buttons through the
+// stub, and there is no beforeEach arming here — same shape as
+// treeSitterArmed below); the top-level afterAll below disarms it so the
+// registry-wide override delegates to the real Button for later files in
+// the same worker.
+let buttonArmed = true
+
 mock.module('../button', () => ({
-  Button: ({
-    children,
-    onClick,
-    ...rest
-  }: {
+  // Real exports first: the registry-wide mock must not drop real exports
+  // for later files importing this module in the same process.
+  ...realButtonModule,
+  Button: (props: {
     children?: React.ReactNode
     onClick?: (event?: unknown) => void | Promise<unknown>
     [key: string]: unknown
   }) => {
+    // Disarmed: render the real Button through createElement — the real
+    // export may be a memo/forwardRef-style object, which must not be called
+    // as a plain function. realButtonModule is a `?real` query import — a
+    // separate module instance this registry-wide mock cannot patch — so
+    // the delegation cannot re-enter this override.
+    if (!buttonArmed) {
+      return React.createElement(
+        realButtonModule.Button as unknown as React.ElementType,
+        props,
+      )
+    }
+
+    const { children, onClick, ...rest } = props
+
     capturedButtons.push({ text: textFromReactNode(children), onClick })
 
     return React.createElement('box', rest, children)
@@ -52,8 +109,62 @@ mock.module('../button', () => ({
 }))
 
 mock.module('../../hooks/use-terminal-layout', () => ({
-  computeTerminalLayout,
-  useTerminalLayout: () => computeTerminalLayout(80, 24),
+  // Real exports first (registry-wide leak guard); the suite default seeded
+  // in beforeEach must keep winning for this suite's assertions, and the
+  // unset fall-through delegates to the real hook instead of a fixed layout
+  // that would survive this file.
+  ...realLayoutModule,
+  useTerminalLayout: () => mockLayout ?? realLayoutModule.useTerminalLayout(),
+}))
+
+// Native-markdown collaborators are mocked so agent-message tests can force
+// native setup failures (mirroring content-with-markdown.test.tsx). Declared
+// before the dynamic import below so the mock factory closes over it.
+let syntaxStyleSetupError: Error | null = null
+
+// Armed at module scope (every agent-message render that reaches native
+// markdown needs the stub; there is no beforeEach arming here — same shape
+// as treeSitterArmed below); the top-level afterAll below disarms it so the
+// registry-wide override delegates to the real module for later files in
+// the same worker.
+let syntaxStyleArmed = true
+
+mock.module('../../utils/opentui-syntax-style', () => ({
+  // Real exports first so createCodeSyntaxStyle and friends survive for
+  // later files; the throwing stub below must keep winning while armed.
+  ...realSyntaxStyleModule,
+  createMarkdownSyntaxStyle: (palette: MarkdownPalette) => {
+    if (!syntaxStyleArmed) {
+      // Delegate to the `?real` module instance — a separate module object
+      // this registry-wide mock cannot patch, so this cannot re-enter the
+      // override.
+      return realSyntaxStyleModule.createMarkdownSyntaxStyle(palette)
+    }
+    if (syntaxStyleSetupError) {
+      throw syntaxStyleSetupError
+    }
+    // String marker so the stub is observable as a native element attribute
+    // in the static markup below.
+    return '__stub-syntax-style__'
+  },
+}))
+
+// Armed at module scope (every agent-message render that reaches native
+// markdown needs the stub); the top-level afterAll below disarms it so the
+// registry-wide override delegates to the real module for later files in the
+// same worker. bun's --isolate REUSES worker processes across test files, so
+// an unconditional stub leaked '__stub-tree-sitter-client__' into
+// tree-sitter-client.test.ts's null assertions in CI.
+let treeSitterArmed = true
+
+mock.module('../../utils/tree-sitter-client', () => ({
+  // Real exports first so buildDefaultParsers and friends survive for later
+  // files; the stub below must keep winning while armed.
+  ...realTreeSitterModule,
+  getSharedTreeSitterClient: () =>
+    treeSitterArmed
+      ? '__stub-tree-sitter-client__'
+      : realTreeSitterModule.getSharedTreeSitterClient(),
 }))
 
 const { MessageWithAgents } = await import('../message-with-agents')
@@ -166,9 +277,23 @@ const initializeStore = (
 }
 
 beforeEach(() => {
+  // Suite default: the fixed 80x24 layout these assertions were written
+  // against; individual tests may override it.
+  mockLayout = computeTerminalLayout(80, 24)
   capturedButtons.length = 0
+  syntaxStyleSetupError = null
   initializeStore()
   useChatStore.setState({ streamingAgents: new Set<string>() })
+})
+
+// Fall through to the real hook + disarm the stubs: the registry-wide
+// mocks survive this file, so neither a stale layout nor the Button /
+// syntax-style / tree-sitter stubs must ever leak to sibling files.
+afterAll(() => {
+  mockLayout = undefined
+  treeSitterArmed = false
+  syntaxStyleArmed = false
+  buttonArmed = false
 })
 
 afterEach(() => {
@@ -579,6 +704,82 @@ describe('MessageWithAgents', () => {
       expect(markup).toContain('Full expanded content here')
       // When expanded, should show the expanded indicator
       expect(markup).toContain('▾')
+    })
+  })
+
+  describe('agent markdown rendering', () => {
+    test('renders expanded agent markdown content through the native <markdown> renderable', () => {
+      const message = createAgentMessage(
+        'agent-md',
+        '# Agent heading\n\nSome **bold** body',
+        'MD Agent',
+        {
+          metadata: { isCollapsed: false },
+        },
+      )
+
+      const markup = renderToStaticMarkup(
+        <MessageWithAgents
+          {...baseMessageWithAgentsProps}
+          message={message}
+        />,
+      )
+
+      // The native renderable is selected with our syntax style and shared
+      // tree-sitter client wired in (observable via the stub attributes).
+      expect(markup).toContain('<markdown')
+      expect(markup).toContain('Agent heading')
+      expect(markup).toContain('Some **bold** body')
+      expect(markup).toContain('__stub-syntax-style__')
+      expect(markup).toContain('__stub-tree-sitter-client__')
+    })
+
+    test('renders non-markdown agent content as plain text without the native renderable', () => {
+      const message = createAgentMessage(
+        'agent-plain',
+        'Plain agent output',
+        'Plain Agent',
+        {
+          metadata: { isCollapsed: false },
+        },
+      )
+
+      const markup = renderToStaticMarkup(
+        <MessageWithAgents
+          {...baseMessageWithAgentsProps}
+          message={message}
+        />,
+      )
+
+      // The plain-text path keeps the wrapped text and never mounts the
+      // native renderable.
+      expect(markup).toContain('Plain agent output')
+      expect(markup).not.toContain('<markdown')
+    })
+
+    test('degrades agent markdown content to plain text when native setup throws', () => {
+      syntaxStyleSetupError = new Error('syntax style setup failed')
+
+      const message = createAgentMessage(
+        'agent-md-degrade',
+        '## Degrading agent body',
+        'Degrading Agent',
+        {
+          metadata: { isCollapsed: false },
+        },
+      )
+
+      const markup = renderToStaticMarkup(
+        <MessageWithAgents
+          {...baseMessageWithAgentsProps}
+          message={message}
+        />,
+      )
+
+      // Degrade-to-plain-text contract: a native setup throw falls back to
+      // the wrapped plain-text path instead of crashing the render.
+      expect(markup).toContain('Degrading agent body')
+      expect(markup).not.toContain('<markdown')
     })
   })
 })

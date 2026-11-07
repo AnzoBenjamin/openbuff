@@ -1,5 +1,6 @@
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
 import { editTransactionParams } from '@codebuff/common/tools/params/tool/edit-transaction'
+import { MAX_READ_BLOCK_BYTES } from '@codebuff/common/tools/params/tool/read-files'
 import { buildReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { describe, expect, it } from 'bun:test'
@@ -492,6 +493,7 @@ describe('read_files edit-state recovery', () => {
     const path = 'src/large.ts'
     const fileProcessingState = createFileProcessingState()
     fileProcessingState.strictReadBeforeEdit = true
+    fileProcessingState.failedEditRequiresReadByPath[path] = true
 
     const result = await handleReadFiles({
       ...defaultTestHandlerAuthority,
@@ -524,7 +526,86 @@ describe('read_files edit-state recovery', () => {
     expect(
       fileProcessingState.readAuthorizationHashesByPath?.[path],
     ).toBeUndefined()
+    expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
   })
+
+  it('returns a symbol larger than the former hidden 100k limit', async () => {
+    const path = 'src/large-symbol.ts'
+    const content = `export function target() {\n  return '${'x'.repeat(101_000)}'\n}\n`
+    const fileProcessingState = createFileProcessingState()
+    fileProcessingState.failedEditRequiresReadByPath[path] = true
+
+    const result = await handleReadFiles({
+      ...defaultTestHandlerAuthority,
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'read-oversize-symbol',
+        toolName: 'read_files',
+        input: { symbols: [{ path, names: ['target'] }] },
+      },
+      fileContext: mockFileContext,
+      fileProcessingState,
+      requestFiles: async () => buildReadFilesResultV1([]),
+      requestOptionalFile: async () => content,
+      logger,
+    } as any)
+
+    expect(result.output[0]).toMatchObject({
+      type: 'json',
+      value: { results: [{ status: 'ok', slices: [{ symbol: 'target' }] }] },
+    })
+    expect(fileProcessingState.failedEditRequiresReadByPath[path]).not.toBe(true)
+  })
+
+  it.each([
+    { symbolChars: 2_200_000, status: 'ok', names: ['first', 'second'] },
+    {
+      symbolChars: Math.floor(MAX_READ_BLOCK_BYTES / 2) + 512,
+      status: 'partial',
+      names: ['first'],
+    },
+  ])(
+    'returns $status for batches with $symbolChars characters per symbol',
+    async ({ symbolChars, status, names }) => {
+      const path = 'src/large-symbol-batch.ts'
+      const content = `export function first() { return '${'a'.repeat(symbolChars)}' }\nexport function second() { return '${'b'.repeat(symbolChars)}' }\n`
+      const result = await handleReadFiles({
+        ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'read-large-symbol-batch',
+          toolName: 'read_files',
+          input: { symbols: [{ path, names: ['first', 'second'] }] },
+        },
+        fileContext: mockFileContext,
+        fileProcessingState: createFileProcessingState(),
+        requestFiles: async () => buildReadFilesResultV1([]),
+        requestOptionalFile: async () => content,
+        logger,
+      } as any)
+      expect(result.output[0]).toMatchObject({
+        type: 'json',
+        value: {
+          results: [
+            {
+              status,
+              slices: names.map((symbol) => ({ symbol })),
+              ...(status === 'partial'
+                ? {
+                    omittedSymbols: ['second'],
+                    recovery: expect.stringContaining('separately'),
+                  }
+                : {}),
+            },
+          ],
+        },
+      })
+      if (status === 'ok')
+        expect(result.output[0]).not.toHaveProperty(
+          'value.results.0.omittedSymbols',
+        )
+    },
+  )
 
   it('rejects a canonical result whose selector path does not match the request', async () => {
     const requestedPath = 'src/requested.ts'

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
+import type { BigIntStats } from 'node:fs'
 import path from 'node:path'
 
 const ignored = new Set([
@@ -17,10 +18,8 @@ export const ignoredLiveStateDirectories = [
   '.tmp',
   'debug',
   'scratch-logs',
-  'release',
-  'release-staging',
-  'bin',
 ] as const
+const artifactDirectories = new Set(['release', 'release-staging', 'bin'])
 export const ignoredLiveStateFileSuffixes = [
   '.log',
   '.sqlite',
@@ -36,12 +35,9 @@ const ignoredLiveStateFileSuffixList: readonly string[] =
 
 export function isIgnoredPath(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, '/')
+  const segments = normalized.split('/')
   if (normalized.startsWith('.agents/sessions/')) return true
-  if (
-    normalized
-      .split('/')
-      .some((segment) => ignoredLiveStateDirectorySet.has(segment))
-  )
+  if (segments.some((segment) => ignoredLiveStateDirectorySet.has(segment)))
     return true
   return ignoredLiveStateFileSuffixList.some((suffix) =>
     normalized.endsWith(suffix),
@@ -102,6 +98,24 @@ export type CodebaseInventory = {
   generatedFiles: string[]
   capabilityPacket: { languages: string[]; frameworks: string[] }
   uncoveredDirectories: string[]
+  scope?: string[]
+  sourceBinding?: {
+    status: 'complete'
+    identity: 'full-file-sha256'
+    shippedMembership: 'all-non-live-entries'
+    symlinkIdentity: 'link-target-bytes'
+    shippedSourceFiles: string[]
+  }
+  directoryDispositions?: Array<{
+    id: string
+    status:
+      | 'inventoried'
+      | 'generated'
+      | 'live-state'
+      | 'out-of-scope'
+      | 'empty'
+    reason: string
+  }>
 }
 
 function walk(root: string, current = root, out: string[] = []): string[] {
@@ -109,10 +123,21 @@ function walk(root: string, current = root, out: string[] = []): string[] {
     const absolute = path.join(current, entry.name)
     const relative = path.relative(root, absolute).replace(/\\/g, '/')
     if (entry.isDirectory()) {
-      if (ignored.has(entry.name) || isIgnoredPath(relative)) continue
+      const segments = relative.split('/')
+      const mayContainShippedSource = segments.some((segment) =>
+        artifactDirectories.has(segment),
+      )
+      if (
+        isIgnoredPath(relative) ||
+        (ignored.has(entry.name) &&
+          (!mayContainShippedSource ||
+            entry.name === '.git' ||
+            entry.name === 'node_modules'))
+      )
+        continue
       walk(root, absolute, out)
-    } else if (entry.isFile()) {
-      if (isIgnoredPath(relative)) continue
+    } else if (entry.isFile() || entry.isSymbolicLink()) {
+      if (ignored.has(entry.name) || isIgnoredPath(relative)) continue
       out.push(relative)
     }
   }
@@ -121,28 +146,64 @@ function walk(root: string, current = root, out: string[] = []): string[] {
 
 const maxFileBytes = 256_000
 
-function readCapped(file: string): Buffer {
-  const fd = fs.openSync(file, 'r')
-  try {
-    const buffer = Buffer.alloc(Math.min(fs.fstatSync(fd).size, maxFileBytes))
-    fs.readSync(fd, buffer, 0, buffer.length, 0)
-    return buffer
-  } finally {
-    fs.closeSync(fd)
-  }
+function sameSourceMetadata(before: BigIntStats, after: BigIntStats): boolean {
+  return (
+    before.dev === after.dev &&
+    before.ino === after.ino &&
+    before.mode === after.mode &&
+    before.size === after.size &&
+    before.mtimeNs === after.mtimeNs &&
+    before.ctimeNs === after.ctimeNs
+  )
 }
 
 function hashInventory(files: string[], root: string): string {
   const hash = createHash('sha256')
+  hash.update('openbuff-source-snapshot-v2\n')
   for (const file of files) {
     const absolute = path.join(root, file)
-    const stat = fs.lstatSync(absolute)
+    const stat = fs.lstatSync(absolute, { bigint: true })
+    const contentHash = createHash('sha256')
+    if (stat.isSymbolicLink()) {
+      contentHash.update(fs.readlinkSync(absolute, { encoding: 'buffer' }))
+      if (!sameSourceMetadata(stat, fs.lstatSync(absolute, { bigint: true })))
+        throw new Error(`Source changed during snapshot attestation: ${file}`)
+    } else {
+      const fd = fs.openSync(absolute, 'r')
+      try {
+        const before = fs.fstatSync(fd, { bigint: true })
+        if (!before.isFile() || !sameSourceMetadata(stat, before))
+          throw new Error(`Source changed during snapshot attestation: ${file}`)
+        const buffer = Buffer.allocUnsafe(64 * 1024)
+        let position = 0
+        while (true) {
+          const count = fs.readSync(fd, buffer, 0, buffer.length, position)
+          if (count === 0) break
+          contentHash.update(buffer.subarray(0, count))
+          position += count
+        }
+        const after = fs.fstatSync(fd, { bigint: true })
+        const current = fs.lstatSync(absolute, { bigint: true })
+        if (
+          BigInt(position) !== before.size ||
+          !sameSourceMetadata(before, after) ||
+          !sameSourceMetadata(before, current)
+        )
+          throw new Error(`Source changed during snapshot attestation: ${file}`)
+      } finally {
+        fs.closeSync(fd)
+      }
+    }
+    // Frame each path/type/mode and full content digest independently. Raw
+    // file bodies may contain arbitrary bytes, including another record header.
     hash.update(
-      `${file}\0${stat.mode}\0${stat.isSymbolicLink() ? 'link' : 'file'}\0`,
+      JSON.stringify([
+        file,
+        stat.mode.toString(),
+        stat.isSymbolicLink() ? 'link' : 'file',
+        contentHash.digest('hex'),
+      ]) + '\n',
     )
-    if (stat.isSymbolicLink()) hash.update(fs.readlinkSync(absolute))
-    else hash.update(readCapped(absolute))
-    hash.update('\n')
   }
   return hash.digest('hex')
 }
@@ -226,10 +287,49 @@ export function inspectCodebaseStructure(
   const frameworks = frameworkSignals
     .filter(([pattern]) => files.some((file) => pattern.test(file)))
     .map(([, id]) => id)
+  const directoryDispositions = fs
+    .readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const id = entry.name
+      if (subsystemMap.has(id))
+        return {
+          id,
+          status: 'inventoried' as const,
+          reason: 'Included in source snapshot',
+        }
+      if (ignored.has(id))
+        return {
+          id,
+          status: 'generated' as const,
+          reason: 'Dependency, VCS or generated directory',
+        }
+      if (ignoredLiveStateDirectorySet.has(id))
+        return {
+          id,
+          status: 'live-state' as const,
+          reason: 'Runtime state excluded from source identity',
+        }
+      if (
+        scope?.length &&
+        !scope.some((prefix) => prefix === id || prefix.startsWith(`${id}/`))
+      )
+        return {
+          id,
+          status: 'out-of-scope' as const,
+          reason: 'Excluded by requested scope',
+        }
+      return {
+        id,
+        status: 'empty' as const,
+        reason: 'No included source files',
+      }
+    })
   return {
     schemaVersion: 1,
     snapshotId: hashInventory(files, root),
     root,
+    ...(scope?.length ? { scope: [...scope] } : {}),
     files,
     subsystems: [...subsystemMap].map(([id, owned]) => ({
       id,
@@ -249,12 +349,25 @@ export function inspectCodebaseStructure(
     generatedFiles,
     capabilityPacket: { languages, frameworks },
     uncoveredDirectories: [],
+    directoryDispositions,
+    sourceBinding: {
+      status: 'complete',
+      identity: 'full-file-sha256',
+      shippedMembership: 'all-non-live-entries',
+      symlinkIdentity: 'link-target-bytes',
+      shippedSourceFiles: files.filter((file) =>
+        file.split('/').some((segment) => artifactDirectories.has(segment)),
+      ),
+    },
   }
 }
 
 export type FeatureCompletenessRecord = {
   feature: string
+  snapshotId?: string
   evidenceKind: 'heuristic' | 'verified'
+  maturity?: 'unknown' | 'absent' | 'partial' | 'unwired'
+  inspectionStatus?: 'complete' | 'partial'
   evidence: {
     entrypoints: string[]
     implementation: string[]
@@ -290,7 +403,7 @@ export function inspectFeatureCompleteness(
       ...inventory.commands,
       ...inventory.publicApis,
       ...inventory.tests,
-      ...walk(path.resolve(cwd)).filter((file) => docPattern.test(file)),
+      ...inventory.files,
     ]),
   ]
   const matching = candidates.filter((file) => {
@@ -324,7 +437,7 @@ export function inspectFeatureCompleteness(
     .filter(([, value]) => value.length === 0)
     .map(([key]) => key)
   let status: FeatureCompletenessRecord['status'] =
-    missing.length === 0 ? 'complete' : 'partial'
+    missing.length === 0 ? 'unknown' : 'partial'
   if (!evidence.implementation.length && evidence.docs.length)
     status = 'documented_but_unimplemented'
   else if (
@@ -338,7 +451,16 @@ export function inspectFeatureCompleteness(
   else if (evidence.entrypoints.length && !evidence.failureStates.length)
     status = 'runtime_wired_without_failure_coverage'
   else if (matching.length === 0) status = 'unknown'
-  return { feature, evidenceKind: 'heuristic', evidence, status, missing }
+  return {
+    feature,
+    snapshotId: inventory.snapshotId,
+    evidenceKind: 'heuristic',
+    maturity: 'unknown',
+    inspectionStatus: 'partial',
+    evidence,
+    status,
+    missing,
+  }
 }
 
 function safeRead(file: string): string {
@@ -363,19 +485,21 @@ export function promoteFeatureEvidence(
   const attested = new Set(attestedFiles)
   const inventoryFiles = new Set(inventory.files)
   const unattested = new Set<string>()
-  let categoriesPopulated = true
   for (const category of Object.values(record.evidence)) {
-    if (category.length === 0) categoriesPopulated = false
     for (const file of category)
       if (!attested.has(file) || !inventoryFiles.has(file)) unattested.add(file)
   }
-  if (categoriesPopulated && unattested.size === 0)
+  if (record.snapshotId !== inventory.snapshotId) unattested.add('snapshot_id')
+  if (
+    Object.values(record.evidence).some((files) => files.length > 0) &&
+    unattested.size === 0
+  )
     return {
       record: {
         ...record,
         evidenceKind: 'verified',
-        status: 'complete',
-        missing: [],
+        inspectionStatus: 'complete',
+        maturity: record.maturity ?? 'unknown',
       },
       verified: true,
       unattested: [],
@@ -406,6 +530,7 @@ export function evaluateAuditCoverage(params: {
     file.includes('/') ? file.split('/')[0]! : '.'
   const validReceipts = params.structuralReceipts.filter(
     (receipt) =>
+      receipt.schemaVersion === 1 &&
       receipt.snapshotId === params.inventory.snapshotId &&
       receipt.shardId.length > 0 &&
       receipt.files.length > 0 &&
@@ -428,29 +553,63 @@ export function evaluateAuditCoverage(params: {
   const invalidReceipts = params.structuralReceipts
     .filter((receipt) => !validReceipts.includes(receipt))
     .map((receipt) => receipt.shardId)
+  const coveredFiles = new Set(
+    validReceipts.flatMap((receipt) => receipt.files),
+  )
+  const uncoveredFiles = params.inventory.files.filter(
+    (file) => !exclusions.has(subsystemFor(file)) && !coveredFiles.has(file),
+  )
   const incompleteFeatures = params.featureRecords.filter(
     (item) =>
+      item.snapshotId !== params.inventory.snapshotId ||
       item.evidenceKind !== 'verified' ||
-      item.status !== 'complete' ||
-      Object.values(item.evidence).some(
-        (files) =>
-          files.length === 0 || files.some((file) => !inventoryFiles.has(file)),
+      !Object.values(item.evidence).some((files) => files.length > 0) ||
+      Object.values(item.evidence).some((files) =>
+        files.some((file) => !inventoryFiles.has(file)),
       ),
   )
+  const inspectionComplete =
+    params.featureRecords.length > 0 &&
+    invalidReceipts.length === 0 &&
+    uncoveredSubsystems.length === 0 &&
+    uncoveredFiles.length === 0 &&
+    incompleteFeatures.length === 0
   return {
     schemaVersion: 1 as const,
     snapshotId: params.inventory.snapshotId,
-    complete:
-      params.featureRecords.length > 0 &&
-      invalidReceipts.length === 0 &&
-      uncoveredSubsystems.length === 0 &&
-      incompleteFeatures.length === 0,
+    complete: inspectionComplete,
+    inspectionComplete,
+    readinessComplete: false,
+    assurance: inspectionComplete
+      ? 'source_inspection'
+      : 'incomplete_inspection',
+    sourceBinding: {
+      status: 'current',
+      snapshotId: params.inventory.snapshotId,
+    },
+    featureAssessments: params.featureRecords.map((item) => ({
+      feature: item.feature,
+      maturity: item.maturity ?? 'unknown',
+      status: item.status,
+      assurance:
+        item.evidenceKind === 'verified' ? 'source_inspection' : 'heuristic',
+      runtimeReadiness: 'not_assessed',
+      missing: item.missing,
+    })),
     invalidReceipts,
     uncoveredSubsystems,
+    uncoveredFiles,
+    directoryDispositions: params.inventory.directoryDispositions ?? [],
     incompleteFeatures: incompleteFeatures.map((item) => ({
       feature: item.feature,
       status: item.status,
       missing: item.missing,
+      reason:
+        item.snapshotId !== params.inventory.snapshotId
+          ? 'snapshot_mismatch'
+          : item.evidenceKind !== 'verified'
+            ? 'unverified_evidence'
+            : 'incomplete_source_evidence',
     })),
     outOfScope: [...exclusions].map(([id, reason]) => ({ id, reason })),
   }

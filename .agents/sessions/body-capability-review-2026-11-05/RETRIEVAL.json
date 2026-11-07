@@ -1,0 +1,3702 @@
+{
+  "available": true,
+  "builtAt": 1793641893505,
+  "fileCount": 2344,
+  "retrieval": [
+    {
+      "query": "agent orchestration supervision completion",
+      "results": [
+        {
+          "path": "sdk/src/impl/agent-runtime.ts",
+          "score": 61.895,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "getAgentRuntimeImpl",
+            "isProcessSupervisionEnabled"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "e8b1f42a47629f512106dfd37c38a12a2f0b3df3f8ab746c1c9bf231782957a4",
+              "stableChunkId": "957351ae1b1b3cd0760d5ed61a500313597e4bac85541aaae241afdb9cb22027",
+              "qualifiedName": "PROCESS_SUPERVISION_ON",
+              "kind": "variable",
+              "startLine": 52,
+              "endLine": 52,
+              "hash": "6459db6f7a632215a72150b44914d0b7a1f35377273d8090099dcfeaa4fc3c6b",
+              "score": 5.541
+            },
+            {
+              "chunkId": "b635de859f575dd2393b338bccb4cc39c49efbcdd191241d6376187692692c81",
+              "stableChunkId": "b853896f0fb778447b4dc8b83b058d3fb8155534e01228a9c8056a59388341d9",
+              "qualifiedName": "PROCESS_SUPERVISION_OFF",
+              "kind": "variable",
+              "startLine": 53,
+              "endLine": 53,
+              "hash": "fc8aca237c955f5add6ab7a5c93fea8790608387068ecf6ad88fd7c2e30b7554",
+              "score": 5.541
+            },
+            {
+              "chunkId": "f316c959382f6fde04533a80e2d4fd77f7dfdbc0cb583a4f7e049b8c3edd60e7",
+              "stableChunkId": "4e3848742e219061cb11eac696516de658c1494f5560b0b21cce915b3af39a49",
+              "qualifiedName": "isProcessSupervisionEnabled",
+              "kind": "function",
+              "startLine": 72,
+              "endLine": 80,
+              "hash": "998a7f01eff3ef95c6896dfd9a88e994c08f6d5ed365f81d509b5142b97dc948",
+              "score": 5.541
+            },
+            {
+              "chunkId": "d46c02dbc10642e7f8d5eb1905c6cbb6d0fa684d84574160f5bf5f69ed7e3bcb",
+              "stableChunkId": "5e37b81bbf2bdce68804a0e3ae0f2c480da1c829524b8a85323807ab647a83d5",
+              "qualifiedName": "resolveDefaultProcessSupervision",
+              "kind": "function",
+              "startLine": 89,
+              "endLine": 105,
+              "hash": "0bafada82929ececfde624b0f6d8419c29f520ff37b5bddc482bc8bb425ee0b0",
+              "score": 5.541
+            },
+            {
+              "chunkId": "11a523ed9aed129a9a5e4772166394b64bdb11c25327eb9220a15822ed8010fc",
+              "stableChunkId": "79cf58b1b30de25cef1d1dd57153439960329078c4f83d888c025a7b842e2cb6",
+              "qualifiedName": "databaseAgentCache",
+              "kind": "variable",
+              "startLine": 50,
+              "endLine": 50,
+              "hash": "00745796a404434bc442dfb478ccb25323c7c74f0f84f87a9b61574015639c92",
+              "score": 1.963
+            }
+          ],
+          "matchedSnippets": [
+            "e8b1f42a47629f512106dfd37c38a12a2f0b3df3f8ab746c1c9bf231782957a4 PROCESS_SUPERVISION_ON L52-52",
+            "b635de859f575dd2393b338bccb4cc39c49efbcdd191241d6376187692692c81 PROCESS_SUPERVISION_OFF L53-53",
+            "f316c959382f6fde04533a80e2d4fd77f7dfdbc0cb583a4f7e049b8c3edd60e7 isProcessSupervisionEnabled L72-80",
+            "d46c02dbc10642e7f8d5eb1905c6cbb6d0fa684d84574160f5bf5f69ed7e3bcb resolveDefaultProcessSupervision L89-105",
+            "11a523ed9aed129a9a5e4772166394b64bdb11c25327eb9220a15822ed8010fc databaseAgentCache L50-50"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/__tests__/process-supervision-flag.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "isProcessSupervisionEnabled"
+            }
+          ]
+        },
+        {
+          "path": "packages/agent-runtime/src/util/orchestration-ledger.ts",
+          "score": 60.328,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "checksum",
+            "compactEvents",
+            "appendOrchestrationEvent",
+            "reconcileInterruptedLedgerSpawns"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "5ff7baaf68d2ff66f14e5d1a8064b9bdfa1385c6b0add64b28ae646854375020",
+              "stableChunkId": "5845d530241e389e84cbbd72242be5df99c8e1ed9e54acd685f7dad1835c0695",
+              "qualifiedName": "appendOrchestrationEvent",
+              "kind": "function",
+              "startLine": 49,
+              "endLine": 98,
+              "hash": "5c41c4bab1f35abf200f5ea2de549af14a991588943bdb703889e697a77a341e",
+              "score": 5.326
+            }
+          ],
+          "matchedSnippets": [
+            "5ff7baaf68d2ff66f14e5d1a8064b9bdfa1385c6b0add64b28ae646854375020 appendOrchestrationEvent L49-98"
+          ],
+          "relatedFiles": [
+            {
+              "path": "packages/agent-runtime/src/util/__tests__/orchestration-ledger.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "appendOrchestrationEvent"
+            },
+            {
+              "path": "common/src/types/orchestration-ledger.ts",
+              "score": 2.7,
+              "reason": "referenced by this file",
+              "via": "@codebuff/common/types/orchestration-ledger"
+            }
+          ]
+        },
+        {
+          "path": "packages/internal/src/openai-compatible/completion/openai-compatible-completion-language-model.ts",
+          "score": 56.579,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "OpenAICompatibleCompletionLanguageModel",
+            "supportedUrls",
+            "isOpenAICompatibleBillingSummaryChunk",
+            "providerOptionsName",
+            "provider",
+            "getArgs",
+            "doStream",
+            "doGenerate",
+            "transform",
+            "flush"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "f637f27d6489d1d25bb4bc477330ece7ebfcac34617f647cf25fdf382b6f240a",
+              "stableChunkId": "989f3578ccc9438edbd3203d07d33118089aa374839e4cbbbda87e690887983f",
+              "qualifiedName": "OpenAICompatibleCompletionConfig",
+              "kind": "type",
+              "startLine": 35,
+              "endLine": 47,
+              "hash": "bd24eefa27b089b5b8472ab9e311999f0b3ea171a94243401908dd097cbdfc96",
+              "score": 4.555
+            },
+            {
+              "chunkId": "0f75e27313fbb3ed07f94547b6afa78f41fb77f239a0e716153059d24a952352",
+              "stableChunkId": "0cb432fff772ca43b36155f23b239d64774301dcc76e6ece671c8ad5c3f26590",
+              "qualifiedName": "OpenAICompatibleCompletionLanguageModel",
+              "kind": "class",
+              "startLine": 49,
+              "endLine": 358,
+              "hash": "e211012fc690d456608507f7fc081b58f67bb0f30ed509c36bc1dc9fe2610d94",
+              "score": 4.555
+            },
+            {
+              "chunkId": "d5120c45eaf67ed65d51ae593f48ff0f219cdbf5a99281f95cce13385e22ad24",
+              "stableChunkId": "9ef6f747bd7942ada209594d8ab17a00a14e320d5d14046b9ff81920fc060b35",
+              "qualifiedName": "OpenAICompatibleCompletionLanguageModel/constructor",
+              "kind": "method",
+              "startLine": 57,
+              "endLine": 71,
+              "hash": "23dcbf964c1d6efa2cf30f8f0cc295515f72dcf73f413c54b5534ec8886ba0db",
+              "score": 4.555
+            },
+            {
+              "chunkId": "cf0fb855b93b698ab54fc17e82c2f56e093c394d59033703547640bf376f50d9",
+              "stableChunkId": "0cac0404032a2da044c648539b3cccd4c776d2c9ae9f65d07a37e74b573392e4",
+              "qualifiedName": "OpenAICompatibleCompletionLanguageModel/provider",
+              "kind": "method",
+              "startLine": 73,
+              "endLine": 75,
+              "hash": "6fade29d56cb57ff30a6dd962c6eb691515af610d3c08b275b037a8790bc3417",
+              "score": 4.555
+            },
+            {
+              "chunkId": "e25750bde8574dd8b68d6a302c3721d8194bc65c2e8ff0d40e9155bdad8bbd99",
+              "stableChunkId": "0aee610857dbbc24762f0db12ab405e93b45ba345ca0bde4e6ef47fc37bceffa",
+              "qualifiedName": "OpenAICompatibleCompletionLanguageModel/providerOptionsName",
+              "kind": "method",
+              "startLine": 77,
+              "endLine": 79,
+              "hash": "0835a51aaab24da0455ab572c073e972db1814f2d6d2798935fe0743e0a6bafa",
+              "score": 4.555
+            }
+          ],
+          "matchedSnippets": [
+            "f637f27d6489d1d25bb4bc477330ece7ebfcac34617f647cf25fdf382b6f240a OpenAICompatibleCompletionConfig L35-47",
+            "0f75e27313fbb3ed07f94547b6afa78f41fb77f239a0e716153059d24a952352 OpenAICompatibleCompletionLanguageModel L49-358",
+            "d5120c45eaf67ed65d51ae593f48ff0f219cdbf5a99281f95cce13385e22ad24 OpenAICompatibleCompletionLanguageModel/constructor L57-71",
+            "cf0fb855b93b698ab54fc17e82c2f56e093c394d59033703547640bf376f50d9 OpenAICompatibleCompletionLanguageModel/provider L73-75",
+            "e25750bde8574dd8b68d6a302c3721d8194bc65c2e8ff0d40e9155bdad8bbd99 OpenAICompatibleCompletionLanguageModel/providerOptionsName L77-79"
+          ],
+          "relatedFiles": [
+            {
+              "path": "packages/internal/src/openai-compatible/completion/convert-to-openai-compatible-completion-prompt.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "convertToOpenAICompatibleCompletionPrompt"
+            },
+            {
+              "path": "packages/internal/src/openai-compatible/completion/openai-compatible-completion-language-model.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "doGenerate"
+            },
+            {
+              "path": "packages/internal/src/openai-compatible/completion/openai-compatible-completion-options.ts",
+              "score": 2.7,
+              "reason": "referenced by this file",
+              "via": "./openai-compatible-completion-options"
+            }
+          ]
+        },
+        {
+          "path": "cli/src/hooks/use-path-tab-completion.ts",
+          "score": 56.569,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "UsePathTabCompletionOptions",
+            "UsePathTabCompletionReturn",
+            "usePathTabCompletion"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "4eee9284aff38cf2007f203ba8b8612be5393a5970fb6934efeca044e107cd05",
+              "stableChunkId": "3ad69595092a8eea8678dafade76c0001a741a1d7e34c5861adae7aaecbb7b47",
+              "qualifiedName": "UsePathTabCompletionOptions",
+              "kind": "interface",
+              "startLine": 8,
+              "endLine": 19,
+              "hash": "10f58c3e53301266851146f2679c314037c03d914472bfbf3735fe4435dbb547",
+              "score": 4.555
+            },
+            {
+              "chunkId": "5d6c80aa8f8f488039b30ee2abf51302e8bdd918047befa57dd50108fd1c46d5",
+              "stableChunkId": "6d886e7e30192f2bb5b527017128a3f3d9cf327750ff75f6276633e17b6e25f0",
+              "qualifiedName": "UsePathTabCompletionReturn",
+              "kind": "interface",
+              "startLine": 21,
+              "endLine": 24,
+              "hash": "4012744978055062d415823db85656424ba4de326b2d5cb1d7bdff790b15d917",
+              "score": 4.555
+            },
+            {
+              "chunkId": "f02d3c58b54b198c06110160d443f15f6655458f2be33aba7d013ccba9c810c9",
+              "stableChunkId": "70841c5ff116367da3c3cc18e6590fab38aeb5d3f394e0e8405f45db6229c047",
+              "qualifiedName": "usePathTabCompletion",
+              "kind": "function",
+              "startLine": 31,
+              "endLine": 88,
+              "hash": "52b0c303dcb38269c43b54111474a7f0c8afe1144469e6dc92916acab0f391a9",
+              "score": 4.555
+            }
+          ],
+          "matchedSnippets": [
+            "4eee9284aff38cf2007f203ba8b8612be5393a5970fb6934efeca044e107cd05 UsePathTabCompletionOptions L8-19",
+            "5d6c80aa8f8f488039b30ee2abf51302e8bdd918047befa57dd50108fd1c46d5 UsePathTabCompletionReturn L21-24",
+            "f02d3c58b54b198c06110160d443f15f6655458f2be33aba7d013ccba9c810c9 usePathTabCompletion L31-88"
+          ],
+          "relatedFiles": [
+            {
+              "path": "cli/src/utils/path-completion.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "getPathCompletion"
+            },
+            {
+              "path": "cli/src/__tests__/path-completion.test.ts",
+              "score": 0.882,
+              "reason": "shares import",
+              "via": "../utils/path-completion"
+            }
+          ]
+        },
+        {
+          "path": "cli/src/utils/path-completion.ts",
+          "score": 54.431,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "getPathCompletion"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "c37cf2372c0319a87c3160f2e8222305167c9cc14afed019906d1b4da9ea89ee",
+              "stableChunkId": "dbb6c48eb67d76463efc7f2754f3c3879ca4e346ab4f7440ce6bd80a19043dda",
+              "qualifiedName": "getPathCompletion",
+              "kind": "function",
+              "startLine": 17,
+              "endLine": 111,
+              "hash": "4511f6fa3fa07c070ade3486fa317f659a7afc8c0946288f7511d7dea710507c",
+              "score": 4.555
+            }
+          ],
+          "matchedSnippets": [
+            "c37cf2372c0319a87c3160f2e8222305167c9cc14afed019906d1b4da9ea89ee getPathCompletion L17-111"
+          ],
+          "relatedFiles": [
+            {
+              "path": "cli/src/hooks/use-path-tab-completion.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "getPathCompletion"
+            },
+            {
+              "path": "cli/src/__tests__/path-completion.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "getPathCompletion"
+            }
+          ]
+        },
+        {
+          "path": "cli/src/utils/completion-summary.ts",
+          "score": 50.776,
+          "matchedOn": [
+            "concept",
+            "path",
+            "symbol",
+            "chunk"
+          ],
+          "symbols": [
+            "computeCompletionSummary",
+            "getHookResults",
+            "getToolOutputString",
+            "formatCompletionSummary",
+            "isErrorOutput",
+            "walk"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "2194991819abc93f896b884797da9cedd5c6bd196ec0aeebfab9f38bb681fabb",
+              "stableChunkId": "f286bae65c86d72dbc21fa88e3dbb71854282c87531d8dff25c105b4e0f70877",
+              "qualifiedName": "CompletionSummary",
+              "kind": "type",
+              "startLine": 18,
+              "endLine": 33,
+              "hash": "c0d2f590f0c10c921af3890c59ef7977bc46f252efd4e344a7d4ed60b663dc23",
+              "score": 4.555
+            },
+            {
+              "chunkId": "dcedea34cc2ec7528b7f6cf5e8372a927d45d9c43829fa2a47420ddc4d7de7c1",
+              "stableChunkId": "fd92a3f62efc06e533d51a3f06fe36d1f858e81594d71561fc9a41df0c73e8de",
+              "qualifiedName": "computeCompletionSummary",
+              "kind": "function",
+              "startLine": 46,
+              "endLine": 247,
+              "hash": "cc92ad63acb6a73422447fe712ea1967af12364ebdbdebe8070c9e51886e44f1",
+              "score": 4.555
+            },
+            {
+              "chunkId": "963a39ed5bd3a9b189e9f10c3710930c2758a0fb7638a48dff3afb03b1d6dc6c",
+              "stableChunkId": "ea86b1aa4eeaeb63d70f2dc3753ad7aaf17915203e6eb6bc5a70c37debf75ea1",
+              "qualifiedName": "computeCompletionSummary/walk",
+              "kind": "function",
+              "startLine": 73,
+              "endLine": 215,
+              "hash": "70dff826c5246a1387726228b137771173854dbe6c43175477236289df4e318c",
+              "score": 4.555
+            },
+            {
+              "chunkId": "04ccb6e96b1e795fc4e652d6a4ac087c67120d846328bd993ecf403aef0834c9",
+              "stableChunkId": "556d2c2d84f1af07817bf504dbea1f06f50a44532f960211e73bdafe648cbf71",
+              "qualifiedName": "formatCompletionSummary",
+              "kind": "function",
+              "startLine": 302,
+              "endLine": 388,
+              "hash": "4d2c6999130b3097448d7cd3198ff37ff5cdbc35147e1003d36911c0e82ccfb8",
+              "score": 4.555
+            }
+          ],
+          "matchedSnippets": [
+            "2194991819abc93f896b884797da9cedd5c6bd196ec0aeebfab9f38bb681fabb CompletionSummary L18-33",
+            "dcedea34cc2ec7528b7f6cf5e8372a927d45d9c43829fa2a47420ddc4d7de7c1 computeCompletionSummary L46-247",
+            "963a39ed5bd3a9b189e9f10c3710930c2758a0fb7638a48dff3afb03b1d6dc6c computeCompletionSummary/walk L73-215",
+            "04ccb6e96b1e795fc4e652d6a4ac087c67120d846328bd993ecf403aef0834c9 formatCompletionSummary L302-388"
+          ]
+        },
+        {
+          "path": "packages/internal/src/utils/streaming-json-completion.ts",
+          "score": 48.74,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "StreamingJsonCompletion",
+            "unmatchedContainerDepth",
+            "unmatchedDepthAfterClose",
+            "isParsable"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "5a40c97c60365aa46d1ce4f4a2c3a830e3033255579a1c15a99b4517c64fb831",
+              "stableChunkId": "4b312d76723cebdf2b7105064205c9389631d27da0905c73d7aa0b8a4464db7a",
+              "qualifiedName": "StreamingJsonCompletion",
+              "kind": "class",
+              "startLine": 9,
+              "endLine": 92,
+              "hash": "57997795f1b629e5eba2e21ab0f61f7b0e0beff772385282ea8059c9d0b278ba",
+              "score": 4.555
+            },
+            {
+              "chunkId": "a2322c527fb845ce9f43ce7d225ecbd67bdcbda878e236d7c8f0670997e05ff6",
+              "stableChunkId": "3f9c030777744fd317b8b2295af47841d13a3f97149a593ec0bef3b55c8064e6",
+              "qualifiedName": "StreamingJsonCompletion/constructor",
+              "kind": "method",
+              "startLine": 25,
+              "endLine": 25,
+              "hash": "9cef93ae296edee24329c13f46e6932f429ab98292ab655a86a3551aa93df04c",
+              "score": 4.555
+            },
+            {
+              "chunkId": "def505e8990ea6231ed7642d46f559972a2c33173be98ceec6b272c9ea07705a",
+              "stableChunkId": "4e17db28eb2f9204b7e29f8dfc7e9e4e7a9b0728dcdfc46e76b4ee02e6020a8f",
+              "qualifiedName": "StreamingJsonCompletion/unmatchedContainerDepth",
+              "kind": "method",
+              "startLine": 37,
+              "endLine": 39,
+              "hash": "9d0e2279a8a7c096fcdaa15ffc5e2e61c28e178a3735ca150310f41e3357f4f3",
+              "score": 4.555
+            },
+            {
+              "chunkId": "73063970176e584402fa8b312e330cca46fd6cc68491215414d564819aaac1df",
+              "stableChunkId": "6bc02bc683b4e6c9561f2f37750d5bbb5c22cac72d8d0de3f343ac8921af0412",
+              "qualifiedName": "StreamingJsonCompletion/unmatchedDepthAfterClose",
+              "kind": "method",
+              "startLine": 51,
+              "endLine": 53,
+              "hash": "e2b88c2e51fddc530557fab2c7a8ab55a246ed3de55fa9946af9f540304cdff1",
+              "score": 4.555
+            },
+            {
+              "chunkId": "6f765b06169ac75c582620af39405be75e876cebd3560102e2fa5bfdea8d157c",
+              "stableChunkId": "36ce964a25f0a4f5d35299d315c48954391e7c253521ef81b2d3123285f71bd7",
+              "qualifiedName": "StreamingJsonCompletion/isParsable",
+              "kind": "method",
+              "startLine": 55,
+              "endLine": 91,
+              "hash": "033dc7dec6d93525135f57e67cd6c54e4ec998795a279ca1ecbbe847f8fee838",
+              "score": 4.555
+            }
+          ],
+          "matchedSnippets": [
+            "5a40c97c60365aa46d1ce4f4a2c3a830e3033255579a1c15a99b4517c64fb831 StreamingJsonCompletion L9-92",
+            "a2322c527fb845ce9f43ce7d225ecbd67bdcbda878e236d7c8f0670997e05ff6 StreamingJsonCompletion/constructor L25-25",
+            "def505e8990ea6231ed7642d46f559972a2c33173be98ceec6b272c9ea07705a StreamingJsonCompletion/unmatchedContainerDepth L37-39",
+            "73063970176e584402fa8b312e330cca46fd6cc68491215414d564819aaac1df StreamingJsonCompletion/unmatchedDepthAfterClose L51-53",
+            "6f765b06169ac75c582620af39405be75e876cebd3560102e2fa5bfdea8d157c StreamingJsonCompletion/isParsable L55-91"
+          ],
+          "relatedFiles": [
+            {
+              "path": "packages/internal/src/utils/__tests__/streaming-json-completion.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "isParsable"
+            }
+          ]
+        },
+        {
+          "path": "common/src/types/orchestration-ledger.ts",
+          "score": 47.934,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "chunk"
+          ],
+          "symbols": [
+            "orchestrationEventV1Schema",
+            "orchestrationLedgerV1Schema"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "286cb260304ba7ef6f47082aa0b5c89ba1a56f46eeecf96c551cb389f94f476b",
+              "stableChunkId": "5bc9f962a016315db33c55db664f18e30dd2f72852b572b84dae8d0102c01c4d",
+              "qualifiedName": "orchestrationEventV1Schema",
+              "kind": "variable",
+              "startLine": 13,
+              "endLine": 86,
+              "hash": "ed4c2e203e4d1772633afd7c073b80751c184da1d3c76513fe29ace1aa9abaf3",
+              "score": 5.326
+            },
+            {
+              "chunkId": "f21ee05f68074198a5b92ef80f19c2fe167fe71767832b270e229008a0dcbb5b",
+              "stableChunkId": "0875544141c0f0b55d895d14f5dc4a9fcc447295ad9f3a6e207253113e2b5413",
+              "qualifiedName": "orchestrationLedgerV1Schema",
+              "kind": "variable",
+              "startLine": 88,
+              "endLine": 93,
+              "hash": "bd8c4f357af8385f96de2350d697e79d159173b8a1bd6b04f4af071158a88b97",
+              "score": 5.326
+            },
+            {
+              "chunkId": "8ec6af8c3771b1fb2bf36b5a508f46263839320649ec7d9e617515bf0f42c154",
+              "stableChunkId": "69a7f1af85be13d5a2deb644eee96082aefd5674c426b19a8ff4f7698b9cdbc7",
+              "qualifiedName": "OrchestrationEventV1",
+              "kind": "type",
+              "startLine": 95,
+              "endLine": 95,
+              "hash": "19ea4546ad0b82e6421a35aa0234f1cd31d6d1d907483b65702ebd794ac8e49d",
+              "score": 5.326
+            },
+            {
+              "chunkId": "389731a433474715bfdba0e4389055ea9b3488991f395ed583543db2a7cd663a",
+              "stableChunkId": "d1de84ea698c97f52ace1f6c3a339f05f01cddbbdb8cb56b413660ded31e988b",
+              "qualifiedName": "OrchestrationLedgerV1",
+              "kind": "type",
+              "startLine": 96,
+              "endLine": 96,
+              "hash": "92afffc1ba84a9ef3f2d7f1c87f22fc0350a3451bf43629c3ea3db2f77475d48",
+              "score": 5.326
+            },
+            {
+              "chunkId": "65cf7e9000f8526be3bcb270e8f26aac1685420fbee184183b4bda688a7083d2",
+              "stableChunkId": "8417048f2284ee4f9965e76414fb7d2d4b149fbf00b59b55bd4c82c52b4dc717",
+              "qualifiedName": "OrchestrationEventDraftV1",
+              "kind": "type",
+              "startLine": 97,
+              "endLine": 104,
+              "hash": "675503195924a2d50ba10d1e53a0d3440465064a2ded7b89fd0762d22f390900",
+              "score": 5.326
+            }
+          ],
+          "matchedSnippets": [
+            "286cb260304ba7ef6f47082aa0b5c89ba1a56f46eeecf96c551cb389f94f476b orchestrationEventV1Schema L13-86",
+            "f21ee05f68074198a5b92ef80f19c2fe167fe71767832b270e229008a0dcbb5b orchestrationLedgerV1Schema L88-93",
+            "8ec6af8c3771b1fb2bf36b5a508f46263839320649ec7d9e617515bf0f42c154 OrchestrationEventV1 L95-95",
+            "389731a433474715bfdba0e4389055ea9b3488991f395ed583543db2a7cd663a OrchestrationLedgerV1 L96-96",
+            "65cf7e9000f8526be3bcb270e8f26aac1685420fbee184183b4bda688a7083d2 OrchestrationEventDraftV1 L97-104"
+          ]
+        }
+      ]
+    },
+    {
+      "query": "session journal resume cancellation",
+      "results": [
+        {
+          "path": "packages/agent-runtime/src/util/run-journal.ts",
+          "score": 104.661,
+          "matchedOn": [
+            "import",
+            "path",
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "createRunJournal",
+            "classifyRunResume",
+            "classifyChildRun",
+            "planChildResume",
+            "executeChildReplay",
+            "planBackgroundAgentResume",
+            "buildRunResumeReport",
+            "isRunResumeReportClean",
+            "planReplayActions",
+            "executeReplayActions"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "95f6dc1e982b0c4b0b5f496bd49e53bf947611cdb6746b06cca19818955ade24",
+              "stableChunkId": "6ab7539623bc9ddebe3714843edd7a64457ab7eb0c75e431a77deef759d6e85a",
+              "qualifiedName": "RunResumeClassification",
+              "kind": "type",
+              "startLine": 223,
+              "endLine": 226,
+              "hash": "81ac74964616eaaa77fac9a97fae880cc37eb2254e583c0f09a2b3f89b201a2b",
+              "score": 5.502
+            },
+            {
+              "chunkId": "98a297b4b9c50f9c8cfc1b1475768376a8624e189cf0b1bda9c58f4baa472949",
+              "stableChunkId": "31a45316071e755d612e52c89e857ceb24fcbb93514499088eeeda3bc74418f0",
+              "qualifiedName": "RESUME_TAIL_EVENT_LIMIT",
+              "kind": "variable",
+              "startLine": 469,
+              "endLine": 469,
+              "hash": "13827f087b606601460b456d3cbeb09872981cbcd64d4347ccd4705cd6b2914a",
+              "score": 5.502
+            },
+            {
+              "chunkId": "9f0a7811cde179251eef5812414b407862a89de4be52cfd6a049c8761ecd174c",
+              "stableChunkId": "2b0359be35878b81446d4cf464e95c45ec1e8b4dbb1fe73fda4330cb24fd049e",
+              "qualifiedName": "classifyRunResume",
+              "kind": "function",
+              "startLine": 1857,
+              "endLine": 1928,
+              "hash": "338f5bfedc2a2318ae1301006e20346b63f63e81569cf5166235ccb4defd1968",
+              "score": 5.502
+            },
+            {
+              "chunkId": "9b1eed21381b551e4279e060abbc160fda4cdfaeeb10197e739b3d0a7b3234e3",
+              "stableChunkId": "75e77aba316e8510902f05184ad2098c23ae95de76dffeaf576b88fb0306d380",
+              "qualifiedName": "ResumePlan",
+              "kind": "type",
+              "startLine": 1994,
+              "endLine": 2000,
+              "hash": "4ce2cb3c1900abcfebc376863cb0ea1316ae9aa86fe678388773e229f9e96986",
+              "score": 5.502
+            },
+            {
+              "chunkId": "440e53fa4fa54c6b812c646dd28192bd8b604b81b548d8a109ac246bdb7ec97e",
+              "stableChunkId": "cb51161ddd71c5089da76a7d59ad4da8c50562fb629114f49f5a95f2fa034540",
+              "qualifiedName": "planChildResume",
+              "kind": "function",
+              "startLine": 2015,
+              "endLine": 2066,
+              "hash": "e6f83cfa9259b3e49be9ac33c4b6b9c8e20cdc56048e3f2c3cf3869e38769bef",
+              "score": 5.502
+            }
+          ],
+          "matchedSnippets": [
+            "95f6dc1e982b0c4b0b5f496bd49e53bf947611cdb6746b06cca19818955ade24 RunResumeClassification L223-226",
+            "98a297b4b9c50f9c8cfc1b1475768376a8624e189cf0b1bda9c58f4baa472949 RESUME_TAIL_EVENT_LIMIT L469-469",
+            "9f0a7811cde179251eef5812414b407862a89de4be52cfd6a049c8761ecd174c classifyRunResume L1857-1928",
+            "9b1eed21381b551e4279e060abbc160fda4cdfaeeb10197e739b3d0a7b3234e3 ResumePlan L1994-2000",
+            "440e53fa4fa54c6b812c646dd28192bd8b604b81b548d8a109ac246bdb7ec97e planChildResume L2015-2066"
+          ],
+          "relatedFiles": [
+            {
+              "path": "packages/agent-runtime/src/util/background-resume.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "events"
+            },
+            {
+              "path": "sdk/src/services/run-resume-driver.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "append"
+            },
+            {
+              "path": "packages/agent-runtime/src/util/__tests__/background-resume.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "close"
+            },
+            {
+              "path": "packages/agent-runtime/src/util/__tests__/run-journal.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "flush"
+            },
+            {
+              "path": "cli/src/commands/replay-command.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "close"
+            }
+          ]
+        },
+        {
+          "path": "packages/agent-runtime/src/util/background-resume.ts",
+          "score": 85.805,
+          "matchedOn": [
+            "import",
+            "symbol",
+            "concept",
+            "chunk",
+            "path",
+            "graph"
+          ],
+          "symbols": [
+            "findBackgroundChildLinkage",
+            "reconstructBackgroundChildHistory",
+            "buildBackgroundRelaunchAgentState",
+            "resumeBackgroundFromOwnJournal",
+            "reserveBackgroundReDrive",
+            "releaseBackgroundReDrive",
+            "__clearBackgroundReDriveReservationsForTest",
+            "isPayloadRecord"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "d30d79234df24aec9329287e24f6b87df627b19dc9699f7ed16ec50bd175e38d",
+              "stableChunkId": "ed0346a45b0d8adee4737fd2cb2f94ee7aa14ec29361d7a8848bc4b994dbb788",
+              "qualifiedName": "resumeBackgroundFromOwnJournal",
+              "kind": "function",
+              "startLine": 235,
+              "endLine": 312,
+              "hash": "e8d40d32ec2d0d5e83e7580a267676f91f76d2a842e50fe3143fec20e301d4c5",
+              "score": 10.237
+            },
+            {
+              "chunkId": "7a826141ed3d2a1c4150ef1a89b1162fed8a0f9c09063195c7c0aa3a7d494424",
+              "stableChunkId": "d927fd504512194a482fe276bab77bd87e2544da9a2d2ad8ece13bc177a8dc35",
+              "qualifiedName": "BackgroundResumeLinkage",
+              "kind": "type",
+              "startLine": 66,
+              "endLine": 66,
+              "hash": "b151e21ccbfa7bcc6d739278cc060883855be9aaef21df740803a62a1916aade",
+              "score": 5.502
+            }
+          ],
+          "matchedSnippets": [
+            "d30d79234df24aec9329287e24f6b87df627b19dc9699f7ed16ec50bd175e38d resumeBackgroundFromOwnJournal L235-312",
+            "7a826141ed3d2a1c4150ef1a89b1162fed8a0f9c09063195c7c0aa3a7d494424 BackgroundResumeLinkage L66-66"
+          ],
+          "relatedFiles": [
+            {
+              "path": "packages/agent-runtime/src/util/__tests__/background-resume.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "reconstructBackgroundChildHistory"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/services/run-resume-driver.ts",
+          "score": 72.907,
+          "matchedOn": [
+            "concept",
+            "import",
+            "path",
+            "symbol",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "createRunResumeDriver"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "764d48d72ae9aa525f785e11d580c76650e886f17e376e847fcf81b7d322e962",
+              "stableChunkId": "e1febe14d79e1aec0b4425f67699e187356698f9cf219e19d3e39683757b420a",
+              "qualifiedName": "RunResumeDriverParams",
+              "kind": "type",
+              "startLine": 56,
+              "endLine": 62,
+              "hash": "5819bb3163b411c7ad57c3a17acbddcb61bc3372b3072e58547d7c9921a8d159",
+              "score": 5.502
+            },
+            {
+              "chunkId": "e4eeabefedca75ce8129a863c4dc13530cc2ad353244ab0cce36c4aace5cbdb0",
+              "stableChunkId": "e049b073bcb5d0f669b1598abbf063ca5ade41793ba79583c0ad2627e9417f9b",
+              "qualifiedName": "createRunResumeDriver",
+              "kind": "function",
+              "startLine": 70,
+              "endLine": 227,
+              "hash": "f6fa945f4da8f4bcd9a629009fde4d5b9b3df39c989dd54790c452c28edecdb5",
+              "score": 5.502
+            }
+          ],
+          "matchedSnippets": [
+            "764d48d72ae9aa525f785e11d580c76650e886f17e376e847fcf81b7d322e962 RunResumeDriverParams L56-62",
+            "e4eeabefedca75ce8129a863c4dc13530cc2ad353244ab0cce36c4aace5cbdb0 createRunResumeDriver L70-227"
+          ],
+          "relatedFiles": [
+            {
+              "path": "packages/agent-runtime/src/util/run-replay-driver.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "executeRunResumeReport"
+            }
+          ]
+        },
+        {
+          "path": "cli/src/utils/run-journal-path.ts",
+          "score": 69.302,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "resolveRunJournalPath",
+            "openRunJournalForRun",
+            "maintainRunJournalIfNeeded",
+            "scheduleRunJournalMaintenance",
+            "RUN_JOURNAL_DEFAULT_RETENTION",
+            "RUN_JOURNAL_MAINTENANCE_TRIGGER_BYTES",
+            "RUN_JOURNAL_DEFAULT_MAINTENANCE",
+            "defaultReadMaintenanceMarker",
+            "defaultWriteMaintenanceMarker",
+            "yieldToScheduler"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "5829edf74f5b12b461ec2185654841e4156559aa5db9235bd869fd40b075dd9a",
+              "stableChunkId": "86fc068503f84d7c1715704fa51ccb59117f420f76d3d9c3338c7cdd459e3e04",
+              "qualifiedName": "resolveRunJournalPath",
+              "kind": "function",
+              "startLine": 18,
+              "endLine": 20,
+              "hash": "5302902a4e71fcff899a5dd9a8aa51274c49b5eed99307c5404f7b4b3a578037",
+              "score": 4.735
+            },
+            {
+              "chunkId": "299a881ad838cb51bc04892d74d3594d0274ea4bcfe4e8748d2251c8ff1e7173",
+              "stableChunkId": "588a46e163b5edaa42ff954c1f86837e54f6b2ddc2a986eb54bfd0ad4aa292a4",
+              "qualifiedName": "RUN_JOURNAL_DEFAULT_RETENTION",
+              "kind": "variable",
+              "startLine": 35,
+              "endLine": 38,
+              "hash": "921df9865b718fda2e0b2c2b6a79e7987d8829bf3f7bbc5b253e0db5ddb31300",
+              "score": 4.735
+            },
+            {
+              "chunkId": "9fc316e7b9c09dac978a40f86962c99c151caff5129b118884dd9feb691919ce",
+              "stableChunkId": "2e172cd1ad706affbd8e69c560939db3b1ce50ffd8a8c22499503b860de3e70c",
+              "qualifiedName": "RUN_JOURNAL_MAINTENANCE_TRIGGER_BYTES",
+              "kind": "variable",
+              "startLine": 47,
+              "endLine": 47,
+              "hash": "ee3ff732c5d43676913a3b37a5f7607ab554dc3c65210114cadba46a07e55b0a",
+              "score": 4.735
+            },
+            {
+              "chunkId": "3ff90ca675edf288182ad4d372f2b90f7f9cea969a6effcd631492d035a6a5a6",
+              "stableChunkId": "7d2d2a061fbd9f22585c2288c6f0ca3f6447fc17a93e10318d9d86e7081db73f",
+              "qualifiedName": "RUN_JOURNAL_DEFAULT_MAINTENANCE",
+              "kind": "variable",
+              "startLine": 57,
+              "endLine": 60,
+              "hash": "bb6fc71a8c5ed3ba73d0def44cbd2700c1d04b4d48b6f6616e038e77d873a363",
+              "score": 4.735
+            },
+            {
+              "chunkId": "1af0f16fcf38f7ccccc368a9647659cece2a4dd1c2994072c0a7c0ff4aea8c1a",
+              "stableChunkId": "00bc0cbffd49a63b4c5b79e59b67a892860b889f2e8a3fe6e4a3c4e110bc17e9",
+              "qualifiedName": "openRunJournalForRun",
+              "kind": "function",
+              "startLine": 73,
+              "endLine": 95,
+              "hash": "486fa75668e5905d3dd3e841143f9ac8e627ef6b55b8be7c3bee6888e21a8d8d",
+              "score": 4.735
+            }
+          ],
+          "matchedSnippets": [
+            "5829edf74f5b12b461ec2185654841e4156559aa5db9235bd869fd40b075dd9a resolveRunJournalPath L18-20",
+            "299a881ad838cb51bc04892d74d3594d0274ea4bcfe4e8748d2251c8ff1e7173 RUN_JOURNAL_DEFAULT_RETENTION L35-38",
+            "9fc316e7b9c09dac978a40f86962c99c151caff5129b118884dd9feb691919ce RUN_JOURNAL_MAINTENANCE_TRIGGER_BYTES L47-47",
+            "3ff90ca675edf288182ad4d372f2b90f7f9cea969a6effcd631492d035a6a5a6 RUN_JOURNAL_DEFAULT_MAINTENANCE L57-60",
+            "1af0f16fcf38f7ccccc368a9647659cece2a4dd1c2994072c0a7c0ff4aea8c1a openRunJournalForRun L73-95"
+          ],
+          "relatedFiles": [
+            {
+              "path": "cli/src/commands/replay-command.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "resolveRunJournalPath"
+            },
+            {
+              "path": "cli/src/utils/__tests__/run-journal-path.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "maintainRunJournalIfNeeded"
+            }
+          ]
+        },
+        {
+          "path": "packages/agent-runtime/src/util/__tests__/background-resume.test.ts",
+          "score": 63.203,
+          "matchedOn": [
+            "import",
+            "concept",
+            "chunk",
+            "path",
+            "graph"
+          ],
+          "symbols": [],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "16414fa078db1beee8e309c3b70e0147f2f4237fbfba392b5c071d68585420bf",
+              "stableChunkId": "aff5c36bbc31b5850f737b68bdb68abdd4a57e65650822c7ca0c79161be40867",
+              "qualifiedName": "resume",
+              "kind": "function",
+              "startLine": 249,
+              "endLine": 263,
+              "hash": "19b8e11869dfe75dd5f0496c94c7c9eea3a3be8a2d620562f598e0a9d3f8c6a5",
+              "score": 5.502
+            },
+            {
+              "chunkId": "fb425d1f7618f25bfab3303a271c3225ac25dd99f742ac75e8acdda2ec9bd868",
+              "stableChunkId": "9a2dc28377c1a9e147cd1865921d3d8606c01c0f2b9a5da906fa39f18372ac84",
+              "qualifiedName": "makeJournal",
+              "kind": "function",
+              "startLine": 51,
+              "endLine": 56,
+              "hash": "d7b6489846e3a0ce7ec903d65ef8da0dd70d8d801db8c8a49cc3b917fc20ed60",
+              "score": 4.735
+            }
+          ],
+          "matchedSnippets": [
+            "16414fa078db1beee8e309c3b70e0147f2f4237fbfba392b5c071d68585420bf resume L249-263",
+            "fb425d1f7618f25bfab3303a271c3225ac25dd99f742ac75e8acdda2ec9bd868 makeJournal L51-56"
+          ],
+          "relatedFiles": [
+            {
+              "path": "packages/agent-runtime/src/util/background-resume.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "reconstructBackgroundChildHistory"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/services/acp/session-data.ts",
+          "score": 61.627,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "toWireReceipt",
+            "toWireMutation",
+            "parseGateStateBlock",
+            "isJournalSafeSessionId",
+            "isRedactionCleanWireEnvelope",
+            "projectGatePhase",
+            "parseWorkflowProgress",
+            "sanitizeGateStateText",
+            "parseReviewerList",
+            "parseSkipReason"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "4748ba7723ee165ca0588c4b8133488261f40f44973be6d452bc38bdd61dff8d",
+              "stableChunkId": "f055307916ab850bdd769cc977cf91ec095f0528cca132f1e335329f26f4fdfe",
+              "qualifiedName": "JOURNAL_SAFE_SESSION_ID_RE",
+              "kind": "variable",
+              "startLine": 213,
+              "endLine": 213,
+              "hash": "26faf8e81c99daecbf1d27a0149beb0019cd12023474d2cc653c6de549113809",
+              "score": 7.771
+            },
+            {
+              "chunkId": "ca4cb4df5521bb76b865711d3a46369e22240fe3f40234805f12b0c9034e4bca",
+              "stableChunkId": "cc3fafa423025ed25327a94e58cf1e2b05e45fd9ef69654311341f0fc4a836ec",
+              "qualifiedName": "isJournalSafeSessionId",
+              "kind": "function",
+              "startLine": 215,
+              "endLine": 222,
+              "hash": "7e7bbd4430c274bac3e2443d4906c8646ddcd30aa8f36adca8b58cf9007e4567",
+              "score": 7.771
+            },
+            {
+              "chunkId": "b02fdb77a8f604bcdaef17dbf04e7b1ec4d784f4bc5ec7e389211be49c42c5a5",
+              "stableChunkId": "1411cdfefea06589b4400a1eb14aaafeacec874b066bc8c60d6234dc189f3986",
+              "qualifiedName": "AcpSessionData/queueJournalWrite",
+              "kind": "method",
+              "startLine": 731,
+              "endLine": 733,
+              "hash": "e428fb0889c13d5c58051a82aac31b4e5eee7a3c72e0b8fd0b731289281945cf",
+              "score": 7.771
+            },
+            {
+              "chunkId": "5952c3e1eb4ee7db5782f594c2fc76106e823cf80ce78043545e3b3b8903b718",
+              "stableChunkId": "ae3b2af21ead7ccc41d9c8edc0f746f55fa943c7f6c80ea9a7f8cb9b7800f300",
+              "qualifiedName": "AcpSessionData/ensureJournalDir",
+              "kind": "method",
+              "startLine": 736,
+              "endLine": 740,
+              "hash": "1058888d7db4d2770ee846a7af047edbece40c2cb350aa26f4bc5fe8f6045a21",
+              "score": 7.771
+            },
+            {
+              "chunkId": "481aa7c57fd43b0b80313c381f74a0473f67e0b2e12cda44358231c994f87224",
+              "stableChunkId": "381a58359bf5df2d03b02f8a5894967b0dc68494168eaafacb80a800c3615371",
+              "qualifiedName": "AcpSessionData/journalFilePathFor",
+              "kind": "method",
+              "startLine": 751,
+              "endLine": 757,
+              "hash": "773b03e819bd845b48387876da7f2e4cc1d8120f2378139859ee92d40f82ef49",
+              "score": 7.771
+            }
+          ],
+          "matchedSnippets": [
+            "4748ba7723ee165ca0588c4b8133488261f40f44973be6d452bc38bdd61dff8d JOURNAL_SAFE_SESSION_ID_RE L213-213",
+            "ca4cb4df5521bb76b865711d3a46369e22240fe3f40234805f12b0c9034e4bca isJournalSafeSessionId L215-222",
+            "b02fdb77a8f604bcdaef17dbf04e7b1ec4d784f4bc5ec7e389211be49c42c5a5 AcpSessionData/queueJournalWrite L731-733",
+            "5952c3e1eb4ee7db5782f594c2fc76106e823cf80ce78043545e3b3b8903b718 AcpSessionData/ensureJournalDir L736-740",
+            "481aa7c57fd43b0b80313c381f74a0473f67e0b2e12cda44358231c994f87224 AcpSessionData/journalFilePathFor L751-757"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/__tests__/acp-session-data.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "getCapabilities"
+            },
+            {
+              "path": "sdk/src/__tests__/acp-agent.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "updateGateStateFromBlock"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/__tests__/acp-session-data.test.ts",
+          "score": 54.16,
+          "matchedOn": [
+            "path",
+            "import",
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "makeConnection",
+            "makePromptHandler",
+            "journalFilePath",
+            "waitForJournalLines",
+            "buildAppliedMutation",
+            "formatGateStateBlock",
+            "makeJournalDir"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "8eb746b405bf47b1f977e7520c54a064841d01d02a0f82b3f877d0d2a1f8b8dd",
+              "stableChunkId": "37b51b0cdb44064ce2978b2ac6ac7a521c5c4bce0e71b10df05d6a7c33b1c33e",
+              "qualifiedName": "makeJournalDir",
+              "kind": "function",
+              "startLine": 699,
+              "endLine": 703,
+              "hash": "b7f1cd705d659a855a9962ec1a91ccd2ac19c2aff856d9d56077b7d11d99ba29",
+              "score": 4.735
+            },
+            {
+              "chunkId": "e34d70b7bef1d9de6443b5d71f7b44c99ffb5b4c3c8a345f6aa5a259423de85d",
+              "stableChunkId": "83d16c180d5d243de21be3c30999a6ee4d3131787fe8325237302b3e209a2bba",
+              "qualifiedName": "journalFilePath",
+              "kind": "function",
+              "startLine": 705,
+              "endLine": 707,
+              "hash": "5c9694208d21a4977f75adef50437918ab857cd0125f67291bf8cb7695ca03f1",
+              "score": 4.735
+            },
+            {
+              "chunkId": "2673c3c49b25dd955aa15bf6596e2f905737c198a947116af9fa91f45fb46289",
+              "stableChunkId": "771985e1c14e8901ebf1c3bf36d2a876539a4175846e9fa2437a524a1c7440e7",
+              "qualifiedName": "waitForJournalLines",
+              "kind": "function",
+              "startLine": 714,
+              "endLine": 733,
+              "hash": "2530d7331c088bb26f8fbe8f457b1b62b94081485d22f278e8f4137f9f8980d4",
+              "score": 4.735
+            }
+          ],
+          "matchedSnippets": [
+            "8eb746b405bf47b1f977e7520c54a064841d01d02a0f82b3f877d0d2a1f8b8dd makeJournalDir L699-703",
+            "e34d70b7bef1d9de6443b5d71f7b44c99ffb5b4c3c8a345f6aa5a259423de85d journalFilePath L705-707",
+            "2673c3c49b25dd955aa15bf6596e2f905737c198a947116af9fa91f45fb46289 waitForJournalLines L714-733"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/services/acp/session-data.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "getCapabilities"
+            },
+            {
+              "path": "sdk/src/services/acp/acp-agent.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "newSession"
+            },
+            {
+              "path": "sdk/src/__tests__/acp-agent.test.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "formatGateStateBlock"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/__tests__/run-cancellation.test.ts",
+          "score": 46.929,
+          "matchedOn": [
+            "concept",
+            "import",
+            "path"
+          ],
+          "symbols": [
+            "ToolCallContentBlock",
+            "verify",
+            "rebuild",
+            "health",
+            "export",
+            "query",
+            "append"
+          ],
+          "headings": []
+        }
+      ]
+    },
+    {
+      "query": "language capabilities validation diagnostics",
+      "results": [
+        {
+          "path": "sdk/src/tools/language-diagnostics.ts",
+          "score": 98.75,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "severity",
+            "normalizeFile",
+            "toDiagnostic",
+            "outputLines",
+            "isJsonDocument",
+            "plainTextLines",
+            "asNumber",
+            "parseJsonOutput",
+            "recordAt",
+            "stringAt"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "eca89fd8ec3d40470ddd07cef7f47fd4344a621490fae329afa219a8a9f56dcc",
+              "stableChunkId": "c7e6ea9d79120ebfa8d1915dd636c97694e98da3ba526d868760026a58c81605",
+              "qualifiedName": "LanguageDiagnosticSeverity",
+              "kind": "type",
+              "startLine": 3,
+              "endLine": 3,
+              "hash": "e2d71bd822834e0956b3b6502e824c0d8bca490d27eb1f888d80e97a91d5fd65",
+              "score": 9.533
+            },
+            {
+              "chunkId": "73105520b69db82eefdfbcb5bcacfad35a9f4f92e8423a4ea4420486327b35fe",
+              "stableChunkId": "b41c0466919aa80aea1d463b13ab295a3385e781dd8f364ec1fee775570cf0b7",
+              "qualifiedName": "parseLanguageDiagnostics",
+              "kind": "function",
+              "startLine": 1242,
+              "endLine": 1284,
+              "hash": "64fb0c7f3b172b640bb309efec4135fb388bb3f0da4a5faaf52edfc9575533e4",
+              "score": 9.533
+            },
+            {
+              "chunkId": "3e49b0c9ccb4c2c35f389e358d2eb7fb08707ea06a4bf0ad52fde149cd344f5d",
+              "stableChunkId": "df6bb9b7f96e66d522b70f553129ba779ebc7523e9068f4b9a2396390e85165a",
+              "qualifiedName": "MAX_DIAGNOSTICS",
+              "kind": "variable",
+              "startLine": 70,
+              "endLine": 70,
+              "hash": "d4d70641ae74bc2b81ae156046a67363473c8247a3aa13196c71f43f944dc8a5",
+              "score": 5.294
+            },
+            {
+              "chunkId": "7c92cb5f86a0acb4632af07038026e0f0ef798483a669b6e486ba1fc0292be4a",
+              "stableChunkId": "eb96f0125fb351871e583a6c61e0f136e495826457e423b8bdf8f6fe57b84901",
+              "qualifiedName": "interleaveDiagnostics",
+              "kind": "function",
+              "startLine": 1229,
+              "endLine": 1240,
+              "hash": "b1db1d8517bc8a66f0e42607439c6af80b08c04a6829fe096c8dc8a7869a4612",
+              "score": 5.294
+            },
+            {
+              "chunkId": "c8451028c439f996d8c4864ff76a5a2ad047ee16d7ff3d75b4f650628a1e5fae",
+              "stableChunkId": "0a4c4597e82831a74a6bbe2711baaab4c6a66f0b1595011b2bfebbc527e285e2",
+              "qualifiedName": "LanguageDiagnosticPosition",
+              "kind": "type",
+              "startLine": 5,
+              "endLine": 10,
+              "hash": "53308603197dbda4a8cfad3a5e39f86dc8558b92426b1cb7770734b5f88261b0",
+              "score": 4.238
+            }
+          ],
+          "matchedSnippets": [
+            "eca89fd8ec3d40470ddd07cef7f47fd4344a621490fae329afa219a8a9f56dcc LanguageDiagnosticSeverity L3-3",
+            "73105520b69db82eefdfbcb5bcacfad35a9f4f92e8423a4ea4420486327b35fe parseLanguageDiagnostics L1242-1284",
+            "3e49b0c9ccb4c2c35f389e358d2eb7fb08707ea06a4bf0ad52fde149cd344f5d MAX_DIAGNOSTICS L70-70",
+            "7c92cb5f86a0acb4632af07038026e0f0ef798483a669b6e486ba1fc0292be4a interleaveDiagnostics L1229-1240",
+            "c8451028c439f996d8c4864ff76a5a2ad047ee16d7ff3d75b4f650628a1e5fae LanguageDiagnosticPosition L5-10"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/services/diagnostic-delta.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "parseLanguageDiagnostics"
+            },
+            {
+              "path": "sdk/src/__tests__/language-diagnostics.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "parse"
+            }
+          ]
+        },
+        {
+          "path": "common/src/util/language-capabilities.ts",
+          "score": 92.492,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "SUPPORTED_LANGUAGE_IDS",
+            "LANGUAGE_CAPABILITY_REGISTRY",
+            "getLanguageCapability",
+            "getLanguageToolSpecs"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "00e01978240b5759881885b8fb6aca9e4eb844071ef29950913c5e9b3212f049",
+              "stableChunkId": "dc1796951a1d527f46d35372bfb84178eaa3036fe77f3b590f51a3c94100ac10",
+              "qualifiedName": "LanguageValidationStage",
+              "kind": "type",
+              "startLine": 49,
+              "endLine": 55,
+              "hash": "b864acf77c1d918475d7960810459c2fad40ea51426092bf95a6485f42214fff",
+              "score": 7.88
+            },
+            {
+              "chunkId": "8d4e7dd2774d74e2647a65ffe04e3473440525c403bfb576b445f2142e3d9656",
+              "stableChunkId": "f159c46ad0fb7652ef9b7884162ba364ae68d0cfd66a11115d52147bfcd76281",
+              "qualifiedName": "LanguageValidationMetadata",
+              "kind": "type",
+              "startLine": 57,
+              "endLine": 62,
+              "hash": "cd7658d888d61bfbbdf89940e5557192c98136e5bce32fdffd4c2f0ea9acf9c7",
+              "score": 7.88
+            },
+            {
+              "chunkId": "bb7ad6633ea1a643cfcc932e3157efebb8e20aae7860fcd568d91ec926afa9b2",
+              "stableChunkId": "da969baec4bbcce6efd1bc432c55bb665cb99619e2b389a1dca54f1718a0a5bc",
+              "qualifiedName": "SUPPORTED_LANGUAGE_IDS",
+              "kind": "variable",
+              "startLine": 1,
+              "endLine": 14,
+              "hash": "6eb8fd6b1b3c97fdf2a9e8928975a7925b42f106cb29cd61ea3af2caf21a8943",
+              "score": 4.238
+            },
+            {
+              "chunkId": "d9c26f98993bbba715ebe82cb0d02c188d13205fee9084240413219bff7ed95a",
+              "stableChunkId": "5a6396b1dce7c914d77192e04b8a2d00850d0bc22dd943c1c8dee71b6701c6c8",
+              "qualifiedName": "SupportedLanguageId",
+              "kind": "type",
+              "startLine": 16,
+              "endLine": 16,
+              "hash": "1ca97b40c3be537fc22414b3ad6c38a50a158c0907adcc37a933f4ff8f1f79e5",
+              "score": 4.238
+            },
+            {
+              "chunkId": "cfcab957ce95d939cc9dc6f3fe855f702dfe905572879eab6bbd6007722b5d6f",
+              "stableChunkId": "cd1122947f1b4f681182b3aa457fc974c67023605b3dd2c69397610dff6a5c6b",
+              "qualifiedName": "LanguageToolRole",
+              "kind": "type",
+              "startLine": 18,
+              "endLine": 26,
+              "hash": "0447f8614e162471a5c0e64986585e447727d84e670d664a213a0f766f35a065",
+              "score": 4.238
+            }
+          ],
+          "matchedSnippets": [
+            "00e01978240b5759881885b8fb6aca9e4eb844071ef29950913c5e9b3212f049 LanguageValidationStage L49-55",
+            "8d4e7dd2774d74e2647a65ffe04e3473440525c403bfb576b445f2142e3d9656 LanguageValidationMetadata L57-62",
+            "bb7ad6633ea1a643cfcc932e3157efebb8e20aae7860fcd568d91ec926afa9b2 SUPPORTED_LANGUAGE_IDS L1-14",
+            "d9c26f98993bbba715ebe82cb0d02c188d13205fee9084240413219bff7ed95a SupportedLanguageId L16-16",
+            "cfcab957ce95d939cc9dc6f3fe855f702dfe905572879eab6bbd6007722b5d6f LanguageToolRole L18-26"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/services/diagnostic-delta.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "getLanguageCapability"
+            },
+            {
+              "path": "sdk/src/services/language-intelligence.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "getLanguageToolSpecs"
+            },
+            {
+              "path": "sdk/src/services/lsp-multiplexer.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "getLanguageToolSpecs"
+            },
+            {
+              "path": "common/src/util/language-capability-manifest.ts",
+              "score": 2.7,
+              "reason": "references this file",
+              "via": "./language-capabilities"
+            },
+            {
+              "path": "common/src/util/__tests__/language-capability-manifest.test.ts",
+              "score": 2.7,
+              "reason": "references this file",
+              "via": "../language-capabilities"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/services/diagnostic-delta.ts",
+          "score": 85.817,
+          "matchedOn": [
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "DELTA_MODE_ENV_FLAG",
+            "languageIdForFile",
+            "supportedDiagnosticFiles",
+            "collectDiagnosticCommands",
+            "captureDiagnostics",
+            "strictKey",
+            "tolerantKey",
+            "computeDiagnosticDelta",
+            "resolveDeltaKeyOf",
+            "preflightDiagnosticDelta"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "06dcbf81864aaa5bf9ba984dce860511a0f4999db50a5d6a5197ac28bf0afb27",
+              "stableChunkId": "d87798bf6566c54739037a91bd87435e075e745fada9a0be20ea090a373a4117",
+              "qualifiedName": "MAX_TOTAL_DIAGNOSTICS",
+              "kind": "variable",
+              "startLine": 117,
+              "endLine": 117,
+              "hash": "0fd2a99e518dde919e0c58f2ea43a3f9b96965986ee0e246d894bab455121f2b",
+              "score": 5.294
+            },
+            {
+              "chunkId": "15419f9a5fb25ac86c1d544af691ddff21aa117585c2b9f16c9391efa4fd0696",
+              "stableChunkId": "fb0546dbd8658834bc892a6cd3b9c961a4d9b18237b14043771e14eb9fb2be38",
+              "qualifiedName": "captureDiagnostics",
+              "kind": "function",
+              "startLine": 192,
+              "endLine": 254,
+              "hash": "34724133609586ed03dd0be289020742d35cbe6668f56e433fe4fbb6931a862b",
+              "score": 5.294
+            },
+            {
+              "chunkId": "ae365537b098e14cc8c5c09855d9e99daf0cae8f71d567760e7fd103421cc7f1",
+              "stableChunkId": "7b3ab6ddda01b3cbb84f5270b85aab882206da5a15f2f5f41f4befd35b6d398c",
+              "qualifiedName": "languageIdForFile",
+              "kind": "function",
+              "startLine": 150,
+              "endLine": 160,
+              "hash": "180fea93569b5d6fee20ab7a23db85ea16207cf9d7c31587ae5f025c278be141",
+              "score": 4.238
+            }
+          ],
+          "matchedSnippets": [
+            "06dcbf81864aaa5bf9ba984dce860511a0f4999db50a5d6a5197ac28bf0afb27 MAX_TOTAL_DIAGNOSTICS L117-117",
+            "15419f9a5fb25ac86c1d544af691ddff21aa117585c2b9f16c9391efa4fd0696 captureDiagnostics L192-254",
+            "ae365537b098e14cc8c5c09855d9e99daf0cae8f71d567760e7fd103421cc7f1 languageIdForFile L150-160"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/tools/language-diagnostics.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "parseLanguageDiagnostics"
+            },
+            {
+              "path": "common/src/util/language-capabilities.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "getLanguageCapability"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/__tests__/language-diagnostics.test.ts",
+          "score": 66.853,
+          "matchedOn": [
+            "path",
+            "concept",
+            "import",
+            "graph"
+          ],
+          "symbols": [],
+          "headings": [],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/tools/language-diagnostics.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "parse"
+            }
+          ]
+        },
+        {
+          "path": "common/src/util/language-capability-manifest.ts",
+          "score": 65.862,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "LANGUAGE_CAPABILITY_MANIFEST_VERSION",
+            "languageCapabilityManifestV1Schema",
+            "buildLanguageCapabilityManifest"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "83d0833344765f3d1abb386f1ea2bc6dde4b1df4d4515b633192ddb3c8d713e7",
+              "stableChunkId": "0583e01d105aa160688fd4418e598aeb22a7ba1fd5a6f3c071794bcc4d706ced",
+              "qualifiedName": "languageValidationStageSchema",
+              "kind": "variable",
+              "startLine": 39,
+              "endLine": 46,
+              "hash": "608f8938ab5da1fe192a89b418cbd9a9810ba1405eb214d2318a21b32426af10",
+              "score": 7.88
+            },
+            {
+              "chunkId": "48ce2cc2216521d1ed742781a1f62db513a4a3e70d8c2fd9af92bfe39c65eeee",
+              "stableChunkId": "5892251cfa8f94cf06e09b080583e4b61cb08af085453caf500dcd08a7c2ae1b",
+              "qualifiedName": "LANGUAGE_CAPABILITY_MANIFEST_VERSION",
+              "kind": "variable",
+              "startLine": 16,
+              "endLine": 16,
+              "hash": "81ddac9ecab3ece06b5755cf02ab1133758d2b61b01f114c466b9f00c33daca8",
+              "score": 4.238
+            },
+            {
+              "chunkId": "feb20ff3736bb130f64ad5d8f97f3f8297f90d2c4754c1099968e6497475f52f",
+              "stableChunkId": "9d9a259dfb0198307454e0c9bf94ca12c841481d8e9e65c7f7553f81617133f4",
+              "qualifiedName": "LanguageCapabilityManifestV1",
+              "kind": "type",
+              "startLine": 23,
+              "endLine": 26,
+              "hash": "46e688da0629ab13bea1bfb68c15a14f378873317e1e456fa7c3f605629f8b95",
+              "score": 4.238
+            },
+            {
+              "chunkId": "a0cb4001d53640331667a94934b446b061fa8d771628f1db61d200f0e7006867",
+              "stableChunkId": "42769b5ec991413570067a8e83fe681fdbe468d00e9d70d7873d4bd32d3a387e",
+              "qualifiedName": "languageToolRoleSchema",
+              "kind": "variable",
+              "startLine": 28,
+              "endLine": 37,
+              "hash": "4466746564b2827d360070156d055b8823c1ad2a21897dcaeb7f455519d88afe",
+              "score": 4.238
+            },
+            {
+              "chunkId": "5dc1882f7251a2744c5ebbfc68ed6a44e6fcdf9cc9831920eea4b2ec0f14185f",
+              "stableChunkId": "49d4846a4a9df5b19958cf0931380c008f61e34d02a9be74ed24a72c7ab6821f",
+              "qualifiedName": "languageServerTransportSchema",
+              "kind": "variable",
+              "startLine": 48,
+              "endLine": 48,
+              "hash": "9f2f1e36e6779ebe46e452b042810435cd3c5f161d273db037b6a0e8e2c20240",
+              "score": 4.238
+            }
+          ],
+          "matchedSnippets": [
+            "83d0833344765f3d1abb386f1ea2bc6dde4b1df4d4515b633192ddb3c8d713e7 languageValidationStageSchema L39-46",
+            "48ce2cc2216521d1ed742781a1f62db513a4a3e70d8c2fd9af92bfe39c65eeee LANGUAGE_CAPABILITY_MANIFEST_VERSION L16-16",
+            "feb20ff3736bb130f64ad5d8f97f3f8297f90d2c4754c1099968e6497475f52f LanguageCapabilityManifestV1 L23-26",
+            "a0cb4001d53640331667a94934b446b061fa8d771628f1db61d200f0e7006867 languageToolRoleSchema L28-37",
+            "5dc1882f7251a2744c5ebbfc68ed6a44e6fcdf9cc9831920eea4b2ec0f14185f languageServerTransportSchema L48-48"
+          ],
+          "relatedFiles": [
+            {
+              "path": "common/src/util/__tests__/language-capability-manifest.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "buildLanguageCapabilityManifest"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "score": 60.057,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "createLanguageIntelligence",
+            "toUnavailable",
+            "uriToPath",
+            "toStructuredLocation",
+            "toStructuredLocations",
+            "toLspPosition",
+            "buildLineStartOffsets",
+            "toOffsetInRangeText",
+            "dedupePerFileEdits",
+            "resolveSplicePath"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "1cb079a0f597986423bd17d5991916e390612e79e1657794659bbfc62628ec64",
+              "stableChunkId": "5a9226947ad6dad54e0a1873371e4ced90da816b58c9aaccd7b7f4a144c56dbc",
+              "qualifiedName": "LanguageIntelligenceService",
+              "kind": "type",
+              "startLine": 64,
+              "endLine": 150,
+              "hash": "f402c71a8365529b4ce5f51aa2e5b65ab0b89f376124c08e7cd10f2cbc05eb13",
+              "score": 4.238
+            },
+            {
+              "chunkId": "a2d0e6e886488f55a0dab8339474eba1531d7bf3e483c6726ba0f0f0d1d4d456",
+              "stableChunkId": "ecc5d947f180589d5e4a5af76579d77bd8cd863eefd1172bb0451cca751986d9",
+              "qualifiedName": "LanguageIntelligenceService/goToDefinition",
+              "kind": "method",
+              "startLine": 65,
+              "endLine": 69,
+              "hash": "f85cd075cb791727ad55587bfd71f801f71293d5898556ecf0cdb495d586892d",
+              "score": 4.238
+            },
+            {
+              "chunkId": "590d206d967043b7b9d7a87eed3a8191e77b92cf9bbf85b5699c1bf3be3713eb",
+              "stableChunkId": "f371b7509dfb6d94a6928679045e5289045cf7c6a8f2f9e2da5b6d0a9b685b5b",
+              "qualifiedName": "LanguageIntelligenceService/findReferences",
+              "kind": "method",
+              "startLine": 70,
+              "endLine": 74,
+              "hash": "bbaee3757ac74fe585ff125535205efd027da11fa165f39553101f9c20379ee9",
+              "score": 4.238
+            },
+            {
+              "chunkId": "dc8c8f303b57bccc31269ac6ac6ef784d3f127c2cb99e5bf7a5f4817feb540f6",
+              "stableChunkId": "5131d8a5325f115b98a07abaffab24a3eb18e89409f9f9784a051d42ca6f610a",
+              "qualifiedName": "LanguageIntelligenceService/hoverType",
+              "kind": "method",
+              "startLine": 75,
+              "endLine": 79,
+              "hash": "0e010d33c6f56a283410805dc604ee9f0e021d9c9f951d37897380895d973282",
+              "score": 4.238
+            },
+            {
+              "chunkId": "beb2fa6ff120f79c8aaa94f10dadc7f53f2fc558bc8da294652eb2a6a1d91278",
+              "stableChunkId": "7d47e9348a045b9654ea668673dbaeeb985b37b1793b1966406e9a59af5ac138",
+              "qualifiedName": "LanguageIntelligenceService/workspaceSymbol",
+              "kind": "method",
+              "startLine": 80,
+              "endLine": 82,
+              "hash": "dd84aa3cea4afa29c7d198f82b85f1d17d11b4c5e9be94bcf41dfea061a1d4e2",
+              "score": 4.238
+            }
+          ],
+          "matchedSnippets": [
+            "1cb079a0f597986423bd17d5991916e390612e79e1657794659bbfc62628ec64 LanguageIntelligenceService L64-150",
+            "a2d0e6e886488f55a0dab8339474eba1531d7bf3e483c6726ba0f0f0d1d4d456 LanguageIntelligenceService/goToDefinition L65-69",
+            "590d206d967043b7b9d7a87eed3a8191e77b92cf9bbf85b5699c1bf3be3713eb LanguageIntelligenceService/findReferences L70-74",
+            "dc8c8f303b57bccc31269ac6ac6ef784d3f127c2cb99e5bf7a5f4817feb540f6 LanguageIntelligenceService/hoverType L75-79",
+            "beb2fa6ff120f79c8aaa94f10dadc7f53f2fc558bc8da294652eb2a6a1d91278 LanguageIntelligenceService/workspaceSymbol L80-82"
+          ],
+          "relatedFiles": [
+            {
+              "path": "common/src/util/language-capabilities.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "getLanguageToolSpecs"
+            },
+            {
+              "path": "sdk/src/services/lsp-multiplexer.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "dispose"
+            }
+          ]
+        },
+        {
+          "path": "packages/code-map/src/languages.ts",
+          "score": 56.565,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "LanguageConfig",
+            "RuntimeLanguageLoader",
+            "languageTable",
+            "SUPPORTED_CODE_EXTENSIONS",
+            "setWasmDir",
+            "getWasmDir",
+            "validateWasmDir",
+            "resolveWasmPath",
+            "tryResolveFromPackage",
+            "resolveQueryPath"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "5d444baf10935ff9b83ed68c0bf4cb4907f364097bef8731d54436402955616e",
+              "stableChunkId": "4e6f7d155cff3ca3d2f48c98692567260685b0615d06c1140218a6482223d782",
+              "qualifiedName": "LanguageConfig",
+              "kind": "interface",
+              "startLine": 21,
+              "endLine": 30,
+              "hash": "e1c227591573bc03e398c63348d8a574bebb6e0178770535639702fa067e4356",
+              "score": 4.238
+            },
+            {
+              "chunkId": "ace605c6f7ff396e10615c8a0adb667ad32f692d62133cae94aa84217dba76b6",
+              "stableChunkId": "aa68a6ff279080becc268859b902031e562f18f33e956b3c0e74048899b22941",
+              "qualifiedName": "RuntimeLanguageLoader",
+              "kind": "interface",
+              "startLine": 32,
+              "endLine": 35,
+              "hash": "12aa05b4dfa545cad6b3e246a258da57667f898e7b73e3d1093b41e45c27f852",
+              "score": 4.238
+            },
+            {
+              "chunkId": "4d5213b4d230295b44564321d994cea5376595e78ef37f524f46ef7cfc1ba611",
+              "stableChunkId": "b840894ed6b1dff5ee46ce60f4c83fde86c3b818ed6c12e2c4240e14d62c286e",
+              "qualifiedName": "RuntimeLanguageLoader/loadLanguage",
+              "kind": "method",
+              "startLine": 33,
+              "endLine": 33,
+              "hash": "8015f46a808d4a2f209d4373c6bf40d5fb2b1f0952b02b5aa47a55b43672b9ac",
+              "score": 4.238
+            },
+            {
+              "chunkId": "b2977a27f8c4cefb06d98654ea5c0ba8fc7d6b4c9a071c8ace477d17ac61c125",
+              "stableChunkId": "6c51f1d406c0515f7fcb99ef85a0762785af7507cb53baf47a00cfe04aaacf10",
+              "qualifiedName": "RuntimeLanguageLoader/initParser",
+              "kind": "method",
+              "startLine": 34,
+              "endLine": 34,
+              "hash": "2056518683c1392299b52cfa54e31832ad5ea53927ba1ca37cb4bc4b5a3248fc",
+              "score": 4.238
+            },
+            {
+              "chunkId": "cece1f771f6e41041482bd9eaaf6a05a02b65d4dabce12586cd3520648a18dad",
+              "stableChunkId": "9ce72bb253ec1967669d81cf085396bfb56569bb0bac50f06ac359ebd0370ff8",
+              "qualifiedName": "languageTable",
+              "kind": "variable",
+              "startLine": 68,
+              "endLine": 144,
+              "hash": "d910b253ab205aa328bf1cec580d8166eaac09c2012a4fd39d46df7398aa4004",
+              "score": 4.238
+            }
+          ],
+          "matchedSnippets": [
+            "5d444baf10935ff9b83ed68c0bf4cb4907f364097bef8731d54436402955616e LanguageConfig L21-30",
+            "ace605c6f7ff396e10615c8a0adb667ad32f692d62133cae94aa84217dba76b6 RuntimeLanguageLoader L32-35",
+            "4d5213b4d230295b44564321d994cea5376595e78ef37f524f46ef7cfc1ba611 RuntimeLanguageLoader/loadLanguage L33-33",
+            "b2977a27f8c4cefb06d98654ea5c0ba8fc7d6b4c9a071c8ace477d17ac61c125 RuntimeLanguageLoader/initParser L34-34",
+            "cece1f771f6e41041482bd9eaaf6a05a02b65d4dabce12586cd3520648a18dad languageTable L68-144"
+          ],
+          "relatedFiles": [
+            {
+              "path": "packages/code-map/__tests__/languages.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "createLanguageConfig"
+            },
+            {
+              "path": "packages/code-map/__tests__/languages-m7.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "findLanguageConfigByExtension"
+            }
+          ]
+        },
+        {
+          "path": "common/src/util/language-profiles.ts",
+          "score": 54.339,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "buildUniqueLookup",
+            "buildLanguageLookups",
+            "getBaseName",
+            "getLanguageFamily",
+            "detectLanguageIdForPath",
+            "profilesForIds",
+            "detectLanguageProfilesFromPaths",
+            "escapeRegexForLiteral",
+            "taskAliasRegexp",
+            "pathSignalRegexp"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "ab36f0699ed86c9c288b6808e6e5834489fcb6987eda7cf321269bdc7f81466d",
+              "stableChunkId": "0af5bcfd0bffbd9d5cac8259ca7d1a3bd97d99b5b4ed8338feec45216a3b132b",
+              "qualifiedName": "LanguageProfile",
+              "kind": "type",
+              "startLine": 26,
+              "endLine": 26,
+              "hash": "ce1fa9c286acd3c646557479259e69789c1474280ef9991671454c6aa7f7ccce",
+              "score": 4.238
+            },
+            {
+              "chunkId": "686352abf97c938e5da8af5d2c22128c24ed5f5a0d412270ef0ce1f25ac3658d",
+              "stableChunkId": "0b65820f4f82b524c82b731a4eeb6aee5eabfcbcc6da495c4cf7ddb694226494",
+              "qualifiedName": "LanguageProfileSelection",
+              "kind": "type",
+              "startLine": 28,
+              "endLine": 36,
+              "hash": "dbf9f438c542a42d8327e595e85b561972dbc9a7443dfa328fdfb9a534b7d37d",
+              "score": 4.238
+            },
+            {
+              "chunkId": "e2e4a4215fd9766ce597cfa21b453675f3cc64460f724fe12fc47dfabedd9b9a",
+              "stableChunkId": "e300869ae98df5a6e3491e80df3486f45940f2d2a8a66ba05ded297fbf31ba3f",
+              "qualifiedName": "LanguageLookupMaps",
+              "kind": "type",
+              "startLine": 38,
+              "endLine": 42,
+              "hash": "ec045df41a99e632d7aa1b724d642ad574b173bf0c31cf494a5a9520de871d2f",
+              "score": 4.238
+            },
+            {
+              "chunkId": "317fd0d11b73204e41e61a3e32fc49d142e6de3ceaf97d7f837672f65367eda6",
+              "stableChunkId": "2e93eb0c5a25f1dd1de7bb258346a9f167c40941fe4c940ed35b41194755577f",
+              "qualifiedName": "buildLanguageLookups",
+              "kind": "function",
+              "startLine": 61,
+              "endLine": 89,
+              "hash": "3c1c79b3a02a50ab85f2342b8230ceba656c357f2ea3d6e0f4aed550550d5066",
+              "score": 4.238
+            },
+            {
+              "chunkId": "9d54c754f77f41e5bb6abc46c068d43abd8171f0fedcc125e6e6368edff9694e",
+              "stableChunkId": "31cfb4f59c2d7c717c61b428f62972fed0220e58055c73a739c5f879303ee2cd",
+              "qualifiedName": "LANGUAGE_LOOKUPS",
+              "kind": "variable",
+              "startLine": 91,
+              "endLine": 91,
+              "hash": "e61b04da245588b306a34e8800be70a3c158e6ea08e1a01cc3fee51228359a0f",
+              "score": 4.238
+            }
+          ],
+          "matchedSnippets": [
+            "ab36f0699ed86c9c288b6808e6e5834489fcb6987eda7cf321269bdc7f81466d LanguageProfile L26-26",
+            "686352abf97c938e5da8af5d2c22128c24ed5f5a0d412270ef0ce1f25ac3658d LanguageProfileSelection L28-36",
+            "e2e4a4215fd9766ce597cfa21b453675f3cc64460f724fe12fc47dfabedd9b9a LanguageLookupMaps L38-42",
+            "317fd0d11b73204e41e61a3e32fc49d142e6de3ceaf97d7f837672f65367eda6 buildLanguageLookups L61-89",
+            "9d54c754f77f41e5bb6abc46c068d43abd8171f0fedcc125e6e6368edff9694e LANGUAGE_LOOKUPS L91-91"
+          ],
+          "relatedFiles": [
+            {
+              "path": "common/src/util/language-capability-manifest.ts",
+              "score": 0.882,
+              "reason": "shares import",
+              "via": "./language-capabilities"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "query": "command sandbox policy",
+      "results": [
+        {
+          "path": "sdk/src/tools/terminal-command-policy.ts",
+          "score": 67.999,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "isSafeShellSetOptions",
+            "isExportAssignmentForm",
+            "envRestHasCommand",
+            "envRestUtilityBasename",
+            "hasMutationOrientedShellSetOptions",
+            "classifyShellSetIssue",
+            "classifyExportIssue",
+            "advancePastEnvironmentDumpWrapper",
+            "resolveEnvironmentDumpCommand",
+            "findProcessEnvironmentIssue"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "de25340aa2cd0b1a6f3f730200bda81770ea027623c472a4148106537555a21d",
+              "stableChunkId": "cd26166eb92442dfcf1424444fc0292f63debe8fcc4c5ef639985f918936be2f",
+              "qualifiedName": "evaluateTerminalCommandPolicy",
+              "kind": "function",
+              "startLine": 2095,
+              "endLine": 2454,
+              "hash": "ed8295a9a9f333169f0322e654f28b9197aa754171f8f6cc52535989e5611889",
+              "score": 7.718
+            },
+            {
+              "chunkId": "e4ac641e0fbd29ebfc5f463825bd3c662a0e61a22edf80b3f34198f841c30e85",
+              "stableChunkId": "cab06f15c2add903249bb58f2ec465e4542e222094b11be383f9e00e103afe7d",
+              "qualifiedName": "TerminalPolicyDecision",
+              "kind": "type",
+              "startLine": 19,
+              "endLine": 21,
+              "hash": "b827b4bf650918176f3ea03748b0dbbed497c241452f432475486dae37962285",
+              "score": 4.366
+            },
+            {
+              "chunkId": "133f04b77a2aa0cef20393940f57899fcf66277ee4cd8115934560874f2d590c",
+              "stableChunkId": "e9d17d52cb1fea07e070b76ee9963d940d1efbff5e69472fff63cf2423cbc881",
+              "qualifiedName": "envRestHasCommand",
+              "kind": "function",
+              "startLine": 93,
+              "endLine": 95,
+              "hash": "3587ce14c48bfd0edc682ce8a82a13cccbcfe6a3dae6f9a55186d9ca7fda1345",
+              "score": 3.353
+            },
+            {
+              "chunkId": "bebd712c5ebc8b942d5307bc33948909dfae274130d0ee819e5fb90428227ab7",
+              "stableChunkId": "9ec92dad95a647a97f5a6fab6770a3ac8cca0bd5c7bd465814d095873153e83c",
+              "qualifiedName": "resolveEnvironmentDumpCommand",
+              "kind": "function",
+              "startLine": 259,
+              "endLine": 374,
+              "hash": "cb71f13443b16a69f35b37ad9f4d8ce787e7286572746653abdca39fa007025f",
+              "score": 3.353
+            },
+            {
+              "chunkId": "33e3fd9502952d173f51930962f33ab48ee913b66877182baa2f7f4cd4909ad9",
+              "stableChunkId": "2ede4e23d8516458c11035a7876a9a8240d07af0e4181f274aecb643db5017e2",
+              "qualifiedName": "findProcessEnvironmentIssueInCommand",
+              "kind": "function",
+              "startLine": 636,
+              "endLine": 672,
+              "hash": "66db7ebd86b0f2836b287add0f825967a9370567f61484bb0ac0970e890ef706",
+              "score": 3.353
+            }
+          ],
+          "matchedSnippets": [
+            "de25340aa2cd0b1a6f3f730200bda81770ea027623c472a4148106537555a21d evaluateTerminalCommandPolicy L2095-2454",
+            "e4ac641e0fbd29ebfc5f463825bd3c662a0e61a22edf80b3f34198f841c30e85 TerminalPolicyDecision L19-21",
+            "133f04b77a2aa0cef20393940f57899fcf66277ee4cd8115934560874f2d590c envRestHasCommand L93-95",
+            "bebd712c5ebc8b942d5307bc33948909dfae274130d0ee819e5fb90428227ab7 resolveEnvironmentDumpCommand L259-374",
+            "33e3fd9502952d173f51930962f33ab48ee913b66877182baa2f7f4cd4909ad9 findProcessEnvironmentIssueInCommand L636-672"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/__tests__/terminal-command-policy.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "evaluateTerminalCommandPolicy"
+            },
+            {
+              "path": "sdk/src/__tests__/terminal-command-capability.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "evaluateTerminalCommandPolicy"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/__tests__/terminal-command-policy.test.ts",
+          "score": 55.522,
+          "matchedOn": [
+            "path",
+            "concept",
+            "import",
+            "graph"
+          ],
+          "symbols": [],
+          "headings": [],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/tools/terminal-command-policy.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "evaluateTerminalCommandPolicy"
+            },
+            {
+              "path": "sdk/src/__tests__/terminal-command-capability.test.ts",
+              "score": 0.882,
+              "reason": "shares import",
+              "via": "../tools/terminal-command-policy"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/tools/run-terminal-command.ts",
+          "score": 51.043,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "import",
+            "chunk",
+            "concept",
+            "graph"
+          ],
+          "symbols": [
+            "__getStagedDiffScanStatsForTest",
+            "__resetStagedDiffScanStatsForTest",
+            "__getStagedDiffRetainedStatsKeysForTest",
+            "__parseStagedDiffHeaderForTest",
+            "findWindowsBash",
+            "listDirtyPaths",
+            "dirtyDelta",
+            "withTouchedPaths",
+            "runTerminalCommand",
+            "snapshotStats"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "0018d6f6f8fce81540a7d1739dcf261fff93f70f213a675a457fad4b804259f9",
+              "stableChunkId": "6866ddef9c96b6ff7d6e782b096152128f21ee439e5e65159f1406d89b8971b4",
+              "qualifiedName": "COMMAND_OUTPUT_LIMIT",
+              "kind": "variable",
+              "startLine": 33,
+              "endLine": 33,
+              "hash": "08d9494b4106f15695180c5601b80af7f812cc0f7acd04b8fc1bb074971502ca",
+              "score": 3.353
+            },
+            {
+              "chunkId": "e95218c149656841e5c9de48ee68ad7628e228823a9e7da0c5846fc947b8296f",
+              "stableChunkId": "989be3e8b0d23fd951748972798ea6d67a89b5fbfa0e917df9a4016cbe5a57c7",
+              "qualifiedName": "persistFullCommandOutput",
+              "kind": "function",
+              "startLine": 1157,
+              "endLine": 1175,
+              "hash": "39c933619855b7d9f5c6c13894c2e278bec2160244a67bc85025660aa0cbf72c",
+              "score": 3.353
+            },
+            {
+              "chunkId": "e7b31117ba327a75908c6192ed28a3fb0fe8244b2ac987173ad7d6122274fec4",
+              "stableChunkId": "b686c8453e231ef8ce3d4a98c719eeeb5b0010dcb187aeed60b7e3fc82c50ea1",
+              "qualifiedName": "runTerminalCommand",
+              "kind": "function",
+              "startLine": 1177,
+              "endLine": 1827,
+              "hash": "e7e550cdcaf5e32670c76a71442957dd10c046f0c1668a3db99df9c31abb6da0",
+              "score": 3.353
+            }
+          ],
+          "matchedSnippets": [
+            "0018d6f6f8fce81540a7d1739dcf261fff93f70f213a675a457fad4b804259f9 COMMAND_OUTPUT_LIMIT L33-33",
+            "e95218c149656841e5c9de48ee68ad7628e228823a9e7da0c5846fc947b8296f persistFullCommandOutput L1157-1175",
+            "e7b31117ba327a75908c6192ed28a3fb0fe8244b2ac987173ad7d6122274fec4 runTerminalCommand L1177-1827"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/tools/terminal-command-policy.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "evaluateTerminalCommandPolicy"
+            },
+            {
+              "path": "sdk/src/__tests__/run-terminal-command.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "__parseStagedDiffHeaderForTest"
+            }
+          ]
+        },
+        {
+          "path": "cli/src/commands/command-registry.ts",
+          "score": 48.458,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "defineCommand",
+            "defineCommandWithArgs",
+            "formatPlanStatusReport",
+            "planListActiveState",
+            "formatPlanListReport",
+            "COMMAND_REGISTRY",
+            "findCommand",
+            "findCommandSuggestions",
+            "createSkillCommand"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "91ec259a44d7f14cf3cc00b7892f4c61eb344a041512b4f1bee60f2575b4a6cd",
+              "stableChunkId": "63e7bc464d923838f00629578bdc3a271ef07cd0487a3492e7e448c657318390",
+              "qualifiedName": "CommandResult",
+              "kind": "type",
+              "startLine": 125,
+              "endLine": 135,
+              "hash": "5dbc1b0f07d3d85002a43f549c85164057990441c12f00aac464f2fa75ca3480",
+              "score": 3.353
+            },
+            {
+              "chunkId": "2fece1641c4e1aede3c201fd01a6d52a907170fc99ace767e9f233d4433946cc",
+              "stableChunkId": "e23f47fa557cef4646cbd5bbed748a1e90e90e64cf3372c99401f6cb8d90fb5a",
+              "qualifiedName": "CommandHandler",
+              "kind": "type",
+              "startLine": 137,
+              "endLine": 140,
+              "hash": "9c357854748c52e6d8bcbf3bedee2929081906511360ce9876685914e07191cd",
+              "score": 3.353
+            },
+            {
+              "chunkId": "e27764744d1eeb95f494a7700bc09d8fb048a7aee5c2f255e1177466da711f52",
+              "stableChunkId": "e1e7fe6756999f3ba265f38e15b6551723e272c4af9e5a00b6a1c774fac496e9",
+              "qualifiedName": "CommandDefinition",
+              "kind": "type",
+              "startLine": 142,
+              "endLine": 148,
+              "hash": "ada0dbc1e7028ec183ef27b0f0dae6b8d794c46d1cb318db59ff5e10a69b987b",
+              "score": 3.353
+            },
+            {
+              "chunkId": "095cf3614b47fb43502a0217681dabc6c11d0acef6dd07f290ab6a729a2f51b4",
+              "stableChunkId": "8f0767c819ed2ab4c520cf39384523f459c281eff0b83ff6b92783157c52fe05",
+              "qualifiedName": "CommandHandlerNoArgs",
+              "kind": "type",
+              "startLine": 153,
+              "endLine": 155,
+              "hash": "0faddef93a98502708a511c0f33fd5040478c1b6933459390d4fc5f712cfcffb",
+              "score": 3.353
+            },
+            {
+              "chunkId": "084cd1ee845438a7aa8d2cd921c886923d871309dc6fb7f45c4c28c77ca5d743",
+              "stableChunkId": "60e392210d02580d73f39aec025dedd97bbdbdb4e7af641c828493af7a1d2f4f",
+              "qualifiedName": "CommandHandlerWithArgs",
+              "kind": "type",
+              "startLine": 160,
+              "endLine": 163,
+              "hash": "29ef98cad7bb51240730e4d2edaf4ba11f793ca826a9eeb08dbf2a91908304ff",
+              "score": 3.353
+            }
+          ],
+          "matchedSnippets": [
+            "91ec259a44d7f14cf3cc00b7892f4c61eb344a041512b4f1bee60f2575b4a6cd CommandResult L125-135",
+            "2fece1641c4e1aede3c201fd01a6d52a907170fc99ace767e9f233d4433946cc CommandHandler L137-140",
+            "e27764744d1eeb95f494a7700bc09d8fb048a7aee5c2f255e1177466da711f52 CommandDefinition L142-148",
+            "095cf3614b47fb43502a0217681dabc6c11d0acef6dd07f290ab6a729a2f51b4 CommandHandlerNoArgs L153-155",
+            "084cd1ee845438a7aa8d2cd921c886923d871309dc6fb7f45c4c28c77ca5d743 CommandHandlerWithArgs L160-163"
+          ],
+          "relatedFiles": [
+            {
+              "path": "cli/src/commands/git-command-args.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "buildSafeGitCommand"
+            },
+            {
+              "path": "cli/src/commands/index-command.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "handleIndexCommandBlocks"
+            },
+            {
+              "path": "cli/src/commands/memory-command.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "handleMemoryCommandBlocks"
+            }
+          ]
+        },
+        {
+          "path": "cli/src/components/command-palette-screen.tsx",
+          "score": 41.858,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "buildEntries",
+            "scoreEntry",
+            "entryToListItem",
+            "CommandPaletteScreenProps",
+            "CommandPaletteScreen"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "e2ef9cb582212491529ecbbd8fc83f5d76c39f45cf24e440fac7f5614b2a058f",
+              "stableChunkId": "f6f5ef5d8e96b319fd7e203242d8a9444d93c05dc3ec40a3713d24eb2a378b5f",
+              "qualifiedName": "CommandPaletteScreenProps",
+              "kind": "interface",
+              "startLine": 52,
+              "endLine": 63,
+              "hash": "63a9f38776956eb1db96399b4d71186f3d63e719abf00cc6da2d4b538b4a4b9c",
+              "score": 3.353
+            },
+            {
+              "chunkId": "e3baba48a9f4c8e237974d6bea9ab721c2ea0ee8fc5a96d5e203f83dfc8ba907",
+              "stableChunkId": "8df6c03d2f44e5452b152e609ad2f2f96fdad1bd51990aa2d80b2c4457b30c3d",
+              "qualifiedName": "CommandPaletteScreen",
+              "kind": "function",
+              "startLine": 160,
+              "endLine": 410,
+              "hash": "e308cb315e7750a5887bdf6c1064aab8a28f85ea80ebc3d977b8bb61023099f0",
+              "score": 3.353
+            }
+          ],
+          "matchedSnippets": [
+            "e2ef9cb582212491529ecbbd8fc83f5d76c39f45cf24e440fac7f5614b2a058f CommandPaletteScreenProps L52-63",
+            "e3baba48a9f4c8e237974d6bea9ab721c2ea0ee8fc5a96d5e203f83dfc8ba907 CommandPaletteScreen L160-410"
+          ],
+          "relatedFiles": [
+            {
+              "path": "cli/src/utils/command-mru.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "recordCommandUse"
+            }
+          ]
+        },
+        {
+          "path": "common/src/util/memory-artifact-policy.ts",
+          "score": 39.29,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "chunk"
+          ],
+          "symbols": [
+            "MemoryGeneratedArtifactProvenance",
+            "MemoryArtifactPolicyDecision",
+            "normalizeMemoryArtifactPath",
+            "hasGeneratedProvenance",
+            "classifyMemoryArtifactPath",
+            "isMemoryArtifactPersistenceAllowed"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "ae74b256db5bfa124a57ce98592ce45cdcf4cad764d330338ff7bbf7e17a8a11",
+              "stableChunkId": "31b5c15ace882d09172cf73a564ffdd60ed3b994e6689d9664c242f13f530f8b",
+              "qualifiedName": "MemoryArtifactPolicyDecision",
+              "kind": "interface",
+              "startLine": 24,
+              "endLine": 40,
+              "hash": "17eb7ffe432c69fcf1d5cb7d6916c5a947ccbd897dcd83085bf4343d0c1b1a73",
+              "score": 4.366
+            }
+          ],
+          "matchedSnippets": [
+            "ae74b256db5bfa124a57ce98592ce45cdcf4cad764d330338ff7bbf7e17a8a11 MemoryArtifactPolicyDecision L24-40"
+          ]
+        },
+        {
+          "path": "sdk/src/services/harness-enforcement.ts",
+          "score": 39.203,
+          "matchedOn": [
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "now",
+            "HarnessApprovalService",
+            "grant",
+            "hashCommand",
+            "classifySingleSegment",
+            "classifySegment",
+            "classifySegmentsLikeCommand",
+            "stripLeadingEnvAssignments",
+            "splitCommandSegments",
+            "readSubstitutionBody"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "e881a0aa940ac5b465bc6d0aa603c83163808e8792588ebf40fa482b2b3fc419",
+              "stableChunkId": "c8e4114752e8625dc7f87a4fe0d310142a14d47c8edb0ebfc7f9a21336bc17ff",
+              "qualifiedName": "HarnessPolicyDecision",
+              "kind": "type",
+              "startLine": 697,
+              "endLine": 699,
+              "hash": "69056fda431d0bd85eec022de1d8d6821da634eb233919361297e112fb01dbf0",
+              "score": 4.366
+            },
+            {
+              "chunkId": "3da18aa0cb5c3ecf00f686ff0e02f4777f362978392d1c135a91e9a919e618e9",
+              "stableChunkId": "4473ad3245dbbb046e59e5469ca305845e97d3173d0b9d57cd94cd42dd0042fd",
+              "qualifiedName": "evaluateHarnessActionPolicy",
+              "kind": "function",
+              "startLine": 701,
+              "endLine": 742,
+              "hash": "55020db72f294254d68c89090b84f2bed7debb399fbe7e9dc3e38f942cd1c896",
+              "score": 4.366
+            },
+            {
+              "chunkId": "da09de286cec2f6223bd5eda280c484a3e9d0f60bd2dab74cd8963eadb51ed23",
+              "stableChunkId": "3679fe7aad75f0a549d7549bd3bfd088a9600b0f1c71ef2a37abbf623a36dbad",
+              "qualifiedName": "normalizeCommand",
+              "kind": "function",
+              "startLine": 153,
+              "endLine": 155,
+              "hash": "0a7698a603c87ab56c9522d837d8e0a9e39d4b8e81063aac7815ccf69e6ab57a",
+              "score": 3.353
+            },
+            {
+              "chunkId": "58e43a73e4c3c0e5c187e76109ee35d4488b7c2536aaa9ae4d733cab1ed2ac4c",
+              "stableChunkId": "058d31ae1ea31c4b3d5e7f2203fc6b4a4f591122a097388180918a58d37f1684",
+              "qualifiedName": "hashCommand",
+              "kind": "function",
+              "startLine": 162,
+              "endLine": 164,
+              "hash": "704723b5cb2dc79cc31888ac094e563cd64b02b06efd0a242955f91383369d47",
+              "score": 3.353
+            },
+            {
+              "chunkId": "89950b13d2e39587846d6ce044dda956200a32805df245ecce6e5cc30aeddbfc",
+              "stableChunkId": "15c8abf8de52d192be6e8f548c5154a1508c8221870f7a2a4bf5a4d9e5787780",
+              "qualifiedName": "classifySegmentsLikeCommand",
+              "kind": "function",
+              "startLine": 425,
+              "endLine": 436,
+              "hash": "458d34b8d79ed3d85119f33fa586c17681f6426ef290fcb5080d447f861af07a",
+              "score": 3.353
+            }
+          ],
+          "matchedSnippets": [
+            "e881a0aa940ac5b465bc6d0aa603c83163808e8792588ebf40fa482b2b3fc419 HarnessPolicyDecision L697-699",
+            "3da18aa0cb5c3ecf00f686ff0e02f4777f362978392d1c135a91e9a919e618e9 evaluateHarnessActionPolicy L701-742",
+            "da09de286cec2f6223bd5eda280c484a3e9d0f60bd2dab74cd8963eadb51ed23 normalizeCommand L153-155",
+            "58e43a73e4c3c0e5c187e76109ee35d4488b7c2536aaa9ae4d733cab1ed2ac4c hashCommand L162-164",
+            "89950b13d2e39587846d6ce044dda956200a32805df245ecce6e5cc30aeddbfc classifySegmentsLikeCommand L425-436"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/__tests__/run-terminal-command.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "now"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/__tests__/run-terminal-command.test.ts",
+          "score": 38.295,
+          "matchedOn": [
+            "path",
+            "concept",
+            "import",
+            "graph"
+          ],
+          "symbols": [
+            "runApprovedCommit",
+            "stageFile",
+            "initTempGitRepo"
+          ],
+          "headings": [],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/tools/run-terminal-command.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "__parseStagedDiffHeaderForTest"
+            },
+            {
+              "path": "sdk/src/services/harness-enforcement.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "now"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "query": "context archive memory learning",
+      "results": [
+        {
+          "path": "cli/src/services/memory-v2/context-archive-sync.ts",
+          "score": 108.943,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "persistContextArchiveSnapshotsToRepository",
+            "loadContextArchiveSnapshotsFromRepository",
+            "flushContextArchiveSnapshots",
+            "hydrateContextArchiveSnapshots",
+            "mergeContextArchives"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "f0e2bbec7a4f46a45126f676a4186d46e99bdd0cee65a94ea1ea0280f8486395",
+              "stableChunkId": "dfc2e02794a5635d534919e2e659d1fce75859d9d725edb3f79483f8c417543c",
+              "qualifiedName": "PersistContextArchiveSnapshots",
+              "kind": "type",
+              "startLine": 47,
+              "endLine": 50,
+              "hash": "f6e8ea6560b77224bd67ba957f100f84519add88c488c63dbc2beb1a39f1881a",
+              "score": 8.581
+            },
+            {
+              "chunkId": "577dac946aa1bd6515143c503620ec256a37b6ceb3ebf6c8242a4902f1ecfd59",
+              "stableChunkId": "40b138c221696d5352204dcb2893bc9bd9d567bc5f03d66778dc72b522b1020d",
+              "qualifiedName": "LoadContextArchiveSnapshots",
+              "kind": "type",
+              "startLine": 53,
+              "endLine": 56,
+              "hash": "2cef234370d0ded71c1c58f3ff57692ccdda7ebffdf76b47af22c262b2d0044a",
+              "score": 8.581
+            },
+            {
+              "chunkId": "c45d076194b03f327bff70ce036271a3621004101078b2018431308c9c63bd78",
+              "stableChunkId": "e86eee39fdf7acc045ebb88c90b83db210ece6db0bcd448a2a31c0f120fa78a7",
+              "qualifiedName": "persistContextArchiveSnapshotsToRepository",
+              "kind": "function",
+              "startLine": 86,
+              "endLine": 113,
+              "hash": "f2987128db11ee50ea3a898a9d0333b3ed3693e546ef014de2a0c4393a728902",
+              "score": 8.581
+            },
+            {
+              "chunkId": "4cf5ab0512d94de3e3682efddda0d0fb9a7f0394c6a7c0d4fae8a42393e673b7",
+              "stableChunkId": "b70b70ac80d42e6ae90aa8626980396c313fefba8a13688de23a39753d547180",
+              "qualifiedName": "loadContextArchiveSnapshotsFromRepository",
+              "kind": "function",
+              "startLine": 120,
+              "endLine": 145,
+              "hash": "194f62c7b7f206c9edc197b1d1c4dfca3e511f1d9b1523d4afa4f26f8e19f201",
+              "score": 8.581
+            },
+            {
+              "chunkId": "5235aedf4cb8d1c436d349aaef5c46d3e1c21ac87e58f564f488508e71df38e2",
+              "stableChunkId": "d880af6e0d3c3b6c20cb7fa316899aee774be00be90df1574400c52ac27b895c",
+              "qualifiedName": "flushContextArchiveSnapshots",
+              "kind": "function",
+              "startLine": 155,
+              "endLine": 211,
+              "hash": "fc2e8f3b0499c998ff83ffe0561171617754f7723d87516d919db5402e5a1b44",
+              "score": 8.581
+            }
+          ],
+          "matchedSnippets": [
+            "f0e2bbec7a4f46a45126f676a4186d46e99bdd0cee65a94ea1ea0280f8486395 PersistContextArchiveSnapshots L47-50",
+            "577dac946aa1bd6515143c503620ec256a37b6ceb3ebf6c8242a4902f1ecfd59 LoadContextArchiveSnapshots L53-56",
+            "c45d076194b03f327bff70ce036271a3621004101078b2018431308c9c63bd78 persistContextArchiveSnapshotsToRepository L86-113",
+            "4cf5ab0512d94de3e3682efddda0d0fb9a7f0394c6a7c0d4fae8a42393e673b7 loadContextArchiveSnapshotsFromRepository L120-145",
+            "5235aedf4cb8d1c436d349aaef5c46d3e1c21ac87e58f564f488508e71df38e2 flushContextArchiveSnapshots L155-211"
+          ],
+          "relatedFiles": [
+            {
+              "path": "cli/src/services/memory-v2/__tests__/context-archive-sync.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "flushContextArchiveSnapshots"
+            }
+          ]
+        },
+        {
+          "path": "cli/src/services/memory-v2/__tests__/context-archive-sync.test.ts",
+          "score": 103.66,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "FakeRepository",
+            "persistContextArchiveSnapshots",
+            "loadContextArchiveSnapshots"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "38d9bc00307756bebfb013f4f28716584e823af484d220cc9b4bc3bf0524e0d8",
+              "stableChunkId": "179f2cda50876a6edf4d55bf533bba2ab1c2d5b3e0b39a1dcd67814d62d4d730",
+              "qualifiedName": "FakeRepository/persistContextArchiveSnapshots",
+              "kind": "method",
+              "startLine": 242,
+              "endLine": 245,
+              "hash": "a3f00cc54ec878f906c6f06f32821944701adcfc812395c235f25b850f468b9d",
+              "score": 8.581
+            },
+            {
+              "chunkId": "af223edbce17a0a73d43ec534e5a9b2c4aca9109b4325dc0ad291a7cdd448b5d",
+              "stableChunkId": "eaa37d5b57f1cc35bbdf1d1bc9511634a5b671a455941567f13f914211f39c2e",
+              "qualifiedName": "FakeRepository/loadContextArchiveSnapshots",
+              "kind": "method",
+              "startLine": 246,
+              "endLine": 253,
+              "hash": "a6a36f1a2d62646cb9fbd164787372b5070af021aff0aa3f83e80e97df31e2b1",
+              "score": 8.581
+            }
+          ],
+          "matchedSnippets": [
+            "38d9bc00307756bebfb013f4f28716584e823af484d220cc9b4bc3bf0524e0d8 FakeRepository/persistContextArchiveSnapshots L242-245",
+            "af223edbce17a0a73d43ec534e5a9b2c4aca9109b4325dc0ad291a7cdd448b5d FakeRepository/loadContextArchiveSnapshots L246-253"
+          ],
+          "relatedFiles": [
+            {
+              "path": "cli/src/services/memory-v2/context-archive-sync.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "flushContextArchiveSnapshots"
+            }
+          ]
+        },
+        {
+          "path": "packages/agent-runtime/src/util/context-archive.ts",
+          "score": 102.768,
+          "matchedOn": [
+            "path",
+            "concept",
+            "import",
+            "chunk",
+            "symbol",
+            "graph"
+          ],
+          "symbols": [
+            "archivePreCompaction",
+            "buildCompactionArchivePointers",
+            "archiveEvictedToolResults",
+            "recallFromArchive",
+            "recallFromArchiveByToolCallId",
+            "MAX_ARCHIVE_SNAPSHOTS",
+            "MAX_EVICTION_ARCHIVE_SNAPSHOTS",
+            "MAX_ARCHIVE_MESSAGES",
+            "MAX_ARCHIVE_MESSAGE_CHARS",
+            "EVICTION_ARCHIVE_MESSAGE_CHARS"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "05a34c20bf8956163dab06ab5b4e3cf52ff2b4f91b49a5e270612ae7c85a20c9",
+              "stableChunkId": "3cf1c5f3da8e7ddc3709f5b9a2c0984d3414e963f479c04ef81f02ed62c32038",
+              "qualifiedName": "MAX_ARCHIVE_SNAPSHOTS",
+              "kind": "variable",
+              "startLine": 23,
+              "endLine": 23,
+              "hash": "124f87643c667c8f4c8af9ae3a981429c11630cf4ba718c65555e60c54cbe3c6",
+              "score": 5.326
+            },
+            {
+              "chunkId": "ccd7d7e2ecf4b8c6957cda3cc55015dca539b353572ad411a981234fb02c3e6c",
+              "stableChunkId": "f705ad72ae253281fb7e0038693677b96457b4b754edac472dfdcdf9eacf652e",
+              "qualifiedName": "MAX_EVICTION_ARCHIVE_SNAPSHOTS",
+              "kind": "variable",
+              "startLine": 34,
+              "endLine": 34,
+              "hash": "7751d62503e366732c51d26c0c8423f1d39efb154980e8fdab8b5148980f2825",
+              "score": 5.326
+            },
+            {
+              "chunkId": "7af682e84c270b52d949b0a649fe0adaf6655f1be2b4d0fa63f108d90f00a16d",
+              "stableChunkId": "4ce115f38fb67691dec8a0aee13b3b7f5c7d6ea24820edff93558d4f7ce41b36",
+              "qualifiedName": "MAX_ARCHIVE_MESSAGES",
+              "kind": "variable",
+              "startLine": 35,
+              "endLine": 35,
+              "hash": "2188de9b7caf23871b5862ec03a100b07aa11a2ae508c72b12c02a54423c990f",
+              "score": 5.326
+            },
+            {
+              "chunkId": "e2c29f2fc0ae9fdb75263ed98dfca00462d63fe3e9c1d1f3c6b2e9c710c87c89",
+              "stableChunkId": "2ea3f234ac89afd87db942ad1e18de1b17f735816bb4647a8c25a7eb157d603d",
+              "qualifiedName": "MAX_ARCHIVE_MESSAGE_CHARS",
+              "kind": "variable",
+              "startLine": 36,
+              "endLine": 36,
+              "hash": "497d95731e6b204a1dd6f611fe87096de1de42b1d99908c51ce6198e30cd2515",
+              "score": 5.326
+            },
+            {
+              "chunkId": "be87b3f959029bb717633817fbdc7e02a6dc7428b54992e27d4eaa7bc89a8230",
+              "stableChunkId": "be337f845d56048c956cd8414ef4f4633c1df81f915c24fc5a29fe0e9e1e56da",
+              "qualifiedName": "EVICTION_ARCHIVE_MESSAGE_CHARS",
+              "kind": "variable",
+              "startLine": 45,
+              "endLine": 45,
+              "hash": "b2bba1d6d1dc7ac1adc9edcac669fe0dee2d01dcbd34116b7bb4ab21ff2eb7ab",
+              "score": 5.326
+            }
+          ],
+          "matchedSnippets": [
+            "05a34c20bf8956163dab06ab5b4e3cf52ff2b4f91b49a5e270612ae7c85a20c9 MAX_ARCHIVE_SNAPSHOTS L23-23",
+            "ccd7d7e2ecf4b8c6957cda3cc55015dca539b353572ad411a981234fb02c3e6c MAX_EVICTION_ARCHIVE_SNAPSHOTS L34-34",
+            "7af682e84c270b52d949b0a649fe0adaf6655f1be2b4d0fa63f108d90f00a16d MAX_ARCHIVE_MESSAGES L35-35",
+            "e2c29f2fc0ae9fdb75263ed98dfca00462d63fe3e9c1d1f3c6b2e9c710c87c89 MAX_ARCHIVE_MESSAGE_CHARS L36-36",
+            "be87b3f959029bb717633817fbdc7e02a6dc7428b54992e27d4eaa7bc89a8230 EVICTION_ARCHIVE_MESSAGE_CHARS L45-45"
+          ],
+          "relatedFiles": [
+            {
+              "path": "packages/agent-runtime/src/util/archive-recall-index.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "getArchiveRecallEntry"
+            },
+            {
+              "path": "packages/agent-runtime/src/util/__tests__/context-archive.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "recallFromArchiveByToolCallId"
+            },
+            {
+              "path": "packages/agent-runtime/src/util/__tests__/archive-recall-index.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "archiveEvictedToolResults"
+            },
+            {
+              "path": "packages/agent-runtime/src/tools/handlers/tool/recall-context.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "recallFromArchiveByToolCallId"
+            }
+          ]
+        },
+        {
+          "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+          "score": 93.58,
+          "matchedOn": [
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "path",
+            "graph"
+          ],
+          "symbols": [
+            "openBunSQLiteMemoryRepository",
+            "MemoryV2Failure",
+            "SQLITE_OPEN_POSTURE",
+            "MemoryV2EventInput",
+            "MemoryV2StoredEvent",
+            "MemoryV2AppendEntry",
+            "MemoryV2Capability",
+            "MemoryV2Health",
+            "BunSQLiteMemoryRepositoryOptions",
+            "ProjectionRow"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "a6c08e394ddf91c0a1a3d0be41681700f7ccd4fbd7e94b80efe47e41d76a8697",
+              "stableChunkId": "6e82cba4b07ab7e8c3782a2f9279fb3912f32bf138bac3e7ed41e545ff7661c4",
+              "qualifiedName": "BunSQLiteMemoryRepository/persistContextArchiveSnapshots",
+              "kind": "method",
+              "startLine": 1279,
+              "endLine": 1433,
+              "hash": "6880823f946c71d43f3d84a10f4ff315e4f9c3785305efe1d9c797f6b9ec22ea",
+              "score": 12.159
+            },
+            {
+              "chunkId": "7f8492d039a507e7a70f558fe826bf69e1d3eed54e7507a0c1e65b58ad1396aa",
+              "stableChunkId": "7164ab6f116f0660c2b49a071ff88fd232c1f9b0ea2ad6b3539d33f45a19735e",
+              "qualifiedName": "BunSQLiteMemoryRepository/loadContextArchiveSnapshots",
+              "kind": "method",
+              "startLine": 1442,
+              "endLine": 1489,
+              "hash": "58129d14f19b48e9a93ba3479425ae7a0baad76e4d1d30b77c3ee3d86b5c451d",
+              "score": 12.159
+            },
+            {
+              "chunkId": "3830c8fb14c207f85f59d852c0af00a3c57b10fa4b566a4d45c70707f7c40d46",
+              "stableChunkId": "a321665c711f47c48239c776d3cd5f97ec4ef74ef9666ff77f58bf494aa60883",
+              "qualifiedName": "BunSQLiteMemoryRepository/searchContextArchive",
+              "kind": "method",
+              "startLine": 1501,
+              "endLine": 1584,
+              "hash": "f9e7c0cac2288a15843ca4a5a29f1215279cd503e0d244886e66edbcac1c13f2",
+              "score": 12.159
+            },
+            {
+              "chunkId": "35d54c2fcc0ad36b3d3ca34db5cfee8dda520416490e2f36cb6e5b354731d969",
+              "stableChunkId": "54e2f1d248e1c1a8759f5b837b7e66acee5084db18b2f24c2bac88c1a128f185",
+              "qualifiedName": "CONTEXT_ARCHIVE_TTL_MS",
+              "kind": "variable",
+              "startLine": 124,
+              "endLine": 124,
+              "hash": "a7a35a79343e388897f7b71382f117714b3ffd1f8375589fdb1a82f20034c2fa",
+              "score": 8.581
+            },
+            {
+              "chunkId": "a5dd69581703d48046f29154b25818af731789071f1109459857d48b9f6f395a",
+              "stableChunkId": "cc46894dec8ad4362a9a3da00653f43f4d6c27b3ec161a3c91b76f69847dcbd3",
+              "qualifiedName": "CONTEXT_ARCHIVE_PRUNE_CAP",
+              "kind": "variable",
+              "startLine": 126,
+              "endLine": 126,
+              "hash": "a7e65ec64278efb3aa6bc118a5cb15670e81531d2c7e72e7564d5f2939b9b337",
+              "score": 8.581
+            }
+          ],
+          "matchedSnippets": [
+            "a6c08e394ddf91c0a1a3d0be41681700f7ccd4fbd7e94b80efe47e41d76a8697 BunSQLiteMemoryRepository/persistContextArchiveSnapshots L1279-1433",
+            "7f8492d039a507e7a70f558fe826bf69e1d3eed54e7507a0c1e65b58ad1396aa BunSQLiteMemoryRepository/loadContextArchiveSnapshots L1442-1489",
+            "3830c8fb14c207f85f59d852c0af00a3c57b10fa4b566a4d45c70707f7c40d46 BunSQLiteMemoryRepository/searchContextArchive L1501-1584",
+            "35d54c2fcc0ad36b3d3ca34db5cfee8dda520416490e2f36cb6e5b354731d969 CONTEXT_ARCHIVE_TTL_MS L124-124",
+            "a5dd69581703d48046f29154b25818af731789071f1109459857d48b9f6f395a CONTEXT_ARCHIVE_PRUNE_CAP L126-126"
+          ],
+          "relatedFiles": [
+            {
+              "path": "cli/src/services/memory-v2/__tests__/bun-sqlite-memory-repository.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "persistContextArchiveSnapshots"
+            },
+            {
+              "path": "common/src/types/memory-playbook.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "computeTriggerSignature"
+            }
+          ]
+        },
+        {
+          "path": "packages/agent-runtime/src/util/archive-recall-index.ts",
+          "score": 81.015,
+          "matchedOn": [
+            "concept",
+            "import",
+            "path",
+            "symbol",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "recallFromArchiveIndexed",
+            "buildArchiveRecallRows",
+            "recallEmptyResultMessage"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "370e24c5d86f6df23ce0ad31ce191186c57416c3c6817ec9ac2afe210ada83fe",
+              "stableChunkId": "34fb2159f7f795ebd42dd54007021ceaf1b4aedc86f7c9d551348d0cf041fecf",
+              "qualifiedName": "ArchiveRecallRow",
+              "kind": "type",
+              "startLine": 64,
+              "endLine": 70,
+              "hash": "65744218b3c393be721d17d0a1ba55948ceb7be3b9455df246ac66dcd3a6ff9d",
+              "score": 5.326
+            },
+            {
+              "chunkId": "6e5fa4a65be40d50ef96f2ef2505a9a7858cdf52a1a29e5a4ddcca77ac3c5d89",
+              "stableChunkId": "529c841f17946b01b937a50385b714a59504b48e86abb7ed94b73364861ff1b6",
+              "qualifiedName": "buildArchiveRecallRows",
+              "kind": "function",
+              "startLine": 87,
+              "endLine": 108,
+              "hash": "5bbe5a804871ea3550eae909bada4229d612208f8aa599d99da533ffd816a9ad",
+              "score": 5.326
+            },
+            {
+              "chunkId": "b47145597481eb01765866d747b9106295f778dc121e65fd2d8b1782ac27ba7a",
+              "stableChunkId": "1c78daa89f716d2751e14b1a41637d5da42ca96c12f5c878e48d39873436b524",
+              "qualifiedName": "ArchiveRecallIndexedResult",
+              "kind": "type",
+              "startLine": 179,
+              "endLine": 184,
+              "hash": "7f3ed6efb2f9ebfdd613a50666bf839f9997d99d70f3a57b315cd65cef40e83d",
+              "score": 5.326
+            },
+            {
+              "chunkId": "cd8a7ae234db36ae7067b72dd39aea8042f2c12f73cf8f378acd1326c3130e8b",
+              "stableChunkId": "a426ec8239426f96d300e1d3b8448ec929bb7dd5c77bbdad6ee6b2804891ea57",
+              "qualifiedName": "recallFromArchiveIndexed",
+              "kind": "function",
+              "startLine": 206,
+              "endLine": 311,
+              "hash": "3bc81c3f0d15715c855422ca6f40fe665fb627a21b5e0fbe952e00c9083cd67b",
+              "score": 5.326
+            },
+            {
+              "chunkId": "42e433af9a45eb5a20977161df605538f1cc75b87a60f1631173c7ffa6020712",
+              "stableChunkId": "8cf2ab4224fb3ab775e78a5a9f3b4ec7dfed3a8e17adf2c6415d4b51b924c2ef",
+              "qualifiedName": "openInMemoryDb",
+              "kind": "function",
+              "startLine": 162,
+              "endLine": 177,
+              "hash": "f80ab14ff2e057f6fc13106c8cf41c2a677cacb8ff02006e9a4d697c0c521f64",
+              "score": 3.578
+            }
+          ],
+          "matchedSnippets": [
+            "370e24c5d86f6df23ce0ad31ce191186c57416c3c6817ec9ac2afe210ada83fe ArchiveRecallRow L64-70",
+            "6e5fa4a65be40d50ef96f2ef2505a9a7858cdf52a1a29e5a4ddcca77ac3c5d89 buildArchiveRecallRows L87-108",
+            "b47145597481eb01765866d747b9106295f778dc121e65fd2d8b1782ac27ba7a ArchiveRecallIndexedResult L179-184",
+            "cd8a7ae234db36ae7067b72dd39aea8042f2c12f73cf8f378acd1326c3130e8b recallFromArchiveIndexed L206-311",
+            "42e433af9a45eb5a20977161df605538f1cc75b87a60f1631173c7ffa6020712 openInMemoryDb L162-177"
+          ],
+          "relatedFiles": [
+            {
+              "path": "packages/agent-runtime/src/util/__tests__/archive-recall-index.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "buildArchiveRecallRows"
+            },
+            {
+              "path": "packages/agent-runtime/src/tools/handlers/tool/recall-context.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "recallEmptyResultMessage"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/services/memory-v2/types.ts",
+          "score": 76.991,
+          "matchedOn": [
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "path",
+            "graph"
+          ],
+          "symbols": [
+            "getEffectiveMemoryAuthority",
+            "MemoryV2ClientConfig",
+            "MemoryStoreStats",
+            "PrivilegedCompactionInput",
+            "PrivilegedCompactionResult",
+            "GcCandidateSelection",
+            "MemoryUsageEntry",
+            "MemoryUsageReadRequest",
+            "MemoryClaimDedupEntry",
+            "MemoryClaimDedupReadRequest"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "599932ce1cc1c4603d67a0f865529e13cb8953891a37ed58f7052a1d9b493681",
+              "stableChunkId": "d5a15d82f0c2f8178856bb22844111aac049c02b2d21c5b37d4cbb5093b31049",
+              "qualifiedName": "MemoryRepositoryV2/persistContextArchiveSnapshots",
+              "kind": "method",
+              "startLine": 282,
+              "endLine": 285,
+              "hash": "86a4a7d4a97a4c7b44556593f432de48564cb61c7b0c55343725b1842b0b8459",
+              "score": 12.159
+            },
+            {
+              "chunkId": "c2cd1b1fe20b44d0ea30b06052d4283b00eaf6dd4d00404af4c9d17a61889c27",
+              "stableChunkId": "18d0bca67a00eb48d3f2904670ec8404a8d19f3bac22547cf4ba86557d15bb17",
+              "qualifiedName": "MemoryRepositoryV2/loadContextArchiveSnapshots",
+              "kind": "method",
+              "startLine": 292,
+              "endLine": 295,
+              "hash": "f825f374f25075198d56998002990e2643fb3b5d0d17f4071cd50db711d75dac",
+              "score": 12.159
+            },
+            {
+              "chunkId": "c217a81270e1b1cbc0b54ca506fea43e2c842b75dd676fab4e2c36472dd5437f",
+              "stableChunkId": "d4c1a0a06e80221882a4072cbd92bd2c298ed80ab743026134d309d72c1ef5dc",
+              "qualifiedName": "MemoryRepositoryV2/searchContextArchive",
+              "kind": "method",
+              "startLine": 303,
+              "endLine": 306,
+              "hash": "784f311c51d2234cb08559b4ab0e12fe6e8361ce655bda01c039176fb961dc42",
+              "score": 12.159
+            },
+            {
+              "chunkId": "ad02a298f2f60754d4b34e6803a3368714e9eb2106f0bc2e8f37f0a9f5c827e0",
+              "stableChunkId": "f300795b36f9b8d4bf4ad8d595d7da39f1c605e9bc8759691586bb82c3b50cb4",
+              "qualifiedName": "ContextArchiveSearchMatch",
+              "kind": "interface",
+              "startLine": 188,
+              "endLine": 195,
+              "hash": "0e63c382b58ffcc9df7a49384f1e949e563287699e633550146b65adf4809b8d",
+              "score": 8.581
+            },
+            {
+              "chunkId": "b489581658ad593a6e23d7e386fdf3d12760d0832f25ec2180f1b74aaf59069d",
+              "stableChunkId": "2a5fa5c7d992ad0318efa72f093f5fbf814fabcd1452694789774e742e9a7073",
+              "qualifiedName": "ContextArchiveSearchOutcome",
+              "kind": "interface",
+              "startLine": 198,
+              "endLine": 202,
+              "hash": "33b4b724fd692bf3787240624843de817441d9a97248c65a8809278e73a40244",
+              "score": 8.581
+            }
+          ],
+          "matchedSnippets": [
+            "599932ce1cc1c4603d67a0f865529e13cb8953891a37ed58f7052a1d9b493681 MemoryRepositoryV2/persistContextArchiveSnapshots L282-285",
+            "c2cd1b1fe20b44d0ea30b06052d4283b00eaf6dd4d00404af4c9d17a61889c27 MemoryRepositoryV2/loadContextArchiveSnapshots L292-295",
+            "c217a81270e1b1cbc0b54ca506fea43e2c842b75dd676fab4e2c36472dd5437f MemoryRepositoryV2/searchContextArchive L303-306",
+            "ad02a298f2f60754d4b34e6803a3368714e9eb2106f0bc2e8f37f0a9f5c827e0 ContextArchiveSearchMatch L188-195",
+            "b489581658ad593a6e23d7e386fdf3d12760d0832f25ec2180f1b74aaf59069d ContextArchiveSearchOutcome L198-202"
+          ],
+          "relatedFiles": [
+            {
+              "path": "common/src/types/context-archive.ts",
+              "score": 2.7,
+              "reason": "referenced by this file",
+              "via": "@codebuff/common/types/context-archive"
+            }
+          ]
+        },
+        {
+          "path": "common/src/types/context-archive.ts",
+          "score": 75.156,
+          "matchedOn": [
+            "path",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "a26c5944c39b31e80ee20f9ab8332d8b8ec570793a491ccc11bfc21dc0094e56",
+              "stableChunkId": "96b7dc01276a088cefb2fa536160c8a934fbd0b6528babdc7471883304ccabc7",
+              "qualifiedName": "ContextArchiveSnapshot",
+              "kind": "type",
+              "startLine": 20,
+              "endLine": 48,
+              "hash": "352a112d72c4a74e503a5e4fea18bc4d1b08e2e1c42a7c79ad54a02fec6c014f",
+              "score": 8.581
+            }
+          ],
+          "matchedSnippets": [
+            "a26c5944c39b31e80ee20f9ab8332d8b8ec570793a491ccc11bfc21dc0094e56 ContextArchiveSnapshot L20-48"
+          ],
+          "relatedFiles": [
+            {
+              "path": "cli/src/services/memory-v2/__tests__/context-archive-sync.test.ts",
+              "score": 2.7,
+              "reason": "references this file",
+              "via": "@codebuff/common/types/context-archive"
+            },
+            {
+              "path": "packages/agent-runtime/src/util/__tests__/context-archive.test.ts",
+              "score": 2.7,
+              "reason": "references this file",
+              "via": "@codebuff/common/types/context-archive"
+            },
+            {
+              "path": "packages/agent-runtime/src/util/__tests__/archive-recall-index.test.ts",
+              "score": 2.7,
+              "reason": "references this file",
+              "via": "@codebuff/common/types/context-archive"
+            },
+            {
+              "path": "common/src/types/context-consolidation.ts",
+              "score": 2.7,
+              "reason": "references this file",
+              "via": "./context-archive"
+            }
+          ]
+        },
+        {
+          "path": "cli/src/commands/__tests__/memory-command.test.ts",
+          "score": 73.521,
+          "matchedOn": [
+            "symbol",
+            "concept",
+            "chunk",
+            "path",
+            "import",
+            "graph"
+          ],
+          "symbols": [
+            "createDeps",
+            "makeCompactEnvelope",
+            "makeForgottenEnvelope",
+            "collectArchiveFiles",
+            "makePlaybookRow",
+            "makeLifecycleRows",
+            "playbookRepository",
+            "playbooksDeps",
+            "proposeDeps",
+            "writeProposal"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "7c21717a3f4fbfb90d14be3cf96b4866f617b92e7a52d25979c43e6be72ba4bb",
+              "stableChunkId": "17b0d92b7724466a162eeee71511547f2bed6d1eec1a4e06a3e751aa78b99752",
+              "qualifiedName": "collectArchiveFiles",
+              "kind": "function",
+              "startLine": 1633,
+              "endLine": 1639,
+              "hash": "c46dc7d47c3055e37d3a3cb2469237c869f2af9ed104a78003577a4ab5bba51f",
+              "score": 5.326
+            },
+            {
+              "chunkId": "ad60a057206d1b0fbda1729823f46ee0d4d668477fc356c23c1a8f7f293335d6",
+              "stableChunkId": "aaa0a04eaed16a232967f9f4273e12788a148997136c70451407afe412477ed8",
+              "qualifiedName": "makeMemory",
+              "kind": "function",
+              "startLine": 43,
+              "endLine": 62,
+              "hash": "719307a59a32469f1539675993400db50c808094979ef469972d4ad2b4e04984",
+              "score": 3.578
+            }
+          ],
+          "matchedSnippets": [
+            "7c21717a3f4fbfb90d14be3cf96b4866f617b92e7a52d25979c43e6be72ba4bb collectArchiveFiles L1633-1639",
+            "ad60a057206d1b0fbda1729823f46ee0d4d668477fc356c23c1a8f7f293335d6 makeMemory L43-62"
+          ],
+          "relatedFiles": [
+            {
+              "path": "cli/src/commands/memory-command.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "buildMemoryContentBlock"
+            },
+            {
+              "path": "common/src/types/memory-playbook.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "computeTriggerSignature"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "query": "serve sidecar supervisor capabilities",
+      "results": [
+        {
+          "path": "sdk/src/__tests__/sidecar-supervisor.test.ts",
+          "score": 126.419,
+          "matchedOn": [
+            "concept",
+            "path",
+            "import",
+            "chunk",
+            "symbol",
+            "graph"
+          ],
+          "symbols": [
+            "makeSupervisor",
+            "waitForEvent"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "0be498804432ff6d0577f435f6e1f4aba880593b97a541c17a79bc7609b47031",
+              "stableChunkId": "cabd97fc568e70996ad15629c5f0024104dedb95f21702d69c0f5c3488899ee5",
+              "qualifiedName": "FAKE_SIDECAR_SOURCE",
+              "kind": "variable",
+              "startLine": 22,
+              "endLine": 74,
+              "hash": "5cce352569e84a97ed458bf1cd64eaae41bfc3cf4e617301d3d38bc28c09066b",
+              "score": 5.87
+            },
+            {
+              "chunkId": "cb6ae7105fc922fc11c40f0fe452efeabe5bd0edec0188219cfa0dba377eb188",
+              "stableChunkId": "27f53cf59ea26f81b1868ff63b4596c44520c9744edfcefeb63264e4e5300ad3",
+              "qualifiedName": "supervisors",
+              "kind": "variable",
+              "startLine": 77,
+              "endLine": 77,
+              "hash": "235b58a40768c840d61b13c3e1f8781fa99fdacd954b1a9093f65e11c4810477",
+              "score": 5.716
+            },
+            {
+              "chunkId": "181c22655901fb0544a168619fec6812893e05e1eeecb059d60da57bed6cbd3e",
+              "stableChunkId": "c11ef39403ba998c5eef56fa36f5ab356e5c75f3e07dc9f7a32b7a0073a1cee8",
+              "qualifiedName": "makeSupervisor",
+              "kind": "function",
+              "startLine": 120,
+              "endLine": 130,
+              "hash": "12c95f6ff05bbec1dd2881fa43c0fa4212645c53b472f3570599113ac2570ffa",
+              "score": 5.716
+            }
+          ],
+          "matchedSnippets": [
+            "0be498804432ff6d0577f435f6e1f4aba880593b97a541c17a79bc7609b47031 FAKE_SIDECAR_SOURCE L22-74",
+            "cb6ae7105fc922fc11c40f0fe452efeabe5bd0edec0188219cfa0dba377eb188 supervisors L77-77",
+            "181c22655901fb0544a168619fec6812893e05e1eeecb059d60da57bed6cbd3e makeSupervisor L120-130"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/services/sidecar-supervisor.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "request"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/services/sidecar-supervisor.ts",
+          "score": 124.944,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "SidecarHandshakeError",
+            "SidecarRequestError",
+            "SidecarSupervisor",
+            "state",
+            "stdoutBufferDrops",
+            "performStop",
+            "spawnChild",
+            "handshake",
+            "writeMessage",
+            "consumeStdout"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "047e4915c2c16764e44586c8a419962e14b9da65cbb6993ea99fa245163f2a91",
+              "stableChunkId": "7b588af499b87b283908c4c00cbbbba0dfdacb1ebc947b251c032f720cac1bd2",
+              "qualifiedName": "SidecarSupervisorState",
+              "kind": "type",
+              "startLine": 22,
+              "endLine": 27,
+              "hash": "013bdc63b2dc845ce86cdaa7d6a192475c434df7f4f296516e26fc3905409ef2",
+              "score": 11.585
+            },
+            {
+              "chunkId": "cbc3a2859acb89972daaaf825fe40581df524e88083bb6b76fa5d9033fdaa19b",
+              "stableChunkId": "7c10e181a74163e3caff7fbfeb9dce31adc7efe7118fead2a0ec843e315a06d0",
+              "qualifiedName": "SidecarSupervisorEvent",
+              "kind": "type",
+              "startLine": 29,
+              "endLine": 33,
+              "hash": "d951c5d7b8c54d1a2bcc0bb666c3c33f76c882e0310d5666e18b264a42a836f9",
+              "score": 11.585
+            },
+            {
+              "chunkId": "ed44ca77fa307f1aab76e31e89c284145469a41a490f22e15f2b7bcb1dcb6451",
+              "stableChunkId": "7a271045e5353e5474b1ad448aeb8a08f99f975f02a0db9fb45f60bf607dd9f6",
+              "qualifiedName": "SidecarSupervisorOptions",
+              "kind": "type",
+              "startLine": 40,
+              "endLine": 49,
+              "hash": "dbd6a8671d6e418709590f75e2e4f458c4077f639dc8982d6ef5d46e8827d3e3",
+              "score": 11.585
+            },
+            {
+              "chunkId": "96250ae16b20ff2bb6004f2b76590269a9a56ee407aec7a64b3f26cfb3664b66",
+              "stableChunkId": "6b3f2a6fc834840f424f9e2c1d3a80138614f4cf10b17bfaf1bc5a17b338572b",
+              "qualifiedName": "SidecarSupervisor",
+              "kind": "class",
+              "startLine": 139,
+              "endLine": 560,
+              "hash": "784edd3ba6601568fdfeec9f368f1e5df7edca32ac042b82e89a2062686d68f2",
+              "score": 11.585
+            },
+            {
+              "chunkId": "4a1e14659c2b813ea3288fb0b1fc3db77aabfbf1d7d11751984603c4b759e7a9",
+              "stableChunkId": "cc5593fd44c1e5858a9b097a5abb488b058ef3c16194066df304f64bbfbb5b3a",
+              "qualifiedName": "SidecarSupervisor/constructor",
+              "kind": "method",
+              "startLine": 161,
+              "endLine": 173,
+              "hash": "f6934d07e817c34df790ae035fc18ecfdd556784439ff5706758d97020156fce",
+              "score": 11.585
+            }
+          ],
+          "matchedSnippets": [
+            "047e4915c2c16764e44586c8a419962e14b9da65cbb6993ea99fa245163f2a91 SidecarSupervisorState L22-27",
+            "cbc3a2859acb89972daaaf825fe40581df524e88083bb6b76fa5d9033fdaa19b SidecarSupervisorEvent L29-33",
+            "ed44ca77fa307f1aab76e31e89c284145469a41a490f22e15f2b7bcb1dcb6451 SidecarSupervisorOptions L40-49",
+            "96250ae16b20ff2bb6004f2b76590269a9a56ee407aec7a64b3f26cfb3664b66 SidecarSupervisor L139-560",
+            "4a1e14659c2b813ea3288fb0b1fc3db77aabfbf1d7d11751984603c4b759e7a9 SidecarSupervisor/constructor L161-173"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/__tests__/sidecar-supervisor.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "request"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/services/sidecar-artifact.ts",
+          "score": 81.003,
+          "matchedOn": [
+            "concept",
+            "path",
+            "symbol",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "SidecarArtifactError",
+            "SidecarArtifactFsSeam",
+            "SidecarArtifactDeps",
+            "isSha256Hex",
+            "isHttpUrl",
+            "cacheBasename",
+            "describeError",
+            "isAsyncIterable",
+            "tryReadFile",
+            "removeQuietly"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "24b1ccd90fb514ee556322d331350df4cb2e494659223f98e6c549b7240b031a",
+              "stableChunkId": "9e30a523d90e03dd392d907010077bf1c21592fc314a6f4d4bece056cc83ed2d",
+              "qualifiedName": "SIDECAR_CACHE_DIR_ENV",
+              "kind": "variable",
+              "startLine": 15,
+              "endLine": 15,
+              "hash": "884b9c4a48d23083a8e6c2133a7d90e15ca952366ce90c5f9dce29ed6ad66853",
+              "score": 5.87
+            },
+            {
+              "chunkId": "211113e417e02feb91cab27544a7f92645ce1ab04a8cede615d3fb92c4a3a432",
+              "stableChunkId": "1219417953519c2d9ff4bc6d47e8d1246f0d6d67fa86325ea2ad2d397de1fe68",
+              "qualifiedName": "SidecarArtifactErrorReason",
+              "kind": "type",
+              "startLine": 19,
+              "endLine": 24,
+              "hash": "9707bd1ca6ba9ab53fb02959e6447f82ce082d58022ebb1e40fe2d28dcfad414",
+              "score": 5.87
+            },
+            {
+              "chunkId": "9b19161f796139de18e8eec265e28d9818548910a25a628bd0a90bd1b68ad717",
+              "stableChunkId": "a7bd61788910dafd02f8a3006ffc008d9ffb1a88c3e19dd04a17afae336fae39",
+              "qualifiedName": "SidecarArtifactError",
+              "kind": "class",
+              "startLine": 26,
+              "endLine": 37,
+              "hash": "235202b74710910a2c7f0b43ecbd1c4d7aee53f9ac25517d6468c16f350c499f",
+              "score": 5.87
+            },
+            {
+              "chunkId": "f826433c71937926f1bd6d77741e6b16886fa53c827cb15698891e487b21fda0",
+              "stableChunkId": "bb58a336982faf068edbf3b9e03f9fe5b23c15fe8ab280f6e09ecc96b9fcc7c6",
+              "qualifiedName": "SidecarArtifactError/constructor",
+              "kind": "method",
+              "startLine": 29,
+              "endLine": 36,
+              "hash": "4a9ba3dc043e88ddb555d948bab543faf21f6f61e964be3bb163e63151ff76a8",
+              "score": 5.87
+            },
+            {
+              "chunkId": "6c09357928f1abfac0e373d2c59d521b1396f40b9e4c521a0d7c20f3c0d72491",
+              "stableChunkId": "92113115f4a07e1c0a279725e85ee10256802de20aaa130536512e6ccc381fe4",
+              "qualifiedName": "SidecarArtifactSource",
+              "kind": "type",
+              "startLine": 39,
+              "endLine": 41,
+              "hash": "9fb1d517db4e3159783cb7a5a19ea85b11fe96b7c1afcc063687f117bed4adb7",
+              "score": 5.87
+            }
+          ],
+          "matchedSnippets": [
+            "24b1ccd90fb514ee556322d331350df4cb2e494659223f98e6c549b7240b031a SIDECAR_CACHE_DIR_ENV L15-15",
+            "211113e417e02feb91cab27544a7f92645ce1ab04a8cede615d3fb92c4a3a432 SidecarArtifactErrorReason L19-24",
+            "9b19161f796139de18e8eec265e28d9818548910a25a628bd0a90bd1b68ad717 SidecarArtifactError L26-37",
+            "f826433c71937926f1bd6d77741e6b16886fa53c827cb15698891e487b21fda0 SidecarArtifactError/constructor L29-36",
+            "6c09357928f1abfac0e373d2c59d521b1396f40b9e4c521a0d7c20f3c0d72491 SidecarArtifactSource L39-41"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/__tests__/sidecar-artifact.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "sha256Hex"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/__tests__/serve-socket.test.ts",
+          "score": 74.462,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "startServer",
+            "makeFakeWritableTarget",
+            "connectAuthedClient",
+            "writeFrame",
+            "waitFor",
+            "run"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "174f26bc3e4c14f766440d23170970c47457958b5e0abdb7a116fcf9e23ab52b",
+              "stableChunkId": "1a47857179e3b3ad90378abea79e2396f68dfe2b35d958a70592205522aa5efc",
+              "qualifiedName": "startServer",
+              "kind": "function",
+              "startLine": 69,
+              "endLine": 81,
+              "hash": "7cb23710e56d1c84f8fbb78daef21b686faac8fa0e3fc7e6bff11c860c66159e",
+              "score": 4.999
+            }
+          ],
+          "matchedSnippets": [
+            "174f26bc3e4c14f766440d23170970c47457958b5e0abdb7a116fcf9e23ab52b startServer L69-81"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/__tests__/serve.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "connectAuthedClient"
+            },
+            {
+              "path": "sdk/src/serve/bridge.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "createServeBridge"
+            },
+            {
+              "path": "sdk/src/serve/socket-listener.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "write"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/__tests__/serve.test.ts",
+          "score": 64.087,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "startServe",
+            "connectAuthedClient",
+            "waitFor"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "938f5e21be5b83777b211832d544e461e4fe9e5ed685fe2045644fcbc385c94b",
+              "stableChunkId": "e49cca0e9d06bb06fd01966c5f5a0270b7a3cf49092b6fe11fcf535be500229d",
+              "qualifiedName": "startServe",
+              "kind": "function",
+              "startLine": 69,
+              "endLine": 95,
+              "hash": "810418e6625ed4e8811d9bbe1c80e3ef27c1ca8f8e0a4b73a5fdf3e3fee7f7bc",
+              "score": 4.999
+            }
+          ],
+          "matchedSnippets": [
+            "938f5e21be5b83777b211832d544e461e4fe9e5ed685fe2045644fcbc385c94b startServe L69-95"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/__tests__/serve-socket.test.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "connectAuthedClient"
+            },
+            {
+              "path": "sdk/src/serve/serve.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "runServe"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/serve/serve.ts",
+          "score": 63.036,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "runServe",
+            "resolveServeContainmentRoot"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "a663898cd173270dbf56a2f70facf103908513ca2f853eb0850d752b03bc5a0f",
+              "stableChunkId": "8ebc246bf4d4de706845a521c693d8394b8d83e3d99f3653922bf3d67ca58b28",
+              "qualifiedName": "RunServeOptions",
+              "kind": "type",
+              "startLine": 22,
+              "endLine": 71,
+              "hash": "3fe2aba443d5a29211ae5b892b1d123febf6e639af029752aa5b10d893597021",
+              "score": 4.999
+            },
+            {
+              "chunkId": "31eef8abf4acfcea8b01a9765fa878ef1be3e68542b88933e16ed2db48ba8b22",
+              "stableChunkId": "f622cb259e08a41dea6de2c6d816a55dd11f2c18d05cdb9b030a1a466e261df0",
+              "qualifiedName": "runServe",
+              "kind": "function",
+              "startLine": 79,
+              "endLine": 136,
+              "hash": "82355e424695f49150d1f2debd62014dc7feb1903ace1adf437070b6c864ff0a",
+              "score": 4.999
+            },
+            {
+              "chunkId": "c8d3a07e6d1b221e92d44529dd2c511d5d0f506c60d896207011d3a113b2af88",
+              "stableChunkId": "9108955ac419ecd26cd561f56838ccbe7a2b7cd6a57916fcac933cc3d3377abb",
+              "qualifiedName": "resolveServeContainmentRoot",
+              "kind": "function",
+              "startLine": 145,
+              "endLine": 157,
+              "hash": "74b4361fd61bd25c9496a9f27252b5e022c8a2bb4ef74728318086a5d70772fa",
+              "score": 4.999
+            }
+          ],
+          "matchedSnippets": [
+            "a663898cd173270dbf56a2f70facf103908513ca2f853eb0850d752b03bc5a0f RunServeOptions L22-71",
+            "31eef8abf4acfcea8b01a9765fa878ef1be3e68542b88933e16ed2db48ba8b22 runServe L79-136",
+            "c8d3a07e6d1b221e92d44529dd2c511d5d0f506c60d896207011d3a113b2af88 resolveServeContainmentRoot L145-157"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/__tests__/serve.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "runServe"
+            },
+            {
+              "path": "sdk/src/services/acp/acp-agent.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "serveAcpOverStdio"
+            },
+            {
+              "path": "sdk/src/serve/socket-listener.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "serveAcpOverSocket"
+            },
+            {
+              "path": "docs/audits/read-write-indexing-2026-07-14/findings/cross-layer-contracts.md",
+              "score": 0.648,
+              "reason": "shares concept",
+              "via": "serves"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/mcp/server.ts",
+          "score": 60.787,
+          "matchedOn": [
+            "path",
+            "symbol",
+            "concept",
+            "import",
+            "chunk",
+            "graph"
+          ],
+          "symbols": [
+            "createMcpServer",
+            "runMcp",
+            "MCP_SERVER_NAME",
+            "buildTools",
+            "McpServer",
+            "invalid",
+            "errnoCode",
+            "optionalStringList",
+            "optionalBoundedInt",
+            "validateQueryIndexInput"
+          ],
+          "headings": [],
+          "chunks": [
+            {
+              "chunkId": "a1cb6783de6431a2f90e3084e8478a7df65805173f5a2c38b2f374629dd0bf8c",
+              "stableChunkId": "72cbfffeb5fa165ec92f1a4d5ce65b4c2406501d179743fe417993f153bc2e22",
+              "qualifiedName": "MCP_SERVER_NAME",
+              "kind": "variable",
+              "startLine": 56,
+              "endLine": 56,
+              "hash": "6f71095413aab1180e17c9bb930c6f184b5ef28a05f1c9e99ae26bc70199bf2c",
+              "score": 4.999
+            },
+            {
+              "chunkId": "61c328fcc77aeeca56dfae9e52181c4cd27a42b6ec9bfca9501b08487dd42ae1",
+              "stableChunkId": "426c801ceeb852ea1353f22516d1937e105f253dd6edec04ce93e17aee23ca34",
+              "qualifiedName": "McpServerClient",
+              "kind": "type",
+              "startLine": 467,
+              "endLine": 471,
+              "hash": "f59d93a8833c55a30e0bb70c05bedfdddffbf722e696be83a3b32f5735de6f08",
+              "score": 4.999
+            },
+            {
+              "chunkId": "07fa612f6eab35dc64117943433364ba5d2da20c326bb838ff1a3b3e6389eb8b",
+              "stableChunkId": "31dfb24bbfd54134296a5bea67fd86ab966df44378d5fc2f9290596e205aff93",
+              "qualifiedName": "McpServer",
+              "kind": "interface",
+              "startLine": 498,
+              "endLine": 506,
+              "hash": "d20dca53ae93dd2bc9e61cbb42de3ae18131f717d5b7d2fcb130ad315f256d65",
+              "score": 4.999
+            },
+            {
+              "chunkId": "82d45580966ef1e2a280e06b276f959bc902c9956e8bebae5c73e68272cee5c3",
+              "stableChunkId": "39d38247c25e7255d8db6780734b361c2a1b261bc5b1a2b5a5880182976c78ac",
+              "qualifiedName": "McpServer/connect",
+              "kind": "method",
+              "startLine": 504,
+              "endLine": 504,
+              "hash": "9e830d353e5a6e51d216bf8bc55e4ef88f91513219f33d1d08b7280112198463",
+              "score": 4.999
+            },
+            {
+              "chunkId": "2a960d81cbdfa967ef5e0d411948bbc1e620f799f2a6abaa54518c6ec9cf829a",
+              "stableChunkId": "cf8bb739e126021d41ea4e804a2e6e44b52cdf37ffc10b509edcf085a652a34c",
+              "qualifiedName": "McpServer/close",
+              "kind": "method",
+              "startLine": 505,
+              "endLine": 505,
+              "hash": "4b970f58d6f9e0da65ceb36766109dfb9b52fa5976fcf0265a4d5e54d77a3773",
+              "score": 4.999
+            }
+          ],
+          "matchedSnippets": [
+            "a1cb6783de6431a2f90e3084e8478a7df65805173f5a2c38b2f374629dd0bf8c MCP_SERVER_NAME L56-56",
+            "61c328fcc77aeeca56dfae9e52181c4cd27a42b6ec9bfca9501b08487dd42ae1 McpServerClient L467-471",
+            "07fa612f6eab35dc64117943433364ba5d2da20c326bb838ff1a3b3e6389eb8b McpServer L498-506",
+            "82d45580966ef1e2a280e06b276f959bc902c9956e8bebae5c73e68272cee5c3 McpServer/connect L504-504",
+            "2a960d81cbdfa967ef5e0d411948bbc1e620f799f2a6abaa54518c6ec9cf829a McpServer/close L505-505"
+          ],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/__tests__/mcp-server.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "createMcpServer"
+            }
+          ]
+        },
+        {
+          "path": "sdk/src/__tests__/sidecar-artifact.test.ts",
+          "score": 58.121,
+          "matchedOn": [
+            "concept",
+            "path",
+            "import",
+            "graph"
+          ],
+          "symbols": [
+            "expectedCachePath",
+            "makeFsSeam",
+            "writeFile",
+            "mkdir",
+            "stat",
+            "unlink",
+            "rename",
+            "makeFetch",
+            "captureError",
+            "readFile"
+          ],
+          "headings": [],
+          "relatedFiles": [
+            {
+              "path": "sdk/src/__tests__/sidecar-supervisor.test.ts",
+              "score": 3.3,
+              "reason": "calls this file",
+              "via": "writeFile"
+            },
+            {
+              "path": "sdk/src/services/sidecar-artifact.ts",
+              "score": 3.3,
+              "reason": "called by this file",
+              "via": "sha256Hex"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "query": "commands build test typecheck smoke release",
+      "results": [
+        {
+          "path": "package.json",
+          "score": 151.273,
+          "matchedOn": [
+            "concept",
+            "command"
+          ],
+          "symbols": [],
+          "headings": [],
+          "matchedSnippets": [
+            "package script: dev=bun start-cli",
+            "package script: up=bun scripts/start-services.ts",
+            "package script: start-cli=bun --cwd cli dev",
+            "package script: down=bun scripts/stop-services.ts",
+            "package script: ps=bun scripts/status-services.ts"
+          ],
+          "explanation": "Matched on concept, command. Snippets: package script: dev=bun start-cli; package script: up=bun scripts/start-services.ts; package script: start-cli=bun --cwd cli dev; package script: down=bun scripts/stop-services.ts; package script: ps=bun scripts/status-services.ts. Index age: 285960s (stale)."
+        },
+        {
+          "path": "sdk/package.json",
+          "score": 149.273,
+          "matchedOn": [
+            "concept",
+            "command"
+          ],
+          "symbols": [],
+          "headings": [],
+          "matchedSnippets": [
+            "package script: build=bun run scripts/build.ts",
+            "package script: clean=rm -rf dist",
+            "package script: typecheck=tsc --noEmit -p .",
+            "package script: test=bun test",
+            "package script: test:e2e=bun test e2e/streaming/ e2e/workflows/ e2e/custom-agents/ e2e/features/"
+          ],
+          "explanation": "Matched on concept, command. Snippets: package script: build=bun run scripts/build.ts; package script: clean=rm -rf dist; package script: typecheck=tsc --noEmit -p .; package script: test=bun test; package script: test:e2e=bun test e2e/streaming/ e2e/workflows/ e2e/custom-agents/ e2e/features/. Index age: 285960s (stale)."
+        },
+        {
+          "path": "evals/package.json",
+          "score": 132.291,
+          "matchedOn": [
+            "concept",
+            "command"
+          ],
+          "symbols": [],
+          "headings": [],
+          "matchedSnippets": [
+            "package script: typecheck=tsc --noEmit -p .",
+            "package script: test=bun test",
+            "package script: test:memory-retention=bun test memory-retention/scenario.test.ts",
+            "package script: test:manifold=bun test manifold.test.ts",
+            "package script: test:pglite=bun test pglite-demo.test.ts"
+          ],
+          "explanation": "Matched on concept, command. Snippets: package script: typecheck=tsc --noEmit -p .; package script: test=bun test; package script: test:memory-retention=bun test memory-retention/scenario.test.ts; package script: test:manifold=bun test manifold.test.ts; package script: test:pglite=bun test pglite-demo.test.ts. Index age: 285960s (stale)."
+        },
+        {
+          "path": "cli/package.json",
+          "score": 127.273,
+          "matchedOn": [
+            "concept",
+            "command"
+          ],
+          "symbols": [],
+          "headings": [],
+          "matchedSnippets": [
+            "package script: dev=NEXT_PUBLIC_CB_ENVIRONMENT=dev NEXT_PUBLIC_CODEBUFF_APP_URL=http://localhost:3000 NEXT_PUBLIC_SUPPORT_EMAIL=support@openbuff.local NEXT_PUBLIC_POSTHOG_API_KEY=openbuff-dev NEXT_PUBLIC_POSTH",
+            "package script: prebuild:agents=bun run ../scripts/generate-gate-helpers.ts --write ../agents/base2/base2.ts && bun run ../scripts/generate-pruner-budgets.ts --write ../agents/context-pruner.ts && bun run scri",
+            "package script: build:binary=bun ./scripts/build-binary.ts openbuff $npm_package_version",
+            "package script: release=bun run scripts/release.ts",
+            "package script: test=bun run scripts/run-cli-tests.ts"
+          ],
+          "explanation": "Matched on concept, command. Snippets: package script: dev=NEXT_PUBLIC_CB_ENVIRONMENT=dev NEXT_PUBLIC_CODEBUFF_APP_URL=http://localhost:3000 NEXT_PUBLIC_SUPPORT_EMAIL=support@openbuff.local NEXT_PUBLIC_POSTHOG_API_KEY=openbuff-dev NEXT_PUBLIC_POSTH; package script: prebuild:agents=bun run ../scripts/generate-gate-helpers.ts --write ../agents/base2/base2.ts && bun run ../scripts/generate-pruner-budgets.ts --write ../agents/context-pruner.ts && bun run scri; package script: build:binary=bun ./scripts/build-binary.ts openbuff $npm_package_version; package script: release=bun run scripts/release.ts; package script: test=bun run scripts/run-cli-tests.ts. Index age: 285960s (stale)."
+        },
+        {
+          "path": "scripts/package.json",
+          "score": 121.864,
+          "matchedOn": [
+            "concept",
+            "command"
+          ],
+          "symbols": [],
+          "headings": [],
+          "matchedSnippets": [
+            "package script: typecheck=tsc --noEmit -p .",
+            "package script: test=bun test",
+            "package script: guard:byok-wording=bun run byok-wording-guard.ts",
+            "package script: guard:dependency-provenance=bun run dependency-provenance-guard.ts",
+            "package script: guard:types-declaration=bun run types-declaration-guard.ts"
+          ],
+          "explanation": "Matched on concept, command. Snippets: package script: typecheck=tsc --noEmit -p .; package script: test=bun test; package script: guard:byok-wording=bun run byok-wording-guard.ts; package script: guard:dependency-provenance=bun run dependency-provenance-guard.ts; package script: guard:types-declaration=bun run types-declaration-guard.ts. Index age: 285960s (stale)."
+        },
+        {
+          "path": "scripts/tmux/README.md",
+          "score": 96.004,
+          "matchedOn": [
+            "heading",
+            "concept",
+            "command"
+          ],
+          "symbols": [],
+          "headings": [
+            "tmux TUI Testing Scripts",
+            "Features",
+            "Why These Scripts?",
+            "❌ Characters get dropped!",
+            "Result: Only \"d\" appears in the input!"
+          ],
+          "matchedSnippets": [],
+          "explanation": "Matched on heading, concept, command. Index age: 285960s (stale)."
+        },
+        {
+          "path": ".github/workflows/cli-release-build.yml",
+          "score": 95.987,
+          "matchedOn": [
+            "path",
+            "concept",
+            "command"
+          ],
+          "symbols": [],
+          "headings": [],
+          "matchedSnippets": [
+            "run: bun run scripts/build-binary.ts ${{ inputs.binary-name }} ${{ inputs.new-version }}"
+          ],
+          "explanation": "Matched on path, concept, command. Snippets: run: bun run scripts/build-binary.ts ${{ inputs.binary-name }} ${{ inputs.new-version }}. Index age: 285960s (stale)."
+        },
+        {
+          "path": ".github/workflows/cli-release-staging.yml",
+          "score": 85.191,
+          "matchedOn": [
+            "concept",
+            "path",
+            "command"
+          ],
+          "symbols": [],
+          "headings": [],
+          "matchedSnippets": [
+            "CI workflow commands"
+          ],
+          "explanation": "Matched on concept, path, command. Snippets: CI workflow commands. Index age: 285960s (stale)."
+        }
+      ]
+    }
+  ]
+}

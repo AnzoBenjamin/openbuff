@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-file-explorer-scope-seal",
+  "recordedAt": "2026-11-07T00:07:49.402528+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "scope": "Read-only binding scope for file-explorer fixture; no implementation or full-suite approval.",
+  "files": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/independent-fixture-review/file-explorer-scope/scope.json",
+      "sha256": "a499c3fa5b878036548abd6b9b3b1ed12c18b6ca5f1a172025a36a8568aed1f1",
+      "bytes": 1987
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/independent-fixture-review/file-explorer-scope/SCOPE.md",
+      "sha256": "d6827383ac6abc7e4dae64da6afc71c83edbac41bfc7d22f06f0b416cd45a0b3",
+      "bytes": 1093
+    }
+  ]
+}

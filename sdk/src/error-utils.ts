@@ -10,6 +10,34 @@
  */
 export type HttpError = Error & { statusCode: number }
 
+/** Supported provider/AI SDK wrappers, bounded even for cyclic error causes. */
+export function* providerErrorChain(
+  error: unknown,
+): Generator<Record<string, unknown>> {
+  const pending = [error]
+  const seen = new Set<object>()
+  for (let inspected = 0; pending.length > 0 && inspected < 32; inspected++) {
+    const value = pending.pop()
+    if (!value || typeof value !== 'object' || seen.has(value)) continue
+    seen.add(value)
+    const record = value as Record<string, unknown>
+    yield record
+    if (Array.isArray(record.errors)) pending.push(...record.errors.slice(-8))
+    pending.push(record.cause, record.lastError)
+    // APICallError retains its parsed provider payload in data.error.
+    pending.push(record.data, record.error)
+  }
+}
+
+export function isProviderAbortError(error: unknown): boolean {
+  return [...providerErrorChain(error)].some(
+    (value) =>
+      value.name === 'AbortError' ||
+      value.code === 'ABORT_ERR' ||
+      value.category === 'abort',
+  )
+}
+
 export const PROVIDER_CONTENT_POLICY_ERROR_CODE = 'provider_content_policy'
 
 export type ProviderContentPolicyError = Error & {
@@ -94,12 +122,27 @@ export function isProviderContentPolicyResponse(error: unknown): boolean {
   if (isProviderContentPolicyError(error)) return true
   if (!error || typeof error !== 'object') return false
 
-  const value = error as {
-    message?: unknown
-    responseBody?: unknown
-    data?: unknown
-  }
-  const text = [value.message, value.responseBody, value.data]
+  const values = [...providerErrorChain(error)]
+  const policyCodes = new Set([
+    PROVIDER_CONTENT_POLICY_ERROR_CODE,
+    'content_filter',
+    'content-policy',
+    'content_policy',
+    'policy_violation',
+    'moderation_blocked',
+    'safety_filter',
+  ])
+  if (
+    values.some((value) =>
+      [value.code, value.type, value.category].some(
+        (part) =>
+          typeof part === 'string' && policyCodes.has(part.toLowerCase()),
+      ),
+    )
+  )
+    return true
+  const text = values
+    .flatMap((value) => [value.message, value.responseBody, value.data])
     .filter((part): part is string => typeof part === 'string')
     .join('\n')
     .toLowerCase()
@@ -187,18 +230,14 @@ export function isRetryableStatusCode(statusCode: number | undefined): boolean {
  * Checks both 'statusCode' (our convention) and 'status' (AI SDK's APICallError convention).
  */
 export function getErrorStatusCode(error: unknown): number | undefined {
-  if (error && typeof error === 'object') {
-    // Check 'statusCode' first (our convention)
-    if ('statusCode' in error) {
-      const statusCode = (error as { statusCode: unknown }).statusCode
-      if (typeof statusCode === 'number') {
-        return statusCode
-      }
-    }
-    // Check 'status' (AI SDK's APICallError uses this)
-    if ('status' in error) {
-      const status = (error as { status: unknown }).status
-      if (typeof status === 'number') {
+  for (const value of providerErrorChain(error)) {
+    for (const status of [value.statusCode, value.status]) {
+      if (
+        typeof status === 'number' &&
+        Number.isInteger(status) &&
+        status >= 100 &&
+        status <= 599
+      ) {
         return status
       }
     }

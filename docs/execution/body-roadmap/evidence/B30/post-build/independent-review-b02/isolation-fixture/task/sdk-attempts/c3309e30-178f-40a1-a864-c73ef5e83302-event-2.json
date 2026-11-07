@@ -1,0 +1,21 @@
+{
+  "attemptId": "c3309e30-178f-40a1-a864-c73ef5e83302",
+  "event": {
+    "type": "tool_call",
+    "toolCallId": "a4afa627-7fd0-44aa-b69d-abf38dd8f9d4",
+    "toolName": "set_output",
+    "input": {
+      "analysis": "fixture",
+      "strengths": [],
+      "weaknesses": [],
+      "completionScore": 10,
+      "codeQualityScore": 10,
+      "overallScore": 10
+    },
+    "agentId": "main-agent"
+  },
+  "costUsd": null,
+  "costEvidence": {
+    "status": "unknown"
+  }
+}

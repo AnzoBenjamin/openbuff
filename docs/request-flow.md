@@ -46,6 +46,17 @@ through a hosted Openbuff/Codebuff service in this primary flow.
 
 **File:** `sdk/src/run.ts`
 
+The CLI requests `projectContextMode: 'paths'`: startup and continued turns
+refresh the project paths and knowledge files without parsing every source
+file for symbol scores before contacting the model. `query_index` and
+`read_subtree` still retrieve symbols on demand. SDK callers default to
+`'symbols'` and can opt into the same path-only startup mode.
+
+Run `bun scripts/benchmark-turn-startup.ts` from the repository root to
+compare both modes for initial and continued sessions without model requests.
+Recorded local preparation timings are in
+[`scripts/benchmark-turn-startup-results.json`](../scripts/benchmark-turn-startup-results.json).
+
 1. `run()` → `runOnce()` is called with the prompt, agent ID, cost mode, and
    session state.
 2. When `cwd` is present and the host did not inject a custom filesystem, the
@@ -81,7 +92,6 @@ through a hosted Openbuff/Codebuff service in this primary flow.
 
    Removed tools (`apply_patch`, `apply_smart_patch`, `read_slices`) are no
    longer registered and cannot be called. Two compatibility guarantees remain:
-
    - **Persisted histories stay interpretable.** CLI chat blocks and tool-call
      histories store `toolName` verbatim, so restored sessions can still
      contain a removed name. `getToolMetadata` in
@@ -270,15 +280,15 @@ exposes a stable structured contract to the user:
   surrounding prose.
 - File contents themselves are not logged into gate state or transcripts;
   only the hash/byte-length marker and pass/fail status are recorded.
-- Versioned reviewer results must attest to every pending file. An omitted
-  file is blocking. A snapshot fingerprint MISMATCH is blocking only when
-  file coverage is also incomplete: a coverage-complete review reporting a
-  well-formed v3 fingerprint is trusted even when the snapshot id advanced
-  between its spawn and attestation (the reviewer may have re-read drifted
-  bytes), and the drift is recorded non-silently via
-  `collectReviewerFingerprintDrift`. A missing or non-attestable
-  fingerprint is always blocking. This matches the pinned behavior in
-  `collectReviewerAttestationIssues` (`agents/base2/gate-reviewer.ts`).
+- Versioned reviewer results must attest to every pending file and echo the
+  exact fingerprint supplied for that review's file scope. Missing files,
+  unsupported schemas, and missing or mismatched fingerprints block credit.
+  Specialist reviews also recheck the scoped bytes after the reviewer returns.
+  A protocol failure gets one reviewer-only retry, then remains blocked;
+  neither `LOOKS_GOOD`, parent-owned requirements, nor a spent retry budget
+  grants credit without attestation. Ordinary reviews require all five review
+  dimensions and nonempty requirement evidence. Eligible reduced reviews keep
+  their explicit smaller contract.
 - Missing hooks or hooks that match no changed files are surfaced as
   `REDUCED_ASSURANCE`, not ordinary validation success.
 - Explicit reviewer bypasses retain the reason, authorization timestamp,

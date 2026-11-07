@@ -1,7 +1,68 @@
-import { execSync, exec } from 'child_process'
-import { promisify } from 'util'
+import { isIsolatedEvaluationClient } from './isolated-sdk-client'
+import {
+  withEvaluationEnvironment,
+  type EvaluationExecutionScope,
+} from './evaluation-environment'
+import type { EvaluationArtifactSink } from './evaluation-artifacts'
+import type { RunOutcome } from '@codebuff/common/types/run-outcome'
+import { spawn } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
-const execAsync = promisify(exec)
+/** File-backed capture retains stdout on Bun versions with async pipe defects. */
+async function captureCommand(
+  command: string,
+  args: string[],
+  options: {
+    cwd: string
+    env?: Record<string, string>
+    signal?: AbortSignal
+    shell?: boolean
+  },
+): Promise<{ stdout: string; stderr: string }> {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'buffbench-command-output-'),
+  )
+  const stdoutPath = path.join(root, 'stdout')
+  const stderrPath = path.join(root, 'stderr')
+  const stdoutFd = fs.openSync(stdoutPath, 'wx')
+  const stderrFd = fs.openSync(stderrPath, 'wx')
+  try {
+    const result = await new Promise<{ code: number | null; error?: Error }>(
+      (resolve) => {
+        let launchError: Error | undefined
+        const child = spawn(command, args, {
+          ...options,
+          stdio: ['ignore', stdoutFd, stderrFd],
+        })
+        child.once('error', (error) => {
+          launchError = error
+        })
+        child.once('close', (code) => resolve({ code, error: launchError }))
+      },
+    )
+    const stdout = fs.readFileSync(stdoutPath, 'utf8')
+    const stderr = fs.readFileSync(stderrPath, 'utf8')
+    if (stdout.length + stderr.length > 10 * 1024 * 1024)
+      throw new Error('Evaluation command output exceeds capture limit')
+    if (result.error || result.code !== 0) {
+      throw Object.assign(
+        result.error ?? new Error(`Command exited ${result.code}`),
+        {
+          code: result.error ? (result.error as any).code : result.code,
+          stdout,
+          stderr,
+        },
+      )
+    }
+    return { stdout, stderr }
+  } finally {
+    fs.closeSync(stdoutFd)
+    fs.closeSync(stderrFd)
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+}
 
 import { withTimeout } from '@codebuff/common/util/promise'
 
@@ -44,7 +105,21 @@ export async function runWithTimeoutSignal<T>(
   )
 }
 
-export async function runAgentOnCommit({
+export async function runAgentOnCommit(
+  options: Parameters<typeof runAgentOnCommitWithEnv>[0],
+) {
+  const executionScope = options.executionScope ?? 'trusted_task'
+  if (
+    executionScope === 'key_free_environment' &&
+    !isIsolatedEvaluationClient(options.client)
+  )
+    throw new Error('Key-free evaluation requires the isolated SDK adapter')
+  return withEvaluationEnvironment(executionScope, options.env, (env) =>
+    runAgentOnCommitWithEnv({ ...options, env }),
+  )
+}
+
+async function runAgentOnCommitWithEnv({
   client,
   agentId,
   commit,
@@ -56,6 +131,8 @@ export async function runAgentOnCommit({
   finalCheckCommands,
   cacheRecallEval,
   externalAgentType,
+  artifactSink,
+  executionScope = 'trusted_task',
 }: {
   client: OpenbuffClient
   agentId: string
@@ -68,12 +145,17 @@ export async function runAgentOnCommit({
   finalCheckCommands?: FinalCheckCommand[]
   cacheRecallEval?: CacheRecallEvalConfig
   externalAgentType?: ExternalAgentType
+  artifactSink?: EvaluationArtifactSink
+  executionScope?: EvaluationExecutionScope
 }): Promise<{
   diff: string
   contextFiles: Record<string, string>
   durationMs: number
   cost: number
   error?: string
+  runOutcome?: RunOutcome
+  costEvidence?: { status: 'reported' | 'unknown'; source?: string }
+  executionScope?: EvaluationExecutionScope
   trace: AgentStep[]
   finalCheckOutputs?: FinalCheckOutput[]
   cacheRecallEval?: CacheRecallEvalResult
@@ -85,11 +167,19 @@ export async function runAgentOnCommit({
   let contextFiles: Record<string, string> = {}
   let error: string | undefined
   let cost = 0
+  let runOutcome: RunOutcome | undefined
+  let costEvidence: { status: 'reported' | 'unknown'; source?: string } = {
+    status: 'unknown',
+  }
   const trace: AgentStep[] = []
   let finalCheckOutputs: FinalCheckOutput[] | undefined
   let cacheRecallEvalResult: CacheRecallEvalResult | undefined
 
   try {
+    if (executionScope === 'key_free_environment' && externalAgentType)
+      throw new Error(
+        'Key-free environment mode requires the injected SDK runner; external CLI environment inheritance is unsupported',
+      )
     const timeoutMs = 60 * 60 * 1000 // 60 minutes
     await runWithTimeoutSignal(
       async (timeoutSignal) =>
@@ -99,6 +189,8 @@ export async function runAgentOnCommit({
             parentSha: commit.parentSha,
             initCommand,
             env,
+            inheritEnv: false,
+            signal: timeoutSignal,
           },
           async (repoDir) => {
             // Select the appropriate runner
@@ -119,6 +211,8 @@ export async function runAgentOnCommit({
                 printEvents,
                 commitId: commit.id,
                 parentSha: commit.parentSha,
+                artifactSink,
+                inheritEnv: executionScope !== 'key_free_environment',
               })
             }
 
@@ -132,6 +226,9 @@ export async function runAgentOnCommit({
             trace.push(...result.steps)
             cost = result.totalCostUsd
             diff = result.diff
+            error = result.error
+            runOutcome = result.runOutcome
+            costEvidence = result.costEvidence ?? { status: 'unknown' }
 
             if (cacheRecallEval) {
               cacheRecallEvalResult = evaluateCacheRecall({
@@ -158,21 +255,13 @@ export async function runAgentOnCommit({
               }
             }
 
-            for (const filePath of contextFilePaths) {
-              try {
-                const content = execSync(
-                  `git show ${commit.parentSha}:${JSON.stringify(filePath)}`,
-                  {
-                    cwd: repoDir,
-                    encoding: 'utf-8',
-                    maxBuffer: 10 * 1024 * 1024,
-                  },
-                )
-                contextFiles[filePath] = content
-              } catch (error) {
-                contextFiles[filePath] = ''
-              }
-            }
+            contextFiles = await readContextFiles(
+              repoDir,
+              commit.parentSha,
+              [...contextFilePaths],
+              timeoutSignal,
+              env,
+            )
 
             // Run final check commands if specified
             const resolvedFinalCheckCommands =
@@ -189,6 +278,7 @@ export async function runAgentOnCommit({
                 repoDir,
                 env,
                 timeoutSignal,
+                { executionScope },
               )
             }
 
@@ -205,6 +295,10 @@ export async function runAgentOnCommit({
     )
   } catch (e) {
     error = e instanceof Error ? `${e.message}\n${e.stack}` : String(e)
+    runOutcome = {
+      termination: isAbortError(e) ? 'cancelled' : 'failed',
+      cause: { code: 'evaluation_runner_error', message: error },
+    }
   }
 
   const durationMs = Date.now() - startTime
@@ -215,6 +309,9 @@ export async function runAgentOnCommit({
     durationMs,
     cost,
     error,
+    runOutcome,
+    costEvidence,
+    executionScope,
     trace,
     finalCheckOutputs,
     cacheRecallEval: cacheRecallEvalResult,
@@ -228,6 +325,44 @@ export async function runAgentOnCommit({
       ],
     }),
   }
+}
+
+/** Read parent revisions concurrently while preserving order and per-file fallback. */
+export async function readContextFiles(
+  cwd: string,
+  revision: string,
+  paths: readonly string[],
+  signal?: AbortSignal,
+  env?: Record<string, string>,
+): Promise<Record<string, string>> {
+  const result: Record<string, string> = {}
+  for (let start = 0; start < paths.length; start += 8) {
+    signal?.throwIfAborted()
+    const batch = paths.slice(start, start + 8)
+    const contents = await Promise.all(
+      batch.map(async (filePath) => {
+        try {
+          const { stdout } = await captureCommand(
+            'git',
+            ['show', `${revision}:${filePath}`],
+            {
+              cwd,
+              env,
+              signal,
+            },
+          )
+          return stdout
+        } catch (error) {
+          if (signal?.aborted) throw error
+          return ''
+        }
+      }),
+    )
+    batch.forEach((filePath, index) => {
+      result[filePath] = contents[index]
+    })
+  }
+  return result
 }
 
 export function cacheRecallEvalToFinalCheckOutput(
@@ -245,6 +380,31 @@ export function cacheRecallEvalToFinalCheckOutput(
 }
 
 export async function runFinalCheckCommands(
+  commands: readonly FinalCheckCommand[],
+  cwd: string,
+  env?: Record<string, string>,
+  signal?: AbortSignal,
+  options: {
+    concurrency?: number
+    defaultTimeoutMs?: number
+    executionScope?: EvaluationExecutionScope
+  } = {},
+): Promise<FinalCheckOutput[]> {
+  return withEvaluationEnvironment(
+    options.executionScope ?? 'trusted_task',
+    env,
+    (executionEnv) =>
+      runFinalCheckCommandsWithEnv(
+        commands,
+        cwd,
+        executionEnv,
+        signal,
+        options,
+      ),
+  )
+}
+
+async function runFinalCheckCommandsWithEnv(
   commands: readonly FinalCheckCommand[],
   cwd: string,
   env?: Record<string, string>,
@@ -402,11 +562,10 @@ async function runFinalCheckCommand(
 
   console.log(`  Running [${check.id}]: ${check.command}`)
   try {
-    const { stdout, stderr } = await execAsync(check.command, {
+    const { stdout, stderr } = await captureCommand(check.command, [], {
       cwd,
-      encoding: 'utf-8',
-      maxBuffer: 10 * 1024 * 1024,
-      env: { ...process.env, ...env },
+      shell: true,
+      env,
       signal: controller.signal,
     })
     console.log(`  ✓ Command succeeded [${check.id}]: ${check.command}`)

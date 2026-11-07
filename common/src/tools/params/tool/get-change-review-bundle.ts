@@ -11,7 +11,7 @@ export const getChangeReviewBundleParams = {
   toolName,
   endsAgentStep,
   description:
-    'Builds a read-only, snapshot-scoped change-review bundle from the current Git worktree, including changed files, unified diff, ownership records when available, validation evidence, and reviewer findings. It never clears findings or mutates state. The returned snapshotId is bare hex evidence-only (files/diff/empty-tree identity) — not the gate attestation token. Gate/specialist/security credit uses opaque v3:… tokens from the parent gate (snapshot_id / snapshot_fingerprint), never bare bundle hex as credit identity. Empty/failed bundles must not auto-credit specialists while reviewable pending files still exist.',
+    'Builds a read-only, snapshot-scoped change-review bundle from the current Git worktree, including changed files, unified diff, ownership records when available, validation evidence, and reviewer findings. It never clears findings or mutates state. The returned snapshotId is bare hex evidence-only content-keyed worktree identity (files/diff/empty-tree/HEAD — stable while no file or HEAD changes; a changed id means real worktree content drift) — not the gate attestation token. Gate/specialist/security credit uses opaque v3:… tokens from the parent gate (snapshot_id / snapshot_fingerprint), never bare bundle hex as credit identity. Empty/failed bundles must not auto-credit specialists while reviewable pending files still exist. The success payload carries snapshotIdUsage restating that the bare-hex snapshotId is evidence-only and must never be passed as params.snapshot_id or params.snapshot_fingerprint.',
   inputSchema: z.object({
     max_chars: z.number().int().min(500).max(200_000).optional(),
   }),
@@ -31,6 +31,26 @@ export const getChangeReviewBundleParams = {
         ownership: z.array(z.record(z.string(), z.any())),
         validation: z.array(z.record(z.string(), z.any())),
         findings: z.array(z.record(z.string(), z.any())),
+        // P3-T11 (LI-10): additive Semgrep --baseline-commit layer. Optional
+        // so existing consumers parse unchanged; a soft status, never an
+        // error, when the sidecar is absent/slow/failing.
+        securityScan: z
+          .object({
+            status: z.enum(['ok', 'unavailable', 'error', 'skipped']),
+            findings: z.array(z.record(z.string(), z.any())),
+            reason: z.string().optional(),
+            toolVersion: z.string().optional(),
+            // Additive: set when the scan's file cap (MAX_SEMGREP_FILES)
+            // truncated the scanned file list; optional so existing
+            // consumers parse unchanged.
+            truncated: z.boolean().optional(),
+          })
+          .optional(),
+        // Additive: restates in the payload itself that the bare-hex
+        // snapshotId is evidence-only and must never be passed as
+        // params.snapshot_id or params.snapshot_fingerprint. Optional so
+        // existing consumers parse unchanged.
+        snapshotIdUsage: z.string().optional(),
       }),
       z.object({ errorMessage: z.string() }),
     ]),

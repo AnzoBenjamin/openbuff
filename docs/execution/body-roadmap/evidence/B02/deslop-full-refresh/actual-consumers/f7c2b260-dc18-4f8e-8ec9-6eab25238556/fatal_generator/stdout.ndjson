@@ -1,0 +1,3 @@
+{"type":"start","messageHistoryLength":0}
+{"type":"finish","agentId":"body-runtime-fixture","totalCost":0,"runOutcome":{"termination":"failed","cause":{"code":"programmatic_execution_error","message":"Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator"}},"taskAcceptance":{"status":"unknown"}}
+{"type":"error","message":"Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator","runOutcome":{"termination":"failed","cause":{"code":"programmatic_execution_error","message":"Error executing handleSteps for agent body-runtime-fixture: fixture fatal generator"}},"taskAcceptance":{"status":"unknown"}}

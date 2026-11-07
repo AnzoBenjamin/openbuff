@@ -1,0 +1,3625 @@
+import path from 'path'
+import { rmSync } from 'node:fs'
+
+import { callMainPrompt } from '@codebuff/agent-runtime/main-prompt'
+import {
+  buildUserMessageContent,
+  withSystemTags,
+} from '@codebuff/agent-runtime/util/messages'
+import { MAX_AGENT_STEPS_DEFAULT } from '@codebuff/common/constants/agents'
+import {
+  getMCPClient,
+  getMCPClientCacheKey,
+  listMCPTools,
+  callMCPTool,
+  resolveMCPConfigOrigin,
+} from '@codebuff/common/mcp/client'
+import type { MCPConfig } from '@codebuff/common/types/mcp'
+import { toolNames } from '@codebuff/common/tools/constants'
+import {
+  fileMutationResultV1Schema,
+  getConfirmedAppliedActionsV1,
+  type CommitReceiptV1,
+  type FileMutationResultV1,
+} from '@codebuff/common/tools/results/filesystem'
+import {
+  clientToolCallSchema,
+  clientToolNames,
+} from '@codebuff/common/tools/list'
+import { parseJsonBounded } from '@codebuff/common/tools/params/utils'
+import { AgentOutputSchema } from '@codebuff/common/types/session-state'
+import { advanceWorkspaceState } from '@codebuff/common/types/workspace-state'
+import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
+import { extractApiErrorDetails } from '@codebuff/common/util/error'
+import { jobRegistry } from '@codebuff/common/util/job-registry'
+import { ensureExternalReadRootsConfigured } from '@codebuff/common/util/project-path-containment'
+import { stableHash } from '@codebuff/common/util/stable-hash'
+import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
+import { cloneDeep } from 'lodash'
+
+import { getErrorStatusCode } from './error-utils'
+import { createJobUpdateForwarder } from './job-update-forwarder'
+import { getHarnessStateDir, getConfigDir } from './credentials'
+import { getAgentRuntimeImpl } from './impl/agent-runtime'
+import { loadProviderConfigSync } from './provider-config'
+import { initialSessionState, applyOverridesToSessionState } from './run-state'
+import {
+  codebuffFsToNodePromises,
+  saveMergedTaskMemory,
+} from './services/task-memory-store'
+import { WorkspaceJournalService } from './services/workspace-journal'
+import { WorkspaceMutationBroker } from './services/workspace-mutation-broker'
+import { LocalHarnessStore } from './services/local-harness-store'
+import {
+  captureDiagnosticObservation,
+  type DiagnosticCapture,
+} from './services/diagnostic-delta'
+import {
+  createDiagnosticCommandRunner,
+  createDiagnosticDeltaHook,
+} from './services/diagnostic-delta-runner'
+import {
+  diagnosticFileSet,
+  diagnosticPostimageMatches,
+} from './services/diagnostic-baseline'
+import { MemoryV2Coordinator } from './services/memory-v2/coordinator'
+import type { MemoryV2ClientConfig } from './services/memory-v2/types'
+import {
+  HarnessApprovalService,
+  evaluateHarnessActionPolicy,
+  hashCommand,
+} from './services/harness-enforcement'
+import type {
+  HarnessApprovalMode,
+  HarnessApprovalRequest,
+} from './services/harness-enforcement'
+import { changeFile, changeFiles } from './tools/change-file'
+import { getDefaultFilesystemAuthority } from './tools/filesystem-authority'
+import { codeSearch } from './tools/code-search'
+import { findFilesMatchingContent } from './tools/find-files-matching-content'
+import { glob } from './tools/glob'
+import { listDirectory } from './tools/list-directory'
+import {
+  getFileForEditResult,
+  getFilesStructured,
+  normalizeReadFilesOverrideResult,
+} from './tools/read-files'
+import { readImages } from './tools/read-image'
+import { edit3dAsset, inspect3dAsset, render3dPreview } from './tools/3d-assets'
+import {
+  browserLogs,
+  stopBrowserSessionsByOwner,
+  type BrowserSessionOwner,
+} from './tools/browser-logs'
+import { replaceRange } from './tools/replace-range'
+import { runTerminalCommand } from './tools/run-terminal-command'
+import { checkJob } from './tools/check-job'
+import { killJob } from './tools/kill-job'
+import { readLogs } from './tools/read-logs'
+import { gitStatus } from './tools/git-status'
+import { inspectWorkspace } from './tools/inspect-workspace'
+import { getTask } from './tools/get-task'
+import { getChangeReviewBundle } from './tools/get-change-review-bundle'
+import { runTargetedValidation } from './tools/run-targeted-validation'
+import { inspectEnvironment } from './tools/inspect-environment'
+import { getAffectedTests } from './tools/get-affected-tests'
+import { getBuildTargets } from './tools/get-build-targets'
+import { findReferences } from './tools/find-references'
+import { goToDefinition } from './tools/go-to-definition'
+import { hoverType } from './tools/hover-type'
+import { workspaceSymbol } from './tools/workspace-symbol'
+import { renameSymbol } from './tools/rename-symbol'
+import { codeAction } from './tools/code-action'
+import { extractSymbol } from './tools/extract-symbol'
+import {
+  createLanguageIntelligence,
+  type LanguageIntelligenceService,
+} from './services/language-intelligence'
+import {
+  evaluateAuditCoverageTool,
+  inspectCodebaseStructureTool,
+  inspectFeatureCompletenessTool,
+} from './tools/audit-intelligence'
+import { gitBranch } from './tools/git-branch'
+import {
+  isDiagnosticPreflightEnabled,
+  runFileChangeHooks,
+  type DiagnosticDeltaHook,
+} from './tools/file-change-hooks'
+import {
+  findFileMutationResult,
+  writeAuditFindings,
+} from './tools/write-audit-findings'
+import { createNodeFileSystem } from './tools/node-filesystem'
+import {
+  createTransactionIntentLogForWorkspace,
+  recoverAndRevertInterruptedTransactions,
+  type TransactionIntentLog,
+} from './tools/transaction-intent-log'
+import type { FilesystemAuthorityPolicy } from './tools/filesystem-authority'
+
+import type { CustomToolDefinition } from './custom-tool'
+import type { RunState } from './run-state'
+import { projectRunOutcomes } from './run-state'
+import type { RunOutcome } from '@codebuff/common/types/run-outcome'
+import type { FileFilter } from './tools/read-files'
+import type { FileLineRange } from '@codebuff/common/types/contracts/client'
+import type { ReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
+import type { ServerAction } from '@codebuff/common/actions'
+import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
+import type {
+  PublishedToolName,
+  ToolName,
+} from '@codebuff/common/tools/constants'
+import type { ClientToolName } from '@codebuff/common/tools/list'
+import type { CodebuffToolCall } from '@codebuff/common/tools/list'
+import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type { ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
+import type {
+  ImagePart,
+  TextPart,
+  ToolResultOutput,
+} from '@codebuff/common/types/messages/content-part'
+import type { PlaybookGateOutcomeEvent } from '@codebuff/common/types/memory-playbook'
+import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+import type { SessionState } from '@codebuff/common/types/session-state'
+import type { JobOwner } from '@codebuff/common/util/job-registry'
+import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
+import type { Source } from '@codebuff/common/types/source'
+import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import { listJobs } from './tools/list-jobs'
+
+import type { ListJobsViewRow } from '@codebuff/common/util/list-jobs-view'
+import { fingerprintListJobsRows } from '@codebuff/common/util/list-jobs-view'
+import { getSystemProcessEnv } from './env'
+import { spawn as nodeSpawn } from 'node:child_process'
+import type {
+  JournalReader,
+  JournalWriter,
+} from '@codebuff/common/types/contracts/agent-runtime'
+import { createRunResumeDriver } from './services/run-resume-driver'
+
+/**
+ * Audit fix (D): tool calls whose receipt can contain file actions — the same
+ * set that reaches handleToolCall's post-commit mutation block (the change-
+ * file tools plus the compact-receipt tools). rename_symbol, code_action,
+ * and extract_symbol ride the same compact-receipt channel as
+ * write_audit_findings, so they are baseline-captured too. Mirrors the
+ * toolName list the override receipt guard uses there.
+ */
+const DIAGNOSTIC_BASELINE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'write_file',
+  'str_replace',
+  'create_plan',
+  'edit_transaction',
+  'replace_range',
+  'write_audit_findings',
+  'rename_symbol',
+  'code_action',
+  'extract_symbol',
+])
+
+/**
+ * Audit fix (D): bounded file list for the pre-edit baseline capture — the
+ * paths a mutating tool call targets, derived from its input WITHOUT any
+ * schema change. Each tool input carries at most a few paths, so the list is
+ * bounded by construction; supportedDiagnosticFiles filters it further before
+ * capture, and an empty output means no capture runs at all.
+ */
+function diagnosticBaselineFiles(toolName: string, input: unknown): string[] {
+  const record = (input ?? {}) as Record<string, unknown>
+  switch (toolName) {
+    case 'write_file':
+    case 'str_replace':
+    case 'create_plan':
+    case 'replace_range':
+    // rename_symbol, code_action, and extract_symbol are single-`path`
+    // mutating tools that reach the same post-commit mutation block via the
+    // compact-receipt channel, so they get the same `input.path` baseline
+    // branch. (extract_symbol's destination is a NEW file, so it needs no
+    // pre-edit baseline.)
+    case 'rename_symbol':
+    case 'code_action':
+    case 'extract_symbol': {
+      const file = typeof record.path === 'string' ? record.path : undefined
+      return file ? [file] : []
+    }
+    case 'edit_transaction': {
+      const edits = Array.isArray(record.edits) ? record.edits : []
+      const files = new Set<string>()
+      for (const edit of edits) {
+        if (!edit || typeof edit !== 'object') continue
+        const editPath = (edit as { path?: unknown }).path
+        if (typeof editPath === 'string' && editPath !== '') {
+          files.add(editPath)
+        }
+      }
+      return [...files]
+    }
+    default:
+      return []
+  }
+}
+
+/**
+ * Stable trusted background-job ownership seed for THIS client session.
+ *
+ * The seed is created lazily ONCE per process (never per run), so consecutive
+ * `run()` calls from the same CLI session resolve the same
+ * `trustedJobOwner.clientSessionId`. That keeps a background process spawned in
+ * turn N owned (and manageable via check_job/kill_job/read_logs/list_jobs /
+ * end_turn) in turn N+1, instead of every new run stamping a fresh random id
+ * that makes all earlier jobs look 'foreign'.
+ *
+ * Trust invariants (unchanged):
+ * - The seed is runtime-owned process state; it is NEVER derived from model,
+ *   tool input, or anything the model can influence.
+ * - It is scoped to one client session/process, so separate sessions stay
+ *   distinct owners.
+ * - `sessionState` itself carries no stable session-level identifier today
+ *   (`AgentState` has only per-run `runId` / deprecated `agentId`, and turn
+ *   ids like `promptId` are per-run by design), which is exactly why a
+ *   process-owned seed is used. No per-run fallback is needed: every
+ *   background job this session spawns is stamped with this same seed.
+ */
+let trustedSessionClientId: string | undefined
+
+/**
+ * Exported for tests: the same accessor `runOnce` uses, so ownership tests
+ * can pin consecutive-run stability against the production symbol.
+ */
+export function getTrustedSessionClientId(): string {
+  trustedSessionClientId ??= crypto.randomUUID()
+  return trustedSessionClientId
+}
+
+/**
+ * Wraps content for user messages, ensuring text is wrapped in <user_message> tags.
+ * Uses buildUserMessageContent from agent-runtime for consistency.
+ */
+const wrapContentForUserMessage = (
+  content?: (TextPart | ImagePart)[],
+): (TextPart | ImagePart)[] | undefined => {
+  if (!content || content.length === 0) {
+    return content
+  }
+  // Delegate to the shared utility which handles wrapping correctly
+  return buildUserMessageContent(undefined, undefined, content)
+}
+
+export type OverrideExecutionContextV1 = {
+  abiVersion: 'v1'
+  signal: AbortSignal
+}
+
+export type OverrideDescriptor<TInput, TV0Output, TV1Output = TV0Output> =
+  | ((input: TInput) => Promise<TV0Output>)
+  | {
+      version: 'v0'
+      execute: (input: TInput) => Promise<TV0Output>
+    }
+  | {
+      version: 'v1'
+      execute: (
+        input: TInput,
+        context: OverrideExecutionContextV1,
+      ) => Promise<TV1Output>
+    }
+
+type PublishedToolInput<T extends PublishedToolName> = Extract<
+  CodebuffToolCall,
+  { toolName: T }
+>['input']
+
+export type ClientToolOverrides = {
+  [T in Exclude<PublishedToolName, 'read_files'>]?: OverrideDescriptor<
+    PublishedToolInput<T>,
+    ToolResultOutput[]
+  >
+} & {
+  read_files?: OverrideDescriptor<
+    { filePaths: string[]; ranges?: FileLineRange[] },
+    ReadFilesResultV1
+  >
+}
+
+export type OpenbuffClientOptions = {
+  apiKey?: string
+
+  cwd?: string
+  /** Optional directory path to load skills from. Skills found here will be available to the `skill` tool. */
+  skillsDir?: string
+  projectFiles?: Record<string, string>
+  /** Use paths to defer repository-wide symbol parsing to retrieval tools. Defaults to symbols. */
+  projectContextMode?: 'paths' | 'symbols'
+  knowledgeFiles?: Record<string, string>
+  agentDefinitions?: AgentDefinition[]
+  /**
+   * Host-supplied MCP servers to attach to the agent being run. They are
+   * merged (by object REFERENCE, never cloned) into the resolved agent
+   * template's `mcpServers` after the session state is built, so the run
+   * loop's getMCPToolData picks them up. Callers that need these treated as
+   * untrusted (e.g. the serve bridge, for client-advertised servers) mark them
+   * with markAllMCPConfigOrigins BEFORE passing them here; run() never
+   * re-marks or clones them, so the identity-keyed origin marks survive to
+   * resolveMCPConfigOrigin.
+   */
+  mcpServers?: Record<string, MCPConfig>
+  maxAgentSteps?: number
+  /** (Optional) Cap on how many times the agent retries a structured set_output after ending its turn without one. Omit for unlimited retries (bounded by maxAgentSteps). */
+  maxMissingOutputRetries?: number
+  env?: Record<string, string>
+  /** Whether terminal commands inherit the host process environment. Defaults
+   * to true. False uses only env (then applies the credential scrub). This
+   * controls child commands; it does not isolate SDK/provider execution. */
+  inheritEnv?: boolean
+  /** Harness control-plane state root. Defaults to the Openbuff config directory. */
+  harnessStateDir?: string
+  /** Pre-created, exact-scope approval receipt IDs available to this run.
+   * Receipts are matched and consumed atomically only for the high-impact
+   * action, workspace, root run, and current snapshot they authorize. */
+  approvalReceiptIds?: string[]
+  /** Approval behavior for classified terminal effects. Defaults to balanced. */
+  approvalMode?: HarnessApprovalMode
+  /** Host callback used to pause the current run for an exact approval. */
+  requestApproval?: (request: HarnessApprovalRequest) => Promise<boolean>
+
+  handleEvent?: (event: PrintModeEvent) => void | Promise<void>
+  handleStreamChunk?: (
+    chunk:
+      | string
+      | {
+          type: 'subagent_chunk'
+          agentId: string
+          agentType: string
+          chunk: string
+        }
+      | {
+          type: 'reasoning_chunk'
+          agentId: string
+          ancestorRunIds: string[]
+          chunk: string
+        },
+  ) => void | Promise<void>
+
+  /** Optional filter to classify files before reading (runs before gitignore check) */
+  fileFilter?: FileFilter
+
+  /** Operation- and phase-aware policy composed after mandatory safeguards. */
+  filesystemPolicy?: FilesystemAuthorityPolicy
+
+  overrideTools?: ClientToolOverrides
+  customToolDefinitions?: CustomToolDefinition[]
+
+  /** Called after a file-mutating tool (write_file/str_replace/edit_transaction/
+   *  replace_range) runs, so a host can invalidate caches such as
+   *  the codebase index. Best-effort; never blocks the tool result. */
+  onFilesChanged?: () => unknown | Promise<unknown>
+
+  /** Awaited after a confirmed mutation so hosts can update indexes precisely. */
+  onFilesystemMutation?: (
+    event: FilesystemMutationEvent,
+  ) => void | Promise<void>
+
+  /** Host attestation hook for v1 mutation overrides. Without it, external
+   * mutation results remain conservatively unconfirmed. */
+  verifyExternalMutation?: (params: {
+    toolName: string
+    callId: string
+    result: FileMutationResultV1
+  }) => boolean | Promise<boolean>
+
+  fsSource?: Source<CodebuffFileSystem>
+  spawnSource?: Source<CodebuffSpawn>
+  logger?: Logger
+
+  /** Runtime-neutral Memory V2 configuration. Authority defaults from legacy mode (shadow when omitted). */
+  memoryV2?: MemoryV2ClientConfig
+
+  /** Overall wall-clock timeout for a single run, in milliseconds. When set,
+   *  the returned promise settles with an error RunState if the run has not
+   *  completed within this duration, so a silent network drop can no longer
+   *  hang the caller forever. Default: disabled (undefined). The timer is
+   *  unref'd so it won't keep a host process alive on its own; it still fires
+   *  while the event loop is busy with the active run. */
+  runTimeoutMs?: number
+
+  /**
+   * P1-T3 backend seam. Optional pluggable execution backend for
+   * `OpenbuffClient.run()`. When omitted, the in-process backend (today's
+   * `run()`) is used and behavior is byte-identical to before. Supplying a
+   * backend (e.g. `AcpRemoteBackend`) routes the run through it instead, so a
+   * host can attach to a live `openbuff serve` session. Additive-optional.
+   */
+  backend?: import('./client/backend').ClientBackend
+
+  /** P2-T2: append-only run-journal writer (see createRunJournal in
+   *  @codebuff/agent-runtime/util/run-journal). Threaded into the agent
+   *  runtime deps so the run loop journals tool_call/tool_result/step
+   *  boundaries for crash-safe resume. Additive-optional: a run without it
+   *  is byte-identical to today (no journaling occurs). */
+  journalWriter?: JournalWriter
+
+  /** P2-T2: run-journal reader threaded into the agent runtime deps so the
+   *  existing guarded block in runAgentStep classifies/replays interrupted
+   *  prior work, and so the §4c replay short-circuit reuses journaled tool
+   *  results (keyed deterministically by toolName+input per P2-T2-DESIGN §5,
+   *  never by the freshly-minted toolCallId). Additive-optional. */
+  journalReader?: JournalReader
+}
+
+export type FilesystemMutationEvent = {
+  toolName: string
+  callId: string
+  operationId: string
+  receiptId?: string
+  workspaceRevision: number
+  workspaceSnapshotId: string
+  actions: Array<{
+    action: 'create' | 'update' | 'delete' | 'move'
+    path: string
+    destinationPath?: string
+    beforeHash: string | null
+    afterHash: string | null
+  }>
+}
+
+/** @deprecated Use `OpenbuffClientOptions` instead. Kept as a compatibility
+ * alias so existing imports continue to resolve after the SDK rename. */
+export type CodebuffClientOptions = OpenbuffClientOptions
+
+export type ImageContent = {
+  type: 'image'
+  image: string // base64 encoded
+  mediaType: string
+}
+
+export type TextContent = {
+  type: 'text'
+  text: string
+}
+
+export type MessageContent = TextContent | ImageContent
+
+export type RunOptions = {
+  agent: string | AgentDefinition
+  prompt: string
+  /** Content array for multimodal messages (text + images) */
+  content?: MessageContent[]
+  params?: Record<string, any>
+  previousRun?: RunState
+  extraToolResults?: ToolMessage[]
+  signal?: AbortSignal
+  costMode?: string
+  /** Extra key/values merged into each LLM request's `codebuff_metadata`.
+   *  Used by hosts (e.g. the CLI) to forward client-scoped identifiers or
+   *  provider-routing metadata that downstream adapters read from the request body. */
+  extraCodebuffMetadata?: Record<string, string>
+
+  /** P2-3: Mid-turn checkpoint callback. When provided, the main agent loop
+   *  invokes it with a snapshot of `mainAgentState` after each step boundary,
+   *  time-throttled (30s), so a crashed/killed session can resume mid-turn from
+   *  the last checkpoint rather than losing all in-flight work. The host (CLI)
+   *  supplies a writer that persists atomically (temp file + rename). Failures
+   *  inside the callback are caught and logged by the loop — they never kill
+   *  the run. */
+  onCheckpoint?: (agentState: SessionState['mainAgentState']) => void
+
+  /** P2-3: When true, the user prompt is already present in
+   *  `previousRun.sessionState.mainAgentState.messageHistory` (restored from a
+   *  checkpoint), so the main agent loop must NOT re-append a USER_PROMPT
+   *  message. The CLI sets this when it detects a valid checkpoint for the
+   *  current turn and resumes from it. */
+  resumeInterruptedTurn?: boolean
+}
+
+const createAbortError = (signal?: AbortSignal) => {
+  if (signal?.reason instanceof Error) {
+    return signal.reason
+  }
+  const error = new Error('Aborted')
+  error.name = 'AbortError'
+  return error
+}
+
+/**
+ * `path.relative`-based containment, the convention used throughout this
+ * codebase. `startsWith` is treated as a bug here: a sibling directory such as
+ * `<configDir>-evil` shares the prefix but is NOT contained.
+ */
+function isPathInsideDirectory(directory: string, candidate: string): boolean {
+  const relative = path.relative(
+    path.resolve(directory),
+    path.resolve(candidate),
+  )
+  return (
+    relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
+  )
+}
+
+/** Outcome of the ER-1 `readableRoots` trust gate. */
+export type TrustedReadableRootsSelection = {
+  /** Roots that may be registered with the external read allowlist. */
+  trusted: string[]
+  /**
+   * How many ABSOLUTE roots were dropped for untrusted provenance. Reported as
+   * a count only, never as paths: a user's home-directory paths are mildly
+   * sensitive and the warning that carries this may be shared.
+   */
+  untrustedCount: number
+}
+
+/**
+ * ER-1 trust gate for `readableRoots`, extracted as a PURE function so the
+ * decision that lets a cloned repository allowlist credential directories is
+ * directly testable (see `sdk/src/__tests__/model-provider.test.ts`).
+ *
+ * TRUSTED: the root's declaring config file lives inside `configDir`
+ *   (user-owned). Always registered.
+ * UNTRUSTED: declared anywhere else (project or ancestor `openbuff.json`), or
+ *   with no recorded provenance at all — fail CLOSED and drop it unless
+ *   `trustProjectRoots` (OPENBUFF_TRUST_PROJECT_READABLE_ROOTS=1) is set.
+ *
+ * Relative entries are dropped rather than guessed — the declaring config may
+ * be a global file loaded from an unrelated directory, so anchoring to
+ * `process.cwd()` could allowlist something the user never intended — and they
+ * are NOT counted as untrusted, since nothing was refused on trust grounds.
+ */
+export function selectTrustedReadableRoots(params: {
+  roots: readonly string[]
+  sources: Record<string, string>
+  configDir: string
+  trustProjectRoots: boolean
+}): TrustedReadableRootsSelection {
+  const { roots, sources, configDir, trustProjectRoots } = params
+  const trusted: string[] = []
+  let untrustedCount = 0
+  for (const root of roots) {
+    if (!path.isAbsolute(root)) continue
+    const sourceFile = sources[path.resolve(root)]
+    if (sourceFile && isPathInsideDirectory(configDir, sourceFile)) {
+      trusted.push(root)
+      continue
+    }
+    if (trustProjectRoots) {
+      trusted.push(root)
+      continue
+    }
+    untrustedCount++
+  }
+  return { trusted, untrustedCount }
+}
+
+async function executeOverride<TInput, TV0Output, TV1Output>({
+  override,
+  input,
+  signal,
+}: {
+  override: OverrideDescriptor<TInput, TV0Output, TV1Output>
+  input: TInput
+  signal: AbortSignal
+}): Promise<TV0Output | TV1Output> {
+  if (signal.aborted) {
+    throw createAbortError(signal)
+  }
+
+  const execution: Promise<TV0Output | TV1Output> = (async () => {
+    if (typeof override === 'function') {
+      return override(input)
+    }
+    if (override.version === 'v1') {
+      return override.execute(input, { abiVersion: 'v1', signal })
+    }
+    return override.execute(input)
+  })()
+
+  return raceAgainstAbort(execution, signal)
+}
+
+function raceAgainstAbort<T>(
+  execution: Promise<T>,
+  signal: AbortSignal,
+): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(createAbortError(signal))
+  }
+
+  // A legacy v0 override may ignore cancellation. Racing it lets the native
+  // scheduler unwind while deliberately suppressing any late self-reported
+  // result. The external side effect remains unconfirmed by contract.
+  const abort = new Promise<never>((_, reject) => {
+    const rejectOnAbort = () => reject(createAbortError(signal))
+    if (signal.aborted) {
+      rejectOnAbort()
+      return
+    }
+    signal.addEventListener('abort', rejectOnAbort, { once: true })
+    void execution.then(
+      () => signal.removeEventListener('abort', rejectOnAbort),
+      () => signal.removeEventListener('abort', rejectOnAbort),
+    )
+  })
+
+  return Promise.race([execution, abort])
+}
+
+/**
+ * File moves recorded in the workspace journal, oldest-last, used to rebind
+ * persisted task-memory evidence paths across sessions. Bounded defensively.
+ */
+export function collectWorkspaceMoves(
+  workspaceJournal: WorkspaceJournalService | undefined,
+): { from: string; to: string }[] {
+  if (!workspaceJournal) return []
+  try {
+    const moves: { from: string; to: string }[] = []
+    for (const record of workspaceJournal.read().changes) {
+      for (const action of record.actions) {
+        if (action.action === 'move' && action.path && action.destinationPath) {
+          moves.push({ from: action.path, to: action.destinationPath })
+        }
+      }
+    }
+    return moves.slice(-64)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Post-run persistence gate for cross-session task memory. Persists whenever a
+ * `cwd` is set and the run produced task memory, regardless of `output.type`:
+ * cancelled and aborted runs always carry an `error` output, and gating on that
+ * threw away everything a Ctrl-C'd session learned. This is safe because the
+ * value is a committed `TaskMemoryV1` produced by `commitTaskMemory` from work
+ * that actually happened, and `saveMergedTaskMemory` merges rather than
+ * overwrites — so a partial session contributes what it learned instead of
+ * discarding it. Do not restore an `output.type === 'error'` early return.
+ * Failures log at debug and never propagate. Exported for tests.
+ */
+export async function persistRunTaskMemory(params: {
+  cwd?: string
+  terminalState: RunState
+  priorMemory?: TaskMemoryV1
+  /** Run filesystem so saves honor injected/virtual-fs hosts like hydration does. */
+  fs?: CodebuffFileSystem
+  logger?: { debug?: (obj: unknown, message: string) => void }
+}): Promise<TaskMemoryV1 | undefined> {
+  const { cwd, terminalState, priorMemory, logger } = params
+  if (!cwd || !terminalState.sessionState?.mainAgentState.taskMemory) {
+    return undefined
+  }
+  try {
+    // Route store IO through the same resolved filesystem hydration used,
+    // mirroring initialSessionState, so virtual-fs hosts keep .openbuff/memory
+    // inside their abstraction instead of writing it to real disk.
+    return await saveMergedTaskMemory({
+      rootDir: cwd,
+      runMemory: terminalState.sessionState.mainAgentState.taskMemory,
+      priorMemory,
+      fs: params.fs ? codebuffFsToNodePromises(params.fs) : undefined,
+    })
+  } catch (error) {
+    logger?.debug?.({ error }, 'Failed to persist task memory')
+    return undefined
+  }
+}
+
+type RunExecutionOptions = RunOptions &
+  OpenbuffClientOptions & {
+    apiKey: string
+    fingerprintId: string
+  }
+type RunReturnType = RunState
+
+/**
+ * P2-T5: guards the once-per-process startup recovery of interrupted
+ * multi-file transactions, keyed by state dir + intent-log file so two
+ * concurrent projects in one process each recover exactly once.
+ */
+const transactionRecoveryPerformed = new Set<string>()
+
+/**
+ * P3-T10: guards the once-per-process registration of the bundled exact
+ * token providers (registerBundledExactTokenProviders in
+ * @codebuff/agent-runtime/util/exact-token-providers). Flipped only once a
+ * run actually finds the OPENBUFF_EXACT_TOKENS gate ON, so flag-off runs
+ * leave it false — a later run that turns the gate on still registers —
+ * while consecutive gated runs never repeat the dynamic import. The
+ * provider module is itself idempotent; this guard only avoids redundant
+ * import attempts.
+ */
+let exactTokenProvidersRegistrationAttempted = false
+
+export async function run(options: RunExecutionOptions): Promise<RunState> {
+  const { signal } = options
+
+  if (signal?.aborted) {
+    const abortError = createAbortError(signal)
+    return projectRunOutcomes(
+      {
+        sessionState: options.previousRun?.sessionState,
+        output: {
+          type: 'error',
+          message: abortError.message,
+        },
+      },
+      {
+        runOutcome: {
+          termination: 'cancelled',
+          cause: { code: 'run_cancelled', message: abortError.message },
+        },
+        taskAcceptance: { status: 'unknown' },
+      },
+    )
+  }
+
+  return runOnce(options)
+}
+
+async function runOnce({
+  apiKey,
+  fingerprintId,
+
+  cwd,
+  skillsDir,
+  projectFiles,
+  projectContextMode,
+  knowledgeFiles,
+  agentDefinitions,
+  mcpServers,
+  maxAgentSteps = MAX_AGENT_STEPS_DEFAULT,
+  // No default: omitted means unlimited missing-output retries, mirroring
+  // the runtime knob's undefined → unlimited contract.
+  maxMissingOutputRetries,
+  env,
+  inheritEnv = true,
+  harnessStateDir,
+  approvalReceiptIds = [],
+  approvalMode = 'balanced',
+  requestApproval,
+  runTimeoutMs,
+
+  handleEvent,
+  handleStreamChunk,
+
+  fileFilter,
+  filesystemPolicy,
+  overrideTools,
+  customToolDefinitions,
+  onFilesChanged,
+  onFilesystemMutation,
+  verifyExternalMutation,
+
+  fsSource,
+  spawnSource,
+  logger,
+  memoryV2,
+  journalWriter,
+  journalReader,
+
+  agent,
+  prompt,
+  content,
+  params,
+  previousRun,
+  extraToolResults,
+  signal,
+  costMode,
+  extraCodebuffMetadata,
+  onCheckpoint,
+  resumeInterruptedTurn,
+}: RunExecutionOptions): Promise<RunState> {
+  // P3-T10: register the bundled OpenAI-family exact tokenizers when the
+  // OPENBUFF_EXACT_TOKENS gate is on. This is the FIRST thing the run does
+  // so no token count in the run can precede registration, and the dynamic
+  // import below is the ONLY import of the provider module — and therefore
+  // of tiktoken's WASM — so a flag-off run never loads it and token counting
+  // stays byte-identical (the gpt-tokenizer estimator). The gate uses the
+  // same truthy-set rule as the counter's per-call gate in
+  // @codebuff/agent-runtime/util/token-counter and is read from the raw
+  // process env through the same accessor the other OPENBUFF_* trust flags
+  // use, so the seam and the counter agree on when the providers are live.
+  // Once-per-process via the module-level guard; a registration failure is
+  // logged and degrades to the estimator (the seam's own fallback) instead
+  // of failing the run.
+  if (!exactTokenProvidersRegistrationAttempted) {
+    const exactTokensEnv = getSystemProcessEnv().OPENBUFF_EXACT_TOKENS
+    if (
+      exactTokensEnv !== undefined &&
+      /^(1|true|yes|on)$/i.test(exactTokensEnv.trim())
+    ) {
+      exactTokenProvidersRegistrationAttempted = true
+      try {
+        const { registerBundledExactTokenProviders } =
+          await import('@codebuff/agent-runtime/util/exact-token-providers')
+        registerBundledExactTokenProviders()
+      } catch (error) {
+        logger?.warn(
+          { error },
+          'Exact token provider registration failed; keeping the estimator',
+        )
+      }
+    }
+  }
+  const resolvedHarnessStateDir = harnessStateDir ?? getHarnessStateDir(env)
+  // Read-only external root allowlist. Configured HERE, strictly before any
+  // tool can dispatch, so the first read of an allowlisted path in a process
+  // cannot fail confusingly while later ones succeed. Two sources:
+  //   1. the openbuff config directory, which is what makes "read my logs/state
+  //      from the config dir" work by default (sensitive files there, notably
+  //      credentials.json, stay refused by the resolver itself);
+  //   2. absolute `readableRoots` entries from openbuff.json, subject to the
+  //      ER-1 trust gate below (only roots declared by a config file inside the
+  //      config dir are registered without an explicit opt-in). Relative
+  //      entries are dropped rather than guessed: that config may be a global
+  //      file loaded from an unrelated directory, so anchoring to process.cwd()
+  //      could allowlist something the user never intended.
+  // Best-effort: if this block throws (e.g. a malformed config), no external
+  // roots are configured and every read outside the project stays refused.
+  try {
+    // loadProviderConfigSync is module-cached but still on a hot path; called
+    // exactly once per run here, never per path or per tool.
+    const loadedProviderConfig = loadProviderConfigSync(env ? { env } : {})
+    const loadedReadableRoots = loadedProviderConfig.config.readableRoots
+    const readableRootsSources = loadedProviderConfig.readableRootsSources ?? {}
+    const configDir = getConfigDir(env)
+    // ER-1 trust gate. `readableRoots` is the only config key that grants
+    // filesystem authority rather than influencing model routing, so a value
+    // supplied by a cloned repository must not silently allowlist directories
+    // like `~/.config/gh` or `~/.docker`: config resolution includes
+    // `<cwd>/openbuff.json` (the first ancestor entry), and a non-empty
+    // project value WINS the merge. A repo-supplied value therefore needs the
+    // same explicit acknowledgement this codebase already requires for
+    // ancestor `apiKeyEnv` providers.
+    //
+    // TRUSTED: the root's declaring config file lives inside the openbuff
+    //   config dir (user-owned). Always registered.
+    // UNTRUSTED: declared anywhere else (project or ancestor `openbuff.json`),
+    //   or with no recorded provenance at all — fail CLOSED and drop it unless
+    //   the user opted in.
+    //
+    // The opt-in env var is read through the same accessor
+    // `getAncestorProviderConfigPaths` uses for
+    // OPENBUFF_TRUST_ANCESTOR_CONFIG, so both trust switches behave alike.
+    const trustProjectReadableRoots =
+      (getSystemProcessEnv().OPENBUFF_TRUST_PROJECT_READABLE_ROOTS ?? '') ===
+      '1'
+    const {
+      trusted: trustedReadableRoots,
+      untrustedCount: untrustedRootCount,
+    } = selectTrustedReadableRoots({
+      roots: loadedReadableRoots,
+      sources: readableRootsSources,
+      configDir,
+      trustProjectRoots: trustProjectReadableRoots,
+    })
+    if (untrustedRootCount > 0) {
+      // Counts only, never the raw paths: a user's home-directory paths are
+      // mildly sensitive and this log may be shared.
+      logger?.warn(
+        {
+          untrustedRootCount,
+          trustedRootCount: trustedReadableRoots.length,
+        },
+        'Ignored readableRoots entries that were not declared by a config file ' +
+          'inside the openbuff config directory (a project or ancestor ' +
+          'openbuff.json, or an entry with no recorded provenance). A ' +
+          'repository-supplied allowlist can expose credential directories ' +
+          'outside the project. Set ' +
+          'OPENBUFF_TRUST_PROJECT_READABLE_ROOTS=1 to acknowledge and register ' +
+          'them.',
+      )
+    }
+    const externalReadResult = ensureExternalReadRootsConfigured(
+      [
+        // The config dir root is seeded by the runtime, not by config, so it is
+        // always trusted and stays unconditional. Narrowing it is out of scope.
+        configDir,
+        ...trustedReadableRoots,
+      ],
+      // ER-5: the registry is process-global but `cwd` is per-run, so the
+      // boundary is tagged with the project it belongs to. Without an owner, a
+      // second project configured in the same process (after
+      // `switchProjectContext`) looks identical to a mid-run attempt to
+      // re-point the boundary: the strict primitive would refuse it, leaving
+      // project A's roots readable while project B's own allowlist never
+      // applied. Supplying the owner makes a genuine switch REPLACE the
+      // boundary instead, which is strictly safer.
+      cwd,
+    )
+    if (externalReadResult.status === 'refused-changed') {
+      // Counts only, never the raw paths: a user's home-directory paths are
+      // mildly sensitive and this log may be shared.
+      logger?.warn(
+        {
+          effectiveRootCount: externalReadResult.roots.length,
+          attemptedRootCount: externalReadResult.attempted.length,
+        },
+        'External read roots changed since process start; keeping the boundary configured earlier in this process. Restart openbuff to apply the new readableRoots.',
+      )
+    }
+  } catch (error) {
+    logger?.warn(
+      { error },
+      'External read roots could not be configured; reads outside the project stay refused for this run',
+    )
+  }
+  let fs: CodebuffFileSystem
+  if (fsSource !== undefined) {
+    const fsSourceValue = typeof fsSource === 'function' ? fsSource() : fsSource
+    fs = await fsSourceValue
+  } else if (cwd) {
+    try {
+      const mutationBroker = await WorkspaceMutationBroker.create({
+        cwd,
+        stateDir: resolvedHarnessStateDir,
+      })
+      fs = createNodeFileSystem({ mutationBroker })
+    } catch (error) {
+      logger?.warn(
+        { error },
+        'Workspace mutation broker unavailable; guarded mutations will fail closed',
+      )
+      fs = createNodeFileSystem()
+    }
+  } else {
+    fs = createNodeFileSystem()
+  }
+
+  // P2-T5: startup recovery of interrupted multi-file transactions. The
+  // intent log is colocated with the harness state dir (outside the project
+  // tree it guards) and scoped to this workspace. Best-effort and
+  // once-per-process: failures are logged and never crash startup.
+  let intentLog: TransactionIntentLog | undefined
+  if (cwd) {
+    intentLog = createTransactionIntentLogForWorkspace({
+      stateDir: resolvedHarnessStateDir,
+      cwd,
+    })
+    const recoveryKey = `${resolvedHarnessStateDir}\u0000${intentLog.filePath}`
+    if (!transactionRecoveryPerformed.has(recoveryKey)) {
+      transactionRecoveryPerformed.add(recoveryKey)
+      try {
+        await recoverAndRevertInterruptedTransactions({
+          intentLog,
+          cwd,
+          fs,
+          logger,
+        })
+      } catch (error) {
+        logger?.warn(
+          { error },
+          'Transaction intent recovery failed; startup continues',
+        )
+      }
+    }
+  }
+  let spawn: CodebuffSpawn
+  if (spawnSource) {
+    const spawnSourceValue = await spawnSource
+    spawn = spawnSourceValue as CodebuffSpawn
+  } else {
+    spawn = nodeSpawn as CodebuffSpawn
+  }
+  // Audit fix (B): production diagnostic-delta preflight wiring. The runner
+  // executes diagnostic commands as argv arrays over this run's child-process
+  // seam (never a shell), and the injector is fail-open. The
+  // OPENBUFF_DIAGNOSTIC_PREFLIGHT flag check lives inside runFileChangeHooks,
+  // so passing the injector unconditionally keeps flag-off behavior
+  // byte-identical.
+  // One retained baseline per run, scoped to a confirmed mutation's postimage.
+  let diagnosticBaselineEpoch = 0
+  let pendingDiagnosticBaseline:
+    | {
+        capture: DiagnosticCapture
+        cwd: string
+        files: string[]
+        mutationCallId: string
+        workspaceRevision: number
+        workspaceSnapshotId: string
+        afterHashes: Record<string, string | null>
+        invalidReason?: string
+      }
+    | undefined
+  const diagnosticDeltaHook = createDiagnosticDeltaHook({
+    spawn,
+    getBaseline: async ({ files, cwd: hookCwd, signal: hookSignal }) => {
+      const pending = pendingDiagnosticBaseline
+      if (!pending) return undefined
+      const workspace = sessionState.mainAgentState.workspaceState
+      const requested = diagnosticFileSet(hookCwd, files)
+      if (
+        !pending.invalidReason &&
+        (path.resolve(hookCwd) !== pending.cwd ||
+          workspace?.revision !== pending.workspaceRevision ||
+          workspace?.snapshotId !== pending.workspaceSnapshotId ||
+          requested.length !== pending.files.length ||
+          requested.some((file, index) => file !== pending.files[index]) ||
+          !(await diagnosticPostimageMatches({
+            fs,
+            hashes: pending.afterHashes,
+            signal: hookSignal,
+          })))
+      ) {
+        pending.invalidReason = 'baseline_postimage_or_scope_unverified'
+      }
+      if (pending.invalidReason) {
+        return {
+          ...pending.capture,
+          coverage: {
+            ...pending.capture.coverage,
+            status: 'unknown' as const,
+            unobservedFiles: [...pending.capture.coverage.requestedFiles],
+            reasons: [
+              ...pending.capture.coverage.reasons,
+              pending.invalidReason,
+            ],
+          },
+        }
+      }
+      return pending.capture
+    },
+  })
+  // Audit fix (D): the pre-edit baseline capture below runs through the SAME
+  // argv-array child-process seam (its own stateless adapter instance — the
+  // runner holds no state), bounded exactly like the hook's own captures.
+  const diagnosticBaselineRunner = createDiagnosticCommandRunner({ spawn })
+  const preparedContent = wrapContentForUserMessage(content)
+
+  // Per-run client session id (also the trusted process-job owner session).
+  const promptId = Math.random().toString(36).substring(2, 15)
+
+  // Init session state
+  let agentId
+  if (typeof agent !== 'string') {
+    // cloneDeep, deliberately NOT the platform's structuredClone: an
+    // AgentDefinition carries non-cloneable members — notably the `handleSteps`
+    // generator function — and structuredClone throws DataCloneError on any
+    // function value, whereas cloneDeep copies the object graph and preserves
+    // them. lodash is therefore a deliberate RUNTIME dependency of this shipped
+    // module (declared in sdk/package.json dependencies), not a convenience
+    // import a built-in could replace.
+    const clonedDefs = agentDefinitions ? cloneDeep(agentDefinitions) : []
+    agentDefinitions = [...clonedDefs, agent]
+    agentId = agent.id
+  } else {
+    agentId = agent
+  }
+  let workspaceJournal = cwd
+    ? await WorkspaceJournalService.create({
+        rootDir: resolvedHarnessStateDir,
+        cwd,
+      }).catch(() => undefined)
+    : undefined
+  // Moves recorded by prior sessions rebind persisted evidence paths during
+  // task-memory hydration inside initialSessionState below.
+  const persistedWorkspaceMoves = collectWorkspaceMoves(workspaceJournal)
+
+  let sessionState: SessionState
+  if (previousRun?.sessionState) {
+    // applyOverridesToSessionState handles deep cloning and applying any provided overrides
+    sessionState = await applyOverridesToSessionState(
+      cwd,
+      previousRun.sessionState,
+      {
+        knowledgeFiles,
+        agentDefinitions,
+        customToolDefinitions,
+        projectFiles,
+        projectContextMode,
+        maxAgentSteps,
+      },
+      { fs, logger },
+    )
+  } else {
+    // No previous run, so create a fresh session state
+    sessionState = await initialSessionState({
+      cwd,
+      skillsDir,
+      knowledgeFiles,
+      agentDefinitions,
+      customToolDefinitions,
+      projectFiles,
+      projectContextMode,
+      maxAgentSteps,
+      fs,
+      spawn,
+      logger,
+      workspaceMoves: persistedWorkspaceMoves,
+    })
+  }
+  // A continued turn must not inherit the previous turn's terminal verdict.
+  sessionState.mainAgentState.runOutcome = undefined
+  sessionState.mainAgentState.taskAcceptance = { status: 'unknown' }
+  // Attach host-supplied MCP servers to the RESOLVED agent template so the run
+  // loop's getMCPToolData reads them. This runs AFTER sessionState is fully
+  // built (post initialSessionState / applyOverridesToSessionState, both of
+  // which JSON-clone), so merging the SAME MCPConfig object references here is
+  // never cloned again. Object identity MUST be preserved: origin marks are
+  // recorded in the mcpConfigOrigins WeakMap keyed by config object identity,
+  // so cloning would strip the caller's 'client' marks and
+  // getMCPToolData / resolveMCPConfigOrigin would no longer see them. run()
+  // never re-marks or re-origins them — it only merges references. Scoped to
+  // the single resolved agentId's template; if that template is missing this
+  // no-ops safely.
+  if (mcpServers && Object.keys(mcpServers).length > 0) {
+    const targetTemplate = sessionState.fileContext.agentTemplates?.[agentId]
+    if (targetTemplate) {
+      targetTemplate.mcpServers = {
+        ...targetTemplate.mcpServers,
+        ...mcpServers,
+      }
+    }
+  }
+  // Snapshot the hydrated task memory so post-run persistence can merge the
+  // final memory into it. The runtime replaces this property rather than
+  // mutating it in place, so holding the reference is sufficient.
+  const hydratedTaskMemory = sessionState.mainAgentState.taskMemory
+  const memoryV2Coordinator = memoryV2
+    ? new MemoryV2Coordinator(memoryV2, logger)
+    : undefined
+  // Trusted ownership identity for every process-job operation. Derived
+  // ONLY from trusted runtime state — NEVER from model or tool input — and
+  // injected into check_job/kill_job/read_logs/list_jobs/run_terminal_command
+  // below. `clientSessionId` comes from the stable per-process session seed
+  // (see getTrustedSessionClientId), NOT from the per-turn promptId, so
+  // ownership survives across consecutive turns of the same client session.
+  const trustedJobOwner: JobOwner = {
+    clientSessionId: getTrustedSessionClientId(),
+    rootRunId:
+      sessionState.mainAgentState.runId ?? sessionState.mainAgentState.agentId,
+    parentRunId:
+      sessionState.mainAgentState.runId ?? sessionState.mainAgentState.agentId,
+    parentAgentId: sessionState.mainAgentState.agentId,
+  }
+  // M5: forward this run's own live background-job activity to the host via
+  // handleEvent. Subscribe once here (never inside a loop) and dispose on
+  // every terminal path so the process-wide registry singleton never leaks
+  // dead listeners across runs. The disposer is idempotent.
+  const unsubscribeJobEvents = jobRegistry.subscribeAll(
+    createJobUpdateForwarder({
+      owner: trustedJobOwner,
+      handleEvent: (event) => handleEvent?.(event),
+      shouldForward: () =>
+        callbacksEnabled && !runSignal.aborted && !!handleEvent,
+    }),
+  )
+  const approvalService = new HarnessApprovalService(
+    new LocalHarnessStore(resolvedHarnessStateDir),
+  )
+  // P3-T2 (LI-01): lazily-built language-intelligence service shared across the
+  // four LSP read tools. Only constructed when a language-intelligence client
+  // tool actually fires, so a run that never uses them never spawns a server.
+  let languageIntelligenceService: LanguageIntelligenceService | undefined
+  const getLanguageIntelligence = (): LanguageIntelligenceService => {
+    languageIntelligenceService ??= createLanguageIntelligence({
+      cwd: requireCwd(cwd, 'language intelligence'),
+      spawn,
+      // Audit fix (fs splice): the semantic-edit splice and post-commit LSP
+      // sync read through THIS run's filesystem, so a virtual-fs host
+      // (fsSource / hydration) is spliced from the same bytes the mutation
+      // broker commits — never raw host node disk.
+      fs,
+    })
+    return languageIntelligenceService
+  }
+  if (workspaceJournal) {
+    try {
+      const persistedWorkspace = workspaceJournal.read()
+      const currentRevision =
+        sessionState.mainAgentState.workspaceState?.revision ?? -1
+      if (persistedWorkspace.revision > currentRevision) {
+        sessionState.mainAgentState.workspaceState = persistedWorkspace
+        sessionState.mainAgentState.readAuthorizationsByPath = {}
+        sessionState.mainAgentState.readAuthorizationHashesByPath = {}
+        sessionState.mainAgentState.confirmedPostEditAnchorsByPath = {}
+      }
+    } catch (error) {
+      logger?.warn(
+        { error },
+        'Workspace journal unavailable; continuing with in-memory workspace state',
+      )
+      workspaceJournal = undefined
+    }
+  }
+
+  // The combined run signal and the run timeout arm HERE, before memory
+  // preparation, so a slow or hung Memory V2 repository is bounded by the run
+  // timeout instead of extending it
+  // (reliability:memory-preparation-is-outside-timeout).
+  const timeoutAbortController = new AbortController()
+  const timeoutEnabled = typeof runTimeoutMs === 'number' && runTimeoutMs > 0
+  const runSignal = timeoutEnabled
+    ? signal
+      ? AbortSignal.any([signal, timeoutAbortController.signal])
+      : timeoutAbortController.signal
+    : (signal ?? timeoutAbortController.signal)
+  let terminalRequested = false
+  let callbacksEnabled = true
+  let callbackQueue: Promise<void> = Promise.resolve()
+  let callbackFailure: unknown
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+  let runDeadlineExceeded = false
+  let resolveTerminal: (value: RunReturnType) => void = () => {}
+  const terminalPromise = new Promise<RunReturnType>((res) => {
+    resolveTerminal = (value) => {
+      if (terminalRequested) return
+      terminalRequested = true
+      res(projectRunOutcomes(value))
+    }
+  })
+
+  const abortRun = (reason: unknown) => {
+    if (!timeoutAbortController.signal.aborted) {
+      timeoutAbortController.abort(reason)
+    }
+  }
+  const enqueueCallback = (callback: () => void | Promise<void>) => {
+    const queued = callbackQueue.then(callback)
+    callbackQueue = queued.catch((error) => {
+      callbackFailure ??= error
+      logger?.error({ error }, 'Openbuff client event callback failed')
+    })
+    return callbackQueue
+  }
+  async function onError(error: { message: string }) {
+    if (callbacksEnabled && !runSignal.aborted && handleEvent) {
+      await handleEvent({ type: 'error', message: error.message })
+    }
+  }
+
+  // The agent runtime mutates sessionState.mainAgentState as it progresses,
+  // replacing messageHistory with a new array once it adds the user prompt.
+  // Comparing array identity detects progress more robustly than length:
+  // context pruning could shrink history below its starting length without
+  // meaning the runtime never ran.
+  const initialMessageHistory = sessionState.mainAgentState.messageHistory
+
+  /** Calculates the current session state if cancelled.
+   *
+   * This is used when callMainPrompt throws an error. If the agent runtime made
+   * any progress (replaced the shared messageHistory), those messages are
+   * preserved. Otherwise the user's message is added so it isn't lost.
+   */
+  function getCancelledSessionState(message: string): SessionState {
+    const runtimeMadeProgress =
+      sessionState.mainAgentState.messageHistory !== initialMessageHistory
+
+    const state = structuredClone(sessionState)
+
+    // Only add the user's message if the runtime didn't get a chance to add it.
+    if (!runtimeMadeProgress && (prompt || preparedContent)) {
+      state.mainAgentState.messageHistory.push({
+        role: 'user' as const,
+        content: buildUserMessageContent(prompt, params, preparedContent),
+        tags: ['USER_PROMPT'] as string[],
+      })
+    }
+
+    // Add error context message
+    state.mainAgentState.messageHistory.push({
+      role: 'user' as const,
+      content: [{ type: 'text' as const, text: withSystemTags(message) }],
+    })
+    return state
+  }
+  function getCancelledRunState(
+    message?: string,
+    termination: RunOutcome['termination'] = runDeadlineExceeded
+      ? 'deadline_exhausted'
+      : 'cancelled',
+  ): RunState {
+    message = message ?? 'Run cancelled by user.'
+    return projectRunOutcomes(
+      {
+        sessionState: getCancelledSessionState(message),
+        output: {
+          type: 'error',
+          message,
+        },
+      },
+      {
+        runOutcome: {
+          termination,
+          cause: { code: `run_${termination}`, message },
+        },
+      },
+    )
+  }
+
+  if (timeoutEnabled) {
+    timeoutHandle = setTimeout(() => {
+      const message = `Run timed out after ${runTimeoutMs}ms`
+      runDeadlineExceeded = true
+      abortRun(new Error(message))
+      resolveTerminal(getCancelledRunState(message))
+    }, runTimeoutMs)
+    timeoutHandle.unref?.()
+  }
+
+  // Race memory preparation against the run signal: an abort (user cancel or
+  // run timeout) rejects here and the run proceeds through its normal
+  // degraded/cancelled paths instead of hanging or crashing. prepareTurn
+  // itself never rejects — its own failures degrade the turn internally — so
+  // the caught rejection below can only come from the abort race.
+  if (memoryV2Coordinator) {
+    try {
+      await raceAgainstAbort(
+        memoryV2Coordinator.prepareTurn({
+          agentState: sessionState.mainAgentState,
+          trustedUserInputId: promptId,
+          query: prompt,
+          workspaceState: sessionState.mainAgentState.workspaceState,
+          resumeInterruptedTurn,
+          signal: runSignal,
+        }),
+        runSignal,
+      )
+    } catch (error) {
+      logger?.warn(
+        { error },
+        'Memory V2 turn preparation was aborted or failed; continuing without injected memory',
+      )
+    }
+  }
+
+  if (runSignal.aborted) {
+    resolveTerminal(getCancelledRunState(createAbortError(runSignal).message))
+    const terminalState = await terminalPromise
+    callbacksEnabled = false
+    unsubscribeJobEvents()
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    return terminalState
+  }
+
+  const onResponseChunk = async (
+    action: ServerAction<'response-chunk'>,
+  ): Promise<void> => {
+    if (!callbacksEnabled || runSignal.aborted) {
+      return
+    }
+    const { chunk } = action
+
+    if (typeof chunk !== 'string') {
+      if (chunk.type === 'reasoning_delta') {
+        handleStreamChunk?.({
+          type: 'reasoning_chunk',
+          chunk: chunk.text,
+          agentId: chunk.agentId ?? chunk.runId,
+          ancestorRunIds: chunk.ancestorRunIds,
+        })
+      } else {
+        await handleEvent?.(chunk)
+      }
+      return
+    }
+
+    if (handleStreamChunk) {
+      await handleStreamChunk(chunk)
+    }
+  }
+  const onSubagentResponseChunk = async (
+    action: ServerAction<'subagent-response-chunk'>,
+  ) => {
+    if (!callbacksEnabled || runSignal.aborted) {
+      return
+    }
+    const { agentId, agentType, chunk, chunkKind, ancestorRunIds } = action
+
+    if (handleStreamChunk && chunk) {
+      if (chunkKind === 'reasoning') {
+        // Reasoning (thinking) delta from a subagent: emit the SAME
+        // reasoning_chunk stream event the root loop's onResponseChunk maps
+        // its reasoning_delta events to (ancestorRunIds is required in the
+        // CLI's reasoning_chunk shape, so a missing chain falls back to the
+        // root reasoning stream with []).
+        await handleStreamChunk({
+          type: 'reasoning_chunk',
+          agentId,
+          ancestorRunIds: ancestorRunIds ?? [],
+          chunk,
+        })
+      } else {
+        await handleStreamChunk({
+          type: 'subagent_chunk',
+          agentId,
+          agentType,
+          chunk,
+        })
+      }
+    }
+  }
+
+  const ownedLibrarianCloneDirs = new Set<string>()
+  // Per-turn change-gate state for list_jobs digests. Declared in this run
+  // closure (not module scope) so every run() call gets a fresh fingerprint
+  // and concurrent runs never share suppression state. `null` means no
+  // list_jobs digest has been emitted yet this turn, so the first call always
+  // returns the full table.
+  let lastListJobsFingerprint: string | null = null
+  // Per-turn change-gate state for git_status observations. Declared in this
+  // run closure (not module scope) so every run() call gets a fresh
+  // fingerprint and concurrent runs never share suppression state. `null`
+  // means no git_status observation has been emitted yet this turn, so the
+  // first call always returns the full observation.
+  let lastGitStatusFingerprint: string | null = null
+  // Per-run set of already-approved client-origin MCP tool keys (P1-T2).
+  // Declared in this run closure (not module scope) so every run() call starts
+  // with a fresh approval scope and concurrent runs never share it. The FIRST
+  // client-origin call of each (server-config, tool) pair is gated behind the
+  // host approver; subsequent calls of the same tool this run run freely.
+  const approvedClientMcpTools = new Set<string>()
+  // P2-audit-fix-8: production crash-resume driver. Built exactly when a
+  // journal reader is wired (the same condition under which the runtime's
+  // loop-entry block builds the resume report) and threaded additively into
+  // the agent-runtime deps so loopAgentSteps' existing not-clean branch can
+  // ACT on the report: re-drive in-flight children (best-effort; recorded)
+  // and re-issue interrupted background intents with the durable respawnOf
+  // marker. Fail-open by contract; a run with no journalReader gets no
+  // resumeDriver field at all and stays byte-identical.
+  const resumeDriver = journalReader
+    ? createRunResumeDriver({ journalWriter, journalReader, logger })
+    : undefined
+  // Memory-overhaul P4 build-order item 2: wire the playbook-gate outcome
+  // producer against this run's Memory V2 repository, so gate verdicts reach
+  // the persisted effectiveness counters in production runs. The helper
+  // returns undefined — and the deps below then carry NO key at all — when
+  // no repository is configured or the store lacks the optional counter-fold
+  // member, so such a run stays byte-identical to an unwired one.
+  const onPlaybookGateOutcome = buildPlaybookGateOutcomeReporter(
+    memoryV2?.repository,
+    logger,
+  )
+  const agentRuntimeImpl = getAgentRuntimeImpl({
+    logger,
+    apiKey,
+    journalWriter,
+    journalReader,
+    ...(resumeDriver ? { resumeDriver } : {}),
+    ...(onPlaybookGateOutcome ? { onPlaybookGateOutcome } : {}),
+    handleStepsLogChunk: () => {
+      // Does nothing for now
+    },
+    requestToolCall: async ({
+      userInputId,
+      callId,
+      toolName,
+      input,
+      mcpConfig,
+      signal: toolSignal,
+    }) => {
+      if (runSignal.aborted || terminalRequested) {
+        throw createAbortError(runSignal)
+      }
+      if (toolName === 'run_terminal_command') {
+        const command = (input as { command?: unknown }).command
+        if (typeof command === 'string') {
+          const cloneMatch = command.match(
+            /^git clone --depth 1 'https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+(?:\.git)?\/?' '(\/tmp\/librarian-[A-Za-z0-9._-]+-[0-9]+)'$/,
+          )
+          if (cloneMatch?.[1]) ownedLibrarianCloneDirs.add(cloneMatch[1])
+        }
+      }
+      // Capture before the mutation and retain it only after confirmed effects.
+      // A later validation call must match its scope, revision and raw postimage.
+      const isMutatingToolCall = DIAGNOSTIC_BASELINE_TOOL_NAMES.has(toolName)
+      const canHaveUnknownEffects =
+        toolName === 'run_terminal_command' ||
+        Boolean(mcpConfig) ||
+        customToolDefinitions?.some(
+          (definition) => definition.toolName === toolName,
+        )
+      if (isMutatingToolCall || canHaveUnknownEffects) {
+        pendingDiagnosticBaseline = undefined
+        diagnosticBaselineEpoch += 1
+      }
+      const baselineEpochForCall = diagnosticBaselineEpoch
+      let diagnosticBaseline: DiagnosticCapture | undefined
+      if (
+        isMutatingToolCall &&
+        cwd &&
+        env &&
+        isDiagnosticPreflightEnabled(env)
+      ) {
+        try {
+          const baselineFiles = diagnosticBaselineFiles(toolName, input)
+          if (baselineFiles.length > 0) {
+            diagnosticBaseline = await captureDiagnosticObservation({
+              files: baselineFiles,
+              cwd,
+              runCommand: diagnosticBaselineRunner,
+              env,
+              signal: runSignal,
+            })
+          }
+        } catch {
+          // Fail-open: no baseline → the hook keeps today's no-baseline path.
+          diagnosticBaseline = undefined
+        }
+      }
+      const trustedCallId = callId ?? crypto.randomUUID()
+      const handled = await handleToolCall({
+        action: {
+          type: 'tool-call-request',
+          requestId: trustedCallId,
+          userInputId,
+          toolName,
+          input,
+          mcpConfig,
+        },
+        overrides: overrideTools ?? {},
+        onFilesChanged,
+        onFilesystemMutation: async (event) => {
+          if (
+            diagnosticBaseline &&
+            cwd &&
+            baselineEpochForCall === diagnosticBaselineEpoch
+          ) {
+            const afterHashes: Record<string, string | null> = {}
+            for (const changed of event.actions) {
+              afterHashes[path.resolve(cwd, changed.path)] =
+                changed.action === 'delete' || changed.action === 'move'
+                  ? null
+                  : changed.afterHash
+              if (changed.destinationPath)
+                afterHashes[path.resolve(cwd, changed.destinationPath)] =
+                  changed.afterHash
+            }
+            const files = diagnosticFileSet(
+              cwd,
+              diagnosticBaseline.coverage.requestedFiles,
+            )
+            const changedFiles = Object.keys(afterHashes).sort()
+            if (
+              files.length > 0 &&
+              files.length <= 32 &&
+              files.length === changedFiles.length &&
+              files.every((file, index) => file === changedFiles[index])
+            ) {
+              pendingDiagnosticBaseline = {
+                capture: diagnosticBaseline,
+                cwd: path.resolve(cwd),
+                files,
+                mutationCallId: trustedCallId,
+                workspaceRevision: event.workspaceRevision,
+                workspaceSnapshotId: event.workspaceSnapshotId,
+                afterHashes,
+              }
+            }
+          } else if (isMutatingToolCall) {
+            pendingDiagnosticBaseline = undefined
+          }
+          if (onFilesystemMutation) await onFilesystemMutation(event)
+          else await onFilesChanged?.()
+        },
+        verifyExternalMutation,
+        getLanguageIntelligence,
+        diagnosticDelta: diagnosticDeltaHook,
+        customToolDefinitions: customToolDefinitions
+          ? Object.fromEntries(
+              customToolDefinitions.map((def) => [def.toolName, def]),
+            )
+          : {},
+        cwd,
+        fs,
+        fileFilter,
+        filesystemPolicy,
+        intentLog,
+        trustedJobOwner,
+        logger,
+        capabilityIssuer: cwd
+          ? {
+              projectId: cwd,
+              runId:
+                sessionState.mainAgentState.runId ??
+                sessionState.mainAgentState.agentId,
+            }
+          : undefined,
+        env,
+        inheritEnv,
+        harnessStateDir: resolvedHarnessStateDir,
+        approvalReceiptIds,
+        approvalMode,
+        requestApproval,
+        approvedClientMcpTools,
+        approvalService,
+        harnessWorkspaceIdentity: workspaceJournal
+          ? {
+              repositoryId: workspaceJournal.repositoryId,
+              workspaceId: workspaceJournal.workspaceId,
+            }
+          : undefined,
+        getWorkspaceState: () => sessionState.mainAgentState.workspaceState,
+        setWorkspaceState: (state) => {
+          sessionState.mainAgentState.workspaceState = state
+        },
+        advanceWorkspaceJournal: workspaceJournal
+          ? (change) =>
+              (() => {
+                if (!workspaceJournal) {
+                  return advanceWorkspaceState(
+                    sessionState.mainAgentState.workspaceState,
+                    change,
+                  )
+                }
+                try {
+                  return workspaceJournal.advance({
+                    runId:
+                      sessionState.mainAgentState.runId ??
+                      sessionState.mainAgentState.agentId,
+                    ...change,
+                  })
+                } catch (error) {
+                  logger?.warn(
+                    { error },
+                    'Workspace journal write failed; continuing with in-memory workspace state',
+                  )
+                  workspaceJournal = undefined
+                  return advanceWorkspaceState(
+                    sessionState.mainAgentState.workspaceState,
+                    change,
+                  )
+                }
+              })()
+          : undefined,
+        signal: toolSignal ?? runSignal,
+      })
+      const directOverride =
+        toolName === 'read_files'
+          ? overrideTools?.read_files
+          : overrideTools?.[
+              toolName as Exclude<PublishedToolName, 'read_files'>
+            ]
+      const fallbackWriteOverride =
+        (toolName === 'str_replace' || toolName === 'create_plan') &&
+        overrideTools?.write_file
+      await memoryV2Coordinator?.recordToolObservation({
+        toolName,
+        callId: trustedCallId,
+        userInputId,
+        input,
+        output: handled.output,
+        workspaceState: sessionState.mainAgentState.workspaceState,
+        native:
+          toolNames.includes(toolName as ToolName) &&
+          !customToolDefinitions?.some(
+            (definition) => definition.toolName === toolName,
+          ) &&
+          !directOverride &&
+          !fallbackWriteOverride,
+        mcp: Boolean(mcpConfig),
+      })
+      // Intercept the single dispatch path (model- and agent-initiated calls
+      // alike) so an unchanged list_jobs digest doesn't re-inject the full
+      // table into the conversation every step. The gate owns the returned
+      // output; the per-turn fingerprint lives in this closure.
+      if (toolName === 'list_jobs') {
+        const gated = applyListJobsDigestGate(
+          lastListJobsFingerprint,
+          handled.output,
+        )
+        lastListJobsFingerprint = gated.nextFingerprint
+        return { ...handled, output: gated.output }
+      } else if (toolName === 'git_status') {
+        // This interception runs AFTER the tool executed (`handled.output`),
+        // so every git_status observation still runs; only its context
+        // encoding is compacted when the worktree is byte-identical.
+        const gated = applyGitStatusGate(
+          lastGitStatusFingerprint,
+          handled.output,
+        )
+        lastGitStatusFingerprint = gated.nextFingerprint
+        return { ...handled, output: gated.output }
+      }
+      return handled
+    },
+    requestMcpToolData: async ({ mcpConfig, toolNames }) => {
+      const mcpClientId = await getMCPClient(mcpConfig)
+      const listToolsResult = await listMCPTools(mcpClientId)
+      const tools = listToolsResult.tools
+      const filteredTools: typeof tools = []
+      for (const tool of tools) {
+        if (!toolNames) {
+          filteredTools.push(tool)
+          continue
+        }
+        if (toolNames.includes(tool.name)) {
+          filteredTools.push(tool)
+          continue
+        }
+      }
+
+      return filteredTools
+    },
+    requestFiles: ({ filePaths, ranges, capabilityIssuer }) => {
+      if (runSignal.aborted || terminalRequested) {
+        throw createAbortError(runSignal)
+      }
+      return readFiles({
+        filePaths,
+        ranges,
+        override: overrideTools?.read_files,
+        fileFilter,
+        cwd,
+        fs,
+        signal: runSignal,
+        capabilityIssuer,
+      })
+    },
+    requestOptionalFile: async ({ filePath }) => {
+      if (runSignal.aborted || terminalRequested) {
+        throw createAbortError(runSignal)
+      }
+      // File-editing tools (str_replace / write_file) validate and
+      // apply against this content, so it MUST be the full, untruncated file. The
+      // regular read_files rendering truncates large files at 100k chars for the
+      // model; using that here corrupts edit validation (e.g. a 4,499-line file
+      // appears to have only ~2,889 lines, rejecting valid basedOnRead anchors).
+      const override = overrideTools?.read_files
+      if (override) {
+        const raw = await executeOverride({
+          override,
+          input: { filePaths: [filePath] },
+          signal: runSignal,
+        })
+        const item = normalizeReadFilesOverrideResult({
+          filePaths: [filePath],
+          raw,
+        }).results[0]
+        if (
+          item?.selector === 'file' &&
+          item.status === 'ok' &&
+          item.complete &&
+          typeof item.content === 'string'
+        ) {
+          return item.content
+        }
+        if (item?.status === 'error' && item.error.code === 'not_found') {
+          return null
+        }
+        const code = item?.status === 'error' ? item.error.code : 'too_large'
+        const message =
+          item?.status === 'error'
+            ? item.error.message
+            : 'The file was not returned as a complete editable snapshot.'
+        throw new Error(`read_files ${code}: ${message}`)
+      }
+      const read = await getFileForEditResult({
+        filePath,
+        cwd: requireCwd(cwd, 'read_files'),
+        fs,
+        fileFilter,
+      })
+      if (read.status === 'found') return read.content
+      if (read.status === 'not_found') return null
+      throw new Error(`read_files ${read.status}: ${read.error.message}`)
+    },
+    fileSystem: fs,
+    fileFilter,
+    sendAction: ({ action }) => {
+      if (!callbacksEnabled || terminalRequested) {
+        return
+      }
+      if (action.type === 'action-error') {
+        return enqueueCallback(() => onError({ message: action.message }))
+      }
+      if (action.type === 'response-chunk') {
+        return enqueueCallback(() => onResponseChunk(action))
+      }
+      if (action.type === 'subagent-response-chunk') {
+        return enqueueCallback(() => onSubagentResponseChunk(action))
+      }
+      if (action.type === 'prompt-response') {
+        handlePromptResponse({
+          action,
+          resolve: resolveTerminal,
+          onError,
+          initialSessionState: sessionState,
+        })
+        return
+      }
+      if (action.type === 'prompt-error') {
+        handlePromptResponse({
+          action,
+          resolve: resolveTerminal,
+          onError,
+          initialSessionState: sessionState,
+        })
+        return
+      }
+      return undefined
+    },
+    sendSubagentChunk: ({
+      userInputId,
+      agentId,
+      agentType,
+      chunk,
+      prompt,
+      forwardToPrompt = true,
+      chunkKind,
+      ancestorRunIds,
+    }) => {
+      if (!callbacksEnabled || terminalRequested) {
+        return
+      }
+      onSubagentResponseChunk({
+        type: 'subagent-response-chunk',
+        userInputId,
+        agentId,
+        agentType,
+        chunk,
+        prompt,
+        forwardToPrompt,
+        chunkKind,
+        ancestorRunIds,
+      })
+    },
+  })
+
+  // Send input
+  const userInfo = await agentRuntimeImpl.getUserInfoFromApiKey({
+    ...agentRuntimeImpl,
+    apiKey,
+    fields: ['id'],
+  })
+  if (!userInfo) {
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    const terminalState = getCancelledRunState(
+      'Invalid API key or user not found',
+      'failed',
+    )
+    if (memoryV2Coordinator) {
+      await raceAgainstAbort(
+        memoryV2Coordinator.finishTurn({
+          agentState: terminalState.sessionState!.mainAgentState,
+          output: terminalState.output,
+          signal: runSignal,
+        }),
+        runSignal,
+      ).catch(() => {})
+    }
+    // Terminal path: dispose the process-wide jobRegistry listener so it does
+    // not leak across runs (same invariant as the aborted path below).
+    callbacksEnabled = false
+    unsubscribeJobEvents()
+    return terminalState
+  }
+
+  const userId = userInfo.id
+
+  if (runSignal.aborted) {
+    resolveTerminal(getCancelledRunState(createAbortError(runSignal).message))
+    const terminalState = await terminalPromise
+    await callbackQueue
+    callbacksEnabled = false
+    unsubscribeJobEvents()
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+    if (terminalState.sessionState && memoryV2Coordinator) {
+      await raceAgainstAbort(
+        memoryV2Coordinator.finishTurn({
+          agentState: terminalState.sessionState.mainAgentState,
+          output: terminalState.output,
+          signal: runSignal,
+        }),
+        runSignal,
+      ).catch(() => {})
+    }
+    return terminalState
+  }
+
+  let settledRuntimeState: RunState | undefined
+  const promptExecution = callMainPrompt({
+    ...agentRuntimeImpl,
+    promptId,
+    action: {
+      type: 'prompt',
+      promptId,
+      prompt,
+      promptParams: params,
+      content: preparedContent,
+      fingerprintId: fingerprintId,
+      costMode: costMode ?? 'normal',
+      sessionState,
+      toolResults: extraToolResults ?? [],
+      agentId,
+    },
+    repoUrl: undefined,
+    repoId: undefined,
+    clientSessionId: promptId,
+    userId,
+    extraCodebuffMetadata,
+    signal: runSignal,
+    onCheckpoint,
+    resumeInterruptedTurn,
+    maxMissingOutputRetries,
+  })
+    .then((result) => {
+      settledRuntimeState = result
+      resolveTerminal(result)
+    })
+    .catch((error) => {
+      let errorMessage =
+        error instanceof Error ? error.message : String(error ?? '')
+      const apiErrorDetails = extractApiErrorDetails(error)
+      const statusCode = apiErrorDetails.statusCode ?? getErrorStatusCode(error)
+      const {
+        countryBlockReason,
+        countryCode,
+        errorCode,
+        ipPrivacySignals,
+        message: parsedMessage,
+      } = apiErrorDetails
+      if (parsedMessage) {
+        errorMessage = parsedMessage
+      }
+
+      resolveTerminal({
+        sessionState: getCancelledSessionState(errorMessage),
+        runOutcome: {
+          termination: runDeadlineExceeded
+            ? 'deadline_exhausted'
+            : runSignal.aborted
+              ? 'cancelled'
+              : 'failed',
+          cause: {
+            code: runDeadlineExceeded
+              ? 'run_deadline_exhausted'
+              : runSignal.aborted
+                ? 'run_cancelled'
+                : 'runtime_error',
+            message: errorMessage,
+          },
+        },
+        output: {
+          type: 'error',
+          message: errorMessage,
+          ...(statusCode !== undefined && { statusCode }),
+          ...(errorCode !== undefined && { error: errorCode }),
+          ...(countryCode !== undefined && { countryCode }),
+          ...(countryBlockReason !== undefined && { countryBlockReason }),
+          ...(ipPrivacySignals !== undefined && { ipPrivacySignals }),
+        },
+      })
+    })
+
+  let terminalState = await terminalPromise
+  // A timeout/cancel first aborts the shared signal; cooperative runtime and
+  // tools then unwind. Legacy overrides are raced against that signal, so a
+  // non-cooperative promise cannot hold the public run open or publish late
+  // output. Normal completion also waits for callMainPrompt's cleanup.
+  await promptExecution
+  // Cancellation may resolve before the runtime records its last in-flight
+  // action. Preserve that settled evidence after unwinding, without changing
+  // the selected terminal reason or the interruption transcript.
+  const settledActions =
+    settledRuntimeState?.sessionState?.mainAgentState.actionOutcomes ??
+    sessionState.mainAgentState.actionOutcomes
+  if (settledActions) {
+    terminalState = projectRunOutcomes({
+      ...terminalState,
+      actionOutcomes: settledActions,
+    })
+  }
+  await callbackQueue
+  callbacksEnabled = false
+  unsubscribeJobEvents()
+  if (timeoutHandle) clearTimeout(timeoutHandle)
+  await stopBrowserSessionsByOwner({
+    // Same resolved owner identity the job tools scope by: browser sessions
+    // follow the stable session seed (not the per-turn promptId), so
+    // browses opened this run are still owned next turn until stopped here.
+    clientSessionId: trustedJobOwner.clientSessionId,
+  })
+  // Dispose warm language servers; no-op when no language-intelligence tool ran.
+  try {
+    await languageIntelligenceService?.dispose()
+  } catch {
+    // best-effort
+  }
+  const cleanupLibrarianClone = (cloneDir: string) => {
+    try {
+      rmSync(cloneDir, { recursive: true, force: true })
+    } catch {
+      // Best-effort cleanup; the path is constrained to an owned /tmp prefix.
+    }
+  }
+  for (const cloneDir of ownedLibrarianCloneDirs) {
+    if (terminalState.output.type === 'error') {
+      cleanupLibrarianClone(cloneDir)
+      continue
+    }
+    // Keep successful clones alive long enough for the parent to inspect the
+    // returned relevantFiles. Bound the lifetime to avoid permanent leaks.
+    const cleanupTimer = setTimeout(
+      () => cleanupLibrarianClone(cloneDir),
+      30 * 60 * 1000,
+    )
+    cleanupTimer.unref?.()
+  }
+  if (callbackFailure) {
+    logger?.warn(
+      { error: callbackFailure },
+      'Run completed after one or more client callbacks failed',
+    )
+  }
+  if (terminalState.sessionState && memoryV2Coordinator) {
+    await raceAgainstAbort(
+      memoryV2Coordinator.finishTurn({
+        agentState: terminalState.sessionState.mainAgentState,
+        output: terminalState.output,
+        signal: runSignal,
+      }),
+      runSignal,
+    ).catch(() => {})
+  }
+  // Persist task memory whenever a cwd is set. The gate lives in
+  // persistRunTaskMemory and deliberately ignores output.type, so cancelled,
+  // aborted, and errored runs still contribute the committed memory the
+  // session produced (saveMergedTaskMemory merges rather than overwrites).
+  // Do not re-add an output.type === 'error' gate here.
+  await persistRunTaskMemory({
+    cwd,
+    terminalState,
+    priorMemory: hydratedTaskMemory,
+    fs,
+    logger,
+  })
+  return terminalState
+}
+
+/**
+ * Memory-overhaul P4 build-order item 2: builds the playbook-gate outcome
+ * reporter wired into this run's agent-runtime deps, so gate verdicts reach
+ * the persisted effectiveness counters in production runs (design record
+ * .agents/sessions/memory-overhaul-2026-10/design-phase2-4-rederived.md
+ * §P4 build order).
+ *
+ * PURE helper, exported for tests (the applyListJobsDigestGate precedent):
+ * it references only the `repository` PARAMETER and the supplied `logger`,
+ * never runOnce closure state. Returns `undefined` when no Memory V2
+ * repository is configured or the repository lacks the optional
+ * `recordPlaybookGateOutcome` member (fakes and backends without playbook
+ * support), in which case the runtime deps carry no `onPlaybookGateOutcome`
+ * key at all and the run stays byte-identical to an unwired one.
+ *
+ * The returned closure forwards the STORE signature —
+ * `recordPlaybookGateOutcome(event.playbookId, event.outcome)` — never the
+ * whole event (`triggerSignature` is not a store parameter), and satisfies
+ * the AgentRuntimeDeps contract: it NEVER throws and NEVER rejects. A
+ * synchronous store throw is caught and a rejected store promise gets a
+ * `.catch()`; both log at debug and no-op. That is the deliberate
+ * wiring-site decision: a failed report must not affect the gated tool call,
+ * including a store throw like 'The playbook was not found.' (mid-session
+ * retirement). The store member is bound to the repository once here so the
+ * receiver survives the detached call (it may be a class method).
+ */
+export function buildPlaybookGateOutcomeReporter(
+  repository: MemoryV2ClientConfig['repository'] | undefined,
+  logger?: Logger,
+): ((event: PlaybookGateOutcomeEvent) => void) | undefined {
+  if (!repository?.recordPlaybookGateOutcome) {
+    return undefined
+  }
+  const record = repository.recordPlaybookGateOutcome.bind(repository)
+  const logFailure = (error: unknown) =>
+    logger?.debug?.({ error }, 'Failed to record playbook gate outcome')
+  return (event) => {
+    try {
+      record(event.playbookId, event.outcome).catch(logFailure)
+    } catch (error) {
+      logFailure(error)
+    }
+  }
+}
+
+/**
+ * Per-turn change-gate for list_jobs digests. Compares the row fingerprint of
+ * the freshly-produced digest (folded with its truncatedCount) against the
+ * last fingerprint this turn and, when nothing meaningful changed, swaps the
+ * full table for a tiny suppression note.
+ *
+ * Exported for tests. `lastFingerprint` is the run-closure state (null on the
+ * first call of a turn, which always returns the full digest). The caller owns
+ * storing `nextFingerprint` back into that state.
+ *
+ * The suppression payload intentionally omits `jobs` entirely: an empty array
+ * would read as "no jobs exist", which is false.
+ */
+
+export function applyListJobsDigestGate(
+  lastFingerprint: string | null,
+  output: ToolResultOutput[],
+): { output: ToolResultOutput[]; nextFingerprint: string | null } {
+  // Only gate a well-formed single json digest. Overrides, errors, or custom
+  // list_jobs shapes are passed through untouched and do not update the gate.
+  const first = output[0]
+  if (output.length !== 1 || first?.type !== 'json') {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  const value = first.value
+  const jobs =
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? (value as { jobs?: unknown }).jobs
+      : undefined
+  if (!Array.isArray(jobs)) {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  // fingerprintListJobsRows ignores tail/startedAt by design, so chattiness
+  // (new buffered output) and wall-clock drift do not reset the gate. Fold in
+  // the digest value's truncatedCount so a change in how many rows were capped
+  // off (identical selected rows, different truncation) still busts the gate.
+  const rawTruncatedCount = (value as { truncatedCount?: unknown })
+    .truncatedCount
+  const truncatedCount =
+    typeof rawTruncatedCount === 'number' ? rawTruncatedCount : 0
+  const nextFingerprint = `${fingerprintListJobsRows(jobs as ListJobsViewRow[])}|${truncatedCount}`
+  if (lastFingerprint !== null && nextFingerprint === lastFingerprint) {
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            unchanged: true,
+            note: 'No job changes since the previous list_jobs digest this turn; the earlier digest is still current.',
+          },
+        },
+      ],
+      nextFingerprint: lastFingerprint,
+    }
+  }
+  return { output, nextFingerprint }
+}
+
+/**
+ * Per-turn change-gate for git_status observations. Compares the fingerprint
+ * of the freshly-produced observation against the last fingerprint this turn
+ * and, when the worktree is byte-identical, swaps the full observation for a
+ * tiny suppression note.
+ *
+ * Exported for tests. `lastFingerprint` is the run-closure state (null on the
+ * first call of a turn, which always returns the full observation). The caller
+ * owns storing `nextFingerprint` back into that state.
+ *
+ * This gates the BUILT-IN git_status tool result (`gitStatus` in
+ * sdk/src/tools/git-status.ts), whose json value is shaped
+ * `{ branch?: string, status: string, diff?: string, truncated?: true }`.
+ * `status` is the dirty-file porcelain body the base2 gate's
+ * `extractGitStatusFiles` parses, so a suppression payload that omits the
+ * fields yields the same file set as the prior (identical) observation.
+ *
+ * The fingerprint serializes every field the tool can return (branch, status,
+ * diff, truncated) via an explicit per-field encoding — never
+ * `JSON.stringify(value)`, whose key order is not guaranteed. `branch` is
+ * included deliberately: a commit changes the branch line while the dirty
+ * status/diff can stay fixed, and that must bust the gate.
+ *
+ * The suppression payload intentionally omits the git fields entirely: an
+ * empty `status` would read as "clean tree", which is false. The gate is
+ * fail-safe: any result that is not a well-formed single-json git_status
+ * observation (including errorMessage shapes) passes through untouched and
+ * does not update the fingerprint.
+ */
+export function applyGitStatusGate(
+  lastFingerprint: string | null,
+  output: ToolResultOutput[],
+): { output: ToolResultOutput[]; nextFingerprint: string | null } {
+  // Only gate a well-formed single json git_status result. Overrides, errors,
+  // or custom git_status shapes are passed through untouched and do not
+  // update the gate.
+  const first = output[0]
+  if (output.length !== 1 || first?.type !== 'json') {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  const value = first.value
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  const record = value as {
+    branch?: unknown
+    status?: unknown
+    diff?: unknown
+    truncated?: unknown
+  }
+  // `status` (the dirty-file porcelain body) is always present on a real
+  // observation; errorMessage results lack it and pass through. `diff` /
+  // `branch` / `truncated` are optional (diff only when include_diff ran,
+  // branch only when upstream info exists, truncated only when capped).
+  if (typeof record.status !== 'string') {
+    return { output, nextFingerprint: lastFingerprint }
+  }
+  // Serialize every field the tool can return via an explicit per-field
+  // encoding (never JSON.stringify key order, which is not guaranteed), so
+  // any change busts the gate and no returned field is dropped from the
+  // comparison. Absent optional fields encode as empty. NUL is a safe
+  // separator: git porcelain/diff text never contains it. `branch` is folded
+  // in because a commit changes the branch line while status/diff can stay
+  // fixed, and that must bust the gate.
+  const nextFingerprint = stableHash(
+    `branch=${typeof record.branch === 'string' ? record.branch : ''}` +
+      '\u0000' +
+      `status=${record.status}` +
+      '\u0000' +
+      `diff=${typeof record.diff === 'string' ? record.diff : ''}` +
+      '\u0000' +
+      `truncated=${record.truncated === true ? 'true' : ''}`,
+  )
+  if (lastFingerprint !== null && nextFingerprint === lastFingerprint) {
+    return {
+      output: [
+        {
+          type: 'json',
+          value: {
+            unchanged: true,
+            note: 'Worktree is byte-identical to the previous git_status observation this turn; the earlier status/diff/branch/truncated are still current, so do not re-request git_status to retrieve them.',
+          },
+        },
+      ],
+      nextFingerprint: lastFingerprint,
+    }
+  }
+  return { output, nextFingerprint }
+}
+
+function requireCwd(cwd: string | undefined, toolName: string): string {
+  if (!cwd) {
+    throw new Error(
+      `cwd is required for the ${toolName} tool. Please provide cwd in OpenbuffClientOptions or override the ${toolName} tool.`,
+    )
+  }
+  return cwd
+}
+
+function requireCapabilityIssuer(
+  capabilityIssuer: ReadCapabilityIssuer | undefined,
+  toolName: string,
+): ReadCapabilityIssuer {
+  if (!capabilityIssuer) {
+    throw new Error(
+      `a read capability issuer is required for the ${toolName} tool. Please provide cwd in OpenbuffClientOptions or override the ${toolName} tool.`,
+    )
+  }
+  return capabilityIssuer
+}
+
+async function readFiles({
+  filePaths,
+  ranges,
+  override,
+  fileFilter,
+  cwd,
+  fs,
+  signal,
+  capabilityIssuer,
+}: {
+  filePaths: string[]
+  ranges?: FileLineRange[]
+  override?: NonNullable<
+    Required<OpenbuffClientOptions>['overrideTools']['read_files']
+  >
+  fileFilter?: FileFilter
+  cwd?: string
+  fs: CodebuffFileSystem
+  signal: AbortSignal
+  capabilityIssuer?: ReadCapabilityIssuer
+}) {
+  if (override) {
+    const output = await executeOverride({
+      override,
+      input: { filePaths, ranges },
+      signal,
+    })
+    return normalizeReadFilesOverrideResult({
+      filePaths,
+      ranges,
+      raw: output,
+    })
+  }
+  return getFilesStructured({
+    filePaths,
+    ranges,
+    cwd: requireCwd(cwd, 'read_files'),
+    fs,
+    fileFilter,
+    signal,
+    capabilityIssuer,
+  })
+}
+
+/**
+ * Dispatches one client tool call and applies the post-dispatch mutation
+ * wiring (workspace state/journal advance plus change-observer notification).
+ * Exported so tests can drive that wiring directly instead of only through a
+ * full run.
+ */
+export async function handleToolCall({
+  action,
+  overrides,
+  customToolDefinitions,
+  cwd,
+  fs,
+  fileFilter,
+  filesystemPolicy,
+  intentLog,
+  trustedJobOwner,
+  capabilityIssuer,
+  logger,
+  env,
+  inheritEnv = true,
+  harnessStateDir,
+  approvalReceiptIds,
+  approvalMode,
+  requestApproval,
+  approvedClientMcpTools,
+  approvalService,
+  harnessWorkspaceIdentity,
+  getWorkspaceState,
+  setWorkspaceState,
+  advanceWorkspaceJournal,
+  onFilesChanged,
+  onFilesystemMutation,
+  verifyExternalMutation,
+  getLanguageIntelligence,
+  diagnosticDelta,
+  signal,
+}: {
+  action: ServerAction<'tool-call-request'>
+  overrides: NonNullable<OpenbuffClientOptions['overrideTools']>
+  customToolDefinitions: Record<string, CustomToolDefinition>
+  cwd?: string
+  fs: CodebuffFileSystem
+  fileFilter?: FileFilter
+  filesystemPolicy?: FilesystemAuthorityPolicy
+  /** P2-T5: durable transaction-intent log for multi-file commit loops. */
+  intentLog?: TransactionIntentLog
+  /** Trusted owner injected into every process-job op; never model-derived. */
+  trustedJobOwner: JobOwner
+  capabilityIssuer?: ReadCapabilityIssuer
+  logger?: Logger
+  env?: Record<string, string>
+  inheritEnv?: boolean
+  harnessStateDir: string
+  approvalReceiptIds: string[]
+  approvalMode: HarnessApprovalMode
+  requestApproval?: OpenbuffClientOptions['requestApproval']
+  /** Per-run set of already-approved client-origin MCP tool keys (P1-T2).
+   * Optional so existing direct callers/tests keep working; when absent, the
+   * gate still enforces approval but with a fresh local set for this call. */
+  approvedClientMcpTools?: Set<string>
+  approvalService: HarnessApprovalService
+  harnessWorkspaceIdentity?: {
+    repositoryId: string
+    workspaceId: string
+  }
+  getWorkspaceState: () => WorkspaceStateV1 | undefined
+  setWorkspaceState: (state: WorkspaceStateV1) => void
+  advanceWorkspaceJournal?: (params: {
+    source: string
+    operationId?: string
+    receiptId?: string
+    actions: FilesystemMutationEvent['actions']
+  }) => WorkspaceStateV1
+  onFilesChanged?: OpenbuffClientOptions['onFilesChanged']
+  onFilesystemMutation?: OpenbuffClientOptions['onFilesystemMutation']
+  verifyExternalMutation?: OpenbuffClientOptions['verifyExternalMutation']
+  /**
+   * P3-T2 (LI-01): lazily builds/returns this run's shared language-intelligence
+   * service. Optional so existing direct `handleToolCall` callers keep working;
+   * when absent the four LSP read tools fall back to a spawner-less service that
+   * degrades each query into a structured result instead of throwing.
+   */
+  getLanguageIntelligence?: () => LanguageIntelligenceService
+  /** Audit fix (B): fail-open diagnostic-delta preflight injector threaded
+   * into run_file_change_hooks (and forwarded to run_targeted_validation).
+   * Optional so existing direct callers/tests keep working; absent means the
+   * preflight seam stays off. The OPENBUFF_DIAGNOSTIC_PREFLIGHT flag check
+   * lives inside runFileChangeHooks. */
+  diagnosticDelta?: DiagnosticDeltaHook
+  signal?: AbortSignal
+}): Promise<{
+  output: ToolResultOutput[]
+  canonicalReceipt?: CommitReceiptV1
+}> {
+  const toolName = action.toolName
+  // P3-T2 (LI-01): resolve the shared language-intelligence service. runOnce
+  // injects a getter closing over this run's spawn/cwd; direct handleToolCall
+  // callers (tests) fall back to a spawner-less service whose queries degrade
+  // into a structured errorMessage result rather than throwing.
+  let fallbackLanguageIntelligence: LanguageIntelligenceService | undefined
+  const resolveLanguageIntelligence = (): LanguageIntelligenceService => {
+    if (getLanguageIntelligence) return getLanguageIntelligence()
+    fallbackLanguageIntelligence ??= createLanguageIntelligence({
+      cwd: requireCwd(cwd, 'language intelligence'),
+      // Direct handleToolCall callers (tests) run against THIS call's fs, so
+      // the splice seam is still filesystem-owned rather than raw node disk.
+      fs,
+    })
+    return fallbackLanguageIntelligence
+  }
+  const input =
+    typeof action.input === 'string'
+      ? parseJsonBounded(action.input)
+      : action.input
+  const normalizedAction =
+    input === action.input ? action : { ...action, input }
+
+  if (signal?.aborted) {
+    throw createAbortError(signal)
+  }
+
+  // Handle MCP tool calls when mcpConfig is present
+  if (action.mcpConfig) {
+    // P1-T2: gate the FIRST call of each tool from a `client`-origin MCP
+    // config behind the host approval callback. Trusted origins
+    // (`user`/`project`, and any explicitly trusted mark) proceed unchanged
+    // with no approval. `resolveMCPConfigOrigin` fails closed to `client` for
+    // unmarked configs, so an unmarked config is gated too — matching every
+    // other origin consumer.
+    if (resolveMCPConfigOrigin(action.mcpConfig) === 'client') {
+      // Stable per-(server-config, tool) key. `getMCPClientCacheKey` is the
+      // same identity `getMCPClient` computes downstream, so computing it here
+      // first is safe. If it can ever throw for a malformed config, fall back
+      // to a JSON key so a key failure never bypasses the gate.
+      let cacheKey: string
+      try {
+        cacheKey = getMCPClientCacheKey(action.mcpConfig, { origin: 'client' })
+      } catch {
+        cacheKey = JSON.stringify(action.mcpConfig)
+      }
+      const approvalKey = `${cacheKey}\u0000${toolName}`
+      // When no per-run set is threaded in, use a fresh local set so behavior
+      // is defined (the gate still enforces approval for this call).
+      const approvedTools = approvedClientMcpTools ?? new Set<string>()
+      if (!approvedTools.has(approvalKey)) {
+        if (requestApproval) {
+          // NUL-free, human-readable approval target derived from the config.
+          const serverLabel =
+            action.mcpConfig.type === 'stdio'
+              ? action.mcpConfig.command
+              : action.mcpConfig.url
+          const approved = await requestApproval({
+            action: 'mcp-tool',
+            target: `${serverLabel} ${toolName}`,
+            commandHash: hashCommand(approvalKey),
+            reason: `MCP tool '${toolName}' comes from a client-supplied (untrusted) MCP server and is running for the first time this run.`,
+            risk: 'high',
+          })
+          if (!approved) {
+            // Denied: do NOT call the tool. Return the same error-output shape
+            // the branch uses for a thrown MCP error so callers parse it
+            // identically to a failed call.
+            return {
+              output: [
+                {
+                  type: 'json',
+                  value: {
+                    errorMessage: `Client MCP tool '${toolName}' was denied approval.`,
+                  },
+                },
+              ],
+            }
+          }
+        }
+        // Approved by the host, or fail-open when no host approver exists
+        // (headless/CI). Record the key so subsequent calls of this same tool
+        // this run run freely.
+        approvedTools.add(approvalKey)
+      }
+    }
+    try {
+      const mcpClientId = await getMCPClient(action.mcpConfig)
+      const result = await callMCPTool(
+        mcpClientId,
+        {
+          name: toolName,
+          arguments: input,
+        },
+        undefined,
+        { signal },
+      )
+      return { output: result }
+    } catch (error) {
+      return {
+        output: [
+          {
+            type: 'json',
+            value: {
+              errorMessage:
+                error instanceof Error ? error.message : String(error),
+            },
+          },
+        ],
+      }
+    }
+  }
+
+  let result: ToolResultOutput[]
+  let canonicalReceipt: CommitReceiptV1 | undefined
+  // Returned by tools whose declared output is a compact receipt rather than
+  // the file_mutation_result payload (write_audit_findings, rename_symbol,
+  // code_action), so the post-dispatch mutation block below still observes
+  // their filesystem actions. It is returned for applied AND not_applied
+  // writes, so the
+  // `getConfirmedAppliedActionsV1` gate below — not its presence — decides
+  // whether anything landed. That receipt intentionally stays compact: the
+  // emitted FilesystemMutationEvent, which carries
+  // workspaceRevision/workspaceSnapshotId, is the correlation channel for the
+  // artifact write.
+  let compactReceiptMutation: FileMutationResultV1 | undefined
+  if (!toolNames.includes(toolName as ToolName)) {
+    const customToolHandler = customToolDefinitions[toolName]
+
+    if (!customToolHandler) {
+      throw new Error(
+        `Custom tool handler not found for user input ID ${action.userInputId}`,
+      )
+    }
+    // The runtime validates the JSON Schema advertised to the provider, but
+    // serialization cannot preserve Zod defaults, transforms, or async
+    // refinements. Apply the original SDK schema at the execution boundary so
+    // the handler receives the Args its TypeScript contract promises.
+    // Older hosts may supply JSON-Schema-only definitions; those have already
+    // been validated by the runtime and retain their existing behavior.
+    let customInput = input
+    if (typeof customToolHandler.inputSchema?.safeParseAsync === 'function') {
+      const validation = customToolHandler.inputSchema.safeParseAsync(input)
+      const parsed = signal
+        ? await raceAgainstAbort(validation, signal)
+        : await validation
+      if (!parsed.success) {
+        const details = parsed.error.issues
+          .map((issue) => {
+            const path = issue.path.map(String).join('.') || 'input'
+            return `${path}: ${issue.message}`
+          })
+          .join('; ')
+        return {
+          output: [
+            {
+              type: 'json',
+              value: {
+                errorMessage: `Invalid parameters for ${toolName}: ${details}`,
+              },
+            },
+          ],
+        }
+      }
+      customInput = parsed.data
+    }
+    return {
+      output: signal
+        ? await raceAgainstAbort(
+            customToolHandler.execute(customInput, { signal }),
+            signal,
+          )
+        : await customToolHandler.execute(customInput, { signal }),
+    }
+  }
+
+  try {
+    let override =
+      toolName === 'read_files'
+        ? undefined
+        : overrides[toolName as Exclude<PublishedToolName, 'read_files'>]
+    if (
+      !override &&
+      (toolName === 'str_replace' || toolName === 'create_plan')
+    ) {
+      // Reuse the write_file override for single-file editing tools that send
+      // FileChange-shaped payloads to the client.
+      override = overrides['write_file']
+    }
+
+    const isClientTool = clientToolNames.includes(toolName as ClientToolName)
+    if (!override && !isClientTool) {
+      throw new Error(
+        `Tool not implemented in SDK. Please provide an override or modify your agent to not use this tool: ${toolName}`,
+      )
+    }
+    const parsed = isClientTool
+      ? clientToolCallSchema.parse(normalizedAction)
+      : undefined
+
+    if (override) {
+      const overrideSignal = signal ?? new AbortController().signal
+      result = (await executeOverride({
+        override: override as OverrideDescriptor<
+          typeof input,
+          ToolResultOutput[]
+        >,
+        input,
+        signal: overrideSignal,
+      })) as ToolResultOutput[]
+      if (
+        toolName === 'write_file' ||
+        toolName === 'str_replace' ||
+        toolName === 'create_plan' ||
+        toolName === 'edit_transaction' ||
+        // Compact-receipt mutating tool: an override for it can still return a
+        // `file_mutation_result` part, which would otherwise self-certify
+        // `applied` and advance workspace state/journal without attestation.
+        toolName === 'write_audit_findings' ||
+        toolName === 'replace_range'
+      ) {
+        result = await Promise.all(
+          result.map(async (part) => {
+            if (part.type !== 'json') return part
+            const parsed = fileMutationResultV1Schema.safeParse(part.value)
+            if (!parsed.success) return part
+            if (
+              verifyExternalMutation &&
+              (await verifyExternalMutation({
+                toolName,
+                callId: action.requestId,
+                result: parsed.data,
+              }))
+            ) {
+              if (parsed.data.authorityReceipt?.callId === action.requestId) {
+                canonicalReceipt = parsed.data.authorityReceipt
+              }
+              return part
+            }
+            return {
+              type: 'json' as const,
+              value: fileMutationResultV1Schema.parse({
+                ...parsed.data,
+                outcome: 'unconfirmed',
+                actions: parsed.data.actions.map((action) => ({
+                  ...action,
+                  outcome: 'unconfirmed',
+                  beforeHash: null,
+                  afterHash: null,
+                  rollback: undefined,
+                })),
+                authorityTier: null,
+                receiptId: undefined,
+                errors: [
+                  ...parsed.data.errors,
+                  {
+                    code: 'malformed_result',
+                    message:
+                      'External mutation overrides cannot self-certify filesystem application.',
+                    retryable: false,
+                  },
+                ],
+                freshCapabilities: [],
+              }),
+            }
+          }),
+        )
+      }
+    } else if (toolName === 'end_turn') {
+      // Mirror the runtime end_turn handler's fail-closed scoping: list ONLY
+      // jobs owned by THIS run's trusted owner (the registry pairs owner
+      // equality on clientSessionId + rootRunId). An unscoped
+      // `listRunning()` here would surface other client sessions' jobs.
+      const runningJobs = jobRegistry
+        .listRunning({
+          clientSessionId: trustedJobOwner.clientSessionId,
+          rootRunId: trustedJobOwner.rootRunId,
+        })
+        .filter((job) => job.kind === 'process')
+      result = [
+        {
+          type: 'json',
+          value:
+            runningJobs.length === 0
+              ? { message: 'Turn ended.' }
+              : {
+                  message: `Turn ended. ${runningJobs.length} background job(s) are still running. Use check_job/read_logs/kill_job to manage them.`,
+                  pendingBackgroundJobs: runningJobs.slice(0, 5).map((job) => ({
+                    jobId: job.jobId,
+                    command: job.label,
+                    startedAt: job.startedAt ?? job.createdAt,
+                  })),
+                  ...(runningJobs.length > 5
+                    ? { pendingBackgroundJobsTruncated: runningJobs.length - 5 }
+                    : {}),
+                },
+        },
+      ]
+    } else if (toolName === 'write_audit_findings') {
+      const audit = await writeAuditFindings({
+        parameters: input,
+        cwd: requireCwd(cwd, toolName),
+        fs,
+        signal,
+        fileFilter,
+        filesystemPolicy,
+        callId: action.requestId,
+        logger,
+      })
+      result = audit.output
+      compactReceiptMutation = audit.mutation
+    } else if (
+      toolName === 'write_file' ||
+      toolName === 'str_replace' ||
+      toolName === 'create_plan'
+    ) {
+      result = await changeFile({
+        parameters: input,
+        cwd: requireCwd(cwd, toolName),
+        fs,
+        signal,
+        fileFilter,
+        filesystemPolicy,
+        capabilityIssuer,
+        callId: action.requestId,
+        logger,
+      })
+    } else if (toolName === 'edit_transaction') {
+      result = await changeFiles({
+        parameters: input,
+        cwd: requireCwd(cwd, toolName),
+        fs,
+        signal,
+        fileFilter,
+        filesystemPolicy,
+        intentLog,
+        capabilityIssuer,
+        callId: action.requestId,
+        logger,
+      })
+    } else if (toolName === 'replace_range') {
+      result = await replaceRange({
+        parameters: input,
+        cwd: requireCwd(cwd, toolName),
+        fs,
+        signal,
+        fileFilter,
+        filesystemPolicy,
+        // The issuer is constructed exactly when `cwd` is set; assert it
+        // explicitly rather than depending on evaluation order of the sibling
+        // `cwd: requireCwd(...)` property.
+        capabilityIssuer: requireCapabilityIssuer(capabilityIssuer, toolName),
+        callId: action.requestId,
+        logger,
+      })
+    } else if (toolName === 'run_terminal_command') {
+      const projectRoot = requireCwd(cwd, 'run_terminal_command')
+      if (parsed?.toolName !== 'run_terminal_command') {
+        throw new Error(
+          'Expected a parsed run_terminal_command client tool call',
+        )
+      }
+      const terminalInput = parsed.input
+      // `permission_profile` passes through verbatim from the client tool call
+      // input, but that input is constructed by the agent runtime handler
+      // (handleRunTerminalCommand), which always sets it from the agent
+      // template's declared `terminalPermissionProfile` (defaulting to
+      // 'full-access') and never from model/tool input — see the parity test
+      // in packages/agent-runtime/src/tools/handlers/tool/__tests__/
+      // run-terminal-command.test.ts. The per-profile policy engine is
+      // therefore clamped to the template declaration, never widened by the
+      // model. The schema on the SDK side still validates the value.
+      result = await runTerminalCommand({
+        ...terminalInput,
+        timeout_seconds: terminalInput.timeout_seconds ?? -1,
+        // Ownership identity is runtime-injected from trusted run state; any
+        // model-supplied `owner` in terminalInput is overridden here.
+        owner: trustedJobOwner,
+        cwd: path.resolve(projectRoot, terminalInput.cwd ?? '.'),
+        projectRoot,
+        env,
+        inheritEnv,
+        signal,
+        authorizeHighImpactAction: async (classified) => {
+          let branch: string | undefined
+          let defaultBranch: string | undefined
+          if (classified.action === 'push') {
+            const workspace = await inspectWorkspace({
+              cwd: projectRoot,
+              signal,
+            })
+            const value = workspace.find((part) => part.type === 'json')
+              ?.value as { branch?: string; defaultBranch?: string } | undefined
+            branch = classified.branch ?? value?.branch
+            defaultBranch = value?.defaultBranch
+          }
+          const staticDecision = evaluateHarnessActionPolicy({
+            ...classified,
+            branch,
+            defaultBranch,
+            hasMatchingApproval: false,
+            approvalMode,
+          })
+          if (!staticDecision.allowed && !staticDecision.approvalRequired) {
+            return staticDecision
+          }
+          if (staticDecision.allowed) {
+            return { allowed: true as const }
+          }
+          const candidateApprovalIds = [
+            terminalInput.approval_receipt_id,
+            ...approvalReceiptIds,
+          ].filter(
+            (value, index, values): value is string =>
+              typeof value === 'string' &&
+              value.length > 0 &&
+              values.indexOf(value) === index,
+          )
+          const snapshotId = getWorkspaceState()?.snapshotId
+          // Approval binding uses the TRUSTED root run id (run/session
+          // state), never a model-supplied owner.
+          const rootRunId = trustedJobOwner.rootRunId
+          if (!snapshotId || !rootRunId || !harnessWorkspaceIdentity) {
+            return {
+              allowed: false as const,
+              approvalRequired: true,
+              reason: `Action '${classified.action}' requires an approval context bound to the current repository, workspace, root run, and snapshot.`,
+            }
+          }
+          let lastError: unknown
+          for (const approvalId of candidateApprovalIds) {
+            try {
+              const receipt = approvalService.consume({
+                ...harnessWorkspaceIdentity,
+                runId: rootRunId,
+                approvalId,
+                action: classified.action,
+                target: classified.target,
+                commandHash: classified.commandHash,
+                snapshotId,
+              })
+              const approvedDecision = evaluateHarnessActionPolicy({
+                ...classified,
+                branch,
+                defaultBranch,
+                hasMatchingApproval: true,
+                approvalMode,
+              })
+              return approvedDecision.allowed
+                ? { allowed: true, approvalReceiptId: receipt.id }
+                : approvedDecision
+            } catch (error) {
+              lastError = error
+            }
+          }
+          if (requestApproval) {
+            const approved = await requestApproval({
+              ...classified,
+              risk:
+                classified.action === 'dependency-install' ||
+                classified.action === 'commit' ||
+                classified.action === 'push' ||
+                classified.action === 'pull-request'
+                  ? 'routine'
+                  : 'high',
+              reason: staticDecision.reason,
+            })
+            if (approved) {
+              const grant = approvalService.grant(
+                {
+                  ...harnessWorkspaceIdentity,
+                  runId: rootRunId,
+                  snapshotId,
+                },
+                {
+                  action: classified.action,
+                  target: classified.target,
+                  commandHash: classified.commandHash,
+                },
+              )
+              const receipt = approvalService.consume({
+                ...harnessWorkspaceIdentity,
+                runId: rootRunId,
+                snapshotId,
+                approvalId: grant.id,
+                action: classified.action,
+                target: classified.target,
+                commandHash: classified.commandHash,
+              })
+              const approvedDecision = evaluateHarnessActionPolicy({
+                ...classified,
+                branch,
+                defaultBranch,
+                hasMatchingApproval: true,
+                approvalMode,
+              })
+              return approvedDecision.allowed
+                ? { allowed: true as const, approvalReceiptId: receipt.id }
+                : approvedDecision
+            }
+            return {
+              allowed: false as const,
+              approvalRequired: true,
+              reason: 'The user declined this operation.',
+            }
+          }
+          return {
+            allowed: false,
+            approvalRequired: true,
+            reason:
+              lastError instanceof Error
+                ? lastError.message
+                : 'Approval receipt validation failed.',
+          }
+        },
+      })
+    } else if (toolName === 'read_image') {
+      result = await readImages({
+        paths: (input as { paths: string[] }).paths,
+        cwd: requireCwd(cwd, 'read_image'),
+        fs,
+        signal,
+        fileFilter,
+      })
+    } else if (toolName === 'inspect_3d_asset') {
+      if (fs.hostProcessView === false) {
+        throw new Error(
+          'inspect_3d_asset is unsupported because this filesystem adapter declares a different host process view.',
+        )
+      }
+      result = await inspect3dAsset({
+        path: (input as { path: string }).path,
+        cwd: requireCwd(cwd, 'inspect_3d_asset'),
+        fs,
+        signal,
+        fileFilter,
+      })
+    } else if (toolName === 'render_3d_preview') {
+      if (fs.hostProcessView === false) {
+        throw new Error(
+          'render_3d_preview is unsupported because this filesystem adapter declares a different host process view.',
+        )
+      }
+      const previewInput = input as {
+        path: string
+        views: Array<'camera' | 'perspective' | 'front' | 'side' | 'top'>
+        mode: 'material' | 'clay' | 'wireframe'
+        width: number
+        height: number
+      }
+      result = await render3dPreview({
+        ...previewInput,
+        cwd: requireCwd(cwd, 'render_3d_preview'),
+        fs,
+        signal,
+        fileFilter,
+      })
+    } else if (toolName === 'edit_3d_asset') {
+      if (fs.hostProcessView === false) {
+        throw new Error(
+          'edit_3d_asset is unsupported because this filesystem adapter declares a different host process view.',
+        )
+      }
+      const editInput = input as {
+        path: string
+        source_hash: string
+        operations: Record<string, unknown>[]
+      }
+      result = await edit3dAsset({
+        path: editInput.path,
+        sourceHash: editInput.source_hash,
+        operations: editInput.operations,
+        cwd: requireCwd(cwd, 'edit_3d_asset'),
+        fs,
+        operationId: action.requestId,
+        signal,
+        fileFilter,
+      })
+    } else if (toolName === 'browser_logs') {
+      // M1-T7: any model-supplied `_browserOwner` in the tool input is
+      // IGNORED — owner identity is stamped from trusted runtime state
+      // (trustedJobOwner) exactly like the check_job/kill_job/read_logs
+      // branches, so a prompt-injected tool call can never claim another
+      // session's browser sessions.
+      const browserInput = input as Parameters<typeof browserLogs>[0] & {
+        _browserOwner?: BrowserSessionOwner
+      }
+      const { _browserOwner, ...browserAction } = browserInput
+      void _browserOwner
+      result = await browserLogs(
+        browserAction as Parameters<typeof browserLogs>[0],
+        { ...trustedJobOwner, projectRoot: cwd },
+      )
+    } else if (toolName === 'code_search') {
+      if (fs.hostProcessView === false) {
+        throw new Error(
+          'code_search is unsupported because this filesystem adapter declares a different host process view. Provide a tool override.',
+        )
+      }
+      const codeSearchInput = input as Omit<
+        Parameters<typeof codeSearch>[0],
+        'projectPath'
+      >
+      result = await codeSearch({
+        ...codeSearchInput,
+        projectPath: requireCwd(cwd, 'code_search'),
+        signal,
+        fileFilter,
+      })
+    } else if (toolName === 'find_files_matching_content') {
+      if (fs.hostProcessView === false) {
+        throw new Error(
+          'find_files_matching_content is unsupported because this filesystem adapter declares a different host process view. Provide a tool override.',
+        )
+      }
+      const findFilesInput = input as Omit<
+        Parameters<typeof findFilesMatchingContent>[0],
+        'projectPath'
+      >
+      result = await findFilesMatchingContent({
+        ...findFilesInput,
+        projectPath: requireCwd(cwd, 'find_files_matching_content'),
+        signal,
+        fileFilter,
+      })
+    } else if (toolName === 'list_directory') {
+      result = await listDirectory({
+        directoryPath: (input as { path: string }).path,
+        offset: (input as { offset?: number }).offset,
+        limit: (input as { limit?: number }).limit,
+        projectPath: requireCwd(cwd, 'list_directory'),
+        fs,
+        fileFilter,
+      })
+    } else if (toolName === 'glob') {
+      result = await glob({
+        pattern: (input as { pattern: string; cwd?: string }).pattern,
+        projectPath: requireCwd(cwd, 'glob'),
+        cwd: (input as { pattern: string; cwd?: string }).cwd,
+        fs,
+        fileFilter,
+      })
+    } else if (toolName === 'run_file_change_hooks') {
+      if (fs.hostProcessView === false) {
+        throw new Error(
+          'run_file_change_hooks is unsupported because hook commands cannot see this filesystem adapter. Provide a tool override.',
+        )
+      }
+      result = await runFileChangeHooks({
+        files: (input as { files?: string[] }).files ?? [],
+        cwd: requireCwd(cwd, 'run_file_change_hooks'),
+        env,
+        signal,
+        fileSystem: fs,
+        diagnosticDelta,
+      })
+    } else if (toolName === 'check_job') {
+      // The trusted owner overrides any model-supplied owner in the input.
+      // M2-T4 (Fix 4): the runtime abort signal is likewise pinned OVER any
+      // model-supplied input value, so a spoofed `signal` in tool input cannot
+      // substitute its own for cancellation.
+      result = await checkJob({
+        ...(input as Omit<Parameters<typeof checkJob>[0], 'owner'>),
+        signal,
+        owner: trustedJobOwner,
+      })
+    } else if (toolName === 'kill_job') {
+      result = await killJob({
+        ...(input as Omit<Parameters<typeof killJob>[0], 'owner'>),
+        owner: trustedJobOwner,
+      })
+    } else if (toolName === 'read_logs') {
+      const readLogsInput = input as Omit<
+        Parameters<typeof readLogs>[0],
+        'cwd' | 'owner' | 'fileFilter'
+      >
+      result = await readLogs({
+        ...readLogsInput,
+        cwd: requireCwd(cwd, 'read_logs'),
+        owner: trustedJobOwner,
+        // ER-4: host read policy is runtime-injected, exactly like the
+        // read_image / list_directory branches; model input cannot supply it.
+        fileFilter,
+      })
+    } else if (toolName === 'list_jobs') {
+      // Any model-supplied `input.owner` is ignored entirely; scoping always
+      // comes from the trusted run owner.
+      result = await listJobs({ owner: trustedJobOwner })
+    } else if (toolName === 'git_status') {
+      const gitStatusInput = input as Omit<
+        Parameters<typeof gitStatus>[0],
+        'cwd'
+      >
+      result = await gitStatus({
+        ...gitStatusInput,
+        cwd: requireCwd(cwd, 'git_status'),
+        signal,
+      })
+    } else if (toolName === 'inspect_workspace') {
+      result = await inspectWorkspace({
+        cwd: requireCwd(cwd, 'inspect_workspace'),
+        signal,
+      })
+    } else if (toolName === 'get_task') {
+      result = getTask({
+        cwd: requireCwd(cwd, 'get_task'),
+        session: (input as { session?: string }).session,
+      })
+    } else if (toolName === 'get_change_review_bundle') {
+      result = await getChangeReviewBundle({
+        cwd: requireCwd(cwd, 'get_change_review_bundle'),
+        max_chars: (input as { max_chars?: number }).max_chars,
+        stateDir: harnessStateDir,
+        workspaceState: getWorkspaceState(),
+        signal,
+      })
+    } else if (toolName === 'run_targeted_validation') {
+      const validationInput = input as {
+        snapshot_id: string
+        files: string[]
+        artifact_kinds?: string[]
+      }
+      result = await runTargetedValidation({
+        cwd: requireCwd(cwd, 'run_targeted_validation'),
+        snapshotId: validationInput.snapshot_id,
+        files: validationInput.files,
+        artifactKinds: validationInput.artifact_kinds,
+        env,
+        signal,
+        fileSystem: fs,
+        diagnosticDelta,
+        workspaceState: getWorkspaceState(),
+      })
+    } else if (toolName === 'inspect_environment') {
+      result = await inspectEnvironment(
+        requireCwd(cwd, 'inspect_environment'),
+        signal,
+      )
+    } else if (toolName === 'get_affected_tests') {
+      result = await getAffectedTests(
+        requireCwd(cwd, 'get_affected_tests'),
+        (input as { files: string[] }).files,
+        signal,
+      )
+    } else if (toolName === 'go_to_definition') {
+      result = await goToDefinition(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+      )
+    } else if (toolName === 'find_references') {
+      result = await findReferences(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+      )
+    } else if (toolName === 'hover_type') {
+      result = await hoverType(
+        resolveLanguageIntelligence(),
+        input as { path: string; line: number; character: number },
+      )
+    } else if (toolName === 'workspace_symbol') {
+      result = await workspaceSymbol(
+        resolveLanguageIntelligence(),
+        input as { query: string },
+      )
+    } else if (toolName === 'rename_symbol') {
+      // P4-T2: the semantic-edit apply tools route their changed files through
+      // the SAME multi-file commit path as edit_transaction (per-file broker
+      // CAS, CommitReceiptV1s, P2-T5 intent log, rollback). The deps passed
+      // below mirror the edit_transaction branch exactly. Their published
+      // output is a compact named result rather than a file_mutation_result
+      // payload, so the underlying mutation rides the compact-receipt channel
+      // (the writeAuditFindings precedent) into the post-dispatch block and
+      // the journaling/LSP-sync wiring stays automatic with no new machinery.
+      const applied = await renameSymbol(
+        resolveLanguageIntelligence(),
+        input as {
+          path: string
+          line: number
+          character: number
+          new_name: string
+        },
+        {
+          cwd: requireCwd(cwd, toolName),
+          fs,
+          signal,
+          fileFilter,
+          filesystemPolicy,
+          capabilityIssuer,
+          intentLog,
+          callId: action.requestId,
+          logger,
+        },
+      )
+      result = applied.output
+      compactReceiptMutation = applied.mutation
+    } else if (toolName === 'code_action') {
+      const applied = await codeAction(
+        resolveLanguageIntelligence(),
+        input as {
+          path: string
+          line: number
+          character: number
+          kind: string
+        },
+        {
+          cwd: requireCwd(cwd, toolName),
+          fs,
+          signal,
+          fileFilter,
+          filesystemPolicy,
+          capabilityIssuer,
+          intentLog,
+          callId: action.requestId,
+          logger,
+        },
+      )
+      result = applied.output
+      compactReceiptMutation = applied.mutation
+    } else if (toolName === 'extract_symbol') {
+      const applied = await extractSymbol(
+        resolveLanguageIntelligence(),
+        input as {
+          path: string
+          line: number
+          character: number
+          destination_path: string
+          symbol_name: string
+        },
+        {
+          cwd: requireCwd(cwd, toolName),
+          fs,
+          signal,
+          fileFilter,
+          filesystemPolicy,
+          capabilityIssuer,
+          intentLog,
+          callId: action.requestId,
+          logger,
+        },
+      )
+      result = applied.output
+      compactReceiptMutation = applied.mutation
+    } else if (toolName === 'get_build_targets') {
+      result = await getBuildTargets(
+        requireCwd(cwd, 'get_build_targets'),
+        (input as { files: string[] }).files,
+        signal,
+      )
+    } else if (toolName === 'inspect_codebase_structure') {
+      result = inspectCodebaseStructureTool(
+        requireCwd(cwd, toolName),
+        (input as { scope?: string[] }).scope,
+      )
+    } else if (toolName === 'inspect_feature_completeness') {
+      result = inspectFeatureCompletenessTool(
+        requireCwd(cwd, toolName),
+        input as { feature: string; snapshot_id: string; scope?: string[] },
+      )
+    } else if (toolName === 'evaluate_audit_coverage') {
+      result = evaluateAuditCoverageTool(
+        requireCwd(cwd, toolName),
+        input as Parameters<typeof evaluateAuditCoverageTool>[1],
+      )
+    } else if (toolName === 'git_branch') {
+      // The Zod schema (`common/src/tools/params/tool/git-branch.ts`) exposes
+      // snake_case input: `{ branch_name, switch, allow_dirty }`. The SDK
+      // `gitBranch()` function (`sdk/src/tools/git-branch.ts`) expects
+      // camelCase: `{ branchName, switch, allowDirty }`. Map the keys
+      // explicitly here — an unsafe `...gitBranchInput` spread would pass
+      // `branch_name`/`allow_dirty` through verbatim, leaving `branchName`
+      // as `undefined` (fails the name regex → every dispatch call errors).
+      // `switch` is the same key in both shapes; it is forwarded as-is.
+      const branchInput = input as {
+        branch_name: string
+        switch?: boolean
+        allow_dirty?: boolean
+      }
+      const branchResult = await gitBranch({
+        branchName: branchInput.branch_name,
+        switch: branchInput.switch,
+        allowDirty: branchInput.allow_dirty,
+        cwd: requireCwd(cwd, 'git_branch'),
+      })
+      // gitBranch returns a single GitBranchResult object; the dispatcher
+      // expects a ToolResultOutput[] (array of { type: 'json', value }).
+      // Mirror the shape gitStatus returns by wrapping the value in a tuple.
+      const { errorMessage, ...successValue } = branchResult
+      result = [
+        {
+          type: 'json',
+          value: errorMessage !== undefined ? { errorMessage } : successValue,
+        },
+      ]
+    } else {
+      throw new Error(
+        `Tool not implemented in SDK. Please provide an override or modify your agent to not use this tool: ${toolName}`,
+      )
+    }
+  } catch (error) {
+    if (signal?.aborted) {
+      throw createAbortError(signal)
+    }
+    result = [
+      {
+        type: 'json',
+        value: {
+          errorMessage:
+            error &&
+            typeof error === 'object' &&
+            'message' in error &&
+            typeof error.message === 'string'
+              ? error.message
+              : typeof error === 'string'
+                ? error
+                : 'Unknown error',
+        },
+      },
+    ]
+  }
+  // Shared selector, so this scan cannot diverge from the one the
+  // compact-receipt tools run over their own output parts.
+  const resultMutation = findFileMutationResult(result)
+  // Fall back to the compact-receipt channel (see its declaration).
+  const mutationValue = resultMutation ?? compactReceiptMutation ?? null
+  const confirmedActions = mutationValue
+    ? getConfirmedAppliedActionsV1(mutationValue)
+    : []
+  // `mutationValue` is re-tested here so TypeScript narrows it for the whole
+  // block below instead of repeating non-null assertions on every use.
+  if (mutationValue && confirmedActions.length > 0) {
+    // Shaped once and reused below, so the journal record and the emitted
+    // event can never describe different actions.
+    const changedActions: FilesystemMutationEvent['actions'] =
+      confirmedActions.map((confirmed) => ({
+        action: confirmed.action,
+        path: confirmed.path,
+        ...(confirmed.destinationPath
+          ? { destinationPath: confirmed.destinationPath }
+          : {}),
+        beforeHash: confirmed.beforeHash,
+        afterHash: confirmed.afterHash,
+      }))
+    const workspaceChange = {
+      source: `sdk:${toolName}`,
+      operationId: mutationValue.operationId,
+      ...(mutationValue.receiptId
+        ? { receiptId: mutationValue.receiptId }
+        : {}),
+      actions: changedActions,
+    }
+    const workspaceState = advanceWorkspaceJournal
+      ? advanceWorkspaceJournal(workspaceChange)
+      : advanceWorkspaceState(getWorkspaceState(), workspaceChange)
+    setWorkspaceState(workspaceState)
+    // Audit fix (C): push the committed files into any already-running
+    // language server so post-edit LSP answers are not stale. Guarded and
+    // fail-open: sync can never fail the run that just committed the write.
+    // Only successfully-written project-relative paths are synced; a move
+    // syncs its destination path.
+    const syncedPaths = changedActions
+      .filter((changed) => changed.action !== 'delete')
+      .map((changed) =>
+        changed.action === 'move' ? changed.destinationPath : changed.path,
+      )
+      .filter((changedPath): changedPath is string => Boolean(changedPath))
+    // Audit fix: deleted paths are forwarded separately as a didClose so a
+    // warm language server drops its stale open-document state for files
+    // that no longer exist (they are excluded from syncedPaths above).
+    const closedPaths = changedActions
+      .filter((changed) => changed.action === 'delete')
+      .map((changed) => changed.path)
+      .filter((changedPath): changedPath is string => Boolean(changedPath))
+    if (syncedPaths.length > 0 || closedPaths.length > 0) {
+      try {
+        await getLanguageIntelligence?.().syncMutatedFiles(syncedPaths, {
+          closedPaths,
+        })
+      } catch (error) {
+        logger?.warn({ error }, 'Language-server document sync failed')
+      }
+    }
+    // Only a mutation that was actually part of `result` can be enriched in
+    // place. Tools whose declared output is a compact receipt reach this block
+    // through `compactReceiptMutation`; their receipt schema declares no
+    // workspace fields (a consumer parsing it through `outputSchema` would
+    // strip them), so those hosts read the coordinates from the
+    // FilesystemMutationEvent emitted below instead.
+    if (resultMutation) {
+      const enrichedMutation = fileMutationResultV1Schema.parse({
+        ...mutationValue,
+        workspaceRevision: workspaceState.revision,
+        workspaceSnapshotId: workspaceState.snapshotId,
+        ...(mutationValue.authorityReceipt
+          ? {
+              authorityReceipt: {
+                ...mutationValue.authorityReceipt,
+                workspaceRevision: workspaceState.revision,
+                workspaceSnapshotId: workspaceState.snapshotId,
+              },
+            }
+          : {}),
+      })
+      result = result.map((part) =>
+        part.type === 'json' && part.value === mutationValue
+          ? { type: 'json' as const, value: enrichedMutation }
+          : part,
+      )
+    }
+    const event: FilesystemMutationEvent = {
+      toolName,
+      callId: action.requestId,
+      operationId: mutationValue.operationId,
+      ...(mutationValue.receiptId
+        ? { receiptId: mutationValue.receiptId }
+        : {}),
+      workspaceRevision: workspaceState.revision,
+      workspaceSnapshotId: workspaceState.snapshotId,
+      actions: changedActions,
+    }
+    if (onFilesystemMutation) {
+      try {
+        await onFilesystemMutation(event)
+      } catch (error) {
+        logger?.warn({ error }, 'Filesystem mutation observer failed')
+        try {
+          await onFilesChanged?.()
+        } catch (fallbackError) {
+          logger?.warn(
+            { error: fallbackError },
+            'File-change fallback observer failed',
+          )
+        }
+      }
+    } else {
+      try {
+        await onFilesChanged?.()
+      } catch (error) {
+        logger?.warn({ error }, 'File-change observer failed')
+      }
+    }
+  } else if (
+    toolName === 'run_terminal_command' ||
+    Boolean(customToolDefinitions[toolName]) ||
+    Boolean(action.mcpConfig)
+  ) {
+    try {
+      await onFilesChanged?.()
+    } catch (error) {
+      logger?.warn({ error }, 'Unknown-mutation observer failed')
+    }
+  }
+  if (!canonicalReceipt && mutationValue && cwd) {
+    canonicalReceipt = getDefaultFilesystemAuthority(
+      cwd,
+      fs,
+      fileFilter,
+      filesystemPolicy,
+    ).getCanonicalReceipt(mutationValue.operationId, action.requestId)
+  }
+  return {
+    output: result,
+    ...(canonicalReceipt ? { canonicalReceipt } : {}),
+  }
+}
+
+/**
+ * Extracts an HTTP status code from an error message string.
+ * Parses common error patterns to identify the underlying status code.
+ * Returns the status code if found, undefined otherwise.
+ */
+export const extractStatusCodeFromMessage = (
+  errorMessage: string,
+): number | undefined => {
+  const lowerMessage = errorMessage.toLowerCase()
+
+  // AI SDK's built-in retry error (e.g., "Failed after 4 attempts. Last error: Service Unavailable")
+  // The AI SDK already retried 4 times, but we still want our SDK wrapper to retry 3 more times
+  if (
+    lowerMessage.includes('failed after') &&
+    lowerMessage.includes('attempts')
+  ) {
+    // Extract the underlying error type from the message
+    if (lowerMessage.includes('service unavailable')) {
+      return 503
+    }
+    if (lowerMessage.includes('timeout')) {
+      return 408
+    }
+    if (lowerMessage.includes('connection refused')) {
+      return 503
+    }
+    // Default to 500 for other AI SDK retry failures
+    return 500
+  }
+
+  if (
+    errorMessage.includes('503') ||
+    lowerMessage.includes('service unavailable')
+  ) {
+    return 503
+  }
+  if (errorMessage.includes('504')) {
+    return 504
+  }
+  if (errorMessage.includes('502')) {
+    return 502
+  }
+  if (lowerMessage.includes('timeout') || errorMessage.includes('408')) {
+    return 408
+  }
+  if (
+    lowerMessage.includes('econnrefused') ||
+    lowerMessage.includes('connection refused')
+  ) {
+    return 503
+  }
+  if (lowerMessage.includes('dns') || lowerMessage.includes('enotfound')) {
+    return 503
+  }
+  if (lowerMessage.includes('server error') || errorMessage.includes('500')) {
+    return 500
+  }
+  if (errorMessage.includes('429') || lowerMessage.includes('rate limit')) {
+    return 429
+  }
+  if (
+    lowerMessage.includes('network error') ||
+    lowerMessage.includes('fetch failed')
+  ) {
+    return 503
+  }
+
+  return undefined
+}
+
+async function handlePromptResponse({
+  action,
+  resolve,
+  onError,
+  initialSessionState,
+}: {
+  action: ServerAction<'prompt-response'> | ServerAction<'prompt-error'>
+  resolve: (value: RunReturnType) => any
+  onError: (error: { message: string }) => void
+  initialSessionState: SessionState
+}) {
+  if (action.type === 'prompt-error') {
+    onError({ message: action.message })
+
+    const statusCode = extractStatusCodeFromMessage(action.message)
+    resolve({
+      sessionState: initialSessionState,
+      output: {
+        type: 'error',
+        message: action.message,
+        ...(statusCode !== undefined && { statusCode }),
+      },
+    })
+  } else if (action.type === 'prompt-response') {
+    // Stop enforcing session state schema! It's a black box we will pass back to the server.
+    // Only check the output schema.
+    const parsedOutput = AgentOutputSchema.safeParse(action.output)
+    if (!parsedOutput.success) {
+      const message = [
+        'Received invalid prompt response from server:',
+        JSON.stringify(parsedOutput.error.issues),
+        'If this issues persists, please contact support@openbuff.dev',
+      ].join('\n')
+      onError({ message })
+      resolve({
+        sessionState: initialSessionState,
+        output: {
+          type: 'error',
+          message,
+        },
+      })
+      return
+    }
+    const { sessionState, output } = action
+
+    const state: RunState = {
+      sessionState,
+      output: output ?? {
+        type: 'error',
+        message: 'No output from agent',
+      },
+    }
+    resolve(state)
+  } else {
+    action satisfies never
+    onError({
+      message: 'Internal error: prompt response type not handled',
+    })
+    resolve({
+      sessionState: initialSessionState,
+      output: {
+        type: 'error',
+        message: 'Internal error: prompt response type not handled',
+      },
+    })
+  }
+}

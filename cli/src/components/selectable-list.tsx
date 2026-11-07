@@ -20,10 +20,17 @@ import React, {
 
 import { Button } from './button'
 import { useTheme } from '../hooks/use-theme'
+import { useTerminalDimensions } from '../hooks/use-terminal-dimensions'
 
 import type { ScrollBoxRenderable } from '@opentui/core'
 
 export interface SelectableListItem {
+  /**
+   * Character positions in `label` matched by the caller's fuzzy query.
+   * Rendered bold (fzf-style) so ranking is visible; optional, so lists
+   * without a query render exactly as before.
+   */
+  labelIndices?: number[]
   id: string
   label: string
   icon?: string
@@ -68,6 +75,7 @@ export const SelectableList = forwardRef<
     ref,
   ) => {
     const theme = useTheme()
+    const { terminalHeight } = useTerminalDimensions()
     const scrollRef = useRef<ScrollBoxRenderable | null>(null)
     const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
 
@@ -91,6 +99,31 @@ export const SelectableList = forwardRef<
       },
       [items.length],
     )
+    const focusedIndexRef = useRef(focusedIndex)
+    const scrollToIndexRef = useRef(scrollToIndex)
+    focusedIndexRef.current = focusedIndex
+    scrollToIndexRef.current = scrollToIndex
+    const resizeCleanupRef = useRef<(() => void) | null>(null)
+    const attachScrollbox = useCallback((node: ScrollBoxRenderable | null) => {
+      resizeCleanupRef.current?.()
+      resizeCleanupRef.current = null
+      scrollRef.current = node
+      if (node) {
+        // React effects can run before OpenTUI computes the new viewport.
+        // Restore visibility when its actual dimensions have changed.
+        const viewport = node.viewport
+        const original = viewport.onSizeChange
+        const resized = () => {
+          original?.call(viewport)
+          scrollToIndexRef.current(focusedIndexRef.current)
+        }
+        viewport.onSizeChange = resized
+        resizeCleanupRef.current = () => {
+          if (viewport.onSizeChange === resized)
+            viewport.onSizeChange = original
+        }
+      }
+    }, [])
 
     // Expose scroll method to parent
     useImperativeHandle(
@@ -108,7 +141,7 @@ export const SelectableList = forwardRef<
       scrollToIndex(focusedIndex)
       // Clear hover state when keyboard navigation happens
       setHoveredIndex(null)
-    }, [focusedIndex, scrollToIndex])
+    }, [focusedIndex, scrollToIndex, maxHeight, terminalHeight])
 
     if (items.length === 0) {
       return (
@@ -120,7 +153,7 @@ export const SelectableList = forwardRef<
 
     return (
       <scrollbox
-        ref={scrollRef}
+        ref={attachScrollbox}
         scrollX={false}
         scrollbarOptions={{ visible: false }}
         verticalScrollbarOptions={{
@@ -201,18 +234,70 @@ export const SelectableList = forwardRef<
                     {item.icon}
                   </text>
                 )}
-                <text
-                  style={{
-                    fg:
-                      item.accent && !isHighlighted ? theme.primary : textColor,
-                    attributes:
-                      item.accent || isHighlighted
-                        ? TextAttributes.BOLD
-                        : undefined,
-                  }}
-                >
-                  {item.label}
-                </text>
+                {(() => {
+                  // fzf-style matched-character emphasis: when the caller
+                  // supplies the fuzzy match positions, the matched
+                  // subsequence renders bold so the user can see WHY a row
+                  // ranked, without re-deriving the match by eye.
+                  if (!item.labelIndices || item.labelIndices.length === 0) {
+                    return (
+                      <text
+                        style={{
+                          fg:
+                            item.accent && !isHighlighted
+                              ? theme.primary
+                              : textColor,
+                          attributes:
+                            item.accent || isHighlighted
+                              ? TextAttributes.BOLD
+                              : undefined,
+                        }}
+                      >
+                        {item.label}
+                      </text>
+                    )
+                  }
+                  const matched = new Set(item.labelIndices)
+                  const segments: Array<{
+                    text: string
+                    matched: boolean
+                  }> = []
+                  let current = ''
+                  let currentMatched = false
+                  for (let i = 0; i < item.label.length; i++) {
+                    const isMatched = matched.has(i)
+                    if (isMatched === currentMatched) {
+                      current += item.label[i]
+                    } else {
+                      segments.push({ text: current, matched: currentMatched })
+                      current = item.label[i] ?? ''
+                      currentMatched = isMatched
+                    }
+                  }
+                  if (current) {
+                    segments.push({ text: current, matched: currentMatched })
+                  }
+                  return (
+                    <text
+                      style={{
+                        fg:
+                          item.accent && !isHighlighted
+                            ? theme.primary
+                            : textColor,
+                      }}
+                    >
+                      {segments.map((segment, index) =>
+                        segment.matched ? (
+                          <span key={index} attributes={TextAttributes.BOLD}>
+                            {segment.text}
+                          </span>
+                        ) : (
+                          <span key={index}>{segment.text}</span>
+                        ),
+                      )}
+                    </text>
+                  )
+                })()}
                 {item.secondary && !item.hideSecondary && (
                   <text style={{ fg: theme.muted }}>{item.secondary}</text>
                 )}

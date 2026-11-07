@@ -1,0 +1,268 @@
+bun test v1.3.5 (1e86cebd)
+
+sdk/src/__tests__/acp-outcomes.test.ts:
+Using environment: test
+(pass) actual ACP hard stops cannot be overridden by completed metadata [104.96ms]
+(pass) actual ACP request errors keep completed execution and rejected task separate [10.00ms]
+(pass) actual ACP failed status survives JSON and conflicting action metadata [24.99ms]
+
+sdk/src/__tests__/run-programmatic-outcomes.test.ts:
+[openbuff] Loaded provider config from:
+  - /tmp/b02-deslop-refresh-7dm78o_7/providers.json
+(pass) the actual SDK admits zero budgets and refuses dispatch before work [290.90ms]
+(pass) serialized programmatic custom tools reach the SDK and preserve rejection and cancellation [292.90ms]
+
+sdk/src/__tests__/serve-bridge.test.ts:
+(pass) createServeBridge > resolved empty errors and rejected task verdicts remain unsuccessful [16.99ms]
+(pass) createServeBridge > an authoritative accepted recovery retains its verdict after an earlier error event [9.00ms]
+(pass) createServeBridge > forwards a plain assistant text chunk (sanitized) to update [6.00ms]
+(pass) createServeBridge > a chunk containing a cap.v3 token reaches update already redacted [1.00ms]
+(pass) createServeBridge > tool_call and tool_result events are NOT forwarded (structural drop) [7.00ms]
+(pass) createServeBridge > an onFilesystemMutation event is recorded as a projected receipt row [3.00ms]
+(pass) createServeBridge > a forwarded chunk containing a <gate-state> block updates the store gate phase [2.00ms]
+(pass) createServeBridge > returns end_turn normally and cancelled when the signal aborts before run resolves [1.00ms]
+(pass) createServeBridge > runs the client with a custom agentId when provided [2.00ms]
+(pass) createServeBridge > defaults the client agentId to base when unset [1.00ms]
+(pass) createServeBridge > marks client-advertised MCP servers client-origin at ingest and skips acp [2.00ms]
+(pass) createServeBridge > does not call markClientMcpServers for empty or absent mcpServers [1.00ms]
+(pass) createServeBridge > never marks when markClientMcpServers is absent but the run still proceeds
+(pass) createServeBridge > attaches marked client MCP servers to client.run at client origin (same identity) [1.00ms]
+(pass) createServeBridge > passes no mcpServers to client.run when none are advertised, and still runs [1.00ms]
+(pass) createServeBridge > non-text payloads reach onSessionUpdate while text still streams via update [2.00ms]
+(pass) createServeBridge > without onSessionUpdate, non-text payloads are dropped (Wave-1 behavior) [6.00ms]
+(pass) createServeBridge > eventsMode full forwards telemetry variants as _openbuff.dev/event payloads [2.00ms]
+(pass) createServeBridge > eventsMode full forwards subagent text through the sanitized update seam [1.00ms]
+(pass) createServeBridge > NEW-3: host-injected credentialValues are held back and redacted across chunk boundaries [1.00ms]
+(pass) createServeBridge > §6.1: the baseline capability map derives journal flags from the store (an in-memory store advertises no resume/replay) [2.00ms]
+(pass) createServeBridge > §6.1: a journal-backed store honestly advertises resume/replay [3.00ms]
+(pass) createServeBridge > §12.8: a rejecting update during the idle flush is contained (warn, no unhandled rejection) [407.86ms]
+(pass) createServeBridge > §12.8: a turn-end flush rejection never masks the run error [2.00ms]
+(pass) createServeBridge > §12.8: a cancelled turn drains held windows without flushing them to the sink [1.00ms]
+
+sdk/src/serve/__tests__/event-bridge.test.ts:
+(pass) printModeToSessionUpdates > text maps to agent_message_chunk with messageId = ctx.runId
+(pass) printModeToSessionUpdates > subagent text is dropped in acp mode and carries _meta.agentId in full mode
+(pass) printModeToSessionUpdates > reasoning_delta maps root-only in acp mode and everywhere in full mode [1.00ms]
+(pass) printModeToSessionUpdates > tool_call maps kind via ctx.toolKind and makes path params absolute [2.00ms]
+(pass) printModeToSessionUpdates > tool_call without path params omits locations
+(pass) printModeToSessionUpdates > NEW-3: tool_call rawInput redacts configured credential values
+(pass) printModeToSessionUpdates > NEW-3: credential redaction reaches nested rawInput fields [1.00ms]
+(pass) printModeToSessionUpdates > NEW-3 composes with NEW-6: non-content fields of a sensitive-path card still redact credentials
+(pass) printModeToSessionUpdates > NEW-6: a sensitive-path replace_range tool_call redacts the top-level newContent field
+(pass) printModeToSessionUpdates > NEW-6: a non-sensitive-path replace_range keeps newContent unredacted [1.00ms]
+(pass) printModeToSessionUpdates > NEW-6: a sensitive-path edit_transaction redacts nested structured-edit operation text [2.00ms]
+(pass) printModeToSessionUpdates > NEW-6: a sensitive-path edit_transaction redacts occurrence-targeted replace_range edits
+(pass) printModeToSessionUpdates > NEW-6: a non-sensitive-path edit_transaction keeps nested edit content unredacted
+(pass) printModeToSessionUpdates > tool_start maps to tool_call_update in_progress
+(pass) printModeToSessionUpdates > tool_result maps to completed with json content and never rawOutput [1.00ms]
+(pass) printModeToSessionUpdates > media-only tool_result output emits no content and never rawOutput [1.00ms]
+(pass) printModeToSessionUpdates > tool_result with an errorMessage in its output maps to failed
+(pass) printModeToSessionUpdates > a mutation outcome outside applied maps tool_result to failed [2.00ms]
+(pass) printModeToSessionUpdates > an applied mutation with afterContent adds diff content blocks [22.99ms]
+(pass) printModeToSessionUpdates > a raw applied claim without authority remains failed and emits no applied diff [3.00ms]
+(pass) printModeToSessionUpdates > oversized tool_result content is capped with a truncation marker [4.00ms]
+(pass) printModeToSessionUpdates > write_todos result maps to plan entries with the first incomplete in_progress [1.00ms]
+(pass) printModeToSessionUpdates > a fully completed todo list yields no in_progress entry
+(pass) printModeToSessionUpdates > subagent_start/finish map onto the parent spawn toolCallId with _meta.agent
+(pass) printModeToSessionUpdates > subagent events without a spawn toolCallId emit nothing
+(pass) printModeToSessionUpdates > context_window maps used/size and finish maps cost only
+(pass) printModeToSessionUpdates > autoRecovering errors are not emitted; terminal errors map via printModeErrorToRpcError
+(pass) printModeToSessionUpdates > telemetry variants emit the _openbuff.dev/event ext notification only in full mode
+(pass) printModeToSessionUpdates > GV-16: an internal tool_result emits nothing even with events=full [1.00ms]
+(pass) printModeToSessionUpdates > the unmapped 'start' variant emits nothing [5.00ms]
+(pass) printModeToSessionUpdates > an unknown variant throws UnhandledPrintModeVariantError naming it [1.00ms]
+(pass) printModeToSessionUpdates > EV-1: a sensitive-path mutation redacts content fields from the raw-JSON text block [3.00ms]
+(pass) printModeToSessionUpdates > EV-1: non-sensitive actions in a mixed mutation keep their afterContent verbatim [8.00ms]
+(pass) printModeToSessionUpdates > EV-2: credential redaction past the walk depth cap is fail-closed [1.00ms]
+(pass) printModeToSessionUpdates > EV-2: subtrees shallower than the walk depth cap keep their structure
+(pass) printModeToSessionUpdates > EV-3: pathologically nested sensitive-path rawInput is depth-bounded, not stack-bound [6.00ms]
+
+cli/src/__tests__/run-command.test.ts:
+(pass) runHeadlessCommand > resolved failed, exhausted and rejected outcomes fail without an error event [2.00ms]
+(pass) runHeadlessCommand > an accepted recovery succeeds while its failed action stays recorded [1.00ms]
+(pass) runHeadlessCommand > short human text flushes before a deferred run completes [83.97ms]
+(pass) runHeadlessCommand > --json emits one ndjson line per event and returns 0 [4.00ms]
+(pass) runHeadlessCommand > batches stdout writes without breaking ndjson line integrity [1.00ms]
+(pass) runHeadlessCommand > non-json writes only text event content to stdout [1.00ms]
+(pass) runHeadlessCommand > a throwing client returns 1 and writes an error ndjson line (json) [1.00ms]
+(pass) runHeadlessCommand > a throwing client returns 1 and writes the error to stderr (non-json) [1.00ms]
+(pass) runHeadlessCommand > threads prompt and agentId into client.run (defaulting agent to base) [1.00ms]
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > the opened journal is threaded as BOTH journalWriter and journalReader, then closed [4.00ms]
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > a fail-open opener (undefined) runs WITHOUT journaling and never throws
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > an opener that throws is contained: fail-open, never crash the run
+(pass) runHeadlessCommand > timeout (--timeout) > aborts a hung run after the deadline: exit 1 with a clean ndjson error event [72.97ms]
+(pass) runHeadlessCommand > timeout (--timeout) > non-json mode reports the timeout on stderr only [53.98ms]
+(pass) runHeadlessCommand > timeout (--timeout) > a run finishing before the deadline still succeeds [9.00ms]
+(pass) runHeadlessCommand > timeout (--timeout) > the run receives a signal when a timeout is set (none before this change) [57.98ms]
+(pass) runHeadlessCommand > timeout (--timeout) > an injected deps.signal still aborts the run when a timeout is also set [14.00ms]
+
+cli/src/hooks/helpers/__tests__/send-message.test.ts:
+(pass) createRunOwnership > superseding run owns persistence and stale owner release cannot clear it
+(pass) createRunOwnership > run is active only while it still owns the ref and has not been aborted [1.00ms]
+(pass) createRunOwnership > early-return cleanup releases the current run owner
+(pass) file attachment prompt provenance > labels guaranteed @file reads and warns when context is truncated
+(pass) formatQueuedMessageForHistory > returns the content unchanged when no attachments are queued
+(pass) formatQueuedMessageForHistory > folds text and file attachments into the persisted prompt text
+(pass) formatQueuedMessageForHistory > persists a locating note for image attachments instead of dropping them
+(pass) cleanupProviderReadinessFailure > sets error state, releases queue/chain locks, and releases run ownership [29.99ms]
+(pass) setupStreamingContext > abort flow > abort handler marks cancelling and retains the chain lock until settlement [3.00ms]
+(pass) setupStreamingContext > abort flow > abort sets canProcessQueue based on queue pause state [1.00ms]
+(pass) setupStreamingContext > abort flow > abort retains isProcessingQueueRef until the run settles
+(pass) setupStreamingContext > abort flow > abort retains chain and processing ownership while cancelling [4.00ms]
+(pass) setupStreamingContext > abort flow > abort handler stores abortController in ref
+(pass) setupStreamingContext > abort flow > setupStreamingContext resets streamRefs and starts timer
+(pass) setupStreamingContext > abort flow > abort terminates a still-running compaction block instead of leaving it pending [1.00ms]
+(pass) markPendingCompactionInterrupted > rewrites a pending block and strips its live stamp
+(pass) markPendingCompactionInterrupted > leaves complete, interrupted and status-less compaction blocks untouched by identity
+(pass) handleRunCompletion > cancellation persists evidence before queue release from completed [5.00ms]
+(pass) handleRunCompletion > cancellation persists evidence before queue release from cancelled [4.00ms]
+(pass) handleRunCompletion > empty typed failure does not issue a successful completion [1.00ms]
+(pass) handleRunCompletion > abort path > finalizes queue state after an aborted run settles
+(pass) handleRunCompletion > abort path > does not process server response when wasAbortedByUser is true [1.00ms]
+(pass) handleRunCompletion > abort path > resumes queue only after the aborted run settles
+(pass) finalizeQueueState > sets stream status to idle and resets queue state [1.00ms]
+(pass) finalizeQueueState > calls resumeQueue instead of setCanProcessQueue when provided [1.00ms]
+(pass) finalizeQueueState > respects isQueuePausedRef when no resumeQueue provided
+(pass) handleRunError > stores error in userError field for regular errors [4.00ms]
+(pass) handleRunError > handles empty existing content gracefully [1.00ms]
+(pass) handleRunError > resets isProcessingQueueRef to false on error [4.00ms]
+(pass) handleRunError > respects isQueuePausedRef when setting canProcessQueue on error [1.00ms]
+(pass) handleRunError > context length exceeded error (AI_APICallError) stores error in userError and preserves content [2.00ms]
+(pass) handleRunError > Payment required error (402) is displayed without switching input mode
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > run B remains blocked while run A is cancelling [1.00ms]
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > handleRunCompletion releases cancellation ownership after settlement [1.00ms]
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > aborted run A finally block must not clear isProcessingQueueRef owned by run B
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > reject-after-abort must not run handleRunError cleanup that could clobber run B
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > handleRunError WOULD clobber run B state if called without abort guard (documents why guard is needed) [1.00ms]
+(pass) CLI-level race condition: abort run A, attempt run B before A resolves > full two-run lifecycle preserves run A state before run B completion [2.00ms]
+(pass) handleRunCompletion and handleRunError settle writes before reopening the queue gate > success path stops the timer and marks complete before finalizeQueueState [1.00ms]
+(pass) handleRunCompletion and handleRunError settle writes before reopening the queue gate > error path sets the error and stops the timer before finalizeQueueState [1.00ms]
+(pass) resetEarlyReturnState > prepareUserMessage exception path > resets chain in progress to false
+(pass) resetEarlyReturnState > prepareUserMessage exception path > sets canProcessQueue to true when queue is not paused [1.00ms]
+(pass) resetEarlyReturnState > prepareUserMessage exception path > sets canProcessQueue to false when queue is paused
+(pass) resetEarlyReturnState > prepareUserMessage exception path > resets isProcessingQueueRef to false
+(pass) resetEarlyReturnState > prepareUserMessage exception path > handles missing isProcessingQueueRef gracefully
+(pass) resetEarlyReturnState > prepareUserMessage exception path > handles missing isQueuePausedRef gracefully (defaults to canProcessQueue=true)
+(pass) resetEarlyReturnState > validation failure path (success: false) > resets all queue state correctly when processing queued message
+(pass) resetEarlyReturnState > validation failure path (success: false) > respects queue paused state after validation failure
+(pass) resetEarlyReturnState > validation exception path > resets all queue state correctly when validation throws
+(pass) resetEarlyReturnState > validation exception path > preserves queue pause state when validation throws
+(pass) resetEarlyReturnState > complete early return scenarios > queue can process next message after prepareUserMessage exception
+(pass) resetEarlyReturnState > complete early return scenarios > queue can process next message after validation returns success=false
+(pass) resetEarlyReturnState > complete early return scenarios > queue can process next message after validation throws exception
+(pass) resetEarlyReturnState > complete early return scenarios > queue remains blocked after error if user had paused it
+
+cli/src/utils/__tests__/sdk-event-handlers.test.ts:
+(pass) sdk-event-handlers > renders provider status as a single coalesced muted status line [7.00ms]
+(pass) sdk-event-handlers > provider status lines never displace non-status text blocks [1.00ms]
+(pass) sdk-event-handlers > surfaces runtime errors without stack-frame lines
+(pass) sdk-event-handlers > prefers the concise userMessage over the detailed message when present [1.00ms]
+(pass) sdk-event-handlers > falls back to the stack-stripped message when userMessage is whitespace-only
+(pass) sdk-event-handlers > does not render an error banner for auto-recovering errors
+(pass) sdk-event-handlers > does not render an error banner for suggest_followups ordering rejections
+(pass) sdk-event-handlers > logs auto-recovering runtime errors at debug rather than error
+(pass) sdk-event-handlers > logs genuine runtime errors at error level
+(pass) sdk-event-handlers > registers a batch of spawned agents in one streaming state update [3.00ms]
+(pass) sdk-event-handlers > background agent cards remain running until polling reports settlement [13.00ms]
+(pass) sdk-event-handlers > [ERR-H01] terminal cancellation is immutable when a late result arrives [1.00ms]
+(pass) sdk-event-handlers > [COR-H03] any error part makes the terminal tool lifecycle failed [2.00ms]
+(pass) sdk-event-handlers > [hasToolBlockById] a pathologically deep block tree does not overflow the flush [5.00ms]
+(pass) sdk-event-handlers > late canonical mutation result replaces cancellation with authoritative state [3.00ms]
+(pass) sdk-event-handlers > an unbacked applied claim after cancellation cannot confirm success [3.00ms]
+(pass) sdk-event-handlers > spawn_agents tool_result with agentReceipt.status partial marks agent block partial [2.00ms]
+(pass) sdk-event-handlers > spawn_agents agentReceipt-only partial still updates status without value content [1.00ms]
+(pass) sdk-event-handlers > [RF-4] nested tool call lands exactly once under its agent with a batched updater [2.00ms]
+(pass) sdk-event-handlers > [RF-4] tool call with an agentId whose block is absent appends once at root
+(pass) sdk-event-handlers > [RF-4] a root-orphaned tool card is adopted by its agent block once it appears [2.00ms]
+(pass) sdk-event-handlers > [RF-4] a root-orphaned tool card is adopted when subagent_start matches a spawn placeholder [2.00ms]
+(pass) sdk-event-handlers > [RF-4] two batched tool_calls for one agent nest exactly once each [1.00ms]
+(pass) sdk-event-handlers > [ERR-H01] subagent error finishes persist failed status [2.00ms]
+(pass) sdk-event-handlers > root finish settles orphaned foreground agent cards [6.00ms]
+(pass) sdk-event-handlers > root finish fails unresolved foreground tools but preserves live background tools [1.00ms]
+(pass) sdk-event-handlers > extracts plan content from root stream [2.00ms]
+(pass) sdk-event-handlers > handles context_window event by calling setContextWindowUsage [1.00ms]
+(pass) sdk-event-handlers > forwards the compaction trigger on context_window only when the event supplies it
+(pass) sdk-event-handlers > accumulates eviction reclaim from context_window into the compaction notice [1.00ms]
+(pass) sdk-event-handlers > a settled pass does not double-count the same iteration eviction [3.00ms]
+(pass) sdk-event-handlers > keeps the last context usage after finish [1.00ms]
+(pass) sdk-event-handlers > BACKGROUND tool_result wires backgroundJobId so job_update settles without check_job [3.00ms]
+(pass) sdk-event-handlers > tool_start flips a queued tool block back to running [1.00ms]
+(pass) sdk-event-handlers > tool_start flips a queued tool block nested inside an agent block back to running [1.00ms]
+(pass) sdk-event-handlers > tool_start does not overflow on a pathologically deep agent block tree [3.00ms]
+(pass) sdk-event-handlers > tool_start flips a queued custom/unknown-path tool block back to running
+(pass) sdk-event-handlers > job_update updates a correlated tool block lifecycle and appends bounded output [1.00ms]
+(pass) sdk-event-handlers > job_update caps the accumulated tool output at the tail ceiling [1.00ms]
+(pass) sdk-event-handlers > job_update updates a correlated agent block status
+(pass) sdk-event-handlers > job_update is a no-op when no block correlates to the jobId [1.00ms]
+(pass) sdk-event-handlers > job_update maps an unknown state to running (fail-safe) instead of throwing [1.00ms]
+(pass) sdk-event-handlers > job_update surfaces a failed tool job error in the card output [1.00ms]
+(pass) sdk-event-handlers > job_update does not duplicate a repeated tool job error in the card output [1.00ms]
+(pass) sdk-event-handlers > job_update still appends an error whose text coincidentally matches trailing streamed output
+(pass) sdk-event-handlers > job_update appends a tool job error wired via tool_result output without duplicating [1.00ms]
+(pass) sdk-event-handlers > job_update re-appends a tool job error after a running recovery resets the append flag [1.00ms]
+(pass) sdk-event-handlers > job_update does not clear tool jobErrorAppended on repeated running+error updates [1.00ms]
+(pass) sdk-event-handlers > job_update re-appends an agent job error after a running recovery resets the append flag [2.00ms]
+(pass) sdk-event-handlers > job_update appends a single error block to a failed agent job without duplicating
+(pass) sdk-event-handlers > job_update still appends an agent job error whose text coincidentally matches trailing streamed output [1.00ms]
+(pass) sdk-event-handlers > persists context compaction details in the assistant message [1.00ms]
+(pass) sdk-event-handlers > degrades a compaction event whose category map omits a removed category [1.00ms]
+(pass) sdk-event-handlers > degrades a compaction event that omits removedCategories entirely
+(pass) sdk-event-handlers > accumulates the compaction notice and flags a degraded pass [1.00ms]
+(pass) sdk-event-handlers > context_compaction_status started appends a pending compaction block and marks the chip live [3.00ms]
+(pass) sdk-event-handlers > a compaction result settles the pending block in place instead of duplicating it [12.00ms]
+(pass) sdk-event-handlers > settled with no result rewrites the pending block as a declined pass and clears the notice [1.00ms]
+(pass) sdk-event-handlers > consecutive declined passes on the same run collapse into a single card
+(pass) sdk-event-handlers > the widened persisted compaction block stays plain JSON and round-trips prior sessions [3.00ms]
+(pass) sdk-event-handlers > context_request_trim renders a request-time card and degrades the notice [1.00ms]
+(pass) sdk-event-handlers > a nested context_request_trim is marked as a subagent pass
+(pass) sdk-event-handlers > printModeContextRequestTrimSchema parses a minimal payload and requires messageBudgetTokens
+(pass) sdk-event-handlers > RequestContextTrimInfo is nameable from the published SDK type surface [2.00ms]
+(pass) sdk-event-handlers > a legacy notice with pending but no pendingRunIds keeps its live flag until a settling event [4.00ms]
+(pass) sdk-event-handlers > a legacy pending flag is consumed by the root compaction result it stands for [3.00ms]
+(pass) sdk-event-handlers > a started pass keeps the completed action so an aborted turn labels the chip by what finished [1.00ms]
+(pass) sdk-event-handlers > a subagent compaction status renders no card but still reports a live pass [2.00ms]
+(pass) sdk-event-handlers > a subagent compaction result cannot overwrite the root turn's count or settle its live card [1.00ms]
+(pass) sdk-event-handlers > a forwarding-rewritten agentId does not affect run correlation for a deeply nested compaction [1.00ms]
+(pass) sdk-event-handlers > handleFinish rewrites a stray pending compaction block as interrupted [2.00ms]
+(pass) sdk-event-handlers > context_compaction_progress raises the pending card progress for the root run [1.00ms]
+(pass) sdk-event-handlers > a lower progress percent never rewinds the pending card [1.00ms]
+(pass) sdk-event-handlers > a non-finite or out-of-range progress percent is clamped instead of thrown on [2.00ms]
+(pass) sdk-event-handlers > a nested progress event advances the shared chip without touching the root card [1.00ms]
+(pass) sdk-event-handlers > a progress event with no pass pending neither creates a notice nor revives a settled one [1.00ms]
+(pass) sdk-event-handlers > a healthy compaction result settles the card at 100% and marks it transient [3.00ms]
+(pass) sdk-event-handlers > an emergency mechanical trim result is never marked transient [1.00ms]
+(pass) sdk-event-handlers > a compaction result that does not fit the budget is never marked transient [1.00ms]
+(pass) sdk-event-handlers > a low-yield compaction streak is never marked transient [1.00ms]
+(pass) sdk-event-handlers > handleFinish drops a transient compaction card and terminates a still-pending one [1.00ms]
+(pass) sdk-event-handlers > a newly announced pass drops the previous transient card instead of stacking cards
+
+packages/agent-runtime/src/util/__tests__/run-outcome-replay.test.ts:
+(pass) an intermediate generator boundary requires live execution [10.00ms]
+(pass) terminal replay preserves failed and rejected verdicts without redispatch [14.99ms]
+
+common/src/util/__tests__/action-outcomes.test.ts:
+(pass) unbacked application cannot confirm an action or an effect [8.00ms]
+(pass) canonical observed mutation confirms exact paths and forward evidence [1.00ms]
+(pass) input identity is stable across key order and distinguishes values [1.00ms]
+(pass) a failed multipart result retains its confirmed mutation in either order [4.00ms]
+(pass) all confirmed mutations in a multipart result retain their paths [6.00ms]
+
+sdk/src/__tests__/serve-approval-bridge.test.ts:
+(pass) serve approval bridge > [B18] forwards the captured command and every compound effect for approval [10.00ms]
+(pass) serve approval bridge > [B18] discloses capped command display while retaining exact identity and later effects [6.00ms]
+(pass) serve approval bridge > GV-21: sanitizes control/bidi/zero-width chars and caps title [1.00ms]
+(pass) serve approval bridge > GV-22: allow_always / proceed_always / reject_once / cancelled all resolve false [3.00ms]
+(pass) serve approval bridge > GV-22 positive: selected allow_once resolves true [1.00ms]
+(pass) serve approval bridge > GV-23: disconnect/cancel mid-approval resolves false AND aborts the run [1.00ms]
+(pass) serve approval bridge > GV-24: a duplicate/late response after resolution is ignored [1.00ms]
+(pass) serve approval bridge > terminal error event answers the prompt with -32603 openbuff.dev message [1.00ms]
+(pass) serve approval bridge > an auto-recovering error event does NOT surface a terminal error [1.00ms]
+(pass) serve approval bridge > §5 production path: a per-turn reverseRequests seam drives session/request_permission [1.00ms]
+(pass) serve approval bridge > §5 stays fail-closed when neither a per-turn nor a static seam exists [1.00ms]
+(pass) serve approval bridge > §4.2 ask_user: per-turn elicitation/form capability drives elicitation/create [3.00ms]
+(pass) serve approval bridge > §4.2 ask_user: no per-turn seam yields the skipped result (fail closed) [1.00ms]
+
+ 239 pass
+ 0 fail
+ 821 expect() calls
+Ran 239 tests across 10 files. [5.61s]

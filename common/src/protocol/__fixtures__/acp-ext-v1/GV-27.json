@@ -1,0 +1,48 @@
+{
+  "_note": "Semantic vector (§12.7 GV-27, NEW-3 streaming holdback): a configured credential value and a cap.v3 token, each split across 3 agent_message_chunk frames. No single emitted frame, and no per-messageId concatenation, contains the value; the holdback reassembles and redacts across the split.",
+  "messageId": "run_root_1",
+  "credential": "sk-or-v1-abc123",
+  "credentialChunks": [
+    "sk-or-",
+    "v1-abc",
+    "123"
+  ],
+  "capToken": "cap.v3.1.1.AAA.BBB.CCC",
+  "capChunks": [
+    "cap.v3.",
+    "1.1.AA",
+    "A.BBB.CCC"
+  ],
+  "emittedChunks": [
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "run_root_1",
+          "content": {
+            "type": "text",
+            "text": "[REDACTED]"
+          }
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "method": "session/update",
+      "params": {
+        "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+        "update": {
+          "sessionUpdate": "agent_message_chunk",
+          "messageId": "run_root_1",
+          "content": {
+            "type": "text",
+            "text": "[REDACTED:cap]"
+          }
+        }
+      }
+    }
+  ]
+}

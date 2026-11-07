@@ -41,6 +41,9 @@ export const handleCheckJob = (async ({
     toolCallId: toolCall.toolCallId,
     input: {
       jobId: toolCall.input.jobId,
+      ...(toolCall.input.cursor !== undefined && {
+        cursor: toolCall.input.cursor,
+      }),
       wait_for: toolCall.input.wait_for,
       timeout_seconds: toolCall.input.timeout_seconds,
       kill_on_timeout: toolCall.input.kill_on_timeout,

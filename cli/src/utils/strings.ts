@@ -33,6 +33,11 @@ import { isImageFile } from './image-handler'
 
 import type { InputValue } from '../types/store'
 
+export type PasteHandler = (
+  eventText?: string,
+  currentValue?: InputValue,
+) => InputValue | void
+
 export function getSubsequenceIndices(
   str: string,
   sub: string,
@@ -87,22 +92,24 @@ export function createTextPasteHandler(
   text: string,
   cursorPosition: number,
   onChange: (value: InputValue) => void,
-): (eventText?: string) => void {
-  return (eventText) => {
+): PasteHandler {
+  return (eventText, currentValue) => {
     const rawPaste = eventText || readClipboardText()
     if (!rawPaste) return
     const pasteText = Bun.stripANSI(rawPaste)
     if (!pasteText) return
     const { newText, newCursor } = insertTextAtCursor(
-      text,
-      cursorPosition,
+      currentValue?.text ?? text,
+      currentValue?.cursorPosition ?? cursorPosition,
       pasteText,
     )
-    onChange({
+    const value: InputValue = {
       text: newText,
       cursorPosition: newCursor,
       lastEditDueToNav: false,
-    })
+    }
+    onChange(value)
+    return value
   }
 }
 
@@ -125,7 +132,7 @@ export function createPasteHandler(options: {
   onPasteFilePath?: (filePath: string, isDirectory: boolean) => void
   onPasteLongText?: (text: string) => void
   cwd?: string
-}): (eventText?: string) => void {
+}): PasteHandler {
   const {
     text,
     cursorPosition,
@@ -136,7 +143,7 @@ export function createPasteHandler(options: {
     onPasteLongText,
     cwd,
   } = options
-  return (eventText) => {
+  return (eventText, currentValue) => {
     // Strip ANSI escape sequences from pasted text — terminal paste events
     // (bracketed paste) may include ANSI sequences from the source content.
     if (eventText) {
@@ -196,16 +203,17 @@ export function createPasteHandler(options: {
 
       // Otherwise paste it as regular text
       const { newText, newCursor } = insertTextAtCursor(
-        text,
-        cursorPosition,
+        currentValue?.text ?? text,
+        currentValue?.cursorPosition ?? cursorPosition,
         eventText,
       )
-      onChange({
+      const value: InputValue = {
         text: newText,
         cursorPosition: newCursor,
         lastEditDueToNav: false,
-      })
-      return
+      }
+      onChange(value)
+      return value
     }
 
     // No direct text provided - read from clipboard
@@ -260,14 +268,16 @@ export function createPasteHandler(options: {
     }
 
     const { newText, newCursor } = insertTextAtCursor(
-      text,
-      cursorPosition,
+      currentValue?.text ?? text,
+      currentValue?.cursorPosition ?? cursorPosition,
       clipboardText,
     )
-    onChange({
+    const value: InputValue = {
       text: newText,
       cursorPosition: newCursor,
       lastEditDueToNav: false,
-    })
+    }
+    onChange(value)
+    return value
   }
 }

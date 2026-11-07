@@ -24,6 +24,9 @@ export type SdkEnv = BaseEnv & {
   OVERRIDE_TARGET?: string
   OVERRIDE_PLATFORM?: string
   OVERRIDE_ARCH?: string
+
+  // Diagnostic-delta preflight match mode ('strict' opts out of the tolerant default)
+  OPENBUFF_DIAGNOSTIC_DELTA_MODE?: string
 }
 
 /**

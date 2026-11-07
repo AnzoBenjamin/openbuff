@@ -6,6 +6,8 @@ import { TextAttributes } from '@opentui/core'
 import React, { memo } from 'react'
 
 import { useTheme } from '../../../hooks/use-theme'
+import { useTerminalDimensions } from '../../../hooks/use-terminal-dimensions'
+import { sliceTextCells } from '../../../utils/text-boundaries'
 import { Button } from '../../button'
 import { SYMBOLS } from '../constants'
 
@@ -30,6 +32,7 @@ export const QuestionOption: React.FC<QuestionOptionProps> = memo(
     onMouseOver,
   }) => {
     const theme = useTheme()
+    const { terminalWidth } = useTerminalDimensions()
 
     // Extract label and description
     const label = typeof option === 'string' ? option : option.label
@@ -66,16 +69,27 @@ export const QuestionOption: React.FC<QuestionOptionProps> = memo(
           paddingLeft: indent,
         }}
       >
-        <text style={{ fg, attributes }}>{`${symbol} ${label}`}</text>
+        <text wrapMode="none" style={{ fg, attributes }}>
+          {sliceTextCells(
+            `${symbol} ${label.replace(/\s+/g, ' ')}`,
+            0,
+            Math.max(1, terminalWidth - indent - 8),
+          )}
+        </text>
         {/* Show description on focus */}
         {isFocused && description && (
           <text
+            wrapMode="none"
             style={{
               fg: theme.muted,
               marginLeft: 2,
             }}
           >
-            {description}
+            {sliceTextCells(
+              description.replace(/\s+/g, ' '),
+              0,
+              Math.max(1, terminalWidth - indent - 10),
+            )}
           </text>
         )}
       </Button>

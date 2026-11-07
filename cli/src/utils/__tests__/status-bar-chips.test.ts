@@ -886,6 +886,77 @@ describe('selectStatusBarChips', () => {
     expect(byId(withoutNotice.chips).compaction).toBeUndefined()
   })
 
+  test('capabilities chip renders beside index at md and lg, hidden below', () => {
+    const capabilitiesChip = {
+      label: 'sandbox:lexical',
+      tone: 'secondary',
+    } as const
+    const idsAt = (widthSize: 'xs' | 'sm' | 'md' | 'lg') =>
+      selectStatusBarChips({
+        ...full,
+        widthSize,
+        terminalWidth: 400,
+        capabilitiesChip,
+      }).chips.map((chip) => chip.id)
+
+    expect(idsAt('lg')).toEqual([
+      'context',
+      'capabilities',
+      'git',
+      'model',
+      'cost',
+      'timer',
+    ])
+    expect(idsAt('md')).toEqual([
+      'context',
+      'capabilities',
+      'git',
+      'model',
+      'timer',
+    ])
+    expect(idsAt('sm')).not.toContain('capabilities')
+    expect(idsAt('xs')).not.toContain('capabilities')
+
+    const chipsById = byId(
+      selectStatusBarChips({
+        ...full,
+        widthSize: 'lg',
+        terminalWidth: 400,
+        capabilitiesChip,
+      }).chips,
+    )
+    expect(chipsById.capabilities?.label).toBe('sandbox:lexical')
+    expect(chipsById.capabilities?.tone).toBe('secondary')
+  })
+
+  test('overflow drops the static capabilities chip before cost', () => {
+    const capabilitiesChip = {
+      label: 'sandbox:lexical',
+      tone: 'secondary',
+    } as const
+    const chipsAt = (terminalWidth: number) =>
+      selectStatusBarChips({
+        ...full,
+        widthSize: 'lg',
+        terminalWidth,
+        capabilitiesChip,
+      }).chips
+    const idsAt = (terminalWidth: number) =>
+      chipsAt(terminalWidth).map((chip) => chip.id)
+
+    const allChips = chipsAt(widthForBudget(120, full.showStop))
+    const clusterWithout = (dropped: StatusBarChip['id'][]) =>
+      statusBarClusterWidth(
+        allChips.filter((chip) => !dropped.includes(chip.id)),
+      )
+
+    // One step tighter than the full cluster: the static advertisement goes
+    // while every live chip (cost included) survives.
+    expect(
+      idsAt(widthForBudget(clusterWithout(['capabilities']), full.showStop)),
+    ).toEqual(['context', 'git', 'model', 'cost', 'timer'])
+  })
+
   test('overflow drops the compaction chip after git but before context', () => {
     const compactionNotice = {
       count: 2,
@@ -1448,9 +1519,9 @@ describe('selectStatusBarChips', () => {
         scrollButtonCompact,
       }).chips.map((chip) => chip.id)
 
-    // At 'xs'/'sm' the button renders three columns, so the seven columns the
-    // expanded reservation would have taken keep the git chip instead.
-    expect(idsFor(true)).toEqual(['context', 'git', 'timer'])
+    // The readable compact Latest label saves two columns. Both forms retain
+    // the high-priority context/timer chips at this width.
+    expect(idsFor(true)).toEqual(['context', 'timer'])
     expect(idsFor(false)).toEqual(['context', 'timer'])
 
     // Omitting the flag keeps the expanded reservation, so existing call sites
@@ -1579,7 +1650,7 @@ describe('statusBarChipBudget', () => {
   test('reserves the compact width when the narrow button form is rendered', () => {
     // Strictly cheaper than the expanded reservation, so the narrow form can
     // never reserve more columns than it renders.
-    expect(SCROLL_BUTTON_COMPACT_RESERVATION).toBe(3)
+    expect(SCROLL_BUTTON_COMPACT_RESERVATION).toBe(8)
     expect(SCROLL_BUTTON_COMPACT_RESERVATION).toBeLessThan(
       SCROLL_BUTTON_RESERVATION,
     )
@@ -1591,7 +1662,7 @@ describe('statusBarChipBudget', () => {
       const compact = statusBarChipBudget(200, showStop, true, true)
       const expanded = statusBarChipBudget(200, showStop, true)
 
-      expect(compact).toBe(withoutScroll - 3)
+      expect(compact).toBe(withoutScroll - 8)
       expect(compact).toBe(withoutScroll - SCROLL_BUTTON_COMPACT_RESERVATION)
       expect(compact).toBeGreaterThan(expanded)
       expect(compact - expanded).toBe(

@@ -1,0 +1,12 @@
+error: unknown role 'bogus-role'
+
+usage: openbuff-native <role>
+
+roles:
+  exec         job executor sandbox (P5-T1)
+  daemon       jobd supervisor (P5-T2)
+  infer        parse/inference tier (P9-T6)
+  plugin-host  plugin host (P5)
+  a11y         accessibility host (P5)
+  version      print sidecar protocol + crate version
+

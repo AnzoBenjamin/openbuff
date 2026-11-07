@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'bun:test'
+import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
+import { applySemanticEdit } from '../tools/semantic-edit-apply'
 
 import {
   decodeReadCapabilityToken,
@@ -13,6 +15,28 @@ import {
 } from '../tools/mutation-capabilities'
 
 describe('mutation capabilities', () => {
+  it('[B03] semantic compact projection preserves refused evidence and does not report applied', async () => {
+    const fs = createMockFs({ files: { '/repo/a.txt': 'before\n' } })
+    let attempts = 0
+    fs.conditionalCommit = async () => {
+      attempts++
+      await fs.writeFile('/repo/a.txt', 'foreign\n')
+      return { applied: false, actualHash: getExactContentHash('foreign\n') }
+    }
+    const result = await applySemanticEdit(
+      { changedFiles: [{ path: '/repo/a.txt', newContent: 'after\n' }] },
+      { cwd: '/repo', fs },
+    )
+    expect(result.output[0]?.value).toMatchObject({
+      applied: false,
+      results: [{ path: 'a.txt', applied: false }],
+    })
+    expect(result.mutation?.actions[0]?.forward?.outcome).toBe('not_applied')
+    expect(result.mutation?.authorityReceipt?.status).toBe('failed')
+    expect(attempts).toBe(1)
+    expect(await fs.readFile('/repo/a.txt', 'utf8')).toBe('foreign\n')
+  })
+
   it('emits a scoped cap.v3 token while snapshotting exact committed bytes', () => {
     const capabilityIssuer = {
       projectId: '/project',

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "approval-fab4f5c9-acb8-40e2-b8c9-1f3aac11bff8",
+  "revision": 1,
+  "repositoryId": "b8b6a5d3af0283a6c13cc172",
+  "workspaceId": "52f0c3b3c1190c0ec2f13fe9",
+  "runId": "main-agent",
+  "snapshotId": "workspace.v1.0.00000000",
+  "createdAt": "2026-11-06T15:53:32.235Z",
+  "updatedAt": "2026-11-06T15:53:32.236Z",
+  "action": "push",
+  "target": "git push --force origin feature",
+  "commandHash": "7cf7abba379abe493f1e4eae5f615e5a8b295a0e9791c431a4be2f9b42cb40ed",
+  "executionContextHash": "a7fc99ca166bd59f953c9a554ddfecef537cb361578559c618cdbb236831e5ad",
+  "grantedBy": "user",
+  "consumedAt": "2026-11-06T15:53:32.236Z"
+}

@@ -1,0 +1,21 @@
+{
+  "output": {
+    "type": "error",
+    "message": "Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed."
+  },
+  "runOutcome": {
+    "termination": "budget_exhausted",
+    "cause": {
+      "code": "cost_budget",
+      "message": "Agent turn ended: cost budget exceeded ($0.00 / $0.00). The task may be incomplete — resume on the next turn if needed."
+    }
+  },
+  "taskAcceptance": {
+    "status": "unknown"
+  },
+  "actionOutcomes": [],
+  "agentId": "main-agent",
+  "runId": "local-run-ffbb3923-53a3-45b0-b2e0-3cd99bf55e5e",
+  "awaitedCalls": 0,
+  "aborted": false
+}

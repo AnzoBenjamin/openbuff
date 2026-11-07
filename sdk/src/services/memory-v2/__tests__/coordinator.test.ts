@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  MemoryPlaybookSchema,
+  type MemoryPlaybook,
+} from '@codebuff/common/types/memory-playbook'
+import {
   MemoryAppendRequestSchema,
   MemoryEventIdSchema,
   MemoryQueryOutcomeSchema,
@@ -265,6 +269,60 @@ class RepositoryWithoutClaimDedup extends RepositoryStub {
     // through to the normal observation.recorded path.
     const legacy: { getClaimDedup?: unknown } = this
     legacy.getClaimDedup = undefined
+  }
+}
+
+/**
+ * Schema-valid active playbook used as the single installed fixture for the
+ * playbook-context tests below.
+ */
+const seedPlaybook = MemoryPlaybookSchema.parse({
+  schemaVersion: 1,
+  playbookId: 'playbook:ci-before-commit',
+  workspaceId: projectId,
+  title: 'Run targeted tests before committing',
+  instruction: 'Always run the targeted test suite before a git commit.',
+  trigger: { tool: 'run_terminal_command', terminalAction: 'git-commit' },
+  scope: { repos: [] },
+  status: 'active',
+  enforcement: 'block',
+  counters: {
+    fired: 0,
+    blocked: 0,
+    compliedAfterBlock: 0,
+    falsePositives: 0,
+    bypassed: 0,
+  },
+  provenance: {
+    origin: 'derived',
+    recordedBy: 'test',
+    sourceEventIds: [],
+    metadata: {},
+  },
+  triggerSignature: 'trigger-signature:ci-before-commit',
+  createdAt: Date.parse(generatedAt),
+  updatedAt: Date.parse(generatedAt),
+})
+
+/**
+ * Fake that adds the optional procedural-memory (playbook) surface so the
+ * coordinator's install branch runs. Only the two playbook reads are added;
+ * tests that need a repository without them keep using RepositoryStub.
+ */
+class RepositoryWithPlaybooks extends RepositoryStub {
+  readonly ensureSeedRequests: string[] = []
+  readonly listPlaybooksRequests: string[] = []
+  playbooks: MemoryPlaybook[] = []
+  listPlaybooksThrows = false
+
+  async ensureSeedPlaybooks(workspaceId: string): Promise<void> {
+    this.ensureSeedRequests.push(workspaceId)
+  }
+
+  async listPlaybooks(workspaceId: string): Promise<MemoryPlaybook[]> {
+    this.listPlaybooksRequests.push(workspaceId)
+    if (this.listPlaybooksThrows) throw new Error('playbook index offline')
+    return this.playbooks
   }
 }
 
@@ -2296,6 +2354,126 @@ describe('MemoryV2Coordinator lifecycle', () => {
     if (event.eventType === 'observation.recorded') {
       expect(event.payload.observation.kind).toBe('constraint')
     }
+  })
+})
+
+describe('MemoryV2Coordinator playbook context', () => {
+  test('installs seeded playbooks into agentState.playbookContext during prepareTurn', async () => {
+    const repository = new RepositoryWithPlaybooks()
+    repository.playbooks = [seedPlaybook]
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:playbook-install',
+      query: 'playbook install',
+    })
+
+    expect(repository.ensureSeedRequests).toEqual([projectId])
+    expect(repository.listPlaybooksRequests).toEqual([projectId])
+    expect(state.playbookContext).toEqual([seedPlaybook])
+    expect(
+      state.playbookContext?.map((playbook) => playbook.playbookId),
+    ).toEqual([seedPlaybook.playbookId])
+    expect(state.memoryAuthority).toMatchObject({
+      requested: 'sqlite-v2-opt-in',
+      active: 'sqlite-v2-opt-in',
+      fallbackOccurred: false,
+    })
+  })
+
+  test('clears playbookContext when the turn degrades', async () => {
+    const repository = new RepositoryWithPlaybooks()
+    repository.playbooks = [seedPlaybook]
+    repository.queryFailure = 'failed'
+    const state = getInitialAgentState()
+    state.playbookContext = [seedPlaybook]
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:playbook-degraded',
+      query: 'playbook degraded',
+    })
+
+    expect(state.playbookContext).toEqual([])
+    expect(state.memoryAuthority).toMatchObject({
+      requested: 'sqlite-v2-opt-in',
+      active: 'sqlite-v2-opt-in',
+      fallbackOccurred: false,
+      reason: 'query-failed',
+    })
+    // The degraded path must short-circuit before any playbook load runs.
+    expect(repository.ensureSeedRequests).toEqual([])
+    expect(repository.listPlaybooksRequests).toEqual([])
+  })
+
+  test('clears playbookContext on the json-v1 authority path without repository playbook work', async () => {
+    const repository = new RepositoryWithPlaybooks()
+    const state = getInitialAgentState()
+    state.playbookContext = [seedPlaybook]
+    const coordinator = new MemoryV2Coordinator({
+      ...config(repository, 'inject'),
+      authority: 'json-v1',
+    })
+
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:playbook-json-v1',
+      query: 'playbook json-v1',
+    })
+
+    expect(state.playbookContext).toEqual([])
+    expect(state.memoryAuthority).toMatchObject({
+      requested: 'json-v1',
+      active: 'json-v1',
+      fallbackOccurred: false,
+    })
+    expect(repository.requests).toHaveLength(0)
+    expect(repository.queryRequests).toHaveLength(0)
+    expect(repository.ensureSeedRequests).toEqual([])
+    expect(repository.listPlaybooksRequests).toEqual([])
+  })
+
+  test('installs an empty playbookContext and completes the turn when listPlaybooks throws', async () => {
+    const repository = new RepositoryWithPlaybooks()
+    repository.playbooks = [seedPlaybook]
+    repository.listPlaybooksThrows = true
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+
+    await expect(
+      coordinator.prepareTurn({
+        agentState: state,
+        trustedUserInputId: 'input:playbook-throw',
+        query: 'playbook throw',
+      }),
+    ).resolves.toBeUndefined()
+
+    // The install branch must actually have run: ensureSeedPlaybooks is
+    // awaited before listPlaybooks, so a missed narrowing would leave zero
+    // calls and the empty context would pass for the wrong reason.
+    expect(repository.ensureSeedRequests).toEqual([projectId])
+    expect(state.playbookContext).toEqual([])
+    expect(state.memoryAuthority).toMatchObject({
+      requested: 'sqlite-v2-opt-in',
+      active: 'sqlite-v2-opt-in',
+      fallbackOccurred: false,
+    })
+    expect(state.memoryV2Context).toBeDefined()
   })
 })
 

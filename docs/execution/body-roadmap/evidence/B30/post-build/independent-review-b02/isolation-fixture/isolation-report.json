@@ -1,0 +1,877 @@
+{
+  "trusted": [
+    {
+      "type": "json",
+      "value": {
+        "command": "printf 'sentinel=%s\n' \"$B30_CONTROLLER_SENTINEL\"",
+        "startingCwd": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo",
+        "stdout": "sentinel=controller-only\n",
+        "exitCode": 0
+      }
+    }
+  ],
+  "scope": "actual child source SDK with replacement process env and ephemeral home; no OS/network confinement claim",
+  "main": {
+    "diff": "diff --git a/.openbuff/memory/task-memory.json b/.openbuff/memory/task-memory.json\nnew file mode 100644\nindex 0000000..21afe3b\n--- /dev/null\n+++ b/.openbuff/memory/task-memory.json\n@@ -0,0 +1,19 @@\n+{\n+  \"schemaVersion\": 1,\n+  \"goal\": \"fixture\",\n+  \"requirements\": [],\n+  \"decisions\": [],\n+  \"filesInspected\": [],\n+  \"editsMade\": [],\n+  \"validationResults\": [],\n+  \"reviewReceipts\": [],\n+  \"blockers\": [],\n+  \"nextActions\": [],\n+  \"historicalSummary\": \"\",\n+  \"evidence\": [],\n+  \"workspaceRevision\": 0,\n+  \"workspaceSnapshotId\": \"workspace.v1.0.00000000\",\n+  \"revision\": 1,\n+  \"updatedAt\": 1794001548063,\n+  \"checksum\": \"92ae751b\"\n+}\n\\ No newline at end of file\ndiff --git a/init-env.json b/init-env.json\nnew file mode 100644\nindex 0000000..828b359\n--- /dev/null\n+++ b/init-env.json\n@@ -0,0 +1 @@\n+{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-Og44CU/home\"}\n\\ No newline at end of file\n",
+    "contextFiles": {},
+    "durationMs": 1266,
+    "cost": 0,
+    "runOutcome": {
+      "termination": "completed"
+    },
+    "costEvidence": {
+      "status": "reported",
+      "source": "finish.totalCost"
+    },
+    "executionScope": "key_free_environment",
+    "trace": [
+      {
+        "type": "start",
+        "messageHistoryLength": 0
+      },
+      {
+        "type": "tool_call",
+        "toolCallId": "bb002d03-3e38-459f-a630-20544fd10725",
+        "toolName": "run_terminal_command",
+        "input": {
+          "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+          "process_type": "SYNC",
+          "detach": false,
+          "timeout_seconds": -1
+        },
+        "agentId": "main-agent"
+      },
+      {
+        "type": "tool_result",
+        "toolCallId": "bb002d03-3e38-459f-a630-20544fd10725",
+        "toolName": "run_terminal_command",
+        "output": [
+          {
+            "type": "json",
+            "value": {
+              "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+              "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-W0aTd6/repo",
+              "stdout": "sentinel=\nhome=/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-w9rUxz/home\n",
+              "exitCode": 0
+            }
+          }
+        ],
+        "agentId": "main-agent",
+        "actionOutcome": {
+          "actionId": "bb002d03-3e38-459f-a630-20544fd10725",
+          "attemptId": "stMy4AkL0E8",
+          "runId": "local-run-3ec5ee14-63c9-433b-a290-4b5365d1a9f4",
+          "toolName": "run_terminal_command",
+          "basis": {
+            "inputHash": "sha256:db53aeb4c7b1fa80db4928a6de3da13e513840a31a5638e2776311763d03c78b",
+            "workspaceRevision": 0
+          },
+          "outcome": "succeeded",
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      },
+      {
+        "type": "tool_call",
+        "toolCallId": "93e84636-0ca1-49ab-9719-24a705629851",
+        "toolName": "run_terminal_command",
+        "input": {
+          "command": "cat init-env.json",
+          "process_type": "SYNC",
+          "detach": false,
+          "timeout_seconds": -1
+        },
+        "agentId": "main-agent"
+      },
+      {
+        "type": "tool_result",
+        "toolCallId": "93e84636-0ca1-49ab-9719-24a705629851",
+        "toolName": "run_terminal_command",
+        "output": [
+          {
+            "type": "json",
+            "value": {
+              "command": "cat init-env.json",
+              "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-W0aTd6/repo",
+              "stdout": "{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-Og44CU/home\"}",
+              "exitCode": 0
+            }
+          }
+        ],
+        "agentId": "main-agent",
+        "actionOutcome": {
+          "actionId": "93e84636-0ca1-49ab-9719-24a705629851",
+          "attemptId": "stMzAcLaPAY",
+          "runId": "local-run-3ec5ee14-63c9-433b-a290-4b5365d1a9f4",
+          "toolName": "run_terminal_command",
+          "basis": {
+            "inputHash": "sha256:f606a56b1fbd7eb6da2cd992f4d741fcd868f12ace2ab5be1a2df4cbe922e129",
+            "workspaceRevision": 0
+          },
+          "outcome": "succeeded",
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      },
+      {
+        "type": "tool_call",
+        "toolCallId": "fa66612f-b159-4f62-9ca9-1c6953684bb1",
+        "toolName": "set_output",
+        "input": {
+          "controller": null,
+          "providerConfig": null,
+          "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-w9rUxz/home",
+          "terminal": {
+            "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+            "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-W0aTd6/repo",
+            "stdout": "sentinel=\nhome=/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-w9rUxz/home\n",
+            "exitCode": 0
+          },
+          "init": {
+            "sentinel": null,
+            "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-Og44CU/home"
+          }
+        },
+        "agentId": "main-agent"
+      },
+      {
+        "type": "tool_result",
+        "toolCallId": "fa66612f-b159-4f62-9ca9-1c6953684bb1",
+        "toolName": "set_output",
+        "output": [
+          {
+            "type": "json",
+            "value": {
+              "message": "Output set"
+            }
+          }
+        ],
+        "agentId": "main-agent",
+        "actionOutcome": {
+          "actionId": "fa66612f-b159-4f62-9ca9-1c6953684bb1",
+          "attemptId": "stMzDNCQ-rs",
+          "runId": "local-run-3ec5ee14-63c9-433b-a290-4b5365d1a9f4",
+          "toolName": "set_output",
+          "basis": {
+            "inputHash": "sha256:ebc82b2cd3acd4343477b1155acf285fdcad6869e0f6a53ffedb5f0516446d81",
+            "workspaceRevision": 0
+          },
+          "outcome": "succeeded",
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      },
+      {
+        "type": "context_window",
+        "used": 3156,
+        "max": 190000,
+        "compactionTriggerTokens": 140000,
+        "compactionTargetTokens": 100000
+      },
+      {
+        "type": "finish",
+        "agentId": "isolation-fixture",
+        "totalCost": 0,
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "taskAcceptance": {
+          "status": "unknown"
+        },
+        "actionOutcomes": [
+          {
+            "actionId": "bb002d03-3e38-459f-a630-20544fd10725",
+            "attemptId": "stMy4AkL0E8",
+            "runId": "local-run-3ec5ee14-63c9-433b-a290-4b5365d1a9f4",
+            "toolName": "run_terminal_command",
+            "basis": {
+              "inputHash": "sha256:db53aeb4c7b1fa80db4928a6de3da13e513840a31a5638e2776311763d03c78b",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          },
+          {
+            "actionId": "93e84636-0ca1-49ab-9719-24a705629851",
+            "attemptId": "stMzAcLaPAY",
+            "runId": "local-run-3ec5ee14-63c9-433b-a290-4b5365d1a9f4",
+            "toolName": "run_terminal_command",
+            "basis": {
+              "inputHash": "sha256:f606a56b1fbd7eb6da2cd992f4d741fcd868f12ace2ab5be1a2df4cbe922e129",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          },
+          {
+            "actionId": "fa66612f-b159-4f62-9ca9-1c6953684bb1",
+            "attemptId": "stMzDNCQ-rs",
+            "runId": "local-run-3ec5ee14-63c9-433b-a290-4b5365d1a9f4",
+            "toolName": "set_output",
+            "basis": {
+              "inputHash": "sha256:ebc82b2cd3acd4343477b1155acf285fdcad6869e0f6a53ffedb5f0516446d81",
+              "workspaceRevision": 0
+            },
+            "outcome": "succeeded",
+            "effect": {
+              "status": "unobserved",
+              "receiptIds": [],
+              "confirmedPaths": []
+            }
+          }
+        ]
+      }
+    ],
+    "finalCheckOutputs": [
+      {
+        "checkId": "check-1",
+        "command": "node -e 'console.log(JSON.stringify({sentinel:process.env.B30_CONTROLLER_SENTINEL ?? null,home:process.env.HOME}))'",
+        "dependsOn": [],
+        "exitCode": 0,
+        "outcome": "passed",
+        "durationMs": 33,
+        "stdout": "{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-v33nwU/home\"}\n",
+        "stderr": ""
+      }
+    ],
+    "retrievalFlow": {
+      "queryCallCount": 0,
+      "queryResultPaths": [],
+      "successfulReadPaths": [],
+      "relevantReadPaths": [],
+      "irrelevantReadPaths": [],
+      "relevantReadBeforeFirstEdit": false
+    }
+  },
+  "output": {
+    "controller": null,
+    "providerConfig": null,
+    "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-w9rUxz/home",
+    "terminal": {
+      "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+      "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-W0aTd6/repo",
+      "stdout": "sentinel=\nhome=/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-w9rUxz/home\n",
+      "exitCode": 0
+    },
+    "init": {
+      "sentinel": null,
+      "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-Og44CU/home"
+    }
+  },
+  "final": {
+    "sentinel": null,
+    "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-v33nwU/home"
+  },
+  "task": [
+    {
+      "agentId": "isolation-fixture",
+      "evalRun": {
+        "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+        "experimentId": "unreported",
+        "taskId": "isolation-task",
+        "repeat": 0,
+        "languages": [
+          "typescript"
+        ],
+        "executionScope": "key_free_environment",
+        "attemptId": "462ef3d6-4e47-4333-b028-ea7b7aa4bf75",
+        "providerRoute": "unreported",
+        "runOutcome": {
+          "termination": "completed"
+        },
+        "costEvidence": {
+          "status": "reported",
+          "source": "finish.totalCost"
+        },
+        "commitSha": "d333293bd15fe67ef4372f2ac7ef218501acce7a",
+        "prompt": "fixture",
+        "diff": "diff --git a/.openbuff/memory/task-memory.json b/.openbuff/memory/task-memory.json\nnew file mode 100644\nindex 0000000..9b0dad4\n--- /dev/null\n+++ b/.openbuff/memory/task-memory.json\n@@ -0,0 +1,19 @@\n+{\n+  \"schemaVersion\": 1,\n+  \"goal\": \"fixture\",\n+  \"requirements\": [],\n+  \"decisions\": [],\n+  \"filesInspected\": [],\n+  \"editsMade\": [],\n+  \"validationResults\": [],\n+  \"reviewReceipts\": [],\n+  \"blockers\": [],\n+  \"nextActions\": [],\n+  \"historicalSummary\": \"\",\n+  \"evidence\": [],\n+  \"workspaceRevision\": 0,\n+  \"workspaceSnapshotId\": \"workspace.v1.0.00000000\",\n+  \"revision\": 1,\n+  \"updatedAt\": 1794001549315,\n+  \"checksum\": \"df2041d2\"\n+}\n\\ No newline at end of file\ndiff --git a/init-env.json b/init-env.json\nnew file mode 100644\nindex 0000000..4472cfc\n--- /dev/null\n+++ b/init-env.json\n@@ -0,0 +1 @@\n+{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-xnWzTe/home\"}\n\\ No newline at end of file\n",
+        "judging": {
+          "analysis": "fixture",
+          "strengths": [],
+          "weaknesses": [],
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10,
+          "perJudgeScores": [
+            {
+              "judgeId": "judge-gpt",
+              "completionScore": 10,
+              "codeQualityScore": 10,
+              "overallScore": 10
+            },
+            {
+              "judgeId": "judge-gemini",
+              "completionScore": 10,
+              "codeQualityScore": 10,
+              "overallScore": 10
+            }
+          ],
+          "scoringStatus": "scored"
+        },
+        "scoringStatus": "scored",
+        "cost": 0,
+        "durationMs": 1247,
+        "finalCheckOutputs": [
+          {
+            "checkId": "check-1",
+            "command": "node -e 'console.log(JSON.stringify({sentinel:process.env.B30_CONTROLLER_SENTINEL ?? null,home:process.env.HOME}))'",
+            "dependsOn": [],
+            "exitCode": 0,
+            "outcome": "passed",
+            "durationMs": 31,
+            "stdout": "{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-1vRFW4/home\"}\n",
+            "stderr": ""
+          }
+        ],
+        "retrievalFlow": {
+          "queryCallCount": 0,
+          "queryResultPaths": [],
+          "successfulReadPaths": [],
+          "relevantReadPaths": [],
+          "irrelevantReadPaths": [],
+          "relevantReadBeforeFirstEdit": false
+        },
+        "idiomTraceability": {
+          "verdict": "skip",
+          "signals": {
+            "nonTypeScriptEditCount": 0,
+            "languageSignals": [],
+            "hasRequiredReads": false,
+            "deliveryObservable": false,
+            "isEmpty": true
+          },
+          "reasons": [
+            "No non-TypeScript supported-language edits were detected."
+          ]
+        },
+        "thinkerHarvest": {
+          "verdict": "skip",
+          "reasons": [
+            "No thinker subagents in trace."
+          ],
+          "signals": {
+            "thinkerAgentIds": [],
+            "agents": [],
+            "anyEmptyHarvestClobber": false,
+            "anyPreservedNonEmpty": false,
+            "allPlainTextOnly": true
+          }
+        }
+      }
+    }
+  ],
+  "observations": [
+    {
+      "adapterScope": "child_process_replacement_environment",
+      "pid": 1462,
+      "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-TDdJ72",
+      "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-w9rUxz/home",
+      "exitCode": 0,
+      "cancelled": false,
+      "eventBytes": 4887,
+      "eventsReplayed": 9,
+      "scope": "child_process_replacement_environment",
+      "agentId": "isolation-fixture",
+      "controllerSentinelPresent": false,
+      "ambientProviderConfigPresent": false,
+      "defaultUserConfigPresent": false,
+      "envNames": [
+        "DO_NOT_TRACK",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "fetch": {
+        "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+        "attempted": 0,
+        "forwarded": 0,
+        "refused": 0,
+        "refuseForFixture": false
+      },
+      "providerConfigSourcePaths": [],
+      "selectedProviderCredentials": []
+    },
+    {
+      "adapterScope": "child_process_replacement_environment",
+      "pid": 1542,
+      "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-WThwzj",
+      "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home",
+      "exitCode": 0,
+      "cancelled": false,
+      "eventBytes": 4887,
+      "eventsReplayed": 9,
+      "scope": "child_process_replacement_environment",
+      "agentId": "isolation-fixture",
+      "controllerSentinelPresent": false,
+      "ambientProviderConfigPresent": false,
+      "defaultUserConfigPresent": false,
+      "envNames": [
+        "DO_NOT_TRACK",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "fetch": {
+        "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+        "attempted": 0,
+        "forwarded": 0,
+        "refused": 0,
+        "refuseForFixture": false
+      },
+      "providerConfigSourcePaths": [],
+      "selectedProviderCredentials": []
+    },
+    {
+      "adapterScope": "child_process_replacement_environment",
+      "pid": 1600,
+      "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-O1yGCF",
+      "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-Tl85we/home",
+      "exitCode": 0,
+      "cancelled": false,
+      "eventBytes": 1487,
+      "eventsReplayed": 5,
+      "scope": "child_process_replacement_environment",
+      "agentId": "judge-gpt",
+      "controllerSentinelPresent": false,
+      "ambientProviderConfigPresent": false,
+      "defaultUserConfigPresent": false,
+      "envNames": [
+        "DO_NOT_TRACK",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "fetch": {
+        "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+        "attempted": 0,
+        "forwarded": 0,
+        "refused": 0,
+        "refuseForFixture": false
+      },
+      "providerConfigSourcePaths": [],
+      "selectedProviderCredentials": []
+    },
+    {
+      "adapterScope": "child_process_replacement_environment",
+      "pid": 1601,
+      "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-ixxq9f",
+      "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-OZLGp7/home",
+      "exitCode": 0,
+      "cancelled": false,
+      "eventBytes": 1490,
+      "eventsReplayed": 5,
+      "scope": "child_process_replacement_environment",
+      "agentId": "judge-gemini",
+      "controllerSentinelPresent": false,
+      "ambientProviderConfigPresent": false,
+      "defaultUserConfigPresent": false,
+      "envNames": [
+        "DO_NOT_TRACK",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "fetch": {
+        "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+        "attempted": 0,
+        "forwarded": 0,
+        "refused": 0,
+        "refuseForFixture": false
+      },
+      "providerConfigSourcePaths": [],
+      "selectedProviderCredentials": []
+    },
+    {
+      "adapterScope": "child_process_replacement_environment",
+      "pid": 1670,
+      "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-Gcv6Qe",
+      "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-dW1hX5/home",
+      "exitCode": 0,
+      "cancelled": false,
+      "eventBytes": 1420,
+      "eventsReplayed": 5,
+      "scope": "child_process_replacement_environment",
+      "agentId": "buffbench-lessons-extractor",
+      "controllerSentinelPresent": false,
+      "ambientProviderConfigPresent": false,
+      "defaultUserConfigPresent": false,
+      "envNames": [
+        "DO_NOT_TRACK",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "fetch": {
+        "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+        "attempted": 0,
+        "forwarded": 0,
+        "refused": 0,
+        "refuseForFixture": false
+      },
+      "providerConfigSourcePaths": [],
+      "selectedProviderCredentials": []
+    },
+    {
+      "adapterScope": "child_process_replacement_environment",
+      "pid": 1705,
+      "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-sbnIoJ",
+      "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-JFTbt5/home",
+      "exitCode": 0,
+      "cancelled": false,
+      "eventBytes": 1426,
+      "eventsReplayed": 5,
+      "scope": "child_process_replacement_environment",
+      "agentId": "trace-analyzer",
+      "controllerSentinelPresent": false,
+      "ambientProviderConfigPresent": false,
+      "defaultUserConfigPresent": false,
+      "envNames": [
+        "DO_NOT_TRACK",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "fetch": {
+        "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+        "attempted": 0,
+        "forwarded": 0,
+        "refused": 0,
+        "refuseForFixture": false
+      },
+      "providerConfigSourcePaths": [],
+      "selectedProviderCredentials": []
+    },
+    {
+      "adapterScope": "child_process_replacement_environment",
+      "pid": 1740,
+      "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-54ww17",
+      "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-XMmei7/home",
+      "exitCode": 0,
+      "cancelled": false,
+      "eventBytes": 1475,
+      "eventsReplayed": 5,
+      "scope": "child_process_replacement_environment",
+      "agentId": "buffbench-meta-analyzer",
+      "controllerSentinelPresent": false,
+      "ambientProviderConfigPresent": false,
+      "defaultUserConfigPresent": false,
+      "envNames": [
+        "DO_NOT_TRACK",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "fetch": {
+        "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+        "attempted": 0,
+        "forwarded": 0,
+        "refused": 0,
+        "refuseForFixture": false
+      },
+      "providerConfigSourcePaths": [],
+      "selectedProviderCredentials": []
+    }
+  ],
+  "unavailable": {
+    "agentId": "valid-no-key-fixture",
+    "selectedModel": "b30-no-key/gpt-4.1",
+    "expectedMissingCredential": "Agent run error: Missing environment variable 'B30_MISSING_API_KEY' required for configured provider 'b30-no-key' and model 'b30-no-key/gpt-4.1'.",
+    "providerConfig": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/missing-credential-provider.json",
+    "output": {
+      "type": "error",
+      "message": "Agent run error: Missing environment variable 'B30_MISSING_API_KEY' required for configured provider 'b30-no-key' and model 'b30-no-key/gpt-4.1'."
+    },
+    "runOutcome": {
+      "termination": "failed",
+      "cause": {
+        "code": "agent_execution_error",
+        "message": "Missing environment variable 'B30_MISSING_API_KEY' required for configured provider 'b30-no-key' and model 'b30-no-key/gpt-4.1'."
+      }
+    },
+    "observations": [
+      {
+        "adapterScope": "child_process_replacement_environment",
+        "pid": 1775,
+        "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-LjOtX6",
+        "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-S8kYwR/home",
+        "exitCode": 0,
+        "cancelled": false,
+        "eventBytes": 42,
+        "eventsReplayed": 1,
+        "scope": "child_process_replacement_environment",
+        "agentId": "base2",
+        "controllerSentinelPresent": false,
+        "ambientProviderConfigPresent": false,
+        "defaultUserConfigPresent": false,
+        "envNames": [
+          "DO_NOT_TRACK",
+          "GIT_CONFIG_GLOBAL",
+          "GIT_CONFIG_NOSYSTEM",
+          "HOME",
+          "OPENBUFF_TELEMETRY",
+          "PATH",
+          "TMPDIR",
+          "USERPROFILE",
+          "XDG_CACHE_HOME",
+          "XDG_CONFIG_HOME",
+          "XDG_DATA_HOME"
+        ],
+        "fetch": {
+          "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+          "attempted": 0,
+          "forwarded": 0,
+          "refused": 0,
+          "refuseForFixture": true
+        },
+        "providerConfigSourcePaths": [],
+        "selectedProviderCredentials": []
+      },
+      {
+        "adapterScope": "child_process_replacement_environment",
+        "pid": 1818,
+        "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-aSSShj",
+        "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-0JtXwa/home",
+        "exitCode": 0,
+        "cancelled": false,
+        "eventBytes": 480,
+        "eventsReplayed": 3,
+        "scope": "child_process_replacement_environment",
+        "agentId": "valid-no-key-fixture",
+        "controllerSentinelPresent": false,
+        "ambientProviderConfigPresent": true,
+        "defaultUserConfigPresent": false,
+        "envNames": [
+          "DO_NOT_TRACK",
+          "GIT_CONFIG_GLOBAL",
+          "GIT_CONFIG_NOSYSTEM",
+          "HOME",
+          "OPENBUFF_PROVIDER_CONFIG",
+          "OPENBUFF_TELEMETRY",
+          "PATH",
+          "TMPDIR",
+          "USERPROFILE",
+          "XDG_CACHE_HOME",
+          "XDG_CONFIG_HOME",
+          "XDG_DATA_HOME"
+        ],
+        "fetch": {
+          "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+          "attempted": 0,
+          "forwarded": 0,
+          "refused": 0,
+          "refuseForFixture": true
+        },
+        "providerConfigSourcePaths": [
+          "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/missing-credential-provider.json"
+        ],
+        "selectedProviderCredentials": [
+          {
+            "providerId": "b30-no-key",
+            "credentialEnv": "B30_MISSING_API_KEY",
+            "present": false
+          }
+        ]
+      },
+      {
+        "adapterScope": "child_process_replacement_environment",
+        "pid": 1861,
+        "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-oONj0H",
+        "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-8uBIxm/home",
+        "exitCode": 0,
+        "cancelled": false,
+        "eventBytes": 1400,
+        "eventsReplayed": 5,
+        "scope": "child_process_replacement_environment",
+        "agentId": "fetch-guard-fixture",
+        "controllerSentinelPresent": false,
+        "ambientProviderConfigPresent": false,
+        "defaultUserConfigPresent": false,
+        "envNames": [
+          "DO_NOT_TRACK",
+          "GIT_CONFIG_GLOBAL",
+          "GIT_CONFIG_NOSYSTEM",
+          "HOME",
+          "OPENBUFF_TELEMETRY",
+          "PATH",
+          "TMPDIR",
+          "USERPROFILE",
+          "XDG_CACHE_HOME",
+          "XDG_CONFIG_HOME",
+          "XDG_DATA_HOME"
+        ],
+        "fetch": {
+          "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+          "attempted": 1,
+          "forwarded": 0,
+          "refused": 1,
+          "refuseForFixture": true
+        },
+        "providerConfigSourcePaths": [],
+        "selectedProviderCredentials": []
+      }
+    ]
+  },
+  "missingAgent": {
+    "output": {
+      "type": "error",
+      "message": "Invalid agent ID: \"base2\". Available agents: "
+    },
+    "runOutcome": {
+      "termination": "failed",
+      "cause": {
+        "code": "runtime_error",
+        "message": "Invalid agent ID: \"base2\". Available agents: "
+      }
+    },
+    "observation": {
+      "adapterScope": "child_process_replacement_environment",
+      "pid": 1775,
+      "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-LjOtX6",
+      "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-S8kYwR/home",
+      "exitCode": 0,
+      "cancelled": false,
+      "eventBytes": 42,
+      "eventsReplayed": 1,
+      "scope": "child_process_replacement_environment",
+      "agentId": "base2",
+      "controllerSentinelPresent": false,
+      "ambientProviderConfigPresent": false,
+      "defaultUserConfigPresent": false,
+      "envNames": [
+        "DO_NOT_TRACK",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "fetch": {
+        "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+        "attempted": 0,
+        "forwarded": 0,
+        "refused": 0,
+        "refuseForFixture": true
+      },
+      "providerConfigSourcePaths": [],
+      "selectedProviderCredentials": []
+    }
+  },
+  "fetchGuardControl": {
+    "output": {
+      "type": "structuredOutput",
+      "value": {
+        "initiated": true
+      }
+    },
+    "observation": {
+      "adapterScope": "child_process_replacement_environment",
+      "pid": 1861,
+      "cwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-sdk-worker-oONj0H",
+      "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-8uBIxm/home",
+      "exitCode": 0,
+      "cancelled": false,
+      "eventBytes": 1400,
+      "eventsReplayed": 5,
+      "scope": "child_process_replacement_environment",
+      "agentId": "fetch-guard-fixture",
+      "controllerSentinelPresent": false,
+      "ambientProviderConfigPresent": false,
+      "defaultUserConfigPresent": false,
+      "envNames": [
+        "DO_NOT_TRACK",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_NOSYSTEM",
+        "HOME",
+        "OPENBUFF_TELEMETRY",
+        "PATH",
+        "TMPDIR",
+        "USERPROFILE",
+        "XDG_CACHE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME"
+      ],
+      "fetch": {
+        "scope": "SDK globalThis.fetch transport only; no OS/network confinement",
+        "attempted": 1,
+        "forwarded": 0,
+        "refused": 1,
+        "refuseForFixture": true
+      },
+      "providerConfigSourcePaths": [],
+      "selectedProviderCredentials": []
+    }
+  },
+  "rejectedCallback": true
+}

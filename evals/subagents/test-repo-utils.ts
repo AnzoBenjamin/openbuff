@@ -1,7 +1,8 @@
-import { execSync } from 'child_process'
-import fs from 'fs'
+import { execFile, spawn } from 'child_process'
+import { promises as fs } from 'fs'
 import * as os from 'os'
 import path from 'path'
+import { promisify } from 'util'
 
 import { getErrorObject } from '@codebuff/common/util/error'
 
@@ -11,12 +12,57 @@ import { getErrorObject } from '@codebuff/common/util/error'
  * git refuses to shallow-copy a checked-out local repo; `--no-local` forces
  * the remote transport, which supports `--depth 1` against worktrees.
  */
-function buildCloneCommand(repoUrl: string, repoDir: string): string {
-  const depthFlag = '--depth 1'
-  const noLocalFlag = repoUrl.startsWith('file://') ? '--no-local' : ''
-  return ['git', 'clone', noLocalFlag, depthFlag, repoUrl, repoDir]
-    .filter(Boolean)
-    .join(' ')
+const execFileAsync = promisify(execFile)
+
+/** Discard setup output as before, and stop the command tree on cancellation. */
+function runInit(
+  command: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason ?? new Error('Aborted'))
+    const child = spawn(command, {
+      cwd,
+      env,
+      shell: true,
+      stdio: 'ignore',
+      detached: process.platform !== 'win32',
+    })
+    const abort = () => {
+      try {
+        if (process.platform !== 'win32' && child.pid)
+          process.kill(-child.pid, 'SIGTERM')
+        else child.kill('SIGTERM')
+      } catch {
+        /* The process may have exited already. */
+      }
+    }
+    signal?.addEventListener('abort', abort, { once: true })
+    child.once('error', (error) => {
+      signal?.removeEventListener('abort', abort)
+      reject(error)
+    })
+    child.once('close', (code) => {
+      signal?.removeEventListener('abort', abort)
+      if (signal?.aborted) reject(signal.reason ?? new Error('Aborted'))
+      else if (code === 0) resolve()
+      else reject(new Error(`Init command exited with code ${code}`))
+    })
+  })
+}
+
+function cloneArgs(repoUrl: string, repoDir: string): string[] {
+  return [
+    'clone',
+    ...(repoUrl.startsWith('file://') ? ['--no-local'] : []),
+    '--depth',
+    '1',
+    '--',
+    repoUrl,
+    repoDir,
+  ]
 }
 
 /**
@@ -30,33 +76,47 @@ export const withTestRepo = async <T>(
     parentSha: string
     initCommand?: string
     env?: Record<string, string>
+    inheritEnv?: boolean
+    signal?: AbortSignal
   },
   fn: (cwd: string) => Promise<T>,
 ): Promise<T> => {
-  const { repoUrl, parentSha, initCommand, env } = repoConfig
+  const {
+    repoUrl,
+    parentSha,
+    initCommand,
+    env,
+    signal,
+    inheritEnv = true,
+  } = repoConfig
+  const executionEnv = inheritEnv ? { ...process.env, ...env } : env
 
   // Create a temporary directory for the test repo
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codebuff-eval-'))
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codebuff-eval-'))
   const repoDir = path.join(tempDir, 'repo')
 
   try {
-    execSync(buildCloneCommand(repoUrl, repoDir), { stdio: 'ignore' })
-
-    execSync(`git fetch --depth 1 origin ${parentSha}`, {
-      cwd: repoDir,
-      stdio: 'ignore',
+    await execFileAsync('git', cloneArgs(repoUrl, repoDir), {
+      signal,
+      env: executionEnv,
     })
-    execSync(`git checkout ${parentSha}`, { cwd: repoDir, stdio: 'ignore' })
+    await execFileAsync('git', ['fetch', '--depth', '1', 'origin', parentSha], {
+      cwd: repoDir,
+      signal,
+      env: executionEnv,
+    })
+    await execFileAsync('git', ['checkout', parentSha], {
+      cwd: repoDir,
+      signal,
+      env: executionEnv,
+    })
 
     if (initCommand) {
       console.log(`Running init command: ${initCommand}...`)
       try {
-        execSync(initCommand, {
-          cwd: repoDir,
-          stdio: 'ignore',
-          env: { ...process.env, ...env },
-        })
+        await runInit(initCommand, repoDir, executionEnv ?? {}, signal)
       } catch (error) {
+        if (signal?.aborted) throw error
         console.error(
           `Error running init command: ${getErrorObject(error).message}`,
         )
@@ -68,7 +128,7 @@ export const withTestRepo = async <T>(
   } finally {
     // Clean up the temporary directory
     try {
-      fs.rmSync(tempDir, { recursive: true, force: true })
+      await fs.rm(tempDir, { recursive: true, force: true })
     } catch (error) {
       console.warn(`Failed to clean up temporary directory: ${error}`)
     }
@@ -80,31 +140,40 @@ export const withTestRepoAndParent = async <T>(
     repoUrl: string
     commitSha: string
     initCommand?: string
+    signal?: AbortSignal
   },
   fn: (cwd: string, commitSha: string, parentSha: string) => Promise<T>,
 ): Promise<T | null> => {
-  const { repoUrl, commitSha, initCommand } = repoConfig
+  const { repoUrl, commitSha, initCommand, signal } = repoConfig
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codebuff-eval-'))
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codebuff-eval-'))
   const repoDir = path.join(tempDir, 'repo')
 
   try {
-    execSync(buildCloneCommand(repoUrl, repoDir), { stdio: 'ignore' })
+    await execFileAsync('git', cloneArgs(repoUrl, repoDir), { signal })
 
-    execSync(`git fetch --depth 2 origin ${commitSha}`, {
+    await execFileAsync('git', ['fetch', '--depth', '2', 'origin', commitSha], {
       cwd: repoDir,
-      stdio: 'ignore',
+      signal,
     })
 
-    execSync(`git checkout ${commitSha}`, { cwd: repoDir, stdio: 'ignore' })
+    await execFileAsync('git', ['checkout', commitSha], {
+      cwd: repoDir,
+      signal,
+    })
 
     let parentSha: string
     try {
-      const parents = execSync(`git log --pretty=%P -n 1 ${commitSha}`, {
-        cwd: repoDir,
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }).trim()
+      const { stdout } = await execFileAsync(
+        'git',
+        ['log', '--pretty=%P', '-n', '1', commitSha],
+        {
+          cwd: repoDir,
+          encoding: 'utf-8',
+          signal,
+        },
+      )
+      const parents = stdout.trim()
 
       if (!parents) {
         console.warn(
@@ -123,21 +192,25 @@ export const withTestRepoAndParent = async <T>(
 
       parentSha = parentList[0]
     } catch (error) {
+      if (signal?.aborted) throw error
       console.error(`Error getting parent for ${commitSha.slice(0, 8)}:`, error)
       return null
     }
 
-    execSync(`git checkout ${parentSha}`, { cwd: repoDir, stdio: 'ignore' })
+    await execFileAsync('git', ['checkout', parentSha], {
+      cwd: repoDir,
+      signal,
+    })
 
     if (initCommand) {
       console.log(`Running init command: ${initCommand}...`)
-      execSync(initCommand, { cwd: repoDir, stdio: 'ignore' })
+      await runInit(initCommand, repoDir, process.env, signal)
     }
 
     return await fn(repoDir, commitSha, parentSha)
   } finally {
     try {
-      fs.rmSync(tempDir, { recursive: true, force: true })
+      await fs.rm(tempDir, { recursive: true, force: true })
     } catch (error) {
       console.warn(`Failed to clean up temporary directory: ${error}`)
     }

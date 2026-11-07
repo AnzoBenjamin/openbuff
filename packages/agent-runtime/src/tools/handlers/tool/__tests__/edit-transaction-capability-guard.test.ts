@@ -653,3 +653,105 @@ describe('edit_transaction confirmed-post-edit substitution span guard', () => {
     expect((out as { basedOnRead?: string }).basedOnRead).toBe(foreignToken)
   })
 })
+
+describe('edit_transaction preflight failure attribution (ledger-mapped edit index)', () => {
+  // Same harness shape as the truncation describe above: a handler-params
+  // builder plus a non-strict fresh state, so the transaction reaches the
+  // virtual-compile preflight loop.
+  const baseHandlerParams = (params: {
+    edits: unknown[]
+    fileProcessingState: FileProcessingState
+    requestOptionalFile?: (args: {
+      filePath: string
+    }) => Promise<string | null>
+  }) => ({
+    previousToolCallFinished: Promise.resolve(),
+    toolCall: {
+      toolCallId: 'preflight-attribution-test',
+      toolName: 'edit_transaction',
+      input: { edits: params.edits },
+    },
+    fileProcessingState: params.fileProcessingState,
+    logger,
+    requestOptionalFile: params.requestOptionalFile ?? (async () => null),
+    requestClientToolCall: async () => [],
+    writeToClient: () => undefined,
+  })
+
+  const freshState = () =>
+    getFileProcessingValues({ strictReadBeforeEdit: false })
+
+  it('attributes a preflight syntax failure to the later edit that produced the broken bytes', async () => {
+    // Three edits over two paths, interleaved so no adjacent same-path
+    // str_replace run coalesces: edit 0 touches src/a.ts, edit 1 src/b.ts, and
+    // edit 2 touches src/a.ts again and is the one that emits the broken
+    // bytes. The naive `edits.findIndex((edit) => edit.path === file.path)`
+    // would report edit 0 — the FIRST edit on the path — so only the
+    // ledger-based attribution can name edit 2.
+    const result = await handleEditTransaction(
+      baseHandlerParams({
+        edits: [
+          {
+            type: 'str_replace',
+            path: 'src/a.ts',
+            replacements: [
+              {
+                oldString: 'const header = 1',
+                newString: 'const header = 11',
+                allowMultiple: false,
+              },
+            ],
+          },
+          {
+            type: 'str_replace',
+            path: 'src/b.ts',
+            replacements: [
+              {
+                oldString: 'const middle = 2',
+                newString: 'const middle = 22',
+                allowMultiple: false,
+              },
+            ],
+          },
+          {
+            type: 'str_replace',
+            path: 'src/a.ts',
+            replacements: [
+              {
+                oldString: 'const tail = 3',
+                newString: 'const tail = 33\nconst broken = :\n',
+                allowMultiple: false,
+              },
+            ],
+          },
+        ],
+        fileProcessingState: freshState(),
+        requestOptionalFile: async () =>
+          'const header = 1\nconst middle = 2\nconst tail = 3\n',
+      }) as any,
+    )
+
+    const value = result.output[0]?.value as {
+      errorCode?: string
+      errorMessage?: string
+      failures?: Array<{
+        editIndex: number
+        path: string
+        failureKind?: string
+        errorMessage?: string
+      }>
+    }
+    expect(value.errorCode).toBe('preflight_failed')
+    // The naive findIndex would report 0; the ledger attributes the broken
+    // bytes to the edit that produced them (index 2).
+    expect(value.failures?.[0]).toMatchObject({
+      editIndex: 2,
+      path: 'src/a.ts',
+      failureKind: 'preflight_failed',
+    })
+    expect(String(value.errorMessage)).toContain('produced by edit 3 of 3')
+    expect(String(value.failures?.[0]?.errorMessage)).toContain(
+      'produced by edit 3 of 3',
+    )
+  })
+})

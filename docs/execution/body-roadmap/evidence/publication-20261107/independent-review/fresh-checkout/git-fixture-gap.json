@@ -1,0 +1,1876 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-fresh-checkout-git-fixture-gap-classification",
+  "createdAt": "2026-11-06T23:00:27.797491+00:00",
+  "scope": "Publication representation correction only; preserves sealed inventory, original archive and archive approval.",
+  "inventory": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/curated-required-files.json",
+    "sha256": "f12426acfb0e68b64a584a08a46ed830a305f3045cdf7bf02c6ffda5f07f5731",
+    "requiredPathsScanned": 2644
+  },
+  "authorityTrace": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/validator-reference-trace-v2.json.gz",
+    "sha256": "2a51f7235d6fe49dc80c64b45d4b680a24e01b567e4d3efb5578eefe76ddd462"
+  },
+  "fixturePrefix": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/",
+  "supplement": {
+    "paths": 27,
+    "bytes": 27922,
+    "gitMetadataPaths": 26,
+    "gitMetadataBytes": 27914,
+    "files": [
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/COMMIT_EDITMSG",
+        "sha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+        "bytes": 8,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/HEAD",
+        "sha256": "f6f2b945f6c411b02ba3da9c7ace88dcf71b6af65ba2e0d89aa82900042b5a10",
+        "bytes": 23,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/config",
+        "sha256": "cfe7ba1238c9a78be7535d7c63bcaf5a4d5011d46b07c9b45d3bbf7d6c312dfe",
+        "bytes": 92,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/description",
+        "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee",
+        "bytes": 73,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/applypatch-msg.sample",
+        "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7",
+        "bytes": 478,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/commit-msg.sample",
+        "sha256": "efc1401b0e99d1ff51494d154d98b46c1e99059bcd8bf9f73cecde19fd3eb23b",
+        "bytes": 1972,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/fsmonitor-watchman.sample",
+        "sha256": "9159720099ad5595b8e66645cbfd47763c1e920f46e0b50ae75e642bbec57ef0",
+        "bytes": 4611,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/post-update.sample",
+        "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5",
+        "bytes": 189,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-applypatch.sample",
+        "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475",
+        "bytes": 424,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-commit.sample",
+        "sha256": "57185b7b9f05239d7ab52db045f5b89eb31348d7b2177eab214f5eb872e1971b",
+        "bytes": 1649,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-merge-commit.sample",
+        "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53",
+        "bytes": 416,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-push.sample",
+        "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a",
+        "bytes": 1374,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-rebase.sample",
+        "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3",
+        "bytes": 4898,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-receive.sample",
+        "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989",
+        "bytes": 544,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/prepare-commit-msg.sample",
+        "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619",
+        "bytes": 1492,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/push-to-checkout.sample",
+        "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f",
+        "bytes": 2783,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/sendemail-validate.sample",
+        "sha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92",
+        "bytes": 2308,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/update.sample",
+        "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106",
+        "bytes": 3650,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/index",
+        "sha256": "8e7c1bd56a31f9abcdf3e55b2eb6add8544b4a72bfb356a81ed8454fca40bd04",
+        "bytes": 137,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/info/exclude",
+        "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1",
+        "bytes": 240,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/HEAD",
+        "sha256": "6473ef7682e3ac791e0722c93ea4a06fb9dc91a143738068a227735195a612e6",
+        "bytes": 155,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/refs/heads/master",
+        "sha256": "6473ef7682e3ac791e0722c93ea4a06fb9dc91a143738068a227735195a612e6",
+        "bytes": 155,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/15/892e7e5ca82d5b42ef2fc9fb4e1d8494d0a9a7",
+        "sha256": "1a29264df4312dab9ac0debf84282520b30922a7b0183cfaf7e237b30ac1f251",
+        "bytes": 54,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/d3/33293bd15fe67ef4372f2ac7ef218501acce7a",
+        "sha256": "c959505a080def9543e79b889791b8e5cbbccf81b0c402f69146033c90a7acda",
+        "bytes": 125,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/ee/8c1ee49b4799bbd170233915a897c19e3b55e1",
+        "sha256": "9c295da59a15a7123840b2a1ab7d3d9161ecf33b02a6ae669f5840508dcf7ce8",
+        "bytes": 23,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/refs/heads/master",
+        "sha256": "dbbf0be1f326e216903245d8727a610596a714e97e51c18c2fa4320f06dd9716",
+        "bytes": 41,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      },
+      {
+        "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/README.md",
+        "sha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+        "bytes": 8,
+        "validatorRequired": true,
+        "tracked": false,
+        "ignoreRule": null,
+        "disposition": "direct_publication_file",
+        "reasonKinds": [
+          "hashed_artifact_or_authority"
+        ],
+        "reason": {
+          "kind": "hashed_artifact_or_authority",
+          "origin": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+          "pointer": "B30 manifest sealed artifact"
+        },
+        "bindingEdgeCount": 4,
+        "originDocumentCount": 4,
+        "fullAuthorityEvidence": "validator-reference-trace-v2.json.gz"
+      }
+    ]
+  },
+  "alreadyArchived": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.openbuff/memory/task-memory.json",
+      "sha256": "13857079323ad8b88c4491b31944eb00a9f12e498c07c88b49f47a3ae2444c2f",
+      "bytes": 415,
+      "disposition": "archive_exact_historical_bytes_restore_at_original_path"
+    }
+  ],
+  "otherMandatoryNestedGitPaths": [],
+  "requiredPathAncestorGitScan": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo",
+      "gitEntryType": "directory",
+      "requiredDescendants": 28,
+      "directDescendants": 27
+    }
+  ],
+  "authorityOrigins": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "sha256": "502d97750b6a12ce62a4029410bac3ae8f65bd2044597622fb0943d56c30034e",
+      "matchingBindings": 27
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "sha256": "f80af7feb5f27397cd12744e0bf6f5c2907b81711e7dd4d7d7f69968bb7872fd",
+      "matchingBindings": 27
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "sha256": "a3c80c75ed5ddbb3123de56428fe29f7eddef04c0f22d3679425c5d562ad6d2b",
+      "matchingBindings": 27
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "sha256": "d053739246f203b807ca9179fdd295efcf4bab5dc5d76ee89f950539708bd4a4",
+      "matchingBindings": 27
+    }
+  ],
+  "authorityEdges": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/COMMIT_EDITMSG",
+      "expectedSha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/HEAD",
+      "expectedSha256": "f6f2b945f6c411b02ba3da9c7ace88dcf71b6af65ba2e0d89aa82900042b5a10",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/config",
+      "expectedSha256": "cfe7ba1238c9a78be7535d7c63bcaf5a4d5011d46b07c9b45d3bbf7d6c312dfe",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/description",
+      "expectedSha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/applypatch-msg.sample",
+      "expectedSha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/commit-msg.sample",
+      "expectedSha256": "efc1401b0e99d1ff51494d154d98b46c1e99059bcd8bf9f73cecde19fd3eb23b",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/fsmonitor-watchman.sample",
+      "expectedSha256": "9159720099ad5595b8e66645cbfd47763c1e920f46e0b50ae75e642bbec57ef0",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/post-update.sample",
+      "expectedSha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-applypatch.sample",
+      "expectedSha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-commit.sample",
+      "expectedSha256": "57185b7b9f05239d7ab52db045f5b89eb31348d7b2177eab214f5eb872e1971b",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-merge-commit.sample",
+      "expectedSha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-push.sample",
+      "expectedSha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-rebase.sample",
+      "expectedSha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-receive.sample",
+      "expectedSha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/prepare-commit-msg.sample",
+      "expectedSha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/push-to-checkout.sample",
+      "expectedSha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/sendemail-validate.sample",
+      "expectedSha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/update.sample",
+      "expectedSha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/index",
+      "expectedSha256": "8e7c1bd56a31f9abcdf3e55b2eb6add8544b4a72bfb356a81ed8454fca40bd04",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/info/exclude",
+      "expectedSha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/HEAD",
+      "expectedSha256": "6473ef7682e3ac791e0722c93ea4a06fb9dc91a143738068a227735195a612e6",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/refs/heads/master",
+      "expectedSha256": "6473ef7682e3ac791e0722c93ea4a06fb9dc91a143738068a227735195a612e6",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/15/892e7e5ca82d5b42ef2fc9fb4e1d8494d0a9a7",
+      "expectedSha256": "1a29264df4312dab9ac0debf84282520b30922a7b0183cfaf7e237b30ac1f251",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/d3/33293bd15fe67ef4372f2ac7ef218501acce7a",
+      "expectedSha256": "c959505a080def9543e79b889791b8e5cbbccf81b0c402f69146033c90a7acda",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/ee/8c1ee49b4799bbd170233915a897c19e3b55e1",
+      "expectedSha256": "9c295da59a15a7123840b2a1ab7d3d9161ecf33b02a6ae669f5840508dcf7ce8",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/refs/heads/master",
+      "expectedSha256": "dbbf0be1f326e216903245d8727a610596a714e97e51c18c2fa4320f06dd9716",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/README.md",
+      "expectedSha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+      "label": "B30 manifest sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/COMMIT_EDITMSG",
+      "expectedSha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/HEAD",
+      "expectedSha256": "f6f2b945f6c411b02ba3da9c7ace88dcf71b6af65ba2e0d89aa82900042b5a10",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/config",
+      "expectedSha256": "cfe7ba1238c9a78be7535d7c63bcaf5a4d5011d46b07c9b45d3bbf7d6c312dfe",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/description",
+      "expectedSha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/applypatch-msg.sample",
+      "expectedSha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/commit-msg.sample",
+      "expectedSha256": "efc1401b0e99d1ff51494d154d98b46c1e99059bcd8bf9f73cecde19fd3eb23b",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/fsmonitor-watchman.sample",
+      "expectedSha256": "9159720099ad5595b8e66645cbfd47763c1e920f46e0b50ae75e642bbec57ef0",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/post-update.sample",
+      "expectedSha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-applypatch.sample",
+      "expectedSha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-commit.sample",
+      "expectedSha256": "57185b7b9f05239d7ab52db045f5b89eb31348d7b2177eab214f5eb872e1971b",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-merge-commit.sample",
+      "expectedSha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-push.sample",
+      "expectedSha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-rebase.sample",
+      "expectedSha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-receive.sample",
+      "expectedSha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/prepare-commit-msg.sample",
+      "expectedSha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/push-to-checkout.sample",
+      "expectedSha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/sendemail-validate.sample",
+      "expectedSha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/update.sample",
+      "expectedSha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/index",
+      "expectedSha256": "8e7c1bd56a31f9abcdf3e55b2eb6add8544b4a72bfb356a81ed8454fca40bd04",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/info/exclude",
+      "expectedSha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/HEAD",
+      "expectedSha256": "6473ef7682e3ac791e0722c93ea4a06fb9dc91a143738068a227735195a612e6",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/refs/heads/master",
+      "expectedSha256": "6473ef7682e3ac791e0722c93ea4a06fb9dc91a143738068a227735195a612e6",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/15/892e7e5ca82d5b42ef2fc9fb4e1d8494d0a9a7",
+      "expectedSha256": "1a29264df4312dab9ac0debf84282520b30922a7b0183cfaf7e237b30ac1f251",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/d3/33293bd15fe67ef4372f2ac7ef218501acce7a",
+      "expectedSha256": "c959505a080def9543e79b889791b8e5cbbccf81b0c402f69146033c90a7acda",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/ee/8c1ee49b4799bbd170233915a897c19e3b55e1",
+      "expectedSha256": "9c295da59a15a7123840b2a1ab7d3d9161ecf33b02a6ae669f5840508dcf7ce8",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/refs/heads/master",
+      "expectedSha256": "dbbf0be1f326e216903245d8727a610596a714e97e51c18c2fa4320f06dd9716",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/README.md",
+      "expectedSha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+      "label": "B30 original review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/approval.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/COMMIT_EDITMSG",
+      "expectedSha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/HEAD",
+      "expectedSha256": "f6f2b945f6c411b02ba3da9c7ace88dcf71b6af65ba2e0d89aa82900042b5a10",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/config",
+      "expectedSha256": "cfe7ba1238c9a78be7535d7c63bcaf5a4d5011d46b07c9b45d3bbf7d6c312dfe",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/description",
+      "expectedSha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/applypatch-msg.sample",
+      "expectedSha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/commit-msg.sample",
+      "expectedSha256": "efc1401b0e99d1ff51494d154d98b46c1e99059bcd8bf9f73cecde19fd3eb23b",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/fsmonitor-watchman.sample",
+      "expectedSha256": "9159720099ad5595b8e66645cbfd47763c1e920f46e0b50ae75e642bbec57ef0",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/post-update.sample",
+      "expectedSha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-applypatch.sample",
+      "expectedSha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-commit.sample",
+      "expectedSha256": "57185b7b9f05239d7ab52db045f5b89eb31348d7b2177eab214f5eb872e1971b",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-merge-commit.sample",
+      "expectedSha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-push.sample",
+      "expectedSha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-rebase.sample",
+      "expectedSha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-receive.sample",
+      "expectedSha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/prepare-commit-msg.sample",
+      "expectedSha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/push-to-checkout.sample",
+      "expectedSha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/sendemail-validate.sample",
+      "expectedSha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/update.sample",
+      "expectedSha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/index",
+      "expectedSha256": "8e7c1bd56a31f9abcdf3e55b2eb6add8544b4a72bfb356a81ed8454fca40bd04",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/info/exclude",
+      "expectedSha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/HEAD",
+      "expectedSha256": "6473ef7682e3ac791e0722c93ea4a06fb9dc91a143738068a227735195a612e6",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/refs/heads/master",
+      "expectedSha256": "6473ef7682e3ac791e0722c93ea4a06fb9dc91a143738068a227735195a612e6",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/15/892e7e5ca82d5b42ef2fc9fb4e1d8494d0a9a7",
+      "expectedSha256": "1a29264df4312dab9ac0debf84282520b30922a7b0183cfaf7e237b30ac1f251",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/d3/33293bd15fe67ef4372f2ac7ef218501acce7a",
+      "expectedSha256": "c959505a080def9543e79b889791b8e5cbbccf81b0c402f69146033c90a7acda",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/ee/8c1ee49b4799bbd170233915a897c19e3b55e1",
+      "expectedSha256": "9c295da59a15a7123840b2a1ab7d3d9161ecf33b02a6ae669f5840508dcf7ce8",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/refs/heads/master",
+      "expectedSha256": "dbbf0be1f326e216903245d8727a610596a714e97e51c18c2fa4320f06dd9716",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/README.md",
+      "expectedSha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+      "label": "B30 review sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
+      "validatorCallers": [
+        "reference",
+        "artifact_seal",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/COMMIT_EDITMSG",
+      "expectedSha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/HEAD",
+      "expectedSha256": "f6f2b945f6c411b02ba3da9c7ace88dcf71b6af65ba2e0d89aa82900042b5a10",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/config",
+      "expectedSha256": "cfe7ba1238c9a78be7535d7c63bcaf5a4d5011d46b07c9b45d3bbf7d6c312dfe",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/description",
+      "expectedSha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/applypatch-msg.sample",
+      "expectedSha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/commit-msg.sample",
+      "expectedSha256": "efc1401b0e99d1ff51494d154d98b46c1e99059bcd8bf9f73cecde19fd3eb23b",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/fsmonitor-watchman.sample",
+      "expectedSha256": "9159720099ad5595b8e66645cbfd47763c1e920f46e0b50ae75e642bbec57ef0",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/post-update.sample",
+      "expectedSha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-applypatch.sample",
+      "expectedSha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-commit.sample",
+      "expectedSha256": "57185b7b9f05239d7ab52db045f5b89eb31348d7b2177eab214f5eb872e1971b",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-merge-commit.sample",
+      "expectedSha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-push.sample",
+      "expectedSha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-rebase.sample",
+      "expectedSha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/pre-receive.sample",
+      "expectedSha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/prepare-commit-msg.sample",
+      "expectedSha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/push-to-checkout.sample",
+      "expectedSha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/sendemail-validate.sample",
+      "expectedSha256": "44ebfc923dc5466bc009602f0ecf067b9c65459abfe8868ddc49b78e6ced7a92",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/hooks/update.sample",
+      "expectedSha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/index",
+      "expectedSha256": "8e7c1bd56a31f9abcdf3e55b2eb6add8544b4a72bfb356a81ed8454fca40bd04",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/info/exclude",
+      "expectedSha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/HEAD",
+      "expectedSha256": "6473ef7682e3ac791e0722c93ea4a06fb9dc91a143738068a227735195a612e6",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/logs/refs/heads/master",
+      "expectedSha256": "6473ef7682e3ac791e0722c93ea4a06fb9dc91a143738068a227735195a612e6",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/15/892e7e5ca82d5b42ef2fc9fb4e1d8494d0a9a7",
+      "expectedSha256": "1a29264df4312dab9ac0debf84282520b30922a7b0183cfaf7e237b30ac1f251",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/d3/33293bd15fe67ef4372f2ac7ef218501acce7a",
+      "expectedSha256": "c959505a080def9543e79b889791b8e5cbbccf81b0c402f69146033c90a7acda",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/objects/ee/8c1ee49b4799bbd170233915a897c19e3b55e1",
+      "expectedSha256": "9c295da59a15a7123840b2a1ab7d3d9161ecf33b02a6ae669f5840508dcf7ce8",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/.git/refs/heads/master",
+      "expectedSha256": "dbbf0be1f326e216903245d8727a610596a714e97e51c18c2fa4320f06dd9716",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/isolation-fixture/repo/README.md",
+      "expectedSha256": "e80b71cd14d3cbd65f4173abcbfcf01a545dbca32a72d575108b553a648cc96f",
+      "label": "B30 sealed artifact",
+      "originDocument": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
+      "validatorCallers": [
+        "reference",
+        "validate"
+      ],
+      "referenceKind": "hashed_artifact_or_authority"
+    }
+  ],
+  "original28FixtureFilesMatchFrozenInventory": true,
+  "recommendation": "Retain all frozen bytes and add an exact pinned supplemental archive for the27 formerly direct files. Omit the embedded Git link from the index; restore bytes only in fresh materializations."
+}

@@ -18,7 +18,11 @@ import {
 } from '../agent-runner'
 import { executeInitCommand } from '../setup-test-repo'
 import { ClaudeRunner } from '../runners/claude'
+import { CodebuffRunner } from '../runners/codebuff'
+import { createArtifactSink } from '../evaluation-artifacts'
 import { isAbortError } from '../runners/runner'
+
+import type { OpenbuffClient } from '@openbuff/sdk'
 
 async function waitForFile(path: string): Promise<void> {
   const deadline = Date.now() + 2000
@@ -143,6 +147,162 @@ describe('external runner abort handling', () => {
 })
 
 describe('runAgentOnCommit', () => {
+  test.each([
+    [
+      'thrown empty string',
+      async () => {
+        throw ''
+      },
+      'failed',
+    ],
+    [
+      'thrown empty Error',
+      async () => {
+        throw new Error('')
+      },
+      'failed',
+    ],
+    [
+      'resolved empty error',
+      async () => ({ output: { type: 'error', message: '' } }),
+      'failed',
+    ],
+    ...(['completed', 'cancelled', 'budget_exhausted', 'failed'] as const).map(
+      (termination) =>
+        [
+          `resolved empty error with ${termination}`,
+          async () => ({
+            output: { type: 'error', message: '' },
+            runOutcome: { termination },
+          }),
+          termination === 'completed' ? 'failed' : termination,
+        ] as const,
+    ),
+  ] as const)(
+    'preserves execution failure for %s',
+    async (_, run, termination) => {
+      const root = mkdtempSync(join(tmpdir(), 'buffbench-empty-error-'))
+      try {
+        const runner = new CodebuffRunner({
+          cwd: root,
+          agentId: 'fixture',
+          commitId: 'fixture',
+          parentSha: 'HEAD',
+          localAgentDefinitions: [],
+          printEvents: false,
+          client: { run } as unknown as OpenbuffClient,
+        })
+        const result = await runner.run('offline fixture')
+        expect(result.error).toBe('')
+        expect(result.runOutcome?.termination).toBe(termination)
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test('retains SDK error, cancelled and incomplete outcomes and their paid evidence', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'buffbench-outcomes-'))
+    try {
+      const artifactSink = createArtifactSink(join(root, 'artifacts'))
+      for (const termination of [
+        'failed',
+        'cancelled',
+        'budget_exhausted',
+        'step_exhausted',
+        'deadline_exhausted',
+        'resource_failure',
+        'cleanup_failure',
+      ]) {
+        const runner = new CodebuffRunner({
+          cwd: root,
+          agentId: '../../agent',
+          commitId: '../../task',
+          parentSha: 'HEAD',
+          localAgentDefinitions: [],
+          printEvents: false,
+          artifactSink,
+          client: {
+            run: async () => ({
+              output: { type: 'text', value: 'looks successful' },
+              runOutcome: { termination },
+              sessionState: { mainAgentState: { creditsUsed: 250 } },
+            }),
+          } as any,
+        })
+        const result = await runner.run('fixture')
+        expect(result.error).toContain(termination)
+        expect(result.runOutcome?.termination).toBe(termination as any)
+        expect(result.totalCostUsd).toBe(2.5)
+        expect(result.costEvidence?.status).toBe('reported')
+      }
+      const errorRunner = new CodebuffRunner({
+        cwd: root,
+        agentId: '../../agent',
+        commitId: '../../task',
+        parentSha: 'HEAD',
+        localAgentDefinitions: [],
+        printEvents: false,
+        artifactSink,
+        client: {
+          run: async () => ({
+            output: { type: 'error', message: 'SDK resolved error' },
+            sessionState: { mainAgentState: { creditsUsed: 100 } },
+          }),
+        } as any,
+      })
+      const resolvedError = await errorRunner.run('fixture')
+      expect(resolvedError.error).toBe('SDK resolved error')
+      expect(resolvedError.runOutcome?.termination).toBe('failed')
+      expect(resolvedError.totalCostUsd).toBe(1)
+      const partialRunner = new CodebuffRunner({
+        cwd: root,
+        agentId: 'agent',
+        commitId: 'task',
+        parentSha: 'HEAD',
+        localAgentDefinitions: [],
+        printEvents: false,
+        artifactSink,
+        client: {
+          run: async (input: any) => {
+            input.handleEvent({ type: 'finish', totalCost: 75 })
+            throw new Error('paid then failed')
+          },
+        } as any,
+      })
+      const partial = await partialRunner.run('fixture')
+      expect(partial.totalCostUsd).toBe(0.75)
+      expect(partial.steps).toHaveLength(1)
+      expect(partial.error).toBe('paid then failed')
+      expect(partial.costEvidence?.status).toBe('reported')
+      expect(existsSync(join(root, 'artifacts'))).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('key-free evaluation refuses injected in-process SDK clients', async () => {
+    await expect(
+      runAgentOnCommit({
+        client: { run: async () => ({}) } as any,
+        agentId: 'fixture',
+        commit: {
+          id: 'fixture',
+          sha: 'sha',
+          parentSha: 'parent',
+          spec: 'fixture',
+          prompt: 'fixture',
+          supplementalFiles: [],
+          fileDiffs: [],
+        },
+        repoUrl: 'offline',
+        localAgentDefinitions: [],
+        printEvents: false,
+        executionScope: 'key_free_environment',
+      }),
+    ).rejects.toThrow('isolated SDK adapter')
+  })
+
   test('computes cache recall eval and appends deterministic final-check output', async () => {
     const tmpRoot = mkdtempSync(
       join(tmpdir(), 'buffbench-cache-recall-runner-'),

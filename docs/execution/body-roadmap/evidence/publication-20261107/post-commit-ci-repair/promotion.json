@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "type": "approved-ci-repair-ledger-promotion",
+  "startedAt": "2026-11-06T23:36:19.537542+00:00",
+  "elapsedSeconds": 13.382157626998378,
+  "previousLedger": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/acceptance/previous-ledger.json",
+    "sha256": "108ed649f9f89f7a767651382f8966d5fdd2a16b50d4d1f43551e7548a833758"
+  },
+  "candidate": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/acceptance/candidate-ledger.json",
+    "sha256": "64bdc49206f2e3efad0393dad82048134c4403e43bef8bdb26696251bbf7b07b"
+  },
+  "liveLedger": {
+    "path": "docs/execution/body-roadmap/ledger.json",
+    "sha256": "64bdc49206f2e3efad0393dad82048134c4403e43bef8bdb26696251bbf7b07b"
+  },
+  "approval": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/acceptance-independent-review/manifest.json",
+    "sha256": "3bf4729d1976ee85ceae40f4f4ef169d14da9a2431f498e04de6e42f9f90e25b"
+  },
+  "promoter": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/promote.py",
+    "sha256": "a81e3ed519f3ff52632f36406be2a12f5485238fc2ab95d900b774d129d5ce3e"
+  },
+  "validation": {
+    "schemaVersion": 1,
+    "valid": true,
+    "scope": "plan/ledger/evidence consistency; no product or unavailable-platform assurance is inferred",
+    "cardCount": 36,
+    "nodeCount": 39,
+    "accepted": [
+      "B01",
+      "B02",
+      "B03",
+      "B04",
+      "B08",
+      "B18",
+      "B30",
+      "B36"
+    ],
+    "remaining": [
+      "B05",
+      "B06",
+      "B07",
+      "B09",
+      "B10",
+      "B11",
+      "B12",
+      "B13",
+      "B14",
+      "B15",
+      "B16",
+      "B17",
+      "B19",
+      "B20",
+      "B21",
+      "B22",
+      "B23",
+      "B24",
+      "B25",
+      "B26",
+      "B27",
+      "B28",
+      "B29",
+      "B31",
+      "B32",
+      "B33",
+      "B34",
+      "B35",
+      "M22-CORE",
+      "M22-TXN",
+      "M22-CHILD"
+    ],
+    "ready": [
+      "B05",
+      "B09",
+      "B10",
+      "B11",
+      "B12",
+      "B15",
+      "B19",
+      "B23",
+      "B28",
+      "B32"
+    ],
+    "errors": []
+  },
+  "argv": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/validate-ledger.py"
+  ],
+  "candidatePromotedByteForByte": true,
+  "initialCheckRefusal": "An earlier inline check treated changedNodes as names rather than objects and stopped before writing; the original live ledger remained unchanged.",
+  "scope": "Renew only the two stale shared-typecheck credits after the reviewed documentation guard repair; no additional implementation or completion-node acceptance."
+}

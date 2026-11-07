@@ -3,7 +3,7 @@ import * as fs from 'node:fs'
 import * as path from 'node:path'
 
 import type { FileVector } from './semantic'
-import type { ChunkSidecar, MetadataIndex } from './types'
+import type { ChunkSidecar, IndexedFile, MetadataIndex } from './types'
 import { buildIndexQueryData } from './query-data'
 import { buildChunkSidecar } from './chunk-freshness'
 
@@ -30,14 +30,6 @@ const DEFAULT_CACHE_DIR = '.codebuff-index'
 const OWNER_FILE = '.openbuff-index-owner'
 const LOCK_FILE = '.openbuff-index.lock'
 const LOCK_TIMEOUT_MS = 10_000
-const STALE_LOCK_MS = 5 * 60_000
-/**
- * The lock holder touches the lock file's mtime at this interval so a
- * slow-but-live writer (large serialize + fsync) is never age-reclaimed
- * mid-operation. Must be well under STALE_LOCK_MS.
- */
-const LOCK_HEARTBEAT_MS = 30_000
-
 /**
  * P8.6b / M4-S6: whether saveIndex may side-effect-write `.git/info/exclude`.
  * Defaults OFF: mutating a user's git metadata as an unadvertised side effect
@@ -99,6 +91,39 @@ export function getIndexDir(
   return path.join(projectRoot, sanitizeIndexCacheDir(cacheDir))
 }
 
+/**
+ * Dedupes loadIndex's oversized-skip warning: index-manager calls loadIndex
+ * twice per build cycle (initial load + post-save verification), so an
+ * undeduped warning printed twice for the same artifact. Only an identical
+ * consecutive (path, size) skip is suppressed; a different artifact or a
+ * size change warns again.
+ */
+let lastSkipWarnKey: string | null = null
+
+function warnOversizedIndexSkip(indexPath: string, size: number): void {
+  const key = `${indexPath}:${size}`
+  if (key === lastSkipWarnKey) return
+  lastSkipWarnKey = key
+  console.warn(
+    `[index-store] skipping oversized index artifact ${indexPath} (${size} bytes > ${MAX_METADATA_INDEX_BYTES} byte load cap)`,
+  )
+}
+
+// A publication token describes the exact bytes observed on disk, including
+// derived graph/query/parse fields. It is distinct from source snapshot identity
+// and survives in-memory rebuilding of optional accelerators after load.
+const publicationTokens = new WeakMap<MetadataIndex, string>()
+
+export function getIndexPublicationToken(
+  index: MetadataIndex,
+): string | undefined {
+  return publicationTokens.get(index)
+}
+
+function publicationToken(content: string | Uint8Array): string {
+  return createHash('sha256').update(content).digest('hex')
+}
+
 export async function loadIndex(
   projectRoot: string,
   cacheDir = '.codebuff-index',
@@ -106,7 +131,19 @@ export async function loadIndex(
 ): Promise<MetadataIndex | null> {
   const indexPath = path.join(getIndexDir(projectRoot, cacheDir), INDEX_FILE)
   try {
-    const content = await fs.promises.readFile(indexPath, 'utf8')
+    // Stat-first byte cap (MAX_METADATA_INDEX_BYTES, reliability finding
+    // index-load-unbounded-read): refuse to read+parse an oversized
+    // metadata.json. The index is rebuild-worthy, and stat-first keeps the
+    // read+JSON.parse cost bounded instead of parsing unbounded bytes. The
+    // cap is the generous metadata one (not the sidecar bound) so the
+    // authoritative index loads instead of tripping a full rebuild.
+    const stat = await fs.promises.stat(indexPath)
+    if (stat.size > MAX_METADATA_INDEX_BYTES) {
+      warnOversizedIndexSkip(indexPath, stat.size)
+      return null
+    }
+    const bytes = await fs.promises.readFile(indexPath)
+    const content = bytes.toString('utf8')
     let parsed: unknown
     try {
       parsed = JSON.parse(content)
@@ -144,6 +181,7 @@ export async function loadIndex(
     ) {
       parsed.queryData = buildIndexQueryData(parsed.files, parsed.graph)
     }
+    publicationTokens.set(parsed, publicationToken(bytes))
     return parsed
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
@@ -155,16 +193,34 @@ export async function saveIndex(
   index: MetadataIndex,
   projectRoot: string,
   cacheDir = '.codebuff-index',
-  options: { expectedBuiltAt?: number | null } = {},
+  options: {
+    expectedBuiltAt?: number | null
+    /** Content identity observed before building; null requires no prior snapshot. */
+    expectedSnapshotId?: string | null
+    /** Exact persisted document observed before building; null requires absence. */
+    expectedPublicationToken?: string | null
+    /** Reports whether the complete document was read back byte-for-byte. */
+    onVerifiedWrite?: (verified: boolean) => void
+  } = {},
 ): Promise<boolean> {
   const dir = getIndexDir(projectRoot, cacheDir)
   await assertCacheOwnership(dir)
-  await ensureGitInfoExcludes(projectRoot, cacheDir)
   await fs.promises.mkdir(dir, { recursive: true })
-  await writeOwnerFile(dir)
   const indexPath = path.join(dir, INDEX_FILE)
   return await withCacheLock(dir, async () => {
-    const current = await readJsonFile(indexPath)
+    await writeOwnerFile(dir)
+    await ensureGitInfoExcludes(projectRoot, cacheDir)
+    const { index: current, token: currentPublicationToken } =
+      await readCurrentIndexForCas(indexPath)
+    if (
+      Object.prototype.hasOwnProperty.call(
+        options,
+        'expectedPublicationToken',
+      ) &&
+      (options.expectedPublicationToken === undefined ||
+        currentPublicationToken !== options.expectedPublicationToken)
+    )
+      return false
     const currentBuiltAt =
       isRecord(current) &&
       current.projectRoot === projectRoot &&
@@ -177,14 +233,68 @@ export async function saveIndex(
     ) {
       return false
     }
+    if (Object.prototype.hasOwnProperty.call(options, 'expectedSnapshotId')) {
+      let currentSnapshotId: string | null = null
+      if (current !== null) {
+        try {
+          currentSnapshotId = computeIndexSnapshotId(current as MetadataIndex)
+        } catch {
+          return false
+        }
+      }
+      if (currentSnapshotId !== options.expectedSnapshotId) return false
+    }
     if (currentBuiltAt !== null && currentBuiltAt > index.builtAt) {
       // A newer inter-process build won the race. Do not replace it with an
       // older snapshot that began before the winning process.
       return false
     }
-    await atomicWriteJson(indexPath, index)
+    // Write-side cap: measure the serialized doc and, when over
+    // MAX_METADATA_INDEX_BYTES, persist a REDUCED snapshot instead of an
+    // artifact loadIndex would refuse (the
+    // skip→full-rebuild→rewrite-oversized loop). Tiers drop only data that
+    // is rebuildable at load, in increasing cost order (see
+    // reduceIndexForByteCap). The reduction never mutates the caller's
+    // in-memory index, which index-manager keeps serving.
+    const reduced = reduceIndexForByteCapWithPayload(
+      index,
+      MAX_METADATA_INDEX_BYTES,
+    )
+    if (reduced.size > MAX_METADATA_INDEX_BYTES) {
+      // Tier 4: even the fully reduced doc does not fit — skip persisting
+      // entirely (metadata AND sidecar; the sidecar must never describe a
+      // snapshot metadata.json does not contain) and keep the in-memory
+      // index serving.
+      console.warn(
+        `[index-store] metadata index exceeds the write cap even after reduction (${reduced.size} bytes); serving in-memory only`,
+      )
+      return true
+    }
+    if (reduced.reduced) {
+      console.warn(
+        `[index-store] metadata index over write cap; persisting without ${reduced.tiers.join('/')} (${reduced.size} bytes)`,
+      )
+    }
+    const written = await atomicWriteJson(
+      indexPath,
+      reduced.index,
+      reduced.compact,
+    )
+    publicationTokens.set(index, publicationToken(written))
+    if (options.onVerifiedWrite) {
+      let verified = false
+      if (!reduced.reduced) {
+        try {
+          verified = (await fs.promises.readFile(indexPath, 'utf8')) === written
+        } catch {
+          // The manager will use its normal validation/recovery path.
+        }
+      }
+      options.onVerifiedWrite(verified)
+    }
     // Sidecar shares the same lock txn + CAS/newest-wins gate above so it
-    // can never describe a snapshot that lost the race. Best-effort: a
+    // can never describe a snapshot that lost the race, and is built from
+    // the ORIGINAL full index — not the reduced doc. Best-effort: a
     // sidecar write failure must not fail the metadata persist.
     try {
       await atomicWriteJson(
@@ -196,6 +306,143 @@ export async function saveIndex(
     }
     return true
   })
+}
+
+/**
+ * Bounded CAS read. The full byte token includes persisted derived fields.
+ * Unreadable/over-cap state is unknown (undefined token), never equivalent
+ * to the absent (null) preimage required for first publication.
+ */
+async function readCurrentIndexForCas(indexPath: string): Promise<{
+  index: unknown
+  token: string | null | undefined
+}> {
+  try {
+    const stat = await fs.promises.stat(indexPath)
+    if (stat.size > MAX_METADATA_INDEX_BYTES)
+      return { index: null, token: undefined }
+    const content = await fs.promises.readFile(indexPath)
+    let index: unknown = null
+    try {
+      index = JSON.parse(content.toString('utf8'))
+    } catch {
+      /* Preserve the exact invalid publication token. */
+    }
+    return { index, token: publicationToken(content) }
+  } catch (error) {
+    // Only ENOENT certifies first publication. Unknown/unreadable must never
+    // compare equal to an absent preimage.
+    return {
+      index: null,
+      token:
+        (error as NodeJS.ErrnoException).code === 'ENOENT' ? null : undefined,
+    }
+  }
+}
+
+/**
+ * Per-file fields saveIndex may strip when the serialized doc exceeds the
+ * metadata write cap. Both are optional and rebuildable/tolerated-missing.
+ */
+type ReducibleFileField = 'contentSample' | 'chunks'
+
+/**
+ * Shallow-copy `files`, setting `field` to undefined on every entry that has
+ * it (JSON.stringify drops undefined-valued keys on write). Entries without
+ * the field keep their ORIGINAL object reference; entries with it get a
+ * fresh copy, so the caller's in-memory index never loses data.
+ */
+function stripFileField(
+  files: MetadataIndex['files'],
+  field: ReducibleFileField,
+): MetadataIndex['files'] {
+  let stripped: MetadataIndex['files'] | null = null
+  for (const [filePath, entry] of Object.entries(files)) {
+    if (entry[field] === undefined) continue
+    stripped ??= { ...files }
+    const copy: IndexedFile = { ...entry }
+    if (field === 'contentSample') copy.contentSample = undefined
+    else copy.chunks = undefined
+    stripped[filePath] = copy
+  }
+  return stripped ?? files
+}
+
+/**
+ * Pure tiered reduction of an index document for saveIndex's write cap
+ * (MAX_METADATA_INDEX_BYTES). Persisting a doc over the cap would write an
+ * artifact loadIndex refuses, feeding the
+ * skip→full-rebuild→rewrite-oversized loop, so saveIndex persists a reduced
+ * snapshot instead. Each tier drops only rebuildable or non-authoritative
+ * data, in increasing cost order:
+ *
+ * 1. queryData (loadIndex rebuilds it via buildIndexQueryData when
+ *    missing/invalid) and parseData (a per-file parse cache whose absence
+ *    metadata-indexer's needsParseHydration tolerates).
+ * 2. per-file contentSample (bounded rebuildable text used only by semantic
+ *    indexing).
+ * 3. per-file chunks arrays (the chunks.json sidecar, written from the
+ *    ORIGINAL index, remains the durable chunk source).
+ *
+ * Tier 4 is the caller's decision: when even the fully reduced `size`
+ * exceeds `maxBytes`, saveIndex skips persisting and serves in-memory.
+ *
+ * Pure: the input index is never mutated — reduced docs are shallow copies
+ * and stripped per-file entries are fresh objects.
+ */
+export function reduceIndexForByteCap(
+  index: MetadataIndex,
+  maxBytes: number,
+): { index: MetadataIndex; reduced: boolean; tiers: string[]; size: number } {
+  const { compact: _compact, ...result } = reduceIndexForByteCapWithPayload(
+    index,
+    maxBytes,
+  )
+  return result
+}
+
+function reduceIndexForByteCapWithPayload(
+  index: MetadataIndex,
+  maxBytes: number,
+): {
+  index: MetadataIndex
+  reduced: boolean
+  tiers: string[]
+  size: number
+  compact: string
+} {
+  let doc = index
+  let compact = JSON.stringify(doc)
+  let size = compact.length
+  const tiers: string[] = []
+  if (
+    size > maxBytes &&
+    (doc.queryData !== undefined || doc.parseData !== undefined)
+  ) {
+    doc = { ...doc, queryData: undefined, parseData: undefined }
+    compact = JSON.stringify(doc)
+    size = compact.length
+    tiers.push('queryData/parseData')
+  }
+  if (size > maxBytes) {
+    const files = stripFileField(doc.files, 'contentSample')
+    if (files !== doc.files) {
+      doc = { ...doc, files }
+      compact = JSON.stringify(doc)
+      size = compact.length
+      tiers.push('contentSample')
+    }
+  }
+  if (size > maxBytes) {
+    const files = stripFileField(doc.files, 'chunks')
+    if (files !== doc.files) {
+      doc = { ...doc, files }
+      compact = JSON.stringify(doc)
+      size = compact.length
+      tiers.push('chunks')
+    }
+  }
+  return { index: doc, reduced: tiers.length > 0, tiers, size, compact }
 }
 
 export interface CachedSemanticVector {
@@ -245,12 +492,11 @@ export async function saveSemanticVectors(
 ): Promise<void> {
   const dir = getIndexDir(projectRoot, cacheDir)
   await assertCacheOwnership(dir)
-  await ensureGitInfoExcludes(projectRoot, cacheDir)
   await fs.promises.mkdir(dir, { recursive: true })
-  await writeOwnerFile(dir)
 
   const cachePath = path.join(dir, SEMANTIC_VECTOR_FILE)
   await withCacheLock(dir, async () => {
+    await writeOwnerFile(dir)
     const existing =
       (await readSemanticVectorCache(projectRoot, cacheDir)) ??
       emptySemanticVectorCache(projectRoot)
@@ -339,22 +585,8 @@ async function assertCacheOwnership(dir: string): Promise<void> {
     if (entries.length > 0 && !entries.includes(OWNER_FILE) && !legacyOwned) {
       throw new Error(`Refusing to use non-owned index cache directory: ${dir}`)
     }
-    // Best-effort sweep of our old scratch artifacts (same finding): entries
-    // older than the stale-lock bound cannot belong to a live operation.
-    for (const entry of entries) {
-      if (!entry.startsWith('.release.') && !entry.startsWith('.reclaim.')) {
-        continue
-      }
-      const scratchPath = path.join(dir, entry)
-      try {
-        const stat = await fs.promises.stat(scratchPath)
-        if (Date.now() - stat.mtimeMs > STALE_LOCK_MS) {
-          await fs.promises.rm(scratchPath, { force: true })
-        }
-      } catch {
-        // Vanished or unreadable: nothing to sweep.
-      }
-    }
+    // Old release/reclaim artifacts may hold displaced ownership evidence.
+    // Age is not proof that an owner is dead; preserve them for recovery.
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
@@ -385,6 +617,15 @@ async function readSemanticVectorCache(
     SEMANTIC_VECTOR_FILE,
   )
   try {
+    // Same stat-first byte cap as loadIndex/loadChunkSidecar: refuse to
+    // read+parse an oversized vector cache and treat it as a safe miss.
+    const stat = await fs.promises.stat(cachePath)
+    if (stat.size > MAX_CHUNK_SIDECAR_BYTES) {
+      console.warn(
+        `[index-store] skipping oversized vector cache ${cachePath} (${stat.size} bytes > ${MAX_CHUNK_SIDECAR_BYTES} byte load cap)`,
+      )
+      return null
+    }
     const parsed: unknown = JSON.parse(
       await fs.promises.readFile(cachePath, 'utf8'),
     )
@@ -464,7 +705,22 @@ export function computeIndexSnapshotId(index: MetadataIndex): string {
 }
 
 const MAX_CHUNK_SIDECAR_ENTRIES = 200_000
-const MAX_CHUNK_SIDECAR_BYTES = 8_000_000
+/**
+ * Byte caps for JSON artifacts read back from the cache directory
+ * (reliability finding index-load-unbounded-read): stat-first size checks
+ * refuse to read+JSON.parse oversized files and treat the artifact as a safe
+ * miss. The caps are SPLIT because the artifacts have different legitimate
+ * sizes: metadata.json is the authoritative index and its files+graph core
+ * is genuinely large (measured 47.4MB on this repo), so
+ * MAX_METADATA_INDEX_BYTES is generous enough that real artifacts load
+ * instead of tripping the skip→full-rebuild→rewrite-oversized loop (a null
+ * load triggers a full walk+parse rebuild whose save rewrites an oversized
+ * artifact that loads as null again). The derived sidecars (chunks.json,
+ * semantic-vectors.json) stay tightly bounded at the historical 8MB because
+ * they are rebuildable from metadata.json.
+ */
+export const MAX_METADATA_INDEX_BYTES = 64_000_000
+export const MAX_CHUNK_SIDECAR_BYTES = 8_000_000
 
 /**
  * Pure derived sidecar document builder. Deterministic (sorted keys via
@@ -576,7 +832,8 @@ function normalizeChunkSidecar(
 /**
  * Best-effort sidecar load. Missing/invalid/foreign files return null and
  * never fail the metadata load; callers fall back to chunkId/inline chunks.
- * Bounded: refuses oversized payloads without parsing the full metadata.json.
+ * Bounded: stat-first byte cap refuses an oversized sidecar before any
+ * read+parse happens, matching loadIndex and readSemanticVectorCache.
  */
 export async function loadChunkSidecar(
   projectRoot: string,
@@ -584,8 +841,17 @@ export async function loadChunkSidecar(
 ): Promise<ChunkSidecar | null> {
   const sidecarPath = path.join(getIndexDir(projectRoot, cacheDir), CHUNKS_FILE)
   try {
+    // Stat-first byte cap (MAX_CHUNK_SIDECAR_BYTES): refuse to read+parse an
+    // oversized chunks.json. A crash- or attacker-grown sidecar is treated as
+    // a safe miss without materializing unbounded bytes.
+    const stat = await fs.promises.stat(sidecarPath)
+    if (stat.size > MAX_CHUNK_SIDECAR_BYTES) {
+      console.warn(
+        `[index-store] skipping oversized chunk sidecar ${sidecarPath} (${stat.size} bytes > ${MAX_CHUNK_SIDECAR_BYTES} byte load cap)`,
+      )
+      return null
+    }
     const content = await fs.promises.readFile(sidecarPath, 'utf8')
-    if (content.length > MAX_CHUNK_SIDECAR_BYTES) return null
     let parsed: unknown
     try {
       parsed = JSON.parse(content)
@@ -631,11 +897,10 @@ export async function saveChunkSidecar(
   }
   const dir = getIndexDir(projectRoot, cacheDir)
   await assertCacheOwnership(dir)
-  await ensureGitInfoExcludes(projectRoot, cacheDir)
   await fs.promises.mkdir(dir, { recursive: true })
-  await writeOwnerFile(dir)
   const sidecarPath = path.join(dir, CHUNKS_FILE)
   await withCacheLock(dir, async () => {
+    await writeOwnerFile(dir)
     await atomicWriteJson(sidecarPath, normalized)
   })
   return true
@@ -754,126 +1019,42 @@ function isValidQueryData(
   return true
 }
 
+export class IndexCacheLockRecoveryError extends Error {
+  constructor(lockPath: string) {
+    super(
+      `Index cache lock requires recovery: ${lockPath} (automatic takeover is disabled)`,
+    )
+    this.name = 'IndexCacheLockRecoveryError'
+  }
+}
+
 async function withCacheLock<T>(
   dir: string,
   operation: () => Promise<T>,
 ): Promise<T> {
   const lockPath = path.join(dir, LOCK_FILE)
   const deadline = Date.now() + LOCK_TIMEOUT_MS
-
-  // Release a lock we verifiably own: clear the heartbeat, close the open
-  // handle, and remove the lock file only when the atomically displaced
-  // bytes still hold our token (see releaseOwnedLock below). Shared by
-  // every exit path below — the critical section, a failed owner-token
-  // verification, and an error during lock initialization — so no path can
-  // leak the 30s heartbeat timer or the open file handle, and the
-  // just-created lock file is always released by the path that created it
-  // (reliability finding withcachelock-verify-continue-skips-release).
-  const release = async (
-    heartbeat: ReturnType<typeof setInterval>,
-    handle: fs.promises.FileHandle,
-    ownerToken: string,
-  ): Promise<void> => {
-    clearInterval(heartbeat)
-    await handle.close().catch(() => {})
-    try {
-      await releaseOwnedLock(lockPath, ownerToken)
-    } catch {
-      // A stale-lock recovery may already have removed it.
-    }
-  }
-
+  let handle: fs.promises.FileHandle
   while (true) {
     try {
-      const handle = await fs.promises.open(lockPath, 'wx')
-      const ownerToken = `${process.pid}:${randomUUID()}`
-      // Heartbeat: keep the lock mtime fresh while the operation runs so a
-      // slow-but-live holder is not reclaimed by the STALE_LOCK_MS age
-      // heuristic (see the EEXIST branch below).
-      const heartbeat = setInterval(() => {
-        // Token-verified touch (reliability finding
-        // heartbeat-utimes-touches-displaced-lock): clearInterval in release()
-        // cannot cancel a utimes already in flight, and a tick that races our
-        // release and a competitor's re-acquire would refresh the NEW owner's
-        // lock mtime, extending its apparent freshness and delaying
-        // legitimate age-based reclaim. Verify the lock still holds OUR token
-        // immediately before (and after) touching so an in-flight tick that
-        // lost the lock is a no-op. Non-throwing on ENOENT.
-        void fs.promises
-          .readFile(lockPath, 'utf8')
-          .then((content) => {
-            if (!content.startsWith(`${ownerToken}\n`)) return
-            const now = new Date()
-            return fs.promises.utimes(lockPath, now, now).catch(() => {})
-          })
-          .catch(() => {})
-      }, LOCK_HEARTBEAT_MS)
-      // unref the heartbeat: a wedged operation must not keep the event loop
-      // alive indefinitely via this timer alone (reliability finding
-      // heartbeat-timer-pinned-to-operation).
-      heartbeat.unref?.()
-      // Phase 1: write our token and verify it is verifiably on disk. The
-      // finally releases the heartbeat, the handle, and the just-created
-      // lock file whenever the phase does NOT end acquired — including the
-      // failed-verification path, whose `continue` below can no longer skip
-      // cleanup (reliability finding withcachelock-verify-continue-skips-release).
-      let acquired = false
-      try {
-        await handle.writeFile(`${ownerToken}\n${Date.now()}\n`, 'utf8')
-        // Close the create-vs-owner-write window (reliability finding
-        // withcachelock-lockfile-open-race): a waiter that snapshotted the
-        // previous dead owner's content could reclaim between our 'wx'
-        // create and this token write. Only run the critical section when
-        // OUR token is verifiably on disk.
-        try {
-          acquired = (await fs.promises.readFile(lockPath, 'utf8')).startsWith(
-            `${ownerToken}\n`,
-          )
-        } catch {
-          acquired = false
-        }
-      } finally {
-        if (!acquired) {
-          await release(heartbeat, handle, ownerToken)
-        }
-      }
-      if (!acquired) continue
-      // Phase 2: the verified critical section. The heartbeat timer and the
-      // handle stay live for the operation and are released exactly once,
-      // whether the operation returns or throws.
-      try {
-        return await operation()
-      } finally {
-        await release(heartbeat, handle, ownerToken)
-      }
+      handle = await fs.promises.open(lockPath, 'wx')
+      break
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+      let status: 'live' | 'dead' | 'unknown'
       try {
-        // Snapshot the lock file once and make every reclaim decision from
-        // that snapshot, so the liveness probe and the age check reason about
-        // the same bytes the reclaim below verifies.
-        const content = await fs.promises.readFile(lockPath, 'utf8')
-        const stat = await fs.promises.stat(lockPath)
-        // Liveness first: reclaim immediately when the process that created
-        // the lock is no longer alive, so a crashed indexer does not block
-        // every build for the full STALE_LOCK_MS window. The age heuristic
-        // below must never preempt this check — stealing a slow-but-live
-        // writer's lock breaks mutual exclusion mid-operation.
-        const deadOwner = isLockOwnerDead(content)
-        // Age fallback for a live or ambiguous owner: a genuine holder keeps
-        // the mtime fresh via the heartbeat, so this only fires for a
-        // genuinely abandoned lock (e.g. one whose pid cannot be probed).
-        const ageStale = Date.now() - stat.mtimeMs > STALE_LOCK_MS
-        if (deadOwner || ageStale) {
-          // Rename-verified reclaim: the lock is moved aside atomically and
-          // only deleted when the displaced bytes still hold the stale
-          // content judged above, so a competing waiter that already
-          // reclaimed and re-acquired never loses its live lock here.
-          if (await reclaimStaleLock(lockPath, content)) continue
-        }
-      } catch (statError) {
-        if ((statError as NodeJS.ErrnoException).code === 'ENOENT') continue
-        throw statError
+        status = lockOwnerStatus(await fs.promises.readFile(lockPath, 'utf8'))
+      } catch (readError) {
+        if ((readError as NodeJS.ErrnoException).code === 'ENOENT') continue
+        status = 'unknown'
+      }
+      // A dead PID is useful recovery evidence, never a right to unlink.
+      // Unknown includes the brief exclusive-create -> token-write window.
+      if (
+        status === 'dead' ||
+        (status === 'unknown' && Date.now() >= deadline)
+      ) {
+        throw new IndexCacheLockRecoveryError(lockPath)
       }
       if (Date.now() >= deadline) {
         throw new Error(`Timed out waiting for index cache lock: ${lockPath}`)
@@ -881,128 +1062,50 @@ async function withCacheLock<T>(
       await new Promise((resolve) => setTimeout(resolve, 25))
     }
   }
+  const ownerToken = `${process.pid}:${randomUUID()}`
+  let initialized = false
+  try {
+    await handle.writeFile(`${ownerToken}\n${Date.now()}\n`, 'utf8')
+    initialized = true
+    return await operation()
+  } finally {
+    await handle.close()
+    // Failed initialization leaves an unknown owner for explicit recovery.
+    if (initialized) await releaseOwnedLock(lockPath, ownerToken)
+  }
 }
 
-/**
- * Determines whether the process that wrote a lock file is no longer alive.
- * The lock's first line is `${pid}:${uuid}` (see withCacheLock); `content` is
- * the caller's snapshot of the file, so the liveness verdict and the
- * subsequent content-verified reclaim (see {@link reclaimStaleLock}) reason
- * about the same bytes. A dead owner lets a crashed indexer's lock be
- * reclaimed immediately instead of waiting out STALE_LOCK_MS. Conservative:
- * any ambiguity (empty lock, unparseable pid, our own pid, or a live/foreign
- * process) returns false so a genuinely held lock is never stolen.
- */
-function isLockOwnerDead(content: string): boolean {
-  const firstLine = content.split('\n', 1)[0] ?? ''
-  const pidText = firstLine.split(':', 1)[0] ?? ''
-  const pid = Number.parseInt(pidText, 10)
-  if (!Number.isInteger(pid) || pid <= 0) return false
-  // Never reclaim our own lock; that would corrupt an in-progress operation.
-  if (pid === process.pid) return false
+function lockOwnerStatus(content: string): 'live' | 'dead' | 'unknown' {
+  const match = /^(\d+):[^\n]+\n/.exec(content)
+  if (!match) return 'unknown'
+  const pid = Number(match[1])
+  if (!Number.isSafeInteger(pid) || pid <= 0) return 'unknown'
   try {
-    // Signal 0 runs existence/permission checks without delivering a signal.
-    // ESRCH means the process no longer exists (dead owner). EPERM means it
-    // exists but is owned by another user (alive) — do not reclaim.
     process.kill(pid, 0)
-    return false
+    return 'live'
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ESRCH'
+    const code = (error as NodeJS.ErrnoException).code
+    return code === 'ESRCH' ? 'dead' : code === 'EPERM' ? 'live' : 'unknown'
   }
 }
 
 /**
- * Reclaim a stale lock by removing the lock file from its namespace — but
- * only when it still holds the exact `staleContent` that was judged
- * reclaimable. Ownership is verified BEFORE the rename (reliability finding
- * release-owned-lock-displaces-foreign-lock): renaming first would displace
- * a competing waiter's live lock when the stale snapshot was already
- * reclaimed and re-acquired, and a third waiter acquiring during the
- * rename→restore window would leave the displaced live lock destroyed —
- * two processes in the critical section. Lock content is only ever replaced
- * via remove+create (never in place), so a read verified as stale cannot be
- * legitimately replaced between this read and the atomic rename; the rename
- * therefore displaces exactly the stale bytes. A vanished path (ENOENT)
- * means another waiter reclaimed it first. The defensive displaced-bytes
- * check restores unexpected content via link (EEXIST-safe) and never
- * deletes possibly-live lock bytes. Returns true when the caller may
- * proceed to (re)acquire.
+ * Compatibility entry point: automatic stale takeover is disabled. In
+ * particular, even matching bytes or a missing path cannot certify a
+ * transfer. A caller must attempt its own exclusive acquisition instead.
  */
 export async function reclaimStaleLock(
-  lockPath: string,
-  staleContent: string,
+  _lockPath: string,
+  _staleContent: string,
 ): Promise<boolean> {
-  let observed: string
-  try {
-    observed = await fs.promises.readFile(lockPath, 'utf8')
-  } catch {
-    // The lock is gone: another waiter already reclaimed it.
-    return true
-  }
-  if (observed !== staleContent) {
-    // A fresh owner token: the lock was re-acquired after the staleness
-    // snapshot was taken. Never displace a live lock — do not proceed.
-    return false
-  }
-  const displacedPath = `${lockPath}.reclaim.${process.pid}.${randomUUID()}`
-  try {
-    await fs.promises.rename(lockPath, displacedPath)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      // Another waiter reclaimed the stale lock between our verified read
-      // and this rename.
-      return true
-    }
-    throw error
-  }
-  let displaced: string
-  try {
-    displaced = await fs.promises.readFile(displacedPath, 'utf8')
-  } catch {
-    // The displaced lock vanished before it could be judged; nothing was
-    // deleted and the lock namespace is free either way.
-    return true
-  }
-  if (displaced !== staleContent) {
-    // Defensive: content changed between the verified read and the rename
-    // without a remove+create (no known code path does this). Restore via
-    // link (EEXIST-safe) and never delete possibly-live lock bytes; a
-    // leaked scratch file is the safe failure mode.
-    try {
-      await fs.promises.link(displacedPath, lockPath)
-      try {
-        await fs.promises.rm(displacedPath, { force: true })
-      } catch {
-        // Our scratch name is gone; the lock survives at lockPath.
-      }
-    } catch {
-      // Lock path occupied by a newer waiter; leave the scratch copy.
-    }
-    return false
-  }
-  try {
-    await fs.promises.rm(displacedPath, { force: true })
-  } catch {
-    // Already gone.
-  }
-  return true
+  return false
 }
 
 /**
- * Release a lock we believe we own by deleting the lock file — but only
- * when the bytes at the lock path still hold `ownerToken`. Ownership is
- * verified BEFORE the rename (reliability finding
- * release-owned-lock-displaces-foreign-lock): renaming first would displace
- * a competing waiter's live lock when our lock was already reclaimed and
- * re-acquired, and a third waiter acquiring during the rename→restore
- * window would leave the displaced live lock destroyed. A reclaim that
- * takes our live lock must first prove our owner pid dead
- * (isLockOwnerDead), so a read verified as ours cannot be legitimately
- * replaced between this read and the atomic rename; the rename therefore
- * displaces exactly our own bytes. Lock content is only ever replaced via
- * remove+create (never in place). The defensive displaced-bytes check
- * restores unexpected content via link (EEXIST-safe) and never deletes
- * possibly-live lock bytes.
+ * Only the creator releases ownership. Safety comes from exclusive create
+ * plus the absence of ALL contender-driven removal, not this token check.
+ * No timers or rename/repair windows participate in exclusion. External
+ * deletion and mixed-version writers are outside this cooperative TS tier.
  */
 export async function releaseOwnedLock(
   lockPath: string,
@@ -1011,55 +1114,12 @@ export async function releaseOwnedLock(
   let observed: string
   try {
     observed = await fs.promises.readFile(lockPath, 'utf8')
-  } catch {
-    // A stale-lock recovery already removed our lock from the namespace.
-    return
-  }
-  if (!observed.startsWith(`${ownerToken}\n`)) {
-    // Not ours: someone else's live (or stale) lock occupies the path.
-    // Never displace or delete bytes we do not own.
-    return
-  }
-  const displacedPath = `${lockPath}.release.${process.pid}.${randomUUID()}`
-  try {
-    await fs.promises.rename(lockPath, displacedPath)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      // Reclaimed between our verified read and the rename.
-      return
-    }
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
     throw error
   }
-  let displaced: string
-  try {
-    displaced = await fs.promises.readFile(displacedPath, 'utf8')
-  } catch {
-    // The displaced lock vanished before it could be judged; nothing was
-    // deleted and the lock namespace is free either way.
-    return
-  }
-  if (!displaced.startsWith(`${ownerToken}\n`)) {
-    // Defensive: content changed between the verified read and the rename
-    // without a remove+create (no known code path does this). Restore via
-    // link (EEXIST-safe) and never delete possibly-live lock bytes; a
-    // leaked scratch file is the safe failure mode.
-    try {
-      await fs.promises.link(displacedPath, lockPath)
-      try {
-        await fs.promises.rm(displacedPath, { force: true })
-      } catch {
-        // Our scratch name is gone; the lock survives at lockPath.
-      }
-    } catch {
-      // Lock path occupied by a newer waiter; leave the scratch copy.
-    }
-    return
-  }
-  try {
-    await fs.promises.rm(displacedPath, { force: true })
-  } catch {
-    // Already gone.
-  }
+  if (!observed.startsWith(`${ownerToken}\n`)) return
+  await fs.promises.unlink(lockPath)
 }
 
 /**
@@ -1071,14 +1131,40 @@ export async function releaseOwnedLock(
  */
 const PRETTY_PRINT_MAX_CHARS = 4_096
 
+/**
+ * Compact-write threshold (reliability finding
+ * atomicwritejson-double-serializes-large-docs): documents whose compact JSON
+ * exceeds COMPACT_WRITE_THRESHOLD_CHARS (1 MiB) are written straight from
+ * their single compact JSON.stringify pass — previously the pretty form was
+ * always materialized first and then discarded for large documents, roughly
+ * doubling peak memory and CPU on every refresh. Documents at or below the
+ * threshold keep the historical pretty-vs-compact decision
+ * (PRETTY_PRINT_MAX_CHARS), so byte-sensitive fixtures and golden snapshotId
+ * round-trips are unaffected: for those documents the written bytes are
+ * identical to the previous behavior.
+ */
+const COMPACT_WRITE_THRESHOLD_CHARS = 1_048_576
+
 async function atomicWriteJson(
   filePath: string,
   value: unknown,
-): Promise<void> {
+  serializedCompact?: string,
+): Promise<string> {
   const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
-  const pretty = JSON.stringify(value, null, 2)
-  const payload =
-    pretty.length > PRETTY_PRINT_MAX_CHARS ? JSON.stringify(value) : pretty
+  const compact = serializedCompact ?? JSON.stringify(value)
+  let payload: string
+  if (compact.length > COMPACT_WRITE_THRESHOLD_CHARS) {
+    // Oversized document: a single compact serialization, written directly.
+    // (Compact length lower-bounds pretty length, so the previous
+    // pretty-first path would have materialized and discarded an even
+    // larger string for these documents.)
+    payload = compact
+  } else {
+    // Small/medium document: keep the historical pretty-vs-compact decision
+    // so byte-sensitive fixtures are unaffected.
+    const pretty = JSON.stringify(value, null, 2)
+    payload = pretty.length > PRETTY_PRINT_MAX_CHARS ? compact : pretty
+  }
   let handle: fs.promises.FileHandle | undefined
   try {
     handle = await fs.promises.open(temporaryPath, 'wx')
@@ -1087,6 +1173,7 @@ async function atomicWriteJson(
     await handle.close()
     handle = undefined
     await fs.promises.rename(temporaryPath, filePath)
+    return payload
   } finally {
     await handle?.close().catch(() => {})
     await fs.promises.rm(temporaryPath, { force: true }).catch(() => {})

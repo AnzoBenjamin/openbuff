@@ -3,6 +3,7 @@ import path from 'path'
 
 import { useCallback } from 'react'
 
+import { isDirectoryPathQuery } from '../utils/directory-browser'
 import { getPathCompletion } from '../utils/path-completion'
 
 export interface UsePathTabCompletionOptions {
@@ -36,7 +37,10 @@ export function usePathTabCompletion({
   expandPath,
 }: UsePathTabCompletionOptions): UsePathTabCompletionReturn {
   const handleTabCompletion = useCallback((): boolean => {
-    if (searchQuery.startsWith('/') || searchQuery.startsWith('~')) {
+    if (
+      isDirectoryPathQuery(searchQuery) &&
+      (path.isAbsolute(searchQuery) || searchQuery.startsWith('~'))
+    ) {
       // Absolute path completion
       const completed = getPathCompletion(searchQuery)
       if (completed) {

@@ -1,0 +1,142 @@
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import path from 'node:path'
+import { createRequire } from 'node:module'
+import { createHash } from 'node:crypto'
+import { Script } from 'node:vm'
+
+const root = '/home/ben/Code/CLI/openbuff'
+const evidence = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const require = createRequire(root + '/package.json')
+const z = require('zod/v4').z
+const transpiler = new Bun.Transpiler({ loader: 'ts', target: 'node' })
+const take = (file: string, first: number, last: number) =>
+  readFileSync(path.join(root, file), 'utf8').split('\n').slice(first - 1, last).join('\n')
+const outcome: Record<string, unknown> = {
+  runtime: Bun.version,
+  scope: 'Isolated source VM + real SDK loader/schema helper imports. No network, account, model, process, or repository writes.',
+  assurance: 'unit-level/source-boundary probes, not a live provider/transport integration',
+}
+
+let calls = 0
+let pageVersion = 1
+const cursors: unknown[] = []
+let fixtureResult: unknown = { isError: true, structuredContent: { error: 'synthetic-failure' }, content: [] }
+const fakeClient = {
+  listTools: async (args?: { cursor?: string }) => {
+    calls++
+    cursors.push(args?.cursor ?? null)
+    return args?.cursor
+      ? { tools: [{ name: 'second', inputSchema: { type: 'object' } }] }
+      : { tools: [{ name: pageVersion === 1 ? 'first' : 'replacement', inputSchema: { type: 'object' } }], nextCursor: 'next' }
+  },
+  callTool: async () => fixtureResult,
+}
+const runtimeContext: Record<string, any> = {
+  fakeRegistry: { synthetic: fakeClient },
+  createHash,
+  getMCPClient: async () => 'synthetic',
+}
+const cacheSource = take('common/src/mcp/client.ts', 574, 576) + '\n' + take('common/src/mcp/client.ts', 816, 903)
+const filterSource = take('sdk/src/run.ts', 1594, 1611).replace('requestMcpToolData:', 'const requestMcpToolData =').replace(/},\s*$/, '};')
+const source = 'const runningClients=globalThis.fakeRegistry; const listToolsCache={};\n' +
+  cacheSource.replace(/^export /gm, '') + '\n' + filterSource + '\n' +
+  'globalThis.auditApi={listMCPTools,callMCPTool,requestMcpToolData};'
+new Script(transpiler.transformSync(source)).runInNewContext(runtimeContext)
+const api = runtimeContext.auditApi
+outcome.mcpEmptyFailure = await api.callMCPTool('synthetic', { name: 'synthetic', arguments: {} })
+fixtureResult = { isError: true, content: [{ type: 'text', text: 'synthetic data' }], structuredContent: { outcome: 'failed', code: 'E_SYNTHETIC' } }
+outcome.mcpTextFailure = await api.callMCPTool('synthetic', { name: 'synthetic', arguments: {} })
+fixtureResult = { structuredContent: { value: 42 }, content: [] }
+outcome.mcpStructuredOnly = await api.callMCPTool('synthetic', { name: 'synthetic', arguments: {} })
+fixtureResult = { content: [{ type: 'resource', resource: { uri: 'fixture://note', mimeType: 'text/plain', text: 'plain text observation' } }] }
+outcome.mcpTextResource = await api.callMCPTool('synthetic', { name: 'synthetic', arguments: {} })
+const first = await api.requestMcpToolData({ mcpConfig: {}, toolNames: null })
+pageVersion = 2
+const repeat = await api.requestMcpToolData({ mcpConfig: {}, toolNames: null })
+const secondSelector = await api.requestMcpToolData({ mcpConfig: {}, toolNames: ['second'] })
+outcome.discovery = { first: first.map((tool: any) => tool.name), repeat: repeat.map((tool: any) => tool.name), secondSelector, calls, cursors }
+
+const { loadLocalAgents } = await import(root + '/sdk/src/agents/load-agents.ts')
+const { validateSingleAgent, serializeSchemaMemberForTransport, coerceJsonSchemaMember } =
+  await import(root + '/common/src/templates/agent-validation.ts')
+const fixtures = path.join(evidence, '10-loader-fixture', '.agents')
+const imported: string[] = []
+;(globalThis as any).__openbuff10Imports = imported
+const cases = ['sessions/run/probe.ts', '__tests__/side-effect.spec.ts', 'node_modules/package/entry.js', 'lib/helper.mjs', 'types/runtime.js', 'probe.test.js', 'skills/excluded.ts', 'excluded.test.ts', 'ignored.d.ts']
+for (const file of cases) {
+  const full = path.join(fixtures, file)
+  mkdirSync(path.dirname(full), { recursive: true })
+  writeFileSync(full, 'globalThis.__openbuff10Imports.push(' + JSON.stringify(file) + '); export const synthetic=true;\n')
+}
+writeFileSync(path.join(fixtures, 'root-agent.ts'), 'export default { id:"source-probe-agent", displayName:"Synthetic", handleSteps:function*(){ yield {toolName:"set_output",input:{answer:outsideHelper}} } }; const outsideHelper=42;\n')
+writeFileSync(path.join(fixtures, 'broken-agent.ts'), 'throw new Error("synthetic import error"); export default {id:"broken-agent"};\n')
+writeFileSync(path.join(fixtures, 'data-agent.json'), JSON.stringify({ id: 'declarative-agent', displayName: 'Declarative' }))
+writeFileSync(path.join(fixtures, 'data-agent.yaml'), 'id: declarative-yaml\ndisplayName: Declarative\n')
+const loaded = await loadLocalAgents({ agentsPath: fixtures, validate: true, verbose: false })
+outcome.loader = { trust: 'Explicit agentsPath opts into this synthetic directory only', imported, agentIds: Object.keys(loaded.agents), validationErrors: loaded.validationErrors }
+const generatorSource = loaded.agents['source-probe-agent']?._serializedHandleSteps
+try {
+  const generator = new Script('(' + generatorSource + ')') .runInNewContext({})
+  outcome.generatorClosure = generator({}).next()
+} catch (error) {
+  outcome.generatorClosure = { error: String(error), validatedByLoader: Boolean(generatorSource) }
+}
+delete (globalThis as any).__openbuff10Imports
+outcome.promptSchemas = [
+  { type: 'string' },
+  { type: 'string', minLength: 5 },
+  { type: 'string', enum: ['work'] },
+].map(schema => {
+  const result = validateSingleAgent({template:{id:'prompt-schema',displayName:'Synthetic',inputSchema:{prompt:schema}}})
+  return {schema,success:result.success,error:result.error}
+})
+const original = z.object({ requiredNumber: z.number() })
+const husk = JSON.parse(JSON.stringify(original))
+const restoredHusk = coerceJsonSchemaMember(husk) as any
+outcome.zodHusk = { beforeRejectsEmpty: !original.safeParse({}).success, afterAcceptsEmpty: restoredHusk.safeParse({}).success }
+const neverWire = serializeSchemaMemberForTransport(z.never(), 'input')
+const neverReloaded = coerceJsonSchemaMember(JSON.parse(JSON.stringify(neverWire))) as any
+outcome.neverSchema = { wire: neverWire, afterAcceptsObject: neverReloaded.safeParse({ unexpected: 'accepted' }).success }
+const rich = {type:'object',properties:{outcome:{type:'string',enum:['success','failure']}},required:['outcome'],additionalProperties:false}
+const restored = coerceJsonSchemaMember(rich) as any
+outcome.richSchema = {emptyAccepted: restored.safeParse({}).success, invalidEnumAccepted:restored.safeParse({outcome:'invented'}).success,extraAccepted:restored.safeParse({outcome:'success',extra:true}).success}
+
+const { getMCPToolData } = await import(root + '/packages/agent-runtime/src/mcp.ts')
+const separatorServers = await getMCPToolData({ toolNames: [], mcpServers: {'team__api':{type:'stdio',command:'synthetic',args:[],env:{}}}, requestMcpToolData:async()=>[{name:'read',inputSchema:{type:'object'},description:'synthetic'}] })
+const publishedName = Object.keys(separatorServers)[0]
+outcome.mcpNames = { publishedName, decodedServer: publishedName.split('__')[0], decodedTool:publishedName.split('__').slice(1).join('__'), realServer:'team__api', realTool:'read' }
+
+const { markMCPConfigOrigin, originOf, resolveMCPConfigOrigin } = await import(root + '/common/src/mcp/client.ts')
+const { buildSupervisedBridgeHandlers } = await import(root + '/packages/agent-runtime/src/supervision/parent-bridge-server.ts')
+const observedBridgeOrigins: unknown[] = []
+const bridge = buildSupervisedBridgeHandlers({
+  logger: {debug:()=>{},info:()=>{},warn:()=>{},error:()=>{}},
+  apiKey: 'synthetic-unused',
+  requestMcpToolData: async (params: any) => {
+    observedBridgeOrigins.push({mark:originOf(params.mcpConfig) ?? null,effective:resolveMCPConfigOrigin(params.mcpConfig)})
+    return []
+  },
+} as any, {bridgeNonce:'synthetic-unused'})
+const localConfig = {type:'stdio' as const,command:'synthetic-unused',args:[],env:{}}
+markMCPConfigOrigin(localConfig,'project')
+await bridge.requestMcpToolData({mcpConfig:JSON.parse(JSON.stringify(localConfig)),toolNames:null})
+outcome.mcpBridgeOrigin = {originalOrigin:originOf(localConfig),observedBridgeOrigins}
+const { assembleLocalAgentTemplates } = await import(root + '/packages/agent-runtime/src/templates/agent-registry.ts')
+const mixedConfig = {type:'stdio' as const,command:'synthetic-unused',args:[],env:{}}
+markMCPConfigOrigin(mixedConfig,'client')
+const mixed = {id:'mixed-origin',displayName:'Mixed',executionSource:'local',mcpServers:{peer:mixedConfig}}
+const logger = {debug:()=>{},info:()=>{},warn:()=>{},error:()=>{}}
+const direct = assembleLocalAgentTemplates({fileContext:{agentTemplates:{'mixed-origin':mixed}} as any,logger})
+const reloaded = assembleLocalAgentTemplates({fileContext:{agentTemplates:JSON.parse(JSON.stringify({'mixed-origin':mixed}))} as any,logger})
+outcome.mcpSerializedMixedOrigin = {before:originOf(mixedConfig),directAfterParse:originOf(direct.agentTemplates['mixed-origin'].mcpServers.peer),afterJsonThenParse:originOf(reloaded.agentTemplates['mixed-origin'].mcpServers.peer)}
+
+const { normalizeScopedToolPath } = await import(root + '/packages/agent-runtime/src/util/filesystem-scope.ts')
+const scanSource = take('packages/agent-runtime/src/tools/tool-executor.ts',2440,2470).replace(/^export /gm,'') + '\n' + take('packages/agent-runtime/src/tools/tool-executor.ts',2381,2387)
+const scanContext:Record<string,any>={path}
+new Script(transpiler.transformSync(scanSource + '\nglobalThis.auditScan={collectCustomInputStrings,normalizedEscapesProject};')).runInNewContext(scanContext)
+const scanValues:string[]=[]
+scanContext.auditScan.collectCustomInputStrings({apiRoute:'/api/v1',separator:'/',pattern:'/^work$/',ordinary:'hello'},scanValues)
+outcome.customInputPathHeuristic = scanValues.map(value=>({value,normalized:normalizeScopedToolPath(value,root),blocked:scanContext.auditScan.normalizedEscapesProject(normalizeScopedToolPath(value,root))}))
+
+writeFileSync(path.join(evidence, '10-probe-results.json'), JSON.stringify(outcome, null, 2) + '\n')
+console.log(JSON.stringify(outcome, null, 2))

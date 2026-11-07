@@ -151,6 +151,39 @@ describe('read_outline path containment', () => {
     expect(called).toBe(false)
   })
 
+  it('fails closed to the legacy error message when fileContext has no projectRoot', async () => {
+    // `src/file.ts` is accepted when a project root is present (see the
+    // acceptance case below), so a refusal here can only come from the
+    // missing root. Params are built inline because `makeParams` always
+    // forces `fileContext: { projectRoot: '/repo' }`.
+    let called = false
+    const requestOptionalFile = async (_p: { filePath: string }) => {
+      called = true
+      return 'export const x = 1\n'
+    }
+
+    const withoutFileContext = await handleReadOutline({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: { input: { path: 'src/file.ts' } },
+      requestOptionalFile,
+    } as any)
+    expect(withoutFileContext.output[0].value.outline).toBe(
+      'Error: File does not exist.',
+    )
+    expect(called).toBe(false)
+
+    const withEmptyFileContext = await handleReadOutline({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: { input: { path: 'src/file.ts' } },
+      requestOptionalFile,
+      fileContext: {},
+    } as any)
+    expect(withEmptyFileContext.output[0].value.outline).toBe(
+      'Error: File does not exist.',
+    )
+    expect(called).toBe(false)
+  })
+
   it('still loads project-relative paths', async () => {
     const requestOptionalFile = async (p: { filePath: string }) => {
       if (p.filePath === 'src/file.ts') {

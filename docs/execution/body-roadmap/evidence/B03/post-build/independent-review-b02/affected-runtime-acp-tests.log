@@ -1,0 +1,274 @@
+bun test v1.3.5 (1e86cebd)
+
+sdk/src/__tests__/run-mutation-dispatch.test.ts:
+Using environment: test
+[openbuff] Loaded provider config from:
+  - /tmp/b03-independent-affected-runtime-acp-tests-38g0o3kl/openbuff-run-mutation-50HMvB/b36-new-error.json
+{"b36":"client-multi-call-observed","name":"new-error","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_rejected","diagnosticStatus":"new_errors","observations":{"basis":"before_after","before":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}},"after":{"diagnostics":[{"file":"src/lib.rs","range":{"start":{"line":5,"column":1},"end":{"line":5,"column":2}},"severity":"error","code":"E0308","message":"synthetic fixture error","command":"cargo check --message-format=json","source":"cargo"}],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":101,"outputTruncated":false,"diagnosticCount":1,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}}},"newDiagnostics":[{"file":"src/lib.rs","range":{"start":{"line":5,"column":1},"end":{"line":5,"column":2}},"severity":"error","code":"E0308","message":"synthetic fixture error","command":"cargo check --message-format=json","source":"cargo"}],"fixIts":[]}}
+{"b36":"client-multi-call","name":"new-error","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_rejected","diagnosticStatus":"new_errors","observations":{"basis":"before_after","before":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}},"after":{"diagnostics":[{"file":"src/lib.rs","range":{"start":{"line":5,"column":1},"end":{"line":5,"column":2}},"severity":"error","code":"E0308","message":"synthetic fixture error","command":"cargo check --message-format=json","source":"cargo"}],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":101,"outputTruncated":false,"diagnosticCount":1,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}}},"newDiagnostics":[{"file":"src/lib.rs","range":{"start":{"line":5,"column":1},"end":{"line":5,"column":2}},"severity":"error","code":"E0308","message":"synthetic fixture error","command":"cargo check --message-format=json","source":"cargo"}],"fixIts":[]}}
+(pass) [B36] diagnostic SDK/client projection > retains the correct baseline across actual client calls: new-error [99.00ms]
+{"b36":"client-multi-call-observed","name":"shifted-error","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_passed","diagnosticStatus":"passed","observations":{"basis":"before_after","before":{"diagnostics":[{"file":"src/lib.rs","range":{"start":{"line":1,"column":1},"end":{"line":1,"column":2}},"severity":"error","code":"E0308","message":"synthetic fixture error","command":"cargo check --message-format=json","source":"cargo"}],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":101,"outputTruncated":false,"diagnosticCount":1,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}},"after":{"diagnostics":[{"file":"src/lib.rs","range":{"start":{"line":5,"column":1},"end":{"line":5,"column":2}},"severity":"error","code":"E0308","message":"synthetic fixture error","command":"cargo check --message-format=json","source":"cargo"}],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":101,"outputTruncated":false,"diagnosticCount":1,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}}}}}
+{"b36":"client-multi-call","name":"shifted-error","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_passed","diagnosticStatus":"passed","observations":{"basis":"before_after","before":{"diagnostics":[{"file":"src/lib.rs","range":{"start":{"line":1,"column":1},"end":{"line":1,"column":2}},"severity":"error","code":"E0308","message":"synthetic fixture error","command":"cargo check --message-format=json","source":"cargo"}],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":101,"outputTruncated":false,"diagnosticCount":1,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}},"after":{"diagnostics":[{"file":"src/lib.rs","range":{"start":{"line":5,"column":1},"end":{"line":5,"column":2}},"severity":"error","code":"E0308","message":"synthetic fixture error","command":"cargo check --message-format=json","source":"cargo"}],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":101,"outputTruncated":false,"diagnosticCount":1,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}}}}}
+(pass) [B36] diagnostic SDK/client projection > retains the correct baseline across actual client calls: shifted-error [29.00ms]
+{"b36":"client-multi-call-observed","name":"failed-baseline","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_unavailable","diagnosticStatus":"unavailable","observations":{"basis":"before_after","before":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"unavailable","exitCode":127,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"unavailable"}],"coverage":{"status":"unavailable","requestedFiles":["src/lib.rs"],"observedFiles":[],"unobservedFiles":["src/lib.rs"],"reasons":["command_unsuccessful"]}},"after":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}}}}}
+{"b36":"client-multi-call","name":"failed-baseline","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_unavailable","diagnosticStatus":"unavailable","observations":{"basis":"before_after","before":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"unavailable","exitCode":127,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"unavailable"}],"coverage":{"status":"unavailable","requestedFiles":["src/lib.rs"],"observedFiles":[],"unobservedFiles":["src/lib.rs"],"reasons":["command_unsuccessful"]}},"after":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}}}}}
+(pass) [B36] diagnostic SDK/client projection > retains the correct baseline across actual client calls: failed-baseline [30.00ms]
+{"b36":"client-multi-call-observed","name":"mismatched-files","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_unknown","diagnosticStatus":"unknown","observations":{"basis":"before_after","before":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"unknown","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":["src/lib.rs"],"reasons":["baseline_postimage_or_scope_unverified"]}},"after":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/other.rs"],"observedFiles":["src/other.rs"],"unobservedFiles":[],"reasons":[]}}}}}
+{"b36":"client-multi-call","name":"mismatched-files","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_unknown","diagnosticStatus":"unknown","observations":{"basis":"before_after","before":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"unknown","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":["src/lib.rs"],"reasons":{}}},"after":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/other.rs"],"observedFiles":["src/other.rs"],"unobservedFiles":[],"reasons":[]}}}}}
+(pass) [B36] diagnostic SDK/client projection > retains the correct baseline across actual client calls: mismatched-files [22.00ms]
+{"b36":"client-multi-call-observed","name":"foreign-bytes","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_unknown","diagnosticStatus":"unknown","observations":{"basis":"before_after","before":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"unknown","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":["src/lib.rs"],"reasons":["baseline_postimage_or_scope_unverified"]}},"after":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}}}}}
+{"b36":"client-multi-call","name":"foreign-bytes","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_unknown","diagnosticStatus":"unknown","observations":{"basis":"before_after","before":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"unknown","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":["src/lib.rs"],"reasons":{}}},"after":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}}}}}
+(pass) [B36] diagnostic SDK/client projection > retains the correct baseline across actual client calls: foreign-bytes [31.00ms]
+{"b36":"client-multi-call-observed","name":"failed-foreign-baseline","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_unknown","diagnosticStatus":"unknown","observations":{"basis":"before_after","before":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"unavailable","exitCode":127,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"unavailable"}],"coverage":{"status":"unknown","requestedFiles":["src/lib.rs"],"observedFiles":[],"unobservedFiles":["src/lib.rs"],"reasons":["command_unsuccessful","baseline_postimage_or_scope_unverified"]}},"after":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}}}}}
+{"b36":"client-multi-call","name":"failed-foreign-baseline","launches":2,"diagnostic":{"hookName":"diagnostic-delta","validationStatus":"diagnostic_delta_unknown","diagnosticStatus":"unknown","observations":{"basis":"before_after","before":{"diagnostics":[],"commands":[{}],"coverage":{"status":"unknown","requestedFiles":["src/lib.rs"],"observedFiles":[],"unobservedFiles":["src/lib.rs"],"reasons":{}}},"after":{"diagnostics":[],"commands":[{"command":"cargo check --message-format=json","status":"completed","exitCode":0,"outputTruncated":false,"diagnosticCount":0,"coverageStatus":"complete"}],"coverage":{"status":"complete","requestedFiles":["src/lib.rs"],"observedFiles":["src/lib.rs"],"unobservedFiles":[],"reasons":[]}}}}}
+(pass) [B36] diagnostic SDK/client projection > retains the correct baseline across actual client calls: failed-foreign-baseline [22.00ms]
+(pass) [B36] diagnostic SDK/client projection > preserves real command coverage through hooks, SDK wire output and client classification [2045.95ms]
+(pass) [B03] SDK confirmed mutation dispatch > retains a refused receipt after later recovery without publishing the refused edit [34.00ms]
+(pass) [B03] SDK confirmed mutation dispatch > publishes only the confirmed surviving forward change when another action throws [58.00ms]
+(pass) write_audit_findings dispatch advances workspace state > notifies onFilesystemMutation for the findings artifact write [22.00ms]
+(pass) write_audit_findings dispatch advances workspace state > falls back to onFilesChanged when no mutation observer is registered [33.00ms]
+(pass) write_audit_findings dispatch advances workspace state > does not notify observers when the artifact write is rejected [18.00ms]
+(pass) replace_range dispatch wiring > rejects the call when the run has no cwd (and therefore no issuer) [22.00ms]
+(pass) replace_range dispatch wiring > forwards the run-scoped capability issuer to the applicator [17.00ms]
+(pass) replace_range dispatch wiring > applies a range edit when the capability scope matches the run and notifies observers [6.00ms]
+(pass) handleToolCall compact-receipt mutation wiring > advances workspace state and emits the artifact actions for an applied write [3.00ms]
+(pass) handleToolCall compact-receipt mutation wiring > advances nothing and notifies nobody for a not_applied write [3.00ms]
+(pass) client-origin MCP tool approval gate (P1-T2) > (a) prompts and runs the tool on the first client-origin call, recording the key [1.00ms]
+(pass) client-origin MCP tool approval gate (P1-T2) > (b) does not re-prompt on the second call of the same tool this run [1.00ms]
+(pass) client-origin MCP tool approval gate (P1-T2) > (c) returns an error output and never calls the tool when denied
+(pass) client-origin MCP tool approval gate (P1-T2) > (d) fails open and runs when no approver is present
+(pass) client-origin MCP tool approval gate (P1-T2) > (e) never prompts for a trusted (project) origin config [1.00ms]
+
+packages/agent-runtime/src/__tests__/tool-validation-error.test.ts:
+(pass) tool validation error handling > builds terminal spawn reports when validation fails after publication [2.00ms]
+(pass) tool validation error handling > includes a sanitized per-agent recoveryHint alongside the static failure string
+(pass) tool validation error handling > surfaces a bounded, sanitized validationIssues list from a Zod-shaped error
+(pass) tool validation error handling > omits validationIssues entirely when the error is not issue-shaped [1.00ms]
+(pass) tool validation error handling > bounds the validationIssues entry count and per-string length [1.00ms]
+(pass) tool validation error handling > extends the recovery-hint allowlist to Zod-style text without weakening redaction
+(pass) tool validation error handling > flags a transport-truncated serialized agents string and keeps the zod guidance alongside the honest truncation hint
+(pass) tool validation error handling > keeps the zod guidance alongside the truncation hint for a malformed unbalanced fragment array
+(pass) tool validation error handling > flags a comma-split fragment array as transport truncation even without an error-derived hint
+(pass) tool validation error handling > emits exactly one report for a multi-fragment truncated array instead of one per fragment
+(pass) tool validation error handling > emits one combined report with both the zod guidance and the truncation hint for a malformed fragment array (F1+F2) [1.00ms]
+(pass) tool validation error handling > classifies an over-cap fragment array without setting the truncation flag (pre-join length cap) [1.00ms]
+(pass) tool validation error handling > appends the auto-decode clarification to an existing hint for a decoded stringified array
+(pass) tool validation error handling > keeps the auto-decode clarification when the error-derived hint is already at the cap
+(pass) tool validation error handling > does not fabricate a hint for a decoded stringified array when the error has none [1.00ms]
+(pass) tool validation error handling > does not flag legitimate string arrays as transport truncation
+(pass) tool validation error handling > no-ops the truncation classifier when the agents field is absent
+(pass) tool validation error handling > preserves basher extractedLines as control-plane output [2.00ms]
+(pass) tool validation error handling > preserves canonical output, translates legacy mutations, and rejects malformed output [10.00ms]
+(pass) tool validation error handling > should parse repeatedly stringified native tool input before validation [2.00ms]
+(pass) tool validation error handling > repairs duplicate JSON separators in stringified read_files input [4.00ms]
+(pass) tool validation error handling > repairs duplicate separators for custom and MCP tool inputs [2.00ms]
+(pass) tool validation error handling > rejects undiscovered MCP tools and inherited custom-tool names
+(pass) tool validation error handling > does not alter duplicate commas inside JSON string values [1.00ms]
+(pass) tool validation error handling > still rejects truncated JSON containing duplicate separators and classifies it payload_truncated [1.00ms]
+(pass) tool validation error handling > classifies a balanced-but-unparseable payload as payload_truncated only when the provider reported the cut
+(pass) tool validation error handling > classifies an over-band payload from the provider cut only, never from size [23.00ms]
+(pass) tool validation error handling > oversized truncation classification (>1 MiB) > classifies an over-1-MiB cut mid-string and names the recovery bound (no cursor possible) [5.00ms]
+(pass) tool validation error handling > oversized truncation classification (>1 MiB) > explains the missing cursor for a sub-1-MiB cut with no clean container boundary
+(pass) tool validation error handling > threads the streamed transportTruncated marker into the payload_truncated classification [12.00ms]
+(pass) tool validation error handling > strips the transportTruncated marker from published and persisted tool calls [17.00ms]
+(pass) tool validation error handling > should preserve provider options from parsed native tool calls
+(pass) tool validation error handling > should repair bare path values for list_directory string input [1.00ms]
+(pass) tool validation error handling > should repair bare pattern values for glob string input
+(pass) tool validation error handling > should repair bare paths values for read_files string input [1.00ms]
+(pass) tool validation error handling > should repair a singular path alias for read_files object input
+(pass) tool validation error handling > should not repair bare path values for unrelated tools
+(pass) tool validation error handling > should hint that atomic must be a boolean when str_replace receives a string (Fix D) [3.00ms]
+(pass) tool validation error handling > should hint that basedOnRead must be a cap.v3 token when str_replace receives a wrong shape (Fix D) [2.00ms]
+(pass) tool validation error handling > should hint that occurrenceIndex must be a positive integer when str_replace receives a string (Fix D)
+(pass) tool validation error handling > gives actionable recovery when get_build_targets receives no changed files
+(pass) tool validation error handling > should parse stringified params for spawn_agents entries [4.00ms]
+(pass) tool validation error handling > should repair provider-tagged Basher params before validation [1.00ms]
+(pass) tool validation error handling > should move an explicit top-level Basher command into params
+(pass) tool validation error handling > should recover an explicitly labelled specialist snapshot after compaction [1.00ms]
+(pass) tool validation error handling > does not recover bare hex labelled Snapshot ID after compaction
+(pass) tool validation error handling > repairs double-stringified spawn_agents lists and stringified entries
+(pass) tool validation error handling > normalizes a nested agentType alias at the runtime tool boundary [1.00ms]
+(pass) tool validation error handling > gives actionable recovery for a validation issue at agents.0.handoff [1.00ms]
+(pass) tool validation error handling > rejects mis-braced serialized spawn payloads with field-placement guidance [1.00ms]
+(pass) tool validation error handling > gives targeted around-selector shape guidance for read_files [1.00ms]
+(pass) tool validation error handling > gives targeted symbols-selector shape guidance for read_files [1.00ms]
+(pass) tool validation error handling > gives targeted windows-index guidance for read_files [2.00ms]
+(pass) tool validation error handling > emits one selector-repair telemetry debug diagnostic per repaired read_files call [1.00ms]
+(pass) tool validation error handling > emits no selector-repair telemetry for an already-valid read_files call
+(pass) tool validation error handling > emits selector-repair telemetry even when the repaired read_files call still fails validation [1.00ms]
+(pass) tool validation error handling > repairs a single-agent stray-sibling spawn payload by folding prompt into the entry
+(pass) tool validation error handling > still rejects a multi-entry spawn array with stray sibling fields [1.00ms]
+(pass) tool validation error handling > does not overwrite an existing in-entry prompt when folding a single-agent stray sibling
+(pass) tool validation error handling > shows the corrected spawn shape inline when agents is an invalid JSON string
+(pass) tool validation error handling > rejects the original stringified agents array with a mis-braced prompt and points at the corrected shape [1.00ms]
+(pass) tool validation error handling > gives spawn-specific recovery for truncated agent JSON
+(pass) tool validation error handling > recovers a comma-split fragment array for spawn_agents [1.00ms]
+(pass) tool validation error handling > produces a single field-level error for unrecoverable comma-split fragments
+(pass) tool validation error handling > should parse stringified params for spawn_agent_inline [2.00ms]
+(pass) tool validation error handling > should summarize missing native tool fields clearly [1.00ms]
+(pass) tool validation error handling > run_terminal_command scalar coercion > coerces string "false"/"60" to boolean/number before validation [1.00ms]
+(pass) tool validation error handling > run_terminal_command scalar coercion > coerces string "true" detach to boolean true
+(pass) tool validation error handling > run_terminal_command scalar coercion > leaves already-correct scalar types untouched
+(pass) tool validation error handling > run_terminal_command scalar coercion > fails closed and hints when timeout_seconds cannot be coerced
+(pass) tool validation error handling > run_terminal_command scalar coercion > fails closed for an ambiguous detach string [1.00ms]
+(pass) tool validation error handling > run_terminal_command scalar coercion > coerces a negative timeout_seconds string via the tool-specific repair
+(pass) tool validation error handling > edit_transaction scalar coercion > coerces stringified replacement scalars before validation [4.00ms]
+(pass) tool validation error handling > edit_transaction scalar coercion > fails closed for an ambiguous allowMultiple string [2.00ms]
+(pass) tool validation error handling > str_replace scalar coercion > coerces stringified atomic and per-replacement scalars before validation [2.00ms]
+(pass) tool validation error handling > str_replace scalar coercion > fails closed for an ambiguous atomic string [1.00ms]
+(pass) tool validation error handling > str_replace scalar coercion > fails closed for a zero occurrenceIndex string [1.00ms]
+(pass) tool validation error handling > str_replace scalar coercion > never coerces content-bearing strings
+(pass) tool validation error handling > replace_range scalar coercion > coerces stringified startLine/endLine before validation [1.00ms]
+(pass) tool validation error handling > replace_range scalar coercion > coerces stringified occurrence.occurrence before validation [1.00ms]
+(pass) tool validation error handling > replace_range scalar coercion > fails closed for a non-integer startLine string [1.00ms]
+(pass) tool validation error handling > replace_range scalar coercion > never coerces occurrence.match
+(pass) tool validation error handling > generic schema-driven scalar coercion > coerces a stringified integer limit for query_index [2.00ms]
+(pass) tool validation error handling > generic schema-driven scalar coercion > coerces stringified integer startLine/endLine in read_files ranges
+(pass) tool validation error handling > generic schema-driven scalar coercion > fails closed for an uncoercible integer string [1.00ms]
+(pass) tool validation error handling > generic schema-driven scalar coercion > never coerces string-typed fields that look numeric
+(pass) tool validation error handling > generic schema-driven scalar coercion > leaves negative integer strings uncoerced on the generic path (fail closed)
+(pass) tool validation error handling > generic schema-driven stringified array/object unserialize (D21 slice 1) > unserializes a stringified array field and recurses into the items schema
+(pass) tool validation error handling > generic schema-driven stringified array/object unserialize (D21 slice 1) > unserializes a fully stringified spawn_agents array including a nested stringified params object [1.00ms]
+(pass) tool validation error handling > generic schema-driven stringified array/object unserialize (D21 slice 1) > unserializes a stringified string-array field
+(pass) tool validation error handling > generic schema-driven stringified array/object unserialize (D21 slice 1) > unserializes a stringified object field and coerces its declared properties
+(pass) tool validation error handling > generic schema-driven stringified array/object unserialize (D21 slice 1) > fails closed when a declared-array field holds a non-JSON string [1.00ms]
+(pass) tool validation error handling > generic schema-driven stringified array/object unserialize (D21 slice 1) > fails closed when a declared-array field parses to a non-array
+(pass) tool validation error handling > generic schema-driven stringified array/object unserialize (D21 slice 1) > never unserializes string-typed fields and does not count them
+(pass) tool validation error handling > generic schema-driven stringified array/object unserialize (D21 slice 1) > repairs a double-encoded bare-string agent_type input for spawn_agent_inline [1.00ms]
+(pass) tool validation error handling > generic schema-driven stringified array/object unserialize (D21 slice 1) > keeps a bracketed bare-string agents input for spawn_agents on the stringInputError path
+(pass) tool validation error handling > should accept old_str/new_str aliases for str_replace replacements
+(pass) tool validation error handling > should accept old/new aliases for str_replace replacements
+(pass) tool validation error handling > should accept old_string/new_string aliases for str_replace replacements [1.00ms]
+(pass) tool validation error handling > should discard a trailing operation-less str_replace placeholder
+(pass) tool validation error handling > should parse a JSON-stringified edit_transaction edits array
+(pass) tool validation error handling > recovers a comma-split serialized edit_transaction array [1.00ms]
+(pass) tool validation error handling > should infer str_replace for an edit_transaction entry with replacements and no type
+(pass) tool validation error handling > gives field-level recovery for a truncated serialized edit_transaction array [1.00ms]
+(pass) tool validation error handling > gives capability-specific transaction recovery and preserves the failing edit excerpt [2.00ms]
+(pass) tool validation error handling > gives deletion-specific recovery for transaction skipIfMissing misuse [1.00ms]
+(pass) tool validation error handling > should not infer ambiguous content-only edit_transaction types
+(pass) tool validation error handling > names the offending edit type in the edit_transaction discriminator hint [1.00ms]
+(pass) tool validation error handling > should summarize missing replacement fields without implying deletion [1.00ms]
+(pass) tool validation error handling > rejects explicit edit placeholders before handler execution
+(pass) tool validation error handling > should include failed-edit recovery guidance for invalid replacement shapes [1.00ms]
+(pass) tool validation error handling > should include JSON parse details for incomplete stringified input
+(pass) tool validation error handling > gives set_output-specific recovery for incomplete stringified input
+(pass) tool validation error handling > publishes set_output when data contains incomplete JSON so the handler can request a retry [1.00ms]
+(pass) tool validation error handling > returns a tool result instead of an error event for incomplete set_output data [3.00ms]
+(pass) tool validation error handling > repairs a complete JSON-stringified set_output data object
+(pass) tool validation error handling > should explain when parsed tool input remains a string
+(pass) tool validation error handling > should emit error event instead of tool result when spawn_agents receives invalid parameters [2.00ms]
+(pass) tool validation error handling > persists streaming XML parser errors into message history so the model can self-correct [2.00ms]
+(pass) tool validation error handling > persists an unterminated end-of-stream tool call as a TOOL_CALL_ERROR so the model can retry [1.00ms]
+(pass) tool validation error handling > persists the provider max-token cut into the TOOL_CALL_ERROR report when the finish chunk reports length [1.00ms]
+(pass) tool validation error handling > should summarize missing spawned agent params clearly [2.00ms]
+(pass) tool validation error handling > includes the exact declared params contract for a generic child [1.00ms]
+(pass) tool validation error handling > gives reliability-reviewer snapshot_id recovery with its normalized ID [1.00ms]
+(pass) tool validation error handling > spawn_agents tool description stops listing reviewer snapshot_id as a required manual param [1.00ms]
+(pass) tool validation error handling > validateAgentInput accepts attestable v3 snapshot_id and rejects bare hex [1.00ms]
+(pass) tool validation error handling > gives dependency-manager canonical manager and operation recovery [1.00ms]
+(pass) tool validation error handling > gives librarian canonical repoUrl recovery on empty params [1.00ms]
+(pass) tool validation error handling > rejects security-reviewer snapshot_id with canonical params recovery [1.00ms]
+(pass) tool validation error handling > accepts a manual security-reviewer spawn supplying both schema-required keys [1.00ms]
+(pass) tool validation error handling > publishes a structured failure result when Basher is missing command [9.00ms]
+(pass) tool validation error handling > emits a calm userMessage on partial spawn failures [55.00ms]
+(pass) tool validation error handling > repairs a single-agent mis-braced spawn payload and publishes it to the handler [5.00ms]
+(pass) tool validation error handling > should still emit tool_call and tool_result for valid tool calls [5.00ms]
+(pass) tool validation error handling > emits a terminal tool_result when a published native handler rejects [3.00ms]
+(pass) tool validation error handling > should repair malformed JSON string input from AI SDK before validation [2.00ms]
+(pass) tool validation error handling > should emit a clear error when tool input is an unparseable string [1.00ms]
+(pass) tool validation error handling > should preserve tool_call/tool_result ordering when custom tool setup is async [5.00ms]
+(pass) tool validation error handling > emits a concise userMessage on the error event when a custom tool call fails validation [4.00ms]
+(pass) custom tool project-root escape backstop > hard-blocks a custom tool whose input contains a ../ escaping path [3.00ms]
+(pass) custom tool project-root escape backstop > hard-blocks a custom tool whose input contains an absolute path [2.00ms]
+(pass) custom tool project-root escape backstop > never echoes secret custom input values in containment errors [1.00ms]
+(pass) custom tool project-root escape backstop > blocks nested custom values that resemble escaping paths [2.00ms]
+(pass) custom tool project-root escape backstop > does not block a legitimate in-project relative path [2.00ms]
+(pass) buildUnavailableToolMessage > explains a known-but-ungranted tool without suggesting a near match
+(pass) buildUnavailableToolMessage > prefers direct code_search when that tool is already available
+(pass) buildUnavailableToolMessage > falls back to generic not-granted guidance when code_search is unavailable
+(pass) buildUnavailableToolMessage > suggests the closest granted tool for a likely typo [1.00ms]
+(pass) buildUnavailableToolMessage > omits suggestions for an unknown tool with no near match
+(pass) buildUnavailableToolMessage > suggests a match for a single-substitution typo
+(pass) buildUnavailableToolMessage > suggests a match for a two-edit transposition typo within threshold
+(pass) buildUnavailableToolMessage > offers no suggestion when the available-tool list is empty
+(pass) executeToolCall queued → running transition > flags the tool_call as queued and emits tool_start only after the barrier resolves [1.00ms]
+(pass) executeToolCall queued → running transition > does not emit a tool_start transition for a non-queued call [1.00ms]
+(pass) getToolSet provider schema compaction > preserves schema descriptions for mutation tools and read_files, strips them for other read-only tools [5.00ms]
+(pass) edit-read-state focused unit cases > markEditRequiresFreshRead does not downgrade context_compacted to a weaker reason
+(pass) edit-read-state focused unit cases > strictEditAuthorizationError uses capability-first basedOnRead recovery when a token is present
+
+sdk/src/serve/__tests__/event-bridge.test.ts:
+(pass) printModeToSessionUpdates > text maps to agent_message_chunk with messageId = ctx.runId
+(pass) printModeToSessionUpdates > subagent text is dropped in acp mode and carries _meta.agentId in full mode
+(pass) printModeToSessionUpdates > reasoning_delta maps root-only in acp mode and everywhere in full mode
+(pass) printModeToSessionUpdates > tool_call maps kind via ctx.toolKind and makes path params absolute [1.00ms]
+(pass) printModeToSessionUpdates > tool_call without path params omits locations
+(pass) printModeToSessionUpdates > NEW-3: tool_call rawInput redacts configured credential values
+(pass) printModeToSessionUpdates > NEW-3: credential redaction reaches nested rawInput fields
+(pass) printModeToSessionUpdates > NEW-3 composes with NEW-6: non-content fields of a sensitive-path card still redact credentials [1.00ms]
+(pass) printModeToSessionUpdates > NEW-6: a sensitive-path replace_range tool_call redacts the top-level newContent field
+(pass) printModeToSessionUpdates > NEW-6: a non-sensitive-path replace_range keeps newContent unredacted
+(pass) printModeToSessionUpdates > NEW-6: a sensitive-path edit_transaction redacts nested structured-edit operation text
+(pass) printModeToSessionUpdates > NEW-6: a sensitive-path edit_transaction redacts occurrence-targeted replace_range edits
+(pass) printModeToSessionUpdates > NEW-6: a non-sensitive-path edit_transaction keeps nested edit content unredacted
+(pass) printModeToSessionUpdates > tool_start maps to tool_call_update in_progress
+(pass) printModeToSessionUpdates > tool_result maps to completed with json content and never rawOutput [1.00ms]
+(pass) printModeToSessionUpdates > media-only tool_result output emits no content and never rawOutput
+(pass) printModeToSessionUpdates > tool_result with an errorMessage in its output maps to failed
+(pass) printModeToSessionUpdates > a mutation outcome outside applied maps tool_result to failed
+(pass) printModeToSessionUpdates > an applied mutation with afterContent adds diff content blocks [4.00ms]
+(pass) printModeToSessionUpdates > a raw applied claim without authority remains failed and emits no applied diff [1.00ms]
+(pass) printModeToSessionUpdates > oversized tool_result content is capped with a truncation marker
+(pass) printModeToSessionUpdates > write_todos result maps to plan entries with the first incomplete in_progress [1.00ms]
+(pass) printModeToSessionUpdates > a fully completed todo list yields no in_progress entry
+(pass) printModeToSessionUpdates > subagent_start/finish map onto the parent spawn toolCallId with _meta.agent
+(pass) printModeToSessionUpdates > subagent events without a spawn toolCallId emit nothing
+(pass) printModeToSessionUpdates > context_window maps used/size and finish maps cost only
+(pass) printModeToSessionUpdates > autoRecovering errors are not emitted; terminal errors map via printModeErrorToRpcError
+(pass) printModeToSessionUpdates > telemetry variants emit the _openbuff.dev/event ext notification only in full mode
+(pass) printModeToSessionUpdates > GV-16: an internal tool_result emits nothing even with events=full
+(pass) printModeToSessionUpdates > the unmapped 'start' variant emits nothing
+(pass) printModeToSessionUpdates > an unknown variant throws UnhandledPrintModeVariantError naming it [1.00ms]
+(pass) printModeToSessionUpdates > EV-1: a sensitive-path mutation redacts content fields from the raw-JSON text block [1.00ms]
+(pass) printModeToSessionUpdates > EV-1: non-sensitive actions in a mixed mutation keep their afterContent verbatim [1.00ms]
+(pass) printModeToSessionUpdates > EV-2: credential redaction past the walk depth cap is fail-closed
+(pass) printModeToSessionUpdates > EV-2: subtrees shallower than the walk depth cap keep their structure
+(pass) printModeToSessionUpdates > EV-3: pathologically nested sensitive-path rawInput is depth-bounded, not stack-bound [1.00ms]
+
+sdk/src/__tests__/acp-outcomes.test.ts:
+(pass) actual ACP hard stops cannot be overridden by completed metadata [24.00ms]
+(pass) actual ACP request errors keep completed execution and rejected task separate [7.00ms]
+(pass) actual ACP failed status survives JSON and conflicting action metadata [20.00ms]
+
+sdk/src/__tests__/serve-bridge.test.ts:
+(pass) createServeBridge > resolved empty errors and rejected task verdicts remain unsuccessful [2.00ms]
+(pass) createServeBridge > an authoritative accepted recovery retains its verdict after an earlier error event [1.00ms]
+(pass) createServeBridge > forwards a plain assistant text chunk (sanitized) to update [1.00ms]
+(pass) createServeBridge > a chunk containing a cap.v3 token reaches update already redacted
+(pass) createServeBridge > tool_call and tool_result events are NOT forwarded (structural drop) [1.00ms]
+(pass) createServeBridge > an onFilesystemMutation event is recorded as a projected receipt row
+(pass) createServeBridge > a forwarded chunk containing a <gate-state> block updates the store gate phase [1.00ms]
+(pass) createServeBridge > returns end_turn normally and cancelled when the signal aborts before run resolves
+(pass) createServeBridge > runs the client with a custom agentId when provided
+(pass) createServeBridge > defaults the client agentId to base when unset [1.00ms]
+(pass) createServeBridge > marks client-advertised MCP servers client-origin at ingest and skips acp
+(pass) createServeBridge > does not call markClientMcpServers for empty or absent mcpServers [1.00ms]
+(pass) createServeBridge > never marks when markClientMcpServers is absent but the run still proceeds
+(pass) createServeBridge > attaches marked client MCP servers to client.run at client origin (same identity)
+(pass) createServeBridge > passes no mcpServers to client.run when none are advertised, and still runs
+(pass) createServeBridge > non-text payloads reach onSessionUpdate while text still streams via update [1.00ms]
+(pass) createServeBridge > without onSessionUpdate, non-text payloads are dropped (Wave-1 behavior) [1.00ms]
+(pass) createServeBridge > eventsMode full forwards telemetry variants as _openbuff.dev/event payloads
+(pass) createServeBridge > eventsMode full forwards subagent text through the sanitized update seam
+(pass) createServeBridge > NEW-3: host-injected credentialValues are held back and redacted across chunk boundaries [1.00ms]
+(pass) createServeBridge > §6.1: the baseline capability map derives journal flags from the store (an in-memory store advertises no resume/replay)
+(pass) createServeBridge > §6.1: a journal-backed store honestly advertises resume/replay [2.00ms]
+(pass) createServeBridge > §12.8: a rejecting update during the idle flush is contained (warn, no unhandled rejection) [400.99ms]
+(pass) createServeBridge > §12.8: a turn-end flush rejection never masks the run error [1.00ms]
+(pass) createServeBridge > §12.8: a cancelled turn drains held windows without flushing them to the sink
+
+ 243 pass
+ 0 fail
+ 1048 expect() calls
+Ran 243 tests across 5 files. [4.59s]

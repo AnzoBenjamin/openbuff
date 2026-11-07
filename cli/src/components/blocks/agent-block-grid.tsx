@@ -2,6 +2,23 @@ import React, { memo, useCallback, useMemo } from 'react'
 
 import { GridLayout } from '../grid-layout'
 import { splitAgentsBySize } from '../../utils/block-processor'
+import { ErrorBoundary } from '../error-boundary'
+import { useOutputReaderStore } from '../../state/output-reader-store'
+import { createJsonDocument } from '../../utils/output-document'
+
+function AgentView({
+  block,
+  prefix,
+  width,
+  render,
+}: {
+  block: AgentContentBlock
+  prefix: string
+  width: number
+  render: AgentBlockGridProps['renderAgentBranch']
+}) {
+  return render(block, prefix, width)
+}
 
 import type { AgentContentBlock } from '../../types/chat'
 
@@ -29,8 +46,36 @@ export const AgentBlockGrid = memo(
     )
 
     const renderItem = useCallback(
-      (agentBlock: AgentContentBlock, idx: number, columnWidth: number) =>
-        renderAgentBranch(agentBlock, `${keyPrefix}-agent-${idx}`, columnWidth),
+      (agentBlock: AgentContentBlock, _idx: number, columnWidth: number) => (
+        <ErrorBoundary
+          componentName={`Agent(${agentBlock.agentId})`}
+          fallback={
+            <text>
+              Could not render agent{' '}
+              {agentBlock.agentName || agentBlock.agentId}.
+            </text>
+          }
+          allowRetry
+          onInspect={() =>
+            useOutputReaderStore
+              .getState()
+              .open({
+                document: createJsonDocument(
+                  `${keyPrefix}:${agentBlock.agentId}:failed-view`,
+                  'Captured agent source',
+                  agentBlock,
+                ),
+              })
+          }
+        >
+          <AgentView
+            block={agentBlock}
+            prefix={`${keyPrefix}-agent-${agentBlock.agentId}`}
+            width={columnWidth}
+            render={renderAgentBranch}
+          />
+        </ErrorBoundary>
+      ),
       [keyPrefix, renderAgentBranch],
     )
 
@@ -55,6 +100,7 @@ export const AgentBlockGrid = memo(
           <GridLayout
             key={getItemKey(group[0])}
             items={group}
+            stableColumns
             availableWidth={availableWidth}
             getItemKey={getItemKey}
             renderItem={renderItem}

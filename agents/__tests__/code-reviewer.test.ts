@@ -42,6 +42,25 @@ describe('code-reviewer prompt isolation', () => {
     expect(reviewer.outputSchema).toBeDefined()
   })
 
+  test('allows receipt corrections and names the actual required fields', () => {
+    const reviewer = createReviewer('anthropic/claude-opus-4.7')
+    expect(reviewer.instructionsPrompt).toContain(
+      'Only read_files and set_output are permitted',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'resubmit without repeating the review',
+    )
+    expect(reviewer.instructionsPrompt).toContain(
+      'Required fields are schemaVersion, family, verdict, snapshotFingerprint, reviewedFiles, coverage, dimensions, and requirementCoverage',
+    )
+    expect(reviewer.instructionsPrompt).not.toContain(
+      'The only tool you may call is read_files',
+    )
+    expect(reviewer.instructionsPrompt).not.toContain(
+      'All nine top-level fields above are REQUIRED',
+    )
+  })
+
   test('does not inherit parent orchestration instructions', () => {
     const reviewer = createReviewer('anthropic/claude-opus-4.7')
 
@@ -155,10 +174,13 @@ describe('code-reviewer prompt isolation', () => {
       'low',
     ])
     // The dimension enum is derived-by-assertion from this schema's own
-    // dimensions object, so adding a review dimension without extending the
-    // finding label fails here instead of silently diverging.
+    // dimensions object keys, so adding a review dimension without extending
+    // the finding label fails here instead of silently diverging. The
+    // dimensions keys are deliberately NOT a nested `required` list (the gate
+    // tolerates absent dimensions, so requiring them would only add rejection
+    // surface), making the property key set the pinned source of truth.
     expect(propertySchema(objectForm, 'dimension')?.enum).toEqual(
-      propertySchema(schema, 'dimensions')?.required,
+      Object.keys(propertySchema(schema, 'dimensions')?.properties ?? {}),
     )
   })
 
@@ -340,9 +362,13 @@ describe('code-reviewer prompt isolation', () => {
       type: 'array',
       items: { type: 'string' },
     })
-    // Vacuity guard: `required` must be the real non-empty list, and
-    // `advisories` must stay out of it so existing receipts stay conforming.
-    expect(schema?.required).toContain('findings')
+    // Vacuity guard: `required` is the real gate-consumed list. `findings` is
+    // deliberately NOT required (the gate reads a missing findings as `?? []`),
+    // and `advisories` must stay out of `required` so existing receipts stay
+    // conforming.
+    expect(schema?.required).toContain('verdict')
+    expect(schema?.required).toContain('snapshotFingerprint')
+    expect(schema?.required).not.toContain('findings')
     expect(schema?.required).not.toContain('advisories')
   })
 

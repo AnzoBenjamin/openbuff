@@ -1,0 +1,269 @@
+{
+  "fixtureRoot": "/tmp/openbuff-body-review-2026-11-05/evidence/06-fixtures-MJeGeW",
+  "runtime": "1.3.14",
+  "bom": {
+    "readContent": "const foo = 1\r\n",
+    "readStatus": "ok",
+    "readHash": "sha256:25bd48427761c14856769da938635f7f5aad37873809d65320e3a8f5db89ee31",
+    "rawBeforeHash": "sha256:eda84870804a2c0cf484c576cb5bb7e8a32a95f59c14392cb3e591ec0936b553",
+    "rawAfterHash": "sha256:eda84870804a2c0cf484c576cb5bb7e8a32a95f59c14392cb3e591ec0936b553",
+    "bytesUnchanged": true,
+    "mutation": {
+      "kind": "file_mutation_result",
+      "version": 1,
+      "operationId": "193d500b-4e44-4446-80bb-19d36ee93ad8",
+      "outcome": "rollback_incomplete",
+      "actions": [
+        {
+          "actionId": "6080af61-7304-40fc-8dc8-4ac6a2212d29",
+          "index": 0,
+          "action": "update",
+          "path": "bom.ts",
+          "outcome": "applied",
+          "beforeHash": "sha256:80403534d01e5d05974fb57a13226b4abb9a12a8448e2e42932a227ae5574ef6",
+          "afterHash": "sha256:eda84870804a2c0cf484c576cb5bb7e8a32a95f59c14392cb3e591ec0936b553",
+          "error": {
+            "code": "rollback_incomplete",
+            "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+            "retryable": false,
+            "recovery": "inspect_rollback"
+          },
+          "rollback": {
+            "attempted": true,
+            "succeeded": false,
+            "error": {
+              "code": "rollback_incomplete",
+              "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+              "retryable": false,
+              "recovery": "inspect_rollback"
+            }
+          }
+        }
+      ],
+      "authorityTier": "conditional_commit",
+      "receiptId": "4ac7aee9-ec74-4e20-9885-3ee33023f36a",
+      "authorityReceipt": {
+        "kind": "commit_receipt",
+        "version": 1,
+        "receiptId": "4ac7aee9-ec74-4e20-9885-3ee33023f36a",
+        "operationId": "193d500b-4e44-4446-80bb-19d36ee93ad8",
+        "callId": "193d500b-4e44-4446-80bb-19d36ee93ad8",
+        "authorityTier": "conditional_commit",
+        "status": "rollback_incomplete",
+        "actions": [
+          {
+            "actionId": "6080af61-7304-40fc-8dc8-4ac6a2212d29",
+            "index": 0,
+            "action": "update",
+            "path": "bom.ts",
+            "status": "rollback_failed",
+            "beforeHash": "sha256:80403534d01e5d05974fb57a13226b4abb9a12a8448e2e42932a227ae5574ef6",
+            "afterHash": "sha256:eda84870804a2c0cf484c576cb5bb7e8a32a95f59c14392cb3e591ec0936b553",
+            "error": {
+              "code": "rollback_incomplete",
+              "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+              "retryable": false,
+              "recovery": "inspect_rollback"
+            }
+          }
+        ],
+        "finalHashes": {
+          "bom.ts": "sha256:eda84870804a2c0cf484c576cb5bb7e8a32a95f59c14392cb3e591ec0936b553"
+        }
+      },
+      "errors": [
+        {
+          "code": "rollback_incomplete",
+          "message": "Rollback conflict: updated file no longer matches transaction-owned state",
+          "retryable": false,
+          "recovery": "inspect_rollback"
+        },
+        {
+          "code": "io_error",
+          "message": "STALE_STATE: bom.ts changed immediately before commit.",
+          "retryable": false
+        }
+      ],
+      "freshCapabilities": []
+    }
+  },
+  "semanticStale": {
+    "serviceValue": {
+      "changedFiles": [
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/06-fixtures-MJeGeW/semantic-stale/workspace/a.ts",
+          "newContent": "const bar = 1\n"
+        }
+      ]
+    },
+    "externalBeforeApply": "const foo = 1\n// fixture external writer preserved text\n",
+    "final": "const bar = 1\n",
+    "output": {
+      "applied": true,
+      "results": [
+        {
+          "path": "a.ts",
+          "applied": true
+        }
+      ]
+    },
+    "mutationOutcome": "applied",
+    "receipt": {
+      "kind": "commit_receipt",
+      "version": 1,
+      "receiptId": "83e958a4-90a8-47b1-9642-0689ef4d15b7",
+      "operationId": "488b4d36-a2ca-4972-9831-298926788883",
+      "callId": "488b4d36-a2ca-4972-9831-298926788883",
+      "authorityTier": "conditional_commit",
+      "status": "committed",
+      "actions": [
+        {
+          "actionId": "5519654e-a2a2-4c22-aace-88bf76b825b1",
+          "index": 0,
+          "action": "update",
+          "path": "a.ts",
+          "status": "committed",
+          "beforeHash": "sha256:80ff42add5178dc998ccf12998cc924451857b9f4183aff2345e87fa980f1602",
+          "afterHash": "sha256:1d892894920e991c1b8731ef9141302f370bfdf2a0eb2d3fb2a86999bbd72949"
+        }
+      ],
+      "finalHashes": {
+        "a.ts": "sha256:1d892894920e991c1b8731ef9141302f370bfdf2a0eb2d3fb2a86999bbd72949"
+      }
+    }
+  },
+  "recoveryExternal": {
+    "begin": {
+      "ok": true
+    },
+    "externalBeforeRecovery": "fixture external writer work\n",
+    "firstAfterRecovery": "original a\n",
+    "secondAfterRecovery": "original b\n",
+    "recovery": {
+      "ok": true,
+      "revertedTransactions": 1,
+      "revertedPaths": 1,
+      "ambiguousCommittedTransactions": 0
+    },
+    "log": "{\"kind\":\"tx_begin\",\"transactionId\":\"tx-probe\",\"operationId\":\"op-probe\",\"callId\":\"call-probe\",\"startedAt\":\"2026-11-05T21:32:32.016Z\",\"ownerPid\":2,\"ownerToken\":\"e433f9dd-54bc-407b-ad5f-8abf1177aa89\",\"entries\":[{\"path\":\"a.ts\",\"beforeHash\":\"sha256:ae3a34637248346a38bb2798377746429731b1068467d81e5ee4ea643ef5914e\",\"beforeBytes\":\"original a\\n\"},{\"path\":\"b.ts\",\"beforeHash\":\"sha256:1896468176c48ad4ec287394037bc8d4eb1704cfa0f3059305b8d6bf7a1799db\",\"beforeBytes\":\"original b\\n\"}]}\n{\"kind\":\"tx_abort\",\"transactionId\":\"tx-probe\",\"abortedAt\":\"2026-11-05T21:32:32.020Z\",\"reason\":\"reverted\"}\n"
+  },
+  "recoveryFailure": {
+    "recovery": {
+      "ok": false,
+      "error": "fixture-only EACCES restore failure",
+      "revertedTransactions": 0,
+      "revertedPaths": 0
+    },
+    "stillPending": {
+      "ok": true,
+      "transactions": []
+    },
+    "firstAfterRecovery": "changed a\n",
+    "log": "{\"kind\":\"tx_begin\",\"transactionId\":\"tx-failed-recovery\",\"operationId\":\"op-failed\",\"callId\":\"call-failed\",\"startedAt\":\"2026-11-05T21:32:32.025Z\",\"ownerPid\":2,\"ownerToken\":\"e433f9dd-54bc-407b-ad5f-8abf1177aa89\",\"entries\":[{\"path\":\"a.ts\",\"beforeHash\":\"sha256:ae3a34637248346a38bb2798377746429731b1068467d81e5ee4ea643ef5914e\",\"beforeBytes\":\"original a\\n\"},{\"path\":\"b.ts\",\"beforeHash\":\"sha256:1896468176c48ad4ec287394037bc8d4eb1704cfa0f3059305b8d6bf7a1799db\",\"beforeBytes\":\"original b\\n\"}]}\n{\"kind\":\"tx_abort\",\"transactionId\":\"tx-failed-recovery\",\"abortedAt\":\"2026-11-05T21:32:32.026Z\",\"reason\":\"revert incomplete: fixture-only EACCES restore failure\"}\n"
+  },
+  "partialRename": {
+    "serviceValue": {
+      "changedFiles": [
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/06-fixtures-MJeGeW/partial-rename/workspace/definition.ts",
+          "newContent": "export const bar = 1\n"
+        }
+      ],
+      "errorMessage": "/tmp/openbuff-body-review-2026-11-05/evidence/06-fixtures-MJeGeW/partial-rename/workspace/consumer.ts: edit range is out of bounds of the current document"
+    },
+    "output": {
+      "applied": true,
+      "results": [
+        {
+          "path": "definition.ts",
+          "applied": true
+        }
+      ],
+      "errorMessage": "/tmp/openbuff-body-review-2026-11-05/evidence/06-fixtures-MJeGeW/partial-rename/workspace/consumer.ts: edit range is out of bounds of the current document"
+    },
+    "definitionAfter": "export const bar = 1\n",
+    "consumerAfter": "import { foo } from \"./definition\"\n",
+    "mutationOutcome": "applied"
+  },
+  "malformedRanges": [
+    {
+      "name": "negative-character",
+      "range": {
+        "start": {
+          "line": 1,
+          "character": -3
+        },
+        "end": {
+          "line": 1,
+          "character": -1
+        }
+      },
+      "serviceValue": {
+        "changedFiles": [
+          {
+            "path": "/tmp/openbuff-body-review-2026-11-05/evidence/06-fixtures-MJeGeW/malformed-ranges/workspace/a.ts",
+            "newContent": "abcdX\nsecond\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reversed-range",
+      "range": {
+        "start": {
+          "line": 0,
+          "character": 4
+        },
+        "end": {
+          "line": 0,
+          "character": 2
+        }
+      },
+      "serviceValue": {
+        "changedFiles": [
+          {
+            "path": "/tmp/openbuff-body-review-2026-11-05/evidence/06-fixtures-MJeGeW/malformed-ranges/workspace/a.ts",
+            "newContent": "abcdXcdef\nsecond\n"
+          }
+        ]
+      }
+    },
+    {
+      "name": "fractional-character",
+      "range": {
+        "start": {
+          "line": 0,
+          "character": 1.5
+        },
+        "end": {
+          "line": 0,
+          "character": 2.5
+        }
+      },
+      "serviceValue": {
+        "changedFiles": [
+          {
+            "path": "/tmp/openbuff-body-review-2026-11-05/evidence/06-fixtures-MJeGeW/malformed-ranges/workspace/a.ts",
+            "newContent": "aXcdef\nsecond\n"
+          }
+        ]
+      }
+    }
+  ],
+  "intentSize": {
+    "preimageBytes": 9437190,
+    "outcome": "applied",
+    "transactionId": null,
+    "intentLogExists": false,
+    "warnings": [
+      [
+        {
+          "operationId": "70cb6c8f-c4f0-447c-851a-52e0e9b0d0e4",
+          "transactionId": "tx-70cb6c8f-c4f0-447c-851a-52e0e9b0d0e4",
+          "error": "transaction intent event for tx-70cb6c8f-c4f0-447c-851a-52e0e9b0d0e4 exceeds the 8388608-byte intent-log cap (max 100 transactions); the log was left unchanged"
+        },
+        "Transaction intent log tx_begin failed; proceeding without a durable pre-image (in-memory rollback still active)"
+      ]
+    ]
+  }
+}

@@ -12,7 +12,8 @@ const isMac = os.platform() === 'darwin'
 const escapeForShell = (value: string): string =>
   `'${value.replace(/'/g, `'\\''`)}'`
 
-const escapeForCmd = (value: string): string => `"${value.replace(/"/g, '""')}"`
+const escapeForCmd = (value: string): string =>
+  `"${value.replace(/"/g, '""').replace(/%/g, '%%')}"`
 
 const replaceFilePlaceholder = (command: string, filePath: string): string => {
   if (command.includes('%f')) {
@@ -24,7 +25,7 @@ const replaceFilePlaceholder = (command: string, filePath: string): string => {
   return command
 }
 
-const buildEditorCommands = (
+export const buildEditorCommands = (
   filePath: string,
   env: CliEnv = getCliEnv(),
 ): string[] => {
@@ -32,7 +33,6 @@ const buildEditorCommands = (
   const shellPath = isWindows
     ? escapeForCmd(filePath)
     : escapeForShell(filePath)
-  const rawPath = filePath
 
   // Check custom editor env vars
   const editorValues = [
@@ -44,11 +44,11 @@ const buildEditorCommands = (
 
   for (const value of editorValues) {
     if (!value) continue
-    const withFile = replaceFilePlaceholder(value, rawPath)
+    const withFile = replaceFilePlaceholder(value, shellPath)
     if (withFile !== value) {
       commands.push(withFile)
     } else {
-      commands.push(`${value} ${isWindows ? shellPath : shellPath}`)
+      commands.push(`${value} ${shellPath}`)
     }
   }
 

@@ -8,6 +8,8 @@ import React, { memo } from 'react'
 
 import { useTerminalLayout } from '../../../hooks/use-terminal-layout'
 import { useTheme } from '../../../hooks/use-theme'
+import { sliceTextCells } from '../../../utils/text-boundaries'
+import { clipEvidenceLine } from '../../../utils/bounded-evidence'
 import { Button } from '../../button'
 
 // Overhead for the answer line: modal borders (~6) + marginLeft (3) + "↳ " (3) + quotes (2) + buffer (6)
@@ -35,11 +37,13 @@ export const QuestionHeader: React.FC<QuestionHeaderProps> = memo(
     const { terminalWidth } = useTerminalLayout()
 
     // Calculate available width for the answer text and truncate with ellipsis at end
-    const availableWidth = Math.max(20, terminalWidth - ANSWER_LINE_OVERHEAD)
-    const truncatedAnswer =
-      answerDisplay.length > availableWidth
-        ? answerDisplay.slice(0, availableWidth - 1) + '…'
-        : answerDisplay
+    const availableWidth = Math.max(1, terminalWidth - ANSWER_LINE_OVERHEAD)
+    const truncatedAnswer = clipEvidenceLine(answerDisplay, availableWidth)
+    const questionPreview = sliceTextCells(
+      questionText.replace(/\s+/g, ' '),
+      0,
+      Math.max(1, terminalWidth - questionPrefix.length - 10),
+    )
 
     return (
       <Button
@@ -49,7 +53,7 @@ export const QuestionHeader: React.FC<QuestionHeaderProps> = memo(
           width: '100%',
         }}
       >
-        <text>
+        <text wrapMode="none">
           <span fg={theme.muted}>{isExpanded ? '▼' : '▶'}</span>
           <span
             fg={theme.foreground}
@@ -57,7 +61,7 @@ export const QuestionHeader: React.FC<QuestionHeaderProps> = memo(
           >
             {' '}
             {questionPrefix}
-            {questionText}
+            {questionPreview}
           </span>
         </text>
         {/* Answer displayed on separate line when collapsed (like User Answers style) */}

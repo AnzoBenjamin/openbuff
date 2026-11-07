@@ -1,0 +1,1322 @@
+{
+  "metadata": {
+    "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+    "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+    "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+    "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+    "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+    "executionScope": "trusted_task",
+    "timestamp": "2026-11-06T21:45:58.175Z",
+    "evalDataPaths": [
+      "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/artifact-fixture/fixture-eval.json"
+    ],
+    "agentsTested": [
+      "agent-a",
+      "agent-b"
+    ],
+    "commitsEvaluated": 4,
+    "rejectedTasks": [],
+    "totalCommitsInEval": 2,
+    "evalFiles": [
+      {
+        "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/artifact-fixture/fixture-eval.json",
+        "repoUrl": "offline-fixture",
+        "taskCount": 2
+      }
+    ],
+    "totalDuration": 25,
+    "logsDirectory": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/artifact-fixture/orchestrator/1970-01-01T00-00-00-000Z-OV7gdd",
+    "files": [
+      "1-typescript-ANALYSIS-typescr-cebb2b16-e84a-49ea-a3fe-2e3adab85f21.json",
+      "1-typescript-agent-a-typescr-111ebc20-48c0-41b3-95ff-6f8f90322f59.json",
+      "1-typescript-agent-b-typescr-266e0829-b22b-4e78-a60c-e4f3f09fec8b.json",
+      "2-typescript-ANALYSIS-typescr-b3d4e253-1af2-48d6-aae6-3100511feda4.json",
+      "2-typescript-agent-a-typescr-08d4d62c-4d69-4cd7-a948-0d96fa978650.json",
+      "2-typescript-agent-b-typescr-66cc41c5-992d-4d3b-8439-64ebd85244a2.json",
+      "3-python-ANALYSIS-python--83c138f0-200d-4ea5-bef4-5e6e6444af94.json",
+      "3-python-agent-a-python--63b4dc53-e533-40ed-9ae7-10e7f6065fbb.json",
+      "3-python-agent-b-python--dc954ddb-6cff-4d70-81fb-a0eabfc28d7b.json",
+      "4-python-ANALYSIS-python--fd681b3e-901b-4223-a72e-ac469d14830a.json",
+      "4-python-agent-a-python--5d8451dc-0b20-4d37-88ef-223cb867d4b5.json",
+      "4-python-agent-b-python--fd4a301b-27fb-4f31-b717-adcda3a75058.json",
+      "FINAL_RESULTS.json",
+      "python-judge-gemini-5d8451dc-0b20-4d37-88ef-223cb867d4b5-agent-output-error.json",
+      "python-judge-gemini-63b4dc53-e533-40ed-9ae7-10e7f6065fbb-agent-output-error.json",
+      "python-judge-gemini-dc954ddb-6cff-4d70-81fb-a0eabfc28d7b-agent-output-error.json",
+      "python-judge-gemini-fd4a301b-27fb-4f31-b717-adcda3a75058-agent-output-error.json",
+      "sdk-attempts/16468a6f-d67e-479d-b4da-c4bafe169349-settled.json",
+      "sdk-attempts/16468a6f-d67e-479d-b4da-c4bafe169349-started.json",
+      "sdk-attempts/1d9afb0d-0736-4804-8182-dcc94f9803af-settled.json",
+      "sdk-attempts/1d9afb0d-0736-4804-8182-dcc94f9803af-started.json",
+      "sdk-attempts/44f7ad2f-d0ca-41d0-9f7f-3275bb15fa39-settled.json",
+      "sdk-attempts/44f7ad2f-d0ca-41d0-9f7f-3275bb15fa39-started.json",
+      "sdk-attempts/589229ea-f70c-4241-9ad6-1d5e82a2124d-settled.json",
+      "sdk-attempts/589229ea-f70c-4241-9ad6-1d5e82a2124d-started.json",
+      "sdk-attempts/5e95919a-9e17-4bf9-affd-4a83e7203e42-settled.json",
+      "sdk-attempts/5e95919a-9e17-4bf9-affd-4a83e7203e42-started.json",
+      "sdk-attempts/66fc8f16-1d29-43f5-af70-0b728c84f639-settled.json",
+      "sdk-attempts/66fc8f16-1d29-43f5-af70-0b728c84f639-started.json",
+      "sdk-attempts/8097869e-2b81-4632-8003-f2555163a5af-settled.json",
+      "sdk-attempts/8097869e-2b81-4632-8003-f2555163a5af-started.json",
+      "sdk-attempts/92ee5689-bc24-40ac-8a0f-81dca163109f-settled.json",
+      "sdk-attempts/92ee5689-bc24-40ac-8a0f-81dca163109f-started.json",
+      "sdk-attempts/af9c61a9-524b-45cd-adfb-2c8a805d3bdc-settled.json",
+      "sdk-attempts/af9c61a9-524b-45cd-adfb-2c8a805d3bdc-started.json",
+      "sdk-attempts/b7bdcdf6-5ca8-4792-aef5-9712b958e67a-settled.json",
+      "sdk-attempts/b7bdcdf6-5ca8-4792-aef5-9712b958e67a-started.json",
+      "sdk-attempts/b94f1e8c-3914-4a4e-b678-8adf986b24a2-settled.json",
+      "sdk-attempts/b94f1e8c-3914-4a4e-b678-8adf986b24a2-started.json",
+      "sdk-attempts/c078f26a-737a-4c27-8760-af72668caa6b-settled.json",
+      "sdk-attempts/c078f26a-737a-4c27-8760-af72668caa6b-started.json",
+      "sdk-attempts/c97480a2-0f81-4b10-bb59-6bbef8662e52-settled.json",
+      "sdk-attempts/c97480a2-0f81-4b10-bb59-6bbef8662e52-started.json",
+      "sdk-attempts/e7d61260-e1ff-4f54-be11-d5091d9520fe-settled.json",
+      "sdk-attempts/e7d61260-e1ff-4f54-be11-d5091d9520fe-started.json",
+      "sdk-attempts/fe2a0c6f-864c-4a9c-a7eb-729b2ba8e3ed-settled.json",
+      "sdk-attempts/fe2a0c6f-864c-4a9c-a7eb-729b2ba8e3ed-started.json",
+      "sdk-attempts/ffe730da-44be-439c-a4d3-b23fa8b0a1bf-settled.json",
+      "sdk-attempts/ffe730da-44be-439c-a4d3-b23fa8b0a1bf-started.json",
+      "typescript-judge-gemini-08d4d62c-4d69-4cd7-a948-0d96fa978650-agent-output-error.json",
+      "typescript-judge-gemini-111ebc20-48c0-41b3-95ff-6f8f90322f59-agent-output-error.json",
+      "typescript-judge-gemini-266e0829-b22b-4e78-a60c-e4f3f09fec8b-agent-output-error.json",
+      "typescript-judge-gemini-66cc41c5-992d-4d3b-8439-64ebd85244a2-agent-output-error.json"
+    ],
+    "repeats": 2,
+    "seed": 11,
+    "costScope": "agent_attempts"
+  },
+  "spend": {
+    "scope": "agent_attempts_plus_available_auxiliary_sdk_attempts",
+    "agentCostUsd": 12,
+    "availableAuxiliaryCostUsd": 2,
+    "availableUnsettledTaskCostUsd": 0,
+    "auxiliaryAttemptCount": 16,
+    "unknownAuxiliaryCostAttempts": 8,
+    "incompleteAuxiliaryCostAttempts": 8,
+    "wholeExperimentCostComplete": false
+  },
+  "modelAttempts": [
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "typescript",
+      "repeat": 0,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "44f7ad2f-d0ca-41d0-9f7f-3275bb15fa39",
+      "agentId": "judge-gpt",
+      "providerRoute": "unreported",
+      "requestedModel": "openai/gpt-5.4",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.155Z",
+      "durationMs": 2,
+      "events": [],
+      "costUsd": null,
+      "costComplete": false,
+      "costEvidence": {
+        "status": "unknown"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "analysis": "offline judge fixture",
+          "strengths": [],
+          "weaknesses": [],
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        }
+      }
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "typescript",
+      "repeat": 0,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "b94f1e8c-3914-4a4e-b678-8adf986b24a2",
+      "agentId": "judge-gemini",
+      "providerRoute": "unreported",
+      "requestedModel": "google/gemini-3.1-pro-preview",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.156Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": 0.25,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "creditsUsed"
+      },
+      "output": {
+        "type": "error",
+        "message": "paid auxiliary judge fixture error"
+      },
+      "error": "paid auxiliary judge fixture error"
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "typescript",
+      "repeat": 0,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "af9c61a9-524b-45cd-adfb-2c8a805d3bdc",
+      "agentId": "judge-gpt",
+      "providerRoute": "unreported",
+      "requestedModel": "openai/gpt-5.4",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.156Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": null,
+      "costComplete": false,
+      "costEvidence": {
+        "status": "unknown"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "analysis": "offline judge fixture",
+          "strengths": [],
+          "weaknesses": [],
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        }
+      }
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "typescript",
+      "repeat": 0,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "e7d61260-e1ff-4f54-be11-d5091d9520fe",
+      "agentId": "judge-gemini",
+      "providerRoute": "unreported",
+      "requestedModel": "google/gemini-3.1-pro-preview",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.156Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": 0.25,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "creditsUsed"
+      },
+      "output": {
+        "type": "error",
+        "message": "paid auxiliary judge fixture error"
+      },
+      "error": "paid auxiliary judge fixture error"
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "typescript",
+      "repeat": 1,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "92ee5689-bc24-40ac-8a0f-81dca163109f",
+      "agentId": "judge-gpt",
+      "providerRoute": "unreported",
+      "requestedModel": "openai/gpt-5.4",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.156Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": null,
+      "costComplete": false,
+      "costEvidence": {
+        "status": "unknown"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "analysis": "offline judge fixture",
+          "strengths": [],
+          "weaknesses": [],
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        }
+      }
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "typescript",
+      "repeat": 1,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "5e95919a-9e17-4bf9-affd-4a83e7203e42",
+      "agentId": "judge-gemini",
+      "providerRoute": "unreported",
+      "requestedModel": "google/gemini-3.1-pro-preview",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.156Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": 0.25,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "creditsUsed"
+      },
+      "output": {
+        "type": "error",
+        "message": "paid auxiliary judge fixture error"
+      },
+      "error": "paid auxiliary judge fixture error"
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "typescript",
+      "repeat": 1,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "b7bdcdf6-5ca8-4792-aef5-9712b958e67a",
+      "agentId": "judge-gpt",
+      "providerRoute": "unreported",
+      "requestedModel": "openai/gpt-5.4",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.156Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": null,
+      "costComplete": false,
+      "costEvidence": {
+        "status": "unknown"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "analysis": "offline judge fixture",
+          "strengths": [],
+          "weaknesses": [],
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        }
+      }
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "typescript",
+      "repeat": 1,
+      "languages": [
+        "typescript"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "fe2a0c6f-864c-4a9c-a7eb-729b2ba8e3ed",
+      "agentId": "judge-gemini",
+      "providerRoute": "unreported",
+      "requestedModel": "google/gemini-3.1-pro-preview",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.156Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": 0.25,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "creditsUsed"
+      },
+      "output": {
+        "type": "error",
+        "message": "paid auxiliary judge fixture error"
+      },
+      "error": "paid auxiliary judge fixture error"
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "python",
+      "repeat": 0,
+      "languages": [
+        "python"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "589229ea-f70c-4241-9ad6-1d5e82a2124d",
+      "agentId": "judge-gpt",
+      "providerRoute": "unreported",
+      "requestedModel": "openai/gpt-5.4",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.163Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": null,
+      "costComplete": false,
+      "costEvidence": {
+        "status": "unknown"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "analysis": "offline judge fixture",
+          "strengths": [],
+          "weaknesses": [],
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        }
+      }
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "python",
+      "repeat": 0,
+      "languages": [
+        "python"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "66fc8f16-1d29-43f5-af70-0b728c84f639",
+      "agentId": "judge-gemini",
+      "providerRoute": "unreported",
+      "requestedModel": "google/gemini-3.1-pro-preview",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.164Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": 0.25,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "creditsUsed"
+      },
+      "output": {
+        "type": "error",
+        "message": "paid auxiliary judge fixture error"
+      },
+      "error": "paid auxiliary judge fixture error"
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "python",
+      "repeat": 0,
+      "languages": [
+        "python"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "c97480a2-0f81-4b10-bb59-6bbef8662e52",
+      "agentId": "judge-gpt",
+      "providerRoute": "unreported",
+      "requestedModel": "openai/gpt-5.4",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.164Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": null,
+      "costComplete": false,
+      "costEvidence": {
+        "status": "unknown"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "analysis": "offline judge fixture",
+          "strengths": [],
+          "weaknesses": [],
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        }
+      }
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "python",
+      "repeat": 0,
+      "languages": [
+        "python"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "8097869e-2b81-4632-8003-f2555163a5af",
+      "agentId": "judge-gemini",
+      "providerRoute": "unreported",
+      "requestedModel": "google/gemini-3.1-pro-preview",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.164Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": 0.25,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "creditsUsed"
+      },
+      "output": {
+        "type": "error",
+        "message": "paid auxiliary judge fixture error"
+      },
+      "error": "paid auxiliary judge fixture error"
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "python",
+      "repeat": 1,
+      "languages": [
+        "python"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "16468a6f-d67e-479d-b4da-c4bafe169349",
+      "agentId": "judge-gpt",
+      "providerRoute": "unreported",
+      "requestedModel": "openai/gpt-5.4",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.164Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": null,
+      "costComplete": false,
+      "costEvidence": {
+        "status": "unknown"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "analysis": "offline judge fixture",
+          "strengths": [],
+          "weaknesses": [],
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        }
+      }
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "python",
+      "repeat": 1,
+      "languages": [
+        "python"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "1d9afb0d-0736-4804-8182-dcc94f9803af",
+      "agentId": "judge-gemini",
+      "providerRoute": "unreported",
+      "requestedModel": "google/gemini-3.1-pro-preview",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.164Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": 0.25,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "creditsUsed"
+      },
+      "output": {
+        "type": "error",
+        "message": "paid auxiliary judge fixture error"
+      },
+      "error": "paid auxiliary judge fixture error"
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "python",
+      "repeat": 1,
+      "languages": [
+        "python"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "ffe730da-44be-439c-a4d3-b23fa8b0a1bf",
+      "agentId": "judge-gpt",
+      "providerRoute": "unreported",
+      "requestedModel": "openai/gpt-5.4",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.164Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": null,
+      "costComplete": false,
+      "costEvidence": {
+        "status": "unknown"
+      },
+      "output": {
+        "type": "structuredOutput",
+        "value": {
+          "analysis": "offline judge fixture",
+          "strengths": [],
+          "weaknesses": [],
+          "completionScore": 10,
+          "codeQualityScore": 10,
+          "overallScore": 10
+        }
+      }
+    },
+    {
+      "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+      "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "taskId": "python",
+      "repeat": 1,
+      "languages": [
+        "python"
+      ],
+      "executionScope": "trusted_task",
+      "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+      "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+      "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+      "attemptId": "c078f26a-737a-4c27-8760-af72668caa6b",
+      "agentId": "judge-gemini",
+      "providerRoute": "unreported",
+      "requestedModel": "google/gemini-3.1-pro-preview",
+      "role": "auxiliary",
+      "phase": "settled",
+      "startedAt": "2026-11-06T21:45:58.164Z",
+      "durationMs": 1,
+      "events": [],
+      "costUsd": 0.25,
+      "costComplete": true,
+      "costEvidence": {
+        "status": "reported",
+        "source": "creditsUsed"
+      },
+      "output": {
+        "type": "error",
+        "message": "paid auxiliary judge fixture error"
+      },
+      "error": "paid auxiliary judge fixture error"
+    }
+  ],
+  "agents": {
+    "agent-a": {
+      "agentId": "agent-a",
+      "runs": [
+        {
+          "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+          "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "taskId": "typescript",
+          "repeat": 0,
+          "languages": [
+            "typescript"
+          ],
+          "executionScope": "trusted_task",
+          "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+          "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+          "attemptId": "111ebc20-48c0-41b3-95ff-6f8f90322f59",
+          "providerRoute": "offline/provider-a",
+          "runOutcome": {
+            "termination": "completed"
+          },
+          "costEvidence": {
+            "status": "reported"
+          },
+          "commitSha": "typescript-sha",
+          "prompt": "offline fixture",
+          "diff": "",
+          "judging": {
+            "analysis": "offline judge fixture",
+            "strengths": [],
+            "weaknesses": [],
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10,
+            "perJudgeScores": [
+              {
+                "judgeId": "judge-gpt",
+                "completionScore": 10,
+                "codeQualityScore": 10,
+                "overallScore": 10
+              }
+            ],
+            "scoringStatus": "partial_judge_failure"
+          },
+          "scoringStatus": "partial_judge_failure",
+          "cost": 1,
+          "durationMs": 10,
+          "retrievalFlow": {
+            "queryCallCount": 0,
+            "queryResultPaths": [],
+            "successfulReadPaths": [],
+            "relevantReadPaths": [],
+            "irrelevantReadPaths": []
+          },
+          "idiomTraceability": {
+            "verdict": "skip",
+            "signals": {
+              "nonTypeScriptEditCount": 0,
+              "languageSignals": [],
+              "hasRequiredReads": false,
+              "deliveryObservable": false,
+              "isEmpty": true
+            },
+            "reasons": [
+              "No non-TypeScript supported-language edits were detected."
+            ]
+          },
+          "thinkerHarvest": {
+            "verdict": "skip",
+            "reasons": [
+              "No thinker subagents in trace."
+            ],
+            "signals": {
+              "thinkerAgentIds": [],
+              "agents": [],
+              "anyEmptyHarvestClobber": false,
+              "anyPreservedNonEmpty": false,
+              "allPlainTextOnly": true
+            }
+          }
+        },
+        {
+          "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+          "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "taskId": "typescript",
+          "repeat": 1,
+          "languages": [
+            "typescript"
+          ],
+          "executionScope": "trusted_task",
+          "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+          "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+          "attemptId": "08d4d62c-4d69-4cd7-a948-0d96fa978650",
+          "providerRoute": "offline/provider-a",
+          "runOutcome": {
+            "termination": "completed"
+          },
+          "costEvidence": {
+            "status": "reported"
+          },
+          "commitSha": "typescript-sha",
+          "prompt": "offline fixture",
+          "diff": "",
+          "judging": {
+            "analysis": "offline judge fixture",
+            "strengths": [],
+            "weaknesses": [],
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10,
+            "perJudgeScores": [
+              {
+                "judgeId": "judge-gpt",
+                "completionScore": 10,
+                "codeQualityScore": 10,
+                "overallScore": 10
+              }
+            ],
+            "scoringStatus": "partial_judge_failure"
+          },
+          "scoringStatus": "partial_judge_failure",
+          "cost": 1,
+          "durationMs": 10,
+          "retrievalFlow": {
+            "queryCallCount": 0,
+            "queryResultPaths": [],
+            "successfulReadPaths": [],
+            "relevantReadPaths": [],
+            "irrelevantReadPaths": []
+          },
+          "idiomTraceability": {
+            "verdict": "skip",
+            "signals": {
+              "nonTypeScriptEditCount": 0,
+              "languageSignals": [],
+              "hasRequiredReads": false,
+              "deliveryObservable": false,
+              "isEmpty": true
+            },
+            "reasons": [
+              "No non-TypeScript supported-language edits were detected."
+            ]
+          },
+          "thinkerHarvest": {
+            "verdict": "skip",
+            "reasons": [
+              "No thinker subagents in trace."
+            ],
+            "signals": {
+              "thinkerAgentIds": [],
+              "agents": [],
+              "anyEmptyHarvestClobber": false,
+              "anyPreservedNonEmpty": false,
+              "allPlainTextOnly": true
+            }
+          }
+        },
+        {
+          "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+          "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "taskId": "python",
+          "repeat": 0,
+          "languages": [
+            "python"
+          ],
+          "executionScope": "trusted_task",
+          "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+          "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+          "attemptId": "63b4dc53-e533-40ed-9ae7-10e7f6065fbb",
+          "providerRoute": "offline/provider-a",
+          "runOutcome": {
+            "termination": "cancelled"
+          },
+          "costEvidence": {
+            "status": "reported"
+          },
+          "commitSha": "python-sha",
+          "prompt": "offline fixture",
+          "diff": "",
+          "judging": {
+            "analysis": "offline judge fixture",
+            "strengths": [],
+            "weaknesses": [],
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10,
+            "perJudgeScores": [
+              {
+                "judgeId": "judge-gpt",
+                "completionScore": 10,
+                "codeQualityScore": 10,
+                "overallScore": 10
+              }
+            ],
+            "scoringStatus": "partial_judge_failure"
+          },
+          "scoringStatus": "partial_judge_failure",
+          "cost": 1,
+          "durationMs": 10,
+          "error": "Run cancelled",
+          "retrievalFlow": {
+            "queryCallCount": 0,
+            "queryResultPaths": [],
+            "successfulReadPaths": [],
+            "relevantReadPaths": [],
+            "irrelevantReadPaths": []
+          },
+          "idiomTraceability": {
+            "verdict": "skip",
+            "signals": {
+              "nonTypeScriptEditCount": 0,
+              "languageSignals": [],
+              "hasRequiredReads": false,
+              "deliveryObservable": false,
+              "isEmpty": true
+            },
+            "reasons": [
+              "No non-TypeScript supported-language edits were detected."
+            ]
+          },
+          "thinkerHarvest": {
+            "verdict": "skip",
+            "reasons": [
+              "No thinker subagents in trace."
+            ],
+            "signals": {
+              "thinkerAgentIds": [],
+              "agents": [],
+              "anyEmptyHarvestClobber": false,
+              "anyPreservedNonEmpty": false,
+              "allPlainTextOnly": true
+            }
+          }
+        },
+        {
+          "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+          "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "taskId": "python",
+          "repeat": 1,
+          "languages": [
+            "python"
+          ],
+          "executionScope": "trusted_task",
+          "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+          "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+          "attemptId": "5d8451dc-0b20-4d37-88ef-223cb867d4b5",
+          "providerRoute": "offline/provider-a",
+          "runOutcome": {
+            "termination": "cancelled"
+          },
+          "costEvidence": {
+            "status": "reported"
+          },
+          "commitSha": "python-sha",
+          "prompt": "offline fixture",
+          "diff": "",
+          "judging": {
+            "analysis": "offline judge fixture",
+            "strengths": [],
+            "weaknesses": [],
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10,
+            "perJudgeScores": [
+              {
+                "judgeId": "judge-gpt",
+                "completionScore": 10,
+                "codeQualityScore": 10,
+                "overallScore": 10
+              }
+            ],
+            "scoringStatus": "partial_judge_failure"
+          },
+          "scoringStatus": "partial_judge_failure",
+          "cost": 1,
+          "durationMs": 10,
+          "error": "Run cancelled",
+          "retrievalFlow": {
+            "queryCallCount": 0,
+            "queryResultPaths": [],
+            "successfulReadPaths": [],
+            "relevantReadPaths": [],
+            "irrelevantReadPaths": []
+          },
+          "idiomTraceability": {
+            "verdict": "skip",
+            "signals": {
+              "nonTypeScriptEditCount": 0,
+              "languageSignals": [],
+              "hasRequiredReads": false,
+              "deliveryObservable": false,
+              "isEmpty": true
+            },
+            "reasons": [
+              "No non-TypeScript supported-language edits were detected."
+            ]
+          },
+          "thinkerHarvest": {
+            "verdict": "skip",
+            "reasons": [
+              "No thinker subagents in trace."
+            ],
+            "signals": {
+              "thinkerAgentIds": [],
+              "agents": [],
+              "anyEmptyHarvestClobber": false,
+              "anyPreservedNonEmpty": false,
+              "allPlainTextOnly": true
+            }
+          }
+        }
+      ],
+      "averageScore": 10,
+      "averageScoreExcludingFailures": 10,
+      "averageCost": 1,
+      "averageDuration": 10,
+      "measuredRunCount": 2,
+      "scoreStandardError": 0,
+      "totalCost": 4,
+      "costComplete": true,
+      "attemptCount": 4,
+      "scorePerDollar": 10
+    },
+    "agent-b": {
+      "agentId": "agent-b",
+      "runs": [
+        {
+          "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+          "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "taskId": "typescript",
+          "repeat": 0,
+          "languages": [
+            "typescript"
+          ],
+          "executionScope": "trusted_task",
+          "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+          "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+          "attemptId": "266e0829-b22b-4e78-a60c-e4f3f09fec8b",
+          "providerRoute": "offline/provider-b",
+          "runOutcome": {
+            "termination": "failed"
+          },
+          "costEvidence": {
+            "status": "reported"
+          },
+          "commitSha": "typescript-sha",
+          "prompt": "offline fixture",
+          "diff": "",
+          "judging": {
+            "analysis": "offline judge fixture",
+            "strengths": [],
+            "weaknesses": [],
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10,
+            "perJudgeScores": [
+              {
+                "judgeId": "judge-gpt",
+                "completionScore": 10,
+                "codeQualityScore": 10,
+                "overallScore": 10
+              }
+            ],
+            "scoringStatus": "partial_judge_failure"
+          },
+          "scoringStatus": "partial_judge_failure",
+          "cost": 2,
+          "durationMs": 10,
+          "error": "Run failed",
+          "retrievalFlow": {
+            "queryCallCount": 0,
+            "queryResultPaths": [],
+            "successfulReadPaths": [],
+            "relevantReadPaths": [],
+            "irrelevantReadPaths": []
+          },
+          "idiomTraceability": {
+            "verdict": "skip",
+            "signals": {
+              "nonTypeScriptEditCount": 0,
+              "languageSignals": [],
+              "hasRequiredReads": false,
+              "deliveryObservable": false,
+              "isEmpty": true
+            },
+            "reasons": [
+              "No non-TypeScript supported-language edits were detected."
+            ]
+          },
+          "thinkerHarvest": {
+            "verdict": "skip",
+            "reasons": [
+              "No thinker subagents in trace."
+            ],
+            "signals": {
+              "thinkerAgentIds": [],
+              "agents": [],
+              "anyEmptyHarvestClobber": false,
+              "anyPreservedNonEmpty": false,
+              "allPlainTextOnly": true
+            }
+          }
+        },
+        {
+          "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+          "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "taskId": "typescript",
+          "repeat": 1,
+          "languages": [
+            "typescript"
+          ],
+          "executionScope": "trusted_task",
+          "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+          "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+          "attemptId": "66cc41c5-992d-4d3b-8439-64ebd85244a2",
+          "providerRoute": "offline/provider-b",
+          "runOutcome": {
+            "termination": "failed"
+          },
+          "costEvidence": {
+            "status": "reported"
+          },
+          "commitSha": "typescript-sha",
+          "prompt": "offline fixture",
+          "diff": "",
+          "judging": {
+            "analysis": "offline judge fixture",
+            "strengths": [],
+            "weaknesses": [],
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10,
+            "perJudgeScores": [
+              {
+                "judgeId": "judge-gpt",
+                "completionScore": 10,
+                "codeQualityScore": 10,
+                "overallScore": 10
+              }
+            ],
+            "scoringStatus": "partial_judge_failure"
+          },
+          "scoringStatus": "partial_judge_failure",
+          "cost": 2,
+          "durationMs": 10,
+          "error": "Run failed",
+          "retrievalFlow": {
+            "queryCallCount": 0,
+            "queryResultPaths": [],
+            "successfulReadPaths": [],
+            "relevantReadPaths": [],
+            "irrelevantReadPaths": []
+          },
+          "idiomTraceability": {
+            "verdict": "skip",
+            "signals": {
+              "nonTypeScriptEditCount": 0,
+              "languageSignals": [],
+              "hasRequiredReads": false,
+              "deliveryObservable": false,
+              "isEmpty": true
+            },
+            "reasons": [
+              "No non-TypeScript supported-language edits were detected."
+            ]
+          },
+          "thinkerHarvest": {
+            "verdict": "skip",
+            "reasons": [
+              "No thinker subagents in trace."
+            ],
+            "signals": {
+              "thinkerAgentIds": [],
+              "agents": [],
+              "anyEmptyHarvestClobber": false,
+              "anyPreservedNonEmpty": false,
+              "allPlainTextOnly": true
+            }
+          }
+        },
+        {
+          "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+          "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "taskId": "python",
+          "repeat": 0,
+          "languages": [
+            "python"
+          ],
+          "executionScope": "trusted_task",
+          "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+          "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+          "attemptId": "dc954ddb-6cff-4d70-81fb-a0eabfc28d7b",
+          "providerRoute": "offline/provider-b",
+          "runOutcome": {
+            "termination": "budget_exhausted"
+          },
+          "costEvidence": {
+            "status": "reported"
+          },
+          "commitSha": "python-sha",
+          "prompt": "offline fixture",
+          "diff": "",
+          "judging": {
+            "analysis": "offline judge fixture",
+            "strengths": [],
+            "weaknesses": [],
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10,
+            "perJudgeScores": [
+              {
+                "judgeId": "judge-gpt",
+                "completionScore": 10,
+                "codeQualityScore": 10,
+                "overallScore": 10
+              }
+            ],
+            "scoringStatus": "partial_judge_failure"
+          },
+          "scoringStatus": "partial_judge_failure",
+          "cost": 2,
+          "durationMs": 10,
+          "error": "Run budget_exhausted",
+          "retrievalFlow": {
+            "queryCallCount": 0,
+            "queryResultPaths": [],
+            "successfulReadPaths": [],
+            "relevantReadPaths": [],
+            "irrelevantReadPaths": []
+          },
+          "idiomTraceability": {
+            "verdict": "skip",
+            "signals": {
+              "nonTypeScriptEditCount": 0,
+              "languageSignals": [],
+              "hasRequiredReads": false,
+              "deliveryObservable": false,
+              "isEmpty": true
+            },
+            "reasons": [
+              "No non-TypeScript supported-language edits were detected."
+            ]
+          },
+          "thinkerHarvest": {
+            "verdict": "skip",
+            "reasons": [
+              "No thinker subagents in trace."
+            ],
+            "signals": {
+              "thinkerAgentIds": [],
+              "agents": [],
+              "anyEmptyHarvestClobber": false,
+              "anyPreservedNonEmpty": false,
+              "allPlainTextOnly": true
+            }
+          }
+        },
+        {
+          "runId": "ee881fd7-70ae-4fb4-856a-11c00893d93e",
+          "experimentId": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "taskId": "python",
+          "repeat": 1,
+          "languages": [
+            "python"
+          ],
+          "executionScope": "trusted_task",
+          "workloadHash": "1dbfbf3984ad9deaaa72ca2fadcfbbc3b8a20ef7b0ff778bf19f303abf57a4df",
+          "measurementConfigHash": "4d320efabe8329a8a399c4bd1fbf15db0a740e81a0f603592c81557ed7a12b2f",
+          "evaluatorVersion": "buffbench-v2/bun-1.3.5/8f8b3e019b76adf8b62616f7de161afd9118da488a336d28b0c7d6eea9ea9454",
+          "attemptId": "fd4a301b-27fb-4f31-b717-adcda3a75058",
+          "providerRoute": "offline/provider-b",
+          "runOutcome": {
+            "termination": "budget_exhausted"
+          },
+          "costEvidence": {
+            "status": "reported"
+          },
+          "commitSha": "python-sha",
+          "prompt": "offline fixture",
+          "diff": "",
+          "judging": {
+            "analysis": "offline judge fixture",
+            "strengths": [],
+            "weaknesses": [],
+            "completionScore": 10,
+            "codeQualityScore": 10,
+            "overallScore": 10,
+            "perJudgeScores": [
+              {
+                "judgeId": "judge-gpt",
+                "completionScore": 10,
+                "codeQualityScore": 10,
+                "overallScore": 10
+              }
+            ],
+            "scoringStatus": "partial_judge_failure"
+          },
+          "scoringStatus": "partial_judge_failure",
+          "cost": 2,
+          "durationMs": 10,
+          "error": "Run budget_exhausted",
+          "retrievalFlow": {
+            "queryCallCount": 0,
+            "queryResultPaths": [],
+            "successfulReadPaths": [],
+            "relevantReadPaths": [],
+            "irrelevantReadPaths": []
+          },
+          "idiomTraceability": {
+            "verdict": "skip",
+            "signals": {
+              "nonTypeScriptEditCount": 0,
+              "languageSignals": [],
+              "hasRequiredReads": false,
+              "deliveryObservable": false,
+              "isEmpty": true
+            },
+            "reasons": [
+              "No non-TypeScript supported-language edits were detected."
+            ]
+          },
+          "thinkerHarvest": {
+            "verdict": "skip",
+            "reasons": [
+              "No thinker subagents in trace."
+            ],
+            "signals": {
+              "thinkerAgentIds": [],
+              "agents": [],
+              "anyEmptyHarvestClobber": false,
+              "anyPreservedNonEmpty": false,
+              "allPlainTextOnly": true
+            }
+          }
+        }
+      ],
+      "averageScore": 0,
+      "averageScoreExcludingFailures": 0,
+      "averageCost": 2,
+      "averageDuration": 10,
+      "measuredRunCount": 0,
+      "scoreStandardError": 0,
+      "totalCost": 8,
+      "costComplete": true,
+      "attemptCount": 4,
+      "scorePerDollar": 0
+    }
+  }
+}

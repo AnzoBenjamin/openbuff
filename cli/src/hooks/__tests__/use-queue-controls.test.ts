@@ -66,7 +66,9 @@ describe('runQueuedMessage', () => {
     const activeQueueProcessingOwnerRef = { current: null as symbol | null }
     const isProcessingQueueRef = { current: false }
     const isQueuePausedRef = { current: false }
-    const queue: QueuedMessage[] = [{ content: 'queued', attachments: [] }]
+    const queue: QueuedMessage[] = [
+      { content: 'queued', attachments: [], agentMode: 'DEFAULT' as const },
+    ]
     const messageToProcess = queue[0]
     expect(messageToProcess).toBeDefined()
 
@@ -96,7 +98,11 @@ describe('runQueuedMessage', () => {
     const activeQueueProcessingOwnerRef = { current: null as symbol | null }
     const isProcessingQueueRef = { current: false }
     const isQueuePausedRef = { current: false }
-    const message = { content: 'do not lose me', attachments: [] }
+    const message = {
+      content: 'do not lose me',
+      attachments: [],
+      agentMode: 'DEFAULT' as const,
+    }
     const restored: QueuedMessage[] = []
 
     runQueuedMessage({
@@ -123,7 +129,11 @@ describe('runQueuedMessage', () => {
     const activeQueueProcessingOwnerRef = { current: null as symbol | null }
     const isProcessingQueueRef = { current: false }
     const isQueuePausedRef = { current: false }
-    const message = { content: 'sync throw', attachments: [] }
+    const message = {
+      content: 'sync throw',
+      attachments: [],
+      agentMode: 'DEFAULT' as const,
+    }
     const restored: QueuedMessage[] = []
 
     runQueuedMessage({
@@ -154,7 +164,11 @@ describe('runQueuedMessage', () => {
     const runB = createDeferred()
 
     runQueuedMessage({
-      messageToProcess: { content: 'run A', attachments: [] },
+      messageToProcess: {
+        content: 'run A',
+        attachments: [],
+        agentMode: 'DEFAULT' as const,
+      },
       sendMessage: () => runA.promise,
       isProcessingQueueRef,
       isQueuePausedRef,
@@ -169,7 +183,11 @@ describe('runQueuedMessage', () => {
     isProcessingQueueRef.current = false
 
     runQueuedMessage({
-      messageToProcess: { content: 'run B', attachments: [] },
+      messageToProcess: {
+        content: 'run B',
+        attachments: [],
+        agentMode: 'DEFAULT' as const,
+      },
       sendMessage: () => runB.promise,
       isProcessingQueueRef,
       isQueuePausedRef,

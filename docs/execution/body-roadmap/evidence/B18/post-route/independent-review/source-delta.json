@@ -1,0 +1,17 @@
+{
+  "allOtherPriorBindingsMatch": true,
+  "changedPriorBindings": [
+    {
+      "file": "sdk/src/impl/llm.ts",
+      "priorHash": "62dfe2a16bef79a700d8aafb7d56ca972a7e1707026e6fe92813cf05978b11c0",
+      "currentHash": "76b1b88454eb1471eeb3a71ae2ec60e97b83603c40799d3ce3cdbc6abe226be5"
+    }
+  ],
+  "addedRegressionBinding": {
+    "file": "sdk/src/__tests__/provider-contract-regressions.test.ts",
+    "sha256": "904140141f77414577f46b498c71c64dca1c83dfd1a44eb1d559b7c23fde323b"
+  },
+  "exactLlmDeltaVerified": true,
+  "exactAddedTestVerified": true,
+  "deltaAuthorship": "Leader-authored B08 route metadata followup; prior B02/B08 fixes were reviewer-authored and receive no new independent prerequisite approval."
+}

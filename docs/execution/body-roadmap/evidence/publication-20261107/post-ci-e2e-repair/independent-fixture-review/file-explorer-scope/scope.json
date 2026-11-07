@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-file-explorer-binding-scope-extension",
+  "recordedAt": "2026-11-07T00:07:25.894230+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "source": {
+    "path": "agents/e2e/file-explorer.e2e.test.ts",
+    "sha256": "b7ac93cac7f1fd2e1d38334ffaf483c473b9e1e5cb7b1a97a1f78c2238d8c48b",
+    "bytes": 16257
+  },
+  "method": "Derive file-specific scope from the already sealed exact frozen-validator digest observer covering all nine E2E TypeScript files, then recheck current ledger, validator, source and frozen inventory hashes. No new validator or product test run.",
+  "originalObserver": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/independent-scope/active-bindings.json",
+    "sha256": "d904eff41f734d7241e8c2bb1560a9df6d028d562cfce53ddebfd9b53b5fe4d2",
+    "bytes": 11995
+  },
+  "ledger": {
+    "path": "docs/execution/body-roadmap/ledger.json",
+    "sha256": "64bdc49206f2e3efad0393dad82048134c4403e43bef8bdb26696251bbf7b07b",
+    "bytes": 83077
+  },
+  "validator": {
+    "path": "docs/execution/body-roadmap/validate-ledger.py",
+    "sha256": "6aa69375eeeae93f4850a6a068e1c17d39ba08b7a7b4d14c8ebe10e552d36c4c",
+    "bytes": 28560
+  },
+  "frozenInventory": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/curated-required-files.json",
+    "sha256": "f12426acfb0e68b64a584a08a46ed830a305f3045cdf7bf02c6ffda5f07f5731",
+    "bytes": 2165517
+  },
+  "frozenInventoryCount": 2644,
+  "actualActiveBindingCalls": [],
+  "acceptedSourceContractMembership": [],
+  "frozenInventoryMembership": [],
+  "ledgerAndValidatorUnchangedSinceObserver": true,
+  "sourceUnchangedSinceObserver": true,
+  "decision": "A change confined to this file requires no accepted-evidence renewal and no frozen-inventory override. Implementation semantics and fresh CI evidence require a separate review.",
+  "twoGateFixtureApprovalUnaffected": true,
+  "sourceLedgerStagingOrSealedEvidenceEdited": false
+}

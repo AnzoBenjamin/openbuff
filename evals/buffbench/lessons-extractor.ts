@@ -18,6 +18,8 @@ export interface Lesson {
 }
 
 type ExtractAgentLessonsInput = {
+  env?: Record<string, string>
+  inheritEnv?: boolean
   client: OpenbuffClient
   localAgentDefinitions: any[]
   prompt: string
@@ -234,8 +236,12 @@ ${error ? `\n## Agent Error\n${error}\n` : ''}
 Task: Analyze what went wrong and what should have been done. For each mistake or gap, provide a lesson with both parts: whatWentWrong and whatShouldHaveBeenDone. Output the lessons array as specified. Additionally, emit structured proposals for any lesson that maps to a safe, mechanical config change (append system-prompt guidance, add/remove tool, set model, set budget). Leave the proposals array empty if no safe proposal exists.`
 
     const agentOutput: string[] = []
+    const controller = new AbortController()
     const result = await withTimeout(
       client.run({
+        signal: controller.signal,
+        env: input.env,
+        inheritEnv: input.inheritEnv,
         agent: 'buffbench-lessons-extractor',
         prompt: lessonsPrompt,
         agentDefinitions: [lessonsExtractorAgent, ...localAgentDefinitions],
@@ -247,6 +253,7 @@ Task: Analyze what went wrong and what should have been done. For each mistake o
       }),
       20 * 60 * 1000,
       'Lessons extractor timed out after 20 minutes',
+      { controller },
     )
 
     if (result.output.type !== 'structuredOutput' || !result.output.value) {

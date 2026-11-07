@@ -12,7 +12,12 @@ import { useShallow } from 'zustand/react/shallow'
 
 import { routeUserPrompt, addBashMessageToHistory } from './commands/router'
 import { ChatInputBar } from './components/chat-input-bar'
+import { Button } from './components/button'
 import { CommandPaletteScreen } from './components/command-palette-screen'
+import { OutputReaderScreen } from './components/output-reader-screen'
+import { QueueScreen } from './components/queue-screen'
+import { AttachmentRecoveryScreen } from './components/attachment-recovery-screen'
+import { useOutputReaderStore } from './state/output-reader-store'
 import { PromptHistorySearchScreen } from './components/prompt-history-search-screen'
 import { ModelRoutePicker } from './components/model-route-picker'
 import { PlanSessionPickerScreen } from './components/plan-session-picker-screen'
@@ -21,8 +26,8 @@ import {
   type ProviderPickerSelection,
 } from './components/provider-picker-screen'
 import { LoadPreviousButton } from './components/load-previous-button'
+import { MessageListWindow } from './components/message-list-window'
 import { ReviewScreen } from './components/review-screen'
-import { MessageWithAgents } from './components/message-with-agents'
 import { PendingBashMessage } from './components/pending-bash-message'
 import { StatusBar } from './components/status-bar'
 import { TopBanner } from './components/top-banner'
@@ -58,16 +63,18 @@ import { usePublishStore } from './state/publish-store'
 import { trackEvent } from './utils/analytics'
 import { showClipboardMessage } from './utils/clipboard'
 import { readClipboardImage } from './utils/clipboard-image'
+import { consumeCapturedEarlyInput } from './utils/early-input-capture'
 import { getSystemMessage } from './utils/message-history'
 import { createErrorMessage } from './utils/send-message-helpers'
+import { forkConversationBeforeMessage } from './utils/conversation-fork'
+import { isTurnBisectionRunning } from './utils/turn-snapshots'
 import { getInputModeConfig } from './utils/input-modes'
 import {
   addCustomOpenbuffProvider,
   handleOpenbuffProviderCommand,
-  resolveModelNameForAgent,
   setupOpenbuffProviderFromArgs,
 } from './utils/openbuff-provider'
-import { getDiffStats, type DiffStats } from './utils/git'
+import { getDiffStatsAsync, type DiffStats } from './utils/git'
 import {
   peekIndexStatus,
   shouldForceStatusLineForIndex,
@@ -86,6 +93,8 @@ import {
   addPendingFileMention,
   addPendingImageFromFile,
   validateAndAddImage,
+  hasProcessingFiles,
+  hasProcessingImages,
 } from './utils/pending-attachments'
 import { getLoadedSkills } from './utils/skill-registry'
 import {
@@ -94,29 +103,67 @@ import {
 } from './utils/status-indicator-state'
 import { createPasteHandler, LONG_TEXT_THRESHOLD } from './utils/strings'
 import { setTerminalTitle } from './utils/terminal-title'
-import { computeInputLayoutMetrics } from './utils/text-layout'
+import {
+  computeInputLayoutMetrics,
+  inputWrapColumns,
+  multilineInputMeasurementKey,
+} from './utils/text-layout'
 
 import type { CommandResult } from './commands/command-registry'
+import type { InputValue, PendingAttachment } from './types/store'
 import type { MultilineInputHandle } from './components/multiline-input'
 import type { MatchedSlashCommand } from './hooks/use-suggestion-engine'
-import { AGENT_MODE_TO_ID, type AgentMode } from './utils/constants'
+import { type AgentMode } from './utils/constants'
+import { useConfiguredModelName } from './hooks/use-configured-model-name'
 import type { FileTreeNode } from '@codebuff/common/util/file'
 import type {
   CompactionNotice,
   StatusBarContextUsage,
 } from './utils/sdk-event-handlers'
-import type { ScrollBoxRenderable } from '@opentui/core'
+import type { BoxRenderable, ScrollBoxRenderable } from '@opentui/core'
 import {
   setExitStreamSignal,
   setQueuedPromptDrain,
 } from './hooks/use-exit-handler'
 import { createQueuedPromptDrainer } from './hooks/helpers/exit-queue-drain'
+import { whenRegistriesReady } from './services/deferred-registries'
+import { createJsonDocument } from './utils/output-document'
+import { conversationUpdateKeys } from './utils/conversation-updates'
+import { useConversationControls } from './hooks/use-conversation-controls'
+import { retryPendingAttachment } from './utils/pending-attachments'
+
+import {
+  type MentionReplacement,
+  resolveMentionReplacement,
+  buildMentionReplacement,
+} from './utils/mention-helpers'
+
+/**
+ * Policy for when the status-bar git diff-stats refresh may fork a git
+ * subprocess across an isStreaming transition (wasStreaming → isStreaming).
+ *
+ * Pins the streaming hot-path invariant documented on the diff-stats effects
+ * below: a stream never spawns git from this component. The steady-stream
+ * half is enforced by the 10s interval poller gating on
+ * `!isStreamingRef.current`; the falling edge applies this predicate
+ * directly and refreshes exactly once. A regression that re-introduces
+ * spawns during streaming must change this predicate's truth table or
+ * bypass it, both reviewable in isolation.
+ */
+export function shouldSpawnDiffStatsForStreamingTransition(
+  wasStreaming: boolean,
+  isStreaming: boolean,
+): boolean {
+  return wasStreaming && !isStreaming
+}
 
 export const Chat = ({
   headerContent,
   initialPrompt,
+  claimInitialPrompt,
   agentId,
   fileTree,
+  fileInventoryState,
   inputRef,
 
   continueChat,
@@ -128,8 +175,10 @@ export const Chat = ({
 }: {
   headerContent: React.ReactNode
   initialPrompt: string | null
+  claimInitialPrompt?: (prompt: string) => boolean
   agentId?: string
   fileTree: FileTreeNode[]
+  fileInventoryState?: 'loading' | 'loaded' | 'unavailable'
   inputRef: React.MutableRefObject<MultilineInputHandle | null>
 
   continueChat: boolean
@@ -143,6 +192,49 @@ export const Chat = ({
   const [modelRoutePickerOpen, setModelRoutePickerOpen] = useState(false)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [promptHistoryOpen, setPromptHistoryOpen] = useState(false)
+  const [queueScreenOpen, setQueueScreenOpen] = useState(false)
+  const [attachmentManagerOpen, setAttachmentManagerOpen] = useState(false)
+  const attachmentManagerOpenRef = useRef(false)
+  const [modeMenuOpen, setModeMenuOpen] = useState(false)
+  const modeMenuOpenRef = useRef(false)
+  const readerRequest = useOutputReaderStore((state) => state.request)
+  const transcriptHeaderRef = useRef<BoxRenderable | null>(null)
+  const [transcriptTarget, setTranscriptTarget] = useState<{ messageId: string; token: number } | null>(null)
+  const [unreadUpdates, setUnreadUpdates] = useState(0)
+  const observedUpdates = useRef<Set<string> | null>(null)
+  const wasReading = useRef(false)
+  useLayoutEffect(() => {
+    if (readerRequest || queueScreenOpen || attachmentManagerOpen) {
+      useChatStore.getState().setInputFocused(false)
+      wasReading.current = true
+    } else if (wasReading.current) {
+      wasReading.current = false
+      useChatStore.getState().setInputFocused(true)
+      inputRef.current?.focus()
+    }
+  }, [readerRequest, queueScreenOpen, attachmentManagerOpen, inputRef])
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
+  const editOriginDraft = useRef<{
+    input: InputValue
+    attachments: PendingAttachment[]
+  } | null>(null)
+  const restoreEditDraft = useEvent(() => {
+    const saved = editOriginDraft.current
+    editOriginDraft.current = null
+    setEditingMessageId(null)
+    if (!saved) return
+    const store = useChatStore.getState()
+    store.setInputValue(saved.input)
+    store.setInputFocused(true)
+    const identity = (attachment: PendingAttachment) =>
+      attachment.kind === 'image' ? attachment.path : attachment.id
+    const existing = new Set(store.pendingAttachments.map(identity))
+    for (const attachment of saved.attachments) {
+      if (!existing.has(identity(attachment)))
+        store.addPendingAttachment(attachment)
+    }
+    inputRef.current?.focus()
+  })
   const [providerPickerOpen, setProviderPickerOpen] = useState(false)
   const [planSessionPickerCommand, setPlanSessionPickerCommand] = useState<
     string | null
@@ -192,6 +284,33 @@ export const Chat = ({
     }
   }, [initialMode, setAgentMode])
 
+  // Boot-window keystroke replay: main() captures stdin bytes typed before the
+  // renderer existed (see utils/early-input-capture.ts) and stops the capture
+  // just before creating the renderer, so this is the first component that can
+  // receive them. consumeCapturedEarlyInput() is a one-shot TAKE — the module
+  // clears its text when it hands it over — so a Chat remount (chatKey change)
+  // can never replay the same text twice, and when there is nothing to replay
+  // it returns undefined and this effect is a no-op.
+  //
+  // APPEND only, and deliberately NOT submitted: the user typed this text
+  // before the input was live, so it belongs in the input box exactly where
+  // they left it. This stays independent of the initialPrompt auto-submit flow
+  // in use-chat-input.ts — that flow submits the CLI-flag prompt on its own
+  // timer and does not read the input value, so the two never interact.
+  //
+  // lastEditDueToNav stays false: the append is a plain text edit, so the
+  // history-navigation guards in use-chat-input treat it as user typing.
+  useEffect(() => {
+    const captured = consumeCapturedEarlyInput()
+    if (captured) {
+      setInputValue((prev) => ({
+        text: prev.text + captured,
+        cursorPosition: prev.text.length + captured.length,
+        lastEditDueToNav: false,
+      }))
+    }
+  }, [setInputValue])
+
   // Additional selector for active agent types to derive phase-aware status labels
   const activeAgentTypes = useChatStore((state) => state.activeAgentTypes)
 
@@ -204,6 +323,7 @@ export const Chat = ({
     isUserCollapsing,
     handleLoadPreviousMessages,
     handleToggleAll,
+    revealMessage,
   } = useChatMessages({ messages, setMessages })
 
   // Use extracted UI hook for scroll, terminal dimensions, and theme
@@ -212,6 +332,10 @@ export const Chat = ({
     scrollToLatest,
     scrollUp,
     scrollDown,
+    adjustScrollTop,
+    isAtBottomNow,
+    scrollIntentRef,
+    pauseFollowing,
     appliedScrollboxProps,
     isAtBottom,
     hasOverflow,
@@ -223,15 +347,47 @@ export const Chat = ({
     isNarrowWidth,
     theme,
     markdownPalette,
-  } = useChatUI({ messages, isUserCollapsing })
+  } = useChatUI({
+    messages,
+    isUserCollapsing,
+    readingPaused: readerRequest !== null || queueScreenOpen || attachmentManagerOpen,
+  })
+  const conversationControls = useConversationControls({
+    scrollRef,
+    enabled: () => !modeMenuOpenRef.current && !attachmentManagerOpenRef.current && useOutputReaderStore.getState().request === null && !queueScreenOpen && !commandPaletteOpen && !promptHistoryOpen && !modelRoutePickerOpen && !providerPickerOpen && !askUserState && !reviewMode,
+    onEnter: () => { setInputFocused(false); pauseFollowing() },
+    onLeave: () => { setInputFocused(true); inputRef.current?.focus() },
+    onCommands: () => setCommandPaletteOpen(true),
+    composerHasFocus: () => inputRef.current?.hasFocus?.() ?? true,
+  })
 
-  const localAgents = useMemo(() => loadLocalAgents(agentMode), [agentMode])
+  // P1-T9: the agent/skill registries load asynchronously after startup
+  // (services/deferred-registries). The reads below happen once at mount, so
+  // re-run them when the deferred loads settle — without this gate the
+  // slash-command skill suggestions and the local agent list would observe
+  // the (still-empty) registries and stay empty for the whole session.
+  const [registriesLoaded, setRegistriesLoaded] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void whenRegistriesReady().then(() => {
+      if (!cancelled) setRegistriesLoaded(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const localAgents = useMemo(
+    () => loadLocalAgents(agentMode),
+    [agentMode, registriesLoaded],
+  )
   const inputMode = useChatStore((state) => state.inputMode)
   const setInputMode = useChatStore((state) => state.setInputMode)
   const askUserState = useChatStore((state) => state.askUserState)
 
-  // Get loaded skills for slash commands
-  const loadedSkills = useMemo(() => getLoadedSkills(), [])
+  // Get loaded skills for slash commands (re-read once the deferred
+  // registry loads settle — see the registriesLoaded gate above).
+  const loadedSkills = useMemo(() => getLoadedSkills(), [registriesLoaded])
 
   // Merge skill commands and game-dev preset commands into the slash command list
   const filteredSlashCommands = useMemo(() => {
@@ -367,6 +523,21 @@ export const Chat = ({
     queuedMessages,
     queuePaused,
     streamMessageIdRef,
+    queueError,
+    queueAttachmentNotice,
+    hasQueuedAttachmentReads,
+    attachmentRemovalCount,
+    getQueuedAttachmentRevision,
+    updateQueuedAttachment,
+    cancelQueuedAttachmentRetry,
+    removeQueuedAttachment,
+    undoQueuedAttachmentRemoval,
+    queueRemovalCount,
+    cancelQueuedMessages,
+    updateQueuedMessage,
+    removeQueuedMessage,
+    moveQueuedMessage,
+    undoQueueRemoval,
     addToQueue,
     stopStreaming,
     setCanProcessQueue,
@@ -405,7 +576,8 @@ export const Chat = ({
     setExitStreamSignal(() => abortControllerRef.current?.signal)
     setQueuedPromptDrain(
       createQueuedPromptDrainer({
-        pushMessageSnapshot: () => useChatStore.getState().pushMessageSnapshot(),
+        pushMessageSnapshot: () =>
+          useChatStore.getState().pushMessageSnapshot(),
         clearQueue,
         saveToHistory,
       }),
@@ -414,7 +586,7 @@ export const Chat = ({
       setExitStreamSignal(undefined)
       setQueuedPromptDrain(undefined)
     }
-  }, [clearQueue, saveToHistory, addToQueue, abortControllerRef])
+  }, [clearQueue, saveToHistory, abortControllerRef])
 
   // M4.3: Context-window usage for the status bar (updated via context_window
   // PrintModeEvent from the agent runtime).
@@ -437,36 +609,88 @@ export const Chat = ({
   const [indexStatus, setIndexStatus] = useState<IndexStatusPeek>(null)
 
   // Resolve the model name for the active agent mode from the provider config.
-  const modelName = useMemo(() => {
-    const agentId = AGENT_MODE_TO_ID[agentMode]
-    return agentId ? resolveModelNameForAgent(agentId) : null
-  }, [agentMode])
+  const modelName = useConfiguredModelName(
+    agentMode,
+    `${modelRoutePickerOpen}:${providerPickerOpen}:${registriesLoaded}`,
+  )
 
-  // Poll git diff stats: on mount, after streaming ends, and periodically
-  // while idle (cheap `git status --short` call).
+  // Current isStreaming value, readable from the effects below so they do
+  // not have to re-subscribe when it changes.
+  const isStreamingRef = useRef(false)
+
+  // Poll git diff stats: on mount and periodically while idle. The git call
+  // runs off the render thread (getDiffStatsAsync). A per-effect AbortController
+  // + cancelled flag ensures a late-resolving result after unmount does not
+  // call setState, and only the latest in-flight refresh wins. The interval
+  // callback is a no-op while isStreaming is true, so no git subprocess is
+  // forked on the streaming hot path; the falling-edge effect below refreshes
+  // exactly once when the stream completes.
+  //
+  // Streaming-path spawn count, before → after (the streaming half is
+  // pinned by shouldSpawnDiffStatsForStreamingTransition below; counting
+  // getDiffStatsAsync invocations while a stream is active verifies the
+  // rest): a stream that holds isStreaming true for T seconds previously
+  // forked floor(T / 10) extra git subprocesses from this interval, on top
+  // of the one per falling edge — e.g. a 60s stream forked ≥6 spawns during
+  // streaming plus 1 after, vs exactly 1 spawn (after) now. The index-status
+  // poller below applies the same pause.
   useEffect(() => {
     const cwd = getProjectRoot() ?? process.cwd()
-    const refresh = () => setDiffStats(getDiffStats({ cwd }))
+    let cancelled = false
+    const controller = new AbortController()
+    const refresh = () => {
+      if (isStreamingRef.current) return
+      getDiffStatsAsync({ cwd, signal: controller.signal })
+        .then((stats) => {
+          if (!cancelled) setDiffStats(stats)
+        })
+        .catch(() => {})
+    }
     refresh()
     const interval = setInterval(refresh, 10_000)
-    return () => clearInterval(interval)
+    return () => {
+      cancelled = true
+      controller.abort()
+      clearInterval(interval)
+    }
   }, [])
-  // Refresh diff stats when streaming completes (files may have changed).
+  // Refresh diff stats only on the falling edge of isStreaming (stream just
+  // completed) via the pinned shouldSpawnDiffStatsForStreamingTransition
+  // predicate. The shared ref doubles as the previous-value tracker, so the
+  // rising edge still does not spawn — and then immediately abort — a
+  // subprocess.
   useEffect(() => {
-    if (!isStreaming) {
-      const cwd = getProjectRoot() ?? process.cwd()
-      setDiffStats(getDiffStats({ cwd }))
+    const wasStreaming = isStreamingRef.current
+    isStreamingRef.current = isStreaming
+    if (
+      !shouldSpawnDiffStatsForStreamingTransition(wasStreaming, isStreaming)
+    ) {
+      return
+    }
+    const cwd = getProjectRoot() ?? process.cwd()
+    let cancelled = false
+    const controller = new AbortController()
+    getDiffStatsAsync({ cwd, signal: controller.signal })
+      .then((stats) => {
+        if (!cancelled) setDiffStats(stats)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+      controller.abort()
     }
   }, [isStreaming])
 
   // Peek index status from the existing singleton (~2s). getStatus() may
   // schedule an age-stale refresh; do not call ensureBuilt() from the UI.
+  // Pause polling while streaming to avoid unnecessary work on the hot path.
   useEffect(() => {
+    if (isStreaming) return
     const refresh = () => setIndexStatus(peekIndexStatus())
     refresh()
     const interval = setInterval(refresh, 2_000)
     return () => clearInterval(interval)
-  }, [])
+  }, [isStreaming])
 
   // When streaming completes, flush any pending bash commands into history (ghost mode only)
   // Non-ghost mode commands are already in history and will be cleared when user sends next message
@@ -519,7 +743,10 @@ export const Chat = ({
     agentId,
     onBeforeMessageSend: validateAgents,
     mainAgentTimer,
-    scrollToLatest,
+    scrollToLatest: (options) => {
+      if (isProcessingQueueRef.current && !isAtBottomNow()) return
+      scrollToLatest(options)
+    },
     onTotalCost: (costCents) => setSessionCostCents((prev) => prev + costCents),
     onTimerEvent: () => {},
     isQueuePausedRef,
@@ -535,61 +762,77 @@ export const Chat = ({
     async (
       content: string,
       mode: AgentMode,
-      options?: { preserveInputValue?: boolean },
+      options?: {
+        preserveInputValue?: boolean
+        editMessageId?: string
+        preservePromptWhitespace?: boolean
+        onAccepted?: () => void
+        propagateError?: boolean
+      },
     ) => {
-      ensureQueueActiveBeforeSubmit()
-
-      // Edit & resend: if the user clicked Edit on a previous user message, the
-      // edited message id was captured at click time. Before sending the new
-      // (edited) content as a fresh user message, snapshot the current
-      // conversation for /undo and truncate the conversation at (and including)
-      // the edited message. The ref is cleared immediately after reading so a
-      // failed/aborted edit cannot poison the next normal send.
-      const editingMessageId = editingMessageIdRef.current
-      if (editingMessageId) {
-        editingMessageIdRef.current = null
-        useChatStore.getState().pushMessageSnapshot()
-        useChatStore.getState().setMessages((prev) => {
-          const idx = prev.findIndex((m) => m.id === editingMessageId)
-          if (idx === -1) return prev
-          return prev.slice(0, idx)
-        })
+      let preserveInput = options?.preserveInputValue === true
+      const editId = options?.editMessageId
+      if (
+        editId &&
+        (content.trim().startsWith('/') ||
+          content.trim().startsWith('!') ||
+          useChatStore.getState().inputMode !== 'default')
+      ) {
+        restoreEditDraft()
+        preserveInput = true
       }
-
-      const preserveInput = options?.preserveInputValue === true
-      const previousInputValue = preserveInput
-        ? (() => {
-            const {
-              inputValue: text,
-              cursorPosition,
-              lastEditDueToNav,
-            } = useChatStore.getState()
-            return { text, cursorPosition, lastEditDueToNav }
-          })()
-        : null
-
-      // Preserve attachments if needed (inline logic to avoid abstraction overhead)
-      const preservedAttachments = preserveInput
-        ? (() => {
-            const items = useChatStore.getState().pendingAttachments
-            if (items.length > 0) {
-              useChatStore.getState().clearPendingAttachments()
-              return [...items]
-            }
-            return null
-          })()
-        : null
+      let committedEdit = false
+      if (editId && !preserveInput) {
+        if (
+          !content.trim() &&
+          useChatStore.getState().pendingAttachments.length === 0
+        )
+          return
+        if (
+          isStreaming ||
+          isChainInProgressRef.current ||
+          streamMessageIdRef.current ||
+          isTurnBisectionRunning() ||
+          hasProcessingImages() ||
+          hasProcessingFiles()
+        ) {
+          showClipboardMessage(
+            'Wait for the current run and attachments, or stop the run before resending this edit.',
+          )
+          return
+        }
+        if (editId !== editingMessageId) return
+        const current = useChatStore.getState()
+        const fork = forkConversationBeforeMessage(
+          current.runState,
+          current.messages,
+          editId,
+        )
+        if (fork.status !== 'ready') {
+          showClipboardMessage(fork.reason, { durationMs: 5000 })
+          return
+        }
+        current.pushMessageSnapshot()
+        clearMessages(fork.runState)
+        current.setMessages(fork.messages)
+        setEditingMessageId(null)
+        committedEdit = true
+      }
+      ensureQueueActiveBeforeSubmit()
 
       // P6.1: Guard the top-level submit path so an unexpected rejection is
       // caught, logged, and surfaced as a visible inline error message instead
-      // of becoming an unhandled rejection that can crash the TUI. The final
-      // restore of input/attachments still runs in the finally block below.
+      // of becoming an unhandled rejection that can crash the TUI. Action
+      // submissions never write to the draft, even while awaiting a result.
       try {
-        const result = await routeUserPrompt({
+        const submission = routeUserPrompt({
           abortControllerRef,
           agentMode: mode,
           inputRef,
           inputValue: content,
+          preserveInputValue: preserveInput,
+          preservePromptWhitespace: options?.preservePromptWhitespace,
+          onPromptAccepted: options?.onAccepted,
           isChainInProgressRef,
           isStreaming,
           streamMessageIdRef,
@@ -604,7 +847,11 @@ export const Chat = ({
           setMessages,
           stopStreaming,
         })
-
+        // The send drains the edit's attachments before its first await.
+        // Restore the earlier draft immediately; never restore after a run.
+        if (committedEdit && useChatStore.getState().inputValue === '')
+          restoreEditDraft()
+        const result = await submission
         return result
       } catch (error) {
         logger.error(
@@ -618,84 +865,51 @@ export const Chat = ({
           ),
         ])
         setTimeout(() => scrollToLatest(), 0)
-        // The caller receives undefined (no command result) and errors attached
-        // to this path are handled above rather than propagating as an
-        // unhandled rejection.
+        if (options?.propagateError) throw error
         return undefined
-      } finally {
-        if (previousInputValue) {
-          setInputValue({
-            text: previousInputValue.text,
-            cursorPosition: previousInputValue.cursorPosition,
-            lastEditDueToNav: previousInputValue.lastEditDueToNav,
-          })
-        }
-
-        // Restore attachments if they were preserved and none have been added since
-        if (
-          preservedAttachments &&
-          useChatStore.getState().pendingAttachments.length === 0
-        ) {
-          useChatStore.setState((state) => {
-            state.pendingAttachments = preservedAttachments
-          })
-        }
       }
     },
   )
 
-  // Handle followup suggestion clicks
+  const handleFollowupClick = useEvent((event: Event) => {
+    const request = event as CustomEvent<import('./utils/followup-request').FollowupSubmissionDetail>
+    const detail = request.detail
+    if (!detail || typeof detail.complete !== 'function') return
+    event.preventDefault()
+    if (typeof detail.prompt !== 'string' || !Number.isInteger(detail.index) || typeof detail.toolCallId !== 'string') {
+      detail.complete(false, 'This followup has invalid captured content.')
+      return
+    }
+    if (modeMenuOpenRef.current || attachmentManagerOpenRef.current || conversationControls.activeRef.current ||
+      useOutputReaderStore.getState().request !== null || queueScreenOpen || commandPaletteOpen ||
+      promptHistoryOpen || modelRoutePickerOpen || providerPickerOpen || askUserState || reviewMode || planSessionPickerCommand) {
+      detail.complete(false, 'Return to the conversation before sending this followup.')
+      return
+    }
+    let accepted = false
+    void onSubmitPrompt(detail.prompt, agentMode, {
+      preserveInputValue: true,
+      preservePromptWhitespace: true,
+      propagateError: true,
+      onAccepted: () => {
+        if (accepted) return
+        accepted = true
+        useChatStore.getState().markFollowupClicked(detail.toolCallId, detail.index)
+        trackEvent(AnalyticsEvent.FOLLOWUP_CLICKED, {
+          promptLength: detail.prompt.length, index: detail.index, agentMode,
+        })
+        detail.complete(true)
+      },
+    }).then(() => {
+      if (!accepted) detail.complete(false, 'The followup was not accepted. Check the conversation for the readiness or validation issue, then retry.')
+    }).catch((error) => {
+      detail.complete(false, error instanceof Error ? error.message : 'Failed to send this followup. Try again.')
+    })
+  })
   useEffect(() => {
-    const handleFollowupClick = (event: Event) => {
-      const customEvent = event as CustomEvent<{
-        prompt: string
-        index: number
-        toolCallId: string
-      }>
-      const { prompt, index, toolCallId } = customEvent.detail
-
-      logger.info(
-        { promptLength: prompt.length, index, toolCallId, agentMode },
-        '[followup-click] Followup clicked',
-      )
-
-      // Track analytics event
-      trackEvent(AnalyticsEvent.FOLLOWUP_CLICKED, {
-        promptLength: prompt.length,
-        index,
-        agentMode,
-      })
-
-      // Mark this followup as clicked (persisted per toolCallId)
-      useChatStore.getState().markFollowupClicked(toolCallId, index)
-
-      // Send the followup prompt directly, preserving the user's current input
-      onSubmitPrompt(prompt, agentMode, {
-        preserveInputValue: true,
-      })
-        .then((result) => {
-          logger.info(
-            { hasResult: !!result },
-            '[followup-click] onSubmitPrompt completed',
-          )
-        })
-        .catch((error) => {
-          logger.error(
-            { error },
-            '[followup-click] onSubmitPrompt failed with error',
-          )
-          showClipboardMessage('Failed to send followup', { durationMs: 3000 })
-        })
-    }
-
     globalThis.addEventListener('codebuff:send-followup', handleFollowupClick)
-    return () => {
-      globalThis.removeEventListener(
-        'codebuff:send-followup',
-        handleFollowupClick,
-      )
-    }
-  }, [onSubmitPrompt, agentMode])
+    return () => globalThis.removeEventListener('codebuff:send-followup', handleFollowupClick)
+  }, [handleFollowupClick])
 
   // handleSlashItemClick is defined later after feedback/publish stores are available
 
@@ -703,31 +917,27 @@ export const Chat = ({
     (index: number) => {
       if (mentionContext.startIndex < 0) return
 
-      let replacement: string
-      if (index < agentMatches.length) {
-        const selected = agentMatches[index]
-        if (!selected) return
-        replacement = `@${selected.id} `
-      } else {
-        const fileIndex = index - agentMatches.length
-        const selectedFile = fileMatches[fileIndex]
-        if (!selectedFile) return
+      const resolved = resolveMentionReplacement(
+        index,
+        agentMatches,
+        fileMatches,
+        false,
+      )
+      if (!resolved) return
+      if (resolved.selectedFile) {
         addPendingFileMention(
-          selectedFile.filePath,
-          selectedFile.isDirectory,
+          resolved.selectedFile.filePath,
+          resolved.selectedFile.isDirectory,
           getProjectRoot(),
         )
-        replacement = `@${selectedFile.filePath} `
       }
-      const before = inputValue.slice(0, mentionContext.startIndex)
-      const after = inputValue.slice(
-        mentionContext.startIndex + 1 + mentionContext.query.length,
+      const { text, cursorPosition } = buildMentionReplacement(
+        inputValue,
+        mentionContext.startIndex,
+        mentionContext.query,
+        resolved.replacement,
       )
-      setInputValue({
-        text: before + replacement + after,
-        cursorPosition: before.length + replacement.length,
-        lastEditDueToNav: false,
-      })
+      setInputValue({ text, cursorPosition, lastEditDueToNav: false })
       setAgentSelectedIndex(0)
     },
     [
@@ -741,14 +951,15 @@ export const Chat = ({
   )
 
   const { inputWidth, handleBuildFast } = useChatInput({
-    setInputValue,
     agentMode,
     setAgentMode,
     separatorWidth,
     initialPrompt,
+    claimInitialPrompt,
     onSubmitPrompt,
     isCompactHeight,
     isNarrowWidth,
+    modeWidthAdjustment: getInputModeConfig(inputMode).widthAdjustment,
   })
 
   const {
@@ -898,13 +1109,10 @@ export const Chat = ({
 
   const inputValueRef = useRef(inputValue)
   const cursorPositionRef = useRef(cursorPosition)
-  useEffect(() => {
-    inputValueRef.current = inputValue
-  }, [inputValue])
-
-  useEffect(() => {
-    cursorPositionRef.current = cursorPosition
-  }, [cursorPosition])
+  // Sync refs synchronously during render — no useEffect needed, avoids
+  // scheduling overhead on the hot keystroke path.
+  inputValueRef.current = inputValue
+  cursorPositionRef.current = cursorPosition
 
   const handleOpenFeedbackForMessage = useCallback(
     (
@@ -937,11 +1145,27 @@ export const Chat = ({
 
   // Edit & resend: capture the edited message id at click time so a re-render
   // between click and submit cannot desync the truncation index lookup.
-  const editingMessageIdRef = useRef<string | null>(null)
-
   const handleEditMessage = useCallback(
     (messageId: string, content: string) => {
-      editingMessageIdRef.current = messageId
+      if (hasProcessingImages() || hasProcessingFiles()) {
+        showClipboardMessage(
+          'Wait for attachments to finish before editing an earlier prompt.',
+        )
+        return
+      }
+      if (!editOriginDraft.current) {
+        const current = useChatStore.getState()
+        editOriginDraft.current = {
+          input: {
+            text: current.inputValue,
+            cursorPosition: current.cursorPosition,
+            lastEditDueToNav: current.lastEditDueToNav,
+          },
+          attachments: [...current.pendingAttachments],
+        }
+        current.clearPendingAttachments()
+      }
+      setEditingMessageId(messageId)
       setInputValue({
         text: content,
         cursorPosition: content.length,
@@ -958,6 +1182,7 @@ export const Chat = ({
   // the input so the user can hit Enter to submit or edit the text first.
   const handleInsertCommand = useCallback(
     (command: string) => {
+      restoreEditDraft()
       setInputValue({
         text: command,
         cursorPosition: command.length,
@@ -966,7 +1191,7 @@ export const Chat = ({
       setInputFocused(true)
       inputRef.current?.focus()
     },
-    [setInputValue, setInputFocused, inputRef],
+    [setInputValue, setInputFocused, inputRef, restoreEditDraft],
   )
 
   const handleExitFeedback = useCallback(() => {
@@ -1036,25 +1261,32 @@ export const Chat = ({
     [publishMutation],
   )
 
-  // Ensure bracketed paste events target the active chat input
+  // Focus the composer only while its conversation scope is visible.
   useEffect(() => {
-    if (feedbackMode) {
-      inputRef.current?.focus()
-      return
-    }
-    if (!askUserState) {
-      inputRef.current?.focus()
-    }
-  }, [feedbackMode, askUserState, inputRef])
+    if (readerRequest || queueScreenOpen || attachmentManagerOpen || commandPaletteOpen || promptHistoryOpen ||
+      modelRoutePickerOpen || providerPickerOpen || askUserState || reviewMode || planSessionPickerCommand || modeMenuOpen ||
+      conversationControls.activeRef.current) return
+    inputRef.current?.focus()
+  }, [feedbackMode, askUserState, readerRequest, queueScreenOpen, attachmentManagerOpen, commandPaletteOpen,
+    promptHistoryOpen, modelRoutePickerOpen, providerPickerOpen, reviewMode, planSessionPickerCommand, modeMenuOpen, inputRef])
 
-  const handleSubmit = useCallback(async () => {
+  const handleSubmit = useCallback(async (latest?: InputValue) => {
+    if (modeMenuOpenRef.current || attachmentManagerOpenRef.current || conversationControls.activeRef.current || useOutputReaderStore.getState().request !== null) return
     // Update terminal title with truncated user input
     if (inputValue.trim()) {
       setTerminalTitle(inputValue)
     }
-    const result = await onSubmitPrompt(inputValue, agentMode)
+    const result = await onSubmitPrompt(latest?.text ?? useChatStore.getState().inputValue, agentMode, {
+      editMessageId: editingMessageId ?? undefined,
+    })
     handleCommandResult(result)
-  }, [onSubmitPrompt, inputValue, agentMode, handleCommandResult])
+  }, [
+    onSubmitPrompt,
+    inputValue,
+    agentMode,
+    handleCommandResult,
+    editingMessageId,
+  ])
 
   const totalMentionMatches = agentMatches.length + fileMatches.length
   const historyNavUpEnabled =
@@ -1096,6 +1328,7 @@ export const Chat = ({
       nextCtrlCWillExit,
       queuePaused,
       queuedCount,
+      editingMessageId,
     }),
     [
       inputMode,
@@ -1118,6 +1351,7 @@ export const Chat = ({
       nextCtrlCWillExit,
       queuePaused,
       queuedCount,
+      editingMessageId,
     ],
   )
 
@@ -1146,7 +1380,14 @@ export const Chat = ({
         useFeedbackStore.getState().setFeedbackCursor(0)
       },
       onClearInput: () =>
-        setInputValue({ text: '', cursorPosition: 0, lastEditDueToNav: false }),
+        editingMessageId
+          ? restoreEditDraft()
+          : setInputValue({
+              text: '',
+              cursorPosition: 0,
+              lastEditDueToNav: false,
+            }),
+      onCancelEdit: restoreEditDraft,
       onBackspaceExitMode: () => setInputMode('default'),
       onInterruptStream: () => {
         abortControllerRef.current?.abort()
@@ -1218,31 +1459,27 @@ export const Chat = ({
         if (mentionContext.startIndex < 0) return
 
         const trySelectAtIndex = (index: number): boolean => {
-          let replacement: string
-          if (index < agentMatches.length) {
-            const selected = agentMatches[index]
-            if (!selected) return false
-            replacement = `@${selected.id} `
-          } else {
-            const fileIndex = index - agentMatches.length
-            const selectedFile = fileMatches[fileIndex]
-            if (!selectedFile) return false
+          const resolved = resolveMentionReplacement(
+            index,
+            agentMatches,
+            fileMatches,
+            false,
+          )
+          if (!resolved) return false
+          if (resolved.selectedFile) {
             addPendingFileMention(
-              selectedFile.filePath,
-              selectedFile.isDirectory,
+              resolved.selectedFile.filePath,
+              resolved.selectedFile.isDirectory,
               getProjectRoot(),
             )
-            replacement = `@${selectedFile.filePath} `
           }
-          const before = inputValue.slice(0, mentionContext.startIndex)
-          const after = inputValue.slice(
-            mentionContext.startIndex + 1 + mentionContext.query.length,
+          const { text, cursorPosition } = buildMentionReplacement(
+            inputValue,
+            mentionContext.startIndex,
+            mentionContext.query,
+            resolved.replacement,
           )
-          setInputValue({
-            text: before + replacement + after,
-            cursorPosition: before.length + replacement.length,
-            lastEditDueToNav: false,
-          })
+          setInputValue({ text, cursorPosition, lastEditDueToNav: false })
           setAgentSelectedIndex(0)
           return true
         }
@@ -1254,38 +1491,27 @@ export const Chat = ({
         // Complete the word without executing - same as select for mentions
         if (mentionContext.startIndex < 0) return
 
-        let replacement: string
-        const index = agentSelectedIndex
-        if (index < agentMatches.length) {
-          const selected =
-            agentMatches.length > 0
-              ? agentMatches[index] || agentMatches[0]
-              : undefined
-          if (!selected) return
-          replacement = `@${selected.id} `
-        } else {
-          const fileIndex = index - agentMatches.length
-          const selectedFile =
-            fileMatches.length > 0
-              ? fileMatches[fileIndex] || fileMatches[0]
-              : undefined
-          if (!selectedFile) return
+        const resolved = resolveMentionReplacement(
+          agentSelectedIndex,
+          agentMatches,
+          fileMatches,
+          true,
+        )
+        if (!resolved) return
+        if (resolved.selectedFile) {
           addPendingFileMention(
-            selectedFile.filePath,
-            selectedFile.isDirectory,
+            resolved.selectedFile.filePath,
+            resolved.selectedFile.isDirectory,
             getProjectRoot(),
           )
-          replacement = `@${selectedFile.filePath} `
         }
-        const before = inputValue.slice(0, mentionContext.startIndex)
-        const after = inputValue.slice(
-          mentionContext.startIndex + 1 + mentionContext.query.length,
+        const { text, cursorPosition } = buildMentionReplacement(
+          inputValue,
+          mentionContext.startIndex,
+          mentionContext.query,
+          resolved.replacement,
         )
-        setInputValue({
-          text: before + replacement + after,
-          cursorPosition: before.length + replacement.length,
-          lastEditDueToNav: false,
-        })
+        setInputValue({ text, cursorPosition, lastEditDueToNav: false })
         setAgentSelectedIndex(0)
       },
       onOpenFileMenuWithTab: () => {
@@ -1311,7 +1537,7 @@ export const Chat = ({
         setInputFocused(true)
         inputRef.current?.focus()
       },
-      onClearQueue: clearQueue,
+      onClearQueue: cancelQueuedMessages,
       onExitAppWarning: () => handleCtrlC(),
       onExitApp: () => handleCtrlC(),
       onBashHistoryUp: navigateUp,
@@ -1401,10 +1627,12 @@ export const Chat = ({
       setInputFocused,
       inputRef,
       handleCtrlC,
-      clearQueue,
+      cancelQueuedMessages,
       scrollUp,
       scrollDown,
       handleToggleAll,
+      editingMessageId,
+      restoreEditDraft,
       handlePasteLongText,
       setPromptHistoryOpen,
     ],
@@ -1414,7 +1642,13 @@ export const Chat = ({
   useChatKeyboard({
     state: chatKeyboardState,
     handlers: chatKeyboardHandlers,
+    isDisabled: () => modeMenuOpenRef.current || attachmentManagerOpenRef.current || conversationControls.activeRef.current || inputRef.current?.hasFocus?.() === false || useOutputReaderStore.getState().request !== null,
     disabled:
+      modeMenuOpen ||
+      attachmentManagerOpen ||
+      conversationControls.active ||
+      readerRequest !== null ||
+      queueScreenOpen ||
       askUserState !== null ||
       reviewMode ||
       commandPaletteOpen ||
@@ -1423,6 +1657,10 @@ export const Chat = ({
       providerPickerOpen ||
       planSessionPickerCommand !== null,
   })
+  useLayoutEffect(() => {
+    if ((readerRequest || queueScreenOpen || attachmentManagerOpen || commandPaletteOpen || promptHistoryOpen || modelRoutePickerOpen || providerPickerOpen || askUserState || reviewMode || planSessionPickerCommand) && conversationControls.activeRef.current)
+      conversationControls.leave(false)
+  }, [readerRequest, queueScreenOpen, attachmentManagerOpen, commandPaletteOpen, promptHistoryOpen, modelRoutePickerOpen, providerPickerOpen, askUserState, reviewMode, planSessionPickerCommand, conversationControls.leave])
 
   // Sync message block context to zustand store for child components
   const setMessageBlockContext = useMessageBlockStore(
@@ -1431,6 +1669,9 @@ export const Chat = ({
   const setMessageBlockCallbacks = useMessageBlockStore(
     (state) => state.setCallbacks,
   )
+  useEffect(() => {
+    useMessageBlockStore.getState().pruneViews(messages.map((message) => message.id))
+  }, [messages])
 
   // Update context when values change - useLayoutEffect ensures synchronous updates
   // to prevent message loss during rapid streaming (race condition fix)
@@ -1492,30 +1733,72 @@ export const Chat = ({
     fileMatchCount: fileSuggestionItems.length,
   })
 
-  const inputLayoutMetrics = useMemo(() => {
-    // In bash mode, layout is based on the actual input (no ! prefix needed)
-    const text = inputValue ?? ''
-    const layoutContent = text.length > 0 ? text : ' '
-    const safeCursor = Math.max(
-      0,
-      Math.min(cursorPosition, layoutContent.length),
-    )
-    const cursorProbe =
-      safeCursor >= layoutContent.length
-        ? layoutContent
-        : layoutContent.slice(0, safeCursor)
-    const cols = Math.max(1, inputWidth)
-    return computeInputLayoutMetrics({
-      layoutContent,
-      cursorProbe,
-      cols,
-      maxHeight: Math.floor(terminalHeight / 2),
-    })
-  }, [inputValue, cursorPosition, inputWidth, terminalHeight])
-  const isMultilineInput = inputLayoutMetrics.heightLines > 1
+  const { metrics: inputLayoutMetrics, measurementKey: inputMeasurementKey } =
+    useMemo(() => {
+      // In bash mode, layout is based on the actual input (no ! prefix needed)
+      const text = inputValue ?? ''
+      // An empty input still occupies one row, so the row count is measured from a
+      // single space. The measurement KEY is derived from the raw `text` (no
+      // substitution): the box compares it against the key IT derives from the
+      // value prop it was handed, which is also the raw value, so the two
+      // identities agree on the idle empty frame — the space never enters the
+      // identity, only the row count.
+      const layoutContent = text.length > 0 ? text : ' '
+      const safeCursor = Math.max(
+        0,
+        Math.min(cursorPosition, layoutContent.length),
+      )
+      // Measure at the columns the text actually wraps at. MultilineInput draws
+      // inside its own 1-column horizontal wrapper padding, so measuring at the
+      // outer inputWidth here would count fewer rows than the box renders — and
+      // that disagreement is what let a wrapped value still be treated as
+      // single-line (centered) while the box needed several rows.
+      //
+      // `inputWrapColumns` is the ONE definition of that subtraction: the box
+      // derives the columns it checks the forwarded key against from the same
+      // helper, so the two cannot drift by a column and the row count computed
+      // here is exactly the one the box would compute — that equality is what
+      // lets the box reuse this measurement instead of re-wrapping the same
+      // value on every keystroke.
+      const cols = inputWrapColumns(inputWidth)
+      return {
+        metrics: computeInputLayoutMetrics({
+          layoutContent,
+          // The metrics only ever need the offset: slicing the prefix string here
+          // allocated an O(cursor) copy on every keystroke and cursor move just to
+          // hand over its length.
+          cursorOffset: safeCursor,
+          cols,
+          // UNCAPPLED row measurement. The forwarded `totalLines` is a PRE-CLAMP row
+          // fact: chat-input-bar forwards it to two MultilineInput mounts that are
+          // given different `maxHeight`s, and each box derives its own height AND
+          // its own `isScrollable` by comparing that row count against the cap it
+          // actually draws with. Measuring to a cap here would saturate the count at
+          // this caller's cap, and a box with a taller cap would then be told the
+          // content fits on a frame where it must scroll. This caller's own
+          // centering decision is clamped separately below.
+          maxHeight: Number.MAX_SAFE_INTEGER,
+        }),
+        // Supplied to the box as the identity of the measurement: a producer-side
+        // key over the same raw value and columns the box derives its own key
+        // from. The box trusts the forwarded count only while the two keys
+        // match, which is what turns a stale or wrong-width count into one extra
+        // local wrap pass instead of a mis-sized box.
+        measurementKey: multilineInputMeasurementKey(text, cols),
+      }
+    }, [inputValue, cursorPosition, inputWidth])
+  // The screen still owns a ceiling for its own layout decision ("is the input
+  // taller than the box I give it"), applied to the uncapped row fact rather
+  // than baked into the measurement the box consumes.
+  const inputHeightCap = Math.floor(terminalHeight / 2)
+  const inputHeightLines = Math.min(
+    inputLayoutMetrics.heightLines,
+    Math.max(1, inputHeightCap),
+  )
+  const isMultilineInput = inputLayoutMetrics.totalLines > 1
   const shouldCenterInputVertically = !hasSuggestionMenu && !isMultilineInput
   const statusIndicatorState = getStatusIndicatorState({
-    statusMessage,
+    statusMessage: null,
     streamStatus,
     nextCtrlCWillExit,
     isConnected,
@@ -1525,7 +1808,8 @@ export const Chat = ({
     isAskUserActive: askUserState !== null,
     activeAgentTypes,
   })
-  const hasStatusIndicatorContent = statusIndicatorState.kind !== 'idle'
+  const hasStatusIndicatorContent =
+    statusIndicatorState.kind !== 'idle' || Boolean(statusMessage)
 
   const inputBoxTitle = useMemo(() => {
     const segments: string[] = []
@@ -1549,6 +1833,14 @@ export const Chat = ({
       shouldShowQueuePreview ||
       shouldForceStatusLineForIndex(indexStatus) ||
       !isAtBottom)
+  useEffect(() => {
+    const keys = conversationUpdateKeys(messages)
+    const observed = observedUpdates.current
+    const unseen = observed ? [...keys].filter((key) => !observed.has(key)).length : 0
+    observedUpdates.current = keys
+    if (isAtBottom && !readerRequest && !queueScreenOpen) setUnreadUpdates(0)
+    else if (unseen) setUnreadUpdates((previous) => previous + unseen)
+  }, [messages, isAtBottom, readerRequest, queueScreenOpen])
 
   const handleCloseModelRoutePicker = useCallback(() => {
     setModelRoutePickerOpen(false)
@@ -1557,13 +1849,15 @@ export const Chat = ({
 
   const handleProviderPickerSelect = useCallback(
     async (selection: ProviderPickerSelection) => {
-      setProviderPickerOpen(false)
-      setInputFocused(true)
+      if (selection.type === 'cancel') {
+        setProviderPickerOpen(false)
+        setInputFocused(true)
+        return
+      }
 
-      if (selection.type === 'cancel') return
+      if (selection.type === 'test-connections') return
 
       let message: string
-      try {
         if (selection.type === 'preset') {
           message = setupOpenbuffProviderFromArgs(selection.preset)
         } else if (selection.type === 'connect-codex') {
@@ -1577,10 +1871,8 @@ export const Chat = ({
         } else {
           message = addCustomOpenbuffProvider(selection.provider)
         }
-      } catch (error) {
-        message = error instanceof Error ? error.message : String(error)
-      }
-
+      setProviderPickerOpen(false)
+      setInputFocused(true)
       setMessages((prev) => [...prev, getSystemMessage(message)])
     },
     [setInputFocused, setInputMode, setMessages],
@@ -1648,7 +1940,84 @@ export const Chat = ({
       <CommandPaletteScreen
         slashCommands={filteredSlashCommands}
         fileTree={fileTree}
+        fileInventoryState={fileInventoryState}
+        actions={[
+          {
+            id: 'attachments', label: 'Attachments', description: 'Inspect, retry and recover composer attachments',
+            onSelect: () => {
+              setCommandPaletteOpen(false)
+              attachmentManagerOpenRef.current = true
+              setAttachmentManagerOpen(true)
+            },
+          },
+          {
+            id: 'activity', label: 'Activity', description: 'Inspect active agents, queued work and failures',
+            onSelect: () => {
+              setCommandPaletteOpen(false)
+              const state = useChatStore.getState()
+              useOutputReaderStore.getState().open({ document: createJsonDocument('activity', 'Activity · captured now', {
+                capturedAt: new Date().toISOString(), run: isStreaming ? 'Running' : 'Idle',
+                agents: [...state.streamingAgents].map((id) => state.activeAgentTypes.get(id) ?? 'Agent'),
+                queue: queuedMessages.map((message) => ({ prompt: message.content, mode: message.agentMode, attachments: message.attachments.length })),
+                queuePaused, lastQueueFailure: queueError,
+              }) })
+            },
+          },
+          {
+            id: 'changes', label: 'Changes', description: 'Browse captured files, hunks and mutation receipts',
+            onSelect: () => { setCommandPaletteOpen(false); useOutputReaderStore.getState().open({ kindFilter: ['diff', 'receipt'] }) },
+          },
+          {
+            id: 'session-details', label: 'Session details', description: 'Inspect configured routing, context and source health',
+            onSelect: () => {
+              setCommandPaletteOpen(false)
+              useOutputReaderStore.getState().open({ document: createJsonDocument('session-details', 'Session details · captured now', {
+                capturedAt: new Date().toISOString(), workspace: getProjectRoot(), selectedMode: agentMode,
+                configuredModelForSelectedMode: modelName ?? 'Not resolved', run: statusIndicatorState.kind,
+                context: contextWindowUsage ?? 'Not reported', compaction: compactionNotice ?? 'Not reported',
+                sessionCostCents, index: indexStatus ?? 'No source status reported',
+                freshness: 'This is a retained UI snapshot; reopen Session details to refresh it.',
+              }) })
+            },
+          },
+          {
+            id: 'work-queue',
+            label: 'Work queue',
+            description: 'Inspect, edit, reorder and recover queued prompts',
+            onSelect: () => {
+              setCommandPaletteOpen(false)
+              pauseQueue()
+              setQueueScreenOpen(true)
+            },
+          },
+          {
+            id: 'browse-output',
+            label: 'Browse output',
+            description: 'Inspect captured text, logs and tool results',
+            onSelect: () => {
+              setCommandPaletteOpen(false)
+              useOutputReaderStore.getState().open()
+            },
+          },
+          {
+            id: 'find-conversation',
+            label: 'Find in conversation',
+            description: 'Search retained collapsed and offscreen output',
+            onSelect: () => {
+              setCommandPaletteOpen(false)
+              useOutputReaderStore.getState().open({ findConversation: true })
+            },
+          },
+        ]}
         onClose={() => setCommandPaletteOpen(false)}
+        onInsertText={(text) => {
+          setInputValue((previous) => ({
+            text: previous.text.slice(0, previous.cursorPosition) + text + previous.text.slice(previous.cursorPosition),
+            cursorPosition: previous.cursorPosition + text.length,
+            lastEditDueToNav: false,
+          }))
+          setInputFocused(true)
+        }}
         onExecuteCommand={async (commandString) => {
           setCommandPaletteOpen(false)
           const result = await onSubmitPrompt(commandString, agentMode)
@@ -1714,14 +2083,35 @@ export const Chat = ({
         flexGrow: 1,
       }}
     >
+      {/* D47 Stage 1: OpenTUI 0.5's native stickyScroll/stickyStart is
+          deliberately NOT enabled here. With stickyScroll live, OpenTUI's
+          native code re-pins scrollTop to the bottom on every content
+          growth, so it would be a SECOND independent writer of scrollTop on
+          this scrollbox alongside use-scroll-management's auto-scroll
+          effect — two writers with no evidence they cooperate (e.g. a user
+          scrolling up during streaming: native stickyScroll re-pins on the
+          next content growth while the JS effect may also force
+          scrollTop = maxScroll, fighting the user's scroll intent or
+          resurrecting auto-follow after they deliberately scrolled away).
+          use-scroll-management remains the single validated scrollTop
+          writer: its auto-scroll effect follows new content only while the
+          user is at/near the bottom (autoScrollEnabledRef), and
+          scrollUp/scrollDown/scrollToLatest stay available for keyboard
+          paging and the jump-to-latest control. */}
       <scrollbox
         ref={scrollRef as React.Ref<ScrollBoxRenderable>}
-        stickyScroll
-        stickyStart="bottom"
         scrollX={false}
         scrollbarOptions={{ visible: false }}
         verticalScrollbarOptions={{
-          visible: !isStreaming && !isWaitingForResponse && hasOverflow,
+          // Visibility depends only on hasOverflow: the scrollbar track is a
+          // layout SIBLING of the message content column, so toggling
+          // visibility with streaming state would shift the message wrap
+          // width on every agent-response start AND end while availableWidth
+          // (terminal-derived) stays fixed — silently staling every
+          // width-tagged measured height exactly when a response completes.
+          // Keeping the track in layout whenever content overflows keeps the
+          // content width stable for those measurements.
+          visible: hasOverflow,
           trackOptions: { width: 1 },
         }}
         {...appliedScrollboxProps}
@@ -1753,27 +2143,33 @@ export const Chat = ({
           },
         }}
       >
-        <TopBanner gitRoot={gitRoot} onSwitchToGitRoot={onSwitchToGitRoot} />
-
-        {headerContent}
-        {hiddenMessageCount > 0 && (
-          <LoadPreviousButton
-            hiddenCount={hiddenMessageCount}
-            onLoadMore={handleLoadPreviousMessages}
-          />
-        )}
-        {visibleTopLevelMessages.map((message, idx) => {
-          const isLast = idx === visibleTopLevelMessages.length - 1
-          return (
-            <MessageWithAgents
-              key={message.id}
-              message={message}
-              depth={0}
-              isLastMessage={isLast}
-              availableWidth={messageAvailableWidth}
-            />
-          )
-        })}
+        <box ref={transcriptHeaderRef} style={{ flexDirection: 'column', flexShrink: 0, width: '100%' }}>
+          <TopBanner gitRoot={gitRoot} onSwitchToGitRoot={onSwitchToGitRoot} />
+          {headerContent}
+          {hiddenMessageCount > 0 && (
+            <LoadPreviousButton hiddenCount={hiddenMessageCount} onLoadMore={handleLoadPreviousMessages} />
+          )}
+        </box>
+        {/* P1-T10: viewport-windowed message list. Only the messages
+            intersecting the current scroll viewport (plus a small overscan)
+            mount real MessageWithAgents components; off-screen messages
+            collapse into fixed spacer boxes that preserve total scroll height
+            and scroll position. Keys stay on the message ids so per-message
+            state survives the window moving as the user scrolls. The scroll
+            subscription is confined to MessageListWindow so scrolling does not
+            re-render the rest of the chat screen. */}
+        <MessageListWindow
+          messages={visibleTopLevelMessages}
+          scrollRef={scrollRef}
+          availableWidth={messageAvailableWidth}
+          hasLoadPrevious={hiddenMessageCount > 0}
+          headerRef={transcriptHeaderRef}
+          scrollTarget={transcriptTarget}
+          scrollIntentRef={scrollIntentRef}
+          adjustScrollTop={adjustScrollTop}
+          isAtBottomNow={isAtBottomNow}
+          scrollToLatest={scrollToLatest}
+        />
         {/* Pending bash messages as ghost messages (only show those not already in history) */}
         {pendingBashMessages
           .filter((msg) => !msg.addedToHistory)
@@ -1788,12 +2184,25 @@ export const Chat = ({
           backgroundColor: 'transparent',
         }}
       >
+        {editingMessageId && (
+          <box flexDirection="row" gap={1}>
+            <text fg={theme.secondary}>
+              Editing earlier prompt · forks conversation
+            </text>
+            <Button onClick={restoreEditDraft}>
+              <text fg={theme.foreground}>Cancel (Esc)</text>
+            </Button>
+          </box>
+        )}
         {shouldShowStatusLine && (
           <StatusBar
             timerStartTime={timerStartTime}
             isAtBottom={isAtBottom}
-            scrollToLatest={scrollToLatest}
+            unreadUpdates={unreadUpdates}
+            scrollToLatest={() => { if (conversationControls.activeRef.current) conversationControls.leave(); scrollToLatest() }}
             statusIndicatorState={statusIndicatorState}
+            notice={statusMessage}
+            runActive={isStreaming || isChainInProgressRef.current}
             contextWindowUsage={contextWindowUsage}
             compactionNotice={compactionNotice}
             sessionCostCents={sessionCostCents}
@@ -1822,6 +2231,12 @@ export const Chat = ({
             agentMode={agentMode}
             toggleAgentMode={toggleAgentMode}
             setAgentMode={setAgentMode}
+            onAgentModeMenuOpenChange={(open) => {
+              modeMenuOpenRef.current = open
+              setModeMenuOpen(open)
+              setInputFocused(!open)
+              if (!open) inputRef.current?.focus()
+            }}
             hasSlashSuggestions={hasSlashSuggestions}
             hasMentionSuggestions={hasMentionSuggestions}
             hasSuggestionMenu={hasSuggestionMenu}
@@ -1844,12 +2259,24 @@ export const Chat = ({
             inputBoxTitle={inputBoxTitle}
             isCompactHeight={isCompactHeight}
             isNarrowWidth={isNarrowWidth}
+            inputWidth={inputWidth}
+            inputMinHeight={1}
+            inputTotalLines={inputLayoutMetrics.totalLines}
+            inputMeasurementKey={inputMeasurementKey}
+            inputInputCap={inputHeightLines}
+            inputGutterEnabled={inputLayoutMetrics.gutterEnabled}
             feedbackMode={feedbackMode}
             handleExitFeedback={handleExitFeedback}
             publishMode={publishMode}
             handleExitPublish={handleExitPublish}
             handlePublish={handlePublish}
             handleSubmit={handleSubmit}
+            onManageAttachments={() => {
+              attachmentManagerOpenRef.current = true
+              setAttachmentManagerOpen(true)
+            }}
+            pasteEnabled={!readerRequest && !queueScreenOpen && !modeMenuOpen && !attachmentManagerOpen}
+            isInputActive={() => !modeMenuOpenRef.current && !attachmentManagerOpenRef.current && !conversationControls.activeRef.current && useOutputReaderStore.getState().request === null && !queueScreenOpen}
             onPaste={createPasteHandler({
               text: inputValue,
               cursorPosition,
@@ -1865,6 +2292,94 @@ export const Chat = ({
           />
         )}
       </box>
+      {readerRequest && (
+        <box
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            zIndex: 100,
+            backgroundColor: theme.surface,
+          }}
+        >
+          <OutputReaderScreen
+            messages={messages}
+            documentId={readerRequest.documentId}
+            initialDocument={readerRequest.document}
+            findConversation={readerRequest.findConversation}
+            kindFilter={readerRequest.kindFilter}
+            onReturnToMessage={(messageId) => {
+              const rootId = revealMessage(messageId)
+              if (!rootId) return
+              setTranscriptTarget({ messageId: rootId, token: Date.now() })
+              useOutputReaderStore.getState().close()
+            }}
+            onClose={() => useOutputReaderStore.getState().close()}
+          />
+        </box>
+      )}
+      {attachmentManagerOpen && (
+        <box style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 100, backgroundColor: theme.surface }}>
+          <AttachmentRecoveryScreen onClose={() => {
+            attachmentManagerOpenRef.current = false
+            setAttachmentManagerOpen(false)
+          }} />
+        </box>
+      )}
+      {queueScreenOpen && (
+        <box
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: '100%',
+            zIndex: 100,
+            backgroundColor: theme.surface,
+          }}
+        >
+          <QueueScreen
+            queuedMessages={queuedMessages}
+            queuePaused={queuePaused}
+            queueError={queueError}
+            queueAttachmentNotice={queueAttachmentNotice}
+            hasQueuedAttachmentReads={hasQueuedAttachmentReads}
+            attachmentRemovalCount={attachmentRemovalCount}
+            getQueuedAttachmentRevision={getQueuedAttachmentRevision}
+            updateQueuedAttachment={updateQueuedAttachment}
+            cancelQueuedAttachmentRetry={cancelQueuedAttachmentRetry}
+            removeQueuedAttachment={removeQueuedAttachment}
+            undoQueuedAttachmentRemoval={undoQueuedAttachmentRemoval}
+            retryAttachment={(_id, attachment, signal) => retryPendingAttachment(attachment, ('sourceRoot' in attachment ? attachment.sourceRoot : undefined) ?? getProjectRoot(), signal)}
+            queueRemovalCount={queueRemovalCount}
+            cancelQueuedMessages={cancelQueuedMessages}
+            updateQueuedMessage={updateQueuedMessage}
+            removeQueuedMessage={removeQueuedMessage}
+            moveQueuedMessage={moveQueuedMessage}
+            undoQueueRemoval={undoQueueRemoval}
+            pauseQueue={pauseQueue}
+            resumeQueue={resumeQueue}
+            onClose={() => setQueueScreenOpen(false)}
+            onRestore={(message) => {
+              const store = useChatStore.getState()
+              if (store.inputValue.trim() || store.pendingAttachments.length)
+                return false
+              store.setInputValue({
+                text: message.content,
+                cursorPosition: message.content.length,
+                lastEditDueToNav: false,
+              })
+              store.setAgentMode(message.agentMode)
+              useChatStore.setState({
+                pendingAttachments: [...message.attachments],
+              })
+              return true
+            }}
+          />
+        </box>
+      )}
     </box>
   )
 }

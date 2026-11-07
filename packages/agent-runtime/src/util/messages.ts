@@ -432,6 +432,29 @@ function compactPinnedContextMessage(message: Message): Message {
   }
 }
 
+/**
+ * User prompts are marked `keepDuringTruncation` when they enter a turn so the
+ * current request always survives. That legacy flag must not make every prompt
+ * from every earlier turn permanently pinned: a long-running conversation then
+ * reaches the mechanical brake with no removable history at all. Preserve only
+ * the newest direct user prompt; semantic memory and the archive carry older
+ * task context through an emergency trim.
+ */
+function isRequiredDuringTrim(
+  message: Message,
+  index: number,
+  newestUserPromptIndex: number,
+): boolean {
+  if (!message.keepDuringTruncation) return false
+  if (
+    message.tags?.includes('USER_PROMPT') &&
+    index !== newestUserPromptIndex
+  ) {
+    return false
+  }
+  return true
+}
+
 function buildMechanicalRecoveryMessage(params: {
   beforeMessageCount: number
   afterMessageCount: number
@@ -450,8 +473,8 @@ function buildMechanicalRecoveryMessage(params: {
         `Mechanical trim kept ${params.afterMessageCount}/${params.beforeMessageCount} messages.`,
         `Reduced: ${removed}.`,
         params.retainedKnowledgeMemory
-          ? 'Use the retained <knowledge_memory> as the recovery source.'
-          : 'No <knowledge_memory> was retained; re-read exact files, constraints, and validation evidence.',
+          ? 'Use <knowledge_memory>; recall_context can recover archived detail.'
+          : 'Use recall_context or re-read exact files and constraints.',
         '</mechanical_context_recovery>',
       ].join('\n'),
     ),
@@ -610,8 +633,14 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
   }
   shortenedMessages.reverse()
 
+  const newestUserPromptIndex = shortenedMessages.findLastIndex((message) =>
+    message.tags?.includes('USER_PROMPT'),
+  )
+
   const requiredTokens = countTokensJson(
-    shortenedMessages.filter((m) => m.keepDuringTruncation),
+    shortenedMessages.filter((message, index) =>
+      isRequiredDuringTrim(message, index, newestUserPromptIndex),
+    ),
   )
   const shortenedTokens = countTokensJson(shortenedMessages)
   const optionalTokens = Math.max(0, shortenedTokens - requiredTokens)
@@ -652,8 +681,9 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
   // would orphan a message we are not allowed to remove, and reconciliation
   // would then have to choose between a pinned drop and an invalid pairing.
   const pinnedToolCallIds = new Set(
-    shortenedMessages.flatMap((message) =>
-      message.role === 'tool' && message.keepDuringTruncation
+    shortenedMessages.flatMap((message, index) =>
+      message.role === 'tool' &&
+      isRequiredDuringTrim(message, index, newestUserPromptIndex)
         ? [message.toolCallId]
         : [],
     ),
@@ -672,7 +702,12 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
     for (let index = 0; index < shortenedMessages.length; index++) {
       if (removedTokens >= tokensToRemove) break
       const message = shortenedMessages[index]
-      if (message.keepDuringTruncation || removedIndices.has(index)) continue
+      if (
+        isRequiredDuringTrim(message, index, newestUserPromptIndex) ||
+        removedIndices.has(index)
+      ) {
+        continue
+      }
       if (answersPinnedToolResult(message)) continue
       if (getContextCategory(message, toolCallInputsByCallId) !== category)
         continue
@@ -756,8 +791,18 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
   // <knowledge_memory>, and the compacted-context pointer are never dropped.
   let escalated = false
   if (runningTokens > maxMessageTokens) {
-    const isEvictableDuringEscalation = (message: Message): boolean =>
-      !message.keepDuringTruncation &&
+    const newestEscalationUserPromptIndex = trimmedMessages.findLastIndex(
+      (message) => message.tags?.includes('USER_PROMPT'),
+    )
+    const isEvictableDuringEscalation = (
+      message: Message,
+      index: number,
+    ): boolean =>
+      !isRequiredDuringTrim(
+        message,
+        index,
+        newestEscalationUserPromptIndex,
+      ) &&
       !answersPinnedToolResult(message) &&
       !messageContainsText(message, COMPACTED_CONTEXT_POINTER) &&
       !messageContainsText(message, '<knowledge_memory>')
@@ -770,7 +815,7 @@ export function trimMessagesToFitTokenLimitWithReport(params: {
         if (escalationRemoved.has(index)) continue
         if (getContextCategory(message, toolCallInputsByCallId) !== category)
           continue
-        if (!isEvictableDuringEscalation(message)) continue
+        if (!isEvictableDuringEscalation(message, index)) continue
         escalationRemoved.add(index)
         // Maintain the running total per drop instead of recounting the whole
         // array, so the escalation pass stays linear in message count.

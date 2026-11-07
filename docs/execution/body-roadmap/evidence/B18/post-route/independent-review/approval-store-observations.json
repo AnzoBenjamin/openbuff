@@ -1,0 +1,235 @@
+{
+  "schemaVersion": 1,
+  "observations": [
+    {
+      "scenario": "invalid-json",
+      "file": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-json/repo/approvals/approval-ddf4f00d-7368-44f9-85c3-5b7fd2eafa71.json",
+      "id": "approval-ddf4f00d-7368-44f9-85c3-5b7fd2eafa71",
+      "command": "git commit -m 'a  b'; rm -rf fixture",
+      "context": {
+        "permissionProfile": "workspace-write",
+        "cwd": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review",
+        "projectRoot": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review",
+        "allowedPaths": [
+          "a",
+          "b"
+        ],
+        "processType": "SYNC"
+      },
+      "scope": {
+        "repositoryId": "repo",
+        "workspaceId": "workspace",
+        "runId": "run",
+        "snapshotId": "snapshot"
+      },
+      "action": {
+        "action": "commit",
+        "target": "git commit -m 'a  b'",
+        "commandHash": "968f16d4d0f96a46f112bab7f45ed2fb9665ab74a277f81a7994408f96ebf41f",
+        "executionContextHash": "4d613b4a3972fd96740ecece3dd0ac9c4be2edf51b3bb88d3e92a05c9f7f6752"
+      },
+      "wins": 0,
+      "errors": [
+        "JSON Parse error: Expected '}'",
+        "Quarantined harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-json/repo/approvals/approval-ddf4f00d-7368-44f9-85c3-5b7fd2eafa71.json: JSON Parse error: Expected '}'",
+        "Quarantined harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-json/repo/approvals/approval-ddf4f00d-7368-44f9-85c3-5b7fd2eafa71.json: JSON Parse error: Expected '}'"
+      ],
+      "diagnostic": {
+        "filePath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-json/repo/approvals/approval-ddf4f00d-7368-44f9-85c3-5b7fd2eafa71.json",
+        "message": "JSON Parse error: Expected '}'",
+        "quarantinedPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-json/repo/approvals/.corrupt/approval-ddf4f00d-7368-44f9-85c3-5b7fd2eafa71.json.1793984958643.82db9613-7420-4f52-9033-d30a254d6cd7"
+      },
+      "corruptBytesSha256": "14ca9a9c198ef67c0774abe0872a96b8db4160106eb4d33829f98c9c224285af",
+      "quarantinedBytesSha256": "14ca9a9c198ef67c0774abe0872a96b8db4160106eb4d33829f98c9c224285af",
+      "noConsumedCorruptRecord": true
+    },
+    {
+      "scenario": "invalid-schema",
+      "file": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/approval-3469248e-89a8-4200-8960-cb48bb6fb3dd.json",
+      "id": "approval-3469248e-89a8-4200-8960-cb48bb6fb3dd",
+      "command": "git commit -m 'a  b'; rm -rf fixture",
+      "context": {
+        "permissionProfile": "workspace-write",
+        "cwd": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review",
+        "projectRoot": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review",
+        "allowedPaths": [
+          "a",
+          "b"
+        ],
+        "processType": "SYNC"
+      },
+      "scope": {
+        "repositoryId": "repo",
+        "workspaceId": "workspace",
+        "runId": "run",
+        "snapshotId": "snapshot"
+      },
+      "action": {
+        "action": "commit",
+        "target": "git commit -m 'a  b'",
+        "commandHash": "968f16d4d0f96a46f112bab7f45ed2fb9665ab74a277f81a7994408f96ebf41f",
+        "executionContextHash": "4d613b4a3972fd96740ecece3dd0ac9c4be2edf51b3bb88d3e92a05c9f7f6752"
+      },
+      "wins": 0,
+      "errors": [
+        "Invalid harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/approval-3469248e-89a8-4200-8960-cb48bb6fb3dd.json: [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [\n      \"schemaVersion\"\n    ],\n    \"message\": \"Invalid input: expected 1\"\n  },\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"revision\"\n    ],\n    \"message\": \"Invalid input: expected number, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"repositoryId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"workspaceId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"runId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"snapshotId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"createdAt\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"updatedAt\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]",
+        "Quarantined harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/approval-3469248e-89a8-4200-8960-cb48bb6fb3dd.json: Invalid harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/approval-3469248e-89a8-4200-8960-cb48bb6fb3dd.json: [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [\n      \"schemaVersion\"\n    ],\n    \"message\": \"Invalid input: expected 1\"\n  },\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"revision\"\n    ],\n    \"message\": \"Invalid input: expected number, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"repositoryId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"workspaceId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"runId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"snapshotId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"createdAt\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"updatedAt\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]",
+        "Quarantined harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/approval-3469248e-89a8-4200-8960-cb48bb6fb3dd.json: Invalid harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/approval-3469248e-89a8-4200-8960-cb48bb6fb3dd.json: [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [\n      \"schemaVersion\"\n    ],\n    \"message\": \"Invalid input: expected 1\"\n  },\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"revision\"\n    ],\n    \"message\": \"Invalid input: expected number, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"repositoryId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"workspaceId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"runId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"snapshotId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"createdAt\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"updatedAt\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]"
+      ],
+      "diagnostic": {
+        "filePath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/approval-3469248e-89a8-4200-8960-cb48bb6fb3dd.json",
+        "message": "Invalid harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/approval-3469248e-89a8-4200-8960-cb48bb6fb3dd.json: [\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      1\n    ],\n    \"path\": [\n      \"schemaVersion\"\n    ],\n    \"message\": \"Invalid input: expected 1\"\n  },\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"revision\"\n    ],\n    \"message\": \"Invalid input: expected number, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"repositoryId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"workspaceId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"runId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"snapshotId\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"createdAt\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  },\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"updatedAt\"\n    ],\n    \"message\": \"Invalid input: expected string, received undefined\"\n  }\n]",
+        "quarantinedPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/invalid-schema/repo/approvals/.corrupt/approval-3469248e-89a8-4200-8960-cb48bb6fb3dd.json.1793984958649.660a1995-8f25-4133-a68d-d562f5a895f1"
+      },
+      "corruptBytesSha256": "21a5a1ea72c1600d0de996e4036e69d091634707018557ae3ef02ce4e5310079",
+      "quarantinedBytesSha256": "21a5a1ea72c1600d0de996e4036e69d091634707018557ae3ef02ce4e5310079",
+      "noConsumedCorruptRecord": true
+    },
+    {
+      "scenario": "lost-sidecar",
+      "file": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/lost-sidecar/repo/approvals/approval.tmp.control.json",
+      "id": "approval.tmp.control",
+      "command": "git commit -m 'a  b'; rm -rf fixture",
+      "context": {
+        "permissionProfile": "workspace-write",
+        "cwd": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review",
+        "projectRoot": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review",
+        "allowedPaths": [
+          "a",
+          "b"
+        ],
+        "processType": "SYNC"
+      },
+      "scope": {
+        "repositoryId": "repo",
+        "workspaceId": "workspace",
+        "runId": "run",
+        "snapshotId": "snapshot"
+      },
+      "action": {
+        "action": "commit",
+        "target": "git commit -m 'a  b'",
+        "commandHash": "968f16d4d0f96a46f112bab7f45ed2fb9665ab74a277f81a7994408f96ebf41f",
+        "executionContextHash": "4d613b4a3972fd96740ecece3dd0ac9c4be2edf51b3bb88d3e92a05c9f7f6752"
+      },
+      "wins": 0,
+      "errors": [
+        "JSON Parse error: Expected '}'",
+        "Quarantined harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/lost-sidecar/repo/approvals/approval.tmp.control.json: Quarantined harness record; original diagnostic unavailable.",
+        "Quarantined harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/lost-sidecar/repo/approvals/approval.tmp.control.json: Quarantined harness record; original diagnostic unavailable."
+      ],
+      "diagnostic": {
+        "filePath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/lost-sidecar/repo/approvals/approval.tmp.control.json",
+        "quarantinedPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/lost-sidecar/repo/approvals/.corrupt/approval.tmp.control.json.1793984958653.eeee7104-981b-499b-b0bd-58582e3be255",
+        "message": "Quarantined harness record; original diagnostic unavailable."
+      },
+      "corruptBytesSha256": "14ca9a9c198ef67c0774abe0872a96b8db4160106eb4d33829f98c9c224285af",
+      "quarantinedBytesSha256": "14ca9a9c198ef67c0774abe0872a96b8db4160106eb4d33829f98c9c224285af",
+      "noConsumedCorruptRecord": true
+    },
+    {
+      "scenario": "corrupt-sidecar",
+      "file": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/corrupt-sidecar/repo/approvals/approval.tmp.control.json",
+      "id": "approval.tmp.control",
+      "command": "git commit -m 'a  b'; rm -rf fixture",
+      "context": {
+        "permissionProfile": "workspace-write",
+        "cwd": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review",
+        "projectRoot": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review",
+        "allowedPaths": [
+          "a",
+          "b"
+        ],
+        "processType": "SYNC"
+      },
+      "scope": {
+        "repositoryId": "repo",
+        "workspaceId": "workspace",
+        "runId": "run",
+        "snapshotId": "snapshot"
+      },
+      "action": {
+        "action": "commit",
+        "target": "git commit -m 'a  b'",
+        "commandHash": "968f16d4d0f96a46f112bab7f45ed2fb9665ab74a277f81a7994408f96ebf41f",
+        "executionContextHash": "4d613b4a3972fd96740ecece3dd0ac9c4be2edf51b3bb88d3e92a05c9f7f6752"
+      },
+      "wins": 0,
+      "errors": [
+        "JSON Parse error: Expected '}'",
+        "Quarantined harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/corrupt-sidecar/repo/approvals/approval.tmp.control.json: Corrupt persisted harness diagnostic; evidence unavailable.",
+        "Quarantined harness record at /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/corrupt-sidecar/repo/approvals/approval.tmp.control.json: Corrupt persisted harness diagnostic; evidence unavailable."
+      ],
+      "diagnostic": {
+        "filePath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/corrupt-sidecar/repo/approvals/approval.tmp.control.json",
+        "quarantinedPath": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/corrupt-approval-fixture/corrupt-sidecar/repo/approvals/.corrupt/approval.tmp.control.json.1793984958657.5274a1df-255d-4a89-8b50-1ad7a8f4e8cc",
+        "message": "Corrupt persisted harness diagnostic; evidence unavailable."
+      },
+      "corruptBytesSha256": "14ca9a9c198ef67c0774abe0872a96b8db4160106eb4d33829f98c9c224285af",
+      "quarantinedBytesSha256": "14ca9a9c198ef67c0774abe0872a96b8db4160106eb4d33829f98c9c224285af",
+      "noConsumedCorruptRecord": true
+    }
+  ],
+  "healthy": {
+    "command": "git commit -m 'a  b'; rm -rf fixture",
+    "context": {
+      "permissionProfile": "workspace-write",
+      "cwd": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review",
+      "projectRoot": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review",
+      "allowedPaths": [
+        "a",
+        "b"
+      ],
+      "processType": "SYNC"
+    },
+    "scope": {
+      "repositoryId": "repo",
+      "workspaceId": "workspace",
+      "runId": "run",
+      "snapshotId": "snapshot"
+    },
+    "action": {
+      "action": "commit",
+      "target": "git commit -m 'a  b'",
+      "commandHash": "968f16d4d0f96a46f112bab7f45ed2fb9665ab74a277f81a7994408f96ebf41f",
+      "executionContextHash": "4d613b4a3972fd96740ecece3dd0ac9c4be2edf51b3bb88d3e92a05c9f7f6752"
+    },
+    "mismatchControls": 7,
+    "unchangedBytesAfterMismatch": true,
+    "consumed": {
+      "schemaVersion": 1,
+      "id": "approval-514d9305-5f68-4848-9a88-97fd07a7bf59",
+      "revision": 1,
+      "repositoryId": "repo",
+      "workspaceId": "workspace",
+      "runId": "run",
+      "snapshotId": "snapshot",
+      "createdAt": "2026-11-06T17:09:18.660Z",
+      "updatedAt": "2026-11-06T17:09:18.667Z",
+      "action": "commit",
+      "target": "git commit -m 'a  b'",
+      "commandHash": "968f16d4d0f96a46f112bab7f45ed2fb9665ab74a277f81a7994408f96ebf41f",
+      "executionContextHash": "4d613b4a3972fd96740ecece3dd0ac9c4be2edf51b3bb88d3e92a05c9f7f6752",
+      "grantedBy": "user",
+      "consumedAt": "2026-11-06T17:09:18.667Z"
+    },
+    "persisted": {
+      "schemaVersion": 1,
+      "id": "approval-514d9305-5f68-4848-9a88-97fd07a7bf59",
+      "revision": 1,
+      "repositoryId": "repo",
+      "workspaceId": "workspace",
+      "runId": "run",
+      "snapshotId": "snapshot",
+      "createdAt": "2026-11-06T17:09:18.660Z",
+      "updatedAt": "2026-11-06T17:09:18.667Z",
+      "action": "commit",
+      "target": "git commit -m 'a  b'",
+      "commandHash": "968f16d4d0f96a46f112bab7f45ed2fb9665ab74a277f81a7994408f96ebf41f",
+      "executionContextHash": "4d613b4a3972fd96740ecece3dd0ac9c4be2edf51b3bb88d3e92a05c9f7f6752",
+      "grantedBy": "user",
+      "consumedAt": "2026-11-06T17:09:18.667Z"
+    }
+  },
+  "fetchCalls": 0
+}

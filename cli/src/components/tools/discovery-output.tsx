@@ -84,9 +84,11 @@ export function discoveryStatus(input: {
   count?: number
 }): string {
   if (input.error) return 'failed'
-  if (input.lifecycle === 'queued') return 'queued'
-  if (input.lifecycle === 'running' || !input.hasOutput) return 'running'
   if (input.lifecycle === 'cancelled') return 'cancelled'
+  if (input.lifecycle === 'failed') return 'failed'
+  if (input.lifecycle === 'queued') return 'queued'
+  if (input.lifecycle === 'running') return 'running'
+  if (!input.hasOutput) return 'unavailable'
   if (input.count === 0) return 'complete · no matches'
   return 'complete'
 }

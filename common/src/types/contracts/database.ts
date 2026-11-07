@@ -1,5 +1,6 @@
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { ActionOutcome, RunOutcome, TaskAcceptance } from '../run-outcome'
 
 type User = {
   id: string
@@ -84,6 +85,9 @@ export type FinishAgentRunFn = (params: {
   directCredits: number
   totalCredits: number
   errorMessage?: string
+  runOutcome?: RunOutcome
+  taskAcceptance?: TaskAcceptance
+  actionOutcomes?: ActionOutcome[]
   logger: Logger
 }) => Promise<void>
 

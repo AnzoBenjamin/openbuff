@@ -17,6 +17,19 @@ import {
   spyOn,
 } from 'bun:test'
 import { cloneDeep } from 'lodash'
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
+
+import { createBase2 } from '../../../../agents/base2/base2'
+import { GATE_TELEMETRY_RELATIVE } from '@codebuff/common/util/gate-telemetry'
+import { transitionBase2GateSafe } from '../orchestration/workflow-engine'
 
 import {
   clearAgentGeneratorCache,
@@ -62,6 +75,13 @@ describe('runProgrammaticStep', () => {
       addAgentStep: async () => 'test-agent-step-id',
 
       sendAction: () => {},
+      // Inject a deterministic id generator so identity ids are stable,
+      // replacing the previous spyOn(crypto, 'randomUUID').
+      idGen: {
+        uuid: () => 'mock-uuid-0000-0000-0000-000000000000',
+        prefixedId: (prefix: string, separator = '-') =>
+          `${prefix}${separator}mock-uuid-0000-0000-0000-000000000000`,
+      },
     }
 
     // Mock analytics
@@ -72,12 +92,6 @@ describe('runProgrammaticStep', () => {
       toolExecutor,
       'executeToolCall',
     ).mockImplementation(async () => {})
-
-    // Mock crypto.randomUUID
-    spyOn(crypto, 'randomUUID').mockImplementation(
-      () =>
-        'mock-uuid-0000-0000-0000-000000000000' as `${string}-${string}-${string}-${string}-${string}`,
-    )
 
     // Create mock template
     mockTemplate = {
@@ -150,6 +164,55 @@ describe('runProgrammaticStep', () => {
   })
 
   describe('generator lifecycle', () => {
+    for (const yieldValue of [
+      { toolName: 'end_turn', input: {} },
+      { toolName: 'read_files', input: { paths: ['test.txt'] } },
+      { type: 'STEP_TEXT', text: '<codebuff_tool_call>\n{"cb_tool_name":"read_files","paths":["test.txt"]}\n</codebuff_tool_call>\nafter-tool-text' },
+    ]) {
+      it(`[B02 cancellation] aborted ${'toolName' in yieldValue ? yieldValue.toolName : yieldValue.type} cannot complete or resume the generator`, async () => {
+        const controller = new AbortController()
+        const reason = new Error('cancelled during tool approval')
+        mockParams.signal = controller.signal
+        let resumed = false
+        mockTemplate.handleSteps = () => (function* () {
+          yield yieldValue
+          resumed = true
+          return
+        })() as StepGenerator
+        executeToolCallSpy.mockImplementation(async () => { controller.abort(reason) })
+        const chunks: unknown[] = []
+        mockParams.onResponseChunk = chunk => chunks.push(chunk)
+        const result = await runProgrammaticStep(mockParams)
+        expect(result.agentState.runOutcome?.termination).toBe('cancelled')
+        expect(result.agentState.output?.error).toContain(reason.message)
+        expect(resumed).toBe(false)
+        expect(executeToolCallSpy).toHaveBeenCalledTimes(1)
+        expect(chunks).not.toContain('after-tool-text')
+      })
+    }
+
+    it('[B02 cancellation] a generator that catches its own abort cannot return completed', async () => {
+      const controller = new AbortController()
+      mockParams.signal = controller.signal
+      mockTemplate.handleSteps = () => (function* () {
+        controller.abort(new Error('cancelled inside generator'))
+        try { controller.signal.throwIfAborted() } catch {}
+        return
+      })() as StepGenerator
+      const result = await runProgrammaticStep(mockParams)
+      expect(result.agentState.runOutcome?.termination).toBe('cancelled')
+      expect(executeToolCallSpy).not.toHaveBeenCalled()
+    })
+
+    it('[B02 cancellation] an actual AbortError remains cancellation without an aborted signal', async () => {
+      mockTemplate.handleSteps = () => (function* () {
+        yield { toolName: 'read_files', input: { paths: ['test.txt'] } }
+      })() as StepGenerator
+      executeToolCallSpy.mockRejectedValue(new DOMException('provider aborted', 'AbortError'))
+      const result = await runProgrammaticStep(mockParams)
+      expect(result.agentState.runOutcome?.termination).toBe('cancelled')
+    })
+
     it('should create new generator when none exists', async () => {
       const mockGenerator = (function* () {
         yield { toolName: 'end_turn', input: {} }
@@ -1032,6 +1095,119 @@ describe('runProgrammaticStep', () => {
   })
 
   describe('error handling', () => {
+    it('B02 the shipped serialized base2 generator records an illegal advisory transition durably', async () => {
+      const projectRoot = mkdtempSync(join(tmpdir(), 'openbuff-b02-workflow-'))
+      const seeded = transitionBase2GateSafe({
+        phase: 'awaiting_validation',
+        now: 100,
+      })
+      if (!seeded.ok) throw new Error('workflow fixture could not be seeded')
+      const source = createBase2('fast')
+      mockTemplate = {
+        ...mockTemplate,
+        ...source,
+        id: 'base2-fast',
+        executionSource: 'bundled',
+        handleSteps: source.handleSteps!.toString(),
+        // Exercise the shipped explicit no-validation option.
+        programmaticConfig: {
+          ...source.programmaticConfig,
+          hasNoValidation: true,
+        },
+      } as unknown as AgentTemplate
+      mockAgentState.agentId = 'base2-fast'
+      mockAgentState.workflowStates = { 'base2-gate-v1': seeded.state }
+      let gitCalls = 0
+      executeToolCallSpy.mockImplementation(async (params) => {
+        const value: Record<string, string> =
+          params.toolName === 'git_status'
+            ? { status: gitCalls++ === 0 ? '' : ' M src/a.ts' }
+            : {}
+        params.toolResults.push({
+          role: 'tool',
+          toolCallId: params.toolCallId ?? 'fixture-call',
+          toolName: params.toolName,
+          content: [{ type: 'json', value }],
+        })
+      })
+      spyOn(console, 'info').mockImplementation(() => {})
+      try {
+        mkdirSync(join(projectRoot, 'src'))
+        writeFileSync(
+          join(projectRoot, 'src/a.ts'),
+          'export const fixture = 1\n',
+        )
+        const params = {
+          ...mockParams,
+          template: mockTemplate,
+          fileContext: { ...mockFileContext, projectRoot },
+        }
+        const first = await runProgrammaticStep(params)
+        expect(first.endTurn).toBe(false)
+        mockAgentState.messageHistory = [
+          ...mockAgentState.messageHistory,
+          {
+            role: 'tool',
+            toolCallId: 'fixture-edit',
+            toolName: 'edit_transaction',
+            content: [
+              {
+                type: 'json',
+                value: {
+                  kind: 'file_mutation_result',
+                  version: 1,
+                  operationId: 'fixture-op',
+                  receiptId: 'fixture-receipt',
+                  outcome: 'applied',
+                  authorityTier: 'conditional_commit',
+                  actions: [
+                    {
+                      actionId: 'fixture-action',
+                      index: 0,
+                      action: 'update',
+                      path: 'src/a.ts',
+                      outcome: 'applied',
+                      beforeHash: 'before',
+                      afterHash: 'after',
+                    },
+                  ],
+                  authorityReceipt: {
+                    operationId: 'fixture-op',
+                    receiptId: 'fixture-receipt',
+                    actions: [{ actionId: 'fixture-action' }],
+                  },
+                  errors: [],
+                  freshCapabilities: [],
+                },
+              },
+            ],
+          },
+        ]
+        await runProgrammaticStep({ ...params, stepsComplete: true })
+        expect(mockAgentState.runOutcome).toBeUndefined()
+        expect(mockAgentState.workflowStates['base2-gate-v1']).toEqual(
+          seeded.state,
+        )
+        const events = readFileSync(
+          join(projectRoot, GATE_TELEMETRY_RELATIVE),
+          'utf8',
+        )
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line))
+        expect(
+          events.some(
+            (event) =>
+              event.workflowTransitionError?.from === 'awaiting_validation' &&
+              event.workflowTransitionError?.event === 'awaiting_validation' &&
+              typeof event.workflowTransitionError.error === 'string',
+          ),
+        ).toBe(true)
+      } finally {
+        rmSync(projectRoot, { recursive: true, force: true })
+      }
+    })
+
     it('should handle generator errors gracefully', async () => {
       const mockGenerator = (function* () {
         throw new Error('Generator error')
@@ -1046,6 +1222,10 @@ describe('runProgrammaticStep', () => {
 
       expect(result.endTurn).toBe(true)
       expect(result.agentState.output?.error).toContain('Generator error')
+      expect(result.agentState.runOutcome).toMatchObject({
+        termination: 'failed',
+        cause: { code: 'programmatic_execution_error' },
+      })
       expect(
         responseChunks.some(
           (chunk) =>
@@ -1070,6 +1250,10 @@ describe('runProgrammaticStep', () => {
 
       expect(result.endTurn).toBe(true)
       expect(result.agentState.output?.error).toContain('Tool execution failed')
+      expect(result.agentState.runOutcome).toMatchObject({
+        termination: 'failed',
+        cause: { message: expect.stringContaining('Tool execution failed') },
+      })
     })
 
     it('should handle non-Error exceptions', async () => {
@@ -2008,6 +2192,67 @@ describe('runProgrammaticStep', () => {
       expect(result.agentState.output?.error).toBeUndefined()
     })
 
+    it('should feed an empty toolResult to the next step after a zero-segment STEP_TEXT', async () => {
+      // Reviewer advisory fix: a STEP_TEXT whose text parses to zero
+      // segments (e.g. whitespace-only) previously skipped the toolResult
+      // reassignment, so the next generator.next() replayed the PREVIOUS
+      // iteration's results for a yield that executed nothing. The
+      // generator below records the toolResult context of every step; the
+      // whitespace-only STEP_TEXT must observe [] — not the read_files
+      // results from the first iteration.
+      const receivedToolResults: unknown[] = []
+      const mockGenerator = (function* () {
+        // Iteration 1: a real tool call. The runtime executes it and feeds
+        // its (non-empty) results to the next step.
+        const afterReadFiles = yield {
+          toolName: 'read_files',
+          input: { paths: ['test.txt'] },
+        }
+        receivedToolResults.push(
+          (afterReadFiles as { toolResult: unknown }).toolResult,
+        )
+        // Iteration 2: a whitespace-only STEP_TEXT parses to zero
+        // segments, so nothing executes and the NEXT step must see an
+        // empty toolResult.
+        const afterEmptyStepText = yield { type: 'STEP_TEXT', text: ' \n\t ' }
+        receivedToolResults.push(
+          (afterEmptyStepText as { toolResult: unknown }).toolResult,
+        )
+        yield { toolName: 'end_turn', input: {} }
+      })() as StepGenerator
+
+      mockTemplate.handleSteps = () => mockGenerator
+      mockTemplate.toolNames = ['read_files', 'end_turn']
+
+      executeToolCallSpy.mockImplementation(
+        async (
+          options: ParamsOf<typeof executeToolCall>,
+        ): ReturnType<typeof executeToolCall> => {
+          if (options.toolName === 'read_files') {
+            options.toolResults.push({
+              role: 'tool',
+              toolName: 'read_files',
+              toolCallId: options.toolCallId ?? 'read-files-call-id',
+              content: jsonToolResult({
+                files: [{ path: 'test.txt', content: 'hello' }],
+              }),
+            })
+          }
+        },
+      )
+
+      const result = await runProgrammaticStep(mockParams)
+
+      expect(result.endTurn).toBe(true)
+      expect(result.agentState.output?.error).toBeUndefined()
+      // Non-vacuous fixture: the read_files step DID produce results...
+      expect(receivedToolResults).toHaveLength(2)
+      expect((receivedToolResults[0] as unknown[]).length).toBeGreaterThan(0)
+      // ...and the zero-segment STEP_TEXT fed an empty toolResult instead
+      // of replaying them.
+      expect(receivedToolResults[1]).toEqual([])
+    })
+
     it('should surface malformed STEP_TEXT tool calls as response errors', async () => {
       const mockGenerator = (function* () {
         yield {
@@ -2031,6 +2276,57 @@ describe('runProgrammaticStep', () => {
         type: 'error',
         message: expect.stringContaining('JSON parsing failed'),
       })
+
+      // Class C
+      // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md):
+      // the same excerpt-annotated failure is ALSO persisted into the
+      // transcript as a TOOL_CALL_ERROR user message. Streaming it alone left
+      // a silent hole in the model's own history where the tool call was, so
+      // the next turn could not self-correct the malformed JSON.
+      const toolCallErrorMessages = result.agentState.messageHistory.filter(
+        (message) =>
+          message.role === 'user' && message.tags?.includes('TOOL_CALL_ERROR'),
+      )
+      expect(toolCallErrorMessages).toHaveLength(1)
+      const errorText = toolCallErrorMessages[0].content
+        .map((part) => ('text' in part ? part.text : ''))
+        .join('')
+      // withSystemTags wraps the composed message so it reads as system
+      // feedback rather than user prose.
+      expect(errorText).toContain('<system>Ignored codebuff_tool_call content')
+      expect(errorText).toContain('JSON parsing failed')
+      expect(errorText).toContain('</system>')
+      // The raw trimmed block is quoted back as a bounded excerpt, mirroring
+      // the executor's pinned 'Original tool call input:' self-correcting shape.
+      expect(errorText).toContain(
+        'Original tool call input (excerpt): {"cb_tool_name": "read_files",',
+      )
+    })
+
+    it('persists actionable guidance for nameless STEP_TEXT tool calls', async () => {
+      const mockGenerator = (function* () {
+        yield {
+          type: 'STEP_TEXT',
+          text: '<codebuff_tool_call>\n{"status":"completed","messages":["Done"]}\n</codebuff_tool_call>',
+        }
+        yield { toolName: 'end_turn', input: {} }
+      })() as StepGenerator
+      mockTemplate.handleSteps = () => mockGenerator
+      const result = await runProgrammaticStep(mockParams)
+      const message = result.agentState.messageHistory.find(
+        (entry) =>
+          entry.role === 'user' && entry.tags?.includes('TOOL_CALL_ERROR'),
+      )
+      const text = message?.content
+        .map((part) => ('text' in part ? part.text : ''))
+        .join('')
+      expect(text).toContain('"cb_tool_name"')
+      expect(text).toContain('plain text')
+      expect(executeToolCallSpy).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: expect.objectContaining({ status: 'completed' }),
+        }),
+      )
     })
 
     it('should repair separators in STEP_TEXT tool calls before execution', async () => {

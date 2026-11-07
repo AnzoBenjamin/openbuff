@@ -2,6 +2,12 @@ import { readFileSync } from 'node:fs'
 
 import { describe, expect, test } from 'bun:test'
 
+import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
+import {
+  buildFileMutationResultFromReceiptV1,
+  commitReceiptV1Schema,
+} from '@codebuff/common/tools/results/filesystem'
+
 import {
   collectToolInputFiles,
   hasEditArtifact,
@@ -189,89 +195,36 @@ function assertNoSiblingHelperReferences(
   }
 }
 
-/**
- * Canonical `file_mutation_result` receipt, duplicated locally from
- * agents/__tests__/gate-files.test.ts (these test files keep fixtures local
- * rather than exporting them from the canonical module). It satisfies
- * fileMutationResultV1Schema exactly, so canonical `hasEditArtifact` returns
- * true and canonical `visitToolValue` collects its action path. Without at
- * least one fixture the canonical helper ACCEPTS, every battery entry would
- * exercise only the reject path and the parity assertions below would still
- * pass if an inline copy rejected everything.
- */
-function editReceipt(path: string): Record<string, unknown> {
-  const operationId = `op-${path}`
-  const receiptId = `receipt-${path}`
-  const actionId = `action-${path}`
-  const hash = 'sha256:' + 'a'.repeat(64)
-  return {
-    kind: 'file_mutation_result',
-    version: 1,
-    operationId,
-    receiptId,
-    outcome: 'applied',
-    authorityTier: 'conditional_commit',
+/** Authority-backed fixtures retain exact postimages for update/move/delete. */
+function editReceipt(
+  path: string,
+  action: 'update' | 'move' | 'delete' = 'update',
+  destinationPath?: string,
+): Record<string, unknown> {
+  const update = committedMutationFixture([{ path, content: 'after' }])
+  if (action === 'update') return update
+
+  const authority = update.authorityReceipt!
+  const original = authority.actions[0]!
+  const afterHash = action === 'delete' ? null : original.afterHash
+  const afterHashes =
+    action === 'move'
+      ? { [path]: null, [destinationPath!]: afterHash }
+      : { [path]: null }
+  const receipt = commitReceiptV1Schema.parse({
+    ...authority,
     actions: [
       {
-        actionId,
-        index: 0,
-        action: 'update',
-        path,
-        outcome: 'applied',
-        beforeHash: hash,
-        afterHash: hash,
+        ...original,
+        action,
+        ...(destinationPath ? { destinationPath } : {}),
+        afterHash,
+        forward: { outcome: 'applied', afterHashes },
       },
     ],
-    authorityReceipt: {
-      kind: 'commit_receipt',
-      version: 1,
-      receiptId,
-      operationId,
-      callId: `call-${path}`,
-      authorityTier: 'conditional_commit',
-      status: 'committed',
-      actions: [
-        {
-          actionId,
-          index: 0,
-          action: 'update',
-          path,
-          status: 'committed',
-          beforeHash: hash,
-          afterHash: hash,
-        },
-      ],
-      finalHashes: { [path]: hash },
-    },
-    errors: [],
-    freshCapabilities: [],
-  }
-}
-
-/**
- * Move-action variant of the canonical receipt. A move credits the
- * DESTINATION path, so the action and its mirrored authority-receipt entry
- * both carry `destinationPath` and `finalHashes` is keyed by the destination
- * (the vacated source key is kept as well, matching the canonical move
- * fixture in agents/__tests__/gate-files.test.ts).
- */
-function moveReceipt(
-  path: string,
-  destinationPath: string,
-): Record<string, unknown> {
-  const receipt = editReceipt(path)
-  const action = (receipt.actions as Array<Record<string, unknown>>)[0]!
-  const authorityReceipt = receipt.authorityReceipt as Record<string, unknown>
-  const authorityAction = (
-    authorityReceipt.actions as Array<Record<string, unknown>>
-  )[0]!
-  const hash = action.afterHash as string
-  receipt.actions = [{ ...action, action: 'move', destinationPath }]
-  authorityReceipt.actions = [
-    { ...authorityAction, action: 'move', destinationPath },
-  ]
-  authorityReceipt.finalHashes = { [path]: hash, [destinationPath]: hash }
-  return receipt
+    finalHashes: afterHashes,
+  })
+  return buildFileMutationResultFromReceiptV1(receipt, [], [])
 }
 
 describe('gate-files helpers — inline copies match canonical exports', () => {
@@ -349,7 +302,20 @@ describe('gate-files helpers — inline copies match canonical exports', () => {
       // rejected by the canonical helper, so the assertions could not detect
       // an inline copy that rejects valid receipts.
       editReceipt('src/applied.ts'),
-      moveReceipt('src/moved-from.ts', 'src/moved-to.ts'),
+      editReceipt('src/moved-from.ts', 'move', 'src/moved-to.ts'),
+      editReceipt('src/deleted.ts', 'delete'),
+      {
+        ...editReceipt('src/missing-authority.ts'),
+        authorityReceipt: undefined,
+      },
+      {
+        ...editReceipt('src/foreign-operation.ts'),
+        operationId: 'foreign-operation',
+      },
+      {
+        ...editReceipt('src/foreign-receipt.ts'),
+        receiptId: 'foreign-receipt',
+      },
       {
         kind: 'file_mutation_result',
         authorityTier: 'portable_path',

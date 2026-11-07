@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import { discoveryCoverageV1Schema } from '@codebuff/common/types/discovery-coverage'
 
 import type { DiscoveryCoverageV1 } from '@codebuff/common/types/discovery-coverage'
@@ -509,6 +510,8 @@ export function claimDiscoveryShard(params: {
   workspaceRevision?: number
   taskId?: string
   workspaceSnapshotId?: string
+  /** Injectable wall-clock (P2-T1); resolves to realClock when omitted. */
+  now?: number
 }): { state: DiscoveryCoverageV1; shardKey: string } {
   const question =
     params.question.trim() ||
@@ -549,7 +552,7 @@ export function claimDiscoveryShard(params: {
         question,
         taskId: params.taskId,
         status: 'active',
-        assignedAt: Date.now(),
+        assignedAt: params.now ?? realClock.now(),
       },
     ].slice(-256),
   })
@@ -853,6 +856,8 @@ export function tryClaimDiscoveryShard(params: {
   workspaceRevision?: number
   taskId?: string
   workspaceSnapshotId?: string
+  /** Injectable wall-clock (P2-T1); forwarded to claimDiscoveryShard. */
+  now?: number
 }): {
   state: DiscoveryCoverageV1
   shardKey: string
@@ -885,6 +890,8 @@ export function completeDiscoveryShard(params: {
   existing?: DiscoveryCoverageV1
   shardKey?: string
   status: 'completed' | 'failed' | 'interrupted'
+  /** Injectable wall-clock (P2-T1); resolves to realClock when omitted. */
+  now?: number
 }): DiscoveryCoverageV1 | undefined {
   if (!params.existing || !params.shardKey) return params.existing
   return discoveryCoverageV1Schema.parse({
@@ -892,7 +899,7 @@ export function completeDiscoveryShard(params: {
     revision: params.existing.revision + 1,
     shards: params.existing.shards.map((shard) =>
       shard.key === params.shardKey
-        ? { ...shard, status: params.status, completedAt: Date.now() }
+        ? { ...shard, status: params.status, completedAt: params.now ?? realClock.now() }
         : shard,
     ),
   })
@@ -937,12 +944,13 @@ export function recordDiscoveryResult(params: {
  */
 export function reconcileInterruptedDiscoveryShards(
   existing?: DiscoveryCoverageV1,
+  now?: number,
 ): DiscoveryCoverageV1 | undefined {
   const hasActiveShard = existing?.shards.some(
     (shard) => shard.status === 'active',
   )
   if (!existing || !hasActiveShard) return existing
-  const completedAt = Date.now()
+  const completedAt = now ?? realClock.now()
   return discoveryCoverageV1Schema.parse({
     ...existing,
     revision: existing.revision + 1,

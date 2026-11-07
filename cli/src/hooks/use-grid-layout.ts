@@ -34,6 +34,7 @@ const COLUMN_GAP = 1
 export function computeGridLayout<T>(
   items: T[],
   availableWidth: number,
+  stableColumns = false,
 ): GridLayoutResult<T> {
   // Force single column for very narrow terminals where multi-column wouldn't fit
   const minWidthForTwoColumns = MIN_COLUMN_WIDTH * 2 + COLUMN_GAP
@@ -49,7 +50,11 @@ export function computeGridLayout<T>(
   const maxColumns =
     WIDTH_THRESHOLDS.filter((t) => availableWidth >= t).length + 1
 
-  const columns = computeSmartColumns(items.length, maxColumns)
+  // A growing agent roster must not alternate 3 -> 2 -> 3 columns as its
+  // count changes: that remounts cards, rewraps text and shifts the viewport.
+  const columns = stableColumns
+    ? Math.max(1, Math.min(items.length, maxColumns))
+    : computeSmartColumns(items.length, maxColumns)
 
   let columnWidth: number
   if (columns === 1) {
@@ -71,9 +76,10 @@ export function computeGridLayout<T>(
 export function useGridLayout<T>(
   items: T[],
   availableWidth: number,
+  stableColumns = false,
 ): GridLayoutResult<T> {
   return useMemo(
-    () => computeGridLayout(items, availableWidth),
-    [items, availableWidth],
+    () => computeGridLayout(items, availableWidth, stableColumns),
+    [items, availableWidth, stableColumns],
   )
 }

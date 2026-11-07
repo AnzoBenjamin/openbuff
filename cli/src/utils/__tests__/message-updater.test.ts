@@ -263,6 +263,39 @@ describe('createBatchedMessageUpdater', () => {
     )
   })
 
+  test('setError is a no-op on an already-marked-complete (terminal) message', () => {
+    // An abort listener terminalizes the AI message the moment the signal
+    // aborts; a run that rejects afterwards must not land a late setError
+    // write on top of that terminal state (single-final-writer invariant,
+    // reliability finding post-abort-error-write-lands-after-terminal-mark-complete).
+    let state: ChatMessage[] = [
+      {
+        id: 'ai-1',
+        variant: 'ai',
+        content: 'Partial streamed content',
+        blocks: [{ type: 'text', content: 'terminal blocks' } as TextContentBlock],
+        timestamp: 'now',
+        isComplete: true,
+      },
+    ]
+
+    const updater = createBatchedMessageUpdater('ai-1', (fn) => {
+      state = fn(state)
+    }, 1000)
+
+    updater.setError('late post-abort error')
+
+    expect(state[0].isComplete).toBe(true)
+    // The late write never landed: the terminal blocks write survives
+    // untouched and no userError banner is appended after completion.
+    expect(state[0].userError).toBeUndefined()
+    expect(state[0].blocks).toEqual([
+      { type: 'text', content: 'terminal blocks' },
+    ])
+
+    updater.dispose()
+  })
+
   test('updates after dispose are applied immediately', () => {
     let state = [...baseMessages]
     let setMessagesCallCount = 0

@@ -162,7 +162,11 @@ Behavior, matched to the implementation in `sdk/src/impl/failover.ts` and
 - **Entry list is model IDs, not provider IDs.** Each entry is routed through
   the same provider-resolution step as the primary, so it must resolve to a
   provider in `providers`.
-- **Primary is always attempted first.** The failover list is deduped against
+- **Primary is attempted first when eligible.** Configured and implicit
+  ChatGPT OAuth routes honor the request's OAuth exclusion and the local
+  rate-limit cache. An excluded OAuth route selects an eligible configured
+  BYOK backup before reading OAuth credentials, or returns an actionable
+  routing error. The failover list is deduped against
   the primary, so a `failoverModels` entry that repeats the primary does not
   cause a redundant same-model attempt (`resolveModelsToTry`).
 - **Duplicate backups are collapsed automatically.** `resolveModelsToTry` also
@@ -179,7 +183,22 @@ Behavior, matched to the implementation in `sdk/src/impl/failover.ts` and
   risks cascading load across providers.
 - **No-content-yielded gate:** failover fires **only when no content has been
   yielded yet**, so partial output is never duplicated across attempts. If the
-  stream has already produced tokens, the error surfaces instead.
+  stream has already delivered text, reasoning or tool calls, the error
+  surfaces instead. Undelivered tool calls are discarded before retry.
+- **One retry owner:** Openbuff disables the AI SDK's automatic retries for
+  streaming, text and structured requests. Its shared policy defaults to
+  three retries after the initial attempt, with jittered exponential waits
+  capped at eight seconds. A valid integer or HTTP-date `Retry-After` hint is
+  capped at the same limit; malformed hints fall back to exponential waits.
+  Content-policy refusals and aborts do not retry or fail over, even when
+  wrapped around a retryable HTTP status. Context repair and OAuth recovery
+  consume the same finite request attempt ledger. Nonstreaming requests use
+  the shared retry policy on their selected BYOK route.
+- **Dormant credentials:** context-window and vision-capability inspection
+  use route metadata without validating API keys. Credentials are validated
+  only for the selected request route. A missing backup key cannot block a
+  healthy primary; selecting that backup returns an actionable configuration
+  error retaining the primary failure as its cause.
 - **`preferModelParam` bypass:** on each backup attempt the failover loop sets
   `preferModelParam: failoverIndex > 0` when resolving the agent's model. This
   makes the explicit backup model ID win over mode/agent/defaultModel routing
@@ -229,6 +248,20 @@ requests when the agent template does not declare its own `maxOutputTokens`.
 Precedence: agent template `maxOutputTokens` > per-model
 `modelCapabilities[modelId].context.outputTokens` >
 `defaultCapabilities.context.outputTokens` > provider default behavior.
+
+For example, set `modelCapabilities["your-model"].context.outputTokens` in
+your provider's `openbuff.d/providers.json` to a value supported by that model.
+This is a requested ceiling, not a way to exceed the provider's actual output
+or context limit. The shipped base and editor agents explicitly request 64,000
+tokens, so their template value takes precedence over provider configuration.
+
+Tool and child-agent output has separate limits. Child outputs that fit the
+256,000-character parent budget retain their complete strings; structural
+limits may still apply. When output is compacted, the receipt reports truncation
+and, when persistence succeeds, an `artifactPath` containing the full result.
+Read that artifact in ranges if it is too large for a single read. The
+provider's `maxOutputBytes` setting controls a transport diagnostic, not the
+model's token ceiling or the size of these parent receipts.
 
 Without any of these, the provider's own default applies (the
 Anthropic-compatible path defaults to a small ~4k cap, which can truncate
@@ -391,6 +424,15 @@ field** for these systems yet — the behavior is code-default and always on.
   positive int cap, max `20`. When omitted, resolves from
   `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS` only when set to a valid positive
   int; unset/invalid → unlimited. Explicit option values win over the env.
+- **`maxMissingOutputRetries`** is an `openbuff.json` key (and an SDK run
+  option). Default **unlimited**: a structured-output agent that ends its
+  turn without calling `set_output` is re-prompted on every turn-end until
+  a configured `maxAgentSteps` cap or user cancellation ends the run.
+  Setting a positive integer caps those retries; after the cap the parent
+  receives a null structured value. Configure in `openbuff.json` as
+  `"maxMissingOutputRetries": 3`, or set the
+  `OPENBUFF_MAX_MISSING_OUTPUT_RETRIES` env var to a positive integer; the
+  JSON config wins over the env fallback.
 - **`/context`** is a read-only slash command that prints the per-component
   token breakdown recorded for the current turn (advisory telemetry, not a
   hard gate). It also always prints the effective gate repair budgets

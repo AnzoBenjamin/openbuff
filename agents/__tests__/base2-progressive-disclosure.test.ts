@@ -9,6 +9,7 @@ import {
   buildBroadAuditSection,
   decisionCapturePolicySection,
   gateAwarenessSection,
+  outputHygieneSection,
   gitDisciplineSection,
   preReviewSelfCheckSection,
   qualitySection,
@@ -339,7 +340,7 @@ describe('base2 progressive prompt disclosure (M4)', () => {
         if (!planOnly) {
           expect(
             system.includes(
-              `\n\n${gateAwarenessSection}\n\n${decisionCapturePolicySection}\n\n# Openbuff Meta-information`,
+              `\n\n${gateAwarenessSection}\n\n${outputHygieneSection}\n\n${decisionCapturePolicySection}\n\n# Openbuff Meta-information`,
             )
               ? 'spaced'
               : `${label}: gate section seam lost its blank-line gaps`,

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "6e069fa3-206e-4c04-95a3-86a30a0baa6b",
+  "brokerRevision": 1,
+  "authorityKind": "cooperative_cas",
+  "repositoryId": "f8e85188373410c51a5d7b2d",
+  "workspaceId": "f8e85188373410c51a5d7b2d",
+  "state": "committed",
+  "createdAt": "2026-11-06T21:45:16.695Z",
+  "updatedAt": "2026-11-06T21:45:16.706Z",
+  "action": "commit",
+  "path": "fixture.txt",
+  "expectedHash": "sha256:c167d8e79831b6d66ab137a4263a46abe371358ab113db9e7abbe4eca1196f35",
+  "beforeHash": "sha256:c167d8e79831b6d66ab137a4263a46abe371358ab113db9e7abbe4eca1196f35",
+  "afterHash": "sha256:715b3a47acf0571d59b4ffb1198242a655795c7b667e60f4026693a489a32d02",
+  "stagingPath": ".openbuff-mutation-479-6de1871b-3645-4909-81da-3aebc5cce55b.tmp"
+}

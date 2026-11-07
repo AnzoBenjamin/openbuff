@@ -12,7 +12,7 @@ const openaiCompatibleErrorPayloadSchema = z.object({
     type: z.string().nullish(),
     param: z.any().nullish(),
     code: z.union([z.string(), z.number()]).nullish(),
-    status: z.string().nullish(),
+    status: z.union([z.string(), z.number()]).nullish(),
     details: z.array(z.any()).nullish(),
   }),
 })

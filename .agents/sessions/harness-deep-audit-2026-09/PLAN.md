@@ -1,5 +1,7 @@
 # Harness Deep Audit — 2026-09 (fresh rediscovery)
 
+> **RETIRED 2026-10-24 — never executed.** This directory holds only this plan; the audit it describes was overtaken by the later waves that DID run: harness-audit-2026-09, harness-audit-2026-09-22, polyglot-reaudit-2026-09-28, reaudit-polyglot-2026-09, audit-phases-p0-p3-2026-10, and polyglot-harness-audit-2026-10 (all with findings/reports). Do not execute this plan; treat those sessions as the record.
+
 <!-- current-task: Wave 1 — discovery -->
 
 ## Mandate

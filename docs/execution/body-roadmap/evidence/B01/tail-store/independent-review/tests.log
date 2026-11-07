@@ -1,0 +1,73 @@
+bun test v1.3.5 (1e86cebd)
+
+sdk/src/__tests__/get-change-review-bundle.test.ts:
+(pass) getChangeReviewBundle > binds status and diff to a deterministic snapshot id [72.00ms]
+(pass) getChangeReviewBundle > carries the evidence-only snapshotIdUsage warning in the success payload [30.00ms]
+(pass) getChangeReviewBundle > parses success payloads with and without the additive snapshotIdUsage field [4.00ms]
+(pass) getChangeReviewBundle > snapshot identity is independent of display truncation and includes every changed file [55.00ms]
+(pass) getChangeReviewBundle > snapshot identity is content-keyed and independent of the workspace journal [71.00ms]
+(pass) getChangeReviewBundle > returns only records bound to the current repository, workspace, snapshot, and changed files [78.00ms]
+(pass) getChangeReviewBundle > falls back to the last commit diff when the worktree is clean [48.00ms]
+(pass) getChangeReviewBundle > committedDiffFiles decodes git-quoted UTF-8 paths from the committed diff [1.00ms]
+(pass) getChangeReviewBundle > ignores .agents/sessions plan artifacts for snapshot identity and files [86.00ms]
+(pass) getChangeReviewBundle > returns empty files when the worktree is clean and there is no parent commit [47.00ms]
+(pass) getChangeReviewBundle > adds a securityScan field with parsed findings when semgrep is available [53.00ms]
+(pass) getChangeReviewBundle > keeps the bundle intact with an unavailable securityScan when semgrep is missing [43.00ms]
+(pass) getChangeReviewBundle > reports a skipped securityScan and never runs semgrep when no changed file is scannable [26.00ms]
+(pass) getChangeReviewBundle > equal-length untracked tails beyond 1 MiB have distinct full identities [45.00ms]
+(pass) getChangeReviewBundle > full Git diff tails change independently of retained presentation bytes [194.00ms]
+(pass) getChangeReviewBundle > canonical status membership retains whitespace, arrows and quoted UTF-8 names [47.00ms]
+(pass) getChangeReviewBundle > quarantined open finding evidence keeps subsequent bundles unavailable [64.00ms]
+(pass) getChangeReviewBundle > refuses incomplete path membership when porcelain exceeds retention [271.00ms]
+(pass) getChangeReviewBundle > identity reads stay order-stable across a file set larger than the read fan-out [47.00ms]
+(pass) getChangeReviewBundle > windowed identity reads match a serial full-file digest reference [4.00ms]
+(pass) getChangeReviewBundle > rejects an in-place write during a full file read using stable metadata [143.00ms]
+(pass) getChangeReviewBundle > full file hashing observes cancellation and its own deadline [3.00ms]
+(pass) getChangeReviewBundle > drains the identity read window before failing closed so sibling rejections are never unhandled [27.00ms]
+(pass) getChangeReviewBundle > abort escalates SIGTERM to SIGKILL for a git child that ignores SIGTERM [173.00ms]
+(pass) getChangeReviewBundle > abort with a SIGTERM-honoring git child settles immediately and leaves no escalation error [441.00ms]
+(pass) getChangeReviewBundle > runGitBounded source pins the close-handler disarm and the escalation dead-child guard [1.00ms]
+(pass) getChangeReviewBundle > gitStatus with timeoutMs fails closed on a wedged git [252.00ms]
+(pass) getChangeReviewBundle > resolveWorkspaceIdentity with timeoutMs rejects bounded on a wedged git [270.00ms]
+(pass) getChangeReviewBundle > reports the documented fallback when rev-parse HEAD fails with empty stderr [8.00ms]
+(pass) getChangeReviewBundle > bundle prelude and scan-baseline git spawns carry the identity deadline
+(pass) getChangeReviewBundle > defaults the diff budget to the schema max (200k) so a realistic multi-file review is whole [29.00ms]
+(pass) getChangeReviewBundle > marks a clipped diff with a self-describing, resumable elision marker [38.00ms]
+
+sdk/src/__tests__/run-git-bounded.test.ts:
+(pass) runGitBounded > counts every stdout byte while retaining only the cap [6.00ms]
+(pass) runGitBounded > equal-length tails beyond retained stdout change its full digest [1.00ms]
+(pass) runGitBounded > kills a wedged git at the wall-clock deadline and fails closed [51.00ms]
+(pass) runGitBounded > returns immediately without spawning when the signal is already aborted
+
+sdk/src/__tests__/local-harness-store.test.ts:
+(pass) LocalHarnessStore > atomically persists and reads scoped records [1.00ms]
+(pass) LocalHarnessStore > enforces compare-and-swap revisions [2.00ms]
+(pass) LocalHarnessStore > rejects traversal-shaped ids [1.00ms]
+(pass) LocalHarnessStore > rejects corrupt records instead of silently trusting them [1.00ms]
+(pass) LocalHarnessStore > quarantines corrupt records while listing healthy records [3.00ms]
+(pass) LocalHarnessStore > direct corrupt reads preserve diagnostics across instances for open [2.00ms]
+(pass) LocalHarnessStore > direct corrupt reads preserve diagnostics across instances for finding.tmp.tail
+(pass) LocalHarnessStore > serializes compare-and-swap across processes [81.00ms]
+(pass) LocalHarnessStore > lock reclaim verifies the recorded owner is dead, not just stale mtime [6.00ms]
+(pass) LocalHarnessStore > release is ownership-verified: a stale holder does not delete a stolen lock [1.00ms]
+(pass) LocalHarnessStore > reclaim deletes the lock dir only when the displaced owner is still dead [3.00ms]
+(pass) LocalHarnessStore > reclaim removes the displaced scratch lock dir when the restore races a newer waiter
+
+sdk/src/__tests__/run-targeted-validation.test.ts:
+(pass) runTargetedValidation > fails closed for a stale snapshot [31.00ms]
+(pass) runTargetedValidation > returns scoped evidence for the current snapshot [56.00ms]
+(pass) runTargetedValidation > accepts validation across a workspace-journal advance with no file change [51.00ms]
+(pass) runTargetedValidation > fails closed when a validation hook returns an execution error [49.00ms]
+(pass) runTargetedValidation > forwards the diagnosticDelta injector to the hook executor [51.00ms]
+(pass) runTargetedValidation > fails closed when the diagnostic-delta preflight rejects [50.00ms]
+(pass) runTargetedValidation > skips the after-bundle semgrep rescan when a securityScanRunner is provided [59.00ms]
+(pass) runTargetedValidation > rejects evidence with the drift summary for a genuine worktree change [47.00ms]
+(pass) runTargetedValidation > reports a post-validation identity failure as a re-attestation error, not drift [41.00ms]
+(pass) runTargetedValidation > rejects passing hook evidence after an equal-length untracked tail edit [48.00ms]
+(pass) runTargetedValidation > refuses validation before hooks when status membership overflows [231.00ms]
+
+ 59 pass
+ 0 fail
+ 396 expect() calls
+Ran 59 tests across 4 files. [3.70s]

@@ -1,0 +1,18 @@
+--- a/sdk/src/serve/event-bridge.ts
++++ b/sdk/src/serve/event-bridge.ts
+@@ -789,7 +789,6 @@
+         event.actionOutcome ??
+         classifyActionOutput(event.toolName, event.output)
+       let failed = classified.outcome !== 'succeeded'
+-      let mutation: MutationResultSummary | undefined
+       // Keep canonical refused/uncertain receipts as observations too.
+       let canonicalMutation: FileMutationResultV1 | undefined
+       for (const value of values) {
+@@ -805,7 +804,6 @@
+         if (parsed !== undefined) {
+           // §4.2: a mutation outcome outside {applied} fails the tool card.
+           if (parsed.outcome !== 'applied') failed = true
+-          mutation = parsed
+         }
+         const confirmed = asConfirmedMutation(value)
+         if (confirmed !== undefined) canonicalMutation = confirmed

@@ -4,6 +4,7 @@ import * as path from 'path'
 import * as os from 'os'
 
 import { setProjectRoot, setCurrentChatId } from '../../project-files'
+import { drainPersistenceQueue } from '../persistence-queue'
 import {
   saveCheckpoint,
   loadCheckpoint,
@@ -84,15 +85,18 @@ describe('turn checkpoint (P2-3)', () => {
     expect(loadCheckpoint()).toBeNull()
   })
 
-  test('saveCheckpoint writes a valid checkpoint file to disk', () => {
+  test('saveCheckpoint writes a valid checkpoint file to disk', async () => {
     const agentState = makeAgentState('main-1')
     saveCheckpoint('turn-abc', agentState)
+    // Persisted writes are queued, not synchronous: drain before asserting.
+    await drainPersistenceQueue()
     expect(fs.existsSync(getCheckpointPath())).toBe(true)
   })
 
-  test('loadCheckpoint round-trips the checkpointTurnId and mainAgentState', () => {
+  test('loadCheckpoint round-trips the checkpointTurnId and mainAgentState', async () => {
     const agentState = makeAgentState('main-2')
     saveCheckpoint('turn-xyz', agentState)
+    await drainPersistenceQueue()
     const loaded = loadCheckpoint()
     expect(loaded).not.toBeNull()
     expect(loaded!.checkpointTurnId).toBe('turn-xyz')
@@ -101,16 +105,34 @@ describe('turn checkpoint (P2-3)', () => {
     expect(loaded!.mainAgentState.agentId).toBe('main-2')
   })
 
-  test('clearCheckpoint removes the checkpoint file', () => {
+  test('clearCheckpoint removes the checkpoint file', async () => {
     saveCheckpoint('turn-clear', makeAgentState('main-3'))
+    await drainPersistenceQueue()
     expect(fs.existsSync(getCheckpointPath())).toBe(true)
-    clearCheckpoint()
+    await clearCheckpoint()
     expect(fs.existsSync(getCheckpointPath())).toBe(false)
     expect(loadCheckpoint()).toBeNull()
   })
 
-  test('clearCheckpoint is a no-op when no checkpoint exists', () => {
-    expect(() => clearCheckpoint()).not.toThrow()
+  test('clearCheckpoint is a no-op when no checkpoint exists', async () => {
+    await expect(clearCheckpoint()).resolves.toBeUndefined()
+  })
+
+  test('clearCheckpoint serializes AFTER an in-flight queued write (no resurrection)', async () => {
+    // Regression for checkpoint-resurrection-race: the persistence pump
+    // deletes the queue entry before awaiting the run, so a plain cancel
+    // cannot reach a write that is already in flight and the checkpoint
+    // rename could land after the clear's unlink. clearCheckpoint now
+    // cancels AND drains, so the rename settles before the unlink.
+    saveCheckpoint('turn-race', makeAgentState('main-race'))
+    // Deliberately NOT drained here: the write is queued or possibly already
+    // handed to the pump. The concurrent clear must wait for it.
+    const clearPromise = clearCheckpoint()
+    await drainPersistenceQueue()
+    await clearPromise
+    // The gated write settled, THEN the unlink ran: no resurrected file.
+    expect(fs.existsSync(getCheckpointPath())).toBe(false)
+    expect(loadCheckpoint()).toBeNull()
   })
 
   test('loadCheckpoint returns null for a malformed checkpoint', () => {
@@ -126,21 +148,86 @@ describe('turn checkpoint (P2-3)', () => {
     expect(loadCheckpoint()).toBeNull()
   })
 
-  test('saveCheckpoint is atomic (no leftover .tmp file on success)', () => {
+  test('saveCheckpoint is atomic (no leftover .tmp file on success)', async () => {
     saveCheckpoint('turn-atomic', makeAgentState('main-4'))
+    await drainPersistenceQueue()
     const dir = fs.readdirSync(path.dirname(getCheckpointPath()))
     expect(dir).toContain('turn-checkpoint.json')
     expect(dir.some((f) => f.endsWith('.tmp'))).toBe(false)
   })
 
-  test('saveCheckpoint overwrites a previous checkpoint for the same turn', () => {
+  test('saveCheckpoint overwrites a previous checkpoint for the same turn', async () => {
     saveCheckpoint('turn-overwrite', makeAgentState('main-5a'))
+    await drainPersistenceQueue()
     const first = loadCheckpoint()
     expect(first!.mainAgentState.agentId).toBe('main-5a')
 
     saveCheckpoint('turn-overwrite', makeAgentState('main-5b'))
+    await drainPersistenceQueue()
     const second = loadCheckpoint()
     expect(second!.mainAgentState.agentId).toBe('main-5b')
     expect(second!.checkpointTurnId).toBe('turn-overwrite')
+  })
+
+    test('compactionArchive incl. D26 eviction snapshot round-trips saveCheckpoint → loadCheckpoint deep-equal', async () => {
+    // P2-T2 slice 1: the mid-turn checkpoint persists the FULL sanitized
+    // mainAgentState (saveCheckpoint wraps it in
+    // sanitizeForChatPersistence), so the compaction archive — including D26
+    // `tool_result_eviction` snapshots — must survive a crash mid-turn
+    // byte-identically. Archive bodies are ≤ 4k chars
+    // (MAX_ARCHIVE_MESSAGE_CHARS), far under the 8k
+    // CHAT_STATE_MAX_STRING_LENGTH, and the chat-persistence object/array
+    // caps are unlimited, so nothing is truncated or key-redacted in transit.
+    const compactionArchive = [
+      {
+        archivedAt: 3_000,
+        action: 'tool_result_eviction',
+        keepRecentSteps: 0,
+        steps: [9],
+        reason: 'deterministic tool-result eviction (stale recency)',
+        messages: [
+          {
+            role: 'tool',
+            toolCallId: 'call-3',
+            toolName: 'read_files',
+            content: [
+              {
+                type: 'json',
+                value:
+                  JSON.stringify({
+                    note: 'evicted body',
+                    refreshTokenCount: 3,
+                  }) + '='.repeat(1_500),
+              },
+            ],
+          },
+        ],
+      },
+    ]
+    const agentState = {
+      ...makeAgentState('main-archive'),
+      compactionArchive,
+    } as unknown as AgentState
+
+    saveCheckpoint('turn-archive', agentState)
+    // Persisted writes are queued, not synchronous: drain before asserting.
+    await drainPersistenceQueue()
+    const loaded = loadCheckpoint()
+
+    expect(loaded).not.toBeNull()
+    const restoredMainAgentState = loaded!.mainAgentState as unknown as {
+      compactionArchive?: Array<Record<string, unknown>>
+    }
+    expect(restoredMainAgentState.compactionArchive).toEqual(compactionArchive)
+
+    // No truncation or redaction markers in the restored archive subtree.
+    const serialized = JSON.stringify(restoredMainAgentState.compactionArchive)
+    expect(serialized).not.toContain('[Openbuff truncated')
+    expect(serialized).not.toContain('[REDACTED]')
+    expect(serialized).toContain('refreshTokenCount')
+    expect(restoredMainAgentState.compactionArchive![0]['steps']).toEqual([9])
+    expect(restoredMainAgentState.compactionArchive![0]['reason']).toBe(
+      'deterministic tool-result eviction (stale recency)',
+    )
   })
 })

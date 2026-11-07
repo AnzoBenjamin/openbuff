@@ -4,6 +4,7 @@ import path from 'path'
 
 import { z } from 'zod/v4'
 
+import { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES } from '@codebuff/common/actions'
 import { CHATGPT_OAUTH_OPENAI_MODEL_ALLOWLIST } from '@codebuff/common/constants/chatgpt-oauth'
 
 import { getConfigDir } from './credentials'
@@ -100,6 +101,8 @@ const providerCompatibilitySchema = z
     supportsStopSequences: z.boolean().default(false),
     /** If true, Openbuff omits non-provider request metadata for this provider. */
     stripProviderMetadata: z.boolean().default(true),
+    /** Replay assistant reasoning on providers that require it. */
+    reasoningReplay: z.enum(['required', 'none']).optional(),
   })
   .default(DEFAULT_PROVIDER_COMPATIBILITY)
 
@@ -121,6 +124,25 @@ export const providerDiscoverySchema = z.object({
 export type ProviderDiscovery = z.infer<typeof providerDiscoverySchema>
 export type ProviderDiscoveryInput = z.input<typeof providerDiscoverySchema>
 
+/**
+ * Default transport-safe byte band for a single assistant response / tool-call
+ * payload.
+ *
+ * Deliberately far below any provider's real output budget (a maxed-out token
+ * budget is orders of magnitude larger) while comfortably above real tool-call
+ * payloads, so it marks a response as truncated without constraining a
+ * legitimate one. Models whose transport band differs declare their own
+ * `maxOutputBytes`; this is only the fallback.
+ *
+ * DERIVED, never restated: this is not a copy of the common transport band
+ * `MAX_TRANSPORT_SAFE_PAYLOAD_BYTES` (`common/src/actions.ts`) — it republishes
+ * that binding under the provider-config name (a live ESM alias), so there is no
+ * second value to keep in sync and no edit path that can leave the SDK default
+ * behind when the common band changes. See {@link getMaxOutputBytesForModel} for
+ * the resolution order.
+ */
+export { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES as DEFAULT_MAX_OUTPUT_BYTES }
+
 export const modelCapabilitiesSchema = z.object({
   input: z
     .object({
@@ -134,6 +156,22 @@ export const modelCapabilitiesSchema = z.object({
       outputTokens: positiveIntSchema.optional(),
     })
     .optional(),
+  /**
+   * Transport-safe byte band for a single assistant response / tool-call
+   * payload: how many bytes one response may occupy on the wire before a
+   * provider or intermediary is expected to cut it. Undefined means "use
+   * DEFAULT_MAX_OUTPUT_BYTES", so only a model with a known different ceiling
+   * needs to declare it.
+   *
+   * This is the SAME band as the common `MAX_TRANSPORT_SAFE_PAYLOAD_BYTES`
+   * (`DEFAULT_MAX_OUTPUT_BYTES` republishes that binding), optionally tuned per
+   * model — not a separate concept. The band is a config-side envelope: its
+   * runtime consumer is the sdk stream's band diagnostic, not the marker
+   * setter — the stream-only `ToolCallStreamChunk.transportTruncated` marker
+   * (`common/src/types/contracts/llm.ts`) is set solely by the provider's
+   * `finishReason === 'length'` report.
+   */
+  maxOutputBytes: z.number().int().positive().optional(),
   reasoning: z
     .object({
       supported: z.boolean().optional(),
@@ -264,6 +302,7 @@ const anthropicCompatibilitySchema = z
     supportsRequiredToolChoice: z.boolean().default(true),
     supportsStopSequences: z.boolean().default(true),
     stripProviderMetadata: z.boolean().default(false),
+    reasoningReplay: z.enum(['required', 'none']).optional(),
   })
   .default(DEFAULT_ANTHROPIC_COMPATIBILITY)
 
@@ -493,11 +532,19 @@ export const providerConfigFileSchema = z
     readableRoots: z.array(z.string().min(1)).default([]),
     /**
      * Optional fixed agent-step cap. Unset or -1 means unlimited productive
-     * steps; a repeated-step watchdog still stops identical no-progress loops.
+     * steps; the configured cap and budget enforcement are what bound runaway
+     * runs.
      */
     maxAgentSteps: z
       .union([z.literal(-1), z.number().int().positive().max(100000)])
       .optional(),
+    /**
+     * Optional cap on the missing-output retry loop for structured-output
+     * agents. Unset means unlimited retries (bounded only by the configured
+     * step cap); a positive integer caps the retries before the parent
+     * receives a null structured value.
+     */
+    maxMissingOutputRetries: z.number().int().positive().max(100000).optional(),
   })
   .transform((config) => {
     const agents: Record<string, string> = {}
@@ -579,9 +626,15 @@ export const providerConfigFileSchema = z
       // run-start registry wiring) never has to handle `undefined`.
       readableRoots: config.readableRoots,
       // Optional in the resolved config: omitted unless explicitly set, so
-      // callers use the unlimited default plus the no-progress watchdog.
+      // callers use the unlimited default, bounded only by budget enforcement.
       ...(config.maxAgentSteps !== undefined && {
         maxAgentSteps: config.maxAgentSteps,
+      }),
+      // Same optional-spread contract as maxAgentSteps: the field stays
+      // absent when unset so consumers see unlimited retries, never an
+      // implicit cap.
+      ...(config.maxMissingOutputRetries !== undefined && {
+        maxMissingOutputRetries: config.maxMissingOutputRetries,
       }),
     }
   })
@@ -614,6 +667,11 @@ export type ResolvedProviderModel = {
   apiKey: string | undefined
   compatibility: ProviderCompatibility
 }
+
+export type ResolvedProviderModelMetadata = Omit<
+  ResolvedProviderModel,
+  'apiKey'
+>
 
 export type LoadedProviderConfig = {
   config: ProviderConfigFile
@@ -994,6 +1052,8 @@ function mergeProviderConfigs(
       : (base.readableRoots ?? []),
     failoverModels: override.failoverModels ?? base.failoverModels,
     maxAgentSteps: override.maxAgentSteps ?? base.maxAgentSteps,
+    maxMissingOutputRetries:
+      override.maxMissingOutputRetries ?? base.maxMissingOutputRetries,
   }
 }
 
@@ -1047,9 +1107,7 @@ export function getAncestorProviderConfigPaths(startDir: string): string[] {
 }
 
 function isAncestorTrustEnabled(): boolean {
-  return (
-    (getSystemProcessEnv().OPENBUFF_TRUST_ANCESTOR_CONFIG ?? '') === '1'
-  )
+  return (getSystemProcessEnv().OPENBUFF_TRUST_ANCESTOR_CONFIG ?? '') === '1'
 }
 
 /**
@@ -1531,6 +1589,7 @@ function mergeModelCapabilities(
     )
     merged.pricing = mergeDefined(merged.pricing, capability.pricing)
     merged.quality = mergeDefined(merged.quality, capability.quality)
+    merged.maxOutputBytes = capability.maxOutputBytes ?? merged.maxOutputBytes
   }
 
   return merged
@@ -1540,6 +1599,9 @@ function compactCapability(capabilities: ModelCapabilities): ModelCapabilities {
   return Object.fromEntries(
     Object.entries(capabilities).filter(([, value]) => {
       if (!value) return false
+      // Scalar capabilities (e.g. maxOutputBytes) are their own value; only
+      // object-shaped capabilities are compacted based on their fields.
+      if (typeof value !== 'object') return true
       return Object.values(value).some((field) => field !== undefined)
     }),
   ) as ModelCapabilities
@@ -1600,6 +1662,50 @@ export function resolveModelCapabilities(params: {
       provider.defaultCapabilities,
       ...modelCapabilityOverrides,
     ),
+  )
+}
+
+/**
+ * Transport-safe output-byte band for one model, resolved in the same order
+ * `resolveModelCapabilities` uses: the per-model
+ * `modelCapabilities.<model>.maxOutputBytes` override wins over the
+ * provider-level `defaultCapabilities.maxOutputBytes`, which falls back to
+ * `DEFAULT_MAX_OUTPUT_BYTES`.
+ *
+ * `providerId` is optional. When given, the model key is resolved through the
+ * same candidate order `resolveModelCapabilities` uses
+ * (`capabilityModelKeyCandidates`: provider-mapped id, provider-qualified
+ * mapped id, unprefixed requested id, raw requested id), and a LATER
+ * candidate's `maxOutputBytes` wins, matching `mergeModelCapabilities`'
+ * sequential merge — so a per-model override keyed by the provider-mapped or
+ * unprefixed id is honored for a provider-qualified request. Omitting it
+ * keeps the exact single-key lookup on `model`, the historical behavior
+ * callers and fixtures that hold no provider id rely on.
+ *
+ * The fallback reads the common `MAX_TRANSPORT_SAFE_PAYLOAD_BYTES` binding
+ * directly — the single source that `DEFAULT_MAX_OUTPUT_BYTES`
+ * alias-republishes — so every branch of this function returns the same concept
+ * (the band above which a response is expected to be cut in transport), and a
+ * config that declares no `maxOutputBytes` at all always keeps the common
+ * default.
+ */
+export function getMaxOutputBytesForModel(
+  provider: ProviderConfig,
+  model: string,
+  providerId?: string,
+): number {
+  const modelKeys = providerId
+    ? capabilityModelKeyCandidates({ providerId, model, provider })
+    : [model]
+  let modelOverride: number | undefined
+  for (const key of modelKeys) {
+    const candidateOverride = provider.modelCapabilities?.[key]?.maxOutputBytes
+    if (candidateOverride !== undefined) modelOverride = candidateOverride
+  }
+  if (modelOverride !== undefined) return modelOverride
+  return (
+    provider.defaultCapabilities?.maxOutputBytes ??
+    MAX_TRANSPORT_SAFE_PAYLOAD_BYTES
   )
 }
 
@@ -1905,13 +2011,13 @@ export function resolveConfiguredAgentModel(params: {
   return resolveConfiguredAgentModelConfig(params).model
 }
 
-export function resolveConfiguredProviderModel(params: {
+/** Map a route and its capabilities without reading any provider credential. */
+export function resolveConfiguredProviderModelMetadata(params: {
   model: string
-  env?: NodeJS.ProcessEnv
   loadedConfig?: LoadedProviderConfig
-}): ResolvedProviderModel | undefined {
-  const { model, env = getSystemProcessEnv() } = params
-  const loadedConfig = params.loadedConfig ?? loadProviderConfigSync({ env })
+}): ResolvedProviderModelMetadata | undefined {
+  const { model } = params
+  const loadedConfig = params.loadedConfig ?? loadProviderConfigSync()
 
   for (const [providerId, provider] of Object.entries(
     loadedConfig.config.providers,
@@ -1921,33 +2027,51 @@ export function resolveConfiguredProviderModel(params: {
       continue
     }
 
-    const providerHasApiKeyEnv =
-      provider.type === 'openai-compatible' ||
-      provider.type === 'anthropic-compatible'
-    const apiKey =
-      providerHasApiKeyEnv && provider.apiKeyEnv
-        ? env[provider.apiKeyEnv]
-        : undefined
-    if (providerHasApiKeyEnv && provider.apiKeyEnv && !apiKey) {
-      throw new Error(
-        `Missing environment variable '${provider.apiKeyEnv}' required for configured provider '${providerId}' and model '${model}'.`,
-      )
-    }
-
     return {
       providerId,
       provider,
       requestedModel: model,
       providerModel,
-      apiKey,
       compatibility: {
         ...DEFAULT_PROVIDER_COMPATIBILITY,
         ...(provider.compatibility ?? {}),
+        ...(provider.type === 'openai-compatible' &&
+        provider.compatibility.reasoningReplay === undefined &&
+        new URL(provider.baseURL).hostname.toLowerCase() === 'api.ifm.ai'
+          ? { reasoningReplay: 'required' as const }
+          : {}),
       },
     }
   }
 
   return undefined
+}
+
+/** Construct only the selected route, preserving the public missing-key error. */
+export function resolveConfiguredProviderModel(params: {
+  model: string
+  env?: NodeJS.ProcessEnv
+  loadedConfig?: LoadedProviderConfig
+}): ResolvedProviderModel | undefined {
+  const env = params.env ?? getSystemProcessEnv()
+  const metadata = resolveConfiguredProviderModelMetadata({
+    model: params.model,
+    loadedConfig: params.loadedConfig ?? loadProviderConfigSync({ env }),
+  })
+  if (!metadata) return undefined
+  const provider = metadata.provider
+  const credentialEnv =
+    provider.type === 'openai-compatible' ||
+    provider.type === 'anthropic-compatible'
+      ? provider.apiKeyEnv
+      : undefined
+  const apiKey = credentialEnv ? env[credentialEnv] : undefined
+  if (credentialEnv && !apiKey) {
+    throw new Error(
+      `Missing environment variable '${credentialEnv}' required for configured provider '${metadata.providerId}' and model '${params.model}'.`,
+    )
+  }
+  return { ...metadata, apiKey }
 }
 
 /**
@@ -1979,7 +2103,7 @@ export function resolveContextWindowTokens(params: {
     model,
     loadedConfig,
   }).model
-  const configuredProviderModel = resolveConfiguredProviderModel({
+  const configuredProviderModel = resolveConfiguredProviderModelMetadata({
     model: effectiveModel,
     loadedConfig,
   })
@@ -2016,7 +2140,6 @@ export function resolveContextWindowTokens(params: {
   }
   return legacyTokens
 }
-
 
 export type OpenbuffProviderPreset = {
   id: string
@@ -2781,6 +2904,9 @@ export function writeProviderConfigFile(params: {
         existingConfig.autoFileChangeHooks ?? newConfig.autoFileChangeHooks,
       failoverModels: existingConfig.failoverModels ?? newConfig.failoverModels,
       maxAgentSteps: existingConfig.maxAgentSteps ?? newConfig.maxAgentSteps,
+      maxMissingOutputRetries:
+        existingConfig.maxMissingOutputRetries ??
+        newConfig.maxMissingOutputRetries,
       // Preserve the user's existing allowlist; /setup only adds providers.
       readableRoots: existingConfig.readableRoots?.length
         ? existingConfig.readableRoots

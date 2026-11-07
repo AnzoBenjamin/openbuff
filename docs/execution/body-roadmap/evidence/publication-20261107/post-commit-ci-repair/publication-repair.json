@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "type": "repaired-publication-checkpoint",
+  "createdAt": "2026-11-06T23:44:05.000855+00:00",
+  "priorPublicationCommit": "6b35474514f109f741e519e75145782c392009b1",
+  "sourceChanges": [
+    "scripts/memory-drift-guard.ts",
+    "scripts/__tests__/memory-drift-guard.test.ts",
+    "cli/knowledge.md",
+    "sdk/knowledge.md",
+    "common/knowledge.md"
+  ],
+  "guardTests": {
+    "pass": 69,
+    "fail": 0,
+    "receipt": {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/guard-tests/guard-tests.json",
+      "sha256": "fe860f7ceac7819bc48c3227b4867a54f1a191978516f398d8a55a740d2f1804",
+      "bytes": 45165
+    }
+  },
+  "guardFindings": 0,
+  "workspaceTypecheck": {
+    "workspaces": 11,
+    "stableInputs": 187,
+    "receipt": {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/commands/typecheck/typecheck.json",
+      "sha256": "e91b3e14b9a45de7ee06c976a6745df465a43124c0e757c7bd1ebd2358520e10",
+      "bytes": 45047
+    }
+  },
+  "approvalSeals": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/independent-review/manifest.json",
+      "sha256": "3e675f3a479431b9df553b7f3dfb42134daee3c6f676d893ba3114c9d86466e5",
+      "bytes": 4178
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/acceptance-independent-review/manifest.json",
+      "sha256": "3bf4729d1976ee85ceae40f4f4ef169d14da9a2431f498e04de6e42f9f90e25b",
+      "bytes": 1908
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/fresh-checkout-independent-review/manifest.json",
+      "sha256": "911bf5868d62f14a4de2a67c09c8a852b63ae065682df7f8f7b59466a7b6e038",
+      "bytes": 2478
+    }
+  ],
+  "promotion": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/promotion.json",
+    "sha256": "55ebb3939d52f89195b87b62edfc73f7589e9f76d6c8357319f24b71e4050b8a",
+    "bytes": 2711
+  },
+  "requiredPathDelta": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/required-path-delta.json",
+    "sha256": "4450aed4a38b1630fe5715ddf6cb00785a5e718475dcb35c9a06c49e557fc30e",
+    "bytes": 1553
+  },
+  "historicalInventoryPaths": 2644,
+  "unchangedHistoricalRequiredPaths": 2641,
+  "approvedChangedRequiredPaths": 3,
+  "repairedMaterialization": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-commit-ci-repair/checkouts/e22d84cd4558/report.json",
+    "sha256": "2d5ccc9ac3f5220ce1d5bdec083dbc5c2f0b356beded0aee83f947f11a1b67bb",
+    "bytes": 5333
+  },
+  "reviewedStagedEntries": 4869,
+  "reviewedStagedIndexSha256": "3b9697d1c50a1e7db164ec7119b607b9cbbecc01ba6b292b8f52b68360d4f7ea",
+  "allReviewedEntriesRetainedUnchanged": true,
+  "accepted": [
+    "B01",
+    "B02",
+    "B03",
+    "B04",
+    "B08",
+    "B18",
+    "B30",
+    "B36"
+  ],
+  "remainingCompletionNodes": 31,
+  "researcherPlanAndFeasibilityUnchanged": true,
+  "scope": "Publish the small CI documentation guard repair with honest renewed source bindings and exact repaired-checkout evidence. Post-review additions are publication metadata; no further product/card acceptance."
+}

@@ -1,11 +1,21 @@
 import { describe, expect, test } from 'bun:test'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { MAX_FILE_CHANGES_PER_TRANSACTION } from '@codebuff/common/actions'
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
-import { fileMutationResultV1Schema } from '@codebuff/common/tools/results/filesystem'
-import { getContentHash } from '@codebuff/common/util/content-hash'
+import {
+  fileMutationResultV1Schema,
+  getConfirmedAppliedActionsV1,
+} from '@codebuff/common/tools/results/filesystem'
+import {
+  getContentHash,
+  getExactContentHash,
+} from '@codebuff/common/util/content-hash'
 
 import { changeFile, changeFiles } from '../tools/change-file'
+import { createTransactionIntentLogForWorkspace } from '../tools/transaction-intent-log'
 
 const capabilityIssuer = {
   projectId: '/repo',
@@ -527,6 +537,7 @@ describe('changeFile', () => {
     })
 
     const value = result[0]?.type === 'json' ? result[0].value : undefined
+    const mutation = fileMutationResultV1Schema.parse(value)
     expect(value).toMatchObject({
       kind: 'file_mutation_result',
       outcome: 'rollback_incomplete',
@@ -545,6 +556,14 @@ describe('changeFile', () => {
       }),
     })
     expect(files['/repo/src/one.ts']).toBe('const one = 2\n')
+    expect(
+      getConfirmedAppliedActionsV1(mutation).map((action) => action.path),
+    ).toEqual(['src/one.ts'])
+    expect(mutation.actions[0]?.forward).toEqual({
+      outcome: 'applied',
+      afterHashes: { 'src/one.ts': getExactContentHash('const one = 2\n') },
+    })
+    expect(mutation.actions[1]?.forward?.outcome).toBe('unconfirmed')
   })
 
   test('does not overwrite an external edit when conditional rollback detects a conflict', async () => {
@@ -582,6 +601,9 @@ describe('changeFile', () => {
       fs,
     })
 
+    const mutation = fileMutationResultV1Schema.parse(
+      result[0]?.type === 'json' ? result[0].value : null,
+    )
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
       outcome: 'rollback_incomplete',
       actions: [
@@ -594,6 +616,226 @@ describe('changeFile', () => {
       ],
     })
     expect(await fs.readFile('/repo/src/one.ts', 'utf-8')).toBe('external\n')
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(mutation.actions[0]).toMatchObject({
+      outcome: 'rollback_incomplete',
+      afterHash: getExactContentHash('external\n'),
+      forward: {
+        outcome: 'applied',
+        afterHashes: { 'src/one.ts': getExactContentHash('one-after\n') },
+      },
+    })
+  })
+
+  test('[B03] rejected forward preserves foreign bytes without compensation or confirmed actions', async () => {
+    const before = 'before\n'
+    const foreign = 'foreign\r\n'
+    const fs = createMockFs({ files: { '/repo/file.txt': before } })
+    const adapterReturns: unknown[] = []
+    fs.conditionalCommit = async () => {
+      await fs.writeFile('/repo/file.txt', foreign)
+      const result = {
+        applied: false as const,
+        actualHash: getExactContentHash(foreign),
+      }
+      adapterReturns.push(result)
+      return result
+    }
+    const output = await changeFiles({
+      parameters: [
+        {
+          type: 'file',
+          path: 'file.txt',
+          content: 'after\n',
+          expectedHash: getContentHash(before),
+        },
+      ],
+      cwd: '/repo',
+      fs,
+    })
+    const mutation = fileMutationResultV1Schema.parse(
+      output[0]?.type === 'json' ? output[0].value : null,
+    )
+    expect(adapterReturns).toHaveLength(1)
+    expect(
+      adapterReturns.every(
+        (result) => (result as { applied: boolean }).applied === false,
+      ),
+    ).toBe(true)
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(mutation.actions[0]).toMatchObject({
+      outcome: 'not_applied',
+      forward: {
+        outcome: 'not_applied',
+        afterHashes: { 'file.txt': getExactContentHash(foreign) },
+      },
+    })
+    expect(mutation.actions[0]?.rollback).toBeUndefined()
+    expect(mutation.errors.some((error) => error.code === 'stale_state')).toBe(
+      true,
+    )
+    expect(await fs.readFile('/repo/file.txt', 'utf8')).toBe(foreign)
+    expect(mutation.authorityReceipt?.finalHashes['file.txt']).toBe(
+      getExactContentHash(foreign),
+    )
+  })
+
+  test('[B03] rejected forward cannot roll back foreign bytes equal to the intended postimage', async () => {
+    const fs = createMockFs({ files: { '/repo/file.txt': 'before\n' } })
+    const conditionalCommit = fs.conditionalCommit!.bind(fs)
+    let attempts = 0
+    fs.conditionalCommit = async (filePath, data, options) => {
+      attempts++
+      if (attempts === 1) {
+        await fs.writeFile('/repo/file.txt', 'after\n')
+        return { applied: false, actualHash: getExactContentHash('after\n') }
+      }
+      return conditionalCommit(filePath, data, options)
+    }
+    const output = await changeFiles({
+      parameters: [
+        {
+          type: 'file',
+          path: 'file.txt',
+          content: 'after\n',
+          expectedHash: getContentHash('before\n'),
+        },
+      ],
+      cwd: '/repo',
+      fs,
+    })
+    const mutation = fileMutationResultV1Schema.parse(
+      output[0]?.type === 'json' ? output[0].value : null,
+    )
+    expect(attempts).toBe(1)
+    expect(mutation.outcome).toBe('not_applied')
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(await fs.readFile('/repo/file.txt', 'utf8')).toBe('after\n')
+  })
+
+  test('[B03] thrown partial forward effect remains uncertain after failed rollback', async () => {
+    const before = 'before\n'
+    const partial = 'partial\n'
+    const fs = createMockFs({ files: { '/repo/file.txt': before } })
+    let attempts = 0
+    fs.conditionalCommit = async () => {
+      attempts++
+      if (attempts === 1) {
+        await fs.writeFile('/repo/file.txt', partial)
+        throw new Error('write stopped after a partial effect')
+      }
+      return { applied: false, actualHash: getExactContentHash(partial) }
+    }
+    const output = await changeFiles({
+      parameters: [
+        {
+          type: 'file',
+          path: 'file.txt',
+          content: 'after\n',
+          expectedHash: getContentHash(before),
+        },
+      ],
+      cwd: '/repo',
+      fs,
+    })
+    const mutation = fileMutationResultV1Schema.parse(
+      output[0]?.type === 'json' ? output[0].value : null,
+    )
+    expect(attempts).toBe(2)
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(mutation.actions[0]).toMatchObject({
+      outcome: 'rollback_incomplete',
+      afterHash: getExactContentHash(partial),
+      rollback: { attempted: true, succeeded: false },
+    })
+    expect(mutation.actions[0]?.forward).toEqual({
+      outcome: 'unconfirmed',
+      afterHashes: { 'file.txt': getExactContentHash(partial) },
+    })
+    expect(await fs.readFile('/repo/file.txt', 'utf8')).toBe(partial)
+  })
+
+  test('[B03] refused exclusive create cannot delete an identical foreign destination', async () => {
+    const fs = createMockFs()
+    fs.createFileExclusive = async () => {
+      await fs.writeFile('/repo/created.txt', 'after\n')
+      throw Object.assign(new Error('foreign creator won'), { code: 'EEXIST' })
+    }
+    let deletes = 0
+    const conditionalDelete = fs.conditionalDelete!.bind(fs)
+    fs.conditionalDelete = async (filePath, options) => {
+      deletes++
+      return conditionalDelete(filePath, options)
+    }
+    const output = await changeFiles({
+      parameters: [
+        {
+          type: 'file',
+          path: 'created.txt',
+          content: 'after\n',
+          expectedHash: null,
+        },
+      ],
+      cwd: '/repo',
+      fs,
+    })
+    const mutation = fileMutationResultV1Schema.parse(
+      output[0]?.type === 'json' ? output[0].value : null,
+    )
+    expect(mutation.outcome).toBe('not_applied')
+    expect(mutation.actions[0]?.forward?.outcome).toBe('not_applied')
+    expect(mutation.errors[0]?.code).toBe('already_exists')
+    expect(deletes).toBe(0)
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(await fs.readFile('/repo/created.txt', 'utf8')).toBe('after\n')
+  })
+
+  test('[B03] partial move keeps both observed paths without claiming a completed move', async () => {
+    const content = 'move me\n'
+    const fs = createMockFs({ files: { '/repo/source.txt': content } })
+    let attempts = 0
+    fs.conditionalMove = async () => {
+      attempts++
+      if (attempts === 1) {
+        await fs.writeFile('/repo/destination.txt', content)
+        throw new Error('unlink source failed after destination creation')
+      }
+      return {
+        applied: false,
+        actualSourceHash: getExactContentHash(content),
+        actualDestinationHash: getExactContentHash(content),
+      }
+    }
+    const output = await changeFiles({
+      parameters: [
+        {
+          type: 'move',
+          path: 'source.txt',
+          destinationPath: 'destination.txt',
+          expectedHash: getContentHash(content),
+          destinationExpectedHash: null,
+        },
+      ],
+      cwd: '/repo',
+      fs,
+    })
+    const mutation = fileMutationResultV1Schema.parse(
+      output[0]?.type === 'json' ? output[0].value : null,
+    )
+    expect(attempts).toBe(2)
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(mutation.actions[0]).toMatchObject({
+      outcome: 'rollback_incomplete',
+      forward: {
+        outcome: 'unconfirmed',
+        afterHashes: {
+          'source.txt': getExactContentHash(content),
+          'destination.txt': getExactContentHash(content),
+        },
+      },
+    })
+    expect(await fs.readFile('/repo/source.txt', 'utf8')).toBe(content)
+    expect(await fs.readFile('/repo/destination.txt', 'utf8')).toBe(content)
   })
 
   test('[ABI-M08] coordinates create, delete, and move with expected state', async () => {
@@ -813,6 +1055,319 @@ describe('changeFile', () => {
     })
     expect(await fs.readFile('/repo/source.txt', 'utf-8')).toBe('move me')
     await expect(fs.readFile('/repo/moved.txt', 'utf-8')).rejects.toThrow()
+  })
+
+  test('records durable begin/commit intents and stamps the transactionId on the receipt', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'openbuff-tx-wiring-'))
+    try {
+      const intentLog = createTransactionIntentLogForWorkspace({
+        stateDir,
+        cwd: '/repo',
+      })
+      const fs = createMockFs({
+        files: {
+          '/repo/src/one.ts': 'const one = 1\n',
+          '/repo/src/two.ts': 'const two = 1\n',
+        },
+      })
+
+      const result = await changeFiles({
+        parameters: [
+          {
+            type: 'patch',
+            path: 'src/one.ts',
+            content: '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
+          },
+          {
+            type: 'patch',
+            path: 'src/two.ts',
+            content: '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
+          },
+        ],
+        cwd: '/repo',
+        fs,
+        intentLog,
+      })
+
+      const mutation = fileMutationResultV1Schema.parse(
+        result[0]?.type === 'json' ? result[0].value : null,
+      )
+      expect(mutation.outcome).toBe('applied')
+      const stampedId = mutation.authorityReceipt?.transactionId
+      expect(stampedId).toBeDefined()
+      expect(stampedId).toBe(`tx-${mutation.operationId}`)
+
+      const events = readFileSync(intentLog.filePath, 'utf8')
+        .split('\n')
+        .filter((line) => line.trim() !== '')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      expect(events.map((event) => event.kind)).toEqual([
+        'tx_begin',
+        'tx_commit',
+      ])
+      expect(events[0]).toMatchObject({
+        transactionId: stampedId,
+        operationId: mutation.operationId,
+      })
+      // Durable pre-images: every staged path is present, with beforeBytes
+      // for updates and none for move destinations.
+      const entries = events[0]?.entries as Array<{
+        path: string
+        beforeHash: string | null
+        beforeBytes?: string
+        beforeMode?: number
+      }>
+      expect(entries).toEqual([
+        {
+          path: 'src/one.ts',
+          beforeHash: expect.any(String),
+          beforeBytes: 'const one = 1\n',
+          // The file's permission bits are part of the durable pre-image.
+          beforeMode: 0o644,
+        },
+        {
+          path: 'src/two.ts',
+          beforeHash: expect.any(String),
+          beforeBytes: 'const two = 1\n',
+          beforeMode: 0o644,
+        },
+      ])
+      expect(events[1]).toMatchObject({ transactionId: stampedId })
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true })
+    }
+  })
+
+  test('records a durable abort after a rolled-back multi-file commit', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'openbuff-tx-wiring-'))
+    try {
+      const intentLog = createTransactionIntentLogForWorkspace({
+        stateDir,
+        cwd: '/repo',
+      })
+      const files: Record<string, string> = {
+        '/repo/src/one.ts': 'const one = 1\n',
+        '/repo/src/two.ts': 'const two = 1\n',
+      }
+      let failedWrite = false
+      const fs = createMockFs({
+        files,
+        readFileImpl: async (path) => {
+          const content = files[path]
+          if (content === undefined)
+            throw Object.assign(new Error('not found'), { code: 'ENOENT' })
+          return content
+        },
+        writeFileImpl: async (path, content) => {
+          if (path === '/repo/src/two.ts' && !failedWrite) {
+            failedWrite = true
+            throw new Error('disk full')
+          }
+          files[path] = content
+        },
+      })
+
+      const result = await changeFiles({
+        parameters: [
+          {
+            type: 'patch',
+            path: 'src/one.ts',
+            content: '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
+          },
+          {
+            type: 'patch',
+            path: 'src/two.ts',
+            content: '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
+          },
+        ],
+        cwd: '/repo',
+        fs,
+        intentLog,
+      })
+
+      const mutation = fileMutationResultV1Schema.parse(
+        result[0]?.type === 'json' ? result[0].value : null,
+      )
+      expect(mutation.outcome).toBe('rolled_back')
+      expect(mutation.authorityReceipt?.transactionId).toBeDefined()
+      // The in-memory rollback already restored the files.
+      expect(files['/repo/src/one.ts']).toBe('const one = 1\n')
+
+      const events = readFileSync(intentLog.filePath, 'utf8')
+        .split('\n')
+        .filter((line) => line.trim() !== '')
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      expect(events.map((event) => event.kind)).toEqual([
+        'tx_begin',
+        'tx_abort',
+      ])
+      expect(events[1]).toMatchObject({
+        transactionId: mutation.authorityReceipt?.transactionId,
+      })
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true })
+    }
+  })
+
+  test('single-file transactions skip the durable intent log', async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'openbuff-tx-wiring-'))
+    try {
+      const intentLog = createTransactionIntentLogForWorkspace({
+        stateDir,
+        cwd: '/repo',
+      })
+      const fs = createMockFs({ files: { '/repo/file.txt': 'before' } })
+
+      const result = await changeFiles({
+        parameters: [
+          {
+            type: 'file',
+            path: 'file.txt',
+            content: 'after',
+            expectedHash: getContentHash('before'),
+          },
+        ],
+        cwd: '/repo',
+        fs,
+        intentLog,
+      })
+
+      // No intent events were written for a single-file transaction, so the
+      // receipt carries NO transactionId: the CommitReceiptV1 field documents
+      // a durable transaction-intent id, not an operation-scoped alias.
+      expect(existsSync(intentLog.filePath)).toBe(false)
+      const mutation = fileMutationResultV1Schema.parse(
+        result[0]?.type === 'json' ? result[0].value : null,
+      )
+      expect(mutation.authorityReceipt?.transactionId).toBeUndefined()
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true })
+    }
+  })
+
+  test('an intent-log failure never breaks the commit path', async () => {
+    const failingIntentLog = {
+      filePath: '/nonexistent/intents.jsonl',
+      beginTransaction: async () => ({ ok: false, error: 'disk exploded' }),
+      commitTransaction: async () => ({ ok: false, error: 'disk exploded' }),
+      abortTransaction: async () => ({ ok: false, error: 'disk exploded' }),
+      recoverInterruptedTransactions: async () => ({
+        ok: false as const,
+        error: 'disk exploded',
+      }),
+      revertTransaction: async () => ({
+        ok: false as const,
+        status: 'revert_failed' as const,
+        error: 'disk exploded',
+        revertedPaths: 0,
+      }),
+    }
+    const fs = createMockFs({
+      files: {
+        '/repo/src/one.ts': 'const one = 1\n',
+        '/repo/src/two.ts': 'const two = 1\n',
+      },
+    })
+
+    const result = await changeFiles({
+      parameters: [
+        {
+          type: 'patch',
+          path: 'src/one.ts',
+          content: '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
+        },
+        {
+          type: 'patch',
+          path: 'src/two.ts',
+          content: '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
+        },
+      ],
+      cwd: '/repo',
+      fs,
+      intentLog: failingIntentLog,
+    })
+
+    expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
+      kind: 'file_mutation_result',
+      outcome: 'applied',
+    })
+    // A tx_begin that failed means no durable intent record exists, so the
+    // committed receipt carries NO transactionId (no dangling id).
+    const mutation = fileMutationResultV1Schema.parse(
+      result[0]?.type === 'json' ? result[0].value : null,
+    )
+    expect(mutation.authorityReceipt?.transactionId).toBeUndefined()
+    expect(await fs.readFile('/repo/src/one.ts', 'utf-8')).toBe(
+      'const one = 2\n',
+    )
+  })
+
+  test('an abort mid-commit stops the loop, rolls back applied changes, and reports a cancelled outcome', async () => {
+    const files: Record<string, string> = {
+      '/repo/src/one.ts': 'const one = 1\n',
+      '/repo/src/two.ts': 'const two = 1\n',
+      '/repo/src/three.ts': 'const three = 1\n',
+    }
+    const fs = createMockFs({ files })
+    const conditionalCommit = fs.conditionalCommit!.bind(fs)
+    // Abort right after the FIRST per-change commit lands, so the recheck
+    // before the SECOND commit must stop the loop with one file applied.
+    let commits = 0
+    const controller = new AbortController()
+    fs.conditionalCommit = async (filePath, data, options) => {
+      // The shared rollback path also goes through conditionalCommit to
+      // restore the applied change, so only commits made before the abort
+      // count as forward transaction commits.
+      const wasAborted = controller.signal.aborted
+      const result = await conditionalCommit(filePath, data, options)
+      if (!wasAborted) {
+        commits += 1
+        if (commits === 1) controller.abort()
+      }
+      return result
+    }
+
+    const result = await changeFiles({
+      parameters: [
+        {
+          type: 'patch',
+          path: 'src/one.ts',
+          content: '@@ -1,1 +1,1 @@\n-const one = 1\n+const one = 2\n',
+        },
+        {
+          type: 'patch',
+          path: 'src/two.ts',
+          content: '@@ -1,1 +1,1 @@\n-const two = 1\n+const two = 2\n',
+        },
+        {
+          type: 'patch',
+          path: 'src/three.ts',
+          content: '@@ -1,1 +1,1 @@\n-const three = 1\n+const three = 2\n',
+        },
+      ],
+      cwd: '/repo',
+      fs,
+      signal: controller.signal,
+    })
+
+    const mutation = fileMutationResultV1Schema.parse(
+      result[0]?.type === 'json' ? result[0].value : null,
+    )
+    // The applied changes were rolled back through the shared in-memory
+    // rollback path, so the outcome is the structured rolled_back shape —
+    // with a 'cancelled' error naming the abort, not an io_error.
+    expect(mutation.outcome).toBe('rolled_back')
+    expect(mutation.errors).toEqual([
+      expect.objectContaining({ code: 'cancelled' }),
+    ])
+    expect(mutation.authorityReceipt).toMatchObject({ status: 'rolled_back' })
+    // Exactly ONE change committed before the abort stopped the loop.
+    expect(commits).toBe(1)
+    // The rollback restored the already-applied change and the remaining
+    // changes were never applied.
+    expect(files['/repo/src/one.ts']).toBe('const one = 1\n')
+    expect(files['/repo/src/two.ts']).toBe('const two = 1\n')
+    expect(files['/repo/src/three.ts']).toBe('const three = 1\n')
   })
 
   test('returns a structured resource-limit result for oversized transactions', async () => {

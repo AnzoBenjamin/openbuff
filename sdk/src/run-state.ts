@@ -1,5 +1,6 @@
 import * as os from 'os'
 import path from 'path'
+import { createHash } from 'node:crypto'
 
 import { getFileTokenScores } from '@codebuff/code-map/parse'
 import { getSystemInfo } from '@codebuff/common/util/system-info'
@@ -16,8 +17,10 @@ import {
   sanitizeAgentStateSecurityMaps,
 } from '@codebuff/common/types/session-state'
 import { getErrorObject } from '@codebuff/common/util/error'
+import { cloneDeep } from 'lodash'
 import z from 'zod/v4'
 
+import { getSdkEnv } from './env'
 import { loadLocalAgents } from './agents/load-agents'
 import {
   codebuffFsToNodePromises,
@@ -37,10 +40,16 @@ import type { CustomToolDefinition } from './custom-tool'
 import type { WorkspaceMoveRecord } from './services/task-memory-store'
 import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type {
+  ActionOutcome,
+  RunOutcome,
+  TaskAcceptance,
+} from '@codebuff/common/types/run-outcome'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { Message } from '@codebuff/common/types/messages/codebuff-message'
 import type {
   AgentOutput,
+  AgentState,
   SessionState,
 } from '@codebuff/common/types/session-state'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
@@ -70,6 +79,105 @@ export function selectHighestPriorityKnowledgeFile(
 export type RunState = {
   sessionState?: SessionState
   output: AgentOutput
+  runOutcome?: RunOutcome
+  taskAcceptance?: TaskAcceptance
+  actionOutcomes?: ActionOutcome[]
+}
+
+/** Project the runtime's three outcome levels onto the public SDK result. */
+export function projectRunOutcomes(
+  state: RunState,
+  overrides?: { runOutcome?: RunOutcome; taskAcceptance?: TaskAcceptance },
+): RunState {
+  const agentState = state.sessionState?.mainAgentState
+  let runOutcome =
+    overrides?.runOutcome ??
+    state.runOutcome ??
+    agentState?.runOutcome ??
+    (state.output.type === 'error'
+      ? {
+          termination: 'failed' as const,
+          cause: { code: 'run_error', message: state.output.message },
+        }
+      : undefined)
+  if (
+    state.output.type === 'error' &&
+    runOutcome?.termination === 'completed'
+  ) {
+    runOutcome = {
+      termination: 'failed',
+      cause: { code: 'run_error', message: state.output.message },
+    }
+  }
+  const taskAcceptance = overrides?.taskAcceptance ??
+    state.taskAcceptance ??
+    agentState?.taskAcceptance ?? { status: 'unknown' as const }
+  const actionOutcomes =
+    state.actionOutcomes ?? agentState?.actionOutcomes ?? []
+  const output =
+    runOutcome &&
+    runOutcome.termination !== 'completed' &&
+    state.output.type !== 'error'
+      ? {
+          type: 'error' as const,
+          message:
+            runOutcome.cause?.message ??
+            `Run ${runOutcome.termination.replaceAll('_', ' ')}.`,
+        }
+      : state.output
+  return {
+    ...state,
+    output,
+    ...(runOutcome ? { runOutcome } : {}),
+    taskAcceptance,
+    actionOutcomes,
+    ...(state.sessionState && agentState
+      ? {
+          sessionState: {
+            ...state.sessionState,
+            mainAgentState: {
+              ...agentState,
+              ...(runOutcome ? { runOutcome } : {}),
+              taskAcceptance,
+              actionOutcomes,
+            },
+          },
+        }
+      : {}),
+  }
+}
+
+/**
+ * Defense-in-depth runtime guard for the targeted-copy contract
+ * (targeted-copy-shared-nodes-contract): withMessageHistory and
+ * applyOverridesToSessionState deliberately SHARE deeper nested nodes
+ * (taskMemory, workspaceState, playbookContext, message-history entry
+ * objects, fileContext subtrees) instead of deep-cloning them, so isolation
+ * between RunState generations rests on the copy-on-write convention — every
+ * runtime writer assigns a freshly built revision rather than mutating in
+ * place. A single mutating consumer would otherwise silently corrupt the
+ * caller's original state across runs.
+ *
+ * Freezing the shared nested nodes makes any in-place nested write from such
+ * a consumer fail loudly (frozen-object TypeError in strict mode) or no-op,
+ * instead of silently aliasing state across runs. DEV AND TEST ONLY: under
+ * NODE_ENV=production the traversal is skipped so the hot run-startup path
+ * pays no per-state O(state-graph) freeze cost.
+ */
+function deepFreezeSharedStateNodes(value: unknown): void {
+  if (getSdkEnv().NODE_ENV === 'production') return
+  const seen = new Set<object>()
+  const freezeDeep = (node: unknown): void => {
+    if (node === null || typeof node !== 'object') return
+    const obj = node as object
+    if (seen.has(obj)) return
+    seen.add(obj)
+    Object.freeze(obj)
+    for (const key of Object.keys(obj)) {
+      freezeDeep((obj as Record<string, unknown>)[key])
+    }
+  }
+  freezeDeep(value)
 }
 
 export type InitialSessionStateOptions = {
@@ -77,6 +185,7 @@ export type InitialSessionStateOptions = {
   /** Optional directory path to load skills from. When provided, skills are loaded from this directory instead of the default locations. */
   skillsDir?: string
   projectFiles?: Record<string, string>
+  projectContextMode?: 'paths' | 'symbols'
   knowledgeFiles?: Record<string, string>
   /** User-provided knowledge files that will be merged with home directory files */
   userKnowledgeFiles?: Record<string, string>
@@ -152,24 +261,139 @@ type ProjectIndexInput = {
   filePaths: string[]
   readFile?: (filePath: string) => string | null | Promise<string | null>
   logger?: Logger
+  fsIdentity: CodebuffFileSystem
 }
+
+// Keep only the last reusable project index. The cache contains digests, not
+// source text; callers receive copies so later session mutations cannot alter
+// the retained result. Incomplete parses must be retried normally.
+let completeProjectIndexCache:
+  | {
+      cwd: string
+      fsIdentity: CodebuffFileSystem
+      scoreProject: typeof getFileTokenScores
+      filePaths: string[]
+      digests: Map<string, string>
+      fileTokenScores: Record<string, any>
+      tokenCallers: Record<string, any>
+    }
+  | undefined
+
+const contentDigest = (content: string): string =>
+  createHash('sha256').update(content).digest('hex')
 
 const MAX_DISCOVERED_PROJECT_READ_BYTES = 1_000_000
 
-async function computeProjectIndex(params: ProjectIndexInput): Promise<{
+/**
+ * Session-boot parse budget: computeProjectIndex runs before the first LLM
+ * call, so its tree-sitter pass must stay bounded regardless of repository
+ * size. The indexer's own build keeps the generous library defaults; this
+ * budget bounds only the synchronous-feeling cold-start pass. 64MB covers
+ * every repository the file-tree discovery (gitignore-aware) can yield in
+ * practice without truncating, while capping pathological workspaces.
+ * Exported for testing.
+ */
+export const SESSION_STATE_MAX_TOTAL_PARSE_BYTES = 64_000_000
+
+export async function computeProjectIndex(
+  params: ProjectIndexInput,
+  scoreProject: typeof getFileTokenScores = getFileTokenScores,
+): Promise<{
   fileTree: FileTreeNode[]
   fileTokenScores: Record<string, any>
   tokenCallers: Record<string, any>
 }> {
-  const { cwd, fileTree, filePaths, readFile, logger } = params
+  const { cwd, fileTree, filePaths, readFile, logger, fsIdentity } = params
   let fileTokenScores = {}
   let tokenCallers = {}
 
   if (filePaths.length > 0) {
     try {
-      const tokenData = await getFileTokenScores(cwd, filePaths, readFile)
+      const cached = completeProjectIndexCache
+      if (
+        readFile &&
+        cached &&
+        cached.cwd === cwd &&
+        cached.fsIdentity === fsIdentity &&
+        cached.scoreProject === scoreProject &&
+        cached.filePaths.length === filePaths.length &&
+        filePaths.every((filePath, i) => filePath === cached.filePaths[i])
+      ) {
+        let unchanged = true
+        for (const filePath of cached.digests.keys()) {
+          let content: string | null
+          try {
+            content = await readFile(filePath)
+          } catch {
+            unchanged = false
+            break
+          }
+          if (
+            content === null ||
+            contentDigest(content) !== cached.digests.get(filePath)
+          ) {
+            unchanged = false
+            break
+          }
+        }
+        if (unchanged) {
+          return {
+            fileTree,
+            fileTokenScores: structuredClone(cached.fileTokenScores),
+            tokenCallers: structuredClone(cached.tokenCallers),
+          }
+        }
+      }
+      const digests = new Map<string, string>()
+      const trackingReader =
+        readFile &&
+        (async (filePath: string) => {
+          const content = await readFile(filePath)
+          if (content !== null) digests.set(filePath, contentDigest(content))
+          return content
+        })
+      const tokenData = await scoreProject(
+        cwd,
+        filePaths,
+        trackingReader,
+        undefined,
+        { maxTotalBytes: SESSION_STATE_MAX_TOTAL_PARSE_BYTES },
+      )
       fileTokenScores = tokenData.tokenScores
       tokenCallers = tokenData.tokenCallers
+      // Unsupported extensions are deterministically skipped independent of
+      // file contents. Any other skipped file (budget, I/O, grammar failure)
+      // may become parseable later and must prevent caching.
+      const onlyUnsupported =
+        tokenData.coverage.skippedFiles === tokenData.diagnostics.length &&
+        tokenData.diagnostics.every(
+          (diagnostic) =>
+            diagnostic.stage === 'language' &&
+            diagnostic.message.startsWith(
+              'No tree-sitter language configuration available',
+            ),
+        )
+      if (onlyUnsupported && digests.size === tokenData.coverage.parsedFiles) {
+        completeProjectIndexCache = {
+          cwd,
+          fsIdentity,
+          scoreProject,
+          filePaths: [...filePaths],
+          digests,
+          fileTokenScores: structuredClone(fileTokenScores),
+          tokenCallers: structuredClone(tokenCallers),
+        }
+      }
+      if (tokenData.coverage?.truncated) {
+        logger?.debug?.(
+          {
+            parsedFiles: tokenData.coverage.parsedFiles,
+            skippedFiles: tokenData.coverage.skippedFiles,
+            maxTotalBytes: SESSION_STATE_MAX_TOTAL_PARSE_BYTES,
+          },
+          'Session-state parse budget truncated token scoring',
+        )
+      }
     } catch (error) {
       // If token scoring fails, continue with empty scores
       logger?.debug?.(
@@ -198,6 +422,7 @@ function getProjectIndexInput(params: {
       fileTree: buildFileTree(filePaths),
       filePaths,
       readFile: (filePath: string) => projectFiles[filePath] || null,
+      fsIdentity: fs,
       logger,
     }
   }
@@ -208,6 +433,7 @@ function getProjectIndexInput(params: {
       fileTree: discoveredProject.fileTree,
       filePaths: discoveredProject.filePaths.sort(),
       readFile: createDiscoveredProjectReader({ cwd, fs, logger }),
+      fsIdentity: fs,
       logger,
     }
   }
@@ -330,7 +556,10 @@ async function getGitChanges(params: {
       return ''
     })
 
-  const diff = childProcessToPromise(spawn('git', ['diff'], { cwd }), GIT_CHANGES_TIMEOUT_MS)
+  const diff = childProcessToPromise(
+    spawn('git', ['diff'], { cwd }),
+    GIT_CHANGES_TIMEOUT_MS,
+  )
     .then(({ stdout }) => stdout)
     .catch((error) => {
       logger.debug?.({ error }, 'Failed to get git diff')
@@ -610,7 +839,9 @@ export async function initialSessionState(
   const projectIndex = cwd
     ? getProjectIndexInput({ cwd, fs, logger, projectFiles, discoveredProject })
     : undefined
-  if (projectIndex) {
+  if (projectIndex && params.projectContextMode === 'paths') {
+    fileTree = projectIndex.fileTree
+  } else if (projectIndex) {
     const result = await computeProjectIndex(projectIndex)
     fileTree = result.fileTree
     fileTokenScores = result.fileTokenScores
@@ -688,7 +919,7 @@ export async function initialSessionState(
     }
   }
 
-  if (maxAgentSteps) {
+  if (maxAgentSteps !== undefined) {
     initialState.mainAgentState.stepsRemaining = maxAgentSteps
   }
 
@@ -769,14 +1000,75 @@ export function withMessageHistory({
   runState: RunState
   messages: Message[]
 }): RunState {
-  // Deep copy
-  const newRunState = JSON.parse(JSON.stringify(runState)) as typeof runState
+  // Runtime controls can be mutated in place or frozen by the CLI store.
+  // Copy those controls while retaining shared transcript bodies and the
+  // copy-on-write memory nodes. Install the supplied history as before.
+  const newRunState = runState.sessionState
+    ? {
+        ...runState,
+        sessionState: {
+          ...runState.sessionState,
+          mainAgentState: {
+            ...copyAgentStateForResume(runState.sessionState.mainAgentState),
+            messageHistory: messages,
+          },
+        },
+      }
+    : { ...runState }
 
-  if (newRunState.sessionState) {
-    newRunState.sessionState.mainAgentState.messageHistory = messages
+  if (newRunState.sessionState && runState.sessionState) {
+    // Runtime guard for the sharing contract (dev/test only): freeze the
+    // nested nodes SHARED with the caller's original state, so a future
+    // in-place writer fails at this boundary instead of silently aliasing
+    // the caller's state across runs. Note the pre-change JSON round-trip
+    // clone incidentally dropped undefined/function fields; the targeted
+    // copy preserves them — pinned by the targeted-copy tests.
+    deepFreezeSharedStateNodes(
+      newRunState.sessionState.mainAgentState.taskMemory,
+    )
+    deepFreezeSharedStateNodes(
+      newRunState.sessionState.mainAgentState.workspaceState,
+    )
+    deepFreezeSharedStateNodes(
+      newRunState.sessionState.mainAgentState.playbookContext,
+    )
   }
 
   return newRunState
+}
+
+/**
+ * A saved state may be frozen by the CLI store. Runtime control fields are
+ * mutated in place (for example base2ActiveWork and childRunIds), so a resumed
+ * run must own them even when the saved state is not frozen. Exclude immutable
+ * transcript/archive payloads and copy-on-write memory before cloning controls:
+ * copying a whole session would re-walk every historical tool result.
+ */
+function copyAgentStateForResume(state: AgentState): AgentState {
+  const {
+    messageHistory,
+    compactionArchive,
+    contextConsolidations,
+    taskMemory,
+    workspaceState,
+    playbookContext,
+    subagents,
+    ...controls
+  } = state
+  return {
+    ...cloneDeep(controls),
+    messageHistory: [...messageHistory],
+    subagents: subagents.map(copyAgentStateForResume),
+    ...(compactionArchive === undefined
+      ? {}
+      : { compactionArchive: [...compactionArchive] }),
+    ...(contextConsolidations === undefined
+      ? {}
+      : { contextConsolidations: [...contextConsolidations] }),
+    ...(taskMemory === undefined ? {} : { taskMemory }),
+    ...(workspaceState === undefined ? {} : { workspaceState }),
+    ...(playbookContext === undefined ? {} : { playbookContext }),
+  }
 }
 
 /**
@@ -788,6 +1080,7 @@ export async function applyOverridesToSessionState(
   baseSessionState: SessionState,
   overrides: {
     projectFiles?: Record<string, string>
+    projectContextMode?: 'paths' | 'symbols'
     knowledgeFiles?: Record<string, string>
     agentDefinitions?: AgentDefinition[]
     customToolDefinitions?: CustomToolDefinition[]
@@ -798,14 +1091,28 @@ export async function applyOverridesToSessionState(
     logger?: Logger
   },
 ): Promise<SessionState> {
-  // Deep clone to avoid mutating the original session state
-  const sessionState = JSON.parse(
-    JSON.stringify(baseSessionState),
-  ) as SessionState
+  // Copy the nodes this function and the continuing run mutate. Historical
+  // message bodies, archived snapshots and copy-on-write memory remain shared;
+  // runtime controls and appendable arrays must not alias a previous run.
+  // Security maps still pass through the restore sanitizer below.
+  const sessionState: SessionState = {
+    ...baseSessionState,
+    fileContext: { ...baseSessionState.fileContext },
+    mainAgentState: copyAgentStateForResume(baseSessionState.mainAgentState),
+  }
 
-  // M2-T3: the clone above re-derives mainAgentState from untrusted persisted
-  // JSON (JSON.parse-and-cast), so shape-validate and strip the security maps
-  // at this restore boundary before any consumer trusts them.
+  // Runtime guard for the targeted-copy contract (dev/test only): freeze the
+  // deeper nodes SHARED verbatim with baseSessionState, so a future in-place
+  // writer fails at this boundary instead of silently corrupting the caller's
+  // original state (see deepFreezeSharedStateNodes).
+  deepFreezeSharedStateNodes(sessionState.mainAgentState.taskMemory)
+  deepFreezeSharedStateNodes(sessionState.mainAgentState.workspaceState)
+  deepFreezeSharedStateNodes(sessionState.mainAgentState.playbookContext)
+
+  // M2-T3: session state restores from untrusted persisted JSON
+  // (JSON.parse-and-cast upstream of this call), so shape-validate and strip
+  // the security maps at this restore boundary before any consumer trusts
+  // them.
   sessionState.mainAgentState = sanitizeAgentStateSecurityMaps(
     sessionState.mainAgentState,
   )
@@ -840,7 +1147,13 @@ export async function applyOverridesToSessionState(
     })
     if (projectIndex) {
       const { fileTree, fileTokenScores, tokenCallers } =
-        await computeProjectIndex(projectIndex)
+        overrides.projectContextMode === 'paths'
+          ? {
+              fileTree: projectIndex.fileTree,
+              fileTokenScores: {},
+              tokenCallers: {},
+            }
+          : await computeProjectIndex(projectIndex)
       sessionState.fileContext.fileTreeSource =
         overrides.projectFiles !== undefined ? 'virtual' : 'live'
       sessionState.fileContext.fileTree = fileTree

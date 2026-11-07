@@ -28,6 +28,7 @@ import type {
 } from '@codebuff/common/types/contracts/database'
 import type { DynamicAgentTemplate } from '@codebuff/common/types/dynamic-agent-template'
 import type { ParamsOf } from '@codebuff/common/types/function-params'
+import { markAllMCPConfigOrigins } from '@codebuff/common/mcp/client'
 
 type CachedUserInfo = Partial<
   NonNullable<Awaited<GetUserInfoFromApiKeyOutput<UserColumn>>>
@@ -321,6 +322,12 @@ export async function fetchAgentFromDatabase(
       id: `${publisherId}/${agentId}@${agentConfig.version}`,
       executionSource: 'database' as const,
     }
+
+    // M-2 backstop: mark the FINAL template object's MCP configs 'client' —
+    // database agents are untrusted, so $VAR references must never expand.
+    // The zod parse and validateSingleAgent spread create fresh objects whose
+    // marks would be lost; only this object reaches callers.
+    markAllMCPConfigOrigins(agentTemplate.mcpServers, 'client')
 
     logger.debug(
       {

@@ -395,7 +395,7 @@ describe('promptAiSdkStream failover loop (integration)', () => {
   })
 
   test('advances to backup on primary 401, records preferModelParam [false, true], yields backup content', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-failover-'))
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-failover-'))
     const configPath = path.join(tempDir, 'openbuff.json')
     fs.writeFileSync(
       configPath,
@@ -510,7 +510,8 @@ describe('promptAiSdkStream failover loop (integration)', () => {
     // finishReason rejection itself). With the fix, the empty-stream error is
     // retried like a transient error (MAX_RETRIES_PER_MESSAGE backoff waits)
     // before the outer loop failovers to the backup model.
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-failover-'))
+    // Assigned to the describe-scoped binding so afterEach removes the dir.
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-failover-'))
     const configPath = path.join(tempDir, 'openbuff.json')
     fs.writeFileSync(
       configPath,

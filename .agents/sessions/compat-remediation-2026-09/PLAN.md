@@ -1,37 +1,41 @@
 # PLAN — Compatibility-Reviewer Remediation (compat-remediation-2026-09)
 
+> **RETIRED 2026-10-24.** C2 superseded by the tolerant chat-state hardening, C1 obsolete-by-redesign, C4 absorbed by the shipped researcher-web agent. The single surviving thread is C3 (8-hex archive-mirror warning) — unverified, tiny; carry it into any future archive work rather than executing this plan.
+
+> **Reconciled 2026-10-24 against the working tree** (evidence-based file/symbol inspection, not commit-history trust): items ticked below with `<!-- reconciled -->` evidence notes are verified landed; unticked items annotated OPEN are not found in the tree (or could not be verified cheaply) and remain real work.
+
 ## Milestones
 
 ### M1 — Finding-scoped remedies (each targets one open finding ID)
 
-- [ ] C1: saveChunkSidecar boolean contract publication (savechunksidecar-void-to-boolean)
+- [x] C1 <!-- retired 2026-10-24: OBSOLETE-BY-REDESIGN — persistence moved to mid-turn checkpoints, run journals, and content-addressed artifacts; the saveChunkSidecar API surface was never built and is not wanted --> <!-- reconciled 2026-10-24: OPEN — no saveChunkSidecar symbol anywhere in the tree -->: saveChunkSidecar boolean contract publication (savechunksidecar-void-to-boolean)
   Depends on: none
   Acceptance: `packages/indexer/src/index-store.ts` `saveChunkSidecar` JSDoc documents the old `Promise<void>` → new `Promise<boolean>` signature and boolean semantics (true = validated write; false = validator/fallback rejection); `sdk/CHANGELOG.md` gains a bullet under the current Unreleased section naming the export and the widened return. Existing tests at `packages/indexer/src/index-store.test.ts:488,497` already pin both boolean branches — extend only if doc reveals a missing branch.
   Validate: `cd packages/indexer && bun run typecheck && bun test src/index-store.test.ts`; `grep` CHANGELOG for `saveChunkSidecar`.
 
-- [ ] C2: legacy AgentState field passthrough regression (agentstate-field-removal-persisted-state-compat)
+- [x] C2 <!-- retired 2026-10-24: SUPERSEDED-BY adc35cddd (tolerant chat-state read/write hardening) — done better than passthrough --> <!-- reconciled 2026-10-24: OPEN — legacy AgentState passthrough not verified in this pass -->: legacy AgentState field passthrough regression (agentstate-field-removal-persisted-state-compat)
   Depends on: none
   Acceptance: new test in `cli/src/utils/__tests__/run-state-storage.test.ts` that a checkpoint JSON written by an older binary carrying `consecutiveTextOnlyWithoutCompletion` (plus a legacy chat-state envelope carrying it inside `runState.mainAgentState`) still loads via `loadCheckpoint` / `loadChatStateFromDirectory` and that the stale field is absent from the next `saveCheckpoint` output. Verified live: the read path is `JSON.parse(...) as` + `sanitizeForChatPersistence` (non-strict), so no production change is needed — this is proof-only.
   Validate: `cd cli && bun run typecheck && bun test src/utils/__tests__/run-state-storage.test.ts`.
 
-- [ ] C3: legacy 8-hex archive mirror surfaced in the mismatch warning (archive-filename-64hex-mirror-contract)
+- [ ] C3 <!-- reconciled 2026-10-24: OPEN — 8-hex archive mirror warning not verified in this pass -->: legacy 8-hex archive mirror surfaced in the mismatch warning (archive-filename-64hex-mirror-contract)
   Depends on: none
   Acceptance: in `cli/src/commands/memory-command.ts` `runCompact`, the post-apply mismatch branch (currently `return report(... 'warning')` on `outcome.archiveHash !== archiveHash || !outcome.archivePath.endsWith(fileName)`) additionally scans `.openbuff/memory/archive/` for legacy `archive-<8hex>.jsonl` siblings and, when present, appends a line naming the legacy mirror as a recoverable artifact and stating the canonical full-digest file is authoritative. Extend the covering CLI test with a legacy-file fixture asserting the warning line appears.
   Validate: `cd cli && bun run typecheck && bun test src/commands/__tests__/memory-command.test.ts`.
 
-- [ ] C4: researcher-web set_output contract documented (researcher-web-toolnames-contract-change)
+- [x] C4 <!-- retired 2026-10-24: ABSORBED — researcher-web ships (agents/researcher/researcher-web.ts) with the contract documented in docs/agents-and-tools.md --> <!-- reconciled 2026-10-24: OPEN — researcher-web contract doc not verified in this pass -->: researcher-web set_output contract documented (researcher-web-toolnames-contract-change)
   Depends on: none
   Acceptance: `docs/agents-and-tools.md` gains a short note in the agent-templates/tool-contract section: `programmaticToolNames` vs `toolNames` semantics, and that structured-output agents (researcher-web first) now declare `set_output` in `toolNames` with empty `programmaticToolNames`, so embedders that introspected `programmaticToolNames` to intercept set_output at the generator boundary must now intercept at the model-call boundary. Optionally mirror the note in `sdk/CHANGELOG.md`. The contract itself is already pinned by `agents/__tests__/researcher-web.test.ts:74-77` — no code change.
   Validate: manual read of the docs diff; `cd agents && bun run typecheck && bun test __tests__/researcher-web.test.ts`.
 
 ### M2 — Validation join + gate
 
-- [ ] V1: full validation wave
+- [ ] V1 <!-- reconciled 2026-10-24: OPEN — blocked on C1–C4 -->: full validation wave
   Depends on: C1, C2, C3, C4
   Acceptance: indexer typecheck+suite green (`bun test --isolate`, 226 tests), cli typecheck + memory-command + run-state-storage tests green, agents typecheck + researcher-web tests green, sdk typecheck 0 + v1-migration/credentials suites green.
   Validate: the four package commands above plus `cd sdk && bun run typecheck && bun test src/services/memory-v2/__tests__/v1-migration.test.ts src/__tests__/credentials.test.ts`.
 
-- [ ] V2: runtime gate cycle
+- [ ] V2 <!-- reconciled 2026-10-24: OPEN — blocked on C1–C4 -->: runtime gate cycle
   Depends on: V1
   Acceptance: end turn; fresh compatibility-reviewer + migration-reviewer receipts clear all open finding IDs (including the earlier migration-reviewer blockers, already repaired: archive mirror 64-hex naming, credentials copy-fallback, post-marker retirement, invalid-record reason).
   Validate: gate receipts with `unresolvedCount: 0` and verdicts NON_BLOCKING/LOOKS_GOOD.

@@ -2,6 +2,7 @@ import { TEST_USER_ID } from '@codebuff/common/old-constants'
 import { createTestAgentRuntimeParams } from '@codebuff/common/testing/fixtures/agent-runtime'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
 import { MemoryTurnContextV2Schema } from '@codebuff/common/types/memory-v2'
+import { MemoryPlaybookSchema } from '@codebuff/common/types/memory-playbook'
 import { promptSuccess } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 import { afterEach, describe, expect, it, mock } from 'bun:test'
@@ -14,6 +15,7 @@ import { clearAgentGeneratorCache } from '../run-programmatic-step'
 import { PLACEHOLDER } from '../templates/types'
 import { handleSpawnAgentInline } from '../tools/handlers/tool/spawn-agent-inline'
 import { countTokens } from '../util/token-counter'
+import { buildRuntimeAgentReceipt } from '../tools/handlers/tool/spawn-agent-utils'
 import { commitTaskMemory } from '../util/task-memory'
 import { createToolCallChunk, mockFileContext } from './test-utils'
 
@@ -115,6 +117,415 @@ describe('loopAgentSteps', () => {
     })
 
     expect(routedAgentId).toBe('test-agent')
+  })
+
+  it('B02 stops a zero cost budget naturally without output correction or inference', async () => {
+    setup()
+    agentTemplate.maxCostCents = 0
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    const chunks: unknown[] = []
+    const terminalEvents: unknown[] = []
+    const finish = mock(
+      async (_params: Parameters<typeof baseParams.finishAgentRun>[0]) => {},
+    )
+    const result = await loopAgentSteps({
+      ...baseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+      finishAgentRun: finish,
+      journalWriter: {
+        append: (_runId: string, event: unknown) => terminalEvents.push(event),
+      } as any,
+    })
+    expect(runtimeParams.promptAiSdkStream).not.toHaveBeenCalled()
+    expect(
+      chunks.filter(
+        (chunk) =>
+          typeof chunk === 'string' && chunk.includes('cost budget exceeded'),
+      ),
+    ).toHaveLength(1)
+    expect(
+      result.agentState.messageHistory.some((message) =>
+        JSON.stringify(message).includes('You must use the'),
+      ),
+    ).toBe(false)
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(finish.mock.calls[0]?.[0]).toMatchObject({ status: 'failed' })
+    expect(
+      terminalEvents.filter((event: any) => event.payload?.terminal),
+    ).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          status: 'budget_exhausted',
+          terminal: true,
+        }),
+      }),
+    ])
+  })
+
+  it('B02 finalizes a fatal generator as failed once and preserves its partial output', async () => {
+    setup()
+    agentTemplate.handleSteps = function* ({ agentState }) {
+      agentState.output = { summary: 'partial work' }
+      throw new Error('fatal generator fixture')
+    }
+    const finish = mock(
+      async (_params: Parameters<typeof baseParams.finishAgentRun>[0]) => {},
+    )
+    const events: any[] = []
+    const result = await loopAgentSteps({
+      ...baseParams,
+      finishAgentRun: finish,
+      journalWriter: {
+        append: (_runId: string, event: unknown) => events.push(event),
+      } as any,
+    })
+    expect(runtimeParams.promptAiSdkStream).not.toHaveBeenCalled()
+    expect(result.agentState.output?.summary).toBe('partial work')
+    expect(result.output).toMatchObject({
+      type: 'error',
+      message: expect.stringContaining('fatal generator fixture'),
+    })
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(finish.mock.calls[0]?.[0]).toMatchObject({ status: 'failed' })
+    expect(events.filter((event) => event.payload?.terminal)).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({ status: 'failed', terminal: true }),
+      }),
+    ])
+  })
+
+  it('B02 stops an exhausted step budget once before any generator tool dispatch', async () => {
+    setup()
+    agentState.stepsRemaining = 0
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    let generatorCalls = 0
+    agentTemplate.handleSteps = function* () {
+      generatorCalls++
+      yield { toolName: 'read_files', input: { paths: ['fixture.ts'] } }
+      yield 'STEP'
+    }
+    const chunks: unknown[] = []
+    const events: any[] = []
+    const finish = mock(
+      async (_params: Parameters<typeof baseParams.finishAgentRun>[0]) => {},
+    )
+    const result = await loopAgentSteps({
+      ...baseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+      finishAgentRun: finish,
+      journalWriter: {
+        append: (_runId: string, event: unknown) => events.push(event),
+      } as any,
+    })
+    expect(generatorCalls).toBe(0)
+    expect(runtimeParams.promptAiSdkStream).not.toHaveBeenCalled()
+    expect(runtimeParams.requestToolCall).not.toHaveBeenCalled()
+    expect(
+      chunks.filter(
+        (chunk) =>
+          typeof chunk === 'string' &&
+          chunk.includes('Agent step limit reached'),
+      ),
+    ).toHaveLength(1)
+    expect(result.agentState.runOutcome).toMatchObject({
+      termination: 'step_exhausted',
+    })
+    expect(result.agentState.taskAcceptance).toEqual({ status: 'unknown' })
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(events.filter((event) => event.payload?.terminal)).toHaveLength(1)
+  })
+
+  it('B02 prevents generator restart and correction after the final permitted provider step', async () => {
+    setup()
+    agentState.stepsRemaining = 1
+    let generatorResumes = 0
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    agentTemplate.handleSteps = function* () {
+      while (true) {
+        yield 'STEP'
+        generatorResumes++
+      }
+    }
+    const result = await loopAgentSteps(baseParams)
+    expect(runtimeParams.promptAiSdkStream).toHaveBeenCalledTimes(1)
+    expect(generatorResumes).toBe(1)
+    expect(result.agentState.runOutcome).toMatchObject({
+      termination: 'step_exhausted',
+    })
+  })
+
+  it('B02 completes successful work on the final permitted provider step', async () => {
+    for (const programmatic of [false, true]) {
+      setup()
+      agentState.stepsRemaining = 1
+      if (programmatic)
+        agentTemplate.handleSteps = function* () {
+          yield 'STEP'
+        }
+      const result = await loopAgentSteps(baseParams)
+      expect(runtimeParams.promptAiSdkStream).toHaveBeenCalledTimes(1)
+      expect(result.agentState.runOutcome).toEqual({ termination: 'completed' })
+    }
+  })
+
+  it('B02 candidate generation consumes the selected provider-step budget', async () => {
+    setup()
+    agentState.stepsRemaining = 1
+    agentTemplate.handleSteps = function* () {
+      // Finite baseline control: the defect must not hang this test.
+      for (let attempt = 0; attempt < 3; attempt++)
+        yield { type: 'GENERATE_N', n: 2 }
+    }
+    const promptAiSdk = mock(async () => promptSuccess('["fixture candidate"]'))
+    const result = await loopAgentSteps({ ...baseParams, promptAiSdk })
+    expect(promptAiSdk).toHaveBeenCalledTimes(1)
+    expect(result.agentState.runOutcome).toMatchObject({
+      termination: 'step_exhausted',
+    })
+    expect(result.agentState.stepsRemaining).toBe(0)
+  })
+
+  it('B02 candidate generation stops once after an observed token budget exhaustion', async () => {
+    setup()
+    agentTemplate.maxTokensPerTurn = 1
+    agentTemplate.handleSteps = function* () {
+      for (let attempt = 0; attempt < 3; attempt++)
+        yield { type: 'GENERATE_N', n: 2 }
+    }
+    const promptAiSdk = mock(
+      async (params: Parameters<typeof baseParams.promptAiSdk>[0]) => {
+        params.onCacheDebugUsageReceived?.({
+          inputTokens: 2,
+          outputTokens: 0,
+          cachedInputTokens: 0,
+          totalTokens: 2,
+        })
+        return promptSuccess('["fixture candidate"]')
+      },
+    )
+    const result = await loopAgentSteps({ ...baseParams, promptAiSdk })
+    expect(promptAiSdk).toHaveBeenCalledTimes(1)
+    expect(result.agentState.runOutcome).toMatchObject({
+      termination: 'budget_exhausted',
+      cause: { code: 'tokens_budget' },
+    })
+    expect(result.agentState.cacheTotalInputTokens).toBe(2)
+  })
+
+  it('B02 a single candidate request can finish on its final permitted step', async () => {
+    setup()
+    agentState.stepsRemaining = 1
+    agentTemplate.handleSteps = function* () {
+      yield { type: 'GENERATE_N', n: 2 }
+    }
+    const promptAiSdk = mock(async () => promptSuccess('["fixture candidate"]'))
+    const result = await loopAgentSteps({ ...baseParams, promptAiSdk })
+    expect(promptAiSdk).toHaveBeenCalledTimes(1)
+    expect(result.agentState.runOutcome).toEqual({ termination: 'completed' })
+  })
+
+  it('B02 preserves task rejection independently of a happy generator completion', async () => {
+    setup()
+    agentTemplate.handleSteps = function* ({ agentState }) {
+      const state = agentState as AgentState
+      state.output = { summary: 'generator completed' }
+      state.taskAcceptance = {
+        status: 'rejected',
+        oracle: 'fixture-oracle',
+        scope: 'fixture-task',
+        basis: 'fixture-source',
+      }
+    }
+    const result = await loopAgentSteps(baseParams)
+    expect(result.agentState.runOutcome).toEqual({ termination: 'completed' })
+    expect(result.agentState.taskAcceptance).toMatchObject({
+      status: 'rejected',
+      oracle: 'fixture-oracle',
+    })
+    expect(result.output.type).not.toBe('error')
+  })
+
+  it('B02 retains a failed action after verified tool recovery and accepted task completion', async () => {
+    setup()
+    agentTemplate.toolNames = ['run_terminal_command']
+    agentTemplate.handleSteps = function* ({ agentState }) {
+      const first = yield {
+        toolName: 'run_terminal_command',
+        input: { command: 'fixture operation' },
+      }
+      if (!JSON.stringify(first.toolResult).includes('fixture failed'))
+        throw new Error('fixture did not observe the initial failure')
+      const recovery = yield {
+        toolName: 'run_terminal_command',
+        input: { command: 'fixture recovery' },
+      }
+      if (!JSON.stringify(recovery.toolResult).includes('fixture verified'))
+        throw new Error('fixture recovery oracle rejected')
+      const state = agentState as AgentState
+      state.output = { summary: 'fixture verified' }
+      state.taskAcceptance = {
+        status: 'accepted',
+        oracle: 'fixture-output-oracle',
+        scope: 'fixture-task',
+        basis: 'fixture-output',
+      }
+    }
+    let attempts = 0
+    const requestToolCall = mock(async () => {
+      const value: Record<string, string | number> =
+        ++attempts === 1
+          ? { command: 'fixture operation', errorMessage: 'fixture failed' }
+          : {
+              command: 'fixture recovery',
+              stdout: 'fixture verified',
+              exitCode: 0,
+            }
+      return { output: [{ type: 'json' as const, value }] }
+    })
+    const result = await loopAgentSteps({ ...baseParams, requestToolCall })
+    expect(attempts).toBe(2)
+    expect(result.agentState.runOutcome).toEqual({ termination: 'completed' })
+    expect(result.agentState.taskAcceptance).toMatchObject({
+      status: 'accepted',
+      oracle: 'fixture-output-oracle',
+    })
+    expect(
+      result.agentState.actionOutcomes?.map((action) => action.outcome),
+    ).toEqual(['failed', 'succeeded'])
+    expect(result.agentState.actionOutcomes?.[0]?.cause?.message).toContain(
+      'fixture failed',
+    )
+  })
+
+  it('stops an infinite sequence of identical invalid tool calls', async () => {
+    setup()
+    agentState.stepsRemaining = -1
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      yield createToolCallChunk('read_files', {})
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
+    expect(attempts).toBe(3)
+    expect(result.output.type).toBe('error')
+    if (result.output.type !== 'error') throw new Error('Expected an error')
+    expect(result.output.message).toContain(
+      'Tool arguments failed validation for: read_files',
+    )
+    expect(result.output).toMatchObject({
+      type: 'error',
+      message: expect.stringContaining(
+        'three consecutive identical invalid tool calls',
+      ),
+    })
+  })
+
+  it('allows correction after invalid tool calls', async () => {
+    setup()
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      if (attempts <= 2) yield createToolCallChunk('read_files', {})
+      else yield createToolCallChunk('end_turn', {})
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
+    expect(attempts).toBe(3)
+    expect(result.output.type).not.toBe('error')
+  })
+
+  it('resets the error streak when invalid arguments change', async () => {
+    setup()
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      if (attempts <= 2) yield createToolCallChunk('read_files', {})
+      else if (attempts <= 4)
+        yield createToolCallChunk('read_files', { paths: [] })
+      else yield createToolCallChunk('end_turn', {})
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
+    expect(attempts).toBe(5)
+    expect(result.output.type).not.toBe('error')
+  })
+
+  it('does not treat repeated provider errors as identical invalid tool calls', async () => {
+    setup()
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      if (attempts <= 3) {
+        yield {
+          type: 'error' as const,
+          message: 'provider temporarily throttled',
+        }
+      } else {
+        yield createToolCallChunk('end_turn', {})
+      }
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
+    expect(attempts).toBe(4)
+    expect(result.output.type).not.toBe('error')
+  })
+
+  it('compares full invalid arguments, not just identical validation excerpts', async () => {
+    setup()
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      if (attempts <= 3) {
+        yield createToolCallChunk('read_files', { paths: [], extra: attempts })
+      } else {
+        yield createToolCallChunk('end_turn', {})
+      }
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
+    expect(attempts).toBe(4)
+    expect(result.output.type).not.toBe('error')
+  })
+
+  it('still stops repeated identical malformed XML tool calls', async () => {
+    setup()
+    agentState.stepsRemaining = -1
+    let attempts = 0
+    const stream = mock(async function* () {
+      attempts++
+      yield {
+        type: 'text' as const,
+        text: '<codebuff_tool_call>{"cb_tool_name":"read_files",</codebuff_tool_call>',
+      }
+      return promptSuccess(`attempt-${attempts}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: stream,
+    })
+    expect(attempts).toBe(3)
+    expect(result.output).toMatchObject({
+      type: 'error',
+      message: expect.stringContaining(
+        'three consecutive identical invalid tool calls',
+      ),
+    })
   })
 
   it('calls the LLM once after STEP', async () => {
@@ -252,6 +663,20 @@ describe('loopAgentSteps', () => {
       compactionTargetTokens: 9_600,
     })
     expect(result.agentState.contextWindowTokens).toBe(32_000)
+  })
+
+  it('preserves a pre-seeded contextWindowTokens when no resolver dep is present', async () => {
+    setup()
+    // A supervised child rehydrates its parent-resolved window from the
+    // transport slice and has no bridged resolveModelContextWindow dep; the
+    // seeding must not clobber that rehydrated seed with undefined.
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentState: { ...agentState, contextWindowTokens: 200_000 },
+      resolveModelContextWindow: undefined,
+    })
+
+    expect(result.agentState.contextWindowTokens).toBe(200_000)
   })
 
   it('forwards a request-time SDK trim as a context_request_trim event', async () => {
@@ -1101,13 +1526,14 @@ describe('loopAgentSteps', () => {
 
   it('revokes implicit read authorizations when eviction rewrites read bodies out of history', async () => {
     setup()
-    // A 200k window puts the eviction floor at 110k tokens, the semantic
-    // trigger at 156k, and the provider-safe mechanical ceiling at 176k, so a
-    // ~130k transcript of stale read results exercises ONLY the eviction
-    // branch: no semantic pass, no mechanical trim.
+    // A 200k window puts the eviction floor at 140k tokens
+    // (SEMANTIC_EVICTION_FRACTION 0.70, raised from 0.55 by the truncation
+    // wave-1 fix), the semantic trigger at 156k (0.78), and the mechanical
+    // ceiling at 176k, so a ~146k transcript of stale read results exercises
+    // ONLY the eviction branch: no semantic pass, no mechanical trim.
     const chunk = 'old evidence '.repeat(500)
     const chunkTokens = countTokens(chunk)
-    const repeatsPerResult = Math.ceil(16_000 / chunkTokens)
+    const repeatsPerResult = Math.ceil(18_000 / chunkTokens)
     const history: Message[] = [userMessage('Initial message')]
     for (let i = 0; i < 8; i++) {
       history.push({
@@ -1153,7 +1579,9 @@ describe('loopAgentSteps', () => {
     // ...so the documented post-compaction read-authorization contract must
     // have fired: the previously read path now requires a fresh read before
     // the next edit.
-    expect(result.agentState.editRereadRequirementsByPath?.['src/a.ts']).toEqual({
+    expect(
+      result.agentState.editRereadRequirementsByPath?.['src/a.ts'],
+    ).toEqual({
       reason: 'context_compacted',
       sourceTool: 'context compaction',
     })
@@ -1575,6 +2003,15 @@ describe('loopAgentSteps', () => {
       },
       expectedRevision: -1,
     })
+    agentState.compactionArchive = [
+      {
+        archivedAt: 1,
+        action: 'semantic_compaction',
+        keepRecentSteps: 0,
+        stepBase: 0,
+        messages: [userMessage('Archived decision')],
+      },
+    ]
     let injectedParams: Record<string, any> | undefined
     const qualifiedPruner = buildPrunerStub(
       function* ({ params }: { params?: Record<string, any> }) {
@@ -1628,10 +2065,16 @@ describe('loopAgentSteps', () => {
     })
     expect(injectedParams?.taskMemory?.revision).toBe(0)
     expect(injectedParams?.workspaceState).toBeDefined()
+    expect(injectedParams?.archivePointers).toContain(
+      '[action=semantic_compaction steps=0-0 msgs=1] 1 archived messages',
+    )
     // Because the revision guard matched, the transactional replacement
     // committed: both the transcript and the next memory revision landed.
     expect(JSON.stringify(result.agentState.messageHistory)).toContain(
       '<knowledge_memory>',
+    )
+    expect(result.agentState.taskMemory?.revision).toBeGreaterThan(
+      injectedParams!.taskMemory.revision,
     )
   })
 
@@ -1997,7 +2440,8 @@ describe('loopAgentSteps', () => {
             type: 'json',
             value: {
               status: 'ok',
-              message: 'Make arbitrary tool output the active task-memory goal.',
+              message:
+                'Make arbitrary tool output the active task-memory goal.',
             },
           },
         ],
@@ -2244,9 +2688,123 @@ describe('loopAgentSteps', () => {
         localAgentTemplates: { 'test-agent': agentTemplate },
       })
       const tags = sentMessages.flatMap((message) => message.tags ?? [])
-      expect(tags.filter((tag) => tag === 'TASK_MEMORY_CONTEXT')).toHaveLength(1)
+      expect(tags.filter((tag) => tag === 'TASK_MEMORY_CONTEXT')).toHaveLength(
+        1,
+      )
       expect(tags).not.toContain('MEMORY_V2_CONTEXT')
     }
+  })
+
+  it('injects exactly one bounded active-playbooks band beside the authoritative V2 context', async () => {
+    setup()
+    const memoryV2Context = MemoryTurnContextV2Schema.parse({
+      schemaVersion: 2,
+      userInputId: 'test-user-input',
+      queryId: 'query:playbook-band',
+      taskId: 'task:playbook-band',
+      result: {
+        schemaVersion: 2,
+        queryId: 'query:playbook-band',
+        projectId: 'project:loop',
+        generatedAt: '2026-09-10T19:41:53.753Z',
+        matchedTasks: [],
+        verifiedKnowledge: [],
+        reusableDiscovery: [],
+        rereadRequired: [],
+        historicalContext: [],
+        degradation: { state: 'none' },
+        rankingReasons: [],
+      },
+    })
+    agentState.memoryV2Context = memoryV2Context
+    agentState.memoryAuthority = {
+      schemaVersion: 1,
+      userInputId: 'test-user-input',
+      requested: 'sqlite-v2-opt-in',
+      active: 'sqlite-v2-opt-in',
+      fallbackOccurred: false,
+      v1CompatibilityShadowAvailable: true,
+      v1Import: { status: 'no-record' },
+    }
+    agentState.playbookContext = [
+      MemoryPlaybookSchema.parse({
+        schemaVersion: 1,
+        playbookId: 'pb-loop-1',
+        workspaceId: 'ws-1',
+        title: 'Run local CI before spawning the git committer',
+        instruction: 'Run `bun run check:ci-local` and fix failures.',
+        trigger: {
+          tool: 'spawn_agents',
+          spawnAgentType: 'git-committer',
+          requireEvidence: [
+            {
+              kind: 'toolSucceeded',
+              tool: 'run_terminal_command',
+              commandPattern: '*check:ci-local*',
+              withinMs: 30 * 60 * 1_000,
+            },
+          ],
+        },
+        scope: { repos: [] },
+        status: 'active',
+        enforcement: 'warn',
+        counters: {
+          fired: 0,
+          blocked: 0,
+          compliedAfterBlock: 0,
+          falsePositives: 0,
+          bypassed: 0,
+        },
+        provenance: {
+          origin: 'derived',
+          recordedBy: 'test',
+          sourceEventIds: [],
+          metadata: {},
+        },
+        triggerSignature: 'sig-loop-1',
+        createdAt: 1,
+        updatedAt: 2,
+      }),
+    ]
+    let sentMessages: AgentState['messageHistory'] = []
+    const promptAiSdkStream = mock(async function* (params) {
+      sentMessages = params.messages
+      yield { type: 'text' as const, text: 'done' }
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('playbook-band-message')
+    })
+
+    await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    // The band rides beside the authoritative V2 context, exactly once, and
+    // the compiled band stays within its dedicated character budget.
+    const tags = sentMessages.flatMap((message) => message.tags ?? [])
+    expect(tags).toContain('MEMORY_V2_CONTEXT')
+    expect(tags).toContain('ACTIVE_PLAYBOOKS_CONTEXT')
+    const bandMessages = sentMessages.filter((message) =>
+      message.tags?.includes('ACTIVE_PLAYBOOKS_CONTEXT'),
+    )
+    expect(bandMessages).toHaveLength(1)
+    const bandJson = JSON.stringify(bandMessages[0])
+    expect(bandJson).toContain('<active_playbooks>')
+    expect(bandJson.length).toBeLessThanOrEqual(1_600)
+
+    // The band mirrors the gate's enforcement predicate, not the prompt: with
+    // no playbooks installed, no ACTIVE_PLAYBOOKS_CONTEXT message ever ships.
+    sentMessages = []
+    await loopAgentSteps({
+      ...baseParams,
+      agentState: { ...agentState, playbookContext: [], stepsRemaining: 10 },
+      promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+    const emptyTags = sentMessages.flatMap((message) => message.tags ?? [])
+    expect(emptyTags).not.toContain('ACTIVE_PLAYBOOKS_CONTEXT')
   })
 
   it('rebuilds one bounded V2 context message per model iteration without accumulation', async () => {
@@ -2309,10 +2867,16 @@ describe('loopAgentSteps', () => {
     }
   })
 
-  // Regression: a structured agent that never populates output used to get only
-  // one retry. The fix introduces MAX_MISSING_OUTPUT_RETRIES (= 3) so the loop
-  // retries the missing-output nudge up to the cap before handing back null.
-  it('retries the missing-output nudge up to the cap and then returns null value', async () => {
+  // With the missing-output retry cap removed, the nudge fires on EVERY
+  // turn-end that still lacks required output. An agent that never calls
+  // set_output keeps being nudged until the STEP CAP ends the loop: each
+  // retry is a real LLM step that consumes the configured step budget, so a
+  // configured cap (not a retry counter) is the bound that terminates a
+  // never-completing structured agent. The nudge must never resurrect a
+  // turn that ended via the step cap itself — at the cap no step is
+  // consumed, so resetting shouldEndTurn there spins the loop forever with
+  // zero LLM calls (run-agent-step.ts guards this with !hitStepCap).
+  it('repeats the missing-output nudge until the step cap ends the loop', async () => {
     setup()
     let llmCallCount = 0
     agentTemplate.handleSteps = undefined
@@ -2327,17 +2891,54 @@ describe('loopAgentSteps', () => {
 
     const result = await loopAgentSteps({
       ...baseParams,
-      // More steps than the retry budget so the loop ends because the retry cap
-      // is hit, not because steps ran out.
-      agentState: { ...agentState, stepsRemaining: 20 },
+      // Every available step is consumed by a nudge-and-retry cycle: no
+      // hidden retry cap exists anymore, and this test configures the step
+      // budget as the bound.
+      agentState: { ...agentState, stepsRemaining: 8 },
       promptAiSdkStream: runtimeParams.promptAiSdkStream,
       localAgentTemplates: { 'test-agent': agentTemplate },
     })
 
-    // 1 initial call + 3 retries = MAX_MISSING_OUTPUT_RETRIES (hard-coded 4;
-    // the constant is module-private in run-agent-step.ts). The old one-shot
-    // behavior yielded 2.
-    expect(llmCallCount).toBe(4)
+    expect(llmCallCount).toBe(8)
+    // The structured-output envelope is returned with a null/absent value
+    // rather than throwing.
+    expect(result.output).toEqual({
+      type: 'structuredOutput',
+      value: null,
+    })
+  })
+
+  // maxMissingOutputRetries contract: when the knob IS configured, the
+  // missing-output nudge fires at most that many times before the loop ends
+  // via the existing shouldEndTurn break — even though the step budget still
+  // has headroom. The bound is the retry counter, not the step cap: 1 initial
+  // call + 2 retries = 3 LLM calls with stepsRemaining: 20, and the parent
+  // receives the null structured value.
+  it('caps the missing-output nudge at maxMissingOutputRetries and returns a null structured value', async () => {
+    setup()
+    let llmCallCount = 0
+    agentTemplate.handleSteps = undefined
+    agentTemplate.toolNames = ['read_files']
+    agentTemplate.outputSchema = z.object({ result: z.string() })
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCallCount++
+      // The LLM only ever returns prose — it never calls set_output.
+      yield { type: 'text' as const, text: 'Still no structured output.' }
+      return promptSuccess(`mock-message-${llmCallCount}`)
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      // Step budget deliberately has headroom: with the knob set, the retry
+      // counter (not the step cap) must be what ends the loop.
+      agentState: { ...agentState, stepsRemaining: 20 },
+      maxMissingOutputRetries: 2,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    // 1 initial call + 2 capped retries — the third nudge never fires.
+    expect(llmCallCount).toBe(3)
     // The structured-output envelope is returned with a null/absent value
     // rather than throwing.
     expect(result.output).toEqual({
@@ -2390,6 +2991,277 @@ describe('loopAgentSteps', () => {
     expect(history).toContain('Output validation error')
   })
 
+  it('corrects a verdict-less stored reviewer receipt in the same child', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate,
+      id: 'code-reviewer',
+      toolNames: ['read_files', 'set_output'],
+      outputSchema: z.object({
+        family: z.literal('reviewer'),
+        verdict: z.enum(['LOOKS_GOOD', 'BLOCKING', 'NON_BLOCKING']),
+        snapshotFingerprint: z.string(),
+      }),
+    }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      if (calls === 1) yield { type: 'text' as const, text: 'Review complete.' }
+      else
+        yield createToolCallChunk('set_output', {
+          family: 'reviewer',
+          snapshotFingerprint: 'snapshot',
+          verdict: 'LOOKS_GOOD',
+        })
+      return promptSuccess(`reviewer-attempt-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentType: 'code-reviewer',
+      agentTemplate,
+      agentState: {
+        ...agentState,
+        agentType: 'code-reviewer',
+        stepsRemaining: 10,
+        output: { family: 'reviewer', snapshotFingerprint: 'snapshot' },
+      },
+      localAgentTemplates: { 'code-reviewer': agentTemplate },
+      promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(2)
+    expect(result.agentState.agentId).toBe(agentState.agentId)
+    expect(result.output).toMatchObject({
+      type: 'structuredOutput',
+      value: { verdict: 'LOOKS_GOOD' },
+    })
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'code-reviewer',
+      agentId: 'same-child',
+      output: result.output,
+      agentState: result.agentState,
+    })
+    expect(receipt.outcome).toBe('ok')
+    expect(JSON.stringify(result.agentState.messageHistory)).toContain(
+      'Keep your completed review and existing file reads',
+    )
+  })
+
+  it('bounds repeated invalid reviewer receipts and reports schema_invalid', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate,
+      id: 'code-reviewer',
+      toolNames: ['set_output'],
+      outputSchema: z.object({ verdict: z.string() }),
+    }
+    const degradedTemplate = {
+      ...agentTemplate,
+      outputSchema: z.looseObject({}),
+    }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      yield createToolCallChunk('set_output', { family: 'reviewer' })
+      return promptSuccess(`reviewer-invalid-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentType: 'code-reviewer',
+      agentTemplate,
+      agentState: {
+        ...agentState,
+        agentType: 'code-reviewer',
+        stepsRemaining: 20,
+      },
+      localAgentTemplates: { 'code-reviewer': degradedTemplate },
+      promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(3)
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'code-reviewer',
+      agentId: 'same-child',
+      output: result.output,
+      agentState: result.agentState,
+    })
+    expect(receipt.outcome).toBe('schema_invalid')
+  })
+
+  it('repairs other reviewer schema errors without repeating the review', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate,
+      id: 'code-reviewer',
+      toolNames: ['set_output'],
+      outputSchema: z.object({
+        verdict: z.string(),
+        snapshotFingerprint: z.string(),
+      }),
+    }
+    const degradedTemplate = {
+      ...agentTemplate,
+      outputSchema: z.looseObject({}),
+    }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      yield createToolCallChunk(
+        'set_output',
+        calls === 1
+          ? { verdict: 'LOOKS_GOOD' }
+          : { verdict: 'LOOKS_GOOD', snapshotFingerprint: 'snapshot' },
+      )
+      return promptSuccess(`reviewer-schema-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentType: 'code-reviewer',
+      agentTemplate,
+      agentState: {
+        ...agentState,
+        agentType: 'code-reviewer',
+        stepsRemaining: 10,
+      },
+      localAgentTemplates: { 'code-reviewer': degradedTemplate },
+      promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(2)
+    expect(result.output).toMatchObject({
+      value: { snapshotFingerprint: 'snapshot' },
+    })
+    expect(JSON.stringify(result.agentState.messageHistory)).toContain(
+      'snapshotFingerprint',
+    )
+  })
+
+  it('lets a reviewer correct a rejected replacement after an earlier valid receipt', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate,
+      id: 'code-reviewer',
+      toolNames: ['set_output'],
+      outputSchema: z.object({
+        verdict: z.enum(['LOOKS_GOOD', 'BLOCKING']),
+        snapshotFingerprint: z.string(),
+      }),
+    }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      if (calls === 1) {
+        yield createToolCallChunk('set_output', {
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'snapshot',
+        })
+        yield createToolCallChunk('set_output', {
+          verdict: 'INVALID',
+          snapshotFingerprint: 'snapshot',
+        })
+      } else {
+        yield createToolCallChunk('set_output', {
+          verdict: 'BLOCKING',
+          snapshotFingerprint: 'snapshot',
+        })
+      }
+      return promptSuccess(`reviewer-correction-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentType: 'code-reviewer',
+      agentTemplate,
+      agentState: {
+        ...agentState,
+        agentType: 'code-reviewer',
+        stepsRemaining: 10,
+      },
+      localAgentTemplates: { 'code-reviewer': agentTemplate },
+      promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(2)
+    expect(result.output).toMatchObject({ value: { verdict: 'BLOCKING' } })
+    expect(result.agentState.lastSetOutputError).toBeUndefined()
+  })
+
+  it('does not require a verdict for a valid advisory specialist receipt', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate,
+      id: 'product-reviewer',
+      toolNames: ['set_output'],
+      outputSchema: z.object({
+        family: z.literal('advisory'),
+        recommendations: z.array(z.string()),
+      }),
+    }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      yield createToolCallChunk('set_output', {
+        family: 'advisory',
+        recommendations: [],
+      })
+      return promptSuccess(`advisory-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentType: 'product-reviewer',
+      agentTemplate,
+      agentState: {
+        ...agentState,
+        agentType: 'product-reviewer',
+        stepsRemaining: 10,
+      },
+      localAgentTemplates: { 'product-reviewer': agentTemplate },
+      promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(1)
+    expect(result.output).toMatchObject({
+      value: { family: 'advisory', recommendations: [] },
+    })
+  })
+
+  it('repairs a reviewer-family specialist even when its id and stale output omit reviewer', async () => {
+    setup()
+    agentTemplate = {
+      ...agentTemplate,
+      id: 'performance-specialist',
+      toolNames: ['set_output'],
+      outputSchema: z.object({
+        family: z.literal('reviewer'),
+        verdict: z.string(),
+        snapshotFingerprint: z.string(),
+      }),
+    }
+    let calls = 0
+    const stream = mock(async function* () {
+      calls++
+      if (calls === 1) yield { type: 'text' as const, text: 'Review complete.' }
+      else
+        yield createToolCallChunk('set_output', {
+          family: 'reviewer',
+          verdict: 'LOOKS_GOOD',
+          snapshotFingerprint: 'snapshot',
+        })
+      return promptSuccess(`specialist-${calls}`)
+    })
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentType: 'performance-specialist',
+      agentTemplate,
+      agentState: {
+        ...agentState,
+        agentType: 'performance-specialist',
+        stepsRemaining: 10,
+        output: { snapshotFingerprint: 'snapshot' },
+      },
+      localAgentTemplates: { 'performance-specialist': agentTemplate },
+      promptAiSdkStream: stream,
+    })
+    expect(calls).toBe(2)
+    expect(result.output).toMatchObject({
+      value: { family: 'reviewer', verdict: 'LOOKS_GOOD' },
+    })
+  })
+
   // Regression: when the agent simply never calls set_output (no recorded
   // rejection), the retry must fall back to the generic wording.
   it('injects the generic missing-output message when there is no recorded rejection', async () => {
@@ -2420,5 +3292,212 @@ describe('loopAgentSteps', () => {
       .join('\n')
     expect(history).toContain('does not populate structured output')
     expect(history).not.toContain('Your set_output call was rejected')
+  })
+
+  // End-of-stream empty-output retry (ai@5 NoOutputGeneratedError). A provider
+  // that opens a stream, emits zero chunks, and closes cleanly makes
+  // runAgentStep throw with the message-prefixed error ('No output generated
+  // ...'), which historically killed the child with
+  // '{type:'error', message:'Agent run error: ...'} and NO retry even when the
+  // child's committed state was untouched. The loop now retries the same LLM
+  // step at most once, guarded on visible committed state. The mock must throw
+  // from the promptAiSdkStream generator to reproduce the same propagation a
+  // real empty stream has through processStream → runAgentStep → here.
+  const emptyCloseError = () =>
+    new Error('No output generated. Check the stream for errors.')
+  const assertNoErrorOutput = (output: { type?: unknown }) => {
+    expect(output).toBeDefined()
+    expect(output.type).not.toBe('error')
+  }
+
+  it('retries once and succeeds when the stream ends empty with no executed tool call', async () => {
+    setup()
+    let llmCalls = 0
+    const events: any[] = []
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCalls++
+      if (llmCalls === 1) {
+        throw emptyCloseError()
+      }
+      yield { type: 'text' as const, text: 'LLM response\n\n' }
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-retry-success')
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // Exactly one extra attempt for the same step input: max 2 generations.
+    expect(llmCalls).toBe(2)
+    // A CLI-visible retry chunk with the same provider_status field shape the
+    // sdk layer emits for its own retries.
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'provider_status',
+        status: 'retrying',
+        attempt: 2,
+        maxAttempts: 2,
+        delayMs: 1_000,
+      }),
+    )
+    // The step completed with no error output at all.
+    assertNoErrorOutput(result.output)
+  })
+
+  it('surfaces the exact failure output when attempt 2 also ends empty', async () => {
+    setup()
+    let llmCalls = 0
+    const events: any[] = []
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCalls++
+      throw emptyCloseError()
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // Bounded: one extra attempt, then failure — no retry loop.
+    expect(llmCalls).toBe(2)
+    // Upstream failover and parent receipt semantics are unchanged: the exact
+    // today's error envelope is surfaced for the second empty attempt too.
+    expect(result.output).toEqual({
+      type: 'error',
+      message:
+        'Agent run error: No output generated. Check the stream for errors.',
+    })
+    // The failure path is silent beyond what today shows: only the one
+    // retrying chunk from attempt 1 exists, nothing is emitted after the
+    // second empty failure.
+    expect(
+      events.filter((event) => event.type === 'provider_status'),
+    ).toHaveLength(1)
+  })
+
+  it('does not retry when a tool call executed before the empty end', async () => {
+    setup()
+    let llmCalls = 0
+    const events: any[] = []
+    runtimeParams.promptAiSdkStream = mock(async function* () {
+      llmCalls++
+      yield { type: 'text' as const, text: 'Reading the file first.\n' }
+      yield createToolCallChunk('read_files', { paths: ['file1.txt'] })
+      throw emptyCloseError()
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // A tool call DID execute before the failure, so the guard surfaces the
+    // error immediately with NO retry: a retried generation could
+    // double-execute the tool and duplicate its committed state.
+    expect(llmCalls).toBe(1)
+    expect(result.output).toEqual({
+      type: 'error',
+      message:
+        'Agent run error: No output generated. Check the stream for errors.',
+    })
+    expect(
+      events.filter((event) => event.type === 'provider_status'),
+    ).toHaveLength(0)
+    // The executed tool call committed visible state exactly the way the
+    // guard detects it: a tool message for read_files landed in history and
+    // grew it beyond the pre-step length.
+    expect(
+      result.agentState.messageHistory.filter(
+        (message) =>
+          message.role === 'tool' && message.toolName === 'read_files',
+      ).length,
+    ).toBeGreaterThan(0)
+  })
+
+  it('compacts once before the retry when context exceeds 0.7 of the window', async () => {
+    setup()
+    const events: any[] = []
+    // A 200k window puts the 0.7 retry-compaction threshold at 140_000 tokens
+    // while the loop's own semantic trigger stays at 156_000 and the
+    // mechanical ceiling at 176_000, so a ~144k transcript is over the retry
+    // threshold but under every pre-existing compaction path — the ONLY
+    // compacting pass observed here is the one the retry guard triggers.
+    agentTemplate.handleSteps = undefined
+    agentTemplate.spawnableAgents = ['context-pruner']
+    const chunk = 'old evidence '.repeat(500)
+    const chunkTokens = countTokens(chunk)
+    agentState.messageHistory = [
+      userMessage(chunk.repeat(Math.ceil(142_000 / chunkTokens))),
+    ]
+    // The pruner CHILD shares this mock (the compaction spreads the same
+    // params), so the counter must branch by agentId: only the parent's calls
+    // count as step attempts, and the child never throws.
+    let llmCalls = 0
+    runtimeParams.promptAiSdkStream = mock(async function* ({ agentId }) {
+      if (agentId !== 'test-agent') {
+        yield { type: 'text' as const, text: 'Pruner child response.' }
+        return promptSuccess('mock-pruner-child-message')
+      }
+      llmCalls++
+      if (llmCalls === 1) {
+        throw emptyCloseError()
+      }
+      yield { type: 'text' as const, text: 'LLM response\n\n' }
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-after-compact')
+    })
+    let prunerRuns = 0
+    const contextPruner = buildPrunerStub(function* () {
+      prunerRuns++
+      yield {
+        toolName: 'set_messages',
+        input: { messages: retainedMemoryTranscript() },
+        includeToolCall: false,
+      }
+    } as () => StepGenerator)
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentState,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      resolveModelContextWindow: mock(() => 200_000),
+      localAgentTemplates: {
+        'test-agent': agentTemplate,
+        'context-pruner': contextPruner,
+      },
+      onResponseChunk: (event) => events.push(event),
+    })
+
+    // Retry exactness: one extra generation after the failed empty attempt.
+    expect(llmCalls).toBe(2)
+    // Above 0.7 of the window the retry first runs ONE compaction pass via
+    // the existing runtime semantic compaction entry point (pruner ran
+    // exactly once), announced and settled with the run correlation.
+    expect(prunerRuns).toBe(1)
+    const startedEvents = events.filter(
+      (event) =>
+        event.type === 'context_compaction_status' && event.state === 'started',
+    )
+    expect(startedEvents).toHaveLength(1)
+    expect(startedEvents[0]).toMatchObject({
+      runId: expect.any(String),
+      agentId: 'test-agent-id',
+      resolvedContextWindowTokens: 200_000,
+    })
+    // The retried generation then succeeded (no error output), and the
+    // compaction result actually shrank the transcript the second attempt
+    // was sent with.
+    assertNoErrorOutput(result.output)
+    expect(JSON.stringify(result.agentState.messageHistory)).toContain(
+      '<knowledge_memory>',
+    )
   })
 })

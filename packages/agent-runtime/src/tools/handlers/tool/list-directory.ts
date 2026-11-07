@@ -50,12 +50,18 @@ export const handleListDirectory = (async (params: {
 }): Promise<{
   output: CodebuffToolOutput<ToolName>
 }> => {
-  const { previousToolCallFinished, toolCall, requestClientToolCall, agentState } =
-    params
+  const {
+    previousToolCallFinished,
+    toolCall,
+    requestClientToolCall,
+    agentState,
+  } = params
 
   await previousToolCallFinished
   const input = toolCall.input as {
     path?: string
+    offset?: number
+    limit?: number
   }
   const question = buildDiscoveryQuestion(input)
   const recordCoverage = (result: unknown) => {
@@ -77,10 +83,15 @@ export const handleListDirectory = (async (params: {
   }
   // Memory-first check (best-effort, never breaks the call).
   try {
-    if (agentState && typeof agentState === 'object') {
+    if (
+      agentState &&
+      typeof agentState === 'object' &&
+      input.offset === undefined &&
+      input.limit === undefined
+    ) {
       const excerpts = getVerifiedMemoryExcerpts(agentState, {
         limit: 5,
-        maxCharsPerExcerpt: 500,
+        maxCharsPerExcerpt: 2_000,
       })
       const pathPrefixes: string[] = []
       if (typeof input.path === 'string' && input.path.length > 0) {
@@ -95,7 +106,8 @@ export const handleListDirectory = (async (params: {
         workspaceSnapshotId: agentState.workspaceState?.snapshotId,
         existingIndexSnapshotId: agentState.discoveryCoverage?.indexSnapshotId,
       })
-      const reuseSkip = cover.decision === 'skip' && cover.coveringExcerpts.length > 0
+      const reuseSkip =
+        cover.decision === 'skip' && cover.coveringExcerpts.length > 0
       recordMemoryReuse(agentState, {
         tool: 'list_directory',
         decision: reuseSkip ? 'skip' : 'full',
@@ -104,7 +116,9 @@ export const handleListDirectory = (async (params: {
         coveredStableChunkIds: reuseSkip
           ? cover.coveringExcerpts
               .map((entry) => entry.chunkId)
-              .filter((id): id is string => typeof id === 'string' && id.length > 0)
+              .filter(
+                (id): id is string => typeof id === 'string' && id.length > 0,
+              )
           : undefined,
       })
       if (cover.decision === 'skip' && cover.coveringExcerpts.length > 0) {

@@ -105,11 +105,13 @@ describe('specialist agents', () => {
     expect(reviewerOutput.properties.dimensions.required).toContain(
       'manifest_and_lockfile_correctness',
     )
+    // The specialist finding text field is `text` (unified with the
+    // code-reviewer / security-reviewer reviewer-family schemas).
     expect(reviewerOutput.properties.findings.items.required).toEqual([
       'id',
       'severity',
       'dimension',
-      'summary',
+      'text',
       'evidence',
       'correction',
     ])
@@ -118,7 +120,7 @@ describe('specialist agents', () => {
       reviewerOutput.properties.findings.items.properties.evidence.maxItems,
     ).toBe(8)
     expect(
-      reviewerOutput.properties.findings.items.properties.summary.maxLength,
+      reviewerOutput.properties.findings.items.properties.text.maxLength,
     ).toBe(2_000)
     expect(reviewerOutput.properties.reviewedFiles.maxItems).toBe(200)
     expect(reviewerOutput.properties.requirementCoverage.maxItems).toBe(100)

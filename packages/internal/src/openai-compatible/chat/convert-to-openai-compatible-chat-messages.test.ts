@@ -2,6 +2,19 @@ import { describe, it, expect } from 'bun:test'
 
 import { convertToOpenAICompatibleChatMessages } from './convert-to-openai-compatible-chat-messages'
 
+describe('required reasoning replay', () => {
+  it('includes empty reasoning on plain turns and preserves returned reasoning', () => {
+    const messages = convertToOpenAICompatibleChatMessages([
+      { role: 'assistant', content: [{ type: 'text', text: 'First' }] },
+      { role: 'user', content: [{ type: 'text', text: 'Next' }] },
+      { role: 'assistant', content: [{ type: 'reasoning', text: 'Thought' }, { type: 'text', text: 'Answer' }] },
+    ], { reasoningReplay: true })
+    expect(messages[0]).toMatchObject({ role: 'assistant', reasoning_content: '' })
+    expect(messages[2]).toMatchObject({ role: 'assistant', reasoning_content: 'Thought' })
+    expect(JSON.stringify(convertToOpenAICompatibleChatMessages([{ role: 'assistant', content: [{ type: 'text', text: 'First' }] }]))).not.toContain('reasoning_content')
+  })
+})
+
 describe('user messages', () => {
   it('omits empty system messages', () => {
     expect(

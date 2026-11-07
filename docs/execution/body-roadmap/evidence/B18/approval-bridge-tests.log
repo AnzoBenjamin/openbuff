@@ -1,0 +1,22 @@
+bun test v1.3.5 (1e86cebd)
+
+sdk/src/__tests__/serve-approval-bridge.test.ts:
+Using environment: test
+(pass) serve approval bridge > [B18] forwards the captured command and every compound effect for approval [11.00ms]
+(pass) serve approval bridge > [B18] discloses capped command display while retaining exact identity and later effects [3.00ms]
+(pass) serve approval bridge > GV-21: sanitizes control/bidi/zero-width chars and caps title [1.00ms]
+(pass) serve approval bridge > GV-22: allow_always / proceed_always / reject_once / cancelled all resolve false [1.00ms]
+(pass) serve approval bridge > GV-22 positive: selected allow_once resolves true
+(pass) serve approval bridge > GV-23: disconnect/cancel mid-approval resolves false AND aborts the run
+(pass) serve approval bridge > GV-24: a duplicate/late response after resolution is ignored [1.00ms]
+(pass) serve approval bridge > terminal error event answers the prompt with -32603 openbuff.dev message [2.00ms]
+(pass) serve approval bridge > an auto-recovering error event does NOT surface a terminal error
+(pass) serve approval bridge > §5 production path: a per-turn reverseRequests seam drives session/request_permission [1.00ms]
+(pass) serve approval bridge > §5 stays fail-closed when neither a per-turn nor a static seam exists
+(pass) serve approval bridge > §4.2 ask_user: per-turn elicitation/form capability drives elicitation/create [1.00ms]
+(pass) serve approval bridge > §4.2 ask_user: no per-turn seam yields the skipped result (fail closed) [1.00ms]
+
+ 13 pass
+ 0 fail
+ 44 expect() calls
+Ran 13 tests across 1 file. [327.00ms]

@@ -54,7 +54,12 @@ const deriveTone = (summary: CompletionSummary): Tone => {
   ) {
     return 'error'
   }
-  if (hasRolledBack || isWarningVerdict) {
+  if (
+    hasRolledBack ||
+    isWarningVerdict ||
+    summary.hooksUnknown ||
+    (!summary.reviewVerdict && summary.reviewHistory?.length)
+  ) {
     return 'warning'
   }
   const hasSuccess =
@@ -123,7 +128,8 @@ export const CompletionSummaryBox = memo(
     const hasHooks =
       summary.hooksPassed > 0 ||
       summary.hooksFailed > 0 ||
-      summary.hooksSkipped > 0
+      summary.hooksSkipped > 0 ||
+      (summary.hooksUnknown ?? 0) > 0
     const hasTests = summary.testPassed > 0 || summary.testFailed > 0
     const hasAux = summary.auxiliaryCompleted > 0 || summary.auxiliaryFailed > 0
 
@@ -135,7 +141,12 @@ export const CompletionSummaryBox = memo(
         : summary.filesRolledBack > 0
           ? 'warning'
           : 'success'
-    const hooksTone: Tone = summary.hooksFailed > 0 ? 'error' : 'success'
+    const hooksTone: Tone =
+      summary.hooksFailed > 0
+        ? 'error'
+        : summary.hooksUnknown
+          ? 'warning'
+          : 'success'
     const testsTone: Tone = summary.testFailed > 0 ? 'error' : 'success'
     const auxTone: Tone = summary.auxiliaryFailed > 0 ? 'error' : 'success'
 
@@ -159,6 +170,8 @@ export const CompletionSummaryBox = memo(
       if (summary.hooksFailed > 0) parts.push(`${summary.hooksFailed} failed`)
       if (summary.hooksSkipped > 0)
         parts.push(`${summary.hooksSkipped} skipped`)
+      if (summary.hooksUnknown)
+        parts.push(`${summary.hooksUnknown} outcome unknown`)
       return parts.join(', ')
     }
     const buildTestsText = (): string => {
@@ -201,6 +214,13 @@ export const CompletionSummaryBox = memo(
             label={ROW_LABELS.review}
             value={summary.reviewVerdict}
             tone={reviewTone}
+          />
+        ) : null}
+        {!summary.reviewVerdict && summary.reviewHistory?.length ? (
+          <SummaryRow
+            label="Review"
+            value="Earlier review predates the latest captured edit · Inspect for prior verdicts"
+            tone="warning"
           />
         ) : null}
         {hasTests ? (

@@ -1,0 +1,12 @@
+bun test v1.3.5 (1e86cebd)
+
+sdk/src/__tests__/provider-contract-regressions.test.ts:
+[openbuff] Loaded provider config from:
+  - /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/tmp/b08-provider-contract-JRm5lT/provider.json
+(pass) [B08] actual provider contracts > vision failover retains the actual route in status and analytics [83.00ms]
+
+ 1 pass
+ 9 filtered out
+ 0 fail
+ 10 expect() calls
+Ran 1 test across 1 file. [781.00ms]

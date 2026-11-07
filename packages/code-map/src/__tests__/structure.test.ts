@@ -1,6 +1,34 @@
 import { describe, expect, test } from 'bun:test'
 
-import { parseFileStructure } from '../structure'
+import {
+  buildQualifiedName,
+  buildQualifiedNames,
+  parseFileStructure,
+} from '../structure'
+import type { SymbolRange } from '../structure'
+
+describe('batch qualified names', () => {
+  test('matches individual lookups with overlapping, nested, equal and unsorted ranges', () => {
+    let seed = 19
+    const next = () => (seed = (seed * 1664525 + 1013904223) >>> 0)
+    const symbols: SymbolRange[] = Array.from({ length: 300 }, (_, index) => {
+      const startLine = (next() % 40) + 1
+      return {
+        name: `symbol${index}`,
+        kind: 'function',
+        startLine,
+        endLine: startLine + (next() % 30),
+        depth: next() % 5,
+      }
+    })
+    // Equal-range duplicates and equal-sort keys keep original stable order.
+    symbols.push({ ...symbols[0], name: 'duplicate' })
+    expect(buildQualifiedNames(symbols)).toEqual(
+      symbols.map((symbol) => buildQualifiedName(symbols, symbol)),
+    )
+    expect(buildQualifiedNames([])).toEqual([])
+  })
+})
 
 describe('parseFileStructure', () => {
   test('captures top-level const arrow/function definitions (exported and not)', async () => {
@@ -464,5 +492,51 @@ describe('parseFileStructure', () => {
     if (syms !== null) {
       expect(syms).toEqual([])
     }
+  })
+
+  test('assigns sibling depths without nesting (interval-stack sweep)', async () => {
+    const src = [
+      'class A {', // 1
+      '  m1() {', // 2
+      '    return 1', // 3
+      '  }', // 4
+      '  m2() {', // 5
+      '    return 2', // 6
+      '  }', // 7
+      '}', // 8
+      'function top1() { return 1 }', // 9
+      'function top2() { return 2 }', // 10
+    ].join('\n')
+
+    const syms = (await parseFileStructure(src, 'x.ts')) ?? []
+    const byName = Object.fromEntries(syms.map((s) => [s.name, s]))
+    expect(byName.A).toMatchObject({ kind: 'class', depth: 0 })
+    // Sequential siblings inside the class each sit at depth 1; a broken
+    // containment sweep would nest m2 inside m1's already-closed interval.
+    expect(byName.m1).toMatchObject({ kind: 'method', depth: 1 })
+    expect(byName.m2).toMatchObject({ kind: 'method', depth: 1 })
+    expect(byName.top1).toMatchObject({ kind: 'function', depth: 0 })
+    expect(byName.top2).toMatchObject({ kind: 'function', depth: 0 })
+  })
+
+  test('assigns transitive depths through class > method > inner function', async () => {
+    const src = [
+      'class Outer {', // 1
+      '  run() {', // 2
+      '    function inner() {', // 3
+      '      return 1', // 4
+      '    }', // 5
+      '    return inner()', // 6
+      '  }', // 7
+      '}', // 8
+    ].join('\n')
+
+    const syms = (await parseFileStructure(src, 'x.ts')) ?? []
+    const byName = Object.fromEntries(syms.map((s) => [s.name, s]))
+    expect(byName.Outer).toMatchObject({ kind: 'class', depth: 0 })
+    expect(byName.run).toMatchObject({ kind: 'method', depth: 1 })
+    // inner's nearest container is `run` (a method, not a method-container
+    // kind), so it keeps the plain `function` kind at depth 2.
+    expect(byName.inner).toMatchObject({ kind: 'function', depth: 2 })
   })
 })

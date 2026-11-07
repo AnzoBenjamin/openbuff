@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 1,
+  "type": "read_only_publication_inventory",
+  "author": "/root/b04_lock_cas",
+  "liveLedger": {
+    "path": "docs/execution/body-roadmap/ledger.json",
+    "sha256": "108ed649f9f89f7a767651382f8966d5fdd2a16b50d4d1f43551e7548a833758"
+  },
+  "validator": {
+    "path": "docs/execution/body-roadmap/validate-ledger.py",
+    "sha256": "6aa69375eeeae93f4850a6a068e1c17d39ba08b7a7b4d14c8ebe10e552d36c4c"
+  },
+  "inventoryCounts": {
+    "requiredFiles": 2644,
+    "directFiles": 2458,
+    "archiveFiles": 183,
+    "contextRestoreFiles": 3,
+    "ignoredDirectLogs": 165
+  },
+  "allDestinationsRepositoryRelative": true,
+  "allRequiredCurrentHashesMatch": true,
+  "allLiteralValidatorDependenciesIncluded": true,
+  "directArchiveContextAreDisjointCompletePartition": true,
+  "missingOrAmbiguousRequiredBinding": false,
+  "archiveWritten": false,
+  "stagedCommittedPushed": false,
+  "changedExistingEvidenceProductValidatorLedger": false,
+  "artifacts": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/README.md",
+      "sha256": "08703ced0c852019b4f58c71fd49a4510c0de7596e942c85f248d1c459441281",
+      "bytes": 7818
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/final-summary.json",
+      "sha256": "9ad866ee50fa24dd559d066ead08f846991771abf788596fe0c271d835429215",
+      "bytes": 2301
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/curated-required-files.json",
+      "sha256": "f12426acfb0e68b64a584a08a46ed830a305f3045cdf7bf02c6ffda5f07f5731",
+      "bytes": 2165517
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/curated-archive-requirements.json",
+      "sha256": "1a34e5454b052bc9e2fd52a2c91eac5b8d87c1f9daf35d40f3f7db4d626eca3b",
+      "bytes": 282956
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/curated-direct-files.nul",
+      "sha256": "2385d132fb76ef60885dcb0876ab6dbf8944a7fed6e079769fa13d1bba388594",
+      "bytes": 234491
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/curated-archive-files.nul",
+      "sha256": "10820f5a9a7c79d618ec35ccbd6f051eb3fb694aa96328b4d4dd9c0430ee8a6a",
+      "bytes": 24882
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/context-restoration-files.nul",
+      "sha256": "f517688588d97dafcb63ff242dd51016afff2fb2d1620d210c3bbcca91cddaa7",
+      "bytes": 110
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/force-stage-logs.nul",
+      "sha256": "3846853ab53f2352038a6b439b141eacbf9c91cf5e78c1d8a0d27369cac655a1",
+      "bytes": 16157
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/required-files.nul",
+      "sha256": "17fccb1b9db4bb3e2d5496f1f3bcc484dd79441c5cf0dfb4342522caa611cc44",
+      "bytes": 259483
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/ordinary-doc-companions.nul",
+      "sha256": "de77beaef208b9f2b31faa64c09ddc2ee44e73ce6ecf0e1bfadafc094679e3d2",
+      "bytes": 173
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/external-context-paths.final.json",
+      "sha256": "6ed4d6d04965f79d8844d42e15944dd5453ae539a55fa5a29363a213a3098230",
+      "bytes": 30031
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/context-and-exclusions.json.gz",
+      "sha256": "dc728254bdb40023090614de140064d86e1e150e5f1d365e44d4188541d2ac0a",
+      "bytes": 472601
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/validator-reference-trace-v2.json.gz",
+      "sha256": "2a51f7235d6fe49dc80c64b45d4b680a24e01b567e4d3efb5578eefe76ddd462",
+      "bytes": 2603725
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/trace-validator.py",
+      "sha256": "fcacf1f4d74a3bb67718ec5b5fb6e10e80a3a5ce57bd5fd5eaa45d2be36491f4",
+      "bytes": 4178
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/build-inventory.py",
+      "sha256": "e26696b82a5be35d83a8a7c3d0faf09b1fa51453e5a82d667edb70772c7a4080",
+      "bytes": 14475
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/curate-final.py",
+      "sha256": "10e14390045da7c5649b06d58f67f71b673e2e3779645b8e011cec77a84a9bb9",
+      "bytes": 8907
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/inventory-artifacts.nul",
+      "sha256": "3ce64c49e094b9a35ba2b50c9771ec6097a2d350368760cb16350012a840f96d",
+      "bytes": 1478
+    }
+  ],
+  "excludedLocalWorkingIntermediates": [
+    "validator-reference-trace.json",
+    "required-files.json",
+    "ignored-required-files.json",
+    "archive-requirements.json",
+    "context-and-exclusions.json",
+    "summary.json",
+    "direct-publication-files.nul",
+    "required-archive-files.nul",
+    "external-context-paths.json"
+  ],
+  "scope": "Dependency inventory and exact-byte preservation recommendation only. Root owns archive/rehydrator implementation and fresh-checkout validation.",
+  "sealedAt": "2026-11-06T22:31:23.901258+00:00"
+}

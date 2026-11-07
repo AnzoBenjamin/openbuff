@@ -1,0 +1,34 @@
+{
+  "runtime": {
+    "bun": "1.3.14",
+    "platform": "linux"
+  },
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "root": "/tmp/openbuff-body-review-2026-11-05/evidence/08-fixtures/sweep-cadence-CnuQtM",
+  "elapsedClockMs": 720000,
+  "safetyAgeMs": 300000,
+  "oldSiblingHash": "a132b4f812ee58e84e7a7166dcac2559a1c3570085a2bb6953f3a1aa8b4635eb",
+  "diskSiblingHash": "8046c6d96b24cd58faab5a3894ac38823ab873d345c887215f287840f48e2c67",
+  "finalSiblingHash": "a132b4f812ee58e84e7a7166dcac2559a1c3570085a2bb6953f3a1aa8b4635eb",
+  "finalStatus": "ready",
+  "revisions": [
+    {
+      "elapsedSinceFullBuildMs": 240000,
+      "snapshotBuiltAt": 1700000240000,
+      "indexAge": 0,
+      "siblingHash": "a132b4f812ee58e84e7a7166dcac2559a1c3570085a2bb6953f3a1aa8b4635eb"
+    },
+    {
+      "elapsedSinceFullBuildMs": 480000,
+      "snapshotBuiltAt": 1700000480000,
+      "indexAge": 0,
+      "siblingHash": "a132b4f812ee58e84e7a7166dcac2559a1c3570085a2bb6953f3a1aa8b4635eb"
+    },
+    {
+      "elapsedSinceFullBuildMs": 720000,
+      "snapshotBuiltAt": 1700000720000,
+      "indexAge": 0,
+      "siblingHash": "a132b4f812ee58e84e7a7166dcac2559a1c3570085a2bb6953f3a1aa8b4635eb"
+    }
+  ]
+}

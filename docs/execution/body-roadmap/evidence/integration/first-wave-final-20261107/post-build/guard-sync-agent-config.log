@@ -1,0 +1,2 @@
+$ bun run sync-agent-config.ts
+Agent config sync guard passed: all 4 canonical config files are consistent with repo structure.

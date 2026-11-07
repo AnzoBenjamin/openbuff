@@ -1,5 +1,12 @@
 import { editTransactionParams } from '@codebuff/common/tools/params/tool/edit-transaction'
-import { decodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
+import {
+  buildReadFilesResultV1,
+  fileMutationResultV1Schema,
+} from '@codebuff/common/tools/results/filesystem'
+import {
+  decodeReadCapabilityToken,
+  getExactContentHash,
+} from '@codebuff/common/util/content-hash'
 import { describe, expect, it } from 'bun:test'
 
 import { handleEditTransaction } from '../tools/handlers/tool/edit-transaction'
@@ -251,6 +258,121 @@ describe('read_files edit-state recovery', () => {
       expect(value.errorMessage ?? '').not.toContain(
         'capability-bearing edits require a nonempty authoritative projectId and runId',
       )
+    }
+  })
+
+  it('mints no editAnchor instead of throwing when the authoritative scope is empty', async () => {
+    const path = 'src/empty-scope-read.ts'
+    const diskContent = 'line 1\nline 2\n'
+    const rangeSourceContent = 'line 1\nline 2'
+    const symbolPath = 'src/empty-scope-symbols.ts'
+    const symbolContent = 'export function target() {\n  return 1\n}\n'
+    const fileProcessingState = createFileProcessingState()
+
+    // No fileContext/runId: projectId and runId both resolve to '', which
+    // hasAuthoritativeReadCapabilityScope rejects. Every anchor-minting branch
+    // must then degrade to "no editAnchor" instead of letting
+    // encodeReadCapabilityToken throw out of the read_files handler.
+    const fileResult = await handleReadFiles({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'empty-scope-whole-file-read',
+        toolName: 'read_files',
+        input: { paths: [path] },
+      },
+      fileProcessingState,
+      requestFiles: async () =>
+        buildWholeFileReadResultV1([path], () => diskContent),
+      logger,
+    } as any)
+
+    expect(fileResult.output[0]?.type).toBe('json')
+    if (fileResult.output[0]?.type === 'json') {
+      const value = fileResult.output[0].value as any
+      expect(value.results[0]).toMatchObject({
+        selector: 'file',
+        path,
+        status: 'ok',
+        complete: true,
+        content: diskContent,
+      })
+      expect(value.results[0].editAnchor).toBeUndefined()
+    }
+
+    const rangeResult = await handleReadFiles({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'empty-scope-complete-range-read',
+        toolName: 'read_files',
+        input: { ranges: [{ path, startLine: 1, endLine: 2 }] },
+      },
+      fileProcessingState,
+      requestFiles: async () =>
+        buildReadFilesResultV1([
+          {
+            selector: 'range',
+            requestIndex: 0,
+            path,
+            status: 'ok',
+            content: `[RANGE_BLOCK ${path} lines 1..2]\n1\tline 1\n2\tline 2`,
+            sourceContent: rangeSourceContent,
+            startLine: 1,
+            endLine: 2,
+            totalLines: 2,
+            complete: true,
+            editAnchor: {
+              startLine: 1,
+              endLine: 2,
+              contentHash: getContentHash(rangeSourceContent),
+              readCapability: 'cap.v3.upstream-scope-token',
+            },
+          },
+        ]),
+      logger,
+    } as any)
+
+    expect(rangeResult.output[0]?.type).toBe('json')
+    if (rangeResult.output[0]?.type === 'json') {
+      const value = rangeResult.output[0].value as any
+      expect(value.results[0]).toMatchObject({
+        selector: 'range',
+        path,
+        status: 'ok',
+        startLine: 1,
+        endLine: 2,
+        complete: true,
+      })
+      expect(value.results[0].editAnchor).toBeUndefined()
+    }
+
+    // The symbols selector mints slice capabilities through the same issuer, so
+    // an empty scope must not surface one there either.
+    const symbolResult = await handleReadFiles({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: {
+        toolCallId: 'empty-scope-symbol-read',
+        toolName: 'read_files',
+        input: { symbols: [{ path: symbolPath, names: ['target'] }] },
+      },
+      fileProcessingState,
+      requestFiles: async () => buildWholeFileReadResultV1([], () => null),
+      requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+        filePath === symbolPath ? symbolContent : null,
+      logger,
+    } as any)
+
+    expect(symbolResult.output[0]?.type).toBe('json')
+    if (symbolResult.output[0]?.type === 'json') {
+      const value = symbolResult.output[0].value as any
+      expect(value.results[0]).toMatchObject({
+        selector: 'symbols',
+        path: symbolPath,
+      })
+      expect(value.results[0].slices?.length ?? 0).toBeGreaterThan(0)
+      for (const slice of value.results[0].slices ?? []) {
+        expect(slice.editAnchor).toBeUndefined()
+        expect(slice.readCapability).toBeUndefined()
+      }
     }
   })
 
@@ -971,9 +1093,9 @@ describe('read_files edit-state recovery', () => {
       expect(
         fileProcessingState.failedEditRequiresReadByPath[otherPath],
       ).toBeFalsy()
-      expect(hasWholeFileReadAuthorization(fileProcessingState, otherPath)).toBe(
-        true,
-      )
+      expect(
+        hasWholeFileReadAuthorization(fileProcessingState, otherPath),
+      ).toBe(true)
       expect(result.output[0]?.type).toBe('json')
       if (result.output[0]?.type === 'json') {
         const value = result.output[0].value as {
@@ -1716,118 +1838,177 @@ describe('read_files edit-state recovery', () => {
       }
     })
 
-    it('confirmed move grants sticky auth and a post-edit anchor on the destination path', async () => {
-      const path = 'src/move-anchor-src.ts'
-      const destinationPath = 'src/move-anchor-dest.ts'
-      const createdContent = 'export const v = 1\n'
-      const runId = 'move-anchor-rekey-strict-run'
-      const fileProcessingState = createFileProcessingState()
-      fileProcessingState.strictReadBeforeEdit = true
+    it.each([
+      'confirmed',
+      'missing-source-deletion',
+      'mismatched-destination-hash',
+    ] as const)(
+      'confirmed move grants destination authority only for retained forward evidence (%s)',
+      async (confirmation) => {
+        const path = 'src/move-anchor-src.ts'
+        const destinationPath = 'src/move-anchor-dest.ts'
+        const createdContent = 'export const v = 1\n'
+        const runId = 'move-anchor-rekey-strict-run'
+        const fileProcessingState = createFileProcessingState()
+        fileProcessingState.strictReadBeforeEdit = true
 
-      const createResult = await handleEditTransaction({
-        ...defaultTestHandlerAuthority,
-        previousToolCallFinished: Promise.resolve(),
-        toolCall: {
-          toolCallId: 'create-move-anchor-src',
-          toolName: 'edit_transaction',
-          input: {
-            edits: [
-              {
-                type: 'create',
-                path,
-                content: createdContent,
-              },
-            ],
+        const createResult = await handleEditTransaction({
+          ...defaultTestHandlerAuthority,
+          previousToolCallFinished: Promise.resolve(),
+          toolCall: {
+            toolCallId: 'create-move-anchor-src',
+            toolName: 'edit_transaction',
+            input: {
+              edits: [
+                {
+                  type: 'create',
+                  path,
+                  content: createdContent,
+                },
+              ],
+            },
           },
-        },
-        fileProcessingState,
-        fileContext: mockFileContext,
-        runId,
-        logger,
-        requestOptionalFile: async () => null,
-        requestClientToolCall: async (toolCall: any) =>
-          confirmedMutationOutput(
-            toolCall,
-            { [path]: createdContent },
-            { projectId: mockFileContext.projectRoot, runId },
-          ),
-      } as any)
+          fileProcessingState,
+          fileContext: mockFileContext,
+          runId,
+          logger,
+          requestOptionalFile: async () => null,
+          requestClientToolCall: async (toolCall: any) =>
+            confirmedMutationOutput(
+              toolCall,
+              { [path]: createdContent },
+              { projectId: mockFileContext.projectRoot, runId },
+            ),
+        } as any)
 
-      const createOutput = createResult.output[0]
-      expect(createOutput.type).toBe('json')
-      if (createOutput.type === 'json') {
-        expect(createOutput.value).not.toHaveProperty('errorMessage')
-      }
+        const createOutput = createResult.output[0]
+        expect(createOutput.type).toBe('json')
+        if (createOutput.type === 'json') {
+          expect(createOutput.value).not.toHaveProperty('errorMessage')
+        }
 
-      // A confirmed move populates wholeFileContentByPath[destinationPath] from
-      // the runtime-known source bytes and confirmationPaths includes the
-      // destination, so commitAppliedEditPaths must re-key BOTH the sticky
-      // whole-file authorization AND the confirmed post-edit anchor onto the
-      // destination path (getPositiveApplicationEvidence uses
-      // action.destinationPath ?? action.path as the anchor target).
-      let applied = false
-      const moveResult = await handleEditTransaction({
-        ...defaultTestHandlerAuthority,
-        previousToolCallFinished: Promise.resolve(),
-        toolCall: {
-          toolCallId: 'move-anchor-rekey',
-          toolName: 'edit_transaction',
-          input: {
-            edits: [
-              {
-                type: 'move',
-                path,
-                destinationPath,
-              },
-            ],
+        // Both exact postconditions must survive: source deletion and the
+        // destination bytes. A legacy destination-only receipt is insufficient.
+        let applied = false
+        const moveResult = await handleEditTransaction({
+          ...defaultTestHandlerAuthority,
+          previousToolCallFinished: Promise.resolve(),
+          toolCall: {
+            toolCallId: 'move-anchor-rekey',
+            toolName: 'edit_transaction',
+            input: {
+              edits: [
+                {
+                  type: 'move',
+                  path,
+                  destinationPath,
+                },
+              ],
+            },
           },
-        },
-        fileProcessingState,
-        fileContext: mockFileContext,
-        runId,
-        logger,
-        requestOptionalFile: async ({ filePath }: { filePath: string }) =>
-          filePath === path
-            ? createdContent
-            : filePath === destinationPath
-              ? null
-              : null,
-        requestClientToolCall: async (toolCall: any) => {
-          applied = true
-          return confirmedMutationOutput(
-            toolCall,
-            { [destinationPath]: createdContent },
-            { projectId: mockFileContext.projectRoot, runId },
-          )
-        },
-      } as any)
+          fileProcessingState,
+          fileContext: mockFileContext,
+          runId,
+          logger,
+          requestOptionalFile: async ({ filePath }: { filePath: string }) =>
+            filePath === path
+              ? createdContent
+              : filePath === destinationPath
+                ? null
+                : null,
+          requestClientToolCall: async (toolCall: any) => {
+            applied = true
+            const output = confirmedMutationOutput(
+              toolCall,
+              { [destinationPath]: createdContent },
+              { projectId: mockFileContext.projectRoot, runId },
+            )
+            const mutation = output[0].value
+            const forward = {
+              outcome: 'applied' as const,
+              afterHashes: {
+                [path]: null,
+                [destinationPath]: getExactContentHash(createdContent),
+              },
+            }
+            const confirmed = fileMutationResultV1Schema.parse({
+              ...mutation,
+              actions: mutation.actions.map((action) => ({
+                ...action,
+                forward,
+              })),
+              authorityReceipt: {
+                ...mutation.authorityReceipt,
+                actions: mutation.authorityReceipt.actions.map((action) => ({
+                  ...action,
+                  forward,
+                })),
+                finalHashes: { ...forward.afterHashes },
+              },
+            })
+            if (confirmation === 'missing-source-deletion') {
+              delete confirmed.authorityReceipt!.finalHashes[path]
+            } else if (confirmation === 'mismatched-destination-hash') {
+              // Same-length different bytes must not inherit the original anchor.
+              confirmed.authorityReceipt!.finalHashes[destinationPath] =
+                getExactContentHash('export const v = 2\n')
+            }
+            return [{ type: 'json' as const, value: confirmed }]
+          },
+        } as any)
 
-      expect(applied).toBe(true)
-      const moveOutput = moveResult.output[0]
-      expect(moveOutput.type).toBe('json')
-      if (moveOutput.type === 'json') {
-        expect(moveOutput.value).not.toHaveProperty('errorMessage')
-      }
+        expect(applied).toBe(true)
+        const moveOutput = moveResult.output[0]
+        expect(moveOutput.type).toBe('json')
+        if (moveOutput.type === 'json') {
+          expect(moveOutput.value).not.toHaveProperty('errorMessage')
+        }
 
-      // The confirmed post-edit anchor is re-keyed to the DESTINATION (not the
-      // now-deleted source), minted from the runtime-known source bytes.
-      const destinationAnchor =
-        fileProcessingState.confirmedPostEditAnchorsByPath?.[destinationPath]
-      expect(destinationAnchor).toBeDefined()
-      expect(destinationAnchor?.contentHash).toBe(
-        getContentHash(createdContent),
-      )
-      expect(destinationAnchor?.readCapability).toMatch(/^cap\.v3\./)
+        if (confirmation !== 'confirmed') {
+          expect(
+            fileProcessingState.confirmedPostEditAnchorsByPath?.[
+              destinationPath
+            ],
+          ).toBeUndefined()
+          expect(
+            fileProcessingState.readAuthorizationsByPath?.[destinationPath],
+          ).not.toBe(true)
+          expect(
+            fileProcessingState.readAuthorizationHashesByPath?.[
+              destinationPath
+            ],
+          ).toBeUndefined()
+          expect(
+            moveResult.output.some(
+              (part) =>
+                part.type === 'json' &&
+                typeof (part.value as { errorMessage?: string })
+                  .errorMessage === 'string',
+            ),
+          ).toBe(true)
+          return
+        }
 
-      // Sticky whole-file authorization + hash are also granted on the
-      // destination path.
-      expect(
-        fileProcessingState.readAuthorizationsByPath?.[destinationPath],
-      ).toBe(true)
-      expect(
-        fileProcessingState.readAuthorizationHashesByPath?.[destinationPath],
-      ).toBe(getContentHash(createdContent))
-    })
+        // The confirmed post-edit anchor is re-keyed to the DESTINATION (not the
+        // now-deleted source), minted from the runtime-known source bytes.
+        const destinationAnchor =
+          fileProcessingState.confirmedPostEditAnchorsByPath?.[destinationPath]
+        expect(destinationAnchor).toBeDefined()
+        expect(destinationAnchor?.contentHash).toBe(
+          getContentHash(createdContent),
+        )
+        expect(destinationAnchor?.readCapability).toMatch(/^cap\.v3\./)
+
+        // Sticky whole-file authorization + hash are also granted on the
+        // destination path.
+        expect(
+          fileProcessingState.readAuthorizationsByPath?.[destinationPath],
+        ).toBe(true)
+        expect(
+          fileProcessingState.readAuthorizationHashesByPath?.[destinationPath],
+        ).toBe(getContentHash(createdContent))
+      },
+    )
 
     it('cross-turn hydration remints the confirmed post-edit anchor with sticky auth', async () => {
       const path = 'src/cross-turn.ts'

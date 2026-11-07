@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-remote-ci-repair-scope-seal",
+  "recordedAt": "2026-11-07T00:22:34.539930+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "scope": "Read-only binding and minimum-renewal scope for guard/test/Rust workflow before edits; no implementation approval or new card acceptance.",
+  "ledgerSha256": "64bdc49206f2e3efad0393dad82048134c4403e43bef8bdb26696251bbf7b07b",
+  "files": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-scope/SCOPE.md",
+      "sha256": "2d27027c6900b3ec57fc8c4f07e23ab724e2c6776c38f9a8d8632a55232a4621",
+      "bytes": 3335
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-scope/active-bindings.json",
+      "sha256": "fa4f302c36614a3778fd97a3b5509806541f5141b7907e71c01fe9aaac71f16f",
+      "bytes": 30346
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-scope/renewal-map.json",
+      "sha256": "2a5279ef837cc6c46cc4d4f99e8a4e458c54f021c7e1b51cb88b094f97226c4e",
+      "bytes": 9145
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-scope/observe-bindings.py",
+      "sha256": "aedc84d07b796a2756e6492fcb5b7242e5f099a50d28f4bf1421eadbfe0168ec",
+      "bytes": 4602
+    }
+  ]
+}

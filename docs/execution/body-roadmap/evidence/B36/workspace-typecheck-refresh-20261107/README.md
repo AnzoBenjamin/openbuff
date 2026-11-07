@@ -1,0 +1,9 @@
+# B36 final workspace-typecheck contextual refresh
+
+The latest `workspace-typecheck-refresh/review.json` is the starting independent authority. Its 15 exact source contracts, dependency/config hashes, oracle/artifact seals and 2 unchanged scoped command maps remain current. The original scope/owners and implementation limits are preserved. No scoped product control was rerun.
+
+Only the broad workspace command is superseded. Its historical map and the initial `first-wave-final-20261107/typecheck.json` remain immutable. This reviewer independently inspected the final raw root command, its log, pinned Bun binary, argv/cwd/timing, equal before/after maps and current hashes. The log records all eleven workspace scripts exit zero. The normalized command preserves the actual 182-input map exactly, including all six B30 comparison repair paths and the new comparator test; no old 180/1309-input map was grafted onto it. Contract paths outside that raw map are ["sdk/src/__tests__/node-filesystem.test.ts"]; current original behavior receipts bind those paths.
+
+Raw hash/typecheck observation of reviewer-authored B30 files is contextual only: this envelope approves no B30 implementation. Original gate-files fixture and other-card context exclusions remain. Older B01 tail/store/specialist, B36 historical 188-test/postimage and native/installed/provider/OS scopes stay as defined by the original independent authority.
+
+`approval.json` is new original typed independent authority; normalized `review.json` hash-references it and matches canonical scope/source/command fields. The same 3 current commands must remain required exactly once. Actual behavior oracle artifacts remain attached directly. Production, repository tests, old evidence and the real ledger were not edited. The unchanged strict validator is used only in a synthetic format harness, conferring no actual roadmap/prerequisite acceptance.

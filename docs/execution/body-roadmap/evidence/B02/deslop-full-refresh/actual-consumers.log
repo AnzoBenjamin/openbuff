@@ -1,0 +1,4 @@
+Using environment: test
+[openbuff] Loaded provider config from:
+  - /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers/f7c2b260-dc18-4f8e-8ec9-6eab25238556/providers.json
+{"cases":9,"providerCalls":0,"evidenceDir":"/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/actual-consumers"}

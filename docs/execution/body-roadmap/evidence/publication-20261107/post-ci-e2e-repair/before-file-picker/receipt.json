@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "type": "file-picker-ci-fixture-control",
+  "mode": "before-file-picker",
+  "argv": [
+    "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+    "--no-env-file",
+    "test",
+    "--preload",
+    "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/offline-test-preload.ts",
+    "/home/ben/Code/CLI/openbuff/agents/e2e/file-explorer.e2e.test.ts"
+  ],
+  "cwd": "/home/ben/Code/CLI/openbuff/agents",
+  "startedAt": "2026-11-07T00:06:34.279302+00:00",
+  "finishedAt": "2026-11-07T00:06:35.805287+00:00",
+  "elapsedSeconds": 1.5259860410005786,
+  "exitCode": 1,
+  "sourceBefore": {
+    "agents/e2e/file-explorer.e2e.test.ts": "b7ac93cac7f1fd2e1d38334ffaf483c473b9e1e5cb7b1a97a1f78c2238d8c48b",
+    "agents/file-explorer/file-picker.ts": "cfb0efc4636970913f322843b39b73cc15dd5b9b0345aa184cd95fe3a99aba3c",
+    "agents/file-explorer/file-lister.ts": "267094240cb24bff85384be715275bc80affa8548c8276c51731a30dfccf6277",
+    "sdk/e2e/utils/e2e-mocks.ts": "0f9872031263c24df95313b9c3962e8b352c60c3b4fe11482ff76725ac672463",
+    "sdk/dist/index.mjs": "a46983f704534eec4157103e66faa32bbf0b9474ac3484e026626c1ad7015f57",
+    "sdk/src/provider-config.ts": "6a659575360e14a8fba319cf6e7e406faa8505d681342a6911835bc870dd8922",
+    "sdk/src/impl/model-provider.ts": "2e14b4aa5534c0e8761b16c234eca300052f4419178ed3ab1d3137af82b2c11e",
+    "sdk/test/setup-env.ts": "b35421460c294edd9b966f29775f089c6311957e16b2bb3ab549abd7ec54d800",
+    "package.json": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8",
+    "agents/package.json": "40afe33da8f72c1027973c8e4006d3538394a770c67cb5af499701b299960ef8",
+    "sdk/package.json": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d",
+    "bun.lock": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6",
+    "bunfig.toml": "48a8b5826d7b001640f0e0f82cf8f612405c6e56080fa182d239e56d5b8a8505",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/record-file-picker.py": "65dc88c37616e082a32617936b6f26d2fb846d6d4e40ee0b6a1e8e2a36e771f9",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/file-picker-diagnostic.ts": "d9da67b1eb9bc87cce9591f926093065d01bfcfdd2b7dd5164dc64af5429dd26",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/offline-test-preload.ts": "6aff5ff5063936591f4fd308a0e9b614a515395eea7043d8b2b37b5e8bbd86f4",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/provider-config.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+  },
+  "sourceAfter": {
+    "agents/e2e/file-explorer.e2e.test.ts": "b7ac93cac7f1fd2e1d38334ffaf483c473b9e1e5cb7b1a97a1f78c2238d8c48b",
+    "agents/file-explorer/file-picker.ts": "cfb0efc4636970913f322843b39b73cc15dd5b9b0345aa184cd95fe3a99aba3c",
+    "agents/file-explorer/file-lister.ts": "267094240cb24bff85384be715275bc80affa8548c8276c51731a30dfccf6277",
+    "sdk/e2e/utils/e2e-mocks.ts": "0f9872031263c24df95313b9c3962e8b352c60c3b4fe11482ff76725ac672463",
+    "sdk/dist/index.mjs": "a46983f704534eec4157103e66faa32bbf0b9474ac3484e026626c1ad7015f57",
+    "sdk/src/provider-config.ts": "6a659575360e14a8fba319cf6e7e406faa8505d681342a6911835bc870dd8922",
+    "sdk/src/impl/model-provider.ts": "2e14b4aa5534c0e8761b16c234eca300052f4419178ed3ab1d3137af82b2c11e",
+    "sdk/test/setup-env.ts": "b35421460c294edd9b966f29775f089c6311957e16b2bb3ab549abd7ec54d800",
+    "package.json": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8",
+    "agents/package.json": "40afe33da8f72c1027973c8e4006d3538394a770c67cb5af499701b299960ef8",
+    "sdk/package.json": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d",
+    "bun.lock": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6",
+    "bunfig.toml": "48a8b5826d7b001640f0e0f82cf8f612405c6e56080fa182d239e56d5b8a8505",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/record-file-picker.py": "65dc88c37616e082a32617936b6f26d2fb846d6d4e40ee0b6a1e8e2a36e771f9",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/file-picker-diagnostic.ts": "d9da67b1eb9bc87cce9591f926093065d01bfcfdd2b7dd5164dc64af5429dd26",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/offline-test-preload.ts": "6aff5ff5063936591f4fd308a0e9b614a515395eea7043d8b2b37b5e8bbd86f4",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/provider-config.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+  },
+  "sourceStable": true,
+  "toolchain": {
+    "version": "1.3.5",
+    "path": "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+    "sha256": "a56093cbdd2efc7290a744ccc39971dcc4be52c5732be15c7fb1465cc119c8de"
+  },
+  "environment": {
+    "replacement": true,
+    "keys": [
+      "B30_INDEPENDENT_FETCH_LOG",
+      "BUN_OPTIONS",
+      "DO_NOT_TRACK",
+      "HOME",
+      "LANG",
+      "NEXT_PUBLIC_CB_ENVIRONMENT",
+      "OPENBUFF_FILE_PICKER_DIAGNOSTIC",
+      "OPENBUFF_PROVIDER_CONFIG",
+      "OPENBUFF_TELEMETRY",
+      "PATH",
+      "TERM",
+      "TMPDIR",
+      "XDG_CONFIG_HOME"
+    ],
+    "envFileLoading": false,
+    "ownedEmptyHomeAndXdg": true,
+    "providerConfig": "{}"
+  },
+  "counts": {
+    "pass": [
+      "3"
+    ],
+    "skip": [],
+    "fail": [
+      "1"
+    ],
+    "assertions": [
+      "14"
+    ]
+  },
+  "artifacts": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/before-file-picker/fetch.jsonl",
+      "sha256": "3f312d0360262bca96c64fcc499831bed10758fbb5d6a5e1e2cc7ec701b71fd2"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/before-file-picker/file-explorer.e2e.test.ts",
+      "sha256": "b7ac93cac7f1fd2e1d38334ffaf483c473b9e1e5cb7b1a97a1f78c2238d8c48b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/before-file-picker/test.log",
+      "sha256": "c71bc53f8ccc7e01ca30cae6374cab49c3f58440963500f840368206db866c7d"
+    }
+  ],
+  "scope": "One current integration fixture plus a diagnostic using the identical published-SDK import/source-mock seam. No card acceptance or production edits."
+}

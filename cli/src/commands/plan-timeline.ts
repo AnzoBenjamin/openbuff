@@ -20,11 +20,7 @@ import {
 import { getProjectRoot } from '../project-files'
 import { existsSync } from 'node:fs'
 
-import {
-  defineCommandWithArgs,
-  type CommandDefinition,
-  type RouterParams,
-} from './command-registry'
+import type { CommandDefinition, RouterParams } from './command-registry'
 import { getSystemMessage, getUserMessage } from '../utils/message-history'
 
 /** Re-export the event kinds + filename so callers (e.g. /plan-status banner) can reference them. */
@@ -122,11 +118,11 @@ export function parsePlanTimelineArgs(
     const tok = tokens[i]
     if (tok === '--kind' || tok === '-k') {
       const next = tokens[i + 1]
-      if (next && (PLAN_EVENT_KINDS as readonly string[]).includes(next)) {
-        kind = next as PlanEventKind
-        i += 1
-      }
-    }
+      if (!next || !(PLAN_EVENT_KINDS as readonly string[]).includes(next))
+        return null
+      kind = next as PlanEventKind
+      i += 1
+    } else return null
   }
   return { slug, kind }
 }
@@ -139,9 +135,10 @@ export function parsePlanTimelineArgs(
  * prompt — it is a read-only inspector like `/plan-status`.
  */
 export function registerPlanTimelineCommand(): CommandDefinition {
-  return defineCommandWithArgs({
+  return {
     name: 'plan-timeline',
     aliases: ['tl'],
+    acceptsArgs: true,
     handler: (params: RouterParams, args: string) => {
       const parsed = parsePlanTimelineArgs(args)
       params.saveToHistory(params.inputValue.trim())
@@ -150,14 +147,9 @@ export function registerPlanTimelineCommand(): CommandDefinition {
           ...prev,
           getUserMessage(params.inputValue.trim()),
           getSystemMessage(
-            '/plan-timeline: missing session slug. Usage: /plan-timeline <slug> [--kind task_update|session_status|current_task|append_lesson].',
+            '/plan-timeline: missing session or invalid filter. Usage: /plan-timeline <slug> [--kind task_update|session_status|current_task|append_lesson].',
           ),
         ])
-        params.setInputValue({
-          text: '',
-          cursorPosition: 0,
-          lastEditDueToNav: false,
-        })
         return
       }
       const resolved = resolvePlanTimelinePath(parsed.slug)
@@ -181,7 +173,9 @@ export function registerPlanTimelineCommand(): CommandDefinition {
       params.setMessages((prev) => [
         ...prev,
         getUserMessage(params.inputValue.trim()),
-        getSystemMessage(report),
+        getSystemMessage(
+          (parsed.kind ? `Filter: ${parsed.kind}\n` : '') + report,
+        ),
       ])
       params.setInputValue({
         text: '',
@@ -190,5 +184,5 @@ export function registerPlanTimelineCommand(): CommandDefinition {
       })
       return
     },
-  })
+  }
 }

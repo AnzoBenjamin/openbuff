@@ -12,7 +12,9 @@ import { NoOutputGeneratedError } from 'ai'
 
 import {
   getErrorStatusCode,
-  isProviderContentPolicyError,
+  isProviderAbortError,
+  normalizeProviderContentPolicyError,
+  providerErrorChain,
 } from '../error-utils'
 
 import type { LoadedProviderConfig } from '../provider-config'
@@ -88,7 +90,16 @@ export function isFailoverEligibleError(error: unknown): boolean {
   // deterministic refusal — the exact policy-evasion path the M3-T4 contract
   // closes (reliability finding
   // content-policy-status-preserved-through-normalization).
-  if (isProviderContentPolicyError(error)) return false
+  if (isProviderAbortError(error) || normalizeProviderContentPolicyError(error))
+    return false
+  if (
+    [...providerErrorChain(error)].some(
+      (value) =>
+        value.code === 'provider_configuration' ||
+        value.code === 'provider_route_excluded',
+    )
+  )
+    return false
   // An empty stream (NoOutputGeneratedError from the AI SDK) means the
   // provider accepted the connection but produced zero chunks before a clean
   // close, so the primary model failed without emitting anything. A backup

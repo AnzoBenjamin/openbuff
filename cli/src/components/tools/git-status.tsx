@@ -27,19 +27,32 @@ export const GitStatusComponent = defineToolComponent({
     const statusLines = output?.status
       ?.split('\n')
       .map((line) => line.trimEnd())
-      .filter(Boolean)
+      .filter((line) => Boolean(line) && !line.startsWith('##'))
     const fileCount = statusLines?.length ?? 0
+    const state =
+      toolBlock.lifecycle === 'queued' ||
+      toolBlock.lifecycle === 'running' ||
+      toolBlock.lifecycle === 'cancelled' ||
+      toolBlock.lifecycle === 'failed'
+        ? toolBlock.lifecycle
+        : output?.status !== undefined && !output.errorMessage
+          ? fileCount === 0
+            ? 'clean captured tree'
+            : 'captured changes'
+          : 'status unavailable'
+    const diffFiles = output?.diff?.match(/^diff --git /gm)?.length ?? 0
     const title = output?.diff
       ? `Change review (${fileCount} file${fileCount === 1 ? '' : 's'})`
       : `Working tree (${fileCount} file${fileCount === 1 ? '' : 's'})`
 
+    const summary = `${title} · ${state}${output?.diff ? ` · patches for ${diffFiles} files` : ''}${output?.truncated ? ' · diff truncated; more may exist' : ''}`
     return {
-      collapsedPreview: output?.errorMessage ?? title,
+      collapsedPreview: output?.errorMessage ?? summary,
       content: (
         <box style={{ flexDirection: 'column', width: '100%' }}>
           <text>
             <span fg={theme.foreground} attributes={TextAttributes.BOLD}>
-              {title}
+              {summary}
             </span>
             {output?.truncated ? (
               <span fg={theme.warning}> — diff truncated</span>
@@ -47,6 +60,9 @@ export const GitStatusComponent = defineToolComponent({
           </text>
           {output?.branch ? (
             <text fg={theme.muted}>{`Branch: ${output.branch}`}</text>
+          ) : null}
+          {output?.diff && statusLines?.length ? (
+            <text fg={theme.muted}>{statusLines.join('\n')}</text>
           ) : null}
           {output?.errorMessage ? (
             <text fg={theme.error}>{output.errorMessage}</text>
@@ -59,7 +75,7 @@ export const GitStatusComponent = defineToolComponent({
             />
           ) : (
             <text fg={theme.muted} style={{ wrapMode: 'word' }}>
-              {statusLines?.join('\n') || 'clean'}
+              {statusLines?.join('\n') || state}
             </text>
           )}
         </box>

@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "type": "body-smoke-mode-host-command",
+  "reviewer": "/root/b02_runtime_outcomes",
+  "name": "host-build-current-source",
+  "argv": [
+    "/home/ben/.rustup/toolchains/1.87.0-x86_64-unknown-linux-gnu/bin/cargo",
+    "build",
+    "--workspace",
+    "--offline",
+    "--locked"
+  ],
+  "cwd": "/home/ben/Code/CLI/openbuff/rust",
+  "exitCode": 0,
+  "expectedExitCode": 0,
+  "expectedExitMatched": true,
+  "startedUtc": "2026-11-07T00:35:59.897767+00:00",
+  "finishedUtc": "2026-11-07T00:36:00.018176+00:00",
+  "sourceBefore": {
+    "rust/scripts/smoke-test-sidecar.sh": "3928fef2828a7ab4434431c7fee7ccf82afba0a2d43891e3867982b88cdcb96f",
+    ".github/workflows/rust-workspace.yml": "0b971a487ab44dd0df8e2080d7ab6ab8bfd4f248918655fa9f9803e2f76095f3",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/run.py": "f95e15db827f70772e927c97e1a79e57d0888248f74b5b10c200c5f4929c8fb2",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/smoke-test-sidecar.before.sh": "3928fef2828a7ab4434431c7fee7ccf82afba0a2d43891e3867982b88cdcb96f",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-review/smoke-mode-scope/scope.json": "8fdea3ce0346cbc04d27d63badf90880964cd93ce51d89aaba91655669393295",
+    "rust/Cargo.lock": "8eb91d4eb3bc1bbbed06a422dfbe2367e0d5dd39207faf3e4f555bb6a63201a7",
+    "rust/Cargo.toml": "5804b3a9ffbae3693d2ccb84f7b21e474eb101c2d699817671395763082f8292",
+    "rust/crates/openbuff-native/Cargo.toml": "36679c08486d35c9b3ef1525c70f80cfcf7e36e11c075b3c16582c4e340e3410",
+    "rust/crates/openbuff-native/src/exec/landlock_fs.rs": "7da2f8e5e150358be64f603eaaa78dc5ff0b774265c437b0288c98773e5af64d",
+    "rust/crates/openbuff-native/src/exec/mod.rs": "38f41eed77d8fc99d51f8d51c7061c85ca6fae15aeaca914f192f70e813078ff",
+    "rust/crates/openbuff-native/src/exec/plan.rs": "8b7ee3e6976d09c7b2c92ca6bf55974e4a5da86166c79ee5bfe09da865e0b0aa",
+    "rust/crates/openbuff-native/src/exec/runner.rs": "6739926889b2cb5fc382dde683c3b0ecf73984fbb1219b55367d1961b20f47e3",
+    "rust/crates/openbuff-native/src/lib.rs": "2537edb5b356cb33b0ba88a9da0c36c896810d5621b6f354a33b4fcea3297321",
+    "rust/crates/openbuff-native/src/main.rs": "1923f92d72126926448b92752206984dbf1dc74229cebd4db011a1b160e0b072",
+    "rust/crates/openbuff-workspace-harness/Cargo.toml": "11252f9e8e4f8e3c402a0f3cae44b95637f8c444d99105b68c33c5c706b4caef",
+    "rust/crates/openbuff-workspace-harness/src/lib.rs": "cd4ac3723fd9af59dd83f9295d923daa3777cbca9e83938aa3afbfe91eb50335",
+    "rust/rust-toolchain.toml": "d4e55d8f04b06b1cddd4359cc87aaed956b03956bba70e02b5bf36c4cc9bb350"
+  },
+  "sourceAfter": {
+    "rust/scripts/smoke-test-sidecar.sh": "3928fef2828a7ab4434431c7fee7ccf82afba0a2d43891e3867982b88cdcb96f",
+    ".github/workflows/rust-workspace.yml": "0b971a487ab44dd0df8e2080d7ab6ab8bfd4f248918655fa9f9803e2f76095f3",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/run.py": "f95e15db827f70772e927c97e1a79e57d0888248f74b5b10c200c5f4929c8fb2",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/smoke-test-sidecar.before.sh": "3928fef2828a7ab4434431c7fee7ccf82afba0a2d43891e3867982b88cdcb96f",
+    "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-review/smoke-mode-scope/scope.json": "8fdea3ce0346cbc04d27d63badf90880964cd93ce51d89aaba91655669393295",
+    "rust/Cargo.lock": "8eb91d4eb3bc1bbbed06a422dfbe2367e0d5dd39207faf3e4f555bb6a63201a7",
+    "rust/Cargo.toml": "5804b3a9ffbae3693d2ccb84f7b21e474eb101c2d699817671395763082f8292",
+    "rust/crates/openbuff-native/Cargo.toml": "36679c08486d35c9b3ef1525c70f80cfcf7e36e11c075b3c16582c4e340e3410",
+    "rust/crates/openbuff-native/src/exec/landlock_fs.rs": "7da2f8e5e150358be64f603eaaa78dc5ff0b774265c437b0288c98773e5af64d",
+    "rust/crates/openbuff-native/src/exec/mod.rs": "38f41eed77d8fc99d51f8d51c7061c85ca6fae15aeaca914f192f70e813078ff",
+    "rust/crates/openbuff-native/src/exec/plan.rs": "8b7ee3e6976d09c7b2c92ca6bf55974e4a5da86166c79ee5bfe09da865e0b0aa",
+    "rust/crates/openbuff-native/src/exec/runner.rs": "6739926889b2cb5fc382dde683c3b0ecf73984fbb1219b55367d1961b20f47e3",
+    "rust/crates/openbuff-native/src/lib.rs": "2537edb5b356cb33b0ba88a9da0c36c896810d5621b6f354a33b4fcea3297321",
+    "rust/crates/openbuff-native/src/main.rs": "1923f92d72126926448b92752206984dbf1dc74229cebd4db011a1b160e0b072",
+    "rust/crates/openbuff-workspace-harness/Cargo.toml": "11252f9e8e4f8e3c402a0f3cae44b95637f8c444d99105b68c33c5c706b4caef",
+    "rust/crates/openbuff-workspace-harness/src/lib.rs": "cd4ac3723fd9af59dd83f9295d923daa3777cbca9e83938aa3afbfe91eb50335",
+    "rust/rust-toolchain.toml": "d4e55d8f04b06b1cddd4359cc87aaed956b03956bba70e02b5bf36c4cc9bb350"
+  },
+  "sourceStable": true,
+  "scriptMode": "0o755",
+  "environment": {
+    "replacement": true,
+    "values": {
+      "PATH": "/home/ben/.rustup/toolchains/1.87.0-x86_64-unknown-linux-gnu/bin:/usr/bin:/bin",
+      "HOME": "/tmp/openbuff-smoke-mode-z8bnuxc9/home",
+      "XDG_CONFIG_HOME": "/tmp/openbuff-smoke-mode-z8bnuxc9/home/.config",
+      "TMPDIR": "/tmp/openbuff-smoke-mode-z8bnuxc9",
+      "CARGO_HOME": "/home/ben/.cargo",
+      "RUSTC": "/home/ben/.rustup/toolchains/1.87.0-x86_64-unknown-linux-gnu/bin/rustc",
+      "CARGO_NET_OFFLINE": "true",
+      "LANG": "C.UTF-8",
+      "GIT_CONFIG_NOSYSTEM": "1",
+      "GIT_CONFIG_GLOBAL": "/tmp/openbuff-smoke-mode-z8bnuxc9/home/.gitconfig"
+    },
+    "stdinDevNull": true,
+    "ownedEmptyHome": true,
+    "offlineCargo": true
+  },
+  "rustToolchain": {
+    "cargo": {
+      "path": "/home/ben/.rustup/toolchains/1.87.0-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "a9fb5ef0f95be70b324f3e88a4621a566320e2eb00635dc37f8a98e0a9fb7c9a"
+    },
+    "rustc": {
+      "path": "/home/ben/.rustup/toolchains/1.87.0-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "9aac770e110f2b2cf1a38e40c9da8268139bae1fcf88d5d152889d199a514a73"
+    },
+    "pinnedVersion": "1.87.0"
+  },
+  "runner": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/run.py",
+    "sha256": "f95e15db827f70772e927c97e1a79e57d0888248f74b5b10c200c5f4929c8fb2"
+  },
+  "stdout": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/host-build-current-source.stdout.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stderr": {
+    "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/windows/smoke-mode/host-build-current-source.stderr.log",
+    "sha256": "4cf86278c1e6d659943a46a3d7e3da429ac15be90f0f17742e24ef85228e7d3e"
+  },
+  "binary": {
+    "path": "rust/target/debug/openbuff-native",
+    "sha256": "4ca44c15aa884cd4f936d9ddd35ecbd89d24fd99df9be5b8481dc06a3ccaaacd"
+  },
+  "scope": "Local Linux ordinary CLI/placeholder checks only; no Windows or downstream native acceptance claim.",
+  "closed": true
+}

@@ -81,7 +81,10 @@ const buildLongTranscript = (): Message[] => {
         {
           type: 'json',
           value: {
-            output: `// ${path}\n${plantedFact(path)}\nexport const config_${i} = ${i}`,
+            // Padding keeps eviction net-POSITIVE: the identity-carrying
+            // tombstone (~220 chars) is longer than a bare fact line, so
+            // unpadded bodies made the savings floor a no-op and F1 vacuous.
+            output: `// ${path}\n${plantedFact(path)}\nexport const config_${i} = ${i}\n${'context filler '.repeat(250)}`,
           },
         },
       ],

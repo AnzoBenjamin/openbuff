@@ -1,0 +1,1948 @@
+{
+  "shardId": "07-languages",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "07-languages",
+    "subsystemIds": [
+      ".github",
+      "agents",
+      "cli",
+      "common",
+      "docs",
+      "packages",
+      "sdk"
+    ],
+    "files": [
+      ".github/workflows/cli-release-build.yml",
+      "agents/patterns/audit-codebase.md",
+      "cli/scripts/build-binary.ts",
+      "cli/src/commands/index-command.ts",
+      "cli/src/pre-init/tree-sitter-wasm.ts",
+      "common/src/util/__tests__/language-capability-manifest.test.ts",
+      "common/src/util/__tests__/language-profiles.test.ts",
+      "common/src/util/language-capabilities.ts",
+      "common/src/util/language-capability-manifest.ts",
+      "common/src/util/language-profiles.ts",
+      "docs/agents-and-tools.md",
+      "docs/architecture.md",
+      "docs/request-flow.md",
+      "docs/testing.md",
+      "packages/agent-runtime/src/templates/strings.ts",
+      "packages/code-map/__tests__/all-language-wasm.test.ts",
+      "packages/code-map/src/__tests__/structure.test.ts",
+      "packages/code-map/src/grammar-wasm-repair.ts",
+      "packages/code-map/src/init-node.ts",
+      "packages/code-map/src/languages.ts",
+      "packages/code-map/src/parse.ts",
+      "packages/code-map/src/structure.ts",
+      "packages/code-map/src/utils.ts",
+      "packages/indexer/src/call-navigation.test.ts",
+      "packages/indexer/src/import-resolution.ts",
+      "packages/indexer/src/metadata-indexer.ts",
+      "packages/indexer/src/scip-ingest.test.ts",
+      "packages/indexer/src/scip-ingest.ts",
+      "packages/indexer/src/scip-runner.ts",
+      "sdk/package.json",
+      "sdk/scripts/build.ts",
+      "sdk/src/__tests__/diagnostic-delta.test.ts",
+      "sdk/src/__tests__/harness-intelligence.test.ts",
+      "sdk/src/__tests__/language-intelligence.test.ts",
+      "sdk/src/__tests__/lsp-multiplexer.test.ts",
+      "sdk/src/__tests__/lsp-real-server.test.ts",
+      "sdk/src/run.ts",
+      "sdk/src/services/build-graph.ts",
+      "sdk/src/services/diagnostic-delta-runner.ts",
+      "sdk/src/services/diagnostic-delta.ts",
+      "sdk/src/services/harness-intelligence.ts",
+      "sdk/src/services/language-intelligence.ts",
+      "sdk/src/services/lsp-multiplexer.ts",
+      "sdk/src/tools/file-change-hooks.ts",
+      "sdk/src/tools/get-affected-tests.ts",
+      "sdk/src/tools/get-build-targets.ts",
+      "sdk/src/tools/language-diagnostics.ts",
+      "sdk/src/tools/run-targeted-validation.ts",
+      "sdk/test/tree-sitter-queries/test-query-files.js"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": "common/src/util/language-capabilities.ts",
+      "from": 1,
+      "to": 300
+    },
+    {
+      "path": "common/src/util/language-capability-manifest.ts",
+      "from": 1,
+      "to": 105
+    },
+    {
+      "path": "common/src/util/language-capabilities.ts",
+      "from": 301,
+      "to": 588
+    },
+    {
+      "path": "common/src/util/language-profiles.ts",
+      "from": 1,
+      "to": 364
+    },
+    {
+      "path": "packages/agent-runtime/src/templates/strings.ts",
+      "from": 174,
+      "to": 202
+    },
+    {
+      "path": "packages/code-map/src/languages.ts",
+      "from": 1,
+      "to": 360
+    },
+    {
+      "path": "packages/code-map/src/init-node.ts",
+      "from": 1,
+      "to": 110
+    },
+    {
+      "path": "packages/code-map/__tests__/all-language-wasm.test.ts",
+      "from": 1,
+      "to": 54
+    },
+    {
+      "path": "packages/code-map/src/languages.ts",
+      "from": 361,
+      "to": 620
+    },
+    {
+      "path": "packages/code-map/src/grammar-wasm-repair.ts",
+      "from": 1,
+      "to": 220
+    },
+    {
+      "path": "sdk/scripts/build.ts",
+      "from": 28,
+      "to": 148
+    },
+    {
+      "path": "sdk/scripts/build.ts",
+      "from": 460,
+      "to": 574
+    },
+    {
+      "path": "sdk/package.json",
+      "from": 1,
+      "to": 93
+    },
+    {
+      "path": "cli/scripts/build-binary.ts",
+      "from": 626,
+      "to": 700
+    },
+    {
+      "path": ".github/workflows/cli-release-build.yml",
+      "from": 451,
+      "to": 482
+    },
+    {
+      "path": ".github/workflows/cli-release-build.yml",
+      "from": 635,
+      "to": 655
+    },
+    {
+      "path": "cli/src/pre-init/tree-sitter-wasm.ts",
+      "from": 1,
+      "to": 116
+    },
+    {
+      "path": "packages/code-map/src/structure.ts",
+      "from": 243,
+      "to": 378
+    },
+    {
+      "path": "packages/code-map/src/structure.ts",
+      "from": 827,
+      "to": 1084
+    },
+    {
+      "path": "packages/code-map/src/parse.ts",
+      "from": 734,
+      "to": 817
+    },
+    {
+      "path": "packages/code-map/src/parse.ts",
+      "from": 878,
+      "to": 929
+    },
+    {
+      "path": "packages/code-map/src/__tests__/structure.test.ts",
+      "from": 385,
+      "to": 499
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 1,
+      "to": 262
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 263,
+      "to": 545
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 546,
+      "to": 697
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 785,
+      "to": 1056
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 1207,
+      "to": 1306
+    },
+    {
+      "path": "sdk/src/services/lsp-multiplexer.ts",
+      "from": 1385,
+      "to": 1454
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 1,
+      "to": 198
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 498,
+      "to": 735
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 938,
+      "to": 1025
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1123,
+      "to": 1137
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 3226,
+      "to": 3244
+    },
+    {
+      "path": "sdk/src/__tests__/lsp-real-server.test.ts",
+      "from": 1,
+      "to": 124
+    },
+    {
+      "path": "packages/indexer/src/import-resolution.ts",
+      "from": 1,
+      "to": 413
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 1244,
+      "to": 1278
+    },
+    {
+      "path": "packages/indexer/src/metadata-indexer.ts",
+      "from": 1389,
+      "to": 1514
+    },
+    {
+      "path": "packages/indexer/src/scip-ingest.ts",
+      "from": 1,
+      "to": 430
+    },
+    {
+      "path": "sdk/src/services/diagnostic-delta.ts",
+      "from": 1,
+      "to": 350
+    },
+    {
+      "path": "sdk/src/services/diagnostic-delta.ts",
+      "from": 351,
+      "to": 494
+    },
+    {
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 1663,
+      "to": 1740
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1400,
+      "to": 1475
+    },
+    {
+      "path": "sdk/src/tools/run-targeted-validation.ts",
+      "from": 1,
+      "to": 148
+    },
+    {
+      "path": "sdk/src/tools/get-affected-tests.ts",
+      "from": 1,
+      "to": 46
+    },
+    {
+      "path": "sdk/src/tools/get-build-targets.ts",
+      "from": 1,
+      "to": 34
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2982,
+      "to": 3024
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 3102,
+      "to": 3110
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 24,
+      "to": 82
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 289,
+      "to": 425
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 603,
+      "to": 823
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 1540,
+      "to": 1732
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 1733,
+      "to": 2008
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 2009,
+      "to": 2295
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 890,
+      "to": 938
+    },
+    {
+      "path": "sdk/test/tree-sitter-queries/test-query-files.js",
+      "from": 1,
+      "to": 105
+    },
+    {
+      "path": "packages/indexer/src/call-navigation.test.ts",
+      "from": 1,
+      "to": 129
+    },
+    {
+      "path": "common/src/util/__tests__/language-profiles.test.ts",
+      "from": 144,
+      "to": 377
+    },
+    {
+      "path": "packages/indexer/src/scip-runner.ts",
+      "from": 647,
+      "to": 806
+    },
+    {
+      "path": "cli/src/commands/index-command.ts",
+      "from": 277,
+      "to": 359
+    },
+    {
+      "path": "packages/code-map/src/grammar-wasm-repair.ts",
+      "from": 221,
+      "to": 404
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 872,
+      "to": 893
+    },
+    {
+      "path": "sdk/src/services/build-graph.ts",
+      "from": 1,
+      "to": 86
+    },
+    {
+      "path": "sdk/src/services/build-graph.ts",
+      "from": 221,
+      "to": 269
+    },
+    {
+      "path": "sdk/src/services/build-graph.ts",
+      "from": 306,
+      "to": 335
+    },
+    {
+      "path": "sdk/src/services/build-graph.ts",
+      "from": 437,
+      "to": 563
+    },
+    {
+      "path": "sdk/src/services/build-graph.ts",
+      "from": 602,
+      "to": 705
+    },
+    {
+      "path": "sdk/test/tree-sitter-queries/test-query-files.js",
+      "from": 160,
+      "to": 256
+    },
+    {
+      "path": "sdk/src/__tests__/lsp-multiplexer.test.ts",
+      "from": 191,
+      "to": 589
+    },
+    {
+      "path": "sdk/src/__tests__/language-intelligence.test.ts",
+      "from": 789,
+      "to": 1086
+    },
+    {
+      "path": "packages/code-map/src/utils.ts",
+      "from": 1,
+      "to": 41
+    },
+    {
+      "path": "sdk/scripts/build.ts",
+      "from": 147,
+      "to": 320
+    },
+    {
+      "path": "sdk/src/services/language-intelligence.ts",
+      "from": 200,
+      "to": 240
+    },
+    {
+      "path": "sdk/src/tools/language-diagnostics.ts",
+      "from": 1242,
+      "to": 1278
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 101,
+      "to": 130
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 152,
+      "to": 178
+    },
+    {
+      "path": "packages/indexer/src/scip-runner.ts",
+      "from": 1,
+      "to": 134
+    },
+    {
+      "path": "sdk/src/tools/language-diagnostics.ts",
+      "from": 1,
+      "to": 72
+    },
+    {
+      "path": "sdk/src/tools/language-diagnostics.ts",
+      "from": 594,
+      "to": 690
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1848,
+      "to": 1868
+    },
+    {
+      "path": "packages/indexer/src/scip-ingest.test.ts",
+      "from": 1,
+      "to": 135
+    },
+    {
+      "path": "packages/indexer/src/scip-ingest.test.ts",
+      "from": 340,
+      "to": 369
+    },
+    {
+      "path": "common/src/util/__tests__/language-capability-manifest.test.ts",
+      "from": 1060,
+      "to": 1150
+    },
+    {
+      "path": "sdk/src/__tests__/diagnostic-delta.test.ts",
+      "from": 912,
+      "to": 945
+    },
+    {
+      "path": "sdk/src/__tests__/harness-intelligence.test.ts",
+      "from": 1,
+      "to": 138
+    },
+    {
+      "path": "packages/indexer/src/scip-ingest.test.ts",
+      "from": 135,
+      "to": 195
+    },
+    {
+      "path": "sdk/src/services/diagnostic-delta-runner.ts",
+      "from": 1,
+      "to": 256
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 991,
+      "to": 1003
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 205,
+      "to": 263
+    },
+    {
+      "path": "agents/patterns/audit-codebase.md",
+      "from": 1,
+      "to": 193
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 1,
+      "to": 110
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 1,
+      "to": 100
+    }
+  ],
+  "contextReadRanges": [
+    {
+      "path": "cli/release/index.js",
+      "from": 22,
+      "to": 118
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "target-language-profiles",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "assuranceDetail": "",
+      "trace": {
+        "entrypoint": "Language-profile placeholder and public manifest builder",
+        "implementation": "Canonical12-ID registry, unique maps, scoped task/path selection, bundled idioms",
+        "realConsumer": "strings.ts:184 supplies task text and maxProfiles3",
+        "tests": "language-profiles.test.ts; language-capability-manifest.test.ts",
+        "docs": "agents-and-tools.md:160-167"
+      },
+      "states": {
+        "discovery": "Stable registry order; case-normalized extensions, exact manifests; explicit task/path focus before tree fallback.",
+        "loading": "Bundled synchronous guidance, no user-repo idiom reads.",
+        "empty": "Unknown paths yield undefined and no detected languages yields empty prompt.",
+        "failure": "Duplicate source/manifest signals throw during map construction.",
+        "cancellation": "No I/O on prompt selection.",
+        "retry": "Not needed for synchronous selection.",
+        "permission": "Guidance/detection is observation-only.",
+        "durability": "Manifest V1 is cloned and serializable; profile runtime results are per prompt."
+      },
+      "evidence": [
+        {
+          "path": "common/src/util/language-capabilities.ts",
+          "line": 1,
+          "detail": "12 supported profile IDs"
+        },
+        {
+          "path": "common/src/util/language-capabilities.ts",
+          "line": 34,
+          "detail": "Launch specs explicitly distinguished from display metadata"
+        },
+        {
+          "path": "packages/agent-runtime/src/templates/strings.ts",
+          "line": 184,
+          "detail": "Actual prompt consumer"
+        },
+        {
+          "path": "common/src/util/language-capability-manifest.ts",
+          "line": 95,
+          "detail": "Deterministic detached serialized manifest"
+        }
+      ],
+      "gaps": [
+        "Closed language enum; no runtime open/generic semantic registration seam was found.",
+        "Display-only tools/validation stages are not availability assertions.",
+        "Production prompt cap3 omits remaining languages by design."
+      ],
+      "strengths": [
+        "Centralized profile contract and bundled guidance reduce prompt drift.",
+        "Manifest version/deep clone and golden schema tests protect serialized consumers."
+      ]
+    },
+    {
+      "id": "grammar-query-packaging",
+      "maturity": "partial",
+      "assurance": "integration",
+      "assuranceDetail": "Offline Bun1.3.5 current-source grammar fixtures plus fresh component bundles; existing CLI grammar bytes accepted only after matching current source hashes. Full packed SDK/installed release not exercised.",
+      "trace": {
+        "entrypoint": "getLanguageConfig / detectSyntaxErrorViaTreeSitter",
+        "implementation": "Core init,15 grammar variants, fail-open query block, pinned immutable repair, builder copies",
+        "realConsumer": "Code scoring, structure/chunks/indexer and CLI pre-init",
+        "tests": "all-language-wasm.test.ts; structure.test.ts; grammar repair tests; packaged query script",
+        "docs": "architecture.md:101-115"
+      },
+      "states": {
+        "discovery": "Finite extension language table and bare query filenames.",
+        "loading": "Memoized parser/language retained even when queries fail; local source and binary-specific repair differ.",
+        "empty": "Unregistered/unloadable grammar undefined; syntax check reports available:false.",
+        "failure": "Missing query disables captures; getLanguageConfig swallows load failure unless debug enabled.",
+        "cancellation": "No caller AbortSignal for parser loading or binary repair; repair retries may honor long Retry-After.",
+        "retry": "Core init retries rejected promise; query load does not retry once parser cached; binary grammar repair max3 attempts.",
+        "permission": "SDK offline; binary-only repair downloads checksum-pinned WASM, bounded20MiB.",
+        "durability": "Built bytes/manifests can be pinned; archive/wrapper query path is incomplete."
+      },
+      "evidence": [
+        {
+          "path": "packages/code-map/src/languages.ts",
+          "line": 479,
+          "detail": "Caches grammar before optional query"
+        },
+        {
+          "path": "packages/code-map/src/grammar-wasm-repair.ts",
+          "line": 82,
+          "detail": "GDScript immutable source/ABI provenance"
+        },
+        {
+          "path": "sdk/scripts/build.ts",
+          "line": 508,
+          "detail": "Build requires pinned assets"
+        }
+      ],
+      "gaps": [
+        "07-F1 packaging gap.",
+        "Development defaults resolve only @vscode fallback, which lacks PHP/Swift/Kotlin/GDScript; build pin-repair source path is different.",
+        "all-language-wasm beforeAll expects GDScript in upstream packages that do not publish it."
+      ],
+      "strengths": [
+        "Current pinned PHP/Swift/Kotlin/GDScript bytes parse and query successfully when explicitly staged.",
+        "Core initialization/pre-init is separate from grammar and query lifecycle; failed query does not reload grammar per file.",
+        "Immutable GDScript source, SHA-256, streaming byte limit and atomic repair are real implemented protections."
+      ]
+    },
+    {
+      "id": "structural-language-semantics",
+      "maturity": "partial",
+      "assurance": "integration",
+      "assuranceDetail": "Actual local buildMetadataIndex fixture and four staged grammar fixtures; no target compiler was invoked.",
+      "trace": {
+        "entrypoint": "parseFileStructureDetailed and indexer import/call graph construction",
+        "implementation": "AST definition walk, same-tree call captures, line/AST import fallback and per-ecosystem resolution",
+        "realConsumer": "metadata-indexer.ts:1255 file references and1437 call edges; read-subtree/chunk layers documented",
+        "tests": "structure.test.ts; import-resolution.test.ts; call-navigation.test.ts",
+        "docs": "architecture.md:103,123"
+      },
+      "states": {
+        "discovery": "15 parser variants cover14 named source languages across12 profiles.",
+        "loading": "No grammar gives null; missing tag query still permits AST symbol walk.",
+        "empty": "Parseable file without definitions returns[]; no grammar returnsnull with language diagnostic when detailed API used.",
+        "failure": "Malformed definition nodes omitted; parse/structure errors become detailed diagnostics.",
+        "cancellation": "Iterative AST walk, no signal inside synchronous parsing; caller budgets handled upstream.",
+        "retry": "Transient grammar load can be retried; failed imports stay unresolved.",
+        "permission": "Indexer resolves among indexed project paths; grammar trust governed by loader.",
+        "durability": "Index lifetime/refresh/cache ownership is pair08 scope."
+      },
+      "evidence": [
+        {
+          "path": "packages/code-map/src/structure.ts",
+          "line": 873,
+          "detail": "No grammar null semantics"
+        },
+        {
+          "path": "packages/code-map/src/structure.ts",
+          "line": 902,
+          "detail": "AST symbols independent from optional call query"
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 1505,
+          "detail": "AST import capture fallback consumer"
+        }
+      ],
+      "gaps": [
+        "07-F2 shared-family inconsistency;07-F10/11 import false positives.",
+        "Python import rules omit loose top-level module files and src-layout roots by conservative design.",
+        "Go multi-file packages often remain unresolved; declaration/namespace rules use bounded samples."
+      ],
+      "strengths": [
+        "Current source successfully extracts real PHP/Swift/Kotlin/GDScript definitions from staged pinned grammars.",
+        "No-grammar null versus empty[] and detailed errors distinguish availability from no symbols.",
+        "AST/import fallback and ambiguity avoidance exist, although defects undermine parts of their precision."
+      ]
+    },
+    {
+      "id": "precise-cross-language-reference-contract",
+      "maturity": "partial",
+      "assurance": "integration",
+      "assuranceDetail": "Pure validating ingest/edge probe confirmed identity collision; subprocess paths statically traced, not executed.",
+      "trace": {
+        "entrypoint": "Explicit /index scip command",
+        "implementation": "Opaque-symbol ingest, safe relative paths, asynchronous bounded subprocess/worker path, batch graph merge",
+        "realConsumer": "index-command.ts:313 real runner and342 snapshot-checked adoption",
+        "tests": "scip-ingest.test.ts; scip-runner.test.ts; CLI index command tests",
+        "docs": "architecture.md indexer section; runner inline contract"
+      },
+      "states": {
+        "discovery": "Optional installed scip-* executables, not automatic refresh work.",
+        "loading": "Per-indexer unavailable/error/success status; async runner and worker for dump parse.",
+        "empty": "No indexed definitions or unavailable tools produce zero merged edges and CLI hint.",
+        "failure": "Unsafe paths throw typed malformed; occurrence/merge caps; per-indexer failures isolate other indexers.",
+        "cancellation": "Timeout-bounded subprocess/worker; inspected public run path has no caller AbortSignal.",
+        "retry": "CLI tells user to rerun after concurrent snapshot replacement.",
+        "permission": "Explicit opt-in argv-only external indexers; execution security policy belongs runtime shard.",
+        "durability": "CLI says live until rebuild; pair08 owns precise-edge persistence/semantic snapshot identity."
+      },
+      "evidence": [
+        {
+          "path": "cli/src/commands/index-command.ts",
+          "line": 288,
+          "detail": "Explicit real entrypoint"
+        },
+        {
+          "path": "packages/indexer/src/scip-ingest.ts",
+          "line": 165,
+          "detail": "Precise derivation"
+        },
+        {
+          "path": "packages/indexer/src/scip-runner.ts",
+          "line": 692,
+          "detail": "Bounded async indexer work"
+        }
+      ],
+      "gaps": [
+        "07-F3 identity collision destroys precise guarantee.",
+        "File-level references discard occurrence ranges; independent per-indexer dumps are derived before merging, not a shared cross-language symbol-definition join.",
+        "Opaque exact symbol equality can connect a producer-provided multi-language dump, but no default generated-schema/FFI bridge resolver was found."
+      ],
+      "strengths": [
+        "Real CLI consumer and snapshot adoption are wired, rather than an unused helper.",
+        "Safe relative-path guard, local-symbol filtering and pure merge with queryData invalidation protect graph consumers."
+      ]
+    },
+    {
+      "id": "lsp-navigation-lifecycle",
+      "maturity": "partial",
+      "assurance": "integration",
+      "assuranceDetail": "DI integration of actual service/mux with fake peer. Repository real clangd fixture read but not run; no real multi-language server task.",
+      "trace": {
+        "entrypoint": "go_to_definition/find_references/hover_type/workspace_symbol SDK dispatch",
+        "implementation": "Registry stdio specs, root resolver, framed JSON-RPC, pooled cold starts and service result shaping",
+        "realConsumer": "run.ts:1125 injects run FS/spawn;3004-3022 dispatches queries;1861 disposes",
+        "tests": "lsp-multiplexer.test.ts; language-intelligence.test.ts; availability-gated real clangd fixture",
+        "docs": "Registry inline role distinction; docs/request-flow.md:88"
+      },
+      "states": {
+        "discovery": "11 stdio specs; GDScript TCP returns tcp-transport. detect/minVersion metadata is not used by acquire.",
+        "loading": "Single-flight per root/lang cold starts and max4 server reservations;15s startup,10s request default.",
+        "empty": "Missing/unsupported language gives typed result; empty locations/hover; workspace_symbol returns[] if no warm server.",
+        "failure": "Typed protocol/timeout/crash reasons; malformed framing triggers defective teardown.",
+        "cancellation": "No AbortSignal on LSP query API; run cleanup disposes after prompt work.",
+        "retry": "One delayed restart, then later cold acquire may retry; restart lacks disposal ownership.",
+        "permission": "On-demand file bytes containment-checked via injected FS; external server uses host process view and root discovery uses node FS.",
+        "durability": "Pool exists only for this service/run; workspace symbols use most-recent warm server, not polyglot federation."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1125,
+          "detail": "Lazy real service construction"
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 861,
+          "detail": "Honest TCP unsupported"
+        },
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 622,
+          "detail": "Contained on-demand bytes"
+        },
+        {
+          "path": "sdk/src/__tests__/lsp-real-server.test.ts",
+          "line": 100,
+          "detail": "Availability-gated clangd integration"
+        }
+      ],
+      "gaps": [
+        "07-F5/6/8/9 lifecycle/protocol/root/document-ID defects.",
+        "workspace_symbol public service accepts only query; optional mux file context is not exposed, and even that chooses language rather than exact root.",
+        "Only clangd real-server test was located; eleven argv fixture cells do not establish eleven real installed servers."
+      ],
+      "strengths": [
+        "Actual per-run FS/spawn injection and on-demand didOpen seam are wired.",
+        "Bounded pending requests/frame buffer and cold-start reservation are concrete mechanisms.",
+        "Read-only unsupported language/transport errors are observable to model."
+      ]
+    },
+    {
+      "id": "lsp-document-sync",
+      "maturity": "partial",
+      "assurance": "integration",
+      "assuranceDetail": "Strict fake peer reproduced duplicate version and stale hover from committed disk fixture; no WorkspaceEdit mutation audit.",
+      "trace": {
+        "entrypoint": "Confirmed-mutation sync path",
+        "implementation": "Containment checked disk reads, bounded concurrency/count/size, service LRU versions, mux didOpen/change/close",
+        "realConsumer": "run.ts:3234 passes confirmed edits/deletes to sync",
+        "tests": "language-intelligence.test.ts:789-1052; mux sync tests",
+        "docs": "Inline public sync contract"
+      },
+      "states": {
+        "discovery": "Registry-source extensions with server spec, guarded by already-built mux.",
+        "loading": "On-demand queries open version1; sync acquires per-language/root server once mux built.",
+        "empty": "No built mux means no-op; closed paths avoid disk read.",
+        "failure": "Per-path errors silently swallowed, no dirty invalidation/outcome receipt.",
+        "cancellation": "No signal in sync API; inline caller awaits work.",
+        "retry": "No failed-sync retry queue; later queries only reread unopened documents.",
+        "permission": "Committed-file read checks containment; close does not read deleted bytes.",
+        "durability": "Independent service/connection version stores diverge, and service LRU forgets versions while connection retains documents."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/run.ts",
+          "line": 3234,
+          "detail": "Production sync consumer"
+        },
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 938,
+          "detail": "Bounded post-mutation sync"
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1428,
+          "detail": "Actual acquire+sync bridge"
+        }
+      ],
+      "gaps": [
+        "07-F4 stale views and version contract break.",
+        "The built-mux guard does not mean no cold start for new roots/languages; syncFile calls acquire, including close for never-opened paths.",
+        "Opened-document map has no explicit per-connection file cap; service LRU64 does not bound it."
+      ],
+      "strengths": [
+        "Real confirmed mutation consumer and delete-close branch exist.",
+        "FS reads and1MiB/count32/concurrency4 bounds are explicit."
+      ]
+    },
+    {
+      "id": "compiler-build-test-discovery",
+      "maturity": "partial",
+      "assurance": "static trace",
+      "assuranceDetail": "",
+      "trace": {
+        "entrypoint": "inspect_environment/get_build_targets/get_affected_tests",
+        "implementation": "Harness manifest walk/probes, deepest ownership, build-graph cargo/go metadata and static ecosystem resolvers",
+        "realConsumer": "run.ts environment/affected/build dispatch; get-build-targets.ts:17 builds owningTargets",
+        "tests": "harness-intelligence.test.ts; build-graph tests",
+        "docs": "request-flow.md:88"
+      },
+      "states": {
+        "discovery": "14 actual installed tool-version probes; manifests for JS/Python/Rust/Go/JVM/.NET/Swift, plus CMake owning targets.",
+        "loading": "Shared async harness traversal/probe caches; build-graph remains sync on live tool path.",
+        "empty": "No usable manifest/manager yields unknown or empty targets; CMake omits guessed commands.",
+        "failure": "Failed metadata/static reads degrade without detailed per-ecosystem failure provenance.",
+        "cancellation": "Async harness discovery/probes accept signal and last-waiter group cancellation; synchronous build-graph does not.",
+        "retry": "TTL invalidation and explicit cache-clear seams; no automatic tool install.",
+        "permission": "Safe command-token checks in build-graph; discovery among contained paths.",
+        "durability": "Bounded short caches, manifest ownership inference, not persistent coverage/test history."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 1551,
+          "detail": "Current test conventions"
+        },
+        {
+          "path": "sdk/src/tools/get-affected-tests.ts",
+          "line": 7,
+          "detail": "Unwired graph tier explicitly disclosed"
+        },
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 1851,
+          "detail": "JS/Cargo/Go test command assembler"
+        },
+        {
+          "path": "sdk/src/services/build-graph.ts",
+          "line": 621,
+          "detail": "Root-scoped cargo/go metadata probe"
+        },
+        {
+          "path": "sdk/src/services/build-graph.ts",
+          "line": 522,
+          "detail": "CMake commands omitted when unknown"
+        }
+      ],
+      "gaps": [
+        "Convention test names are JS-shaped stem.test/spec and __tests__; Python test_foo.py, Go foo_test.go, Rust inline modules/JVM tests are not convention-discovered.",
+        "get_affected_tests graph tier is explicitly unwired and coverage tier always empty; build-tool impact emits JS/Cargo/Go only.",
+        "Nested Cargo/Go metadata is probed at repository root rather than each discovered owning root.",
+        "Owning-target build graph uses synchronous process calls of up to10s each, despite async harness path.",
+        "Ruby/PHP/GDScript have no native harness manifest/command target path; Swift commands are inferred but swift executable is not among14 probes."
+      ],
+      "strengths": [
+        "Manifest-confirmed Cargo package names and JS scripts avoid guessed package IDs.",
+        "Deepest workspace ownership and honest confidence tiers exist.",
+        "CMake build directory is not invented; no build/test execution is falsely implied by command candidates."
+      ]
+    },
+    {
+      "id": "targeted-validation-execution",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "assuranceDetail": "Usable configured-hook primitive, assessed by static production trace; not a measured validation workload.",
+      "trace": {
+        "entrypoint": "run_targeted_validation tool",
+        "implementation": "Before/after worktree identity and configured matching file-change hooks",
+        "realConsumer": "run.ts:2982 injects run FS/env/signal/workspace and diagnostic hook",
+        "tests": "run-targeted-validation.test.ts; runtime handler tests",
+        "docs": "request-flow.md:90"
+      },
+      "states": {
+        "discovery": "Runs configured hooks for supplied files, not get_build_targets command candidates.",
+        "loading": "Computes attested snapshot before and after actual hook invocation.",
+        "empty": "No configured/matching hooks -> skipped/reduced.",
+        "failure": "Stale snapshot, failed re-attestation, hook failure/permission denial/delta rejection -> failed/none.",
+        "cancellation": "Signal passed to snapshot/hook execution; host execution cancellation assurance owned other shards.",
+        "retry": "Stale/drift/re-attestation errors are observable; caller can retry correct snapshot.",
+        "permission": "Permission-denied hook result hard-fails validation.",
+        "durability": "Returns snapshot-bound scoped evidence; it is not full repository completion/reviewer gate."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/tools/run-targeted-validation.ts",
+          "line": 68,
+          "detail": "Real hook consumer"
+        },
+        {
+          "path": "sdk/src/tools/run-targeted-validation.ts",
+          "line": 110,
+          "detail": "Empty-check state"
+        },
+        {
+          "path": "sdk/src/tools/run-targeted-validation.ts",
+          "line": 119,
+          "detail": "Explicit status/assurance result"
+        }
+      ],
+      "gaps": [
+        "07-F7 diagnostic subresult can contribute false passed evidence.",
+        "Artifact kinds are returned as requested labels; supplied discovery targets are not executed by this tool.",
+        "No native cross-language interface-validation recipe is selected from registry stages."
+      ],
+      "strengths": [
+        "Configured checks really execute via hooks; absent checks report skipped rather than vacuous pass.",
+        "Before/after byte-keyed worktree identity rejects actual drift and distinguishes re-attestation failure."
+      ]
+    },
+    {
+      "id": "diagnostic-delta",
+      "maturity": "partial",
+      "assurance": "integration",
+      "assuranceDetail": "DI capture/preflight output confirmed failed observation accepted; actual compilers and full mutation/hook run were not executed.",
+      "trace": {
+        "entrypoint": "Diagnostic preflight environment flag and per-call baseline wrapper",
+        "implementation": "Four-language one-shot commands, structured/plain parsers, strict/tolerant multiset delta",
+        "realConsumer": "run.ts:1441 before mutation;1460 per-call hook;file-change-hooks.ts:1675 matching-hook consumer",
+        "tests": "diagnostic-delta.test.ts; language-diagnostics.test.ts",
+        "docs": "Inline opt-in preflight contract"
+      },
+      "states": {
+        "discovery": "12 registry IDs recognized; only4 language command dispatch entries.",
+        "loading": "At most20 files/4 commands, concurrency2; bounded process capture and timeout runner.",
+        "empty": "Empty diagnostic array conflates clean, unavailable, failed, unsupported and truncated.",
+        "failure": "Execution status/exception provenance discarded before gate; apply/rollback helper failures handled but rollback outcome only logged.",
+        "cancellation": "Runner receives AbortSignal; aborted failure can be converted to clean[] by capture.",
+        "retry": "No incremental compiler daemons; each capture is one-shot.",
+        "permission": "Fixed strings split to argv, no user-file shell interpolation.",
+        "durability": "True baseline belongs per tool-call closure; no persistent daemon snapshot."
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1441,
+          "detail": "Real before-mutation capture"
+        },
+        {
+          "path": "sdk/src/services/diagnostic-delta.ts",
+          "line": 289,
+          "detail": "Count-aware tolerant delta"
+        },
+        {
+          "path": "sdk/src/tools/file-change-hooks.ts",
+          "line": 1669,
+          "detail": "Matching configured hook prerequisite"
+        },
+        {
+          "path": "sdk/src/services/diagnostic-delta-runner.ts",
+          "line": 89,
+          "detail": "Real injected process adapter"
+        }
+      ],
+      "gaps": [
+        "07-F7 missing coverage/outcomes.",
+        "Flag alone does not run preflight without matching configured hooks.",
+        "No-baseline observer reuses current diagnostics and cannot establish edit did not introduce errors.",
+        "Tolerant(file,code) multiset survives line shifts but can mask replaced same-code errors or warning->error with same count."
+      ],
+      "strengths": [
+        "Actual pre-mutation baseline consumer and per-call isolation are present.",
+        "Structured cargo/ruff/pyright/eslint parsers preserve fixes; tolerant matching is count-aware rather than a plain set.",
+        "Fixed argv runner bounds captured bytes and timeout escalation."
+      ]
+    },
+    {
+      "id": "cross-language-interface-validation",
+      "maturity": "absent",
+      "assurance": "static trace",
+      "assuranceDetail": "",
+      "trace": {
+        "entrypoint": "Inspected registry/SCIP/build-target/validation pipeline",
+        "implementation": "No default resolver for generated schemas, RPC/FFI/ABI producer-consumer evidence was found",
+        "realConsumer": "Existing caller graphs and per-language configured hooks can supply pieces but no joined task validation contract",
+        "tests": "No exercised TS/Python/Rust contract-change fixture in this shard",
+        "docs": "Capability rubric distinguishes grammar, semantic navigation and interface validation"
+      },
+      "states": {
+        "discovery": "Profiles name multiple languages; dependency/validation targets remain separate.",
+        "loading": "No joined interface artifact/capability negotiation in reviewed consumers.",
+        "empty": "Unknown bridge remains absent/unresolved; raw-name linking is intended to refuse it.",
+        "failure": "No boundary-specific typed validation receipt observed.",
+        "cancellation": "No boundary transaction/task lifecycle to assess.",
+        "retry": "No generated-contract reconciliation protocol observed.",
+        "permission": "General execution/mutation policy belongs other shards.",
+        "durability": "No producer/consumer schema version plus byte-hash evidence graph observed in reviewed path."
+      },
+      "evidence": [
+        {
+          "path": "packages/code-map/src/parse.ts",
+          "line": 911,
+          "detail": "Raw-name cross-language edge refusal intended"
+        },
+        {
+          "path": "packages/indexer/src/scip-runner.ts",
+          "line": 695,
+          "detail": "Per-indexer dump derivation before batch merge"
+        },
+        {
+          "path": "sdk/src/tools/run-targeted-validation.ts",
+          "line": 68,
+          "detail": "Only configured hooks selected"
+        }
+      ],
+      "gaps": [
+        "Exact SCIP identities can support a producer-provided mixed-language dump, but separate default indexer passes do not prove interface coherence.",
+        "Generic read/edit/terminal/custom-hook workflows remain available elsewhere; broad text access is not semantic/compiler coverage.",
+        "Whole-repository absence outside reviewed target-language pipeline is not claimed."
+      ],
+      "strengths": [
+        "Existing standard LSP/SCIP/compiler integrations provide a practical base for measured cross-language fixtures without a language port."
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "07-F1",
+      "title": "Current packaging omits tag queries and relies on checkout-dependent asset lookup",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "dependency-hygiene",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/code-map/src/languages.ts",
+          "line": 51,
+          "detail": "Tag queries are bare filenames, no longer bundled .scm imports."
+        },
+        {
+          "path": "packages/code-map/src/languages.ts",
+          "line": 265,
+          "detail": "Queries load through filesystem candidates including the module and executable directory."
+        },
+        {
+          "path": "packages/code-map/src/utils.ts",
+          "line": 25,
+          "detail": "Dynamic dirname falls back to require.resolve(@codebuff/code-map), which current Bun bundles resolve to the build checkout."
+        },
+        {
+          "path": "sdk/scripts/build.ts",
+          "line": 78,
+          "detail": "The .scm loader remains, but no .scm file is imported by the language table."
+        },
+        {
+          "path": "sdk/scripts/build.ts",
+          "line": 147,
+          "detail": "SDK packaging copies WASM and vendor files; it never copies the query directory."
+        },
+        {
+          "path": "sdk/scripts/build.ts",
+          "line": 508,
+          "detail": "Required grammar assets are copied to dist/wasm."
+        },
+        {
+          "path": "cli/scripts/build-binary.ts",
+          "line": 658,
+          "detail": "Binary builder explicitly creates sibling tree-sitter-queries directory."
+        },
+        {
+          "path": ".github/workflows/cli-release-build.yml",
+          "line": 460,
+          "detail": "Matrix tar member list includes binary, WASMs and manifest, but excludes query directory."
+        },
+        {
+          "path": ".github/workflows/cli-release-build.yml",
+          "line": 644,
+          "detail": "Windows tar member list excludes query directory too."
+        },
+        {
+          "path": "packages/code-map/src/parse.ts",
+          "line": 743,
+          "detail": "Token scoring requires both parser and query; missing query becomes parse_error."
+        }
+      ],
+      "trigger": "Publish current SDK dist or install current CLI release archive on a machine without the build checkout or incidental query directory.",
+      "consequence": "Grammar existence does not establish semantic availability: installed query-driven symbol/call/import captures disappear; SDK default grammar resolution can also miss copied assets. AST structural outlines can still work when a grammar loads.",
+      "suggestedFix": "Anchor assets to the actual package/executable location; copy and checksum query files in SDK, both release archives and wrapper-managed siblings; retain caller-supplied setWasmDir behavior.",
+      "acceptanceProbe": "Build current SDK ESM/CJS, npm-pack and extract it and both platform archives into isolated fixtures; remove build-source visibility; assert parser/query and nonempty symbols/calls for every advertised grammar without network or cwd-dependent files.",
+      "observedEvidence": "Source builder/archive mismatch plus fresh current-source component bundles in evidence/07-assets.json. Default PHP parser false in both Node formats; explicit pinned WASM directory enables it while retained checkout supplies queries.",
+      "inferenceLimits": "Component bundle probe is not a full SDK release build. CLI installed-wrapper context at cli/release/index.js:52-68 omits query directories, but that file is deliberately excluded from structuralReceipt. No release bug is inferred merely from failing development asset tests.",
+      "markdownParagraph": "HIGH \u2014 The binary builder creates `tree-sitter-queries/` (`cli/scripts/build-binary.ts:658`), but both release tar lists omit it (`.github/workflows/cli-release-build.yml:460,644`). SDK packaging copies WASM without queries (`sdk/scripts/build.ts:147,508`); its old `.scm` loader cannot embed bare filenames. Runtime lookup also depends on dynamically resolving the internal code-map package (`packages/code-map/src/utils.ts:25`). Missing queries remove scoring and call/import captures, although AST outlines may survive. Isolated package/archive probes must require actual semantic output, preserve explicit directory overrides, and avoid build-checkout visibility."
+    },
+    {
+      "id": "07-F2",
+      "title": "Bare-extension language families collapse unrelated languages and drop same-language caller edges",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "common/src/util/language-profiles.ts",
+          "line": 150,
+          "detail": "Bare-dot candidates are recognized for pinned families only; fallback returns path.extname result."
+        },
+        {
+          "path": "common/src/util/language-profiles.ts",
+          "line": 163,
+          "detail": "getLanguageFamily(.py/.rs/.go/.java/.rb) returns empty string."
+        },
+        {
+          "path": "packages/code-map/src/parse.ts",
+          "line": 891,
+          "detail": "Definitions pass bare ext while callers at905 pass whole paths."
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 1408,
+          "detail": "Indexer family cache passes IndexedFile.ext, collapsing all unpinned families."
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 1437,
+          "detail": "Same-language filtering trusts the collapsed family."
+        },
+        {
+          "path": "packages/indexer/src/call-navigation.test.ts",
+          "line": 106,
+          "detail": "Cross-language regression covers TS versus Python, which does not detect two collapsed families."
+        }
+      ],
+      "trigger": "Use Python/Rust/Go/etc. bare extensions in the shared helper or index a Python call and a Rust same-name definition.",
+      "consequence": "Code-map misses valid non-pinned-family callers; indexer fabricates cross-language call edges or suppresses legitimate edges as ambiguous. Downstream neighbors/blast-radius evidence is unsound.",
+      "suggestedFix": "Make extension-token and path inputs equivalent for every supported family while preserving dotfile handling, or require paths consistently at both consumers; test every supported extension pair.",
+      "acceptanceProbe": "Assert family(a.py)==family(.py), distinguish Python/Rust/Go, preserve TS/JS and C/C++ separation, emit Python->Python calls, and never emit Python->Rust raw-name calls.",
+      "observedEvidence": "Bun1.3.5 real buildMetadataIndex fixture emitted caller.py -> worker.rs calls(shared_name); buildTokenCallers produced {} for the Python same-language fixture but a valid TS result. evidence/07-probes.json.",
+      "inferenceLimits": "This establishes incorrect graph edges, not a claim that a model actually edited the wrong file.",
+      "markdownParagraph": "HIGH \u2014 `getLanguageFamily(\".py\")` and `.rs`, `.go`, `.java`, `.rb` return an empty string (`common/src/util/language-profiles.ts:163`). Code-map supplies bare extensions for definitions but paths for callers (`parse.ts:891,905`), dropping Python caller edges. Indexer supplies bare extensions on both sides (`metadata-indexer.ts:1408`), collapsing unrelated languages. The real fixture emitted a Python call edge to a Rust definition with the same name. Existing TS/Python exclusion tests miss this case. Make path/extension inputs equivalent across every language and pin positive and negative edges."
+    },
+    {
+      "id": "07-F3",
+      "title": "SCIP label truncation corrupts opaque symbol identity before precise resolution",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/scip-ingest.ts",
+          "line": 36,
+          "detail": "Symbol cap slices at160 characters."
+        },
+        {
+          "path": "packages/indexer/src/scip-ingest.ts",
+          "line": 367,
+          "detail": "Parsed occurrence identity is replaced with capped symbol."
+        },
+        {
+          "path": "packages/indexer/src/scip-ingest.ts",
+          "line": 265,
+          "detail": "Definition map joins on the already-truncated identity and overwrites duplicates."
+        },
+        {
+          "path": "packages/indexer/src/scip-ingest.ts",
+          "line": 276,
+          "detail": "References resolve through that map and are labeled precise at286."
+        },
+        {
+          "path": "packages/indexer/src/scip-ingest.test.ts",
+          "line": 151,
+          "detail": "Length test uses one overlong identity; it does not test distinct identical-prefix descriptors."
+        }
+      ],
+      "trigger": "Two valid SCIP descriptors exceed160 characters and differ only after their shared prefix.",
+      "consequence": "Distinct definitions collapse; a reference to A resolves to B yet advertises confidence precise. Stable document sorting makes the wrong answer deterministic.",
+      "suggestedFix": "Retain full bounded opaque identity or a collision-resistant digest for semantic matching; truncate only presentation labels. Define ambiguous multi-definition policy separately.",
+      "acceptanceProbe": "Two231-character descriptors sharing160 characters retain distinct identities; references to each resolve correctly regardless of document order; displayed labels remain bounded.",
+      "observedEvidence": "Evidence/07-probes.json shows distinct231-character input symbols become identical and caller.ts -> b.ts is produced for the reference to A with confidence precise.",
+      "inferenceLimits": "No external SCIP CLI was executed. The validating ingest/edge consumer itself was exercised.",
+      "markdownParagraph": "HIGH \u2014 SCIP caps the occurrence\u2019s symbol itself (`packages/indexer/src/scip-ingest.ts:367`), then uses that shortened string to join references to definitions (`:265,276`). Two distinct 231-character descriptors in the probe collapsed; a reference to A pointed to `b.ts` with `confidence: precise`. The existing cap test checks one identity, so it rewards bounded labels without protecting semantic identity. Keep the full bounded descriptor or digest for matching, truncate presentation separately, and test collisions plus multiple-definition ambiguity."
+    },
+    {
+      "id": "07-F4",
+      "title": "Post-edit LSP synchronization can reuse versions and leave opened documents stale",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1040,
+          "detail": "On-demand query opens a document at connection-local version1."
+        },
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 593,
+          "detail": "Separate service version LRU does not observe that open; eviction resets next counter."
+        },
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 979,
+          "detail": "First sync uses service-map default0 +1."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1435,
+          "detail": "Existing connection document receives didChange rather than a reopening."
+        },
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 952,
+          "detail": "Only first32 paths are synced; at974 oversized files are silently skipped."
+        },
+        {
+          "path": "sdk/src/__tests__/language-intelligence.test.ts",
+          "line": 1001,
+          "detail": "LRU test records fake syncFile calls and expects reset1, without real mux document-state semantics."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 3234,
+          "detail": "Real confirmed-mutation consumer awaits this sync service."
+        }
+      ],
+      "trigger": "Query a file before its first edit, overflow the64-entry service version LRU, or edit an already-open path beyond the32-path/1MiB sync bounds.",
+      "consequence": "didChange can reuse/decrease a version; a conforming server may discard it. Skipped already-open files remain stale because later queries only reopen unopened URIs.",
+      "suggestedFix": "Make version authority connection-local and shared by query/sync; close/invalidate dirty skipped paths and reopen from committed bytes on demand; report per-path sync outcomes and bounds.",
+      "acceptanceProbe": "Strict fake peer plus real-server query->edit->query must see committed bytes and strictly increasing versions; exercise65+ paths,33-file edit batches, oversized changed documents, failures and restart.",
+      "observedEvidence": "Real service/mux DI fixture sent didOpen(v1) then didChange(v1); strict peer rejected change and hover returned before while disk contained after. evidence/07-probes.json.",
+      "inferenceLimits": "The strict fake confirms protocol violation and reachable stale observation; individual real servers may tolerate duplicate versions. WorkspaceEdit mutation normalization remains pair06 scope.",
+      "markdownParagraph": "HIGH \u2014 Query opening uses connection version 1 (`lsp-multiplexer.ts:1040`), while post-edit sync starts a separate counter at 1 (`language-intelligence.ts:979`). The strict peer rejected that first `didChange` and returned old hover text after disk changed. LRU eviction also resets counters without reopening (`:593`), and capped or oversized already-open files remain stale. The existing version test observes a fake multiplexer, missing this integration. Share document/version authority and invalidate skipped dirty documents so later queries reread committed bytes."
+    },
+    {
+      "id": "07-F5",
+      "title": "Malformed transport teardown and delayed restart can orphan language-server processes",
+      "severity": "HIGH",
+      "domains": [
+        "state-mutation",
+        "error-handling",
+        "performance",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 481,
+          "detail": "Frame overflow calls handleGone; malformed headers do likewise at495."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 572,
+          "detail": "handleGone clears child without terminating it."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 586,
+          "detail": "killChild cannot kill a child after the handle was cleared."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 961,
+          "detail": "Restart sleeps, starts a fresh connection, then assigns it without disposed/entry ownership checks."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1443,
+          "detail": "Dispose stops currently registered connections and clears map without joining restart promises."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 1861,
+          "detail": "Production run cleanup uses mux disposal."
+        }
+      ],
+      "trigger": "A still-live peer emits malformed/oversized framing; dispose occurs during its200ms restart delay.",
+      "consequence": "Original process loses its kill handle; replacement can start after disposal and never be registered/reaped. Reported pool bounds and run cleanup no longer bound actual processes.",
+      "suggestedFix": "Separate observed exit from transport failure; retain/terminate/reap child before clearing it. Cancel/join restarts and check disposed plus entry ownership before spawning/publishing.",
+      "acceptanceProbe": "Under malformed framing and dispose during backoff/startup, every spawned fake child receives termination; a real bounded child fixture leaves no surviving PID or pending timer and no post-dispose spawn.",
+      "observedEvidence": "Evidence/07-probes.json reports spawnCount2, killCounts[0,0], warmServerCount0 after malformed header then dispose.",
+      "inferenceLimits": "Fake handles measure missed termination calls. No hostile process or OS sandbox exploit was tested.",
+      "markdownParagraph": "HIGH \u2014 Framing failures call `handleGone`, which clears the child without killing it (`sdk/src/services/lsp-multiplexer.ts:572`). The delayed restart does not check disposal before starting its replacement (`:961`); disposal joins neither restart nor replacement (`:1443`). The probe produced two fake children, zero kill calls, and a reported pool size of zero. Preserve handles through termination, cancel and join restarts, and require ownership checks before publication. Pool counts alone cannot serve as process-lifetime evidence."
+    },
+    {
+      "id": "07-F6",
+      "title": "A first root marker in the file parent can be overwritten by an ancestor marker",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 657,
+          "detail": "Marker search starts from parent for each marker."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 668,
+          "detail": "Search breaks only if chosen root differs from parent, confusing a successful parent match with no match."
+        },
+        {
+          "path": "sdk/src/__tests__/lsp-multiplexer.test.ts",
+          "line": 327,
+          "detail": "Priority fixture covers an ancestor first marker, not first marker in the file parent."
+        }
+      ],
+      "trigger": "pkg/tsconfig.json sits next to pkg/doc.ts while root/package.json is an ancestor later-listed marker.",
+      "consequence": "Wrong cwd/rootUri and pool key select the ancestor server instead of the documented first-marker root.",
+      "suggestedFix": "Track found explicitly or return immediately on a successful marker, including the file-parent directory; document marker priority versus nearest-directory policy.",
+      "acceptanceProbe": "Parent first marker must win over ancestor later marker; preserve existing priority, subtree sharing, TTL invalidation and nested root fixtures.",
+      "observedEvidence": "Evidence/07-probes.json expected roots/pkg but defaultRootResolver returned roots.",
+      "inferenceLimits": "This finding challenges a branch error, not the intentional first-marker priority policy.",
+      "markdownParagraph": "MEDIUM \u2014 `defaultRootResolver` stops only when its selected root differs from the starting parent (`sdk/src/services/lsp-multiplexer.ts:668`). A matching `pkg/tsconfig.json` beside the queried file leaves that comparison false; the later ancestor `package.json` overwrites it. The fixture reproduced the wrong root. Track successful discovery explicitly and cover parent-directory matches, preserving the documented priority policy and cache behavior."
+    },
+    {
+      "id": "07-F7",
+      "title": "Diagnostic execution failures and missing coverage are reported as successful deltas",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/diagnostic-delta.ts",
+          "line": 143,
+          "detail": "Concrete dispatch has only TypeScript, Python, Rust and Go commands."
+        },
+        {
+          "path": "sdk/src/services/diagnostic-delta.ts",
+          "line": 163,
+          "detail": "supportedDiagnosticFiles actually accepts all registry-known languages."
+        },
+        {
+          "path": "sdk/src/services/diagnostic-delta.ts",
+          "line": 183,
+          "detail": "Command selection silently caps at4."
+        },
+        {
+          "path": "sdk/src/services/diagnostic-delta.ts",
+          "line": 225,
+          "detail": "Runner receives caller cwd, not owning target root."
+        },
+        {
+          "path": "sdk/src/services/diagnostic-delta.ts",
+          "line": 232,
+          "detail": "Capture ignores exitCode/timedOut/errorMessage and parses only text; exceptions become []."
+        },
+        {
+          "path": "sdk/src/services/diagnostic-delta.ts",
+          "line": 463,
+          "detail": "Empty new-error set returns rejected:false."
+        },
+        {
+          "path": "sdk/src/services/diagnostic-delta-runner.ts",
+          "line": 140,
+          "detail": "Production timeout yields timedOut/errorMessage which capture discards."
+        },
+        {
+          "path": "sdk/src/tools/file-change-hooks.ts",
+          "line": 1691,
+          "detail": "Non-rejected preflight is labeled diagnostic_delta_passed."
+        },
+        {
+          "path": "sdk/src/tools/run-targeted-validation.ts",
+          "line": 132,
+          "detail": "Composite result can use full assurance when hook results appear successful."
+        }
+      ],
+      "trigger": "Matching configured hooks with diagnostic flag on; diagnostic tool is missing/timed out, files use known unsupported-command language, nested Cargo/Go project is checked from repo root, or TS/Python exhaust cap before Rust/Go.",
+      "consequence": "Model cannot distinguish clean compile evidence from no valid observation; opt-in diagnostic result falsely says passed and can contribute to full scoped-validation assurance.",
+      "suggestedFix": "Return capture coverage and per-command outcomes; separate clean, failed, unavailable, cancelled, partial/truncated. Route by owning project/environment and compare only trustworthy before/after baselines. Preserve optional fail-open policy without claiming success.",
+      "acceptanceProbe": "Missing executable, timeout, cancellation, malformed/partial output, Java-only input and four-language nested fixture must expose skipped/reduced/error coverage; genuine clean and new-error before/after fixtures remain accurate.",
+      "observedEvidence": "Evidence/07-probes.json: timeout+127 capture returns[] and rejected:false; Java selects no commands; TS+Python consumes all4 slots; Rust command receives repository fixture cwd.",
+      "inferenceLimits": "No actual compilers ran in these DI probes. Configured hook execution and overall gate ownership are shared with validation/runtime shards; this finding is the language capture truth boundary.",
+      "markdownParagraph": "HIGH \u2014 Capture discards timeout, exit-code and error fields (`diagnostic-delta.ts:232`), then empty deltas become accepted (`:463`) and hooks label them `diagnostic_delta_passed` (`file-change-hooks.ts:1691`). The DI timeout/127 probe reproduced acceptance. Known Java files select no commands; TS and Python consume the four-command cap before Rust/Go. Nested toolchains receive repository cwd. Return command and coverage outcomes, preserve explicit optional checks, and expose unavailable, incomplete or failed observation instead of asserting successful diagnostic evidence."
+    },
+    {
+      "id": "07-F8",
+      "title": "Grouped profile IDs are sent as LSP document language identifiers",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "common/src/util/language-capabilities.ts",
+          "line": 108,
+          "detail": "TypeScript profile groups JS/JSX/TSX."
+        },
+        {
+          "path": "common/src/util/language-capabilities.ts",
+          "line": 346,
+          "detail": "C/C++ profile groups C source."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 842,
+          "detail": "Server routing uses grouped registry ID."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1040,
+          "detail": "On-demand didOpen forwards grouped ID directly."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1437,
+          "detail": "Sync didOpen does likewise."
+        }
+      ],
+      "trigger": "Open .js/.jsx/.tsx or .c through the real multiplexer.",
+      "consequence": "Document identifier is typescript for JS/JSX/TSX and cpp for C, losing normal javascript/javascriptreact/typescriptreact/c distinctions; server parser/mode selection can be wrong.",
+      "suggestedFix": "Separate profile/toolchain routing ID from protocol document language ID, with explicit per-extension mapping and negotiation where supported.",
+      "acceptanceProbe": "Capture correct didOpen identifiers for JS/JSX/TS/TSX/C/C++; exercise real TypeScript server JS and JSX navigation in a fixture.",
+      "observedEvidence": "Evidence/07-probes.json records grouped identifiers in all four tested didOpen messages.",
+      "inferenceLimits": "Actual TypeScript-server misparse was not measured; some servers infer parser mode from URI and tolerate wrong IDs.",
+      "markdownParagraph": "MEDIUM \u2014 The multiplexer sends profile IDs directly in `didOpen` (`lsp-multiplexer.ts:1040,1437`). The probe sent `typescript` for JavaScript, JSX and TSX, and `cpp` for C. Toolchain grouping is useful for prompts but loses protocol document distinctions. Map source suffixes to canonical document IDs and test real JSX/JavaScript server behavior; the downstream impact remains server-dependent."
+    },
+    {
+      "id": "07-F9",
+      "title": "Server-originated JSON-RPC requests receive no response",
+      "severity": "MEDIUM",
+      "domains": [
+        "error-handling",
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 539,
+          "detail": "Every message with method is ignored, including messages with request id."
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 314,
+          "detail": "Initialize waits for a correlated response under timeout."
+        }
+      ],
+      "trigger": "Peer sends a client request requiring a reply while an operation awaits server progress; even unsupported requests need a JSON-RPC error response.",
+      "consequence": "Peer awaiting client response can stall until startup/request timeout; notifications and requests are indistinguishable to this adapter.",
+      "suggestedFix": "Dispatch supported client requests and reply with typed method-not-found to unsupported requests. Keep workspace mutation requests outside this read-only adapter/pair06 boundary.",
+      "acceptanceProbe": "Fake peer waiting on a string-ID callback receives exactly one result/error; initialize/query settles; true notifications remain non-correlated and do not reject pending requests.",
+      "observedEvidence": "Evidence/07-probes.json: peer-issued configuration request received0 replies; initialize timed out after40ms.",
+      "inferenceLimits": "This is a conditional protocol-liveness failure; no claim is made that a specific installed supported server emitted this callback.",
+      "markdownParagraph": "MEDIUM \u2014 All incoming messages carrying `method` are ignored (`lsp-multiplexer.ts:539`), including requests with IDs. A peer waiting for a client response in the probe received none and timed out. Implement bounded client-request dispatch and explicit errors for unsupported methods while keeping notifications non-correlated. This confirms a protocol gap; it does not prove a particular installed server currently triggers it."
+    },
+    {
+      "id": "07-F10",
+      "title": "Explicit Rust crate imports resolve caller-local modules before crate-root modules",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/import-resolution.ts",
+          "line": 275,
+          "detail": "crate:: prefix is detected then removed."
+        },
+        {
+          "path": "packages/indexer/src/import-resolution.ts",
+          "line": 281,
+          "detail": "Resolution first joins the remaining path to importing file directory."
+        },
+        {
+          "path": "packages/indexer/src/import-resolution.ts",
+          "line": 289,
+          "detail": "Crate root is only a fallback after caller-local match."
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 1255,
+          "detail": "This resolver creates file-reference graph edges."
+        }
+      ],
+      "trigger": "src/nested/main.rs imports crate::config and both src/config.rs and src/nested/config.rs exist.",
+      "consequence": "Import graph chooses nested/config.rs, contradicting explicit crate rooting and misleading reference/impact navigation.",
+      "suggestedFix": "Resolve crate:: exclusively relative to the owning Cargo crate root; preserve correct self/super/local mod rules and nested-workspace ownership.",
+      "acceptanceProbe": "Two config files fixture must select src/config.rs; add two-crate workspace and crate-specific module-root fixtures.",
+      "observedEvidence": "Evidence/07-probes.json returns src/nested/config.rs for crate::config.",
+      "inferenceLimits": "Resolver is heuristic, not a Rust compiler; the wrong explicit-root result is still deterministic.",
+      "markdownParagraph": "MEDIUM \u2014 Rust strips `crate::` and tries the caller\u2019s directory before crate root (`import-resolution.ts:275,281,289`). With both root and nested `config.rs`, the explicit crate import incorrectly selected the nested file. Resolve against the owning crate first, then test `self`, `super`, local modules and multiple crates. This is a deterministic heuristic graph error, independently of missing compiler integration."
+    },
+    {
+      "id": "07-F11",
+      "title": "Go import resolution can create a reference to a foreign-language file",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/indexer/src/import-resolution.ts",
+          "line": 354,
+          "detail": "Go import is gated by root go.mod identity."
+        },
+        {
+          "path": "packages/indexer/src/import-resolution.ts",
+          "line": 359,
+          "detail": "Suffix search scans every indexed path without extension filtering."
+        },
+        {
+          "path": "packages/indexer/src/import-resolution.ts",
+          "line": 370,
+          "detail": "One foreign suffix candidate is accepted as file target."
+        },
+        {
+          "path": "packages/indexer/src/metadata-indexer.ts",
+          "line": 1263,
+          "detail": "Accepted result becomes file-to-file references edge."
+        }
+      ],
+      "trigger": "Go imports local module/pkg/config while that directory contains only an indexed main.ts and no Go source.",
+      "consequence": "An unrelated TypeScript file satisfies the package-directory suffix and becomes a fabricated cross-language import edge.",
+      "suggestedFix": "Use Go-package metadata or at least exact normalized directory plus .go candidates; represent multi-file package ownership without arbitrary one-file guessing.",
+      "acceptanceProbe": "Foreign-only directory must stay unresolved; valid Go package maps to package/member evidence; external, ambiguous and nested-module cases remain honest.",
+      "observedEvidence": "Evidence/07-probes.json resolves example.com/project/pkg/config to pkg/config/main.ts.",
+      "inferenceLimits": "No real go list execution was needed to demonstrate wrong file selection.",
+      "markdownParagraph": "MEDIUM \u2014 Go\u2019s suffix search scans every indexed file (`import-resolution.ts:359`) and accepts a lone matching directory member (`:370`). A fixture with only `pkg/config/main.ts` resolved a Go package import to that TypeScript file. Restrict candidates to the owning Go package and model package membership explicitly. Cross-language references require bridge evidence; sharing a directory suffix is insufficient."
+    }
+  ],
+  "domainAssessment": {
+    "security": "Observed containment before LSP document-byte reads, safe SCIP relative paths, fixed argv diagnostic commands, checksum-pinned/byte-bounded grammar repair and safe interpolated build tokens. No demonstrated injection or credential leak. Language-server process access itself is a host boundary, not an OS sandbox; those policy paths belong execution/governance shards.",
+    "correctness": "Confirmed wrong call/import/precise-reference edges, stale LSP document views, incorrect root selection, misleading diagnostic success and missing installed query assets. Each uses exact current source anchors plus bounded fixture evidence where possible.",
+    "state-mutation": "Shared parser cache keeps grammar through query failure; separate LSP version stores diverge; restart/disposal loses child ownership; silent skipped-sync paths stay dirty. No WorkspaceEdit mutation application findings duplicated from pair06.",
+    "error-handling": "Good typed unavailable/TCP/protocol statuses and scoped-validation drift/re-attestation failures coexist with ignored server requests, discarded diagnostic status and LSP malformed-frame teardown without termination. Binary grammar repair lacks caller cancellation and can honor long Retry-After delays.",
+    "performance": "Bounds and asynchronous shared caches are implemented, not assumed. Fake child counts confirm an ownership leak despite bounded pool counts. Opened document map has no explicit cap. Owning-target build graph still synchronously probes cargo/go up to10s per process on live tool path; no latency benchmark was run.",
+    "dependency-hygiene": "web-tree-sitter0.25.10, @vscode grammars0.1.4 and build grammar package0.1.13 are explicitly declared/pinned; GDScript immutable asset/ABI provenance is explicit. Packaging omits query assets; current bundler resolves a runtime package probe to build-checkout path. No registry/network vulnerability audit or dependency installation performed.",
+    "test-coverage": "Root evidence154pass/4fail and isolated17pass/3fail is environment-specific; current pinned explicit grammar probes repair the interpretation. Several mocks miss real component interactions: two collapsed language families, long SCIP prefix collision, query->first-sync version and restart->dispose ownership. Eleven argv cases and skip-gated clangd do not establish eleven-server assurance. Packaged query script only warns on missing expected tokens and is not fresh isolated-install evidence.",
+    "api-contract": "ManifestV1 is deterministic/detached with closed language keys and golden validation; do not treat listed tool names/stages as negotiated runtime availability. Preserve setWasmDir relative/verbatim API. LSP document language IDs and monotonic versions break protocol expectations; diagnostic passed scalar lacks coverage/outcome contract. Existing constructed-only service interface additions are explicitly documented and not separately flagged as newly discovered breakage."
+  },
+  "coverageLimits": [
+    "Native query_index/read_files/read_subtree are not exposed here; discovery used rg, exact numbered reads and the pinned picker/inventory. No native retrieval calls are claimed.",
+    "Every picker primary range was read. Large adjacent files were sampled at recorded ranges; structural receipt means inspection, not full-line audit or whole-repository guarantee.",
+    "cli/release/index.js was read only for current installed-wrapper context and is omitted from structuralReceipt because the native inventory excludes it. Pair12 owns that inventory gap.",
+    "No credentials/private configuration, external APIs/network/model calls, source fixes or existing build output mutations. Only owned /tmp evidence and reports were written.",
+    "Probes use local Bun1.3.5. Graph/parser probes use actual current source; LSP peers and diagnostic runner are injected fakes. No real compiler, external SCIP indexer or multi-language server task ran.",
+    "Root tests154pass/4fail and isolated17pass/3fail are retained as existing evidence, not renamed release failures. Pinned local asset probes succeeded for PHP/Swift/Kotlin/GDScript. Fresh component bundles are not a packed whole SDK installation.",
+    "WorkspaceEdit mutation normalization/apply/version/resource operations remain pair06. Pair08 owns SCIP/index manager persistence/refresh/snapshot semantics. Execution sandbox/approval, native sidecar supervisors, broad retrieval ranking and global learned-routing audits are elsewhere.",
+    "Cross-language generated-schema/RPC/FFI absence is scoped to inspected target-language consumers. Whole-repo implementations outside this slice and live virtual-FS/server namespace consistency remain unknown."
+  ],
+  "evidenceArtifacts": [
+    {
+      "path": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/07-probes.json",
+      "kind": "bounded-fixture-and-DI",
+      "runtime": "Bun1.3.5",
+      "detail": "Family/call/import/SCIP edge checks, actual service+mux fake peer protocol/lifecycle checks and injected diagnostic runner."
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/07-assets.json",
+      "kind": "pinned-grammar-and-component-packaging",
+      "runtime": "Bun1.3.5; Node26.1.0",
+      "detail": "Current source grammar parser/query/symbol results using local bytes matched to current pins; fresh CJS/ESM code-map component bundles. Python-launched Node entries carry observed structured result; empty Bun spawnSync entries are not passing semantic evidence."
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/code-map-tests.log",
+      "kind": "existing-root-test",
+      "detail": "154pass/4fail, read as environment-specific asset setup/structure evidence."
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/code-map-structure-alone.log",
+      "kind": "existing-root-test",
+      "detail": "17pass/3fail, PHP null and missing GDScript definitions before explicit pinned grammar staging."
+    }
+  ],
+  "recommendedPlanWork": [
+    {
+      "id": "07-W1",
+      "priority": "ready",
+      "problem": "Installed semantics differ from builder/dev evidence (07-F1).",
+      "sourceAnchors": [
+        {
+          "path": "sdk/scripts/build.ts",
+          "line": 147,
+          "detail": "Asset publication"
+        },
+        {
+          "path": "cli/scripts/build-binary.ts",
+          "line": 658,
+          "detail": "Query copy"
+        },
+        {
+          "path": ".github/workflows/cli-release-build.yml",
+          "line": 460,
+          "detail": "Archive membership"
+        },
+        {
+          "path": "packages/code-map/src/utils.ts",
+          "line": 25,
+          "detail": "Runtime resolver"
+        }
+      ],
+      "intendedBehavior": "All advertised grammar/query assets load from actual installed package/executable location with observable partial/unavailable states.",
+      "smallestScope": "Code-map asset resolver plus SDK copy, two archive branches, installed wrapper managed-query assets/checksum and isolated packaging tests.",
+      "prerequisites": [],
+      "languageDecision": "Retain TypeScript orchestration and existing pinned WASM grammars; no parser port.",
+      "behavioralAcceptance": [
+        "Fresh CJS/ESM npm-pack and both CLI archive fixtures with no checkout visibility.",
+        "Nonempty symbols, calls/import captures plus unavailable/empty distinction for every grammar."
+      ],
+      "regressionChecks": [
+        "setWasmDir relative/verbatim compatibility",
+        "GDScript immutable hash/ABI pin",
+        "Core tree-sitter startup and grammar-no-query cache retention"
+      ],
+      "completionEvidence": "Installed-layout asset manifest and parser/query/semantic output matrix with exact archive members and hashes.",
+      "stopDeferRule": "Do not add languages or mark packaging done while fixture only validates --help/core WASM or retained build checkout."
+    },
+    {
+      "id": "07-W2",
+      "priority": "ready",
+      "problem": "Wrong language/call/import boundaries (07-F2/10/11).",
+      "sourceAnchors": [
+        {
+          "path": "common/src/util/language-profiles.ts",
+          "line": 138,
+          "detail": "Family API"
+        },
+        {
+          "path": "packages/code-map/src/parse.ts",
+          "line": 891,
+          "detail": "Caller family consumer"
+        },
+        {
+          "path": "packages/indexer/src/import-resolution.ts",
+          "line": 273,
+          "detail": "Rust/Go resolution"
+        }
+      ],
+      "intendedBehavior": "Path/extension families agree; explicit crate roots and local Go package membership cannot fabricate foreign edges.",
+      "smallestScope": "Shared family helper plus both callers and import resolver; typed package-root metadata only where required.",
+      "prerequisites": [],
+      "languageDecision": "Repair current TS functions; prefer cargo/go ecosystem metadata over new custom language parser.",
+      "behavioralAcceptance": [
+        "All supported positive/negative family pairs.",
+        "Python caller/Rust same-name definition never linked.",
+        "Root/nested Rust config and foreign-only Go package fixtures."
+      ],
+      "regressionChecks": [
+        "TS/JS and C/C++ separation",
+        "dot-directory/dotfile contract",
+        "Ambiguous/external imports remain unresolved"
+      ],
+      "completionEvidence": "Snapshot-bound real graph fixture output with expected edges and explicit unresolved cases.",
+      "stopDeferRule": "Do not claim precise call semantics for regex/name heuristics; defer full compiler resolution beyond declared workload."
+    },
+    {
+      "id": "07-W3",
+      "priority": "ready",
+      "problem": "Precise symbol identity is conflated with bounded display label (07-F3).",
+      "sourceAnchors": [
+        {
+          "path": "packages/indexer/src/scip-ingest.ts",
+          "line": 367,
+          "detail": "Parse boundary"
+        },
+        {
+          "path": "packages/indexer/src/scip-ingest.ts",
+          "line": 265,
+          "detail": "Definition identity map"
+        }
+      ],
+      "intendedBehavior": "No distinct SCIP symbols collide due to presentation cap; precise confidence has defined ambiguity and provenance.",
+      "smallestScope": "Separate identity/label fields or bounded digest identity in ingest/edge schema and tests; join pair08 persistence work.",
+      "prerequisites": [],
+      "languageDecision": "Use existing SCIP standard and TS ingest; adding indexer languages is deferred.",
+      "behavioralAcceptance": [
+        "Identical160-char prefixes with distinct descriptors preserve correct target.",
+        "Document order/duplicate definitions and repeated ingest produce deterministic honest evidence."
+      ],
+      "regressionChecks": [
+        "Label/occurrence/edge caps",
+        "Unsafe paths/local symbols",
+        "Pure merge and queryData invalidation"
+      ],
+      "completionEvidence": "Actual indexer dump fixture plus collision and ambiguity receipts and persistence refresh confirmation from pair08.",
+      "stopDeferRule": "No precise label on guessed raw-name or truncated identities; defer new indexers until producer dump contracts pass."
+    },
+    {
+      "id": "07-W4",
+      "priority": "next",
+      "problem": "LSP document truth and process ownership diverge (07-F4/5).",
+      "sourceAnchors": [
+        {
+          "path": "sdk/src/services/language-intelligence.ts",
+          "line": 593,
+          "detail": "Version LRU"
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 569,
+          "detail": "Transport/process teardown"
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 961,
+          "detail": "Restart ownership"
+        }
+      ],
+      "intendedBehavior": "Query and sync share current document versions; skipped changes invalidate observations; disposed/cancelled runs own no server process.",
+      "smallestScope": "Mux-owned document state and dirty invalidation plus restart cancellation/join and explicit teardown/reaping, with service/run sync status.",
+      "prerequisites": [
+        "07-W1"
+      ],
+      "languageDecision": "Keep TS lifecycle authority; use standard LSP transports rather than duplicate supervisor port.",
+      "behavioralAcceptance": [
+        "Strict peer query->edit->query bytes/version checks.",
+        "65+ documents,33-file edits, size cap and failed writes/sync.",
+        "Malformed peer plus disposal/backoff/startup leaves zero surviving processes."
+      ],
+      "regressionChecks": [
+        "Single-flight/max-server reservations",
+        "FS containment/deletes",
+        "Warm/cold availability and request/frame limits"
+      ],
+      "completionEvidence": "Per-document version/hash and per-PID start/stop receipts in DI and bounded real server fixture.",
+      "stopDeferRule": "Do not let fail-open sync imply fresh semantics; expose unavailable/dirty until validated."
+    },
+    {
+      "id": "07-W5",
+      "priority": "next",
+      "problem": "LSP interoperability still groups documents, misroots and drops client requests (07-F6/8/9).",
+      "sourceAnchors": [
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 668,
+          "detail": "Root found-state"
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 1040,
+          "detail": "Document ID"
+        },
+        {
+          "path": "sdk/src/services/lsp-multiplexer.ts",
+          "line": 539,
+          "detail": "Client requests"
+        }
+      ],
+      "intendedBehavior": "Correct root/document ID and supported-or-explicitly-rejected callbacks, with per-server capability/encoding truth.",
+      "smallestScope": "Root resolver branch, document-ID mapping, bounded read-only callback dispatcher and response schema/negotiation; expose root/lang context for workspace symbols.",
+      "prerequisites": [
+        "07-W4"
+      ],
+      "languageDecision": "Adopt ecosystem LSP conventions; GDScript TCP remains explicit unavailable until a measured Godot workload justifies support.",
+      "behavioralAcceptance": [
+        "Parent marker versus ancestor, nested root cases.",
+        "JS/JSX/TSX/C correct didOpen.",
+        "String/number callback IDs get result/error exactly once.",
+        "Real clangd plus TypeScript/Python/Rust fixture cells report pass or explicit unavailable."
+      ],
+      "regressionChecks": [
+        "Registry profile ordering unchanged",
+        "Position encoding and document versions",
+        "No automatic WorkspaceEdit application in read-only callback handler"
+      ],
+      "completionEvidence": "Runtime capability matrix and actual navigation results with document versions/root/encoding.",
+      "stopDeferRule": "Argv mocks or skipped fixtures cannot graduate a language to tested semantic support."
+    },
+    {
+      "id": "07-W6",
+      "priority": "next",
+      "problem": "Diagnostic passes can represent zero trustworthy observation (07-F7).",
+      "sourceAnchors": [
+        {
+          "path": "sdk/src/services/diagnostic-delta.ts",
+          "line": 232,
+          "detail": "Capture truth"
+        },
+        {
+          "path": "sdk/src/tools/file-change-hooks.ts",
+          "line": 1691,
+          "detail": "Passed result"
+        },
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 2162,
+          "detail": "Target command/root inference"
+        }
+      ],
+      "intendedBehavior": "Diagnostics carry command/root/env/exit/status/coverage; clean delta requires valid comparable observations; missing checks remain skipped/reduced.",
+      "smallestScope": "Typed capture outcome and coverage plus per-owning-project routing through existing runner and hook/scoped-validation result contracts.",
+      "prerequisites": [
+        "07-W2"
+      ],
+      "languageDecision": "One TS orchestration authority invoking existing compilers/linters; no incremental daemon until measured workload requires it.",
+      "behavioralAcceptance": [
+        "Timeout/missing/cancelled/partial/malformed output is not diagnostic_delta_passed.",
+        "Nested TS/Python/Rust/Go project checks correct roots/envs.",
+        "Known no-dispatch language and command cap expose incomplete coverage.",
+        "Before/after new-error and shifted-preexisting-error cases."
+      ],
+      "regressionChecks": [
+        "Matching-hook opt-in policy",
+        "Baseline per-call isolation",
+        "Configured hook permission/drift gates and fix-it parsing"
+      ],
+      "completionEvidence": "Per-command outcome receipts and validation assurance tied to actual coverage, snapshot and diagnostics.",
+      "stopDeferRule": "Do not auto-run every advertised validation stage; defer unsupported ecosystems visibly and retain configured generic hook route."
+    },
+    {
+      "id": "07-W7",
+      "priority": "defer-until-prerequisites",
+      "problem": "Cross-language target discovery is not interface validation and test graph/coverage are unwired.",
+      "sourceAnchors": [
+        {
+          "path": "sdk/src/tools/get-affected-tests.ts",
+          "line": 7,
+          "detail": "Unwired graph seam"
+        },
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 1551,
+          "detail": "Test conventions"
+        },
+        {
+          "path": "sdk/src/services/build-graph.ts",
+          "line": 621,
+          "detail": "Nested metadata roots"
+        },
+        {
+          "path": "sdk/src/tools/run-targeted-validation.ts",
+          "line": 68,
+          "detail": "Configured execution authority"
+        }
+      ],
+      "intendedBehavior": "Contract-change tasks discover producers/consumers, execute correct component validation and return one joined version/hash/outcome evidence bundle.",
+      "smallestScope": "Wire read-only indexer reverse dependencies into affected tests; add ecosystem test conventions and per-root metadata; one TS/Python/Rust versioned-schema fixture using existing hook executor.",
+      "prerequisites": [
+        "07-W1",
+        "07-W2",
+        "07-W3",
+        "07-W4",
+        "07-W5",
+        "07-W6"
+      ],
+      "languageDecision": "Target-project language cooperation first; choose a Rust/Python sidecar implementation only for a measured capability/ABI advantage, preserving one run/effect authority.",
+      "behavioralAcceptance": [
+        "Change a versioned JSON/schema contract and generated/client/server consumers across TS/Python/Rust.",
+        "Verify artifact bytes/hash, encoding, diagnostic versions, cancellation and typed failures at every boundary.",
+        "Show relevant tests beyond JS filename convention and compare baseline task success/latency/resource evidence."
+      ],
+      "regressionChecks": [
+        "No foreign raw-name edge guessing",
+        "Snapshot/permission/drift validation",
+        "Unknown targets and empty coverage stay explicit"
+      ],
+      "completionEvidence": "Repeatable bounded cross-language task receipts with actual compiler/test results and held-out interface changes.",
+      "stopDeferRule": "Do not mark complete for grammar count, unused adapter, skipped native path or command candidate; defer ecosystem expansions without a declared workload."
+    }
+  ],
+  "summary": {
+    "findings": 11,
+    "capabilities": 10,
+    "high": 6,
+    "medium": 5,
+    "receiptFiles": 49,
+    "topConclusions": [
+      "Advertised profile/grammar breadth is useful but exceeds shipped semantic and validation assurance; packaging and observation-state truth require repair before adding languages.",
+      "Current graph/SCIP/LSP/diagnostic boundary bugs fabricate or lose evidence; repair in TypeScript using existing ecosystem tools before considering an implementation-language migration."
+    ]
+  }
+}

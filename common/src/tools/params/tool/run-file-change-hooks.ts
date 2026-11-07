@@ -24,6 +24,8 @@ Use cases:
 
 The client will run only the hooks whose filePattern matches the provided files.
 
+When the opt-in OPENBUFF_DIAGNOSTIC_PREFLIGHT diagnostic-delta preflight runs, a diagnostic-delta entry retains command execution and coverage observations. Only a complete before/after check reports diagnostic_delta_passed. New errors report diagnostic_delta_rejected with newDiagnostics and fixIts; failed, cancelled, unavailable, incomplete and unknown observations retain their specific status even when optional validation permits work.
+
 Example:
 ${$getNativeToolCallExampleString({
   toolName,
@@ -56,6 +58,53 @@ const diagnosticSchema = z.object({
   source: z.string(),
 })
 
+const diagnosticCoverageStatusSchema = z.enum(['complete', 'incomplete', 'unavailable', 'unknown'])
+export const diagnosticCaptureSchema = z.object({
+  diagnostics: z.array(diagnosticSchema),
+  commands: z.array(z.object({
+    command: z.string(),
+    status: z.enum(['completed', 'failed', 'timed_out', 'cancelled', 'unavailable', 'unknown']),
+    exitCode: z.number().optional(),
+    errorMessage: z.string().optional(),
+    outputTruncated: z.boolean(),
+    diagnosticCount: z.number().int().nonnegative(),
+    coverageStatus: diagnosticCoverageStatusSchema,
+  })),
+  coverage: z.object({
+    status: diagnosticCoverageStatusSchema,
+    requestedFiles: z.array(z.string()),
+    observedFiles: z.array(z.string()),
+    unobservedFiles: z.array(z.string()),
+    reasons: z.array(z.string()),
+  }),
+})
+
+export const diagnosticObservationsSchema = z.object({
+  basis: z.enum(['before_after', 'current_only', 'unknown']),
+  before: diagnosticCaptureSchema.optional(),
+  after: diagnosticCaptureSchema.optional(),
+  reason: z.string().optional(),
+})
+
+/** Matches LanguageDiagnosticTextEdit from sdk/src/tools/language-diagnostics. */
+const textEditSchema = z.object({
+  file: z.string(),
+  newText: z.string(),
+  range: z.object({
+    start: z.object({
+      line: z.number().int().positive(),
+      column: z.number().int().positive(),
+    }),
+    end: z.object({
+      line: z.number().int().positive(),
+      column: z.number().int().positive(),
+    }),
+  }),
+  applicability: z
+    .enum(['machineApplicable', 'maybeIncorrect', 'unspecified'])
+    .optional(),
+})
+
 export const runFileChangeHooksParams = {
   toolName,
   endsAgentStep,
@@ -79,6 +128,28 @@ export const runFileChangeHooksParams = {
           message: z.string(),
           configuredHookCount: z.number().optional(),
           changedFiles: z.array(z.string()).optional(),
+        }),
+        // Opt-in diagnostic-delta preflight result (requires
+        // OPENBUFF_DIAGNOSTIC_PREFLIGHT and an injected diagnosticDelta hook).
+        // Without this arm, schema-parsing consumers rejected or stripped the
+        // delta entry runFileChangeHooks appends when the preflight runs: the
+        // shape matches no terminal-command arm (no command) and no run-level
+        // arm (different validationStatus, no message).
+        z.object({
+          hookName: z.literal('diagnostic-delta'),
+          validationStatus: z.enum([
+            'diagnostic_delta_rejected',
+            'diagnostic_delta_passed',
+            'diagnostic_delta_failed',
+            'diagnostic_delta_cancelled',
+            'diagnostic_delta_unavailable',
+            'diagnostic_delta_incomplete',
+            'diagnostic_delta_unknown',
+          ]),
+          diagnosticStatus: z.enum(['passed', 'new_errors', 'failed', 'cancelled', 'unavailable', 'incomplete', 'unknown']).optional(),
+          observations: diagnosticObservationsSchema.optional(),
+          newDiagnostics: z.array(diagnosticSchema).optional(),
+          fixIts: z.array(textEditSchema).optional(),
         }),
       ])
       .array(),

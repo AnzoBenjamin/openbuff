@@ -21,10 +21,16 @@ const CHECK_JOB_OUTPUT_LIMIT = 50_000
 const POLL_INTERVAL_MS = 200
 
 /**
- * M2-T4 (Fix 1): default follow deadline when a caller joined follow mode via
- * `wait_for` WITHOUT a positive timeout_seconds. Follow mode must ALWAYS have
- * a finite deadline: awaiting the registry with none could block the turn
- * indefinitely. Exported so the covering test pins the bound.
+ * @deprecated UNREACHABLE — retained for source compatibility only.
+ *
+ * This constant previously supplied the implicit 30s follow deadline when a
+ * caller passed `wait_for` without a positive `timeout_seconds`. Under the
+ * current contract `resolveCheckJobWaitBounds` enters follow mode ONLY for an
+ * explicit positive `timeout_seconds` (`follow = requestedTimeoutMs > 0`), so
+ * no code path can resolve a follow request without a caller-supplied
+ * duration and this value is never read. Migrate by passing an explicit
+ * `timeout_seconds` when you want a blocking wait; a bare `wait_for` is a
+ * single non-blocking poll.
  */
 export const DEFAULT_CHECK_JOB_FOLLOW_TIMEOUT_MS = 30_000
 
@@ -241,9 +247,7 @@ export function resolveCheckJobWaitBounds(params: {
   // timeoutMs 0 (immediate single poll).
   const follow = requestedTimeoutMs > 0
   const timeoutMs = Math.min(
-    follow
-      ? requestedTimeoutMs
-      : 0,
+    follow ? requestedTimeoutMs : 0,
     MAX_CHECK_JOB_FOLLOW_TIMEOUT_MS,
   )
   return { follow, timeoutMs, deadline: Date.now() + timeoutMs }
@@ -252,8 +256,8 @@ export function resolveCheckJobWaitBounds(params: {
 /**
  * Build the structured poll/follow result from the raw follow state. Computes
  * the common output fields (state, events, nextCursor, truncated, dropped,
- * matched, exitCode) shared by poll and follow modes. Advances the per-adapter
- * consumer cursor (lastCheckCursor) as a side effect. The presentation-level
+ * matched, exitCode) shared by poll and follow modes. When no explicit cursor
+ * was provided, advances the job's stored cursor as a side effect. The presentation-level
  * output cap (boundEventsToOutputTail) is applied here; the caller folds the
  * returned `timedOut` into its kill/return logic.
  */
@@ -271,6 +275,7 @@ function buildCheckJobPollResult(params: {
   newEvents: JobEvent[]
   cursor: number
   truncated: boolean
+  advanceStoredCursor: boolean
 }): {
   jobId: string
   state: JobState
@@ -291,6 +296,7 @@ function buildCheckJobPollResult(params: {
     newEvents,
     cursor,
     truncated: truncatedSoFar,
+    advanceStoredCursor,
   } = params
   const registryJob = jobRegistry.get(jobId)
   const state = registryJob?.state ?? job.status
@@ -310,10 +316,9 @@ function buildCheckJobPollResult(params: {
   )
   const events = boundedResult.events
   const nextCursor = finalSnapshot?.nextCursor ?? cursor
-  // Advance the per-adapter consumer cursor so the next check_job does not
-  // re-serve these events. Mirrored-by-live-drainer is not the same as
-  // consumed-by-check_job; only this advance marks consumption.
-  job.lastCheckCursor = nextCursor
+  // Explicit cursors are independent observations; only cursorless polling
+  // advances the job's stored cursor.
+  if (advanceStoredCursor) job.lastCheckCursor = nextCursor
   const finalDropped = finalSnapshot?.dropped ?? 0
   const finalTruncated =
     truncatedSoFar ||
@@ -339,25 +344,31 @@ function buildCheckJobPollResult(params: {
  * The unified job registry is the source of truth for the job's lifecycle
  * state and output event stream; this adapter-level follow loop drains new
  * log bytes via readNewJobOutput (which mirrors them into the registry as
- * `output` events) and returns the registry event slice since the caller's
- * per-consumer cursor.
+ * `output` events) and returns the registry event slice since an explicit
+ * caller cursor or the job's stored cursor.
  *
- * Blocking (follow mode) is governed solely by `timeout_seconds`:
- * - Without `timeout_seconds` (i.e. it is unset or <= 0) the call performs a
- *   single non-blocking poll and returns immediately with whatever output is
- *   currently available (poll mode). When `wait_for` is supplied it is still
- *   evaluated against that single poll — `matched` reflects the output already
- *   present — but the call does NOT wait for the pattern to appear.
- * - With `timeout_seconds` > 0 the call blocks — bounded by the timeout —
- *   until `wait_for` appears in new output, the job exits, or the timeout
- *   elapses (follow mode). Without `wait_for` it blocks until the job exits or
+ * SINGLE CONTRACT — blocking is governed solely by `timeout_seconds`:
+ * - `timeout_seconds` unset, zero, or invalid (non-finite/negative) is POLL
+ *   mode: exactly one non-blocking poll, returning immediately with the output
+ *   currently available. A `wait_for` supplied without a positive
+ *   `timeout_seconds` is evaluated against THAT single poll only — `matched`
+ *   reports whether the pattern is already present — and the call does NOT
+ *   wait for the pattern to appear. There is no implicit follow window:
+ *   `DEFAULT_CHECK_JOB_FOLLOW_TIMEOUT_MS` is deprecated and unreachable, so a
+ *   caller migrating off the old follow-by-default behavior must pass an
+ *   explicit duration.
+ * - `timeout_seconds` > 0 is FOLLOW mode: the call blocks — bounded by the
+ *   timeout (capped at `MAX_CHECK_JOB_FOLLOW_TIMEOUT_MS`) — until `wait_for`
+ *   appears in new output, the job exits, the timeout elapses, or the caller's
+ *   abort signal fires. Without `wait_for` it blocks until the job exits or
  *   the timeout elapses.
  * To follow an arbitrary log file until a pattern appears, start a
  * `tail -f <file>` background job and check_job it with both a `wait_for`
- * pattern and a `timeout_seconds`.
+ * pattern and a positive `timeout_seconds`.
  */
 export async function checkJob(params: {
   jobId: string
+  cursor?: number
   wait_for?: string
   timeout_seconds?: number
   kill_on_timeout?: boolean
@@ -430,16 +441,16 @@ export async function checkJob(params: {
   // drain inside recheckRecoveredJobLiveness happens BEFORE the poll's own
   // drain later in the loop, so no events are lost).
   recheckRecoveredJobLiveness(job)
-  // Per-adapter registry consumer cursor (lastCheckCursor). Independent of the
-  // live drainer's readOffset: bytes the 250ms interval already mirrored into
-  // the registry are still unconsumed by check_job until returned here.
+  // Explicit observations do not move the stored job cursor; cursorless polls
+  // consume from that shared position. Neither position is the live drainer's
+  // readOffset: the drainer mirrors bytes into the registry independently.
   // Default 0 so the first poll observes prior registry events (including
   // pre-drained live output); subsequent polls advance from the prior return.
   // Re-snapshotting from entryCursor before returning yields the FULL window
   // matching `nextCursor`, so a multi-iteration follow returns every `output`
   // event emitted before the match/exit/timeout — not just the final poll's
   // batch (which would drop earlier events while advancing `nextCursor`).
-  const entryCursor = job.lastCheckCursor ?? 0
+  const entryCursor = params.cursor ?? job.lastCheckCursor ?? 0
   let cursor = entryCursor
   let truncated = false
   let collected = ''
@@ -532,6 +543,7 @@ export async function checkJob(params: {
         newEvents,
         cursor,
         truncated,
+        advanceStoredCursor: params.cursor === undefined,
       })
 
       if (timedOut && job.status === 'running' && killOnTimeout) {

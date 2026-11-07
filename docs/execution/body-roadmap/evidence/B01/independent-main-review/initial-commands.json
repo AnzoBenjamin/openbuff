@@ -1,0 +1,31 @@
+[
+  {
+    "name": "initial-core",
+    "argv": [
+      "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+      "--no-env-file",
+      "test",
+      "--isolate",
+      "sdk/src/__tests__/audit-intelligence.test.ts",
+      "common/src/tools/params/__tests__/write-audit-findings.test.ts",
+      "sdk/src/__tests__/write-audit-findings.test.ts",
+      "common/src/util/__tests__/audit-receipt.test.ts",
+      "agents/__tests__/gate-reviewer.test.ts",
+      "agents/__tests__/code-reviewer.test.ts",
+      "agents/__tests__/gate-reviewer-parity.test.ts",
+      "agents/__tests__/audit-contracts.test.ts"
+    ],
+    "exitCode": 0
+  },
+  {
+    "name": "initial-base2-consumer",
+    "argv": [
+      "/home/ben/.bun/install/cache/@oven/bun-linux-x64@1.3.5@@@1/bin/bun",
+      "--no-env-file",
+      "test",
+      "--isolate",
+      "agents/__tests__/base2.test.ts"
+    ],
+    "exitCode": 1
+  }
+]

@@ -1,0 +1,108 @@
+{
+  "scope": "Actual Node filesystem and cooperating local broker ordinary conditional success; no B04 exclusion/crash reclamation or native/installed claim",
+  "workspace": "/tmp/b03-independent-node-broker-probe-y2h8q4d5/b03-node-confirmed-7NZId9",
+  "before": {
+    "base64": "YmVmb3JlDQprZXB0DQo=",
+    "hash": "sha256:c167d8e79831b6d66ab137a4263a46abe371358ab113db9e7abbe4eca1196f35"
+  },
+  "after": {
+    "base64": "YWZ0ZXINCmtlcHQNCg==",
+    "hash": "sha256:715b3a47acf0571d59b4ffb1198242a655795c7b667e60f4026693a489a32d02"
+  },
+  "mutation": {
+    "kind": "file_mutation_result",
+    "version": 1,
+    "operationId": "54379dd7-f520-4327-9227-f8dfc50f4a2c",
+    "outcome": "applied",
+    "actions": [
+      {
+        "actionId": "088edc06-7e02-4f4c-9381-39a575220da2",
+        "index": 0,
+        "action": "update",
+        "path": "fixture.txt",
+        "outcome": "applied",
+        "beforeHash": "sha256:c167d8e79831b6d66ab137a4263a46abe371358ab113db9e7abbe4eca1196f35",
+        "afterHash": "sha256:715b3a47acf0571d59b4ffb1198242a655795c7b667e60f4026693a489a32d02",
+        "forward": {
+          "outcome": "applied",
+          "afterHashes": {
+            "fixture.txt": "sha256:715b3a47acf0571d59b4ffb1198242a655795c7b667e60f4026693a489a32d02"
+          }
+        },
+        "afterContent": "after\r\nkept\r\n",
+        "editAnchor": {
+          "startLine": 1,
+          "endLine": 3,
+          "contentHash": "sha256:3d017c9112bc1f414043395d2d4beff6f9396e4891951f94a4c1b85f6376b7db",
+          "readCapability": "cap.v3.1.3.PQF8kRK8H0FAQzldLUvv9vk5bkiRlR-UpMG4X2N2t9s.s1EZ5NafkRH3gijTDRIsGiSNml-OI0ZKgzof-blhufI.dCROIX-1EBIlFYGspKtE0rdIpRs6bW3apE17uzetbz0"
+        }
+      }
+    ],
+    "authorityTier": "conditional_commit",
+    "receiptId": "4f61bece-6fc7-4115-8c66-423ffef287bb",
+    "authorityReceipt": {
+      "kind": "commit_receipt",
+      "version": 1,
+      "receiptId": "4f61bece-6fc7-4115-8c66-423ffef287bb",
+      "operationId": "54379dd7-f520-4327-9227-f8dfc50f4a2c",
+      "callId": "54379dd7-f520-4327-9227-f8dfc50f4a2c",
+      "authorityTier": "conditional_commit",
+      "status": "committed",
+      "actions": [
+        {
+          "actionId": "088edc06-7e02-4f4c-9381-39a575220da2",
+          "index": 0,
+          "action": "update",
+          "path": "fixture.txt",
+          "status": "committed",
+          "beforeHash": "sha256:c167d8e79831b6d66ab137a4263a46abe371358ab113db9e7abbe4eca1196f35",
+          "afterHash": "sha256:715b3a47acf0571d59b4ffb1198242a655795c7b667e60f4026693a489a32d02",
+          "forward": {
+            "outcome": "applied",
+            "afterHashes": {
+              "fixture.txt": "sha256:715b3a47acf0571d59b4ffb1198242a655795c7b667e60f4026693a489a32d02"
+            }
+          }
+        }
+      ],
+      "finalHashes": {
+        "fixture.txt": "sha256:715b3a47acf0571d59b4ffb1198242a655795c7b667e60f4026693a489a32d02"
+      }
+    },
+    "errors": [],
+    "freshCapabilities": [
+      {
+        "version": 1,
+        "token": "cap.v3.1.3.PQF8kRK8H0FAQzldLUvv9vk5bkiRlR-UpMG4X2N2t9s.s1EZ5NafkRH3gijTDRIsGiSNml-OI0ZKgzof-blhufI.dCROIX-1EBIlFYGspKtE0rdIpRs6bW3apE17uzetbz0",
+        "snapshot": {
+          "kind": "file_snapshot",
+          "version": 1,
+          "canonicalPath": "/tmp/b03-independent-node-broker-probe-y2h8q4d5/b03-node-confirmed-7NZId9/fixture.txt",
+          "contentHash": "sha256:715b3a47acf0571d59b4ffb1198242a655795c7b667e60f4026693a489a32d02",
+          "sizeBytes": 13,
+          "encoding": "utf8",
+          "readGeneration": 1794001516725
+        },
+        "kind": "whole_file"
+      }
+    ]
+  },
+  "adapterReturns": [
+    {
+      "result": {
+        "applied": true,
+        "receipt": {
+          "receiptId": "6e069fa3-206e-4c04-95a3-86a30a0baa6b",
+          "brokerRevision": 1,
+          "authorityKind": "cooperative_cas"
+        }
+      },
+      "requestedBase64": "YWZ0ZXINCmtlcHQNCg==",
+      "expectedHash": "sha256:c167d8e79831b6d66ab137a4263a46abe371358ab113db9e7abbe4eca1196f35"
+    }
+  ],
+  "fetchObservation": {
+    "attempted": 0,
+    "forwarded": 0
+  }
+}

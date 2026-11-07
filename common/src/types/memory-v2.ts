@@ -596,6 +596,72 @@ export type ProjectionRebuildFailedPayload = z.infer<
   typeof ProjectionRebuildFailedPayloadSchema
 >
 
+// Playbook (procedural memory) event payloads — Phase 1 part A of the
+// memory overhaul. Additive only: these five kinds extend the event-kind
+// unions below without touching any existing payload or kind. All playbook
+// payloads carry the `triggerSignature` (sha256 upsert/dedup key defined in
+// ./memory-playbook.ts) so consumers can correlate events to the exact rule
+// version without loading the playbook row.
+export const PlaybookBlockedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    playbookId: z.string().min(1).max(128),
+    title: z.string().min(1).max(200),
+    tool: z.string().min(1).max(128),
+    reason: shortTextSchema,
+    triggerSignature: z.string().min(1).max(128),
+  })
+  .strict()
+export type PlaybookBlockedPayload = z.infer<
+  typeof PlaybookBlockedPayloadSchema
+>
+
+export const PlaybookBypassedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    playbookId: z.string().min(1).max(128),
+    triggerSignature: z.string().min(1).max(128),
+  })
+  .strict()
+export type PlaybookBypassedPayload = z.infer<
+  typeof PlaybookBypassedPayloadSchema
+>
+
+export const PlaybookProposedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    playbookId: z.string().min(1).max(128),
+    triggerSignature: z.string().min(1).max(128),
+    origin: z.string().min(1).max(256),
+  })
+  .strict()
+export type PlaybookProposedPayload = z.infer<
+  typeof PlaybookProposedPayloadSchema
+>
+
+export const PlaybookActivatedPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    playbookId: z.string().min(1).max(128),
+    triggerSignature: z.string().min(1).max(128),
+  })
+  .strict()
+export type PlaybookActivatedPayload = z.infer<
+  typeof PlaybookActivatedPayloadSchema
+>
+
+export const PlaybookRetiredPayloadSchema = z
+  .object({
+    ...payloadVersionShape,
+    playbookId: z.string().min(1).max(128),
+    triggerSignature: z.string().min(1).max(128),
+    reason: longTextSchema,
+  })
+  .strict()
+export type PlaybookRetiredPayload = z.infer<
+  typeof PlaybookRetiredPayloadSchema
+>
+
 export const SessionStartedPayloadSchema = z
   .object({
     ...payloadVersionShape,
@@ -751,6 +817,11 @@ export const MemoryEventDraftSchema = z.discriminatedUnion('eventType', [
     ProjectionRebuildCompletedPayloadSchema,
   ),
   eventDraft('projection.rebuild.failed', ProjectionRebuildFailedPayloadSchema),
+  eventDraft('playbook.blocked', PlaybookBlockedPayloadSchema),
+  eventDraft('playbook.bypassed', PlaybookBypassedPayloadSchema),
+  eventDraft('playbook.proposed', PlaybookProposedPayloadSchema),
+  eventDraft('playbook.activated', PlaybookActivatedPayloadSchema),
+  eventDraft('playbook.retired', PlaybookRetiredPayloadSchema),
 ])
 export type MemoryEventDraft = z.infer<typeof MemoryEventDraftSchema>
 
@@ -791,9 +862,21 @@ export const MemoryEventEnvelopeSchema = z.discriminatedUnion('eventType', [
     'projection.rebuild.failed',
     ProjectionRebuildFailedPayloadSchema,
   ),
+  eventEnvelope('playbook.blocked', PlaybookBlockedPayloadSchema),
+  eventEnvelope('playbook.bypassed', PlaybookBypassedPayloadSchema),
+  eventEnvelope('playbook.proposed', PlaybookProposedPayloadSchema),
+  eventEnvelope('playbook.activated', PlaybookActivatedPayloadSchema),
+  eventEnvelope('playbook.retired', PlaybookRetiredPayloadSchema),
 ])
 export type MemoryEventEnvelope = z.infer<typeof MemoryEventEnvelopeSchema>
 export type MemoryEventType = MemoryEventEnvelope['eventType']
+
+export type PlaybookEventPayload =
+  | PlaybookBlockedPayload
+  | PlaybookBypassedPayload
+  | PlaybookProposedPayload
+  | PlaybookActivatedPayload
+  | PlaybookRetiredPayload
 
 // lexical-match is preferred for token overlap, semantic-match retained for backwards compat.
 export const RankingReasonSchema = z
@@ -1389,6 +1472,13 @@ export const MemoryReuseReceiptV1Schema = z
   .strict()
 export type MemoryReuseReceiptV1 = z.infer<typeof MemoryReuseReceiptV1Schema>
 
+// Playbook event kinds are NOT added to any GC relevance allowlist yet: no
+// such allowlist (e.g. a GC_RELEVANT_EVENT_TYPES set) is defined in this
+// module, so there is no membership to opt into here. Conservative choice:
+// only the lifecycle-terminal kinds (`playbook.retired`, `playbook.blocked`)
+// would ever be GC-eligible; until a real GC consumer exists, all playbook
+// kinds are retained. Revisit when the GC handler lands (memory overhaul
+// Phase 2).
 const operatorScopeShape = {
   schemaVersion: z.literal(2),
   projectId: ProjectIdSchema,

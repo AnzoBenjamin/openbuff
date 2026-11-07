@@ -1,0 +1,105 @@
+--- prior-independently-reviewed/sdk/src/run.ts
++++ current/sdk/src/run.ts
+@@ -2807,18 +2807,29 @@
+         authorizeHighImpactAction: async (classified) => {
+           let branch: string | undefined
+           let defaultBranch: string | undefined
+-          if (classified.action === 'push') {
++          const effects = classified.effects?.length
++            ? classified.effects
++            : [classified]
++          if (effects.some((effect) => effect.action === 'push')) {
+             const workspace = await inspectWorkspace({
+               cwd: projectRoot,
+               signal,
+             })
+             const value = workspace.find((part) => part.type === 'json')
+               ?.value as { branch?: string; defaultBranch?: string } | undefined
+-            branch = classified.branch ?? value?.branch
++            branch = value?.branch
+             defaultBranch = value?.defaultBranch
+           }
++          const effectiveAction = {
++            ...classified,
++            effects: effects.map((effect) =>
++              effect.action === 'push'
++                ? { ...effect, branch: effect.branch ?? branch }
++                : effect,
++            ),
++          }
+           const staticDecision = evaluateHarnessActionPolicy({
+-            ...classified,
++            ...effectiveAction,
+             branch,
+             defaultBranch,
+             hasMatchingApproval: false,
+@@ -2860,10 +2871,11 @@
+                 action: classified.action,
+                 target: classified.target,
+                 commandHash: classified.commandHash,
++                executionContextHash: classified.executionContextHash,
+                 snapshotId,
+               })
+               const approvedDecision = evaluateHarnessActionPolicy({
+-                ...classified,
++                ...effectiveAction,
+                 branch,
+                 defaultBranch,
+                 hasMatchingApproval: true,
+@@ -2878,17 +2890,31 @@
+           }
+           if (requestApproval) {
+             const approved = await requestApproval({
+-              ...classified,
++              ...effectiveAction,
+               risk:
+-                classified.action === 'dependency-install' ||
+-                classified.action === 'commit' ||
+-                classified.action === 'push' ||
+-                classified.action === 'pull-request'
++                effectiveAction.parseStatus === 'complete' &&
++                effectiveAction.effects.every(
++                  (effect) =>
++                    [
++                      'dependency-install',
++                      'commit',
++                      'push',
++                      'pull-request',
++                    ].includes(effect.action) && !effect.pushRisks?.length,
++                )
+                   ? 'routine'
+                   : 'high',
+               reason: staticDecision.reason,
+             })
++            if (signal?.aborted) throw createAbortError(signal)
+             if (approved) {
++              if (getWorkspaceState()?.snapshotId !== snapshotId)
++                return {
++                  allowed: false as const,
++                  approvalRequired: true,
++                  reason:
++                    'Workspace changed while awaiting approval; a current decision is required.',
++                }
+               const grant = approvalService.grant(
+                 {
+                   ...harnessWorkspaceIdentity,
+@@ -2899,6 +2925,7 @@
+                   action: classified.action,
+                   target: classified.target,
+                   commandHash: classified.commandHash,
++                  executionContextHash: classified.executionContextHash,
+                 },
+               )
+               const receipt = approvalService.consume({
+@@ -2909,9 +2936,10 @@
+                 action: classified.action,
+                 target: classified.target,
+                 commandHash: classified.commandHash,
++                executionContextHash: classified.executionContextHash,
+               })
+               const approvedDecision = evaluateHarnessActionPolicy({
+-                ...classified,
++                ...effectiveAction,
+                 branch,
+                 defaultBranch,
+                 hasMatchingApproval: true,

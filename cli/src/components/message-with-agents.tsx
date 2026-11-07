@@ -12,25 +12,30 @@ import { useChatStore } from '../state/chat-store'
 import { useMessageBlockStore } from '../state/message-block-store'
 import { splitByAgentSize } from '../utils/block-processor'
 import { getCliEnv } from '../utils/env'
-import {
-  AGENT_CONTENT_HORIZONTAL_PADDING,
-  MAX_AGENT_DEPTH,
-} from '../utils/layout-helpers'
-import {
-  renderMarkdown,
-  hasMarkdown,
-  type MarkdownPalette,
-} from '../utils/markdown-renderer'
+import { MAX_AGENT_DEPTH } from '../utils/layout-helpers'
+import { logger } from '../utils/logger'
 import { wrapTextPreservingNewlines } from '../utils/text-layout'
 
 import type { ChatMessage } from '../types/chat'
 import type { FeedbackCategory } from '@codebuff/common/constants/feedback'
+import { hasMarkdown, type MarkdownPalette } from '../utils/markdown-renderer'
+import { createMarkdownSyntaxStyle } from '../utils/opentui-syntax-style'
+import { getSharedTreeSitterClient } from '../utils/tree-sitter-client'
+import {
+  legacyAgentDescendantDocument,
+  legacyAgentStateLabel,
+} from '../utils/legacy-agent-document'
+import { createJsonDocument } from '../utils/output-document'
+import { clipEvidenceLine } from '../utils/bounded-evidence'
+import { useOutputReaderStore } from '../state/output-reader-store'
 
 interface AgentChildrenGridProps {
   agentChildren: ChatMessage[]
   depth: number
   availableWidth: number
 }
+
+const EMPTY_AGENT_CHILDREN: ChatMessage[] = []
 
 const AgentChildrenGrid = memo(
   ({ agentChildren, depth, availableWidth }: AgentChildrenGridProps) => {
@@ -64,11 +69,25 @@ const AgentChildrenGrid = memo(
         )
       }
       return (
-        <text fg={theme?.muted} attributes={TextAttributes.ITALIC}>
-          {`${agentChildren.length} nested agent${
-            agentChildren.length > 1 ? 's' : ''
-          } not shown (depth limit)`}
-        </text>
+        <box style={{ flexDirection: 'column', width: '100%' }}>
+          <text fg={theme?.muted} attributes={TextAttributes.ITALIC}>
+            {`${agentChildren.length} nested agent${agentChildren.length > 1 ? 's' : ''} not shown (depth limit)`}
+          </text>
+          <Button
+            onClick={() =>
+              useOutputReaderStore
+                .getState()
+                .open({
+                  document: legacyAgentDescendantDocument(
+                    agentChildren,
+                    useMessageBlockStore.getState().context.messageTree,
+                  ),
+                })
+            }
+          >
+            <text fg={theme?.link}>Inspect captured descendants</text>
+          </Button>
+        </box>
       )
     }
 
@@ -83,6 +102,7 @@ const AgentChildrenGrid = memo(
             <GridLayout
               key={getItemKey(group[0])}
               items={group}
+              stableColumns
               availableWidth={availableWidth}
               getItemKey={getItemKey}
               renderItem={renderAgentChild}
@@ -112,20 +132,19 @@ export const MessageWithAgents = memo(
     const isAgent = message.variant === 'agent'
 
     // Use useShallow for grouped selectors to prevent unnecessary re-renders
-    const {
-      theme,
-      markdownPalette,
-      messageTree,
-      isWaitingForResponse,
-      timerStartTime,
-    } = useMessageBlockStore(
-      useShallow((state) => ({
-        theme: state.context.theme,
-        markdownPalette: state.context.markdownPalette,
-        messageTree: state.context.messageTree,
-        isWaitingForResponse: state.context.isWaitingForResponse,
-        timerStartTime: state.context.timerStartTime,
-      })),
+    const { theme, markdownPalette, isWaitingForResponse, timerStartTime } =
+      useMessageBlockStore(
+        useShallow((state) => ({
+          theme: state.context.theme,
+          markdownPalette: state.context.markdownPalette,
+          isWaitingForResponse: state.context.isWaitingForResponse,
+          timerStartTime: state.context.timerStartTime,
+        })),
+      )
+
+    const agentChildren = useMessageBlockStore(
+      (state) =>
+        state.context.messageTree?.get(message.id) ?? EMPTY_AGENT_CHILDREN,
     )
 
     const {
@@ -177,6 +196,19 @@ export const MessageWithAgents = memo(
     const isAi = message.variant === 'ai'
     const isUser = message.variant === 'user'
     const isError = message.variant === 'error'
+    const isComplete = message.isComplete ?? isUser
+    const content = useMemo(
+      () =>
+        message.content ||
+        (isUser
+          ? (message.blocks ?? [])
+              .flatMap((block) =>
+                block.type === 'text' ? [block.content] : [],
+              )
+              .join('\n\n')
+          : ''),
+      [message.content, message.blocks, isUser],
+    )
 
     const lineColor = isError
       ? (theme?.error ?? 'red')
@@ -240,7 +272,6 @@ export const MessageWithAgents = memo(
     const isLoading =
       isAi && message.content === '' && !message.blocks && isWaitingForResponse
 
-    const agentChildren = messageTree?.get(message.id) ?? []
     const hasAgentChildren = agentChildren.length > 0
     // Show vertical line for user messages (including bash commands which are now user messages)
     const showVerticalLine = isUser
@@ -283,12 +314,12 @@ export const MessageWithAgents = memo(
                 <MessageBlock
                   messageId={message.id}
                   blocks={message.blocks}
-                  content={message.content}
+                  content={content}
                   isUser={isUser}
                   isAi={isAi}
                   isLoading={isLoading}
                   timestamp={message.timestamp}
-                  isComplete={message.isComplete}
+                  isComplete={isComplete}
                   completionTime={message.completionTime}
                   credits={message.credits}
                   cacheHitRate={message.cacheHitRate}
@@ -320,12 +351,12 @@ export const MessageWithAgents = memo(
               <MessageBlock
                 messageId={message.id}
                 blocks={message.blocks}
-                content={message.content}
+                content={content}
                 isUser={isUser}
                 isAi={isAi}
                 isLoading={isLoading}
                 timestamp={message.timestamp}
-                isComplete={message.isComplete}
+                isComplete={isComplete}
                 completionTime={message.completionTime}
                 credits={message.credits}
                 cacheHitRate={message.cacheHitRate}
@@ -366,6 +397,50 @@ export const MessageWithAgents = memo(
   },
 )
 
+/**
+ * Renders agent markdown content through OpenTUI 0.5's native <markdown>
+ * renderable. Native setup failures (syntax style construction or shared
+ * tree-sitter client creation) degrade to a plain-text <text> element
+ * (native wrapMode handles wrapping) instead of crashing the agent message
+ * render, matching the degrade-to-plain-text contract documented for
+ * ContentWithMarkdown.
+ */
+const renderAgentNativeMarkdown = (
+  key: string,
+  content: string,
+  isStreaming: boolean,
+  palette: MarkdownPalette | undefined,
+  fallbackFg: string | undefined,
+): ReactNode => {
+  try {
+    return (
+      <markdown
+        key={key}
+        width="100%"
+        content={content}
+        syntaxStyle={createMarkdownSyntaxStyle(palette ?? {})}
+        treeSitterClient={getSharedTreeSitterClient() ?? undefined}
+        streaming={isStreaming}
+        conceal
+        concealCode={false}
+        internalBlockMode="top-level"
+      />
+    )
+  } catch (error) {
+    logger.error(
+      error,
+      'Native markdown rendering failed to set up; degrading to plain text',
+    )
+    // D47 Stage 4: the <text> element's native wrapMode: 'word' handles
+    // wrapping, so the raw content is passed through without JS pre-wrap.
+    return (
+      <text key={key} style={{ wrapMode: 'word', fg: fallbackFg }}>
+        {content}
+      </text>
+    )
+  }
+}
+
 interface AgentMessageProps {
   message: ChatMessage
   depth: number
@@ -375,21 +450,27 @@ interface AgentMessageProps {
 const AgentMessage = memo(
   ({ message, depth, availableWidth }: AgentMessageProps): ReactNode => {
     // Use useShallow for grouped selectors to prevent unnecessary re-renders
-    const { theme, markdownPalette, messageTree, onToggleCollapsed } =
-      useMessageBlockStore(
-        useShallow((state) => ({
-          theme: state.context.theme,
-          markdownPalette: state.context.markdownPalette,
-          messageTree: state.context.messageTree,
-          onToggleCollapsed: state.callbacks.onToggleCollapsed,
-        })),
-      )
+    const { theme, markdownPalette, onToggleCollapsed } = useMessageBlockStore(
+      useShallow((state) => ({
+        theme: state.context.theme,
+        markdownPalette: state.context.markdownPalette,
+        onToggleCollapsed: state.callbacks.onToggleCollapsed,
+      })),
+    )
+
+    const agentChildren = useMessageBlockStore(
+      (state) =>
+        state.context.messageTree?.get(message.id) ?? EMPTY_AGENT_CHILDREN,
+    )
 
     // Derive streaming boolean for this specific message to avoid re-renders when other agents change
     const isStreaming = useChatStore((state) =>
       state.streamingAgents.has(message.id),
     )
     const setFocusedAgentId = useChatStore((state) => state.setFocusedAgentId)
+    const isFocused = useChatStore(
+      (state) => state.focusedAgentId === message.id,
+    )
 
     // Guard against missing agent info (should not happen for agent variant messages)
     if (!message.agent) {
@@ -404,16 +485,22 @@ const AgentMessage = memo(
     // Get or initialize collapse state from message metadata
     const isCollapsed = message.metadata?.isCollapsed ?? false
 
-    const agentChildren = messageTree?.get(message.id) ?? []
-
     const bulletChar = '• '
     const fullPrefix = bulletChar
     const agentContentWidth = Math.max(10, availableWidth - fullPrefix.length)
 
-    const lines = message.content.split('\n').filter((line) => line.trim())
+    const lines = message.content
+      .split('\n')
+      .filter((line) => line.trim() && !/^\s*(?:`{3,}|~{3,})/.test(line))
     const firstLine = lines[0] || ''
     const lastLine = lines[lines.length - 1] || firstLine
     const rawDisplayContent = isCollapsed ? lastLine : message.content
+    const stateLabel = legacyAgentStateLabel(message, isStreaming)
+    const capturedError = typeof message.userError === 'string' ? message.userError : undefined
+    const stateColor =
+      capturedError || ['Failed', 'Cancelled'].includes(stateLabel)
+        ? theme?.error
+        : theme?.muted
 
     const streamingPreview = isStreaming
       ? wrapTextPreservingNewlines(
@@ -425,28 +512,24 @@ const AgentMessage = memo(
     const finishedPreview =
       !isStreaming && isCollapsed
         ? wrapTextPreservingNewlines(
-            lastLine.replace(/[#*_`~\[\]()]/g, '').trim(),
+            lastLine.replace(/[#*_`~\[\]()]/g, '').trim() ||
+              'No captured output',
             agentContentWidth,
           )
         : ''
 
-    const agentCodeBlockWidth = Math.max(
-      10,
-      availableWidth - AGENT_CONTENT_HORIZONTAL_PADDING,
-    )
+    // D47 Stage 2: the legacy remark renderer was removed, so markdown agent
+    // content renders through the native <markdown> renderable (with native
+    // setup failures degrading to plain text). D47 Stage 4: plain text is
+    // passed through unwrapped — the native wrapMode: 'word' on the <text>
+    // element handles wrapping.
     const agentPalette: MarkdownPalette | undefined = markdownPalette
       ? {
           ...markdownPalette,
           codeTextFg: theme?.foreground ?? markdownPalette.codeTextFg,
         }
       : undefined
-    const agentMarkdownOptions = {
-      codeBlockWidth: agentCodeBlockWidth,
-      palette: agentPalette!,
-    }
-    const displayContent = hasMarkdown(rawDisplayContent)
-      ? renderMarkdown(rawDisplayContent, agentMarkdownOptions)
-      : wrapTextPreservingNewlines(rawDisplayContent, agentContentWidth)
+    const isMarkdownContent = hasMarkdown(rawDisplayContent)
 
     const handleTitleClick = (): void => {
       onToggleCollapsed(message.id)
@@ -482,7 +565,7 @@ const AgentMessage = memo(
           }}
         >
           <text style={{ wrapMode: 'none' }}>
-            <span fg={theme?.success}>{fullPrefix}</span>
+            <span fg={stateColor}>{fullPrefix}</span>
           </text>
           <box
             style={{
@@ -494,21 +577,55 @@ const AgentMessage = memo(
             }}
           >
             <Button
+              id={`agent-title-control-${message.id}`}
               style={{
                 flexDirection: 'row',
                 alignSelf: 'flex-start',
-                backgroundColor: isCollapsed ? theme?.muted : theme?.success,
+                backgroundColor: isFocused
+                  ? theme?.surfaceHover
+                  : theme?.surface,
                 paddingLeft: 1,
                 paddingRight: 1,
               }}
               onClick={handleTitleClick}
             >
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme?.foreground}>{isCollapsed ? '▸ ' : '▾ '}</span>
-                <span fg={theme?.foreground} attributes={TextAttributes.BOLD}>
+              <text
+                id={`agent-title-${message.id}`}
+                fg={theme?.foreground}
+                style={{ wrapMode: 'word' }}
+              >
+                <span>{isCollapsed ? '▸ ' : '▾ '}</span>
+                <span attributes={TextAttributes.BOLD}>
                   {agentInfo.agentName}
                 </span>
               </text>
+            </Button>
+            <text fg={stateColor}>
+              {stateLabel}
+              {capturedError
+                ? ` · ${clipEvidenceLine(capturedError, Math.max(24, agentContentWidth - 18))}`
+                : ''}
+            </text>
+            <Button
+              onClick={() =>
+                useOutputReaderStore
+                  .getState()
+                  .open({
+                    document: createJsonDocument(
+                      `legacy-agent:${message.id}`,
+                      `Captured ${agentInfo.agentName}`,
+                      {
+                        agent: agentInfo,
+                        content: message.content,
+                        error: message.userError,
+                        availability:
+                          'Captured legacy fields; absent lifecycle remains unknown',
+                      },
+                    ),
+                  })
+              }
+            >
+              <text fg={theme?.link}>Inspect captured agent</text>
             </Button>
             <Button
               style={{ flexShrink: 1, paddingBottom: isCollapsed ? 1 : 0 }}
@@ -530,14 +647,23 @@ const AgentMessage = memo(
                   {finishedPreview}
                 </text>
               )}
-              {!isCollapsed && (
-                <text
-                  key={`agent-content-${message.id}`}
-                  style={{ wrapMode: 'word', fg: theme?.foreground }}
-                >
-                  {displayContent}
-                </text>
-              )}
+              {!isCollapsed &&
+                (isMarkdownContent ? (
+                  renderAgentNativeMarkdown(
+                    `agent-content-${message.id}`,
+                    rawDisplayContent,
+                    isStreaming,
+                    agentPalette,
+                    theme?.foreground,
+                  )
+                ) : (
+                  <text
+                    key={`agent-content-${message.id}`}
+                    style={{ wrapMode: 'word', fg: theme?.foreground }}
+                  >
+                    {rawDisplayContent}
+                  </text>
+                ))}
             </Button>
           </box>
         </box>

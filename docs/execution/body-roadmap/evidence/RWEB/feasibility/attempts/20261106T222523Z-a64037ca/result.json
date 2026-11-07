@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "type": "researcher-browser-local-feasibility-probe",
+  "startedAt": "2026-11-06T22:25:23.080632+00:00",
+  "elapsedSeconds": 0.5195808970020153,
+  "argv": [
+    "/tmp/openbuff-rweb-toolchain-ml81t51k/package/bin/agent-browser-linux-x64",
+    "--session",
+    "openbuff-rweb-52f0c3b3c119-a-a64037ca",
+    "--config",
+    "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/mcp-config.json",
+    "mcp",
+    "--tools",
+    "core"
+  ],
+  "cwd": "/tmp/openbuff-rweb-toolchain-ml81t51k/mcp",
+  "environment": {
+    "replacement": true,
+    "keys": [
+      "AGENT_BROWSER_CONFIG",
+      "AGENT_BROWSER_NO_VERSION_CHECK",
+      "AGENT_BROWSER_NO_WEBMCP",
+      "AGENT_BROWSER_SESSION",
+      "HOME",
+      "LANG",
+      "PATH",
+      "TERM",
+      "TMPDIR",
+      "XDG_CACHE_HOME",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_HOME",
+      "XDG_RUNTIME_DIR"
+    ],
+    "providerCalls": 0
+  },
+  "toolchain": {
+    "version": "0.41.2",
+    "nativeSha256": "c4351f3802ffa5254d8c69f20a52e2fcf56925c6016fcf4203db25a07d811379",
+    "browser": "Google Chrome 157.0.8103.38",
+    "browserSha256": "fa67e06a5bcd0525739996fb8e3ecff449039e6165c15ea7968d3935e59e829e"
+  },
+  "sessions": [
+    "openbuff-rweb-52f0c3b3c119-a-a64037ca",
+    "openbuff-rweb-52f0c3b3c119-b-a64037ca"
+  ],
+  "checks": {},
+  "error": {
+    "type": "AssertionError",
+    "message": "",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/run-local-probes.py\", line 205, in <module>\n    assert '429' in json.dumps(blocked)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n"
+  },
+  "remainingOwnedProcesses": [],
+  "passed": false,
+  "artifacts": [
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222523Z-a64037ca/blocked-result.json",
+      "sha256": "7883203b3e523888f4283ac2b7003063e1b40520abcbdf8c705f0bb37eb92794"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222523Z-a64037ca/cleanup.json",
+      "sha256": "293605a7a679920c5db33902ec16b2ffc4acb6bbd2bd4ac5ed89c08f3ef1f94a"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222523Z-a64037ca/fixture.json",
+      "sha256": "45270b778e2105a171cf36655126aa566f67d7f54ae84fbdf0ffd936e82c7a20"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222523Z-a64037ca/mcp.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222523Z-a64037ca/requests.json",
+      "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+    },
+    {
+      "path": "/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/RWEB/feasibility/attempts/20261106T222523Z-a64037ca/transcript.json",
+      "sha256": "ca3f9617d362fbbcb25b6b6fde2ae0624331cff2a9206ab89f207d9ffdeed357"
+    }
+  ],
+  "scope": "Actual upstream MCP/native/Chrome local fixture feasibility only. Openbuff researcher strategy, SDK/installed CLI delivery, host authority and deadline cleanup remain future RWEB/B19/B20/B28/B33 work.",
+  "researcherImplementationAccepted": false
+}

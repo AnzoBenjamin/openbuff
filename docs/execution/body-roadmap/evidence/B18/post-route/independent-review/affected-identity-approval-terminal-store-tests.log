@@ -1,0 +1,204 @@
+bun test v1.3.5 (1e86cebd)
+
+sdk/src/__tests__/harness-enforcement.test.ts:
+(pass) harness enforcement services > approvals are exact-scope and single-use [9.00ms]
+(pass) harness enforcement services > approvals bind to the exact command hash [2.00ms]
+(pass) harness enforcement services > consume rejects expired approvals, including a malformed expiresAt [3.00ms]
+(pass) harness enforcement services > hashCommand preserves exact command whitespace
+(pass) harness enforcement services > ownership receipts reject traversal and duplicate paths [1.00ms]
+(pass) harness enforcement services > policy supports balanced, strict, and allow-all approval modes
+(pass) harness enforcement services > classifies only recognized high-impact command shapes [6.00ms]
+(pass) harness enforcement services > classifies dangerous commands hidden behind harmless segments [1.00ms]
+(pass) harness enforcement services > classifies payloads hidden behind shell-interpreter wrappers [2.00ms]
+(pass) harness enforcement services > consume observes a concurrent consumer through the kind lock [3.00ms]
+(pass) harness enforcement services > exactly one consume wins across repeated attempts [5.00ms]
+(pass) harness enforcement services > a non-EEXIST acquire failure never deletes a competing holder lock
+
+sdk/src/__tests__/harness-command-identity.test.ts:
+(pass) B18 exact command identity and complete effect admission > profile path admission preserves whitespace inside quoted arguments [3.00ms]
+(pass) B18 exact command identity and complete effect admission > different executable bytes retain distinct hashes: git commit -m 'a  b'
+(pass) B18 exact command identity and complete effect admission > different executable bytes retain distinct hashes: echo one
+rm -rf build
+(pass) B18 exact command identity and complete effect admission > different executable bytes retain distinct hashes: echo "$(printf 'a  b')"
+(pass) B18 exact command identity and complete effect admission > different executable bytes retain distinct hashes: git push origin feature
+(pass) B18 exact command identity and complete effect admission > different executable bytes retain distinct hashes: git commit -m a\
+b
+(pass) B18 exact command identity and complete effect admission > governs every potential effect: npm install && rm -rf build [1.00ms]
+(pass) B18 exact command identity and complete effect admission > governs every potential effect: git commit -m ok; kubectl apply -f deploy.yaml
+(pass) B18 exact command identity and complete effect admission > governs every potential effect: git push origin feature
+rm -rf build
+(pass) B18 exact command identity and complete effect admission > governs every potential effect: echo "$(git push origin feature; rm -rf build)"
+(pass) B18 exact command identity and complete effect admission > governs every potential effect: bash -c 'npm install && rm -rf build'
+(pass) B18 exact command identity and complete effect admission > governs every potential effect: echo `git push origin feature`; kubectl apply -f deploy.yaml [1.00ms]
+(pass) B18 exact command identity and complete effect admission > governs every potential effect: cat <(git push origin feature; rm -rf build)
+(pass) B18 exact command identity and complete effect admission > governs every potential effect: (npm install; rm -rf build)
+(pass) B18 exact command identity and complete effect admission > governs every potential effect: (npm install && git push origin feature) && rm -rf build
+(pass) B18 exact command identity and complete effect admission > governs every potential effect: ! FOO=1 git push origin feature; git reset -q --hard HEAD [1.00ms]
+(pass) B18 exact command identity and complete effect admission > governs every potential effect: 'git' pu"sh" origin feature && /bin/rm -rf build
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push --force origin feature [1.00ms]
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push -uf origin feature
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push --force-with-lease origin feature
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push --delete origin feature
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push -d origin feature
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push origin :feature [1.00ms]
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push origin +HEAD:feature
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push origin HEAD:feature
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push --mirror origin
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push --tags origin
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push origin "$BRANCH"
+(pass) B18 exact command identity and complete effect admission > preserves push risk across policy modes: git push --repo elsewhere feature [1.00ms]
+(pass) B18 exact command identity and complete effect admission > routine feature work remains available and default branch checks cover later pushes
+(pass) B18 exact command identity and complete effect admission > malformed shell syntax is explicitly refused: echo "unterminated [4.00ms]
+(pass) B18 exact command identity and complete effect admission > malformed shell syntax is explicitly refused: echo $(pwd [3.00ms]
+(pass) B18 exact command identity and complete effect admission > malformed shell syntax is explicitly refused: echo ok && [2.00ms]
+(pass) B18 exact command identity and complete effect admission > malformed shell syntax is explicitly refused: (git push origin feature [2.00ms]
+(pass) B18 exact command identity and complete effect admission > malformed shell syntax is explicitly refused: echo ok) [2.00ms]
+(pass) B18 exact command identity and complete effect admission > malformed shell syntax is explicitly refused: ; echo ok [2.00ms]
+(pass) B18 exact command identity and complete effect admission > malformed shell syntax is explicitly refused: () [2.00ms]
+(pass) B18 exact command identity and complete effect admission > malformed shell syntax is explicitly refused: echo ok & & echo wrong [2.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: if true; then git push origin feature; fi [2.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: for x in a; do rm -rf "$x"; done [3.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: cat <<EOF
+hello
+EOF [2.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: $EXECUTABLE --flag [2.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: git "$SUBCOMMAND" origin feature [2.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: env -S 'git push origin feature' [2.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: git -C elsewhere push origin feature [2.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: >trace git push origin feature [3.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: coproc git push origin feature [2.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: g?t push origin feature [2.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: case x in x) git push origin feature;; esac [2.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: wrapper() { git push origin feature; }; wrapper [2.00ms]
+(pass) B18 exact command identity and complete effect admission > unsupported shell interpretation is explicit: printf push | xargs git origin feature [3.00ms]
+(pass) B18 exact command identity and complete effect admission > one approval binds exact command bytes, execution profile, working context, and snapshot [8.00ms]
+(pass) B18 exact command identity and complete effect admission > real harmless shell effects match the complete admission roster [9.00ms]
+
+sdk/src/__tests__/run-terminal-command.test.ts:
+(pass) Windows bash prerequisite > honors the Openbuff-specific Git Bash override
+(pass) runTerminalCommand cwd containment > stages the exact quoted-space path only when that path is allowed [48.00ms]
+(pass) runTerminalCommand cwd containment > requires approval authorization before a high-impact assistant command [2.00ms]
+(pass) runTerminalCommand cwd containment > carries a commandHash on the classified action and ignores a mismatched one-shot pre-approval [1.00ms]
+(pass) runTerminalCommand cwd containment > reauthorizes a caller-created pre-approval even when every public field matches [26.00ms]
+(pass) runTerminalCommand cwd containment > keeps the permission profile enforced even when a high-impact command is approved [2.00ms]
+(pass) runTerminalCommand cwd containment > propagates cancellation even when the awaited authorizer returns a denial [1.00ms]
+(pass) runTerminalCommand cwd containment > refuses fabricated receipt metadata repeatedly and binds approved execution to its context [10.00ms]
+(pass) runTerminalCommand cwd containment > re-runs an approved high-impact command exactly once via the one-shot pre-approval and threads its metadata [26.00ms]
+(pass) runTerminalCommand cwd containment > returns a structured timeout result with partial output [112.00ms]
+(pass) runTerminalCommand cwd containment > cancels an owned background job when the request aborts [44.00ms]
+(pass) runTerminalCommand cwd containment > terminates a background job that exceeds the bounded log quota [606.99ms]
+(pass) runTerminalCommand cwd containment > accepts the project root itself as cwd [62.00ms]
+(pass) runTerminalCommand cwd containment > rejects an absolute cwd outside the project with a structured error [1.00ms]
+(pass) runTerminalCommand cwd containment > rejects a parent-traversal cwd with a structured error
+(pass) runTerminalCommand cwd containment > rejects a BACKGROUND process whose cwd escapes the project
+(pass) runTerminalCommand cwd containment > rejects a BACKGROUND process whose cwd escapes the explicit project root
+(pass) runTerminalCommand cwd containment > rejects an openbuff-owned temp directory as cwd without running the command
+(pass) runTerminalCommand cwd containment > preserves the command field in the error result for debugging [1.00ms]
+(pass) runTerminalCommand cwd containment > runs inside the dereferenced target of an in-project cwd symlink [7.00ms]
+(pass) runTerminalCommand cwd containment > rejects a cwd symlink that resolves outside the project root [1.00ms]
+(pass) runTerminalCommand staged-commit safety preflight > blocks a commit whose staged diff fails whitespace checks [24.00ms]
+(pass) runTerminalCommand staged-commit safety preflight > blocks a commit that stages a sensitive file name [26.00ms]
+(pass) runTerminalCommand staged-commit safety preflight > blocks a commit whose staged content holds private-key material [28.00ms]
+(pass) runTerminalCommand staged-commit safety preflight > blocks a rename whose new staged name is sensitive [34.00ms]
+(pass) runTerminalCommand staged-commit safety preflight > scans a large staged patch in bounded slices rather than one pass [52.00ms]
+(pass) runTerminalCommand staged-commit safety preflight > bounds the staged-name table and fails closed instead of clearing an uninspectable diff [227.00ms]
+(pass) runTerminalCommand staged-commit safety preflight > reassembles a multi-byte code point split across chunk boundaries [28.00ms]
+(pass) runTerminalCommand staged-commit safety preflight > catches a sensitive non-ASCII path in a C-quoted diff header [27.00ms]
+(pass) runTerminalCommand staged-commit safety preflight > parses quoted headers, renames with embedded separators, and fails closed on malformed quotes
+(pass) runTerminalCommand staged-commit safety preflight > runs a clean staged commit without a safety block [38.00ms]
+(pass) runTerminalCommand SYNC dirty-delta touchedPaths > reports newly created project files in touchedPaths [25.00ms]
+(pass) runTerminalCommand SYNC dirty-delta touchedPaths > attributes paths relative to projectRoot when cwd is a subdirectory [26.00ms]
+(pass) runTerminalCommand SYNC dirty-delta touchedPaths > omits touchedPaths when the project is not a git repo [14.00ms]
+(pass) runTerminalCommand BACKGROUND dirty snapshot at start > stores pre-start dirty snapshot on the job without emitting touchedPaths [24.00ms]
+(pass) runTerminalCommand BACKGROUND dirty snapshot at start > omits dirtyBeforePaths when the project is not a git repo [3.00ms]
+(pass) runTerminalCommand BACKGROUND abort window around job start > never starts a job when the run aborts during the dirty-snapshot await [3.00ms]
+(pass) runTerminalCommand BACKGROUND abort window around job start > kills a fresh job immediately when the signal aborted before the kill listener was wired [42.00ms]
+(pass) startBackgroundJob failed-spawn log file preservation > preserves a pre-existing foreign log when creation hits EEXIST [1.00ms]
+(pass) runTerminalCommand SYNC full-output persistence on truncation > omits fullLogPath when output fits under the inline limit [80.00ms]
+(pass) runTerminalCommand SYNC full-output persistence on truncation > recovers the middle of both streams beyond the old accumulation cap [97.00ms]
+(pass) runTerminalCommand SYNC full-output persistence on truncation > reports unavailable full logs without returning a nonexistent path [73.00ms]
+(pass) runTerminalCommand SYNC full-output persistence on truncation > persists the full untruncated output and returns a pointer when stdout exceeds the limit [78.00ms]
+(pass) runTerminalCommand SYNC full-output persistence on truncation > treats an unreadable staged diff as an inspection failure, not a denial [11.00ms]
+(pass) runTerminalCommand SYNC full-output persistence on truncation > includes the pointer on a truncated, timed-out command result [2076.98ms]
+
+sdk/src/__tests__/terminal-command-policy.test.ts:
+(pass) terminal command permission policy > allows inspection and validation commands in read-only mode [3.00ms]
+(pass) terminal command permission policy > allows unfamiliar inspection commands and denies dangerous operations in read-only mode [1.00ms]
+(pass) terminal command permission policy > denies in-place edits, env-reading one-liners, and destructive deletion in read-only mode [1.00ms]
+(pass) terminal command permission policy > keeps allowing inspection commands that merely mention environment text
+(pass) terminal command permission policy > allows routine workspace effects but preserves hard containment [4.00ms]
+(pass) terminal command permission policy > tolerates the bare temp-root token while still refusing sibling-prefix paths [1.00ms]
+(pass) terminal command permission policy > ignores a quoted bare slash but keeps real absolute operands denied [2.00ms]
+(pass) terminal command permission policy > refuses a quoted root-only operand of a filesystem-mutation command [1.00ms]
+(pass) terminal command permission policy > denies process environment dumps under tmux-test without re-enabling workspace deny patterns [1.00ms]
+(pass) terminal command permission policy > allows option-only set under read-only but still blocks env dumps and mutations [1.00ms]
+(pass) terminal command permission policy > allows in-project traversal but rejects escaping traversal in workspace-write [1.00ms]
+(pass) terminal command permission policy > resolves relative traversal against cwd under workspace-write
+(pass) terminal command permission policy > allows everyday workspace-write bash, non-dump substitutions, and gh pr
+(pass) terminal command permission policy > allows the word source inside quoted arguments but blocks real shell indirection in workspace-write [1.00ms]
+(pass) terminal command permission policy > allows routine dependency mutation inline
+(pass) terminal command permission policy > denies sudo, package managers, and force pushes composed after separators
+(pass) terminal command permission policy > allows only isolated package mutations in dependency-mutation mode [1.00ms]
+(pass) terminal command permission policy > limits git-commit agents to inspection, staging, and non-amend commits [1.00ms]
+(pass) terminal command permission policy > accepts git commit --message forms matching the -m allow [1.00ms]
+(pass) terminal command permission policy > allows multiple git commit message args containing path-like tokens
+(pass) terminal command permission policy > rejects placeholder git commit messages but allows real imperative ones [2.00ms]
+(pass) terminal command permission policy > rejects multi-line multi-command composition under restricted profiles [1.00ms]
+(pass) terminal command permission policy > allows quoted <> in commit/stash messages but rejects active substitution and unquoted redirection
+(pass) terminal command permission policy > allows read-only git inspection commands and read-only composition for git-commit agents
+(pass) terminal command permission policy > applies the git-commit allowedPaths allowlist to staged restore [1.00ms]
+(pass) terminal command permission policy > allows safe complex git operations for git-commit agents
+(pass) terminal command permission policy > forbids data-loss and history-rewrite git operations for git-commit agents [2.00ms]
+(pass) terminal command permission policy > rejects quoted substitution, redirection, and mutating flags in git-commit read-only commands [1.00ms]
+(pass) terminal command permission policy > blocks tmux agents from direct workspace mutation [7.00ms]
+(pass) terminal command permission policy > fails closed on unparseable tmux-test composition around mutators
+(pass) terminal command permission policy > rejects tmux fixture writes before a checked target can be replaced [1.00ms]
+(pass) terminal command permission policy > preserves workspace containment for tmux-test commands
+(pass) terminal command permission policy > normalizes tmux executable quoting and escaping while leaving arguments inert [1.00ms]
+(pass) terminal command permission policy > rejects git fetch in tmux-test while preserving Git inspection
+(pass) terminal command permission policy > rejects tmux fixtures that are symlinks outside /tmp [1.00ms]
+(pass) terminal command permission policy > rejects tmux fixture hard links
+(pass) terminal command permission policy > enforces /tmp operands for every wrapped tmux filesystem mutator [1.00ms]
+(pass) terminal command permission policy > applies outside-absolute-path containment to tmux-test mode
+(pass) terminal command permission policy > allows diagnostic repro writes and in-project traversal for validation-diagnosis [1.00ms]
+(pass) terminal command permission policy > keeps validation-diagnosis writes and traversal inside the project [1.00ms]
+(pass) terminal command permission policy > confines validation-diagnosis writes to diagnostic output files [1.00ms]
+(pass) terminal command permission policy > keeps multiline diagnostic heredocs fail-closed for tmux-test
+(pass) terminal command permission policy > denies env-reading one-liners and in-place edits under validation-diagnosis too
+(pass) terminal command permission policy > allows explicit full-access or user-originated commands [1.00ms]
+(pass) terminal command permission policy > allows only owned GitHub shallow clones in librarian mode
+
+sdk/src/__tests__/serve-approval-bridge.test.ts:
+Using environment: test
+(pass) serve approval bridge > [B18] forwards the captured command and every compound effect for approval [6.00ms]
+(pass) serve approval bridge > [B18] discloses capped command display while retaining exact identity and later effects [3.00ms]
+(pass) serve approval bridge > GV-21: sanitizes control/bidi/zero-width chars and caps title [1.00ms]
+(pass) serve approval bridge > GV-22: allow_always / proceed_always / reject_once / cancelled all resolve false [2.00ms]
+(pass) serve approval bridge > GV-22 positive: selected allow_once resolves true [17.00ms]
+(pass) serve approval bridge > GV-23: disconnect/cancel mid-approval resolves false AND aborts the run [1.00ms]
+(pass) serve approval bridge > GV-24: a duplicate/late response after resolution is ignored
+(pass) serve approval bridge > terminal error event answers the prompt with -32603 openbuff.dev message [3.00ms]
+(pass) serve approval bridge > an auto-recovering error event does NOT surface a terminal error
+(pass) serve approval bridge > §5 production path: a per-turn reverseRequests seam drives session/request_permission [1.00ms]
+(pass) serve approval bridge > §5 stays fail-closed when neither a per-turn nor a static seam exists
+(pass) serve approval bridge > §4.2 ask_user: per-turn elicitation/form capability drives elicitation/create [2.00ms]
+(pass) serve approval bridge > §4.2 ask_user: no per-turn seam yields the skipped result (fail closed) [1.00ms]
+
+sdk/src/__tests__/local-harness-store.test.ts:
+(pass) LocalHarnessStore > atomically persists and reads scoped records [2.00ms]
+(pass) LocalHarnessStore > enforces compare-and-swap revisions [2.00ms]
+(pass) LocalHarnessStore > rejects traversal-shaped ids
+(pass) LocalHarnessStore > rejects corrupt records instead of silently trusting them [2.00ms]
+(pass) LocalHarnessStore > quarantines corrupt records while listing healthy records [5.00ms]
+(pass) LocalHarnessStore > direct corrupt reads preserve diagnostics across instances for open [1.00ms]
+(pass) LocalHarnessStore > direct corrupt reads preserve diagnostics across instances for finding.tmp.tail [1.00ms]
+(pass) LocalHarnessStore > serializes compare-and-swap across processes [126.00ms]
+(pass) LocalHarnessStore > lock reclaim verifies the recorded owner is dead, not just stale mtime [15.00ms]
+(pass) LocalHarnessStore > release is ownership-verified: a stale holder does not delete a stolen lock
+(pass) LocalHarnessStore > reclaim deletes the lock dir only when the displaced owner is still dead [14.00ms]
+(pass) LocalHarnessStore > reclaim removes the displaced scratch lock dir when the restore races a newer waiter
+
+ 180 pass
+ 0 fail
+ 1289 expect() calls
+Ran 180 tests across 6 files. [4.84s]

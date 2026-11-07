@@ -1,0 +1,310 @@
+{
+  "runId": "15645369-a00b-4191-9f99-cf9085053f24",
+  "experimentId": "unreported",
+  "taskId": "isolation-task",
+  "repeat": 0,
+  "languages": [
+    "typescript"
+  ],
+  "executionScope": "key_free_environment",
+  "attemptId": "462ef3d6-4e47-4333-b028-ea7b7aa4bf75",
+  "providerRoute": "unreported",
+  "runOutcome": {
+    "termination": "completed"
+  },
+  "costEvidence": {
+    "status": "reported",
+    "source": "finish.totalCost"
+  },
+  "agentId": "isolation-fixture",
+  "commitSha": "d333293bd15fe67ef4372f2ac7ef218501acce7a",
+  "prompt": "fixture",
+  "trace": [
+    {
+      "type": "start",
+      "messageHistoryLength": 0
+    },
+    {
+      "type": "tool_call",
+      "toolCallId": "073fb809-1799-426f-878c-a91dd35b785b",
+      "toolName": "run_terminal_command",
+      "input": {
+        "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+        "process_type": "SYNC",
+        "detach": false,
+        "timeout_seconds": -1
+      },
+      "agentId": "main-agent"
+    },
+    {
+      "type": "tool_result",
+      "toolCallId": "073fb809-1799-426f-878c-a91dd35b785b",
+      "toolName": "run_terminal_command",
+      "output": [
+        {
+          "type": "json",
+          "value": {
+            "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+            "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-2bh8pO/repo",
+            "stdout": "sentinel=\nhome=/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home\n",
+            "exitCode": 0
+          }
+        }
+      ],
+      "agentId": "main-agent",
+      "actionOutcome": {
+        "actionId": "073fb809-1799-426f-878c-a91dd35b785b",
+        "attemptId": "stM3yJdwYt0",
+        "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+        "toolName": "run_terminal_command",
+        "basis": {
+          "inputHash": "sha256:db53aeb4c7b1fa80db4928a6de3da13e513840a31a5638e2776311763d03c78b",
+          "workspaceRevision": 0
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "unobserved",
+          "receiptIds": [],
+          "confirmedPaths": []
+        }
+      }
+    },
+    {
+      "type": "tool_call",
+      "toolCallId": "2929170a-e389-4d6c-823a-035276bee6e0",
+      "toolName": "run_terminal_command",
+      "input": {
+        "command": "cat init-env.json",
+        "process_type": "SYNC",
+        "detach": false,
+        "timeout_seconds": -1
+      },
+      "agentId": "main-agent"
+    },
+    {
+      "type": "tool_result",
+      "toolCallId": "2929170a-e389-4d6c-823a-035276bee6e0",
+      "toolName": "run_terminal_command",
+      "output": [
+        {
+          "type": "json",
+          "value": {
+            "command": "cat init-env.json",
+            "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-2bh8pO/repo",
+            "stdout": "{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-xnWzTe/home\"}",
+            "exitCode": 0
+          }
+        }
+      ],
+      "agentId": "main-agent",
+      "actionOutcome": {
+        "actionId": "2929170a-e389-4d6c-823a-035276bee6e0",
+        "attemptId": "stM35d1Cr6s",
+        "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+        "toolName": "run_terminal_command",
+        "basis": {
+          "inputHash": "sha256:f606a56b1fbd7eb6da2cd992f4d741fcd868f12ace2ab5be1a2df4cbe922e129",
+          "workspaceRevision": 0
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "unobserved",
+          "receiptIds": [],
+          "confirmedPaths": []
+        }
+      }
+    },
+    {
+      "type": "tool_call",
+      "toolCallId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+      "toolName": "set_output",
+      "input": {
+        "controller": null,
+        "providerConfig": null,
+        "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home",
+        "terminal": {
+          "command": "printf 'sentinel=%s\nhome=%s\n' \"$B30_CONTROLLER_SENTINEL\" \"$HOME\"",
+          "startingCwd": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/codebuff-eval-2bh8pO/repo",
+          "stdout": "sentinel=\nhome=/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-h3ZMhG/home\n",
+          "exitCode": 0
+        },
+        "init": {
+          "sentinel": null,
+          "home": "/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-xnWzTe/home"
+        }
+      },
+      "agentId": "main-agent"
+    },
+    {
+      "type": "tool_result",
+      "toolCallId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+      "toolName": "set_output",
+      "output": [
+        {
+          "type": "json",
+          "value": {
+            "message": "Output set"
+          }
+        }
+      ],
+      "agentId": "main-agent",
+      "actionOutcome": {
+        "actionId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+        "attemptId": "stM38BAX3o4",
+        "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+        "toolName": "set_output",
+        "basis": {
+          "inputHash": "sha256:10d7cb81ef1dd7329b96f03407a4a6753875666cc01c673b3abfec913d62c4e9",
+          "workspaceRevision": 0
+        },
+        "outcome": "succeeded",
+        "effect": {
+          "status": "unobserved",
+          "receiptIds": [],
+          "confirmedPaths": []
+        }
+      }
+    },
+    {
+      "type": "context_window",
+      "used": 3156,
+      "max": 190000,
+      "compactionTriggerTokens": 140000,
+      "compactionTargetTokens": 100000
+    },
+    {
+      "type": "finish",
+      "agentId": "isolation-fixture",
+      "totalCost": 0,
+      "runOutcome": {
+        "termination": "completed"
+      },
+      "taskAcceptance": {
+        "status": "unknown"
+      },
+      "actionOutcomes": [
+        {
+          "actionId": "073fb809-1799-426f-878c-a91dd35b785b",
+          "attemptId": "stM3yJdwYt0",
+          "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+          "toolName": "run_terminal_command",
+          "basis": {
+            "inputHash": "sha256:db53aeb4c7b1fa80db4928a6de3da13e513840a31a5638e2776311763d03c78b",
+            "workspaceRevision": 0
+          },
+          "outcome": "succeeded",
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        },
+        {
+          "actionId": "2929170a-e389-4d6c-823a-035276bee6e0",
+          "attemptId": "stM35d1Cr6s",
+          "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+          "toolName": "run_terminal_command",
+          "basis": {
+            "inputHash": "sha256:f606a56b1fbd7eb6da2cd992f4d741fcd868f12ace2ab5be1a2df4cbe922e129",
+            "workspaceRevision": 0
+          },
+          "outcome": "succeeded",
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        },
+        {
+          "actionId": "4cbfe39e-c5ba-42a1-81d1-654e32745824",
+          "attemptId": "stM38BAX3o4",
+          "runId": "local-run-8bd0f9a8-c97a-4e91-9967-fc1d81b77d15",
+          "toolName": "set_output",
+          "basis": {
+            "inputHash": "sha256:10d7cb81ef1dd7329b96f03407a4a6753875666cc01c673b3abfec913d62c4e9",
+            "workspaceRevision": 0
+          },
+          "outcome": "succeeded",
+          "effect": {
+            "status": "unobserved",
+            "receiptIds": [],
+            "confirmedPaths": []
+          }
+        }
+      ]
+    }
+  ],
+  "diff": "diff --git a/.openbuff/memory/task-memory.json b/.openbuff/memory/task-memory.json\nnew file mode 100644\nindex 0000000..9b0dad4\n--- /dev/null\n+++ b/.openbuff/memory/task-memory.json\n@@ -0,0 +1,19 @@\n+{\n+  \"schemaVersion\": 1,\n+  \"goal\": \"fixture\",\n+  \"requirements\": [],\n+  \"decisions\": [],\n+  \"filesInspected\": [],\n+  \"editsMade\": [],\n+  \"validationResults\": [],\n+  \"reviewReceipts\": [],\n+  \"blockers\": [],\n+  \"nextActions\": [],\n+  \"historicalSummary\": \"\",\n+  \"evidence\": [],\n+  \"workspaceRevision\": 0,\n+  \"workspaceSnapshotId\": \"workspace.v1.0.00000000\",\n+  \"revision\": 1,\n+  \"updatedAt\": 1794001549315,\n+  \"checksum\": \"df2041d2\"\n+}\n\\ No newline at end of file\ndiff --git a/init-env.json b/init-env.json\nnew file mode 100644\nindex 0000000..4472cfc\n--- /dev/null\n+++ b/init-env.json\n@@ -0,0 +1 @@\n+{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-xnWzTe/home\"}\n\\ No newline at end of file\n",
+  "judgeResult": {
+    "analysis": "fixture",
+    "strengths": [],
+    "weaknesses": [],
+    "completionScore": 10,
+    "codeQualityScore": 10,
+    "overallScore": 10,
+    "perJudgeScores": [
+      {
+        "judgeId": "judge-gpt",
+        "completionScore": 10,
+        "codeQualityScore": 10,
+        "overallScore": 10
+      },
+      {
+        "judgeId": "judge-gemini",
+        "completionScore": 10,
+        "codeQualityScore": 10,
+        "overallScore": 10
+      }
+    ],
+    "scoringStatus": "scored"
+  },
+  "cost": 0,
+  "durationMs": 1247,
+  "timestamp": "2026-11-06T21:45:51.736Z",
+  "finalCheckOutputs": [
+    {
+      "checkId": "check-1",
+      "command": "node -e 'console.log(JSON.stringify({sentinel:process.env.B30_CONTROLLER_SENTINEL ?? null,home:process.env.HOME}))'",
+      "dependsOn": [],
+      "exitCode": 0,
+      "outcome": "passed",
+      "durationMs": 31,
+      "stdout": "{\"sentinel\":null,\"home\":\"/tmp/b30-independent-actual-isolated-sdk-t0bl7n2a/buffbench-key-free-1vRFW4/home\"}\n",
+      "stderr": ""
+    }
+  ],
+  "retrievalFlow": {
+    "queryCallCount": 0,
+    "queryResultPaths": [],
+    "successfulReadPaths": [],
+    "relevantReadPaths": [],
+    "irrelevantReadPaths": [],
+    "relevantReadBeforeFirstEdit": false
+  },
+  "idiomTraceability": {
+    "verdict": "skip",
+    "signals": {
+      "nonTypeScriptEditCount": 0,
+      "languageSignals": [],
+      "hasRequiredReads": false,
+      "deliveryObservable": false,
+      "isEmpty": true
+    },
+    "reasons": [
+      "No non-TypeScript supported-language edits were detected."
+    ]
+  },
+  "thinkerHarvest": {
+    "verdict": "skip",
+    "reasons": [
+      "No thinker subagents in trace."
+    ],
+    "signals": {
+      "thinkerAgentIds": [],
+      "agents": [],
+      "anyEmptyHarvestClobber": false,
+      "anyPreservedNonEmpty": false,
+      "allPlainTextOnly": true
+    }
+  }
+}

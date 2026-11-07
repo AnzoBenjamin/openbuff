@@ -824,6 +824,7 @@ export class MemoryV2Coordinator {
     reason: MemoryAuthorityReasonCode,
   ): void {
     agentState.memoryV2Context = undefined
+    agentState.playbookContext = []
     if (!agentState.memoryAuthority) return
     agentState.memoryAuthority.active =
       agentState.memoryAuthority.requested === 'sqlite-v2-opt-in'
@@ -861,6 +862,9 @@ export class MemoryV2Coordinator {
       memoryV2Context: params.agentState.memoryV2Context
         ? structuredClone(params.agentState.memoryV2Context)
         : undefined,
+      playbookContext: params.agentState.playbookContext
+        ? structuredClone(params.agentState.playbookContext)
+        : [],
     }
     const invalidate = () => {
       if (this.activePreparation !== operation) return
@@ -876,6 +880,7 @@ export class MemoryV2Coordinator {
       params.agentState.memoryV2 = stagedState.memoryV2
       params.agentState.memoryV2Context = stagedState.memoryV2Context
       params.agentState.memoryAuthority = stagedState.memoryAuthority
+      params.agentState.playbookContext = stagedState.playbookContext
       this.runtimeState = operation.runtimeState
       this.queryTerminal = operation.queryTerminal
       this.preparationReady = operation.ready
@@ -886,6 +891,10 @@ export class MemoryV2Coordinator {
       const { requested, invalidAuthority } =
         getEffectiveMemoryAuthority(this.config)
       stagedState.memoryV2Context = undefined
+      // Playbooks are staged and cleared on the same terms as the injected V2
+      // context: a fresh turn starts with no inherited rules until the
+      // preparation below reinstalls them for this workspace.
+      stagedState.playbookContext = []
       stagedState.memoryAuthority = {
         schemaVersion: 1,
         userInputId: params.trustedUserInputId.slice(0, 128),
@@ -1271,6 +1280,26 @@ export class MemoryV2Coordinator {
         params.agentState.memoryAuthority!.active = 'sqlite-v2-opt-in'
         params.agentState.memoryAuthority!.fallbackOccurred = false
         params.agentState.memoryAuthority!.reason = undefined
+      }
+      // Procedural memory (playbook gate): load the workspace's active
+      // playbooks so the runtime gate can enforce them. FAIL-OPEN — a load
+      // failure installs an empty set and never breaks the turn. One indexed
+      // SELECT; ensureSeedPlaybooks is idempotent and provides the baseline
+      // CI-before-commit rule on first turn.
+      const playbookRepository = this.config.repository
+      if (playbookRepository?.ensureSeedPlaybooks && playbookRepository.listPlaybooks) {
+        try {
+          await playbookRepository.ensureSeedPlaybooks(this.config.projectId)
+          params.agentState.playbookContext = await playbookRepository.listPlaybooks(
+            this.config.projectId,
+          )
+        } catch (error) {
+          this.logger?.warn(
+            { error },
+            'Playbook load failed; proceeding without rules',
+          )
+          params.agentState.playbookContext = []
+        }
       }
       return
     }

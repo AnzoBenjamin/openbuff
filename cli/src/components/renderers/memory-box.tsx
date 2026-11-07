@@ -5,7 +5,10 @@ import { useTheme } from '../../hooks/use-theme'
 import { BORDER_CHARS } from '../../utils/ui-constants'
 import { Button } from '../button'
 import { CollapseButton } from '../collapse-button'
-import { formatAge, pluralizeEntries } from '../../utils/format-helpers'
+import { pluralizeEntries } from '../../utils/format-helpers'
+import { useOutputReaderStore } from '../../state/output-reader-store'
+import { capturedDiagnosticDocument } from '../../utils/captured-diagnostic-document'
+import { clipEvidenceLine } from '../../utils/bounded-evidence'
 
 import type { MemoryContentBlock } from '../../types/chat'
 
@@ -36,6 +39,21 @@ export const MemoryBox = memo(
     const [hoveredPrune, setHoveredPrune] = useState(false)
     const [goalExpanded, setGoalExpanded] = useState(false)
     const [staleExpanded, setStaleExpanded] = useState(false)
+    const inspect = () =>
+      useOutputReaderStore
+        .getState()
+        .open({
+          document: capturedDiagnosticDocument(
+            'memory-status',
+            'Captured memory status',
+            block,
+          ),
+        })
+    const inspectAction = (
+      <Button onClick={inspect}>
+        <text fg={theme.secondary}>Inspect captured memory</text>
+      </Button>
+    )
 
     if (block.state === 'report') {
       return (
@@ -45,14 +63,18 @@ export const MemoryBox = memo(
           gap={1}
           paddingBottom={1}
         >
-          {block.lines.map((line, index) => (
+          {block.lines.slice(0, 8).map((line, index) => (
             <text
               key={`${index}-${line}`}
               style={{ wrapMode: 'word', fg: theme.foreground }}
             >
-              {line}
+              {clipEvidenceLine(line, 120)}
             </text>
           ))}
+          <text
+            fg={theme.muted}
+          >{`Showing ${Math.min(8, block.lines.length)} of ${block.lines.length} captured report lines.`}</text>
+          {inspectAction}
           {block.insertCommands?.map(({ label, command }) => (
             <Button
               key={command}
@@ -112,8 +134,11 @@ export const MemoryBox = memo(
     }
 
     if (block.state === 'status') {
-      const ageText = formatAge(Math.max(0, Date.now() - block.updatedAt))
-      const header = `${block.revision} · ${ageText}`
+      const capturedDate = new Date(block.updatedAt)
+      const capturedTime = Number.isFinite(capturedDate.getTime())
+        ? capturedDate.toISOString()
+        : 'unavailable'
+      const header = `Revision ${block.revision} · captured memory`
       const staleTone: 'success' | 'warning' | 'error' =
         block.evidence.stale > 0
           ? block.evidence.fresh === 0
@@ -121,7 +146,14 @@ export const MemoryBox = memo(
             : 'warning'
           : 'success'
       const tone: 'success' | 'warning' | 'error' | 'secondary' =
-        block.evidence.stale > 0 ? staleTone : 'success'
+        block.memoryV2Status === 'degraded' ||
+        block.memoryV2Status === 'unavailable'
+          ? 'warning'
+          : block.evidence.stale > 0
+            ? staleTone
+            : block.memoryV2Status === 'healthy'
+              ? 'success'
+              : 'secondary'
       const goalText =
         block.isGoalTruncated && goalExpanded && block.goal
           ? block.goal
@@ -130,6 +162,13 @@ export const MemoryBox = memo(
 
       return (
         <HarnessBox tone={tone} title={header} gap={1} paddingBottom={1}>
+          <text
+            fg={theme.muted}
+          >{`Memory source updated at ${capturedTime}; saved timestamp.`}</text>
+          <text
+            fg={tone === 'warning' ? theme.warning : theme.secondary}
+          >{`Combined health: ${block.memoryV2Status === 'healthy' && block.evidence.stale === 0 ? 'healthy' : block.memoryV2Status === 'degraded' || block.memoryV2Status === 'unavailable' || block.evidence.stale > 0 ? 'partial/degraded' : 'Memory V2 health not captured'}.`}</text>
+          {inspectAction}
           {block.v2Lines?.map((line, index) => (
             <text
               key={`v2-${index}`}
@@ -210,7 +249,7 @@ export const MemoryBox = memo(
                 <text style={{ fg: theme.secondary, wrapMode: 'word' }}>
                   {staleHeader}
                 </text>
-                {block.stalePaths.map((p, idx) => (
+                {block.stalePaths.slice(0, 5).map((p, idx) => (
                   <text
                     key={`${p}-${idx}`}
                     style={{ wrapMode: 'word', fg: theme.foreground }}
@@ -221,8 +260,11 @@ export const MemoryBox = memo(
                 {block.totalStaleCount > block.stalePaths.length ? (
                   <text
                     style={{ fg: theme.muted, wrapMode: 'word' }}
-                  >{`+ ${block.totalStaleCount - block.stalePaths.length} more`}</text>
+                  >{`Only ${block.stalePaths.length} path names were captured of ${block.totalStaleCount} stale entries; other path names are unavailable in this report.`}</text>
                 ) : null}
+                <text
+                  fg={theme.muted}
+                >{`Showing ${Math.min(5, block.stalePaths.length)} of ${block.stalePaths.length} captured path names; Inspect captured memory reads retained names.`}</text>
                 <CollapseButton onClick={() => setStaleExpanded(false)} />
               </box>
             ) : (
