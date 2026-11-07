@@ -1,0 +1,31 @@
+bun test v1.3.5 (1e86cebd)
+
+e2e/file-explorer.e2e.test.ts:
+Using environment: test
+(pass) File Lister Agent Integration - read_subtree tool > should find relevant files using read_subtree tool [206.99ms]
+(pass) File Lister Agent Integration - read_subtree tool > should use the file tree from session state [34.00ms]
+(pass) File Lister Agent Integration - read_subtree tool > should respect directories parameter [64.00ms]
+File picker output type: structuredOutput
+File picker output: {
+  "type": "structuredOutput",
+  "value": null
+}
+487 |         'src/index.ts',
+488 |       ]
+489 |       const matchedFiles = expectedFiles.filter((file) =>
+490 |         outputStr.includes(file),
+491 |       )
+492 |       expect(matchedFiles.length).toBeGreaterThanOrEqual(2)
+                                        ^
+error: expect(received).toBeGreaterThanOrEqual(expected)
+
+Expected: >= 2
+Received: 0
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/agents/e2e/file-explorer.e2e.test.ts:492:35)
+(fail) File Picker Agent Integration - spawn_agents tool > should spawn file-lister subagent and find relevant files [86.00ms]
+
+ 3 pass
+ 1 fail
+ 14 expect() calls
+Ran 4 tests across 1 file. [1416.00ms]

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "type": "independent-e2e-repair-binding-scope-seal",
+  "recordedAt": "2026-11-06T23:53:13.930967+00:00",
+  "reviewer": "/root/b04_lock_cas",
+  "scope": "Read-only active-ledger binding and historical/current test schedule analysis; no fixture implementation approval or new acceptance.",
+  "ledgerSha256": "64bdc49206f2e3efad0393dad82048134c4403e43bef8bdb26696251bbf7b07b",
+  "files": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/independent-scope/SCOPE.md",
+      "sha256": "ca31308b86b9e0539d16cb3e3287325a09c96bdcff2a78f8aff8046a9e51da2d",
+      "bytes": 3355
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/independent-scope/active-bindings.json",
+      "sha256": "d904eff41f734d7241e8c2bb1560a9df6d028d562cfce53ddebfd9b53b5fe4d2",
+      "bytes": 11995
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-ci-e2e-repair/independent-scope/coverage-schedules.json",
+      "sha256": "30f1e7eaabc4818ff1211fba7007e1483552b189037a5e4d0b38796b5d688b2f",
+      "bytes": 6824
+    }
+  ]
+}

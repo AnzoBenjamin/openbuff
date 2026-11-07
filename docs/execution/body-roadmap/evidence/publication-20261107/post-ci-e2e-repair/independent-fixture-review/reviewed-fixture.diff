@@ -1,0 +1,401 @@
+diff --git a/agents/e2e/gate-aux-ordering.e2e.test.ts b/agents/e2e/gate-aux-ordering.e2e.test.ts
+index 8a5653e51..ea79b5469 100644
+--- a/agents/e2e/gate-aux-ordering.e2e.test.ts
++++ b/agents/e2e/gate-aux-ordering.e2e.test.ts
+@@ -115,8 +115,22 @@ function reviewerValue(snapshotFingerprint: string, reviewedFiles: string[]) {
+     reviewedFiles,
+     findings: [],
+     coverage: 'covered',
+-    dimensions: {},
+-    requirementCoverage: [],
++    dimensions: {
++      correctness: 'pass: requested fixture behavior is preserved',
++      security: 'pass: fixture introduces no new authority',
++      tests: 'pass: scenario exercises the requested behavior',
++      apiCompatibility: 'pass: fixture preserves the existing contract',
++      performance: 'pass: fixture work remains bounded',
++    },
++    requirementCoverage: [
++      {
++        requirement: 'Preserve the requested fixture behavior',
++        status: 'satisfied',
++        evidence: [
++          `Synthetic fixture review attests ${reviewedFiles.join(', ')} at ${snapshotFingerprint}.`,
++        ],
++      },
++    ],
+   }
+ }
+ 
+@@ -147,8 +161,7 @@ function staleSpawnedReviewerResult(
+   return feedJson({
+     agentType,
+     value: {
+-      schemaVersion: 1,
+-      family: 'reviewer',
++      ...reviewerValue(snapshotFingerprint, _pendingFiles),
+       verdict: 'BLOCKING',
+       snapshotFingerprint,
+       // Empty reviewedFiles → attestation issues remain → one evidence refresh.
+@@ -164,8 +177,10 @@ function staleSpawnedReviewerResult(
+         },
+       ],
+       coverage: 'missing',
+-      dimensions: { correctness: 'block' },
+-      requirementCoverage: [],
++      dimensions: {
++        ...reviewerValue(snapshotFingerprint, _pendingFiles).dimensions,
++        correctness: 'block',
++      },
+     },
+   })
+ }
+@@ -1857,7 +1872,8 @@ describe('base2 specialist terminal-failure user bypass e2e', () => {
+       currentPhase: 'blocked',
+       lastReviewerGateSkipReason: 'specialist-terminal-failure',
+     })
+-    const challenge = (agentState as any).base2ActiveWork.reviewerBypassChallenge
++    const challenge = (agentState as any).base2ActiveWork
++      .reviewerBypassChallenge
+     expect(typeof challenge).toBe('object')
+     expect(typeof challenge.id).toBe('string')
+     expect(challenge.id.length).toBeGreaterThan(0)
+@@ -1999,7 +2015,9 @@ describe('base2 specialist terminal-failure user bypass e2e', () => {
+     // number of steps as a guard; break as soon as the credit is observed.
+     for (let i = 0; i < 12; i += 1) {
+       if (
+-        (authorizedState as any).base2ActiveWork.specialistReviewGatesDone?.includes(
++        (
++          authorizedState as any
++        ).base2ActiveWork.specialistReviewGatesDone?.includes(
+           'reliability-reviewer',
+         )
+       ) {
+@@ -2052,10 +2070,8 @@ describe('base2 specialist terminal-failure user bypass e2e', () => {
+ 
+ /**
+  * A structured specialist reviewer value that BLOCKS with exactly ONE typed
+- * finding. `dimensions` is deliberately empty: collectReviewerBlockers
+- * synthesizes an extra `BLOCKING: <dimension> review dimension failed` blocker
+- * for every dimension marked 'block', which would double the blocker count (and
+- * with it the repair handoff's requirements/findings) for a single finding.
++ * finding. Assess every required dimension without marking a second dimension
++ * blocker: the typed finding alone owns the repair target and blocker count.
+  */
+ function blockingSpecialistValue(
+   snapshotFingerprint: string,
+@@ -2063,8 +2079,7 @@ function blockingSpecialistValue(
+   finding: { id: string; summary: string },
+ ) {
+   return {
+-    schemaVersion: 1,
+-    family: 'reviewer',
++    ...reviewerValue(snapshotFingerprint, files),
+     verdict: 'BLOCKING',
+     snapshotFingerprint,
+     reviewedFiles: files,
+@@ -2079,8 +2094,10 @@ function blockingSpecialistValue(
+       },
+     ],
+     coverage: 'covered',
+-    dimensions: {},
+-    requirementCoverage: [],
++    dimensions: {
++      ...reviewerValue(snapshotFingerprint, files).dimensions,
++      correctness: 'assessed: see the typed finding below',
++    },
+   }
+ }
+ 
+@@ -2097,14 +2114,12 @@ function looksGoodWithParentOwnedRequirements(
+   return feedJson({
+     agentType,
+     value: {
+-      schemaVersion: 1,
+-      family: 'reviewer',
++      ...reviewerValue(snapshotFingerprint, files),
+       verdict: 'LOOKS_GOOD',
+       snapshotFingerprint,
+       reviewedFiles: files,
+       findings: [],
+       coverage: 'covered',
+-      dimensions: {},
+       requirementCoverage: [
+         {
+           requirement: 'Rewrite git commit messages',
+@@ -2492,7 +2507,10 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
+     const repairSpawn = gen.next()
+     expect(repairSpawn.value).toMatchObject({ toolName: 'spawn_agents' })
+     const repairAgent = (repairSpawn.value as any).input.agents[0]
+-    expect(spawnAgentsParams.inputSchema.safeParse((repairSpawn.value as any).input).success).toBe(true)
++    expect(
++      spawnAgentsParams.inputSchema.safeParse((repairSpawn.value as any).input)
++        .success,
++    ).toBe(true)
+     expect(repairAgent.agent_type).toBe('repair-editor')
+     expect(repairAgent.handoff.schemaVersion).toBe(1)
+     expect(repairAgent.handoff.role).toBe('repair-editor')
+@@ -2874,12 +2892,12 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
+       'repair-editor',
+     )
+     const repairAgent = (repairSpawn.value as any).input.agents[0]
+-    expect(repairAgent.handoff.findings.map((finding: any) => finding.id)).toEqual(
+-      expect.arrayContaining([relFinding.id, compatFinding.id]),
+-    )
+-    expect(repairAgent.handoff.requirements.map((item: any) => item.id)).toEqual(
+-      expect.arrayContaining([relFinding.id, compatFinding.id]),
+-    )
++    expect(
++      repairAgent.handoff.findings.map((finding: any) => finding.id),
++    ).toEqual(expect.arrayContaining([relFinding.id, compatFinding.id]))
++    expect(
++      repairAgent.handoff.requirements.map((item: any) => item.id),
++    ).toEqual(expect.arrayContaining([relFinding.id, compatFinding.id]))
+     expect(repairAgent.prompt).toContain(relFinding.summary)
+     expect(repairAgent.prompt).toContain(compatFinding.summary)
+     writeFileSync(SPECIALIST_FILE, 'export const session = "v2-repaired"\n')
+@@ -2975,21 +2993,77 @@ describe('base2 specialist reviewer-gate state machine e2e', () => {
+       expect(gen.next().value).toBe('STEP')
+       gen.next(finishStepWithToolResult({})) // post-step git_status
+       gen.next(feedJson({ status: ` M ${SPECIALIST_FILE}` })) // review bundle
+-      const spawn = gen.next(feedJson({ snapshotId: 'batch', files: [SPECIALIST_FILE] }))
++      const spawn = gen.next(
++        feedJson({ snapshotId: 'batch', files: [SPECIALIST_FILE] }),
++      )
+       const fingerprint = specialistFingerprintFromSpawn(spawn.value)
+       const rel = { id: 'rel-new', summary: 'Correct the retry race.' }
+-      const performance = { id: 'perf-new', summary: 'Remove the repeated index scan.' }
+-      const notice = gen.next(feedJson([
+-        { agentType: 'reliability-reviewer', value: blockingSpecialistValue(fingerprint, [SPECIALIST_FILE], rel) },
+-        { agentType: 'performance-specialist', value: blockingSpecialistValue(fingerprint, secondAttested ? [SPECIALIST_FILE] : [], performance) },
+-      ]))
++      const performance = {
++        id: 'perf-new',
++        summary: 'Remove the repeated index scan.',
++      }
++      let notice = gen.next(
++        feedJson([
++          {
++            agentType: 'reliability-reviewer',
++            value: blockingSpecialistValue(fingerprint, [SPECIALIST_FILE], rel),
++          },
++          {
++            agentType: 'performance-specialist',
++            value: blockingSpecialistValue(
++              fingerprint,
++              secondAttested ? [SPECIALIST_FILE] : [],
++              performance,
++            ),
++          },
++        ]),
++      )
++      if (!secondAttested) {
++        // A missing sibling attestation first gets the accepted reviewer-only
++        // retry. Keep it unattested on retry so only reliability's finding can
++        // enter the repair handoff below.
++        expect(notice.value).toMatchObject({
++          toolName: 'get_change_review_bundle',
++          includeToolCall: false,
++        })
++        const retry = gen.next(
++          feedJson({ snapshotId: 'batch-retry', files: [SPECIALIST_FILE] }),
++        )
++        expect(retry.value).toMatchObject({
++          toolName: 'spawn_agents',
++          input: { agents: [{ agent_type: 'performance-specialist' }] },
++        })
++        expect((retry.value as any).input.agents).toHaveLength(1)
++        expect((agentState as any).base2ActiveWork.pendingGateFiles).toEqual([
++          SPECIALIST_FILE,
++        ])
++        expect((agentState as any).base2ActiveWork.reviewReceipts).toEqual([])
++        notice = gen.next(
++          feedJson({
++            agentType: 'performance-specialist',
++            value: blockingSpecialistValue(
++              specialistFingerprintFromSpawn(retry.value),
++              [],
++              performance,
++            ),
++          }),
++        )
++      }
+       expect((notice.value as any).input.content).toContain(rel.summary)
+       const repair = (gen.next().value as any).input.agents[0]
+-      expect(repair.handoff.findings.map((finding: any) => finding.id)).toContain(rel.id)
++      expect(
++        repair.handoff.findings.map((finding: any) => finding.id),
++      ).toContain(rel.id)
+       expect(repair.prompt.includes(performance.summary)).toBe(secondAttested)
+-      expect(repair.handoff.findings.some((finding: any) => finding.id === performance.id)).toBe(secondAttested)
++      expect(
++        repair.handoff.findings.some(
++          (finding: any) => finding.id === performance.id,
++        ),
++      ).toBe(secondAttested)
+       const open = (agentState as any).base2ActiveWork.openReviewerFindings
+-      expect(open.some((finding: any) => finding.id === performance.id)).toBe(secondAttested)
++      expect(open.some((finding: any) => finding.id === performance.id)).toBe(
++        secondAttested,
++      )
+     },
+   )
+ 
+diff --git a/agents/e2e/gate-lifecycle.e2e.test.ts b/agents/e2e/gate-lifecycle.e2e.test.ts
+index 6571f8f6c..a043357a7 100644
+--- a/agents/e2e/gate-lifecycle.e2e.test.ts
++++ b/agents/e2e/gate-lifecycle.e2e.test.ts
+@@ -106,7 +106,7 @@ function reviewerResult(params: {
+   findings?: string[]
+   /** Defaults to `covered`; pass `missing` to fire the coverage hard rule. */
+   coverage?: 'covered' | 'missing' | 'n/a'
+-  /** Defaults to an empty list. */
++  /** Defaults to evidence for the requested fixture behavior. */
+   requirementCoverage?: Array<{
+     requirement: string
+     status: string
+@@ -115,6 +115,7 @@ function reviewerResult(params: {
+ }) {
+   return feedJson({
+     schemaVersion: 1,
++    family: 'reviewer',
+     verdict: params.verdict,
+     snapshotFingerprint: params.snapshotFingerprint,
+     reviewedFiles: params.reviewedFiles,
+@@ -127,7 +128,15 @@ function reviewerResult(params: {
+       apiCompatibility: 'pass',
+       performance: 'pass',
+     },
+-    requirementCoverage: params.requirementCoverage ?? [],
++    requirementCoverage: params.requirementCoverage ?? [
++      {
++        requirement: 'Preserve the requested fixture behavior',
++        status: 'satisfied',
++        evidence: [
++          `Synthetic fixture review attests ${params.reviewedFiles.join(', ')} at ${params.snapshotFingerprint}.`,
++        ],
++      },
++    ],
+   })
+ }
+ 
+@@ -964,11 +973,10 @@ describe('base2 deterministic gate lifecycle e2e', () => {
+     expect(drain.done).toBe(true)
+   })
+ 
+-  // RF-4: a coverage-complete review whose fingerprint is well-formed but does
+-  // NOT match the expected snapshot is tolerated (the gate still credits
+-  // LOOKS_GOOD) and the tolerated drift is recorded exactly once as gate
+-  // telemetry with dedicated reported/expected fingerprint keys.
+-  test('tolerates a well-formed non-matching reviewer fingerprint and records the drift once', () => {
++  // A full-evidence review must echo the current content basis. A stale
++  // fingerprint gets one reviewer-only protocol retry and no gate credit;
++  // correcting that attestation permits the original happy-path finalization.
++  test('rejects a non-matching reviewer fingerprint before a corrected protocol retry passes', () => {
+     mkdirSync(path.dirname(FINGERPRINT_DRIFT_FILE), { recursive: true })
+     writeFileSync(FINGERPRINT_DRIFT_FILE, 'export const drift = "before"\n')
+     const driftFingerprint = `v3:${'e'.repeat(64)}`
+@@ -1027,13 +1035,40 @@ describe('base2 deterministic gate lifecycle e2e', () => {
+ 
+       // Coverage-complete review (every pending file attested) that echoes a
+       // well-formed but different v3 fingerprint.
+-      const preCreditStatus = gen.next(
++      const protocolRetry = gen.next(
+         reviewerResult({
+           snapshotFingerprint: driftFingerprint,
+           reviewedFiles: [FINGERPRINT_DRIFT_FILE],
+           verdict: 'LOOKS_GOOD',
+         }),
+       )
++      expect(protocolRetry.value).toMatchObject({
++        toolName: 'spawn_agents',
++        input: { agents: [{ agent_type: 'code-reviewer' }] },
++      })
++      expect((protocolRetry.value as any).input.agents).toHaveLength(1)
++      expect((protocolRetry.value as any).input.agents[0].prompt).toContain(
++        'reviewer snapshot fingerprint did not match the reviewed working tree',
++      )
++      expect(reviewerFingerprintFromSpawn(protocolRetry.value)).toBe(
++        expectedFingerprint,
++      )
++      expect((agentState as any).base2ActiveWork).toMatchObject({
++        currentPhase: 'awaiting_review',
++        pendingGateFiles: [FINGERPRINT_DRIFT_FILE],
++        reviewerProtocolRetryCount: 1,
++        reviewReceipts: [],
++      })
++      expect((agentState as any).base2ActiveWork.gatePassedFiles).not.toContain(
++        FINGERPRINT_DRIFT_FILE,
++      )
++      const preCreditStatus = gen.next(
++        reviewerResult({
++          snapshotFingerprint: expectedFingerprint,
++          reviewedFiles: [FINGERPRINT_DRIFT_FILE],
++          verdict: 'LOOKS_GOOD',
++        }),
++      )
+       expect(preCreditStatus.value).toMatchObject({
+         toolName: 'git_status',
+         input: {},
+@@ -1056,20 +1091,20 @@ describe('base2 deterministic gate lifecycle e2e', () => {
+         gatePassedReviewerVerdict: 'LOOKS_GOOD',
+       })
+ 
+-      // The tolerated drift is recorded exactly once, with dedicated payload
+-      // keys instead of a concatenated reuseReason string.
++      // Rejected drift is never recorded as tolerated or used as receipt
++      // evidence. Exactly one review receipt binds the corrected fingerprint.
+       const driftEvents = telemetry.filter(
+         (event) => event.reviewerStatus === 'attestation-fingerprint-drift',
+       )
+-      expect(driftEvents).toHaveLength(1)
+-      expect(driftEvents[0]).toMatchObject({
+-        event: 'base2.gate',
++      expect(driftEvents).toHaveLength(0)
++      const receipts = (agentState as any).base2ActiveWork.reviewReceipts
++      expect(receipts).toHaveLength(1)
++      expect(receipts[0]).toMatchObject({
+         reviewer: 'code-reviewer',
+-        reportedFingerprint: driftFingerprint,
+-        expectedFingerprint,
+-        pendingFiles: [FINGERPRINT_DRIFT_FILE],
++        gateId: `code-reviewer:${expectedFingerprint}`,
++        snapshotFingerprint: expectedFingerprint,
++        reviewedFiles: [FINGERPRINT_DRIFT_FILE],
+       })
+-      expect(driftEvents[0]!.reuseReason).toBeUndefined()
+     } finally {
+       console.info = originalInfo
+     }
+@@ -1128,8 +1163,16 @@ describe('base2 deterministic gate lifecycle e2e', () => {
+         reviewedFiles: [PARENT_OWNED_FILE],
+         verdict: 'LOOKS_GOOD',
+         requirementCoverage: [
+-          { requirement: 'Commit and push', status: 'missing' },
+-          { requirement: 'Confirm CI/CD is green', status: 'uncertain' },
++          {
++            requirement: 'Commit and push',
++            status: 'missing',
++            evidence: ['parent only: commit and push after specialist review'],
++          },
++          {
++            requirement: 'Confirm CI/CD is green',
++            status: 'uncertain',
++            evidence: ['parent only: confirm CI/CD after publication'],
++          },
+           // Parent-owned only via evidence; the requirement text alone is
+           // in-scope, so the gate must consult the structured evidence.
+           {
+@@ -1219,7 +1262,11 @@ describe('base2 deterministic gate lifecycle e2e', () => {
+         reviewedFiles: [IN_SCOPE_REQUIREMENT_FILE],
+         verdict: 'LOOKS_GOOD',
+         requirementCoverage: [
+-          { requirement: 'Commit and push', status: 'missing' },
++          {
++            requirement: 'Commit and push',
++            status: 'missing',
++            evidence: ['parent only: commit and push after specialist review'],
++          },
+           {
+             requirement: 'preserve CLI compatibility',
+             status: 'missing',
