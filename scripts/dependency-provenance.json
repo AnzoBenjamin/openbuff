@@ -1,6 +1,6 @@
 {
   "source": "https://registry.npmjs.org",
-  "verifiedAt": "2026-10-23T07:24:10.956Z",
+  "verifiedAt": "2026-11-07T01:18:19.662Z",
   "packages": {
     "@ai-sdk/anthropic@2.0.50": {
       "integrity": "sha512-21PaHfoLmouOXXNINTsZJsMw+wE5oLR2He/1kq/sKokTVKyq7ObGT1LDk6ahwxaz/GoaNaGankMh+EgVcdv2Cw==",
@@ -648,6 +648,12 @@
       "integrity": "sha512-0wZ1IRqGGhMP76gLqz8EyfBXKk0J2qo2+H3fi4mcUP/KtTocoX08nmIAHl1Z2kJIZbZee8KOpBCSNPRgauucjw==",
       "license": "MIT",
       "tarball": "https://registry.npmjs.org/zod/-/zod-4.2.1.tgz",
+      "deprecated": false
+    },
+    "ajv@6.12.6": {
+      "integrity": "sha512-j3fVLgvTo527anyYyJOGTYJbG+vnnQYvE0m5mmkc1TK+nxAppkCLMIL0aZ4dblVCNoGShhm+kzE4ZUykBoMg4g==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/ajv/-/ajv-6.12.6.tgz",
       "deprecated": false
     }
   }
