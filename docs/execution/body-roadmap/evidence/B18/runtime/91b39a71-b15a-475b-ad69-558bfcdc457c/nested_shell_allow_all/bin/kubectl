@@ -1,3 +1,0 @@
-#!/bin/sh
-if [ "${0##*/}:$1" = "git:status" ]; then exit 0; fi
-printf "%s\n" "${0##*/}:$*" >> "$B18_TRACE"

@@ -11,8 +11,11 @@ import {
   listDirtyPaths,
   withTouchedPaths,
 } from './run-terminal-command'
+import { raceAbort } from './concurrency'
+import { ExecutionRefusalError, refusalForSignal } from '../services/execution-launch'
 
 import type { BackgroundJobOwner } from './background-jobs'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 import type { JobEvent, JobState } from '@codebuff/common/util/job-registry'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
@@ -191,27 +194,61 @@ export function boundEventsToOutputTail(
  * Returns paths to emit only on the resolving observation (omit on
  * subsequent polls and while still running).
  */
-async function resolveSettlementTouchedPaths(job: {
+type SettlementJob = {
   settlementTouchedPaths?: string[]
   dirtyBeforePaths?: string[]
   projectRoot?: string
-}): Promise<string[] | undefined> {
+}
+
+const settlementInFlight = new WeakMap<SettlementJob, Promise<void>>()
+
+async function resolveSettlementTouchedPaths(
+  job: SettlementJob,
+  request: { signal?: AbortSignal; executionContext?: ExecutionAdapterContext },
+): Promise<string[] | undefined> {
+  // Serialize the first observation without retaining another request's authority.
+  // A failed observer releases the slot so a fresh request can retry.
+  let pending = settlementInFlight.get(job)
+  while (pending) {
+    const signals = [request.executionContext?.signal, request.signal].filter(
+      (signal): signal is AbortSignal => signal !== undefined,
+    )
+    const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0]
+    try {
+      await raceAbort(pending, signal)
+    } catch (error) {
+      if (signal?.aborted) {
+        // Deadline identity belongs to its registered source signal, not the
+        // combined waiter. Cancelling this wait must leave the owner running.
+        const source = signals.find(candidate => candidate.aborted && candidate.reason === signal.reason) ?? signal
+        throw new ExecutionRefusalError(refusalForSignal(source))
+      }
+      throw error
+    }
+    pending = settlementInFlight.get(job)
+  }
   if (job.settlementTouchedPaths !== undefined) {
     // Already resolved on a prior settled check_job — do not re-emit.
     return undefined
   }
-  if (job.dirtyBeforePaths !== undefined && job.projectRoot !== undefined) {
-    const dirtyAfter = await listDirtyPaths(job.projectRoot)
-    const touched =
-      dirtyAfter !== null
+  let release!: () => void
+  settlementInFlight.set(job, new Promise<void>(resolve => { release = resolve }))
+  try {
+    if (job.dirtyBeforePaths !== undefined && job.projectRoot !== undefined) {
+      const dirtyAfter = await listDirtyPaths(job.projectRoot, request.signal, undefined, request.executionContext)
+      const touched = dirtyAfter !== null
         ? dirtyDelta(new Set(job.dirtyBeforePaths), dirtyAfter)
         : []
-    job.settlementTouchedPaths = touched
-    return touched
+      job.settlementTouchedPaths = touched
+      return touched
+    }
+    // Soft-fail: recovered jobs / no git snapshot — lock out recompute.
+    job.settlementTouchedPaths = []
+    return undefined
+  } finally {
+    settlementInFlight.delete(job)
+    release()
   }
-  // Soft-fail: recovered jobs / no git snapshot — lock out recompute.
-  job.settlementTouchedPaths = []
-  return undefined
 }
 
 /**
@@ -256,8 +293,7 @@ export function resolveCheckJobWaitBounds(params: {
 /**
  * Build the structured poll/follow result from the raw follow state. Computes
  * the common output fields (state, events, nextCursor, truncated, dropped,
- * matched, exitCode) shared by poll and follow modes. When no explicit cursor
- * was provided, advances the job's stored cursor as a side effect. The presentation-level
+ * matched, exitCode) shared by poll and follow modes. The presentation-level
  * output cap (boundEventsToOutputTail) is applied here; the caller folds the
  * returned `timedOut` into its kill/return logic.
  */
@@ -275,7 +311,6 @@ function buildCheckJobPollResult(params: {
   newEvents: JobEvent[]
   cursor: number
   truncated: boolean
-  advanceStoredCursor: boolean
 }): {
   jobId: string
   state: JobState
@@ -296,7 +331,6 @@ function buildCheckJobPollResult(params: {
     newEvents,
     cursor,
     truncated: truncatedSoFar,
-    advanceStoredCursor,
   } = params
   const registryJob = jobRegistry.get(jobId)
   const state = registryJob?.state ?? job.status
@@ -316,9 +350,6 @@ function buildCheckJobPollResult(params: {
   )
   const events = boundedResult.events
   const nextCursor = finalSnapshot?.nextCursor ?? cursor
-  // Explicit cursors are independent observations; only cursorless polling
-  // advances the job's stored cursor.
-  if (advanceStoredCursor) job.lastCheckCursor = nextCursor
   const finalDropped = finalSnapshot?.dropped ?? 0
   const finalTruncated =
     truncatedSoFar ||
@@ -379,6 +410,8 @@ export async function checkJob(params: {
    * immediately — the follow must not linger past the turn.
    */
   signal?: AbortSignal
+  /** Current host request authority for the optional settlement Git observation. */
+  executionContext?: ExecutionAdapterContext
   /**
    * REQUIRED trusted owner, injected from run/session state by the caller
    * (never from model/tool input). Ownership is verified against the
@@ -451,6 +484,11 @@ export async function checkJob(params: {
   // event emitted before the match/exit/timeout — not just the final poll's
   // batch (which would drop earlier events while advancing `nextCursor`).
   const entryCursor = params.cursor ?? job.lastCheckCursor ?? 0
+  const commitStoredCursor = (nextCursor: number) => {
+    if (params.cursor === undefined) {
+      job.lastCheckCursor = Math.max(job.lastCheckCursor ?? 0, nextCursor)
+    }
+  }
   let cursor = entryCursor
   let truncated = false
   let collected = ''
@@ -543,7 +581,6 @@ export async function checkJob(params: {
         newEvents,
         cursor,
         truncated,
-        advanceStoredCursor: params.cursor === undefined,
       })
 
       if (timedOut && job.status === 'running' && killOnTimeout) {
@@ -555,9 +592,11 @@ export async function checkJob(params: {
           const postKillState = postKillJob?.state ?? killResult.status
           const postKillExitCode =
             postKillJob?.exitCode ?? killResult.exitCode ?? undefined
-          // Kill settles the job; credit dirty delta on this first settled
-          // observation (same one-shot path as natural finish).
-          const killTouched = await resolveSettlementTouchedPaths(job)
+          // Signal delivery can leave the child running or stopping. Attribute
+          // dirt only when the post-kill registry state is already terminal.
+          const killTouched = isTerminalCheckJobState(postKillState)
+            ? await resolveSettlementTouchedPaths(job, params)
+            : undefined
           const killLoopBreaker = checkJobLoopBreakerHints({
             state: postKillState,
             events: baseValue.events,
@@ -572,18 +611,20 @@ export async function checkJob(params: {
             killed: true as const,
             timedOut: true as const,
           }
+          const value = killTouched !== undefined
+            ? withTouchedPaths(killValue, killTouched)
+            : killValue
+          commitStoredCursor(baseValue.nextCursor)
           return [
             {
               type: 'json',
-              value:
-                killTouched !== undefined
-                  ? withTouchedPaths(killValue, killTouched)
-                  : killValue,
+              value,
             },
           ]
         }
         // Kill itself reported an error (e.g. no pid): surface it while still
         // marking the attempt so the caller knows a kill was attempted.
+        commitStoredCursor(baseValue.nextCursor)
         return [
           {
             type: 'json',
@@ -601,8 +642,8 @@ export async function checkJob(params: {
         ]
       }
 
-      const settlementTouched = finished
-        ? await resolveSettlementTouchedPaths(job)
+      const settlementTouched = isTerminalCheckJobState(baseValue.state)
+        ? await resolveSettlementTouchedPaths(job, params)
         : undefined
       const loopBreaker = checkJobLoopBreakerHints({
         state: baseValue.state,
@@ -623,6 +664,8 @@ export async function checkJob(params: {
               ...loopBreaker,
               ...(timedOut ? { timedOut: true as const } : {}),
             }
+      // A refused settlement observation must leave unseen output available.
+      commitStoredCursor(baseValue.nextCursor)
       return [
         {
           type: 'json',

@@ -2,6 +2,10 @@ import * as os from 'os'
 import * as path from 'path'
 
 import { z } from 'zod/v4'
+import {
+  externalToolIdentitySchema,
+  externalToolPathParameterSchema,
+} from '../tools/external-tool'
 
 import type { CodebuffFileSystem } from '../types/filesystem'
 import type { SkillsMap } from '../types/skill'
@@ -80,10 +84,12 @@ export const customToolDefinitionsSchema = z
       // inputSchema can be a Zod schema (from MCP tools) or a JSON Schema object
       // (from SDK custom tools that have been serialized). The agent-runtime
       // converts JSON schemas to Zod using ensureZodSchema() before use.
-      inputSchema: z.custom<z.ZodType | Record<string, unknown>>(),
+      inputSchema: z.custom<z.ZodType | Record<string, unknown> | boolean>(),
       endsAgentStep: z.boolean().optional().default(false),
       description: z.string().optional(),
       exampleInputs: z.record(z.string(), z.any()).array().optional(),
+      identity: externalToolIdentitySchema.optional(),
+      pathParameters: z.array(externalToolPathParameterSchema).optional(),
     }),
   )
   .default(() => ({}))
@@ -94,6 +100,19 @@ export type CustomToolDefinitions = NonNullable<
 export const ProjectFileContextSchema = z.object({
   projectRoot: z.string(),
   cwd: z.string(),
+  /** Reference to this process's retained MCP host scope; labels confer no trust. */
+  mcpSessionReference: z.string().optional(),
+  mcpCatalogs: z
+    .record(
+      z.string(),
+      z.object({
+        generation: z.number().int().nonnegative().nullable(),
+        complete: z.boolean(),
+        incompleteReasons: z.array(z.string()),
+        origin: z.enum(['user', 'project', 'client']).optional(),
+      }),
+    )
+    .optional(),
   fileTreeSource: z.enum(['live', 'virtual']).optional(),
   fileTree: z.array(z.custom<FileTreeNode>()),
   fileTokenScores: z.record(z.string(), z.record(z.string(), z.number())),
@@ -127,6 +146,16 @@ export const ProjectFileContextSchema = z.object({
 export type ProjectFileContext = {
   projectRoot: string
   cwd: string
+  mcpSessionReference?: string
+  mcpCatalogs?: Record<
+    string,
+    {
+      generation: number | null
+      complete: boolean
+      incompleteReasons: string[]
+      origin?: 'user' | 'project' | 'client'
+    }
+  >
   /** Whether fileTree came from the filesystem or explicit in-memory files. */
   fileTreeSource?: 'live' | 'virtual'
   fileTree: FileTreeNode[]

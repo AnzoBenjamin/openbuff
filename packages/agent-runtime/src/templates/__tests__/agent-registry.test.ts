@@ -122,8 +122,8 @@ describe('Agent Registry', () => {
       return { templates, dynamicTemplates: agentTemplates, validationErrors }
     }
 
-    spyOn(validationModule, 'validateAgents').mockImplementation(
-      (params) => validateAgentsBehavior(params),
+    spyOn(validationModule, 'validateAgents').mockImplementation((params) =>
+      validateAgentsBehavior(params),
     )
 
     spyOn(validationModule, 'validateSingleAgent').mockImplementation(
@@ -307,55 +307,52 @@ describe('Agent Registry', () => {
       expect(outputSchema.safeParse({ answer: 'x' }).success).toBe(true)
     })
 
-    it(
-      'does not cache an unversioned (latest-resolved) template fetched via the codebuff-defaulted fallback',
-      async () => {
-        // The fallback branch (unversioned id -> codebuff/<id>) resolves
-        // 'latest'; caching it would pin a stale template for the process
-        // lifetime, contradicting the specific-version-only cache policy.
-        const mockAgentData: AgentTemplate = {
-          id: `${DEFAULT_ORG_PREFIX}fallback-agent`,
-          displayName: 'Fallback Agent',
-          systemPrompt: 'Test system prompt',
-          instructionsPrompt: 'Test instructions',
-          stepPrompt: 'Test step prompt',
-          toolNames: ['end_turn'],
-          mcpServers: {},
-          inputSchema: {},
-          spawnableAgents: [],
-          outputMode: 'last_message',
-          includeMessageHistory: true,
-          inheritParentSystemPrompt: false,
-          model: 'anthropic/claude-4-sonnet-20250522',
-          spawnerPrompt: 'Test',
-        }
-        const spy = mock(async () => mockAgentData)
-        agentRuntimeImpl = {
-          ...agentRuntimeImpl,
-          fetchAgentFromDatabase: spy,
-        }
+    it('does not cache an unversioned (latest-resolved) template fetched via the codebuff-defaulted fallback', async () => {
+      // The fallback branch (unversioned id -> codebuff/<id>) resolves
+      // 'latest'; caching it would pin a stale template for the process
+      // lifetime, contradicting the specific-version-only cache policy.
+      const mockAgentData: AgentTemplate = {
+        id: `${DEFAULT_ORG_PREFIX}fallback-agent`,
+        displayName: 'Fallback Agent',
+        systemPrompt: 'Test system prompt',
+        instructionsPrompt: 'Test instructions',
+        stepPrompt: 'Test step prompt',
+        toolNames: ['end_turn'],
+        mcpServers: {},
+        inputSchema: {},
+        spawnableAgents: [],
+        outputMode: 'last_message',
+        includeMessageHistory: true,
+        inheritParentSystemPrompt: false,
+        model: 'anthropic/claude-4-sonnet-20250522',
+        spawnerPrompt: 'Test',
+      }
+      const spy = mock(async () => mockAgentData)
+      agentRuntimeImpl = {
+        ...agentRuntimeImpl,
+        fetchAgentFromDatabase: spy,
+      }
 
-        // First call resolves via the codebuff-defaulted fallback branch.
-        const result1 = await getAgentTemplate({
-          ...agentRuntimeImpl,
-          agentId: 'fallback-agent',
-          localAgentTemplates: {},
-        })
-        expect(result1).toBeTruthy()
-        expect(spy).toHaveBeenCalledTimes(1)
+      // First call resolves via the codebuff-defaulted fallback branch.
+      const result1 = await getAgentTemplate({
+        ...agentRuntimeImpl,
+        agentId: 'fallback-agent',
+        localAgentTemplates: {},
+      })
+      expect(result1).toBeTruthy()
+      expect(spy).toHaveBeenCalledTimes(1)
 
-        // The unversioned lookup must not be cached: a repeat lookup re-fetches
-        // so a newly published 'latest' template is served.
-        expect(agentRuntimeImpl.databaseAgentCache.size).toBe(0)
-        const result2 = await getAgentTemplate({
-          ...agentRuntimeImpl,
-          agentId: 'fallback-agent',
-          localAgentTemplates: {},
-        })
-        expect(result2).toBeTruthy()
-        expect(spy).toHaveBeenCalledTimes(2)
-      },
-    )
+      // The unversioned lookup must not be cached: a repeat lookup re-fetches
+      // so a newly published 'latest' template is served.
+      expect(agentRuntimeImpl.databaseAgentCache.size).toBe(0)
+      const result2 = await getAgentTemplate({
+        ...agentRuntimeImpl,
+        agentId: 'fallback-agent',
+        localAgentTemplates: {},
+      })
+      expect(result2).toBeTruthy()
+      expect(spy).toHaveBeenCalledTimes(2)
+    })
 
     it('caches a specific-version template fetched via the codebuff-defaulted fallback', async () => {
       // A versioned fallback lookup (publisher-less id with an explicit
@@ -849,15 +846,14 @@ describe('Agent Registry', () => {
       }
     })
 
-    it("marks assembled local templates' mcpServers as 'project'", () => {
+    it('does not grant project origin from a serialized local executionSource label', () => {
       const fileContext: ProjectFileContext = {
         ...mockFileContext,
         agentTemplates: {
           'mcp-agent.ts': {
             id: 'mcp-agent',
             displayName: 'MCP Agent',
-            // loadLocalAgents stamps trusted on-disk templates 'local'; the
-            // registry blanket-marks 'project' only for that provenance.
+            // A peer can supply this label; only host origin marks grant trust.
             executionSource: 'local',
             systemPrompt: 'Test',
             instructionsPrompt: 'Test',
@@ -886,9 +882,38 @@ describe('Agent Registry', () => {
       })
 
       expect(result.agentTemplates['mcp-agent']).toBeDefined()
-      expect(originOf(result.agentTemplates['mcp-agent'].mcpServers.remote)).toBe(
-        'project',
-      )
+      expect(
+        originOf(result.agentTemplates['mcp-agent'].mcpServers.remote),
+      ).toBeUndefined()
+    })
+
+    it('preserves project origin supplied by the trusted local loader', () => {
+      const servers = {
+        remote: {
+          type: 'http' as const,
+          url: 'https://mcp.example.com/rpc',
+          params: {},
+          headers: {},
+        },
+      }
+      markAllMCPConfigOrigins(servers, 'project')
+      const result = assembleLocalAgentTemplates({
+        ...agentRuntimeImpl,
+        fileContext: {
+          ...mockFileContext,
+          agentTemplates: {
+            'host-marked-agent.ts': {
+              ...mockStaticTemplates.base,
+              id: 'host-marked-agent',
+              executionSource: 'local',
+              mcpServers: servers,
+            },
+          },
+        },
+      })
+      expect(
+        originOf(result.agentTemplates['host-marked-agent'].mcpServers.remote),
+      ).toBe('project')
     })
 
     it("keeps an existing 'client' mark when the trusted loader blanket-marks 'project'", () => {
@@ -943,7 +968,8 @@ describe('Agent Registry', () => {
           ),
         ).toBe('client')
 
-        const remote = result.agentTemplates['client-marked-agent'].mcpServers.remote
+        const remote =
+          result.agentTemplates['client-marked-agent'].mcpServers.remote
         const clientKey = getMCPClientCacheKey(remote)
         expect(clientKey).toBe(
           getMCPClientCacheKey(remote, { origin: 'client' }),
@@ -1035,7 +1061,7 @@ describe('Agent Registry', () => {
       }
     })
 
-    it("$TEST_SECRET arrives at getMCPClientCacheKey unexpanded (GV-30)", () => {
+    it('$TEST_SECRET arrives at getMCPClientCacheKey unexpanded (GV-30)', () => {
       process.env.TEST_SECRET = secretValue
       try {
         const config = secretMcpServers.remote

@@ -12,6 +12,7 @@ import {
   type LanguageIntelligenceService,
 } from '../services/language-intelligence'
 import {
+  LspExecutionError,
   LspServerError,
   LspServerUnavailableError,
 } from '../services/lsp-multiplexer'
@@ -92,6 +93,15 @@ function fsReadPaths(filesystem: unknown): string[] {
 }
 
 describe('language-intelligence service', () => {
+  test('preserves structured execution refusal in language-tool output', async () => {
+    const refusal = { ok: false as const, reason: 'denied', cause: 'language launch denied' }
+    const service = createLanguageIntelligence({ cwd: CWD, multiplexer: makeMultiplexer({
+      definition: async () => { throw new LspExecutionError(refusal) },
+    }) })
+    const output = await service.goToDefinition({ path: 'src/foo.ts', line: 1, character: 1 })
+    expect(output[0]).toMatchObject({ type: 'json', value: { executionRefusal: refusal } })
+  })
+
   test('go_to_definition returns structured locations and converts 1-based line to 0-based', async () => {
     let captured: { filePath: string; position: { line: number; character: number } } | undefined
     const service = createLanguageIntelligence({
@@ -1247,6 +1257,8 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
   }
 
   test('renameSymbol routes the service splice through changeFiles and reduces the commit result', async () => {
+    const executionContext = { execution: {} as import('@codebuff/common/types/contracts/execution-context').ActionExecutionPort }
+    let receivedContext: unknown
     const mockFs = createMockFs({
       files: { '/repo/src/foo.ts': 'const foo = 1\n' },
     })
@@ -1257,7 +1269,8 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
       new_name: string
     }> = []
     const service = makeApplyService({
-      renameSymbol: async (params) => {
+      renameSymbol: async (params, context) => {
+        receivedContext = context
         captured.push(params)
         return [
           {
@@ -1278,7 +1291,9 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
       service,
       { path: 'src/foo.ts', line: 1, character: 6, new_name: 'bar' },
       { cwd: '/repo', fs: mockFs, capabilityIssuer },
+      executionContext,
     )
+    expect(receivedContext).toBe(executionContext)
     // Positions pass through VERBATIM: the service owns the 1-based->0-based
     // conversion, so the wrapper must not shift a second time.
     expect(captured).toEqual([
@@ -1295,6 +1310,8 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
   })
 
   test('codeAction returns an unavailable result verbatim and commits nothing', async () => {
+    const executionContext = { execution: {} as import('@codebuff/common/types/contracts/execution-context').ActionExecutionPort }
+    let receivedContext: unknown
     const mockFs = createMockFs({
       files: { '/repo/src/foo.ts': 'const foo = 1\n' },
     })
@@ -1302,9 +1319,10 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
       unavailable: { reason: 'no-server-spec', languageId: 'typescript' },
     }
     const service = makeApplyService({
-      codeAction: async () => [
-        { type: 'json' as const, value: unavailable },
-      ],
+      codeAction: async (_params, context) => {
+        receivedContext = context
+        return [{ type: 'json' as const, value: unavailable }]
+      },
     })
     const applied = await codeAction(
       service,
@@ -1315,7 +1333,9 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
         kind: 'source.organizeImports',
       },
       { cwd: '/repo', fs: mockFs },
+      executionContext,
     )
+    expect(receivedContext).toBe(executionContext)
     expect(applied.output[0]?.value).toEqual(unavailable)
     expect(applied.mutation).toBeUndefined()
     expect(await mockFs.readFile('/repo/src/foo.ts', 'utf-8')).toBe(
@@ -1324,6 +1344,8 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
   })
 
   test('extract_symbol applies the broker-assigned created file', async () => {
+    const executionContext = { execution: {} as import('@codebuff/common/types/contracts/execution-context').ActionExecutionPort }
+    let receivedContext: unknown
     const mockFs = createMockFs({
       files: { '/repo/src/foo.ts': 'const foo = 1\n' },
     })
@@ -1335,7 +1357,8 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
       symbol_name: string
     }> = []
     const service = makeApplyService({
-      extractSymbol: async (params) => {
+      extractSymbol: async (params, context) => {
+        receivedContext = context
         captured.push(params)
         return [
           {
@@ -1363,7 +1386,9 @@ describe('semantic-edit apply wrappers (rename_symbol / code_action / extract_sy
         symbol_name: 'extractedHelper',
       },
       { cwd: '/repo', fs: mockFs, capabilityIssuer },
+      executionContext,
     )
+    expect(receivedContext).toBe(executionContext)
     // Params pass through VERBATIM: destination_path is never rewritten,
     // normalized, or existence-checked at the wrapper layer.
     expect(captured).toEqual([

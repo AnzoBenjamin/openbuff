@@ -6,11 +6,13 @@ import {
 import { MAX_READ_BLOCK_BYTES } from '@codebuff/common/tools/params/tool/read-files'
 import {
   encodeReadCapabilityToken,
+  decodeReadCapabilityToken,
   getContentHash,
   hasAuthoritativeReadCapabilityScope,
   normalizeLineEndings,
 } from '@codebuff/common/util/content-hash'
 import { jsonToolResult } from '@codebuff/common/util/messages'
+import { AbortError } from '@codebuff/common/util/error'
 
 import {
   formatUnsafeToolPathError,
@@ -23,6 +25,17 @@ import {
   getEditRereadRequirement,
 } from './edit-read-state'
 import { getFileReadingUpdates } from '../../../get-file-reading-updates'
+import {
+  authenticateReadFilesItem,
+  captureAuthenticatedWholeRead,
+} from '../../../util/authenticated-read-source'
+import {
+  captureTextDocument,
+  getRawLineSpan,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
+import type { CapturedTextDocument } from '@codebuff/common/util/byte-text'
+import type { RawReadBasisV1 } from '@codebuff/common/util/raw-read-basis'
 import {
   buildAroundBlock,
   buildSymbolBlock,
@@ -74,6 +87,9 @@ export const handleReadFiles = (async (
     // TypeError.
     projectId: fileContext?.projectRoot ?? '',
     runId: params.runId ?? '',
+  }
+  const assertReadActive = () => {
+    if (params.signal?.aborted) throw new AbortError('read_files was cancelled')
   }
   const pathInputs = toolCall.input.paths ?? []
   const rangeInputs = toolCall.input.ranges ?? []
@@ -177,6 +193,7 @@ export const handleReadFiles = (async (
   }))
 
   await previousToolCallFinished
+  assertReadActive()
 
   const requestedPaths = new Set([
     ...paths,
@@ -220,52 +237,13 @@ export const handleReadFiles = (async (
     ranges,
     capabilityIssuer,
   })
+  assertReadActive()
   const fileResults = fileReadResult.results.map((result) => {
     if (result.status === 'error') return result
-    const completeEditAnchor = (() => {
-      if (
-        result.selector === 'file' &&
-        result.complete &&
-        typeof result.content === 'string'
-      ) {
-        const scope = { ...capabilityIssuer, path: result.path }
-        // Same guard as mintBlockEditAnchor: a non-authoritative scope (empty
-        // projectId/runId) mints no capability instead of throwing.
-        if (!hasAuthoritativeReadCapabilityScope(scope)) return undefined
-        const contentHash = getContentHash(result.content)
-        const startLine = 1
-        const endLine = normalizeLineEndings(result.content).split('\n').length
-        const readCapability = encodeReadCapabilityToken({
-          startLine,
-          endLine,
-          hash: contentHash,
-          scope,
-        })
-        return { startLine, endLine, contentHash, readCapability }
-      }
-      if (
-        result.selector === 'range' &&
-        result.complete &&
-        result.editAnchor &&
-        /^sha256:[a-f0-9]{64}$/.test(result.editAnchor.contentHash)
-      ) {
-        const scope = { ...capabilityIssuer, path: result.path }
-        if (!hasAuthoritativeReadCapabilityScope(scope)) return undefined
-        const readCapability = encodeReadCapabilityToken({
-          startLine: result.startLine,
-          endLine: result.endLine,
-          hash: result.editAnchor.contentHash,
-          scope,
-        })
-        return {
-          startLine: result.startLine,
-          endLine: result.endLine,
-          contentHash: result.editAnchor.contentHash,
-          readCapability,
-        }
-      }
-      return undefined
-    })()
+    const completeEditAnchor = authenticateReadFilesItem(
+      result,
+      capabilityIssuer,
+    )
     const refs =
       result.selector === 'file'
         ? fileContext?.tokenCallers?.[result.path]
@@ -289,7 +267,9 @@ export const handleReadFiles = (async (
         (result) =>
           result.status === 'ok' &&
           'complete' in result &&
-          result.complete === true,
+          result.complete === true &&
+          'editAnchor' in result &&
+          Boolean(result.editAnchor),
       )
       .map((result) => result.path),
   )
@@ -302,64 +282,19 @@ export const handleReadFiles = (async (
   const wholeFileGrantPaths = new Set<string>()
 
   for (const result of fileResults) {
-    if (result.status !== 'ok') continue
-    // One ladder call for every selector: whole-file paths reads and complete
-    // full-file (1..totalLines) range reads both promote to sticky whole-file
-    // auth; truncated/partial reads, range subsets and symbol reads never do.
-    const coverage = (() => {
-      if (
-        result.selector === 'file' &&
-        result.complete &&
-        typeof result.content === 'string'
-      ) {
-        const totalLines = normalizeLineEndings(result.content).split(
-          '\n',
-        ).length
-        return {
-          complete: true,
-          startLine: 1,
-          endLine: totalLines,
-          totalLines,
-          sourceContent: result.content,
-        }
-      }
-      if (result.selector === 'range' && result.complete === true) {
-        // Only the undecorated sourceContent (hash-stable bytes) can grant;
-        // numbered display content is never used.
-        return {
-          complete: true,
-          startLine: result.startLine,
-          endLine: result.endLine,
-          totalLines:
-            'totalLines' in result && typeof result.totalLines === 'number'
-              ? result.totalLines
-              : 0,
-          sourceContent:
-            'sourceContent' in result &&
-            typeof result.sourceContent === 'string'
-              ? result.sourceContent
-              : undefined,
-        }
-      }
-      return undefined
-    })()
-    if (!coverage) continue
-    const sourceContent = coverage.sourceContent
+    const verified = captureAuthenticatedWholeRead(result, capabilityIssuer)
+    if (!verified) continue
     if (
-      classifyReadBlockAuthority(coverage) !== 'whole_file' ||
-      sourceContent === undefined
-    ) {
-      continue
-    }
-    wholeFileGrantPaths.add(result.path)
-    delete fileProcessingState.confirmedPostEditAnchorsByPath?.[result.path]
-    if (fileProcessingState.strictReadBeforeEdit) {
-      grantWholeFileReadAuthorization(
+      !grantWholeFileReadAuthorization(
         fileProcessingState,
         result.path,
-        sourceContent,
+        verified.document.rawText,
+        verified.anchor.rawBasis,
       )
-    }
+    )
+      continue
+    wholeFileGrantPaths.add(result.path)
+    delete fileProcessingState.confirmedPostEditAnchorsByPath?.[result.path]
   }
 
   for (const path of successfulReadPaths) {
@@ -380,6 +315,8 @@ export const handleReadFiles = (async (
   }
 
   const renderedFileResults = fileResults.map((result) => {
+    const modelResult = { ...result }
+    if ('rawSourceContent' in modelResult) delete modelResult.rawSourceContent
     const modelContent =
       result.status !== 'error' &&
       result.selector === 'range' &&
@@ -395,13 +332,13 @@ export const handleReadFiles = (async (
       editedSinceLastRead.has(result.path)
     ) {
       return {
-        ...result,
+        ...modelResult,
         content: `${CHANGED_SINCE_LAST_READ_MARKER}\n${modelContent}`,
       }
     }
     return modelContent === undefined
-      ? result
-      : { ...result, content: modelContent }
+      ? modelResult
+      : { ...modelResult, content: modelContent }
   })
 
   // -------------------------------------------------------------------------
@@ -411,28 +348,55 @@ export const handleReadFiles = (async (
   // -------------------------------------------------------------------------
   const blockFileCache = new Map<
     string,
-    Promise<{ content: string } | { error: FilesystemError }>
+    Promise<
+      | { content: string; sourceReadCapability?: string }
+      | { error: FilesystemError }
+    >
   >()
+  const blockDocumentsByPath = new Map<string, CapturedTextDocument>()
   const loadBlockFile = (
     path: string,
-  ): Promise<{ content: string } | { error: FilesystemError }> => {
+  ): Promise<
+    | { content: string; sourceReadCapability?: string }
+    | { error: FilesystemError }
+  > => {
     let cached = blockFileCache.get(path)
     if (!cached) {
       cached = (async () => {
         try {
-          const raw = await requestOptionalFile({ ...params, filePath: path })
-          if (raw === null) {
+          const read = await getFileReadingUpdates({
+            requestFiles: params.requestFiles,
+            requestedFiles: [path],
+            capabilityIssuer,
+            signal: params.signal,
+          })
+          assertReadActive()
+          const item = read.results[0]
+          if (item?.status === 'error') return { error: item.error }
+          if (
+            !item ||
+            item.selector !== 'file' ||
+            !item.complete ||
+            typeof item.content !== 'string'
+          ) {
             return {
               error: {
-                code: 'not_found',
-                message: `File does not exist: ${path}`,
+                code: 'too_large',
+                message: `A complete bounded source is unavailable for structural reads of ${path}. Request a smaller line range.`,
                 retryable: true,
-                recovery: 'discover_path',
+                recovery: 'read_smaller_range',
               } satisfies FilesystemError,
             }
           }
-          return { content: raw }
+          const verified = captureAuthenticatedWholeRead(item, capabilityIssuer)
+          if (!verified) return { content: item.content }
+          blockDocumentsByPath.set(path, verified.document)
+          return {
+            content: verified.document.rawText,
+            sourceReadCapability: verified.anchor.readCapability,
+          }
         } catch (error) {
+          if (error instanceof AbortError) throw error
           return { error: classifyOptionalReadError(error) }
         }
       })()
@@ -447,8 +411,20 @@ export const handleReadFiles = (async (
     endLine: number,
     blockContent: string,
   ) => {
+    assertReadActive()
     const scope = { ...capabilityIssuer, path }
     if (!hasAuthoritativeReadCapabilityScope(scope)) return undefined
+    const document = blockDocumentsByPath.get(path)
+    if (!document) return undefined
+    const span = getRawLineSpan(document, startLine, endLine)
+    if (
+      document.observation.slice(
+        span.startObservationOffset,
+        span.endObservationOffset,
+      ) !== blockContent
+    )
+      return undefined
+    const rawBasis = getRawReadBasis(document, startLine, endLine, 'lines')
     const contentHash = getContentHash(blockContent)
     return {
       startLine,
@@ -459,7 +435,9 @@ export const handleReadFiles = (async (
         endLine,
         hash: contentHash,
         scope,
+        rawBasis,
       }),
+      rawBasis,
     }
   }
 
@@ -470,6 +448,7 @@ export const handleReadFiles = (async (
     totalLines: number
     sourceContent: string
     capabilityEligible?: boolean
+    rawBasis?: RawReadBasisV1
   }) => {
     const authority = classifyReadBlockAuthority({
       complete: true,
@@ -480,19 +459,24 @@ export const handleReadFiles = (async (
       ...(blockParams.capabilityEligible === undefined
         ? {}
         : { capabilityEligible: blockParams.capabilityEligible }),
+      rawBasis: blockParams.rawBasis,
     })
     if (authority !== 'whole_file') return
+    const document = blockDocumentsByPath.get(blockParams.path)
+    if (
+      !document ||
+      !grantWholeFileReadAuthorization(
+        fileProcessingState,
+        blockParams.path,
+        document.rawText,
+        blockParams.rawBasis,
+      )
+    )
+      return
     wholeFileGrantPaths.add(blockParams.path)
     delete fileProcessingState.confirmedPostEditAnchorsByPath?.[
       blockParams.path
     ]
-    if (fileProcessingState.strictReadBeforeEdit) {
-      grantWholeFileReadAuthorization(
-        fileProcessingState,
-        blockParams.path,
-        blockParams.sourceContent,
-      )
-    }
   }
 
   // A block that exceeds the byte budget mints no editAnchor and never counts
@@ -552,13 +536,12 @@ export const handleReadFiles = (async (
     )
   }
 
-  // A block covering the whole file mints the same authority an identical
-  // whole-file paths read would, so it may clear context_compacted. Sub-file
-  // blocks may clear failed_edit gates but must not drop context_compacted
-  // (same rule as range/symbol reads).
+  // Line and structural blocks retain scoped authority, including full-looking
+  // blocks. They may clear failed_edit gates while preserving context_compacted.
   const blockReadPaths = new Set<string>()
   for (const item of blockItems) {
-    if (item.status !== 'error') blockReadPaths.add(item.path)
+    if (item.status !== 'error' && 'editAnchor' in item && item.editAnchor)
+      blockReadPaths.add(item.path)
   }
   for (const path of blockReadPaths) {
     const rereadReq = getEditRereadRequirement(fileProcessingState, path)
@@ -585,34 +568,14 @@ export const handleReadFiles = (async (
       aroundRequests.length +
       symbolBlockRequests.length +
       index
-    let rawContent: string | null
-    try {
-      rawContent = await requestOptionalFile({
-        ...params,
-        filePath: request.path,
-      })
-    } catch (error) {
+    const loaded = await loadBlockFile(request.path)
+    if ('error' in loaded) {
       symbolResults.push({
         selector: 'symbols',
         requestIndex,
         path: request.path,
         status: 'error',
-        error: classifyOptionalReadError(error),
-      })
-      continue
-    }
-    if (rawContent === null) {
-      symbolResults.push({
-        selector: 'symbols',
-        requestIndex,
-        path: request.path,
-        status: 'error',
-        error: {
-          code: 'not_found',
-          message: `File does not exist: ${request.path}`,
-          retryable: true,
-          recovery: 'discover_path',
-        },
+        error: loaded.error,
       })
       continue
     }
@@ -620,7 +583,7 @@ export const handleReadFiles = (async (
     const symbolScope = { ...capabilityIssuer, path: request.path }
     const slices = (
       await extractSlices(
-        rawContent,
+        loaded.content,
         request.path,
         request.names,
         undefined,
@@ -629,25 +592,24 @@ export const handleReadFiles = (async (
         hasAuthoritativeReadCapabilityScope(symbolScope)
           ? symbolScope
           : undefined,
+        loaded.sourceReadCapability,
       )
     ).map((slice) => {
-      if (!slice.readCapability) return slice
-      const contentHash = getContentHash(slice.content)
-      const readCapability = encodeReadCapabilityToken({
-        startLine: slice.startLine,
-        endLine: slice.endLine,
-        hash: contentHash,
-        scope: symbolScope,
-      })
       const sliceWithoutCapability = { ...slice }
       delete sliceWithoutCapability.readCapability
+      if (!slice.readCapability) return sliceWithoutCapability
+      const contentHash = getContentHash(slice.content)
+      const capability = decodeReadCapabilityToken(slice.readCapability)
+      if (typeof capability === 'string' || capability.tokenVersion !== 'v4')
+        return sliceWithoutCapability
       return {
         ...sliceWithoutCapability,
         editAnchor: {
           startLine: slice.startLine,
           endLine: slice.endLine,
           contentHash,
-          readCapability,
+          readCapability: slice.readCapability,
+          rawBasis: capability.rawBasis,
         },
       }
     })
@@ -678,14 +640,19 @@ export const handleReadFiles = (async (
     const omittedSymbols: string[] = []
     for (const slice of slices) {
       const bytes = Buffer.byteLength(slice.content, 'utf8')
-      if (bytes > MAX_READ_BLOCK_BYTES || returnedBytes + bytes > MAX_READ_BLOCK_BYTES) {
+      if (
+        bytes > MAX_READ_BLOCK_BYTES ||
+        returnedBytes + bytes > MAX_READ_BLOCK_BYTES
+      ) {
         omittedSymbols.push(slice.symbol)
       } else {
         returnedSlices.push(slice)
         returnedBytes += bytes
       }
     }
-    if (returnedSlices.length > 0) {
+    if (
+      returnedSlices.some((slice) => 'editAnchor' in slice && slice.editAnchor)
+    ) {
       successfulReadPaths.add(request.path)
       const symbolRereadReq = getEditRereadRequirement(
         fileProcessingState,
@@ -702,7 +669,10 @@ export const handleReadFiles = (async (
       selector: 'symbols',
       requestIndex,
       path: request.path,
-      status: missingSymbols.length > 0 || omittedSymbols.length > 0 ? 'partial' : 'ok',
+      status:
+        missingSymbols.length > 0 || omittedSymbols.length > 0
+          ? 'partial'
+          : 'ok',
       requestedSymbols: request.names,
       missingSymbols,
       slices: returnedSlices,
@@ -745,7 +715,7 @@ export const handleReadFiles = (async (
     for (const path of truncatedFilePaths) {
       const loaded = await loadBlockFile(path)
       if ('error' in loaded) continue
-      const lines = normalizeLineEndings(loaded.content).split('\n')
+      const lines = captureTextDocument(loaded.content).observation.split('\n')
       const totalLines = lines.length
       const windowSize = DEFAULT_MANIFEST_WINDOW_SIZE
       const windowCount = Math.max(1, Math.ceil(totalLines / windowSize))

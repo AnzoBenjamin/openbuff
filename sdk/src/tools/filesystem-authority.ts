@@ -1010,13 +1010,19 @@ export function getDefaultFilesystemAuthority(
   )
   if (existing) return existing.authority
 
-  const authorityFileSystem = Object.assign(Object.create(fs), {
-    createFileExclusive:
-      fs.createFileExclusive ??
-      ((
-        filePath: Parameters<CodebuffFileSystem['writeFile']>[0],
-        data: Parameters<CodebuffFileSystem['writeFile']>[1],
-      ) => fs.writeFile(filePath, data, { flag: 'wx' })),
+  // A frozen host adapter may expose a nonwritable inherited method.
+  const authorityFileSystem = Object.create(fs, {
+    createFileExclusive: {
+      value:
+        fs.createFileExclusive ??
+        ((
+          filePath: Parameters<CodebuffFileSystem['writeFile']>[0],
+          data: Parameters<CodebuffFileSystem['writeFile']>[1],
+        ) => fs.writeFile(filePath, data, { flag: 'wx' })),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    },
   }) as CodebuffFileSystem
   const mandatoryMutationPolicy: FilesystemAuthorityPolicy = {
     name: 'mandatory-mutation-policy',

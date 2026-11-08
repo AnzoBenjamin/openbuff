@@ -1,4 +1,5 @@
 import { Database } from 'bun:sqlite'
+import { z } from 'zod/v4'
 
 import { checkBackgroundAgentParams } from '@codebuff/common/tools/params/tool/check-background-agent'
 import { TEST_USER_ID } from '@codebuff/common/old-constants'
@@ -1337,9 +1338,7 @@ describe('spawn_agents background intent reconciliation', () => {
     displayName: `Mock ${id}`,
     outputMode: 'last_message' as const,
     inputSchema: {
-      prompt: {
-        safeParse: () => ({ success: true }),
-      } as unknown as AgentTemplate['inputSchema']['prompt'],
+      prompt: z.string(),
     },
     spawnerPrompt: '',
     model: '',
@@ -1626,9 +1625,7 @@ describe('background agent journaling (P2-T2)', () => {
     displayName: `Mock ${id}`,
     outputMode: 'last_message' as const,
     inputSchema: {
-      prompt: {
-        safeParse: () => ({ success: true }),
-      } as unknown as AgentTemplate['inputSchema']['prompt'],
+      prompt: z.string(),
     },
     spawnerPrompt: '',
     model: 'claude-3-5-sonnet-20241022',
@@ -1852,9 +1849,7 @@ describe('background resume from own journal (P2-T2b runtime seam)', () => {
     displayName: `Mock ${id}`,
     outputMode: 'last_message' as const,
     inputSchema: {
-      prompt: {
-        safeParse: () => ({ success: true }),
-      } as unknown as AgentTemplate['inputSchema']['prompt'],
+      prompt: z.string(),
     },
     spawnerPrompt: '',
     model: 'claude-3-5-sonnet-20241022',

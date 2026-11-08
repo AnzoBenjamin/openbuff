@@ -1,2 +1,0 @@
-$ bun run mock-module-guard.ts
-Mock-module guard passed: 0 findings.

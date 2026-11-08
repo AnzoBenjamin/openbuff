@@ -1,3 +1,0 @@
-[openbuff] Loaded provider config from:
-  - /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/route-metadata/provider.json
-{"passed":true,"refused":0,"ledger":["vision","vision","vision","backup"],"waits":[100,200],"actualFailover":{"type":"provider_status","status":"failover","model":"vision/model","nextModel":"backup/model","statusCode":503}}

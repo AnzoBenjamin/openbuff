@@ -1,7 +1,7 @@
 /**
  * Last-line outbound redactor for text about to cross the ACP wire.
  *
- * Mirrors P1-T1-DESIGN §12.1 SEC-1 ("no cap.v3 token / secret value leaves the
+ * Mirrors P1-T1-DESIGN §12.1 SEC-1 ("no capability token / secret value leaves the
  * process"). This is DEFENSE-IN-DEPTH, not the only guard: the serve bridge
  * already structurally DROPS `tool_call`/`tool_result` events and forwards only
  * model-visible assistant text, so a secret-bearing tool result never reaches
@@ -17,10 +17,10 @@
  */
 
 /**
- * Active read/edit capability tokens are `cap.v3.` followed by a run of
+ * Read/edit capability tokens use `cap.v3.` or `cap.v4.` followed by a run of
  * base64url / `.` / `-` characters. Bounded single-`+` run, so it is linear.
  */
-const CAP_V3_TOKEN_RE = /cap\.v3\.[A-Za-z0-9._-]+/g
+const CAPABILITY_TOKEN_RE = /cap\.v[34]\.[A-Za-z0-9._-]+/g
 
 /**
  * `KEY=value` provider-secret env pairs. The key prefix is preserved and only
@@ -46,7 +46,7 @@ const PROVIDER_SECRET_RE =
 export function sanitizeOutbound(text: string): string {
   if (text.length === 0) return text
   return text
-    .replace(CAP_V3_TOKEN_RE, '[REDACTED_CAPABILITY]')
+    .replace(CAPABILITY_TOKEN_RE, '[REDACTED_CAPABILITY]')
     .replace(ENV_KEY_PAIR_RE, '$1=[REDACTED_SECRET]')
     .replace(PROVIDER_SECRET_RE, '[REDACTED_SECRET]')
 }

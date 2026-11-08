@@ -5,6 +5,7 @@ import {
   getContentHash,
   getExactContentHash,
 } from '../../../util/content-hash'
+import { captureTextDocument, getRawReadBasis } from '../../../util/byte-text'
 
 import {
   buildFileMutationResultFromReceiptV1,
@@ -821,6 +822,12 @@ describe('mutation receipts and reconciliation', () => {
 
   it('reconciles exact CRLF receipt hashes with normalized action anchors', () => {
     const afterContent = 'const value = 2\r\n'
+    const rawBasis = getRawReadBasis(
+      captureTextDocument(afterContent),
+      1,
+      2,
+      'whole',
+    )
     const afterHash = getExactContentHash(afterContent)
     const normalizedHash = getContentHash(afterContent)
     const receipt = {
@@ -832,6 +839,7 @@ describe('mutation receipts and reconciliation', () => {
       startLine: 1,
       endLine: 2,
       hash: normalizedHash,
+      rawBasis,
       scope: {
         projectId: '/project',
         path: 'src/a.ts',
@@ -857,6 +865,7 @@ describe('mutation receipts and reconciliation', () => {
       endLine: 2,
       contentHash: normalizedHash,
       readCapability: token,
+      rawBasis,
     }
     const handlerResult = buildFileMutationResultFromReceiptV1(
       receipt,
@@ -891,6 +900,12 @@ describe('mutation receipts and reconciliation', () => {
 
   it('rejects a same-hash fresh capability with a colliding path suffix', () => {
     const afterContent = 'shared content\n'
+    const rawBasis = getRawReadBasis(
+      captureTextDocument(afterContent),
+      1,
+      2,
+      'whole',
+    )
     const afterHash = getExactContentHash(afterContent)
     const receipt = {
       ...portableReceipt,
@@ -901,6 +916,7 @@ describe('mutation receipts and reconciliation', () => {
       startLine: 1,
       endLine: 2,
       hash: getContentHash(afterContent),
+      rawBasis,
       scope: {
         projectId: '/project',
         path: 'other/src/a.ts',
@@ -934,6 +950,7 @@ describe('mutation receipts and reconciliation', () => {
             endLine: 2,
             contentHash: getContentHash(afterContent),
             readCapability: wrongPathToken,
+            rawBasis,
           },
         ],
       ]),
@@ -999,12 +1016,19 @@ describe('mutation receipts and reconciliation', () => {
 
   it('maps missing authority evidence to unconfirmed and strips action authority', () => {
     const afterContent = 'confirmed only with receipt\n'
+    const rawBasis = getRawReadBasis(
+      captureTextDocument(afterContent),
+      1,
+      2,
+      'whole',
+    )
     const afterHash = getExactContentHash(afterContent)
     const contentHash = getContentHash(afterContent)
     const token = encodeReadCapabilityToken({
       startLine: 1,
       endLine: 2,
       hash: contentHash,
+      rawBasis,
       scope: {
         projectId: '/project',
         path: 'src/a.ts',
@@ -1043,6 +1067,7 @@ describe('mutation receipts and reconciliation', () => {
             endLine: 2,
             contentHash,
             readCapability: token,
+            rawBasis,
           },
         ],
       ]),
@@ -1207,6 +1232,12 @@ describe('mutation receipts and reconciliation', () => {
 
   it('rejects duplicate capability tokens during action-anchor reconciliation', () => {
     const afterContent = 'same bytes\n'
+    const rawBasis = getRawReadBasis(
+      captureTextDocument(afterContent),
+      1,
+      2,
+      'whole',
+    )
     const afterHash = getExactContentHash(afterContent)
     const contentHash = getContentHash(afterContent)
     const receipt = {
@@ -1229,6 +1260,7 @@ describe('mutation receipts and reconciliation', () => {
       startLine: 1,
       endLine: 2,
       hash: contentHash,
+      rawBasis,
       scope: { projectId: '/project', path: 'src/a.ts', runId: 'run-1' },
     })
     const capability = {
@@ -1250,6 +1282,7 @@ describe('mutation receipts and reconciliation', () => {
       endLine: 2,
       contentHash,
       readCapability: token,
+      rawBasis,
     }
     const handlerResult = buildFileMutationResultFromReceiptV1(
       receipt,

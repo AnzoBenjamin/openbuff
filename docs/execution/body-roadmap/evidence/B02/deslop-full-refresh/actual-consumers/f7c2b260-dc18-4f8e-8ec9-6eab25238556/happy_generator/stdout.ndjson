@@ -1,3 +1,0 @@
-{"type":"start","messageHistoryLength":0}
-{"type":"context_window","used":3214,"max":190000,"compactionTriggerTokens":140000,"compactionTargetTokens":100000}
-{"type":"finish","agentId":"body-runtime-fixture","totalCost":0,"runOutcome":{"termination":"completed"},"taskAcceptance":{"status":"accepted","oracle":"fixture-output","basis":"expected result present"}}

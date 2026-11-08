@@ -505,7 +505,7 @@ export const providerConfigFileSchema = z
           command: z.string().min(1),
           filePattern: z.string().min(1).optional(),
           /** Optional per-hook wall-clock bound in seconds. Omitted means no timeout. */
-          timeoutSeconds: z.number().int().positive().max(3600).optional(),
+          timeoutSeconds: z.union([z.literal(-1), z.number().int().positive().max(3600)]).optional(),
           /** Run the command once per matching changed file instead of project-wide (FileChangeHook.runPerFile). */
           runPerFile: z.boolean().optional(),
         }),
@@ -705,6 +705,23 @@ export type LoadedProviderConfig = {
 
 type ProviderConfigLoadResult = LoadedProviderConfig
 
+/** Explicit sync read port for a per-run configuration capture. */
+export interface ConfigReadFs {
+  readFile(filePath: string): Uint8Array
+  stat(filePath: string): Readonly<{ kind: 'file' | 'directory' | 'other'; size: number; revision: string }>
+  readDirectory(directory: string): readonly string[]
+  realpath(filePath: string): string
+}
+
+function optionalConfigStat(reader: ConfigReadFs, filePath: string) {
+  try { return reader.stat(filePath) }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined
+    throw error
+  }
+}
+
 const emptyProviderConfig = (): ProviderConfigFile => ({
   providers: {},
   defaultModel: undefined,
@@ -750,6 +767,7 @@ function resolveConfigFragmentPath(
 function expandFragmentPaths(
   resolvedConfigPath: string,
   fragmentPaths: string[],
+  reader?: ConfigReadFs,
 ): string[] {
   const expanded: string[] = []
   for (const fragmentPath of fragmentPaths) {
@@ -757,6 +775,18 @@ function expandFragmentPaths(
       resolvedConfigPath,
       fragmentPath,
     )
+    if (reader) {
+      const stat = optionalConfigStat(reader, resolvedPath)
+      if (!stat) throw new Error(`Required provider config include is absent: ${resolvedPath}`)
+      if (stat.kind === 'directory') {
+        const names = reader.readDirectory(resolvedPath)
+        if (names.some(name => !name || name.includes('\0') || /[\\/]/.test(name) || name === '..' || name === '.'))
+          throw new Error(`Invalid provider config directory entry: ${resolvedPath}`)
+        expanded.push(...names.filter(name => name.endsWith('.json')).sort().map(name => path.join(resolvedPath, name)))
+      } else if (stat.kind === 'file') expanded.push(resolvedPath)
+      else throw new Error(`Provider config include is not a file or directory: ${resolvedPath}`)
+      continue
+    }
     if (!fs.existsSync(resolvedPath)) {
       continue
     }
@@ -868,8 +898,10 @@ function readProviderConfigFile(
     stack: Set<string>
     cache: Map<string, ProviderConfigLoadResult>
   } = { stack: new Set(), cache: new Map() },
+  reader?: ConfigReadFs,
 ): ProviderConfigLoadResult {
-  const resolvedConfigPath = path.resolve(configPath)
+  const resolvedConfigPath = reader ? reader.realpath(configPath) : path.resolve(configPath)
+  if (reader && !path.isAbsolute(resolvedConfigPath)) throw new Error('Config realpath must be absolute')
   const cached = state.cache.get(resolvedConfigPath)
   if (cached) return cached
   if (state.stack.has(resolvedConfigPath)) {
@@ -880,7 +912,7 @@ function readProviderConfigFile(
 
   state.stack.add(resolvedConfigPath)
   try {
-    const rawConfig = JSON.parse(fs.readFileSync(resolvedConfigPath, 'utf8'))
+    const rawConfig = JSON.parse(reader ? new TextDecoder('utf-8', { fatal: true }).decode(reader.readFile(resolvedConfigPath)) : fs.readFileSync(resolvedConfigPath, 'utf8'))
     const fragmentPaths = [
       ...normalizeConfigFragmentPaths(rawConfig?.extends),
       ...normalizeConfigFragmentPaths(rawConfig?.include),
@@ -890,7 +922,7 @@ function readProviderConfigFile(
     // Automatically look for openbuff.d next to any config file (like openbuff.json)
     const configDir = path.dirname(resolvedConfigPath)
     const implicitDir = path.join(configDir, 'openbuff.d')
-    if (fs.existsSync(implicitDir) && fs.statSync(implicitDir).isDirectory()) {
+    if (reader ? optionalConfigStat(reader, implicitDir)?.kind === 'directory' : fs.existsSync(implicitDir) && fs.statSync(implicitDir).isDirectory()) {
       if (
         !fragmentPaths.includes('openbuff.d') &&
         !fragmentPaths.includes('./openbuff.d')
@@ -899,7 +931,7 @@ function readProviderConfigFile(
       }
     }
 
-    const expandedPaths = expandFragmentPaths(resolvedConfigPath, fragmentPaths)
+    const expandedPaths = expandFragmentPaths(resolvedConfigPath, fragmentPaths, reader)
 
     let config = emptyProviderConfig()
     const sourceFilePaths: string[] = []
@@ -913,7 +945,7 @@ function readProviderConfigFile(
     }
 
     for (const resolvedPath of expandedPaths) {
-      const loadedFragment = readProviderConfigFile(resolvedPath, state)
+      const loadedFragment = readProviderConfigFile(resolvedPath, state, reader)
       config = mergeProviderConfigs(config, loadedFragment.config)
       sourceFilePaths.push(...loadedFragment.sourceFilePaths)
       sourceFiles = mergeSourceFiles(
@@ -940,7 +972,7 @@ function readProviderConfigFile(
     // This file's own declarations win over any fragment it included, matching
     // the override-wins `readableRoots` merge in mergeProviderConfigs.
     for (const entry of parseResult.data.readableRoots) {
-      readableRootsSources[path.resolve(entry)] = resolvedConfigPath
+      readableRootsSources[reader ? entry : path.resolve(entry)] = resolvedConfigPath
     }
 
     const currentSourceFiles = getSourceFilesFromRawConfig(
@@ -1043,6 +1075,7 @@ function mergeProviderConfigs(
     ),
     autoFileChangeHooks:
       override.autoFileChangeHooks ?? base.autoFileChangeHooks,
+    adaptiveReasoning: override.adaptiveReasoning ?? base.adaptiveReasoning,
     approvalMode: override.approvalMode ?? base.approvalMode,
     // An override fragment that simply omits `readableRoots` parses to `[]`
     // (schema default), so a plain override would silently erase a base
@@ -1055,6 +1088,44 @@ function mergeProviderConfigs(
     maxMissingOutputRetries:
       override.maxMissingOutputRetries ?? base.maxMissingOutputRetries,
   }
+}
+
+/** Strict capture path: no ambient paths, shared cache, swallowed read errors or optional includes. */
+export function loadProviderConfigForHost(params: {
+  configPaths: readonly Readonly<{ path: string; required: boolean }>[]
+  reader: ConfigReadFs
+  isTrustedPath: (filePath: string) => boolean
+}): LoadedProviderConfig {
+  let config = emptyProviderConfig()
+  const sourceFilePaths: string[] = []
+  const readableRootsSources: Record<string, string> = {}
+  let sourceFiles: NonNullable<LoadedProviderConfig['sourceFiles']> = { providers: {}, routes: { modes: {}, agents: {} } }
+  const diagnostics: NonNullable<LoadedProviderConfig['diagnostics']> = []
+  const state = { stack: new Set<string>(), cache: new Map<string, ProviderConfigLoadResult>() }
+  for (const selected of params.configPaths) {
+    if (!path.isAbsolute(selected.path)) throw new Error('Selected host config path must be absolute')
+    const stat = optionalConfigStat(params.reader, selected.path)
+    if (!stat) {
+      if (selected.required) throw new Error(`Required provider config is absent: ${selected.path}`)
+      continue
+    }
+    if (stat.kind !== 'file') throw new Error(`Selected provider config is not a file: ${selected.path}`)
+    const parsed = readProviderConfigFile(selected.path, state, params.reader)
+    // Trust every declaring fragment, including an include outside a trusted base.
+    const fragment = { ...parsed, config: { ...parsed.config, providers: { ...parsed.config.providers } } }
+    for (const [providerId, provider] of Object.entries(fragment.config.providers)) {
+      const origin = parsed.sourceFiles?.providers?.[providerId]
+      if ('apiKeyEnv' in provider && provider.apiKeyEnv && (!origin || !params.isTrustedPath(origin))) {
+        delete fragment.config.providers[providerId]
+        diagnostics.push({ filePath: origin ?? selected.path, message: `Untrusted apiKeyEnv provider excluded: ${providerId}` })
+      }
+    }
+    config = mergeProviderConfigs(config, fragment.config)
+    sourceFilePaths.push(...parsed.sourceFilePaths)
+    sourceFiles = mergeSourceFiles(sourceFiles, parsed.sourceFiles ?? {})
+    Object.assign(readableRootsSources, parsed.readableRootsSources ?? {})
+  }
+  return { config, sourceFilePaths: [...new Set(sourceFilePaths)], sourceFiles, readableRootsSources, diagnostics }
 }
 
 function getOpenbuffConfigDirs(): string[] {

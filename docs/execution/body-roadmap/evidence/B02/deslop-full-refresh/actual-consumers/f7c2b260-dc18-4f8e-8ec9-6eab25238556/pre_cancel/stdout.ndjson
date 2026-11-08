@@ -1,1 +1,0 @@
-{"type":"error","message":"fixture pre-cancellation","runOutcome":{"termination":"cancelled","cause":{"code":"run_cancelled","message":"fixture pre-cancellation"}},"taskAcceptance":{"status":"unknown"}}

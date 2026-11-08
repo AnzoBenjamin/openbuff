@@ -1,4 +1,0 @@
-Using environment: test
-[openbuff] Loaded provider config from:
-  - /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/sdk-fixture/c347e6c1-522b-4870-8724-d02a9558a360/providers.json
-{"cases":7,"providerCalls":0,"evidenceDir":"/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B18/post-route/independent-review/sdk-fixture","fixtureSha256":"8009dd642a67b9530c023ea377b4dedf04e4f3987829eeb7ca2c2cc7b6d45a01"}

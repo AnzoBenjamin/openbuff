@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
 import { receiptEnvelopeV1Schema } from '@codebuff/common/protocol/acp-ext-v1'
+import { mcpToolResult } from '@codebuff/common/mcp/result'
 
 import {
   printModeErrorToRpcError,
@@ -23,6 +24,69 @@ function makeCtx(overrides?: Partial<EventBridgeContext>): EventBridgeContext {
 }
 
 describe('printModeToSessionUpdates', () => {
+  test('MCP empty/media failures preserve status and safe content metadata over ACP', () => {
+    for (const content of [
+      [],
+      [
+        { type: 'image', data: 'aW1hZ2U=', mimeType: 'image/png' },
+        { type: 'audio', data: 'YXVkaW8=', mimeType: 'audio/wav' },
+        {
+          type: 'resource',
+          resource: {
+            uri: 'file:///blob',
+            blob: 'YmxvYg==',
+            mimeType: 'application/octet-stream',
+          },
+        },
+        {
+          type: 'resource',
+          resource: { uri: 'file:///text', text: 'resource text' },
+        },
+      ],
+    ]) {
+      const updates = printModeToSessionUpdates(
+        {
+          type: 'tool_result',
+          toolCallId: 'mcp',
+          toolName: 'peer',
+          output: mcpToolResult({
+            content,
+            isError: true,
+            structuredContent: { detail: 'structured reason' },
+            _meta: { generation: 3 },
+          }),
+        },
+        makeCtx(),
+      )
+      expect((updates[0] as { status: string }).status).toBe('failed')
+      const text = JSON.stringify(updates)
+      expect(text).toContain('structured reason')
+      expect(text).toContain('generation')
+      for (const bytes of ['aW1hZ2U=', 'YXVkaW8=', 'YmxvYg=='])
+        expect(text).not.toContain(bytes)
+      if (content.length) {
+        expect(text).toContain('media_bytes_omitted')
+        expect(text).toContain('file:///blob')
+        expect(text).toContain('resource text')
+      }
+    }
+    const success = printModeToSessionUpdates(
+      {
+        type: 'tool_result',
+        toolCallId: 'mcp-success',
+        toolName: 'peer',
+        output: mcpToolResult({
+          content: [],
+          structuredContent: { errorMessage: 'data', isError: true },
+          errorMessage: 'extension data',
+          status: 'error',
+        }),
+      },
+      makeCtx(),
+    )
+    expect((success[0] as { status: string }).status).toBe('completed')
+    expect(JSON.stringify(success)).toContain('data')
+  })
   test('text maps to agent_message_chunk with messageId = ctx.runId', () => {
     const updates = printModeToSessionUpdates(
       { type: 'text', text: 'hello world' },

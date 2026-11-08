@@ -96,13 +96,15 @@ describe('provider tool input contracts', () => {
         'then',
         'else',
       ]) {
-        if (source[key] && typeof source[key] === 'object') {
+        if (Array.isArray(source[key])) {
+          continue
+        } else if (source[key] && typeof source[key] === 'object') {
           verify(source[key], target[key], `${path}.${key}`)
         } else if (key in source) {
           expect(target[key], `${path}.${key}`).toEqual(source[key])
         }
       }
-      for (const key of ['anyOf', 'oneOf', 'allOf', 'prefixItems']) {
+      for (const key of ['anyOf', 'oneOf', 'allOf', 'prefixItems', 'items']) {
         if (Array.isArray(source[key])) {
           expect(Array.isArray(target[key]), `${path}.${key}`).toBe(true)
           expect((target[key] as unknown[]).length, `${path}.${key}`).toBe(
@@ -123,6 +125,7 @@ describe('provider tool input contracts', () => {
       try {
         original = z.toJSONSchema(resolveToolParameterSchema(definition), {
           io: 'input',
+          target: 'draft-7',
         })
       } catch {
         skipped.push(name)

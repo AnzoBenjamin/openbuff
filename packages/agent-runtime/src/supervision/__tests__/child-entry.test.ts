@@ -15,7 +15,7 @@ import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 import { MemoryPlaybookSchema } from '@codebuff/common/types/memory-playbook'
 import { createInitialWorkspaceState } from '@codebuff/common/types/workspace-state'
 
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, setSystemTime } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -470,48 +470,65 @@ describe('child-state rehydration validation (json-roundtrip repair)', () => {
   })
 
   it('a workspaceState whose occurredAt was coerced to an ISO string is DROPPED, not blind-cast', () => {
-    const base = createInitialWorkspaceState(1000)
-    // A DROPPED field leaves the fresh initial-state default standing in
-    // (see the buildChildAgentState docblock), so assert against a baseline
-    // request that carries no workspaceState at all.
-    const baseline = buildChildAgentState({
-      ...makeRequest(),
-      child: { agentId: 'baseline-1' },
-    })
-    const state = buildChildAgentState({
-      ...makeRequest(),
-      child: {
-        agentId: 'child-entry-agent-1',
-        workspaceState: {
-          ...base,
-          updatedAt: '1970-01-01T00:00:01.000Z',
-          changes: [
-            {
-              revision: 1,
-              source: 'edit',
-              occurredAt: '1970-01-01T00:00:01.000Z',
-              actions: [],
-            },
-          ],
+    // Both fresh defaults use the same clock; millisecond drift cannot obscure
+    // whether the malformed transported workspace was discarded.
+    setSystemTime(2000)
+    try {
+      const base = createInitialWorkspaceState(1000)
+      // A DROPPED field leaves the fresh initial-state default standing in
+      // (see the buildChildAgentState docblock), so assert against a baseline
+      // request that carries no workspaceState at all.
+      const baseline = buildChildAgentState({
+        ...makeRequest(),
+        child: { agentId: 'baseline-1' },
+      })
+      const state = buildChildAgentState({
+        ...makeRequest(),
+        child: {
+          agentId: 'child-entry-agent-1',
+          workspaceState: {
+            ...base,
+            updatedAt: '1970-01-01T00:00:01.000Z',
+            changes: [
+              {
+                revision: 1,
+                source: 'edit',
+                occurredAt: '1970-01-01T00:00:01.000Z',
+                actions: [],
+              },
+            ],
+          },
         },
-      },
-    })
-    expect(state.workspaceState).toEqual(baseline.workspaceState)
+      })
+      expect(state.workspaceState).toEqual(baseline.workspaceState)
+    } finally {
+      setSystemTime()
+    }
   })
 
   it('a workspaceState with an invalid schemaVersion is DROPPED, not blind-cast', () => {
-    const baseline = buildChildAgentState({
-      ...makeRequest(),
-      child: { agentId: 'baseline-1' },
-    })
-    const state = buildChildAgentState({
-      ...makeRequest(),
-      child: {
-        agentId: 'child-entry-agent-1',
-        workspaceState: { ...createInitialWorkspaceState(1), schemaVersion: 2 },
-      },
-    })
-    expect(state.workspaceState).toEqual(baseline.workspaceState)
+    // Both fresh defaults use the same clock; millisecond drift cannot obscure
+    // whether the malformed transported workspace was discarded.
+    setSystemTime(2000)
+    try {
+      const baseline = buildChildAgentState({
+        ...makeRequest(),
+        child: { agentId: 'baseline-1' },
+      })
+      const state = buildChildAgentState({
+        ...makeRequest(),
+        child: {
+          agentId: 'child-entry-agent-1',
+          workspaceState: {
+            ...createInitialWorkspaceState(1),
+            schemaVersion: 2,
+          },
+        },
+      })
+      expect(state.workspaceState).toEqual(baseline.workspaceState)
+    } finally {
+      setSystemTime()
+    }
   })
 
   it.skipIf(!canSpawn)(
@@ -588,28 +605,17 @@ describe('rehydrateLocalAgentTemplates (transport-boundary zod repair)', () => {
     ).toBe(true)
   })
 
-  it('repairs a degraded zod-v4 husk (~standard marker, no live internals) instead of crashing asSchema', () => {
-    // The worst case: a husk that still carries zod-v4's `~standard` marker
-    // but lost its live internals across JSON.stringify. Left unrepaired it
-    // reaches asSchema, which reads schema._def.typeName on undefined.
+  it('refuses degraded Zod internals instead of inventing a permissive schema', () => {
     const husk = { '~standard': { version: 1, vendor: 'zod' } }
-    const rehydrated = rehydrateLocalAgentTemplates({
-      'husk-agent': {
-        id: 'husk-agent',
-        inputSchema: { prompt: husk, params: husk },
-        outputSchema: husk,
-      } as never,
-    })
-    const template = rehydrated['husk-agent']
-    for (const member of [
-      template.inputSchema?.prompt,
-      template.inputSchema?.params,
-      template.outputSchema,
-    ]) {
-      expect(typeof (member as { safeParse?: unknown })?.safeParse).toBe(
-        'function',
-      )
-    }
+    expect(() =>
+      rehydrateLocalAgentTemplates({
+        'husk-agent': {
+          id: 'husk-agent',
+          inputSchema: { prompt: husk, params: husk },
+          outputSchema: husk,
+        } as never,
+      }),
+    ).toThrow('Cannot restore degraded Zod schema')
   })
 
   it('passes through templates whose members are already live zod schemas unchanged', () => {

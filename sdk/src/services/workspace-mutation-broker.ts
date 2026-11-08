@@ -3,7 +3,9 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { resolveWorkspaceIdentity } from './repository-identity'
+import { captureWorkspaceBootstrapExecution, resolveBootstrapWorkspaceIdentity } from './workspace-bootstrap'
+import type { WorkspaceIdentitySource } from './workspace-bootstrap'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 
 import type {
   CodebuffConditionalCommitResult,
@@ -80,6 +82,7 @@ export type WorkspaceMutationMoveResult = CodebuffConditionalMoveResult & {
 export type WorkspaceMutationBrokerOptions = {
   cwd: string
   stateDir: string
+  executionContext?: ExecutionAdapterContext
   lockTimeoutMs?: number
   /** @deprecated Stale locks are never automatically reclaimed. */
   staleLockMs?: number
@@ -97,18 +100,6 @@ type LockOwner = {
   token: string
   pid: number
   acquiredAt: string
-}
-
-function fallbackIdentity(cwd: string): {
-  repositoryId: string
-  workspaceId: string
-} {
-  const canonical = path.resolve(cwd)
-  const digest = createHash('sha256')
-    .update(canonical)
-    .digest('hex')
-    .slice(0, 24)
-  return { repositoryId: digest, workspaceId: digest }
 }
 
 function exactHash(content: Uint8Array): string {
@@ -175,6 +166,7 @@ export class WorkspaceMutationBroker {
   readonly authorityKind = WORKSPACE_MUTATION_AUTHORITY
   readonly repositoryId: string
   readonly workspaceId: string
+  readonly identitySource: WorkspaceIdentitySource
   readonly workspaceRoot: string
   readonly brokerDir: string
 
@@ -190,12 +182,14 @@ export class WorkspaceMutationBroker {
     stateDir: string
     repositoryId: string
     workspaceId: string
+    identitySource: WorkspaceIdentitySource
     lockTimeoutMs: number
     lockPollMs: number
   }) {
     this.workspaceRoot = params.workspaceRoot
     this.repositoryId = params.repositoryId
     this.workspaceId = params.workspaceId
+    this.identitySource = params.identitySource
     this.brokerDir = path.join(
       path.resolve(params.stateDir),
       params.repositoryId,
@@ -213,6 +207,7 @@ export class WorkspaceMutationBroker {
   static async create(
     options: WorkspaceMutationBrokerOptions,
   ): Promise<WorkspaceMutationBroker> {
+    options = { ...options, executionContext: captureWorkspaceBootstrapExecution(options) }
     const resolvedRoot = path.resolve(options.cwd)
     const workspaceRoot = await fs
       .realpath(resolvedRoot)
@@ -226,14 +221,16 @@ export class WorkspaceMutationBroker {
         'Workspace mutation broker state must be stored outside the workspace.',
       )
     }
-    const identity = await resolveWorkspaceIdentity({
+    const identity = await resolveBootstrapWorkspaceIdentity({
       cwd: workspaceRoot,
-    }).catch(() => fallbackIdentity(workspaceRoot))
+      executionContext: options.executionContext,
+    })
     const broker = new WorkspaceMutationBroker({
       workspaceRoot,
       stateDir,
       repositoryId: identity.repositoryId,
       workspaceId: identity.workspaceId,
+      identitySource: identity.identitySource,
       lockTimeoutMs: options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
       lockPollMs: options.lockPollMs ?? DEFAULT_LOCK_POLL_MS,
     })

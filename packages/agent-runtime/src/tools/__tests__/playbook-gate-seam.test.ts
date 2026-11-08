@@ -23,6 +23,7 @@ import { MemoryPlaybookSchema } from '@codebuff/common/types/memory-playbook'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 
 import { createSessionEvidenceLog } from '../../memory/session-evidence-log'
+import { getFileProcessingValues } from '../handlers/tool/write-file'
 import { executeToolCall, recordToolEvidence } from '../tool-executor'
 
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -145,6 +146,7 @@ const dispatchGatedSpawn = async (
       fileTreeSource: 'virtual',
       tokenCallers: {},
     },
+    fileProcessingState: getFileProcessingValues({}),
     previousToolCallFinished: Promise.resolve(),
     signal: new AbortController().signal,
     toolCalls: [],

@@ -103,14 +103,19 @@ describe('Schema handling error recovery', () => {
         stepPrompt: '',
       }
 
-      await expect(buildAgentToolSet({
-        spawnableAgents: ['test-agent'],
-        agentTemplates: { 'test-agent': agentTemplate },
-        logger: createMockLogger(),
-        apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
-        databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
-        fetchAgentFromDatabase: TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
-      })).rejects.toThrow('Cannot publish spawn input schema for agent test-agent')
+      await expect(
+        buildAgentToolSet({
+          spawnableAgents: ['test-agent'],
+          agentTemplates: { 'test-agent': agentTemplate },
+          logger: createMockLogger(),
+          apiKey: TEST_AGENT_RUNTIME_IMPL.apiKey,
+          databaseAgentCache: TEST_AGENT_RUNTIME_IMPL.databaseAgentCache,
+          fetchAgentFromDatabase:
+            TEST_AGENT_RUNTIME_IMPL.fetchAgentFromDatabase,
+        }),
+      ).rejects.toThrow(
+        'Cannot publish spawn input schema for agent test-agent',
+      )
     })
 
     test('generic spawn mode omits redundant per-agent native tools', async () => {
@@ -322,50 +327,18 @@ describe('Schema handling error recovery', () => {
       expect(result.outputSchema!.safeParse({ answer: 'x' }).success).toBe(true)
     })
 
-    test('ensureAgentTemplateZodSchemas re-coerces degraded zod-v4 husks into live zod schemas', () => {
-      // Shape JSON.stringify produces when a live zod-v4 schema is left on
-      // the spawn transport boundary: the ~standard standard-schema marker
-      // survives as an own property, but the non-enumerable _zod internals
-      // and safeParse are gone. Such a husk is neither live zod nor valid
-      // JSON Schema, and feeding it to asSchema crashes on def.typeName.
-      const husk = {
-        '~standard': { validate: () => {} },
-        def: {},
-        type: 'string',
-      }
+    test('ensureAgentTemplateZodSchemas refuses degraded Zod husks explicitly', () => {
+      const husk = { '~standard': {}, def: {}, type: 'string' }
       const template = {
         id: 'husk-agent',
-        inputSchema: { prompt: { ...husk }, params: { ...husk } },
-        outputSchema: { ...husk },
+        inputSchema: { prompt: husk },
       } as unknown as AgentTemplate
-
-      const result = ensureAgentTemplateZodSchemas(template)
-
-      const isLiveZod = (member: unknown) => {
-        const record = member as
-          | { _zod?: unknown; safeParse?: unknown }
-          | undefined
-        return (
-          !!record &&
-          (record._zod !== undefined || typeof record.safeParse === 'function')
-        )
-      }
-      // The husk never survives to the model surface as a non-zod object.
-      expect(isLiveZod(result.inputSchema?.prompt)).toBe(true)
-      expect(isLiveZod(result.inputSchema?.params)).toBe(true)
-      expect(isLiveZod(result.outputSchema)).toBe(true)
-      expect(result.inputSchema?.prompt).not.toBe(husk)
-      expect(result.outputSchema).not.toBe(husk)
+      expect(() => ensureAgentTemplateZodSchemas(template)).toThrow(
+        'degraded Zod',
+      )
     })
 
-    test('coerceJsonSchemaMember: degenerate { type: "object" } input coerces into a REPRESENTABLE native schema (both io modes)', () => {
-      // convertJsonSchemaToZod({ type: 'object' }) itself is poisoned: its
-      // output carries a z.custom(...) base-union branch that z.toJSONSchema
-      // rejects with "Custom types cannot be represented in JSON Schema" —
-      // the crash that surfaced as "Agent run error" on every spawn. The
-      // coercion must guarantee representable output instead, so it degrades
-      // to the type-faithful NATIVE fallback (a loose object for the
-      // object/absent type branch).
+    test('coerceJsonSchemaMember preserves an unconstrained object in both projections', () => {
       const coerced = coerceJsonSchemaMember({ type: 'object' }) as z.ZodType
       const safeParse = (
         coerced as unknown as {
@@ -378,23 +351,9 @@ describe('Schema handling error recovery', () => {
       expect(() => z.toJSONSchema(coerced, { io: 'output' })).not.toThrow()
     })
 
-    test('coerceJsonSchemaMember: a REAL degraded husk (JSON.stringify of a live zod schema) coerces into a representable live zod schema', () => {
-      // The husk wire form is zod's serialized INTERNALS (def/shape), not
-      // JSON Schema. Converting it previously produced an unrepresentable
-      // schema (z.custom base-union branch) that crashed asSchema downstream.
-      const husk = JSON.parse(
-        JSON.stringify(z.object({ prompt: z.string() })),
-      ) as Record<string, unknown>
-      const coerced = coerceJsonSchemaMember(husk) as z.ZodType
-      const safeParse = (
-        coerced as unknown as {
-          safeParse: (v: unknown) => { success: boolean }
-        }
-      ).safeParse
-      expect(typeof safeParse).toBe('function')
-      expect(safeParse({ prompt: 'x' }).success).toBe(true)
-      expect(() => z.toJSONSchema(coerced, { io: 'input' })).not.toThrow()
-      expect(() => z.toJSONSchema(coerced, { io: 'output' })).not.toThrow()
+    test('coerceJsonSchemaMember refuses JSON.stringify of a live Zod schema', () => {
+      const husk = JSON.parse(JSON.stringify(z.object({ prompt: z.string() })))
+      expect(() => coerceJsonSchemaMember(husk)).toThrow('degraded Zod')
     })
 
     test('coerceJsonSchemaMember: rich shapes keep their converted structured schema', () => {
@@ -769,6 +728,58 @@ describe('Schema handling error recovery', () => {
       expect(description).toContain('allOf')
       expect(description).toContain('name')
       expect(description).not.toContain('Params: None')
+    })
+
+    test('ensureZodSchema preserves enum siblings, closed objects and parsed data', () => {
+      const schema = ensureZodSchema({
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            enum: ['/api/v1', 'x'],
+            minLength: 7,
+            pattern: '^/api/',
+          },
+        },
+        required: ['path'],
+        additionalProperties: false,
+      })
+      const input = { path: '/api/v1' }
+      expect(schema.parse(input)).toBe(input)
+      expect(schema.safeParse({ path: 'x' }).success).toBe(false)
+      expect(schema.safeParse({ path: '/api/v1', extra: true }).success).toBe(
+        false,
+      )
+      const provider = compactToolInputSchemaForProvider(schema).jsonSchema
+      expect(provider).toMatchObject({
+        additionalProperties: false,
+        properties: {
+          path: { enum: ['/api/v1', 'x'], minLength: 7, pattern: '^/api/' },
+        },
+      })
+    })
+
+    test('getToolSet retains boolean schemas and refuses unsupported custom schemas by tool name', async () => {
+      const valid = await getToolSet({
+        toolNames: [],
+        additionalToolDefinitions: async () =>
+          ({ never_tool: { inputSchema: false } }) as any,
+        agentTools: {},
+        skills: {},
+      })
+      expect((valid.never_tool.inputSchema as any).jsonSchema).toBe(false)
+      await expect(
+        getToolSet({
+          toolNames: [],
+          additionalToolDefinitions: async () => ({
+            unsupported_tool: {
+              inputSchema: { type: 'object', unevaluatedProperties: false },
+            },
+          }),
+          agentTools: {},
+          skills: {},
+        }),
+      ).rejects.toThrow('Cannot publish input schema for tool unsupported_tool')
     })
 
     test('getToolSet binds spawn_agents provider schema to the live catalog', async () => {
@@ -1248,6 +1259,19 @@ describe('Schema handling error recovery', () => {
       expect(transportedString.handleSteps).toBe(stringHandleSteps)
     })
 
+    test('transport refusal identifies the agent and executable schema member', () => {
+      const template = makeTransportTemplate({
+        inputSchema: {
+          params: z.object({ value: z.string().default('fallback') }),
+        },
+      })
+      expect(() =>
+        serializeAgentTemplatesForTransport({ 'transport-agent': template }),
+      ).toThrow(
+        'Agent "transport-agent" inputSchema.params: Cannot transport input schema: Cannot transport executable Zod default',
+      )
+    })
+
     test('returns the original template object when nothing needs conversion', () => {
       const plain = makeTransportTemplate({
         inputSchema: { prompt: { type: 'string' } },
@@ -1288,15 +1312,9 @@ describe('Schema handling error recovery', () => {
     })
 
     test('pipeline intersection schemas transport with full structure, not a permissive husk', () => {
-      // The bundled code-reviewer outputSchema hits exactly this shape after
-      // convertJsonSchemaToZod: a base union containing a z.custom object
-      // branch intersected with the anyOf union. Plain z.toJSONSchema options
-      // throw on the custom branch ("Custom types cannot be represented in
-      // JSON Schema"), which is the honesty guard below — the transport
-      // serializer passes unrepresentable:'any' so the full structure
-      // (properties/required/anyOf/allOf) survives the spawn boundary and
-      // only the degenerate custom branch degrades to {}.
-      const nonExpressible = convertJsonSchemaToZod({
+      // Mixed object/string branches remain exact through a nested provider
+      // projection and the actual supervision JSON boundary.
+      const nonExpressible = ensureZodSchema({
         type: 'object',
         properties: {
           findings: {
@@ -1310,7 +1328,7 @@ describe('Schema handling error recovery', () => {
       })
       expect(() =>
         z.toJSONSchema(nonExpressible as z.ZodType, { io: 'output' }),
-      ).toThrow()
+      ).not.toThrow()
 
       const template = makeTransportTemplate({
         inputSchema: {
@@ -1355,13 +1373,7 @@ describe('Schema handling error recovery', () => {
     })
 
     test('code-reviewer-shaped template survives the full JSON round-trip with asSchema-live members', async () => {
-      // Reproduces the real crash: the bundled code-reviewer outputSchema
-      // (findings.items anyOf [string, object]) converts to an intersection
-      // that z.toJSONSchema rejects, and context-pruner-shaped params (anyOf
-      // over optional fields) hit the same throw. Before the fix the live
-      // zod member was left in place, degraded into a husk by JSON.stringify
-      // across the spawn boundary, and crashed asSchema in the child with
-      // "undefined is not an object (evaluating 'H.typeName')".
+      // Exercise the actual bundled mixed-branch output and nullable params.
       const findingsJsonSchema = {
         type: 'object',
         properties: {
@@ -1382,17 +1394,13 @@ describe('Schema handling error recovery', () => {
           },
         },
       }
-      const outputZod = convertJsonSchemaToZod(
-        findingsJsonSchema as Parameters<typeof convertJsonSchemaToZod>[0],
-      )
-      expect(() => z.toJSONSchema(outputZod, { io: 'output' })).toThrow()
+      const outputZod = ensureZodSchema(findingsJsonSchema)
+      expect(() => z.toJSONSchema(outputZod, { io: 'output' })).not.toThrow()
 
       const template = makeTransportTemplate({
         inputSchema: {
-          prompt: convertJsonSchemaToZod({ type: 'string' }),
-          params: convertJsonSchemaToZod(
-            paramsJsonSchema as Parameters<typeof convertJsonSchemaToZod>[0],
-          ),
+          prompt: ensureZodSchema({ type: 'string' }),
+          params: ensureZodSchema(paramsJsonSchema),
         },
         outputSchema: outputZod as unknown as AgentTemplate['outputSchema'],
       })

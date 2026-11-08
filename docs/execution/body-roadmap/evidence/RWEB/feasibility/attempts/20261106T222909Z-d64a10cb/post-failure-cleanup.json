@@ -1,9 +1,0 @@
-{
-  "type": "recorded-owned-probe-daemon-settlement",
-  "pid": 617013,
-  "nativeSha256": "c4351f3802ffa5254d8c69f20a52e2fcf56925c6016fcf4203db25a07d811379",
-  "socketDirectory": "/tmp/rw-d64a10cb",
-  "signal": "SIGTERM via pidfd",
-  "stillAlive": false,
-  "scope": "Only the verified native daemon from the recorded rejected-profile probe; no Chrome or sibling process was signaled."
-}

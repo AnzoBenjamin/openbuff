@@ -12,7 +12,13 @@ import {
   type LanguageDiagnosticTextEdit,
 } from '../tools/language-diagnostics'
 import { mapWithConcurrency } from '../tools/concurrency'
-import { getSdkEnv } from '../env'
+import {
+  deriveExecutionContext,
+  executionLimitSeconds,
+  isExecutionRefusalError,
+} from './execution-launch'
+
+import type { ExecutionAdapterContext, Refusal, Result } from '@codebuff/common/types/contracts/execution-context'
 
 /**
  * Diagnostic-delta preflight (LI-02 tiers 1–2).
@@ -57,7 +63,10 @@ export type DiagnosticRunResult = {
   cancelled?: boolean
   outputTruncated?: boolean
   errorCode?: string
+  executionRefusal?: Refusal
 }
+
+export type DiagnosticPhase = 'baseline' | 'current' | 'after'
 
 /**
  * Injected runner seam. Report exit status, cancellation, timeout and truncated
@@ -70,6 +79,8 @@ export type DiagnosticCommandRunner = (params: {
   timeoutSeconds: number
   env?: Record<string, string | undefined>
   signal?: AbortSignal
+  executionContext?: ExecutionAdapterContext
+  phase?: DiagnosticPhase
 }) => Promise<DiagnosticRunResult>
 
 /**
@@ -107,6 +118,7 @@ export type DiagnosticCoverageStatus =
   | 'unknown'
 export type DiagnosticCommandObservation = {
   command: string
+  phase?: DiagnosticPhase
   status:
     | 'completed'
     | 'failed'
@@ -119,6 +131,7 @@ export type DiagnosticCommandObservation = {
   outputTruncated: boolean
   diagnosticCount: number
   coverageStatus: DiagnosticCoverageStatus
+  executionRefusal?: Refusal
 }
 export type DiagnosticCapture = {
   diagnostics: LanguageDiagnostic[]
@@ -156,6 +169,7 @@ export type DiagnosticDeltaPreflightResult = (
   /** Optional only for legacy injected adapters; absence grants no passed evidence. */
   diagnosticStatus?: DiagnosticStatus
   observations?: DiagnosticObservations
+  executionRefusal?: Refusal
 }
 
 /** Bounded work: cap files inspected per preflight/capture. */
@@ -193,6 +207,29 @@ const DIAGNOSTIC_COMMANDS: Partial<
   python: ['ruff check --output-format=json', 'pyright --outputjson'],
   rust: ['cargo check --message-format=json'],
   go: ['go vet ./...'],
+}
+
+/** Fixed exact argv vectors; command text is presentation, never reparsed. */
+export type DiagnosticCommandId = 'tsc' | 'eslint' | 'ruff' | 'pyright' | 'cargo' | 'go'
+type DiagnosticInvocation = Readonly<{
+  id: DiagnosticCommandId
+  executable: string
+  argv: readonly string[]
+}>
+const diagnosticInvocation = (id: DiagnosticCommandId, argv: readonly string[]): DiagnosticInvocation =>
+  Object.freeze({ id, executable: id, argv: Object.freeze([...argv]) })
+export const DIAGNOSTIC_COMMAND_INVOCATIONS: Readonly<Record<string, DiagnosticInvocation>> = Object.freeze({
+  'tsc --noEmit --pretty false': diagnosticInvocation('tsc', ['--noEmit', '--pretty', 'false']),
+  'eslint --format=json .': diagnosticInvocation('eslint', ['--format=json', '.']),
+  'ruff check --output-format=json': diagnosticInvocation('ruff', ['check', '--output-format=json']),
+  'pyright --outputjson': diagnosticInvocation('pyright', ['--outputjson']),
+  'cargo check --message-format=json': diagnosticInvocation('cargo', ['check', '--message-format=json']),
+  'go vet ./...': diagnosticInvocation('go', ['vet', './...']),
+})
+
+export function capturedDiagnosticInvocation(command: string): DiagnosticInvocation | undefined {
+  return Object.hasOwn(DIAGNOSTIC_COMMAND_INVOCATIONS, command)
+    ? DIAGNOSTIC_COMMAND_INVOCATIONS[command] : undefined
 }
 
 /** Resolve a file to its supported language via the registry's extensions. */
@@ -240,6 +277,8 @@ type CaptureParams = {
   signal?: AbortSignal
   timeoutSeconds?: number
   maxFiles?: number
+  executionContext?: ExecutionAdapterContext
+  phase?: DiagnosticPhase
 }
 
 /** Compatibility projection. Call captureDiagnosticObservation for validation evidence. */
@@ -395,7 +434,9 @@ function completedWithDiagnostics(
 export async function captureDiagnosticObservation(
   params: CaptureParams,
 ): Promise<DiagnosticCapture> {
-  const { cwd, runCommand, env, signal } = params
+  const { cwd, runCommand } = params
+  const env = params.env ? { ...params.env } : undefined
+  const signal = params.executionContext?.signal ?? params.signal
   const maxFiles = Math.max(
     1,
     Math.min(MAX_PREFLIGHT_FILES, params.maxFiles ?? MAX_PREFLIGHT_FILES),
@@ -404,25 +445,38 @@ export async function captureDiagnosticObservation(
   const files = supportedDiagnosticFiles(requestedFiles).slice(0, maxFiles)
   const planned = collectDiagnosticCommands(files)
   const commands = planned.slice(0, MAX_DIAGNOSTIC_COMMANDS)
+  const phase = params.phase ?? 'current'
+  const timeoutSeconds = params.timeoutSeconds ?? DEFAULT_DIAGNOSTIC_TIMEOUT_SECONDS
+  const localLimit = executionLimitSeconds(timeoutSeconds)
+  const contexts = commands.map((command): Result<ExecutionAdapterContext> | undefined => {
+    if (!params.executionContext) return undefined
+    if (!localLimit.ok) return localLimit
+    const id = DIAGNOSTIC_COMMAND_INVOCATIONS[command]!.id
+    return deriveExecutionContext(params.executionContext, `diagnostic:${id}:${phase}:preflight`, localLimit.value)
+  })
   const captures = await mapWithConcurrency(
-    commands,
+    commands.map((command, index) => ({ command, context: contexts[index] })),
     Math.max(1, Math.min(MAX_DIAGNOSTIC_CONCURRENCY, commands.length)),
-    async (command) => {
+    async ({ command, context }) => {
       let result: DiagnosticRunResult
       try {
-        result = signal?.aborted
+        result = context && !context.ok
+          ? { errorMessage: context.cause, executionRefusal: context }
+          : signal?.aborted
           ? { cancelled: true }
           : await runCommand({
               command,
               cwd,
-              timeoutSeconds:
-                params.timeoutSeconds ?? DEFAULT_DIAGNOSTIC_TIMEOUT_SECONDS,
+              timeoutSeconds,
               env,
-              signal,
+              signal: context?.ok ? context.value.signal ?? signal : signal,
+              executionContext: context?.ok ? context.value : params.executionContext,
+              phase,
             })
       } catch (error) {
         result = {
           errorMessage: error instanceof Error ? error.message : String(error),
+          ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
           cancelled:
             signal?.aborted ||
             (error instanceof Error && error.name === 'AbortError'),
@@ -435,12 +489,13 @@ export async function captureDiagnosticObservation(
         stderr: result.stderr ?? '',
       })
       let status: DiagnosticCommandObservation['status']
-      if (result.cancelled || signal?.aborted) status = 'cancelled'
-      else if (result.timedOut) status = 'timed_out'
+      if (result.cancelled || signal?.aborted || result.executionRefusal?.reason === 'cancelled') status = 'cancelled'
+      else if (result.timedOut || result.executionRefusal?.reason === 'deadline-exhausted') status = 'timed_out'
       else if (
         result.exitCode === 127 ||
         result.errorCode === 'ENOENT' ||
         result.errorCode === 'EMPTY_COMMAND'
+        || result.executionRefusal?.reason === 'unavailable'
       )
         status = 'unavailable'
       else if (result.errorMessage) status = 'failed'
@@ -476,12 +531,14 @@ export async function captureDiagnosticObservation(
               : 'unknown'
       const observation: DiagnosticCommandObservation = {
         command,
+        phase,
         status,
         exitCode: result.exitCode,
         errorMessage: result.errorMessage,
         outputTruncated,
         diagnosticCount: parsed.diagnostics.length,
         coverageStatus,
+        ...(result.executionRefusal ? { executionRefusal: result.executionRefusal } : {}),
       }
       return { diagnostics: parsed.diagnostics, observation }
     },
@@ -637,19 +694,16 @@ export function computeDiagnosticDelta(
 
 /**
  * Resolve the effective delta match mode. Explicit `options.mode` wins;
- * otherwise OPENBUFF_DIAGNOSTIC_DELTA_MODE=strict opts into the strict
- * matcher and the default is 'tolerant' (fail-open-friendly: a pre-existing
+ * otherwise the default is 'tolerant' (a pre-existing
  * diagnostic that merely shifted lines must not fabricate a rejection).
  */
 function resolveDeltaKeyOf(
   mode?: DeltaMatchMode,
 ): (diagnostic: LanguageDiagnostic) => string {
   if (mode) return mode === 'tolerant' ? tolerantKey : strictKey
-  // Env access is routed through the SDK env helper (env-architecture gate);
-  // DELTA_MODE_ENV_FLAG names the OPENBUFF_DIAGNOSTIC_DELTA_MODE var.
-  return getSdkEnv()[DELTA_MODE_ENV_FLAG]?.trim().toLowerCase() === 'strict'
-    ? strictKey
-    : tolerantKey
+  // Root captures any host flag and supplies mode explicitly. Child env does
+  // not select host diagnostic policy, and this helper has no ambient reads.
+  return tolerantKey
 }
 
 /**
@@ -693,6 +747,7 @@ export async function preflightDiagnosticDelta(params: {
   timeoutSeconds?: number
   maxFiles?: number
   deltaMode?: DeltaMatchMode
+  executionContext?: ExecutionAdapterContext
   /**
    * Skip the second diagnostic capture when the caller's `applyEdit` is a
    * guaranteed no-op. Used by the file-change-hook seam, which observes
@@ -714,9 +769,11 @@ export async function preflightDiagnosticDelta(params: {
    */
   baseline?: DiagnosticCapture | LanguageDiagnostic[]
 }): Promise<DiagnosticDeltaPreflightResult> {
+  params = { ...params, files: [...params.files], env: params.env ? { ...params.env } : undefined,
+    signal: params.executionContext?.signal ?? params.signal }
   const { files, cwd, runCommand, applyEdit, rollbackEdit, env, signal } =
     params
-  const capture = () =>
+  const capture = (phase: DiagnosticPhase) =>
     captureDiagnosticObservation({
       files,
       cwd,
@@ -725,6 +782,8 @@ export async function preflightDiagnosticDelta(params: {
       signal,
       timeoutSeconds: params.timeoutSeconds,
       maxFiles: params.maxFiles,
+      executionContext: params.executionContext,
+      phase,
     })
 
   // When a pre-edit baseline is supplied, skip the first capture and use it
@@ -742,7 +801,7 @@ export async function preflightDiagnosticDelta(params: {
           reasons: ['legacy_baseline_has_no_observation'],
         },
       }
-    : (params.baseline ?? (await capture()))
+    : (params.baseline ?? (await capture(params.skipSecondCapture ? 'current' : 'baseline')))
   const observations: DiagnosticObservations = {
     basis:
       params.skipSecondCapture && params.baseline === undefined
@@ -760,6 +819,9 @@ export async function preflightDiagnosticDelta(params: {
       observations,
       newDiagnostics: [],
       fixIts: [],
+      ...(before.commands.find((command) => command.executionRefusal)?.executionRefusal
+        ? { executionRefusal: before.commands.find((command) => command.executionRefusal)!.executionRefusal }
+        : {}),
     }
   }
   // A throwing applyEdit used to leave the edit applied with no rollback and
@@ -804,7 +866,7 @@ export async function preflightDiagnosticDelta(params: {
   const after =
     params.skipSecondCapture && params.baseline === undefined
       ? before
-      : await capture()
+      : await capture('after')
 
   observations.after = after
   const beforeStatus = captureStatus(before)
@@ -821,7 +883,8 @@ export async function preflightDiagnosticDelta(params: {
       priority.find(
         (status) => status === beforeStatus || status === afterStatus,
       ) ?? 'unknown'
-    return { rejected: false, diagnosticStatus, observations }
+    const executionRefusal = [...before.commands, ...after.commands].find((command) => command.executionRefusal)?.executionRefusal
+    return { rejected: false, diagnosticStatus, observations, ...(executionRefusal ? { executionRefusal } : {}) }
   }
   if (
     observations.basis === 'current_only' &&
@@ -846,7 +909,7 @@ export async function preflightDiagnosticDelta(params: {
     }
   }
   const delta = computeDiagnosticDelta(before.diagnostics, after.diagnostics, {
-    mode: params.deltaMode,
+    mode: params.deltaMode ?? 'tolerant',
   })
   const newErrors = delta.filter(
     (diagnostic) => diagnostic.severity === 'error',

@@ -1,3 +1,4 @@
+import { authenticatedHostFixture } from './authenticated-host-fixture'
 import { expect, test } from 'bun:test'
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -28,6 +29,9 @@ test('replacement environments hide controller variables in real sync and backgr
   const command =
     'printf "%s|%s|%s" "$OPENBUFF_TEST_CONTROLLER_SENTINEL" "$OPENBUFF_TEST_SELECTED_VALUE" "$HOME"'
   const jobs: string[] = []
+  const capturedEnvironment = { ...env, [name]: 'controller-only' }
+  const inheritedHost = authenticatedHostFixture(root, { environment: capturedEnvironment, env })
+  const replacementHost = authenticatedHostFixture(root, { environment: capturedEnvironment, env, inheritEnv: false })
   try {
     const inherited = await runTerminalCommand({
       command,
@@ -37,6 +41,8 @@ test('replacement environments hide controller variables in real sync and backgr
       timeout_seconds: 5,
       env,
       owner,
+      executionContext: inheritedHost.context,
+      terminalShell: inheritedHost.host.terminalShell,
     })
     expect(inherited[0].value).toMatchObject({
       exitCode: 0,
@@ -51,6 +57,8 @@ test('replacement environments hide controller variables in real sync and backgr
       env,
       inheritEnv: false,
       owner,
+      executionContext: replacementHost.context,
+      terminalShell: replacementHost.host.terminalShell,
     })
     expect(replacement[0].value).toMatchObject({
       exitCode: 0,
@@ -65,6 +73,8 @@ test('replacement environments hide controller variables in real sync and backgr
       env,
       inheritEnv: false,
       owner,
+      executionContext: replacementHost.context,
+      terminalShell: replacementHost.host.terminalShell,
     })
     const jobId = (background[0].value as { jobId: string }).jobId
     expect(jobId).toBeString()
@@ -85,6 +95,8 @@ test('replacement environments hide controller variables in real sync and backgr
     expect(process.env[name]).toBe('controller-only')
   } finally {
     for (const jobId of jobs) killBackgroundJob(jobId, 'SIGKILL')
+    inheritedHost.close()
+    replacementHost.close()
     if (previous === undefined) delete process.env[name]
     else process.env[name] = previous
     rmSync(root, { recursive: true, force: true })

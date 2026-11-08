@@ -12,6 +12,15 @@ export type {
 // can read the same journal-recorded moves hydration uses; without them,
 // moved-file evidence reconciles stale and prune deletes it.
 export { collectWorkspaceMoves, run } from './run'
+export { createDirectHostExecution, createHostExecutionServices } from './host-execution'
+export type { ExecutionScope, HostExecutionOptions, RunHostServices } from './host-execution'
+export { captureAmbientHostInputs, loadHostConfigSnapshot, nodeConfigReadFs } from './host-config'
+export type { CapturedCredentialPort, DeepReadonly, HostConfigurationInputs, HostConfigSnapshot, ProviderHostContext, SnapshotResult } from './host-config'
+export { captureRootDeadline } from '@codebuff/common/util/execution-context'
+export type * from '@codebuff/common/types/contracts/execution-context'
+export type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+export type { JobOwner } from '@codebuff/common/util/job-registry'
+export type { HostReadPolicy } from '@codebuff/common/util/project-path-containment'
 export { getFilesStructured } from './tools/read-files'
 export { changeFile, changeFiles } from './tools/change-file'
 // The `changeFiles` `intentLog` parameter above is typed with
@@ -292,7 +301,11 @@ export type {
   // its mandatory `readdirView` pairing.
   CodebuffStreamDirectory,
   CodebuffTextRangeReadResult,
+  CodebuffTextReadOptions,
+  CodebuffTextRangeRead,
+  CodebuffTextFileRead,
 } from '@codebuff/common/types/filesystem'
+export type { RawReadBasisV1 } from '@codebuff/common/util/raw-read-basis'
 
 // Tree-sitter / code-map exports
 export {
@@ -303,6 +316,9 @@ export {
 export type { FileTokenData, TokenCallerMap } from '@codebuff/code-map'
 
 export { runTerminalCommand } from './tools/run-terminal-command'
+export type { CapturedTerminalLaunchMetadata } from './tools/run-terminal-command'
+export type { CapturedHookConfiguration, FileChangeHook } from './tools/file-change-hooks'
+export type { LlmHostDeps } from './impl/llm'
 export { evaluateTerminalCommandPolicy } from './tools/terminal-command-policy'
 export type {
   TerminalPermissionProfile,
@@ -337,6 +353,7 @@ export {
 export { resetChatGptOAuthRateLimit } from './impl/model-provider'
 export { LocalHarnessStore } from './services/local-harness-store'
 export { WorkspaceJournalService } from './services/workspace-journal'
+export type { WorkspaceIdentitySource } from './services/workspace-bootstrap'
 export {
   WORKSPACE_MUTATION_AUTHORITY,
   WorkspaceMutationBroker,

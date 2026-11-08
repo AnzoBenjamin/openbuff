@@ -3,12 +3,13 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   writeFileSync,
   rmSync,
   existsSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { execSync } from 'node:child_process'
 
 import {
@@ -141,6 +142,102 @@ beforeEach(() => {
 afterEach(() => {
   if (existsSync(tmpRoot)) {
     rmSync(tmpRoot, { recursive: true, force: true })
+  }
+})
+
+test('B05 preimages and the closed failed-path diagnosis do not suppress adjacent live references', () => {
+  const evidence = 'docs/execution/body-roadmap/evidence'
+  const excludedPaths = [
+    `${evidence}/B05/implementation/description-preimages-1/docs/architecture.md`,
+    `${evidence}/B05/implementation/description-preimages-2/source/docs/request-flow.md`,
+    `${evidence}/B05/root-development/format-root-01/preimages/docs/architecture.md`,
+    `${evidence}/B05/root-development/format-root-02/preimages/docs/request-flow.md`,
+    `${evidence}/B05/root-development/format-root-03/preimages/docs/architecture.md`,
+    `${evidence}/B05/resume-20261108/root-repair-preimages/common/knowledge.md`,
+    `${evidence}/B05/resume-20261108/architect-review/runtime-ci-diagnosis-1.md`,
+  ]
+  const activePaths = [
+    `${evidence}/B05/implementation/REVIEW.md`,
+    `${evidence}/B05/implementation/description-preimages-3/docs/architecture.md`,
+    `${evidence}/B05/implementation/description-preimages-2-active/docs/architecture.md`,
+    `${evidence}/B05/root-development/format-root-03/preimages-active/docs/architecture.md`,
+    `${evidence}/B05/resume-20261108/root-repair-preimages-active/common/knowledge.md`,
+    `${evidence}/B05/resume-20261108/architect-review/runtime-ci-diagnosis-2.md`,
+    `${evidence}/B06/implementation/description-preimages-1/docs/architecture.md`,
+    'docs/preimages/docs/architecture.md',
+  ]
+  for (const path of [...excludedPaths, ...activePaths]) {
+    mkdirSync(dirname(join(tmpRoot, path)), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, path),
+      'See `sdk/src/missing.ts` and [missing](./missing.md).\n',
+    )
+  }
+  const snapshot = buildMarkdownSnapshot(tmpRoot)
+  for (const path of excludedPaths) {
+    expect(snapshot.files).not.toContain(join(tmpRoot, path))
+  }
+  for (const supplied of [undefined, snapshot]) {
+    for (const check of [checkPath, checkCrossFile, checkBrokenLink]) {
+      expect(check(tmpRoot, supplied).map((finding) => finding.path).sort()).toEqual(
+        [...activePaths].sort(),
+      )
+    }
+  }
+})
+
+test('B19 exact historical inputs preserve their bytes without suppressing active reference checks', () => {
+  const evidence = 'docs/execution/body-roadmap/evidence'
+  const archive = `${evidence}/B19/implementation/design-input-preimages`
+  const excludedPaths = [
+    `${archive}/docs/architecture.md`,
+    `${archive}/docs/execution/body-roadmap/evidence/B19/design-20261108/DESIGN.md`,
+    `${evidence}/B19/design-20261108/DESIGN.md`,
+    `${evidence}/B19/design-review-20261108/review-r1.md`,
+    `${evidence}/B19/design-review-20261108/r2/review.md`,
+    `${evidence}/B19/implementation/checkpoints/state-before-preflight-11.md`,
+    `${evidence}/B19/implementation/independent-architecture-20261109/r3-preflight-11-v2/precheck.md`,
+  ]
+  const activePaths = [
+    `${evidence}/B19/implementation/REVIEW.md`,
+    `${archive}-active/docs/architecture.md`,
+    `${archive}-newer/docs/architecture.md`,
+    `${archive}-2/docs/architecture.md`,
+    `${archive}.md`,
+    `${evidence}/B20/implementation/design-input-preimages/docs/architecture.md`,
+    `${evidence}/B19/design-20261108-active/DESIGN.md`,
+    `${evidence}/B19/design-20261108/DESIGN-newer.md`,
+    `${evidence}/B19/design-revision-20261108-r2/DESIGN.md`,
+    `${evidence}/B19/design-review-20261108/review-r1-active.md`,
+    `${evidence}/B19/design-review-20261108/review-r2.md`,
+    `${evidence}/B19/design-review-20261108/r2/review-active.md`,
+    `${evidence}/B19/design-review-20261108/r3/review.md`,
+    `${evidence}/B19/implementation/checkpoints/state-before-preflight-11-active.md`,
+    `${evidence}/B19/implementation/checkpoints/state-before-preflight-12.md`,
+    `${evidence}/B19/implementation/independent-architecture-20261109/r3-preflight-11-v2/precheck-active.md`,
+    `${evidence}/B19/implementation/independent-architecture-20261109/r3-preflight-12-v2/precheck.md`,
+  ]
+  const text = 'See `sdk/src/missing.ts` and [missing](./missing.md).\n'
+  for (const path of [...excludedPaths, ...activePaths]) {
+    mkdirSync(dirname(join(tmpRoot, path)), { recursive: true })
+    writeFileSync(join(tmpRoot, path), text)
+  }
+  const snapshot = buildMarkdownSnapshot(tmpRoot)
+  for (const path of excludedPaths) {
+    expect(snapshot.files).not.toContain(join(tmpRoot, path))
+  }
+  for (const path of activePaths) {
+    expect(snapshot.files).toContain(join(tmpRoot, path))
+  }
+  for (const supplied of [undefined, snapshot]) {
+    for (const check of [checkPath, checkCrossFile, checkBrokenLink]) {
+      expect(check(tmpRoot, supplied).map((finding) => finding.path).sort()).toEqual(
+        [...activePaths].sort(),
+      )
+    }
+  }
+  for (const path of excludedPaths) {
+    expect(readFileSync(join(tmpRoot, path), 'utf8')).toBe(text)
   }
 })
 

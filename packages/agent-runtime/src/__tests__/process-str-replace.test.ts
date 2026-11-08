@@ -2,6 +2,15 @@ import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import { applyPatch } from 'diff'
 
 import * as codeMap from '@codebuff/code-map'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+  spliceDocumentRange,
+} from '@codebuff/common/util/byte-text'
+import {
+  getLineCoordinates,
+  getRangeSlice,
+} from '@codebuff/common/util/line-coordinates'
 
 import {
   encodeReadCapabilityToken,
@@ -32,13 +41,37 @@ const readCapability = (params: {
   startLine: number
   endLine: number
   content: string
-}) =>
-  encodeReadCapabilityToken({
+  sourceContent: string
+}) => {
+  // Reconstruct the actual observed prior source from the full fixture and its
+  // known read slice. Raw offsets, terminators and hashes come from that source.
+  const document = captureTextDocument(
+    spliceDocumentRange(
+      captureTextDocument(params.sourceContent),
+      params.startLine,
+      params.endLine,
+      params.content,
+    ),
+  )
+  return encodeReadCapabilityToken({
     startLine: params.startLine,
     endLine: params.endLine,
-    hash: getContentHash(params.content),
+    hash: getContentHash(
+      getRangeSlice(
+        getLineCoordinates(document.observation),
+        params.startLine,
+        params.endLine,
+      ),
+    ),
     scope: readScope(params.path),
+    rawBasis: getRawReadBasis(
+      document,
+      params.startLine,
+      params.endLine,
+      'lines',
+    ),
   })
+}
 
 describe('processStrReplace', () => {
   it('should replace exact string matches', async () => {
@@ -393,12 +426,21 @@ describe('processStrReplace', () => {
   })
 
   it('reports recovery ranges against the unchanged snapshot after an earlier insertion', async () => {
-    const initialContent = 'const header = 1;\nconst targetValue = 123;\nconst tail = 3;\n'
+    const initialContent =
+      'const header = 1;\nconst targetValue = 123;\nconst tail = 3;\n'
     const result = await processStrReplace({
       path: 'test.ts',
       replacements: [
-        { oldString: 'const header = 1;', newString: 'const header = 1;\nconst inserted = true;', allowMultiple: false },
-        { oldString: 'const targetValue = 999;', newString: 'const targetValue = 456;', allowMultiple: false },
+        {
+          oldString: 'const header = 1;',
+          newString: 'const header = 1;\nconst inserted = true;',
+          allowMultiple: false,
+        },
+        {
+          oldString: 'const targetValue = 999;',
+          newString: 'const targetValue = 456;',
+          allowMultiple: false,
+        },
       ],
       atomic: true,
       initialContentPromise: Promise.resolve(initialContent),
@@ -414,11 +456,19 @@ describe('processStrReplace', () => {
 
   it('distinguishes missing anchors in unanchored large files', async () => {
     const initialContent = Array.from({ length: 1001 }, (_, index) =>
-      index === 500 ? 'export const distinctiveTargetValue = makeValue(123);' : `const filler${index} = ${index};`,
+      index === 500
+        ? 'export const distinctiveTargetValue = makeValue(123);'
+        : `const filler${index} = ${index};`,
     ).join('\n')
     const result = await processStrReplace({
       path: 'large.ts',
-      replacements: [{ oldString: 'export const distinctiveTargetValue = makeValue(999);', newString: 'export const distinctiveTargetValue = makeValue(456);', allowMultiple: false }],
+      replacements: [
+        {
+          oldString: 'export const distinctiveTargetValue = makeValue(999);',
+          newString: 'export const distinctiveTargetValue = makeValue(456);',
+          allowMultiple: false,
+        },
+      ],
       initialContentPromise: Promise.resolve(initialContent),
       logger,
     })
@@ -1864,6 +1914,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const rangeContent = lines.slice(500, 501).join('\n')
     const token = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 501,
@@ -1907,6 +1958,7 @@ function test3() {
     // Lines 1-10 are fresh, but the target lives at line 1001.
     const windowContent = lines.slice(0, 10).join('\n')
     const token = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 1,
       endLine: 10,
@@ -1962,6 +2014,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const windowContent = lines.slice(0, 10).join('\n')
     const token = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 1,
       endLine: 10,
@@ -2004,6 +2057,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const windowContent = lines.slice(0, 10).join('\n')
     const token = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 1,
       endLine: 10,
@@ -2059,6 +2113,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const rangeContent = lines.slice(500, 505).join('\n')
     const token = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 505,
@@ -2134,7 +2189,7 @@ function test3() {
     }
   })
 
-  it('accepts a strict cap.v3 token only for its bound project, path, and run', async () => {
+  it('accepts a strict cap.v4 token only for its bound project, path, and run', async () => {
     const initialContent = 'const target = 1;\n'
     const scope = {
       projectId: '/project',
@@ -2146,6 +2201,12 @@ function test3() {
       endLine: 1,
       hash: getContentHash('const target = 1;'),
       scope,
+      rawBasis: getRawReadBasis(
+        captureTextDocument(initialContent),
+        1,
+        1,
+        'lines',
+      ),
     })
 
     const result = await processStrReplace({
@@ -2167,7 +2228,7 @@ function test3() {
     expect(result).toHaveProperty('content', 'const target = 2;\n')
   })
 
-  it('rejects cross-path replay of a strict cap.v3 token even for identical content', async () => {
+  it('rejects cross-path replay of a strict cap.v4 token even for identical content', async () => {
     const sourceScope = {
       projectId: '/project',
       path: 'src/source.ts',
@@ -2178,6 +2239,12 @@ function test3() {
       endLine: 1,
       hash: getContentHash('const target = 1;'),
       scope: sourceScope,
+      rawBasis: getRawReadBasis(
+        captureTextDocument('const target = 1;\n'),
+        1,
+        1,
+        'lines',
+      ),
     })
 
     const result = await processStrReplace({
@@ -2213,12 +2280,111 @@ function test3() {
     }
   })
 
+  it('refuses legacy and malformed supplied tokens before unique edits or idempotent skips', async () => {
+    const source = 'const target = 1;\n'
+    const legacy = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: 1,
+      hash: getContentHash('const target = 1;'),
+      scope: readScope('legacy.ts'),
+    })
+    for (const token of [legacy, 'dummy']) {
+      for (const requireFreshReadCapability of [false, true]) {
+        for (const deletion of [false, true]) {
+          const result = await processStrReplace({
+            path: 'legacy.ts',
+            readCapabilityScope: readScope('legacy.ts'),
+            requireFreshReadCapability,
+            replacements: [
+              {
+                oldString: deletion ? 'already absent' : 'const target = 1;',
+                newString: deletion ? '' : 'const target = 2;',
+                allowMultiple: false,
+                skipIfMissing: deletion,
+                basedOnRead: token,
+              },
+            ],
+            initialContentPromise: Promise.resolve(source),
+            logger,
+          })
+          expect(result).toHaveProperty('failureKind', 'capability_invalid')
+          expect(result).not.toHaveProperty('content')
+        }
+      }
+    }
+  })
+
+  it('preserves unrelated BOM, mixed terminators and Unicode bytes in a scoped edit', async () => {
+    const source = '\uFEFFheader\r\nconst target = "😀e\u0301";\nuntouched\r\n'
+    const oldString = 'const target = "😀e\u0301";'
+    const newString = 'const target = "😀e\u0301 changed";'
+    const result = await processStrReplace({
+      path: 'bytes.ts',
+      readCapabilityScope: readScope('bytes.ts'),
+      requireFreshReadCapability: true,
+      replacements: [
+        {
+          oldString,
+          newString,
+          allowMultiple: false,
+          basedOnRead: readCapability({
+            path: 'bytes.ts',
+            startLine: 2,
+            endLine: 2,
+            content: oldString,
+            sourceContent: source,
+          }),
+        },
+      ],
+      initialContentPromise: Promise.resolve(source),
+      logger,
+    })
+    const expected =
+      '\uFEFFheader\r\nconst target = "😀e\u0301 changed";\nuntouched\r\n'
+    expect(result).toHaveProperty('content', expected)
+    if ('content' in result)
+      expect(applyPatch(source, result.patch)).toBe(expected)
+  })
+
+  it('refuses raw-only scope drift and duplicated scopes after document drift', async () => {
+    const observed = 'header\nTARGET\nfooter\n'
+    const token = readCapability({
+      path: 'drift.txt',
+      startLine: 2,
+      endLine: 2,
+      content: 'TARGET',
+      sourceContent: observed,
+    })
+    for (const current of [
+      'header\nTARGET\r\nfooter\n',
+      'header\nTARGET\nTARGET\nfooter\n',
+    ]) {
+      const result = await processStrReplace({
+        path: 'drift.txt',
+        readCapabilityScope: readScope('drift.txt'),
+        replacements: [
+          {
+            oldString: 'TARGET',
+            newString: 'CHANGED',
+            allowMultiple: false,
+            basedOnRead: token,
+          },
+        ],
+        initialContentPromise: Promise.resolve(current),
+        logger,
+      })
+      expect(result).toHaveProperty('failureKind', 'capability_stale')
+      expect(result).not.toHaveProperty('content')
+    }
+  })
+
   it('rejects a stale readCapability token on large files even when oldString is unique', async () => {
     const lines = Array.from({ length: 1_001 }, (_, index) =>
       index === 500 ? 'const target = 1;' : `const filler${index} = ${index};`,
     )
     const initialContent = lines.join('\n')
     const staleToken = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 501,
@@ -2257,6 +2423,7 @@ function test3() {
     )
     const initialContent = lines.join('\n')
     const staleToken = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 301,
       endLine: 301,
@@ -2291,12 +2458,14 @@ function test3() {
   it('does not mint authorization from a strict stale-capability failure', async () => {
     const initialContent = 'const first = 1;\nconst second = 1;\n'
     const broadCapability = readCapability({
+      sourceContent: initialContent,
       path: 'strict.ts',
       startLine: 1,
       endLine: 2,
       content: 'const first = 1;\nconst second = 1;',
     })
     const staleNestedCapability = readCapability({
+      sourceContent: initialContent,
       path: 'strict.ts',
       startLine: 2,
       endLine: 2,
@@ -2328,7 +2497,8 @@ function test3() {
 
     expect('error' in result).toBe(true)
     if ('error' in result) {
-      expect(result.error).toContain('Strict read-before-edit blocked')
+      expect(result.error).toContain('supplied basedOnRead range is stale')
+      expect(result.failureKind).toBe('capability_stale')
       expect(result.error).toContain('read_files')
       expect(result.error).not.toContain('cap.v3.')
       expect(result.error).not.toMatch(/readCapability\s*=/)
@@ -2352,6 +2522,7 @@ function test3() {
           newString: 'const target = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2388,6 +2559,7 @@ function test3() {
           newString: 'const target = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2415,6 +2587,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const rangeContent = lines.slice(500, 501).join('\n')
     const basedOnRead = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 502,
@@ -2457,6 +2630,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const rangeContent = lines.slice(500, 501).join('\n')
     const basedOnRead = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 502,
@@ -2518,6 +2692,7 @@ function test3() {
             'const first = 2;\nconst inserted = true;\nconst second = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 502,
@@ -2558,6 +2733,7 @@ function test3() {
           newString: 'const first = 2;\nconst inserted = true;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 101,
             endLine: 101,
@@ -2569,6 +2745,7 @@ function test3() {
           newString: 'const second = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2598,6 +2775,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const rangeContent = lines.slice(500, 501).join('\n')
     const basedOnRead = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 503,
@@ -2656,6 +2834,7 @@ function test3() {
           newString: 'const repeated = 2;\nconst inserted = true;',
           allowMultiple: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 101,
             endLine: 501,
@@ -2667,6 +2846,7 @@ function test3() {
           newString: 'const target = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 301,
             endLine: 301,
@@ -2710,6 +2890,7 @@ function test3() {
           allowMultiple: false,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2721,6 +2902,7 @@ function test3() {
           newString: 'const target = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2762,6 +2944,7 @@ function test3() {
           allowMultiple: false,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2926,6 +3109,7 @@ function test3() {
           allowMultiple: false,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -2979,6 +3163,7 @@ function test3() {
           occurrenceIndex: 3,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 2,
             endLine: 2,
@@ -3036,6 +3221,7 @@ function test3() {
           allowMultiple: false,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -3075,6 +3261,7 @@ function test3() {
           occurrenceIndex: 2,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -3202,6 +3389,7 @@ function test3() {
           newString: 'const target = 2;\r\nconst neighbor = 1;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 502,
@@ -3259,6 +3447,7 @@ function test3() {
           newString: 'const target = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -3278,7 +3467,7 @@ function test3() {
     }
   })
 
-  it('auto-strips stale basedOnRead on small files when oldString is unique', async () => {
+  it('rejects a supplied stale capability even when the small-file target is unique', async () => {
     const initialContent = 'const x = 1;\nconst y = 2;\n'
 
     const result = await processStrReplace({
@@ -3290,6 +3479,7 @@ function test3() {
           newString: 'const y = 3;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -3301,12 +3491,10 @@ function test3() {
       logger,
     })
 
-    expect('error' in result).toBe(false)
-    if (!('error' in result)) {
-      expect(result.content).toContain('const y = 3;')
-      expect(
-        result.messages.some((msg) => msg.includes('stale basedOnRead')),
-      ).toBe(true)
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('supplied basedOnRead range is stale')
+      expect(result.failureKind).toBe('capability_stale')
     }
   })
 
@@ -3322,6 +3510,7 @@ function test3() {
           newString: 'const y = 3;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -3354,6 +3543,7 @@ function test3() {
           allowMultiple: false,
           // Bounds point at a different region than where the match lives.
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -3393,6 +3583,7 @@ function test3() {
       )
       const initialContent = lines.join('\n')
       const token = readCapability({
+        sourceContent: initialContent,
         path: 'large.ts',
         startLine: 501,
         endLine: 501,
@@ -3562,10 +3753,11 @@ function test3() {
 
   describe('fresh range capability scoping', () => {
     it('keeps a fresh small-file edit inside the proven range', async () => {
-      // The capability was minted before an unrelated later line changed. The
-      // target range itself is still fresh, so the scoped edit remains safe.
+      // The authenticated whole raw hash is unchanged, so the original bounds
+      // remain usable even when another line contains identical text.
       const initialContent = 'same\nkeep\nsame\nunrelated post-read edit\n'
       const capability = readCapability({
+        sourceContent: initialContent,
         path: 'PLAN.md',
         startLine: 3,
         endLine: 3,
@@ -3596,8 +3788,10 @@ function test3() {
     })
 
     it('rejects a stale supplied range instead of guessing across the file', async () => {
-      const initialContent = 'same\nkeep\nsame changed formatting\n'
+      const initialContent =
+        'same changed elsewhere\nkeep\nsame changed formatting\n'
       const staleCapability = readCapability({
+        sourceContent: initialContent,
         path: 'PLAN.md',
         startLine: 3,
         endLine: 3,

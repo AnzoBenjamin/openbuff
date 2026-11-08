@@ -1,4 +1,3 @@
-import { spawn } from 'child_process'
 import { createHash } from 'node:crypto'
 import { lstat, open, readlink } from 'node:fs/promises'
 import path from 'node:path'
@@ -6,12 +5,14 @@ import path from 'node:path'
 import { LocalHarnessStore } from '../services/local-harness-store'
 import { resolveWorkspaceIdentity } from '../services/repository-identity'
 import { runSemgrepBaseline } from '../services/semgrep-baseline'
+import { ExecutionRefusalError, isExecutionRefusalError, scheduleNodeDeadline } from '../services/execution-launch'
 import { gitStatus, runGitBounded } from './git-status'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
 import type { LanguageDiagnostic } from './language-diagnostics'
 import type { SemgrepRunner } from '../services/semgrep-baseline'
+import type { ExecutionAdapterContext, Refusal } from '@codebuff/common/types/contracts/execution-context'
 
 const normalizeFile = (file: string) =>
   file.replace(/\\/g, '/').replace(/^\.\//, '')
@@ -221,6 +222,7 @@ type SecurityScanResult = {
   toolVersion?: string
   /** Set when the semgrep file cap truncated the scanned file list. */
   truncated?: boolean
+  executionRefusal?: Refusal
 }
 
 const isSafeRefName = (ref: string): boolean =>
@@ -238,6 +240,7 @@ async function resolveSecurityScanBaseline(params: {
   cwd: string
   headCommit: string
   signal?: AbortSignal
+  executionContext?: ExecutionAdapterContext
 }): Promise<string | null> {
   // (reliability: bundle-rev-parse-head-unbounded) the baseline resolution
   // is best-effort fail-open, so every spawn runs under the identity
@@ -251,8 +254,9 @@ async function resolveSecurityScanBaseline(params: {
     ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
     params.cwd,
     params.signal,
-    bounded,
+    { ...bounded, executionContext: params.executionContext, branchId: 'bundle.security-default-ref', phase: 'security-baseline' },
   )
+  if (defaultRef.executionRefusal) throw new ExecutionRefusalError(defaultRef.executionRefusal)
   if (defaultRef.exitCode === 0) {
     const ref = defaultRef.stdout.trim()
     if (isSafeRefName(ref)) {
@@ -260,8 +264,9 @@ async function resolveSecurityScanBaseline(params: {
         ['merge-base', 'HEAD', ref],
         params.cwd,
         params.signal,
-        bounded,
+        { ...bounded, executionContext: params.executionContext, branchId: 'bundle.security-merge-base', phase: 'security-baseline' },
       )
+      if (mergeBase.executionRefusal) throw new ExecutionRefusalError(mergeBase.executionRefusal)
       const candidate = mergeBase.stdout.trim()
       if (
         mergeBase.exitCode === 0 &&
@@ -276,8 +281,9 @@ async function resolveSecurityScanBaseline(params: {
     ['rev-parse', '--verify', 'HEAD~1'],
     params.cwd,
     params.signal,
-    bounded,
+    { ...bounded, executionContext: params.executionContext, branchId: 'bundle.security-parent', phase: 'security-baseline' },
   )
+  if (parent.executionRefusal) throw new ExecutionRefusalError(parent.executionRefusal)
   const fallback = parent.stdout.trim()
   if (
     parent.exitCode === 0 &&
@@ -300,16 +306,17 @@ async function resolveSecurityScan(params: {
   skipScan?: boolean
   runner?: SemgrepRunner
   signal?: AbortSignal
+  executionContext?: ExecutionAdapterContext
 }): Promise<SecurityScanResult> {
   const scannable = params.files.filter(isSemgrepScannableFile)
   if (scannable.length === 0) {
     return { status: 'skipped', reason: 'no-source-files', findings: [] }
   }
-  const baselineCommit = await resolveSecurityScanBaseline(params)
-  if (!baselineCommit) {
-    return { status: 'skipped', reason: 'no-baseline-commit', findings: [] }
-  }
   try {
+    const baselineCommit = await resolveSecurityScanBaseline(params)
+    if (!baselineCommit) {
+      return { status: 'skipped', reason: 'no-baseline-commit', findings: [] }
+    }
     const result = await runSemgrepBaseline({
       cwd: params.cwd,
       baselineCommit,
@@ -319,6 +326,7 @@ async function resolveSecurityScan(params: {
       // P3 audit fix: forward the caller's cancellation so an aborted scan
       // settles promptly instead of waiting out the full timeout.
       signal: params.signal,
+      executionContext: params.executionContext,
     })
     if (result.status === 'ok') {
       return {
@@ -332,13 +340,15 @@ async function resolveSecurityScan(params: {
       status: result.status,
       reason: result.reason,
       findings: result.findings,
+      ...('executionRefusal' in result ? { executionRefusal: result.executionRefusal as Refusal } : {}),
     }
   } catch (error) {
     // Fail-open: the optional security layer must never break the bundle.
     return {
-      status: 'error',
+      status: isExecutionRefusalError(error) ? 'unavailable' : 'error',
       reason: error instanceof Error ? error.message : String(error),
       findings: [],
+      ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
     }
   }
 }
@@ -357,17 +367,24 @@ export async function hashIdentityFileBytes(
   files: string[],
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<void> {
+  options = { ...options }
   const controller = new AbortController()
   const onAbort = () => controller.abort(options.signal?.reason)
   if (options.signal?.aborted) onAbort()
   options.signal?.addEventListener('abort', onAbort, { once: true })
   const timeoutMs = options.timeoutMs ?? SNAPSHOT_ID_GIT_TIMEOUT_MS
-  const deadline = setTimeout(
+  const startedAt = performance.now()
+  const cancelDeadline = scheduleNodeDeadline(
+    () => Math.max(0, (Number.isFinite(timeoutMs) ? timeoutMs : 0) - (performance.now() - startedAt)),
     () =>
       controller.abort(
         new Error(`File identity timed out after ${timeoutMs}ms`),
       ),
-    timeoutMs,
+    // Keep this independent file-hash deadline referenced, as before.
+    {
+      set(delay, callback) { return setTimeout(callback, delay) },
+      clear(timer) { clearTimeout(timer as ReturnType<typeof setTimeout>) },
+    },
   )
   const check = () => controller.signal.throwIfAborted()
   // Bigint nanosecond metadata is compared, not hashed: touching an unchanged
@@ -472,7 +489,7 @@ export async function hashIdentityFileBytes(
     await Promise.race([task(), cancelled])
   } finally {
     controller.abort(new Error('Identity hashing settled'))
-    clearTimeout(deadline)
+    cancelDeadline()
     removeCancel()
     options.signal?.removeEventListener('abort', onAbort)
   }
@@ -495,6 +512,8 @@ async function buildSnapshotIdentity(params: {
   statusSha256: string
   workspaceState?: WorkspaceStateV1
   signal?: AbortSignal
+  executionContext?: ExecutionAdapterContext
+  phase?: string
 }): Promise<{
   snapshotId: string
   files: string[]
@@ -519,8 +538,12 @@ async function buildSnapshotIdentity(params: {
       {
         timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
         maxOutputBytes: MAX_SNAPSHOT_ID_DIFF_BYTES,
+        executionContext: params.executionContext,
+        branchId: 'bundle.clean-parent',
+        phase: params.phase,
       },
     )
+    if (parentCheck.executionRefusal) throw new ExecutionRefusalError(parentCheck.executionRefusal)
     if (parentCheck.exitCode === 0) {
       const committedDiffResult = await runGitBounded(
         ['diff', '--no-color', 'HEAD~1', 'HEAD', '--'],
@@ -529,8 +552,12 @@ async function buildSnapshotIdentity(params: {
         {
           timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
           maxOutputBytes: MAX_SNAPSHOT_ID_DIFF_BYTES,
+          executionContext: params.executionContext,
+          branchId: 'bundle.clean-committed-diff',
+          phase: params.phase,
         },
       )
+      if (committedDiffResult.executionRefusal) throw new ExecutionRefusalError(committedDiffResult.executionRefusal)
       if (
         committedDiffResult.exitCode === 0 ||
         committedDiffResult.exitCode === 1
@@ -556,8 +583,12 @@ async function buildSnapshotIdentity(params: {
     {
       timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
       maxOutputBytes: MAX_SNAPSHOT_ID_DIFF_BYTES,
+      executionContext: params.executionContext,
+      branchId: 'bundle.full-binary-diff',
+      phase: params.phase,
     },
   )
+  if (fullDiff.executionRefusal) throw new ExecutionRefusalError(fullDiff.executionRefusal)
   if (fullDiff.exitCode !== 0 && fullDiff.exitCode !== 1) {
     throw new Error(
       fullDiff.stderr.trim() ||
@@ -610,7 +641,10 @@ export async function computeWorktreeSnapshotIdentity(params: {
   cwd: string
   workspaceState?: WorkspaceStateV1
   signal?: AbortSignal
-}): Promise<{ snapshotId: string } | { errorMessage: string }> {
+  executionContext?: ExecutionAdapterContext
+  phase?: string
+}): Promise<{ snapshotId: string } | { errorMessage: string; executionRefusal?: Refusal }> {
+  params = { ...params, signal: params.executionContext?.signal ?? params.signal }
   // Bounded deadline on every identity-path git spawn
   // (perf: identity-git-spawns-no-deadline): runTargetedValidation executes
   // this path twice per call, so a wedged git fails closed instead of hanging.
@@ -621,12 +655,16 @@ export async function computeWorktreeSnapshotIdentity(params: {
     {
       timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
       maxOutputBytes: MAX_SNAPSHOT_ID_DIFF_BYTES,
+      executionContext: params.executionContext,
+      branchId: 'bundle.snapshot-head',
+      phase: params.phase,
     },
   )
   if (head.exitCode !== 0) {
     return {
       errorMessage:
         head.stderr.trim() || 'Unable to attest validation snapshot.',
+      ...(head.executionRefusal ? { executionRefusal: head.executionRefusal } : {}),
     }
   }
   const porcelain = await runGitBounded(
@@ -645,6 +683,9 @@ export async function computeWorktreeSnapshotIdentity(params: {
     {
       timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
       maxOutputBytes: MAX_SNAPSHOT_ID_DIFF_BYTES,
+      executionContext: params.executionContext,
+      branchId: 'bundle.snapshot-porcelain',
+      phase: params.phase,
     },
   )
   if (porcelain.exitCode !== 0 || porcelain.stdoutTruncated) {
@@ -653,6 +694,7 @@ export async function computeWorktreeSnapshotIdentity(params: {
         ? 'Git status exceeds identity membership limit; complete review files are unavailable.'
         : porcelain.stderr.trim() ||
           `git status exited with code ${porcelain.exitCode}.`,
+      ...(porcelain.executionRefusal ? { executionRefusal: porcelain.executionRefusal } : {}),
     }
   }
   try {
@@ -664,11 +706,14 @@ export async function computeWorktreeSnapshotIdentity(params: {
       statusSha256: porcelain.stdoutSha256,
       workspaceState: params.workspaceState,
       signal: params.signal,
+      executionContext: params.executionContext,
+      phase: params.phase,
     })
     return { snapshotId: identity.snapshotId }
   } catch (error) {
     return {
       errorMessage: error instanceof Error ? error.message : String(error),
+      ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
     }
   }
 }
@@ -680,6 +725,7 @@ export async function getChangeReviewBundle(params: {
   workspaceState?: WorkspaceStateV1
   signal?: AbortSignal
   securityScanRunner?: SemgrepRunner
+  executionContext?: ExecutionAdapterContext
   /**
    * Skip the semgrep baseline scan for THIS bundle: targeted validation sets
    * it on the after-bundle because the before-bundle already ran the
@@ -687,6 +733,7 @@ export async function getChangeReviewBundle(params: {
    */
   skipSecurityScan?: boolean
 }): Promise<CodebuffToolOutput<'get_change_review_bundle'>> {
+  params = { ...params }
   // (reliability: bundle-rev-parse-head-unbounded) the ENTIRE prelude runs
   // under the identity deadline: gitStatus threads its timeoutMs, HEAD
   // resolves through runGitBounded (a timeout resolves exitCode -1, which
@@ -704,17 +751,30 @@ export async function getChangeReviewBundle(params: {
       max_chars: params.max_chars ?? 200_000,
       signal: params.signal,
       timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
+      executionContext: params.executionContext,
+      phase: 'bundle',
     }),
     runGitBounded(['rev-parse', 'HEAD'], params.cwd, params.signal, {
       timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
       maxOutputBytes: 4096,
+      executionContext: params.executionContext,
+      branchId: 'bundle.bundle-head',
+      phase: 'bundle',
     }),
     resolveWorkspaceIdentity({
       cwd: params.cwd,
       signal: params.signal,
       timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
+      executionContext: params.executionContext,
+      phase: 'bundle',
+    }).catch((error: unknown) => {
+      if (isExecutionRefusalError(error)) return error
+      throw error
     }),
   ])
+  if (isExecutionRefusalError(workspace)) {
+    return [{ type: 'json', value: { errorMessage: workspace.message, executionRefusal: workspace.refusal } }]
+  }
   const value = git[0]?.type === 'json' ? git[0].value : undefined
   // Direct gitStatus() never emits the per-turn suppressed { unchanged }
   // variant (only applyGitStatusGate does). Fail closed if it appears so
@@ -743,6 +803,8 @@ export async function getChangeReviewBundle(params: {
                   'git_status returned a suppressed unchanged payload; expected a full status observation.'
                 : undefined) ??
             (head.stderr.trim() || 'Unable to build change review bundle.'),
+          ...(head.executionRefusal ? { executionRefusal: head.executionRefusal } : {}),
+          ...(value && 'executionRefusal' in value ? { executionRefusal: value.executionRefusal } : {}),
         },
       },
     ]
@@ -778,6 +840,9 @@ export async function getChangeReviewBundle(params: {
     {
       timeoutMs: SNAPSHOT_ID_GIT_TIMEOUT_MS,
       maxOutputBytes: MAX_SNAPSHOT_ID_DIFF_BYTES,
+      executionContext: params.executionContext,
+      branchId: 'bundle.bundle-porcelain',
+      phase: 'bundle',
     },
   )
   if (porcelain.exitCode !== 0 || porcelain.stdoutTruncated) {
@@ -789,6 +854,7 @@ export async function getChangeReviewBundle(params: {
             ? 'Git status exceeds identity membership limit; complete review files are unavailable.'
             : porcelain.stderr.trim() ||
               `git status exited with code ${porcelain.exitCode}.`,
+          ...(porcelain.executionRefusal ? { executionRefusal: porcelain.executionRefusal } : {}),
         },
       },
     ]
@@ -809,6 +875,8 @@ export async function getChangeReviewBundle(params: {
       statusSha256: porcelain.stdoutSha256,
       workspaceState: params.workspaceState,
       signal: params.signal,
+      executionContext: params.executionContext,
+      phase: 'bundle',
     })
     snapshotId = identity.snapshotId
     files = identity.files
@@ -819,6 +887,7 @@ export async function getChangeReviewBundle(params: {
         type: 'json',
         value: {
           errorMessage: error instanceof Error ? error.message : String(error),
+          ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
         },
       },
     ]
@@ -900,6 +969,7 @@ export async function getChangeReviewBundle(params: {
     skipScan: params.skipSecurityScan,
     runner: params.securityScanRunner,
     signal: params.signal,
+    executionContext: params.executionContext,
   })
   return [
     {

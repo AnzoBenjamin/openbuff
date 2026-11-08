@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto'
+import { raceAbort, throwIfAborted } from '../tools/concurrency'
+import type { ActionExecutionPort, PreparedLaunch, Result, TargetPermit } from '@codebuff/common/types/contracts/execution-context'
 import fs from 'node:fs'
 import path from 'node:path'
 
@@ -166,7 +169,23 @@ export type LspSpawnSpec = {
  * supply a fake Duplex-backed child. The returned object only needs the
  * stdin/stdout/kill surface the multiplexer drives.
  */
-export type LspSpawner = (spec: LspSpawnSpec) => LspChildHandle
+export type AdmittedLspLaunch = { launch: PreparedLaunch; permit: TargetPermit }
+export type AdmitLspSpawn = (spec: LspSpawnSpec) => Promise<Result<AdmittedLspLaunch>>
+export type LspRequestContext = { execution: ActionExecutionPort; signal?: AbortSignal }
+export type LspResourceFacade = {
+  admitSpawn: AdmitLspSpawn
+  nextGeneration(reason: 'observed-adapter-failure' | 'dead-entry-reacquire'): Result<LspResourceFacade>
+  request(execution: ActionExecutionPort): ReturnType<ActionExecutionPort['requestResource']>
+}
+export type LspResourceFactory = (spec: LspSpawnSpec, request: LspRequestContext) => Result<LspResourceFacade>
+export type LspSpawner = (spec: LspSpawnSpec, admitted: AdmittedLspLaunch) => LspChildHandle
+
+export class LspExecutionError extends LspServerError {
+  constructor(readonly refusal: { ok: false; reason: string; cause: string }) {
+    super(`execution-${refusal.reason}: ${refusal.cause}`, { reason: 'unavailable' })
+    this.name = 'LspExecutionError'
+  }
+}
 
 export type LspChildHandle = {
   pid?: number
@@ -186,6 +205,7 @@ export type LspRootResolver = (params: {
 }) => string
 
 export type LspMultiplexerOptions = {
+  resourceFactory?: LspResourceFactory
   spawner: LspSpawner
   rootResolver?: LspRootResolver
   maxServers?: number
@@ -267,6 +287,7 @@ class LspServerConnection {
   private frameBuffer: Buffer = Buffer.alloc(0)
   private running = false
   private readonly opened = new Map<string, number>()
+  private readonly admitSpawn: AdmitLspSpawn
   private readonly spawner: LspSpawner
   private readonly spawnSpec: LspSpawnSpec
   private readonly requestTimeoutMs: number
@@ -277,6 +298,7 @@ class LspServerConnection {
   private stopRequested = false
 
   constructor(params: {
+    admitSpawn: AdmitLspSpawn
     spawner: LspSpawner
     spawnSpec: LspSpawnSpec
     requestTimeoutMs: number
@@ -285,6 +307,7 @@ class LspServerConnection {
     maxFrameBytes: number
     onCrash: (reason: string) => void
   }) {
+    this.admitSpawn = params.admitSpawn
     this.spawner = params.spawner
     this.spawnSpec = params.spawnSpec
     this.requestTimeoutMs = params.requestTimeoutMs
@@ -299,7 +322,11 @@ class LspServerConnection {
   }
 
   async start(rootUri: string): Promise<void> {
-    const child = this.spawner(this.spawnSpec)
+    if (this.stopRequested) throw new LspServerError('LSP start was stopped.', { reason: 'stopped' })
+    const admitted = await this.admitSpawn(this.spawnSpec)
+    if (this.stopRequested) throw new LspServerError('LSP start was stopped during admission.', { reason: 'stopped' })
+    if (!admitted.ok) throw new LspExecutionError(admitted)
+    const child = this.spawner(this.spawnSpec, admitted.value)
     this.child = child
     this.frameBuffer = Buffer.alloc(0)
     child.stdout.on('data', (chunk) => this.consume(chunk))
@@ -597,6 +624,7 @@ class LspServerConnection {
 }
 
 type ServerEntry = {
+  resource: LspResourceFacade
   key: string
   languageId: SupportedLanguageId
   rootUri: string
@@ -699,12 +727,12 @@ export type LspMultiplexer = {
   definition(params: {
     filePath: string
     position: LspPosition
-  }): Promise<LspLocation | LspLocation[] | null>
+  }, executionContext?: LspRequestContext): Promise<LspLocation | LspLocation[] | null>
   references(params: {
     filePath: string
     position: LspPosition
-  }): Promise<LspLocation[] | null>
-  hover(params: { filePath: string; position: LspPosition }): Promise<LspHover | null>
+  }, executionContext?: LspRequestContext): Promise<LspLocation[] | null>
+  hover(params: { filePath: string; position: LspPosition }, executionContext?: LspRequestContext): Promise<LspHover | null>
   /**
    * P4-T2 (rename_symbol / code_action v1): rename and codeAction issue the
    * request WITHOUT gating on server capability advertisements — an incapable
@@ -714,17 +742,17 @@ export type LspMultiplexer = {
   prepareRenameParams(params: {
     filePath: string
     position: LspPosition
-  }): Promise<{ range: LspRange } | null>
+  }, executionContext?: LspRequestContext): Promise<{ range: LspRange } | null>
   rename(params: {
     filePath: string
     position: LspPosition
     newName: string
-  }): Promise<LspWorkspaceEditChanges>
+  }, executionContext?: LspRequestContext): Promise<LspWorkspaceEditChanges>
   codeAction(params: {
     filePath: string
     position: LspPosition
     only?: string[]
-  }): Promise<
+  }, executionContext?: LspRequestContext): Promise<
     Array<{
       title: string
       changesByUri: LspWorkspaceEditChanges
@@ -749,10 +777,10 @@ export type LspMultiplexer = {
     filePath: string
     command: string
     arguments?: unknown[]
-  }): Promise<LspNormalizedEdit>
+  }, executionContext?: LspRequestContext): Promise<LspNormalizedEdit>
   documentSymbol(params: {
     filePath: string
-  }): Promise<LspDocumentSymbol[] | null>
+  }, executionContext?: LspRequestContext): Promise<LspDocumentSymbol[] | null>
   /**
    * P3 audit note: `filePath` is a reserved-for-future-use seam. Production
    * callers (language-intelligence.ts -> run.ts) pass only a `query` today,
@@ -765,6 +793,7 @@ export type LspMultiplexer = {
   workspaceSymbol(
     query: string,
     filePath?: string,
+    executionContext?: LspRequestContext,
   ): Promise<LspWorkspaceSymbol[] | null>
   syncFile(params: {
     filePath: string
@@ -772,7 +801,7 @@ export type LspMultiplexer = {
     text: string
     open?: boolean
     close?: boolean
-  }): Promise<void>
+  }, executionContext?: LspRequestContext): Promise<void>
   warmServerCount(): number
   dispose(): Promise<void>
 }
@@ -900,7 +929,9 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     }
   }
 
-  async function acquire(filePath: string): Promise<ServerEntry> {
+  async function acquire(filePath: string, executionContext?: LspRequestContext): Promise<ServerEntry> {
+    if (!executionContext || !options.resourceFactory) throw new LspExecutionError({ ok: false, reason: 'unavailable', cause: 'LSP execution context or resource factory is unavailable.' })
+    throwIfAborted(executionContext.signal)
     if (disposed) {
       throw new LspServerError('LSP multiplexer is disposed.', { reason: 'disposed' })
     }
@@ -909,6 +940,7 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     const root = rootResolver({ filePath, rootMarkers: spec.rootMarkers ?? [] })
     const rootUri = filePathToUri(root)
     const key = `${languageId}:${rootUri}`
+    let nextResource: LspResourceFacade | undefined
     const existing = servers.get(key)
     if (existing) {
       if (existing.restarting) await existing.restarting
@@ -926,7 +958,12 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       // reserved-but-still-starting entry (isRunning false while its own
       // cold start is in flight) is left in place: deleting it would make
       // the in-flight start see its slot as stolen and churn a respawn.
-      if (!starting.has(key)) servers.delete(key)
+      if (!starting.has(key)) {
+        const next = existing.resource.nextGeneration('dead-entry-reacquire')
+        if (!next.ok) throw new LspExecutionError(next)
+        nextResource = next.value
+        servers.delete(key)
+      }
     }
     // Single-flight cold start: concurrent acquire() calls for the same
     // (languageId, root) key join one in-flight start instead of each
@@ -944,12 +981,17 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     }
     const startPromise = (async (): Promise<ServerEntry> => {
       const buildEntry = (): ServerEntry => {
+        const bound = nextResource ? { ok: true as const, value: nextResource } : options.resourceFactory!({ argv: spec.argv, cwd: root }, executionContext)
+        if (!bound.ok) throw new LspExecutionError(bound)
+        const resource = bound.value
         const entry: ServerEntry = {
+          resource,
           key,
           languageId,
           rootUri,
           restarting: null,
           connection: new LspServerConnection({
+            admitSpawn: spec => resource.admitSpawn(spec),
             spawner: options.spawner,
             spawnSpec: { argv: spec.argv, cwd: root },
             requestTimeoutMs,
@@ -957,11 +999,17 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
             maxPendingRequests,
             maxFrameBytes,
             onCrash: (reason) => {
+              if (entry.resource !== resource || disposed) return
               emit({ kind: 'restart', key, reason })
               entry.restarting = (async () => {
                 await sleep(RESTART_BACKOFF_MS)
                 try {
+                  if (disposed || servers.get(key) !== entry) return
+                  const replacement = resource.nextGeneration('observed-adapter-failure')
+                  if (!replacement.ok) throw new LspExecutionError(replacement)
+                  entry.resource = replacement.value
                   const fresh = new LspServerConnection({
+                    admitSpawn: spec => replacement.value.admitSpawn(spec),
                     spawner: options.spawner,
                     spawnSpec: { argv: spec.argv, cwd: root },
                     requestTimeoutMs,
@@ -972,8 +1020,10 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
                       emit({ kind: 'gave-up', key, reason: again })
                     },
                   })
-                  await fresh.start(rootUri)
+                  // Expose the pending connection so dispose/eviction can stop
+                  // it while its asynchronous admission is still outstanding.
                   entry.connection = fresh
+                  await fresh.start(rootUri)
                 } catch {
                   emit({ kind: 'gave-up', key, reason })
                 } finally {
@@ -1022,13 +1072,32 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     }
   }
 
+  async function withResourceUse<T>(entry: ServerEntry, context: LspRequestContext | undefined, method: string, params: unknown, use: () => T): Promise<Awaited<T>> {
+    if (!context) throw new LspExecutionError({ ok: false, reason: 'unavailable', cause: 'LSP request execution context is unavailable.' })
+    throwIfAborted(context.signal)
+    const access = entry.resource.request(context.execution)
+    if (!access.ok) throw new LspExecutionError(access)
+    try {
+      const digest = createHash('sha256').update(JSON.stringify([method, params])).digest('hex')
+      const admitted = await raceAbort(access.value.admitUse(digest), context.signal)
+      if (!admitted.ok) throw new LspExecutionError(admitted)
+      throwIfAborted(context.signal)
+      const result = access.value.useNow(admitted.value, use)
+      if (!result.ok) throw new LspExecutionError(result)
+      return await raceAbort(Promise.resolve(result.value), context.signal)
+    } finally {
+      access.value.release()
+    }
+  }
+
   async function withServer<T>(
     filePath: string,
     method: string,
     params: unknown,
+    executionContext?: LspRequestContext,
   ): Promise<T | null> {
-    const entry = await acquire(filePath)
-    if (entry.restarting) await entry.restarting
+    const entry = await raceAbort(acquire(filePath, executionContext), executionContext?.signal)
+    if (entry.restarting) await raceAbort(entry.restarting, executionContext?.signal)
     // P4-T2 (real-server seam): auto-open an unopened document before a
     // document-scoped request when the caller supplied bytes for it. Version
     // 1 is correct here: versionOf is connection-local and the connection
@@ -1037,10 +1106,10 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       const uri = filePathToUri(filePath)
       if (entry.connection.versionOf(uri) === undefined) {
         const text = await options.openFile({ filePath })
-        entry.connection.didOpen(uri, entry.languageId, 1, text)
+        await withResourceUse(entry, executionContext, 'textDocument/didOpen', { uri, text }, () => entry.connection.didOpen(uri, entry.languageId, 1, text))
       }
     }
-    const result = (await entry.connection.request(method, params)) as T | null
+    const result = (await withResourceUse(entry, executionContext, method, params, () => entry.connection.request(method, params))) as T | null
     return result ?? null
   }
 
@@ -1237,18 +1306,17 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
   async function requestWorkspaceSymbols(
     entry: ServerEntry,
     query: string,
+    executionContext?: LspRequestContext,
   ): Promise<LspWorkspaceSymbol[] | null> {
     // Degrade a server that reports a protocol error or lacks support to the
     // same null (unavailable) result the no-warm-server path returns rather
     // than throwing.
     try {
-      const result = (await entry.connection.request('workspace/symbol', {
-        query,
-      })) as LspWorkspaceSymbol[] | null
+      const result = (await withResourceUse(entry, executionContext, 'workspace/symbol', { query }, () => entry.connection.request('workspace/symbol', { query }))) as LspWorkspaceSymbol[] | null
       return result ?? null
     } catch (error) {
       if (
-        error instanceof LspServerError &&
+        !(error instanceof LspExecutionError) && error instanceof LspServerError &&
         (error.reason === 'protocol' || error.reason === 'unavailable')
       ) {
         return null
@@ -1258,28 +1326,30 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
   }
 
   return {
-    definition: ({ filePath, position }) =>
+    definition: ({ filePath, position }, executionContext) =>
       withServer<LspLocation | LspLocation[]>(
         filePath,
         'textDocument/definition',
         positionParams(filePath, position),
+        executionContext,
       ),
-    references: ({ filePath, position }) =>
+    references: ({ filePath, position }, executionContext) =>
       withServer<LspLocation[]>(filePath, 'textDocument/references', {
         ...positionParams(filePath, position),
         context: { includeDeclaration: true },
-      }),
+      }, executionContext),
     // P4-T2 rename/codeAction: the same request seam as definition/references
     // (prepare-file via acquire + withServer, 0-based LSP positions verbatim —
     // the service layer is the ONLY owner of the 1-based→0-based shift).
     // Deliberately NOT capability-advertisement-gated: an over-cautious
     // client-claimed capability would paper over a server that actually
     // answers; an incapable server's error response surfaces honestly instead.
-    prepareRenameParams: async ({ filePath, position }) => {
+    prepareRenameParams: async ({ filePath, position }, executionContext) => {
       const result = await withServer<unknown>(
         filePath,
         'textDocument/prepareRename',
         positionParams(filePath, position),
+        executionContext,
       )
       // Normalize the two server response shapes — the legacy bare Range and
       // the current { range, placeholder } — into one `{ range }` result;
@@ -1309,22 +1379,22 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
         },
       }
     },
-    rename: async ({ filePath, position, newName }) => {
+    rename: async ({ filePath, position, newName }, executionContext) => {
       const result = await withServer<unknown>(filePath, 'textDocument/rename', {
         ...positionParams(filePath, position),
         newName,
-      })
+      }, executionContext)
       // The raw WorkspaceEdit is normalized exactly once, here.
       return normalizeWorkspaceEdit(result).changesByUri
     },
-    codeAction: async ({ filePath, position, only }) => {
+    codeAction: async ({ filePath, position, only }, executionContext) => {
       const { textDocument } = positionParams(filePath, position)
       const result = await withServer<unknown>(filePath, 'textDocument/codeAction', {
         textDocument,
         range: { start: position, end: position },
         context: { diagnostics: [] },
         ...(only !== undefined ? { only } : {}),
-      })
+      }, executionContext)
       // Edit-carrying AND command-carrying actions are returned; the command
       // is surfaced verbatim so the caller (extractSymbol) can resolve it
       // through executeCommand. Resolution stays the CALLER's choice — this
@@ -1366,7 +1436,7 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
       filePath,
       command,
       arguments: commandArguments,
-    }) => {
+    }, executionContext) => {
       const result = await withServer<unknown>(
         filePath,
         'workspace/executeCommand',
@@ -1376,6 +1446,7 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
             ? { arguments: commandArguments }
             : {}),
         },
+        executionContext,
       )
       // The raw reply is normalized exactly once, here. null / primitives /
       // non-record replies normalize to an EMPTY edit (many servers
@@ -1387,12 +1458,12 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
         createdUris: normalizedEdit.createdUris,
       }
     },
-    hover: ({ filePath, position }) =>
-      withServer<LspHover>(filePath, 'textDocument/hover', positionParams(filePath, position)),
-    documentSymbol: ({ filePath }) =>
+    hover: ({ filePath, position }, executionContext) =>
+      withServer<LspHover>(filePath, 'textDocument/hover', positionParams(filePath, position), executionContext),
+    documentSymbol: ({ filePath }, executionContext) =>
       withServer<LspDocumentSymbol[]>(filePath, 'textDocument/documentSymbol', {
         textDocument: { uri: filePathToUri(filePath) },
-      }),
+      }, executionContext),
     // workspace/symbol is issued against an already-warm server. When a
     // `filePath` context is provided, the language is derived from its
     // extension via the registry mapping and the query is routed to THAT
@@ -1407,7 +1478,7 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     // result (null) as the context-free path. A server that lacks
     // workspace/symbol support resolves to an empty result rather than
     // throwing.
-    workspaceSymbol: async (query, filePath) => {
+    workspaceSymbol: async (query, filePath, executionContext) => {
       if (filePath !== undefined) {
         let languageId: SupportedLanguageId
         try {
@@ -1419,24 +1490,24 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
         }
         const entry = latestWarmEntry(languageId)
         if (!entry) return null
-        return requestWorkspaceSymbols(entry, query)
+        return requestWorkspaceSymbols(entry, query, executionContext)
       }
-      const entry = await warmEntryForWorkspaceSymbol()
+      const entry = await raceAbort(warmEntryForWorkspaceSymbol(), executionContext?.signal)
       if (!entry) return null
-      return requestWorkspaceSymbols(entry, query)
+      return requestWorkspaceSymbols(entry, query, executionContext)
     },
-    async syncFile({ filePath, version, text, open, close }) {
-      const entry = await acquire(filePath)
+    async syncFile({ filePath, version, text, open, close }, executionContext) {
+      const entry = await raceAbort(acquire(filePath, executionContext), executionContext?.signal)
       const uri = filePathToUri(filePath)
       if (close) {
-        entry.connection.didClose(uri)
+        await withResourceUse(entry, executionContext, 'textDocument/didClose', { uri }, () => entry.connection.didClose(uri))
         return
       }
       const known = entry.connection.versionOf(uri)
       if (open || known === undefined) {
-        entry.connection.didOpen(uri, entry.languageId, version, text)
+        await withResourceUse(entry, executionContext, 'textDocument/didOpen', { uri, version, text }, () => entry.connection.didOpen(uri, entry.languageId, version, text))
       } else {
-        entry.connection.didChange(uri, version, text)
+        await withResourceUse(entry, executionContext, 'textDocument/didChange', { uri, version, text }, () => entry.connection.didChange(uri, version, text))
       }
     },
     warmServerCount: () => servers.size,

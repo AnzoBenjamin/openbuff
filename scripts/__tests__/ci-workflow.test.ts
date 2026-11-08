@@ -183,26 +183,38 @@ describe('CI project-root guard gate', () => {
     )
   })
 
-  test('build-and-check fails an unreviewed provenance-record diff', () => {
-    // The offline gate proves the record agrees with bun.lock, not that either
-    // matches upstream, so the reviewed record diff is the independent anchor.
-    // The comparison MUST name a base ref: after the shallow checkout the
-    // working tree equals HEAD, so a plain `git diff HEAD` is always empty —
-    // the no-op form of this anchor. The step therefore fetches the base
-    // (PR base branch, or the pushed commit's parent) and diffs by
-    // name-status: a pure ADDITION (the PR that first lands the record, which
-    // is itself its review) passes, any modification or deletion fails.
-    const ciLines = CI_WORKFLOW.split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-    expect(ciLines).toContain(
-      'changes=$(git diff --name-status "$base" HEAD -- scripts/dependency-provenance.json)',
+  test('build-and-check checks append-only provenance over immutable whole-event ranges', () => {
+    const step = CI_WORKFLOW.split(
+      '- name: Check append-only provenance changes and dedicated commits',
+    )[1]!.split('- name: Types declaration guard')[0]!
+    expect(step).toContain(
+      'PROVENANCE_BASE_SHA: ${{ github.event.pull_request.base.sha }}',
     )
-    expect(ciLines).toContain(`if echo "$changes" | grep -qv '^A'; then`)
-    expect(ciLines).toContain(
-      'git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"',
+    expect(step).toContain(
+      'PROVENANCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}',
     )
-    expect(ciLines).toContain('git fetch --no-tags --deepen=1 origin')
+    expect(step).toContain('PROVENANCE_BEFORE_SHA: ${{ github.event.before }}')
+    expect(step).toContain('git fetch --no-tags --unshallow origin')
+    expect(step).toContain(
+      'bun scripts/provenance-change-guard.ts --event pull_request --base "$PROVENANCE_BASE_SHA" --head "$PROVENANCE_HEAD_SHA"',
+    )
+    expect(step).toContain(
+      'bun scripts/provenance-change-guard.ts --event push --before "$PROVENANCE_BEFORE_SHA" --head "$PROVENANCE_HEAD_SHA"',
+    )
+    expect(step).toContain(
+      'PROVENANCE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}',
+    )
+    expect(step).toContain(
+      'git fetch --no-tags origin "refs/heads/$PROVENANCE_DEFAULT_BRANCH"',
+    )
+    expect(step).toContain('--default-base "$default_base"')
+    expect(step).toContain(
+      'if [ "$PROVENANCE_REF_NAME" = "$PROVENANCE_DEFAULT_BRANCH" ]; then',
+    )
+    expect(step).toContain('--initial-history')
+    expect(step).not.toContain('HEAD~1')
+    expect(step).not.toContain('github.base_ref')
+    expect(step).not.toContain('exit 0')
   })
 })
 
@@ -220,9 +232,15 @@ describe('CI bun toolchain alignment', () => {
     // provenance and declaration guards are only valid when both agree.
     // Every manifest declaring a bun engine must declare the CI toolchain;
     // only the root also carries the `packageManager` corepack-style field.
-    const manifests = ['package.json', 'cli/package.json', 'scripts/package.json']
+    const manifests = [
+      'package.json',
+      'cli/package.json',
+      'scripts/package.json',
+    ]
     for (const manifest of manifests) {
-      const parsed = JSON.parse(readFileSync(join(repoRoot, manifest), 'utf8')) as {
+      const parsed = JSON.parse(
+        readFileSync(join(repoRoot, manifest), 'utf8'),
+      ) as {
         engines?: { bun?: string }
         packageManager?: string
       }
@@ -234,9 +252,9 @@ describe('CI bun toolchain alignment', () => {
     }
 
     // Every setup-bun step in the workflow must pin the declared toolchain.
-    const ciVersions = [...CI_WORKFLOW.matchAll(/bun-version:\s*'([^']+)'/g)].map(
-      (match) => match[1]!,
-    )
+    const ciVersions = [
+      ...CI_WORKFLOW.matchAll(/bun-version:\s*'([^']+)'/g),
+    ].map((match) => match[1]!)
     expect(ciVersions.length).toBeGreaterThan(0)
     expect(new Set(ciVersions)).toEqual(new Set(['1.3.5']))
   })

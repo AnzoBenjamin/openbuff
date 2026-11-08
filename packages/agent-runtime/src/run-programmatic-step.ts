@@ -10,6 +10,7 @@ import { getErrorObject, isAbortError } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 
 import { toolNames } from '@codebuff/common/tools/constants'
+import { getAdvertisedExternalToolDefinitions } from './tools/prompts'
 import { executeCustomToolCall, executeToolCall } from './tools/tool-executor'
 import { parseTextWithToolCalls } from './util/parse-tool-calls-from-text'
 import {
@@ -556,6 +557,9 @@ export async function runProgrammaticStep(
     readAuthorizationHashesByPath: {
       ...(agentState.readAuthorizationHashesByPath ?? {}),
     },
+    rawReadAuthorizationHashesByPath: {
+      ...(agentState.rawReadAuthorizationHashesByPath ?? {}),
+    },
     // `projectRoot` is '' only when the caller omitted `fileContext`, and that
     // fails closed rather than widening anchor scoping: an empty projectId
     // makes `hasAuthoritativeReadCapabilityScope` reject every scope, so each
@@ -781,7 +785,8 @@ export async function runProgrammaticStep(
     // any partial output and tool results, but carry the authoritative run
     // termination to the loop and receipt consumers.
     agentState.runOutcome = {
-      termination: params.signal.aborted || isAbortError(error) ? 'cancelled' : 'failed',
+      termination:
+        params.signal.aborted || isAbortError(error) ? 'cancelled' : 'failed',
       cause: { code: 'programmatic_execution_error', message: errorMessage },
     }
     logger.error(
@@ -843,6 +848,9 @@ export async function runProgrammaticStep(
     }
     agentState.readAuthorizationHashesByPath = {
       ...(fileProcessingState.readAuthorizationHashesByPath ?? {}),
+    }
+    agentState.rawReadAuthorizationHashesByPath = {
+      ...(fileProcessingState.rawReadAuthorizationHashesByPath ?? {}),
     }
     agentState.confirmedPostEditAnchorsByPath = {
       ...(fileProcessingState.confirmedPostEditAnchorsByPath ?? {}),
@@ -973,6 +981,25 @@ async function executeSingleToolCall(
     toolResults,
   } = params
 
+  const published = getAdvertisedExternalToolDefinitions(params.tools)
+  const definition = Object.hasOwn(published ?? {}, toolCallToExecute.toolName)
+    ? published![toolCallToExecute.toolName]
+    : Object.hasOwn(
+          params.fileContext.customToolDefinitions ?? {},
+          toolCallToExecute.toolName,
+        )
+      ? params.fileContext.customToolDefinitions[toolCallToExecute.toolName]
+      : undefined
+  const canonicalName =
+    definition?.identity?.kind === 'custom'
+      ? definition.identity.toolName
+      : definition?.identity?.kind === 'mcp'
+        ? `${definition.identity.serverName}/${definition.identity.toolName}`
+        : undefined
+  const declaredNames = [
+    ...getEffectiveAgentToolNames(agentTemplate),
+    ...(agentTemplate.programmaticToolNames ?? []),
+  ]
   const programmaticToolAllowed =
     PROGRAMMATIC_CONTEXT_MANAGEMENT_TOOLS.has(toolCallToExecute.toolName) ||
     getEffectiveAgentToolNames(agentTemplate).includes(
@@ -980,7 +1007,8 @@ async function executeSingleToolCall(
     ) ||
     (agentTemplate.programmaticToolNames ?? []).includes(
       toolCallToExecute.toolName,
-    )
+    ) ||
+    (canonicalName !== undefined && declaredNames.includes(canonicalName))
   if (!programmaticToolAllowed) {
     throw new Error(
       `Programmatic tool ${toolCallToExecute.toolName} is not available for agent ${agentTemplate.id}. ` +
@@ -994,8 +1022,7 @@ async function executeSingleToolCall(
   // P2-T2 slice 1: replay idempotency short-circuit (P2-T2-DESIGN §4c).
   // A journaled tool_result is never re-executed on replay: if this exact
   // tool call already completed before a crash, reuse the recorded result
-  // verbatim in the same shape the normal path produces (latestToolResult =
-  // toolResults[last]?.content) instead of re-running a side-effecting tool.
+  // verbatim as this call's result instead of re-running a side-effecting tool.
   //
   // P2-T2-DESIGN §5 (replay requires reproducible ids): the short-circuit must
   // NOT key on `toolCallId` — it is minted fresh by idGen.uuid() (realIdGen
@@ -1032,7 +1059,7 @@ async function executeSingleToolCall(
       agentState.messageHistory = [...agentState.messageHistory]
       agentState.messageHistory.push(replayedToolMessage)
       toolResults.push(replayedToolMessage)
-      return toolResults[toolResults.length - 1]?.content
+      return replayedToolMessage.content
     }
   }
 
@@ -1088,6 +1115,7 @@ async function executeSingleToolCall(
   const execute = toolNames.includes(toolCallToExecute.toolName as any)
     ? executeToolCall
     : executeCustomToolCall
+  const firstInvocationResult = toolResults.length
   await execute({
     ...params,
     toolName: toolCallToExecute.toolName as any,
@@ -1167,8 +1195,9 @@ async function executeSingleToolCall(
   agentState.messageHistory = [...agentState.messageHistory]
   agentState.messageHistory.push(...toolResultsToAddToMessageHistory)
 
-  // Get the latest tool result
-  const latestToolResult = toolResults[toolResults.length - 1]?.content
+  // Only this invocation can supply its generator or journal result.
+  const latestToolResult = toolResults.slice(firstInvocationResult)
+    .findLast(result => result.toolCallId === toolCallId)?.content
 
   // P2-T2 slice 1: tool_result closes the tool_call boundary; a journaled
   // result is what the replay short-circuit above later reuses.

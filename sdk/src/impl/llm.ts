@@ -34,9 +34,13 @@ import {
   getMaxOutputBytesForModel,
   loadProviderConfigSync,
   resolveConfiguredAgentModelConfig,
-  resolveConfiguredProviderModel,
+  resolveConfiguredProviderModelMetadata,
 } from '../provider-config'
+import { getCapturedProviderConfig } from '../host-config'
+import type { ProviderHostContext } from '../host-config'
 import { refreshChatGptOAuthToken } from '../credentials'
+
+export type LlmHostDeps = Readonly<{ providerContext: ProviderHostContext; getModel?: typeof getModelForRequest }>
 import {
   getProviderContentPolicyFinishError,
   getErrorStatusCode,
@@ -1136,6 +1140,7 @@ export async function* promptAiSdkStream(
       chatGptOAuthRetried?: boolean
       retryBudget?: RequestRetryBudget
     },
+  deps?: LlmHostDeps,
 ): ReturnType<PromptAiSdkStreamFn> {
   const { providerOptions: originalProviderOptions, ...streamParams } = params
 
@@ -1206,7 +1211,7 @@ export async function* promptAiSdkStream(
     })
   }
 
-  const loadedConfig = loadProviderConfigSync()
+  const loadedConfig = deps ? getCapturedProviderConfig(deps.providerContext.snapshot) : loadProviderConfigSync()
   // When the caller's `model` is undefined (e.g. bundled agents whose model
   // is intentionally deferred to openbuff.json routing), resolve the effective
   // primary model from the agentId now so the failover loop below has at least
@@ -1232,6 +1237,7 @@ export async function* promptAiSdkStream(
   const routeContextWindowTokens = resolveModelContextWindow({
     agentId: params.agentId,
     model: effectiveRequestedModel,
+    loadedConfig,
   })
   params.onModelContextResolved?.(routeContextWindowTokens)
 
@@ -1290,7 +1296,7 @@ export async function* promptAiSdkStream(
             // primary and failover would be a no-op (M8.1).
             preferModelParam: failoverIndex > 0,
           }
-          const modelResult = await getModelForRequest(modelParams).catch(
+          const modelResult = await (deps?.getModel ?? getModelForRequest)({ ...modelParams, providerContext: deps?.providerContext }).catch(
             (error) => {
               if (retryBudget.lastError === undefined) throw error
               throw Object.assign(
@@ -1651,7 +1657,7 @@ export async function* promptAiSdkStream(
                   ...params,
                   retryBudget,
                   skipChatGptOAuth: true,
-                })
+                }, deps)
                 return fallbackResult
               }
 
@@ -1677,7 +1683,7 @@ export async function* promptAiSdkStream(
                   !params.chatGptOAuthRetried &&
                   canAdmitRequestAttempt(policy, retryBudget, attemptModel)
                 ) {
-                  const refreshed = await refreshChatGptOAuthToken()
+                  const refreshed = await (deps ? deps.providerContext.credentials.refreshChatGptOAuthToken?.() ?? Promise.resolve(null) : refreshChatGptOAuthToken())
                   if (refreshed) {
                     logger.info(
                       { model: requestedModel },
@@ -1689,7 +1695,7 @@ export async function* promptAiSdkStream(
                       ...params,
                       retryBudget,
                       chatGptOAuthRetried: true,
-                    })
+                    }, deps)
                     return retryResult
                   }
                   logger.warn(
@@ -1706,7 +1712,7 @@ export async function* promptAiSdkStream(
                   ...params,
                   retryBudget,
                   skipChatGptOAuth: true,
-                })
+                }, deps)
                 return fallbackResult
               }
 
@@ -1822,7 +1828,7 @@ export async function* promptAiSdkStream(
           // Runs once per stream and only when tool calls are pending; the
           // check must precede the flush, which drains the pending buffer.
           if (finishReason !== 'length' && pendingToolCallChunks.length > 0) {
-            const configured = resolveConfiguredProviderModel({
+            const configured = resolveConfiguredProviderModelMetadata({
               model: attemptModel,
               loadedConfig,
             })
@@ -2139,6 +2145,7 @@ export async function* promptAiSdkStream(
 
 export async function promptAiSdk(
   params: ParamsOf<PromptAiSdkFn> & RetryExecutionOptions,
+  deps?: LlmHostDeps,
 ): ReturnType<PromptAiSdkFn> {
   const { logger } = params
 
@@ -2168,7 +2175,7 @@ export async function promptAiSdk(
     effectiveModel: effectiveModelSdk,
     contextWindowTokens,
     pricing,
-  } = await getModelForRequest(modelParams)
+  } = await (deps?.getModel ?? getModelForRequest)({ ...modelParams, providerContext: deps?.providerContext })
 
   const providerOptionsWithReasoning = withConfiguredReasoningEffort(
     (params as { providerOptions?: Record<string, JSONObject> })
@@ -2309,6 +2316,7 @@ export async function promptAiSdk(
 
 export async function promptAiSdkStructured<T>(
   params: PromptAiSdkStructuredInput<T> & RetryExecutionOptions,
+  deps?: LlmHostDeps,
 ): PromptAiSdkStructuredOutput<T> {
   const { logger } = params
 
@@ -2337,7 +2345,7 @@ export async function promptAiSdkStructured<T>(
     effectiveModel: effectiveModelStructured,
     contextWindowTokens,
     pricing,
-  } = await getModelForRequest(modelParams)
+  } = await (deps?.getModel ?? getModelForRequest)({ ...modelParams, providerContext: deps?.providerContext })
 
   const providerOptionsWithReasoning = withConfiguredReasoningEffort(
     (params as { providerOptions?: Record<string, JSONObject> })

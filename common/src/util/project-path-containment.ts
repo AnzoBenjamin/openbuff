@@ -392,10 +392,10 @@ async function getOwnedTempComparisonRootsForFileSystem(
  * `startsWith` check would admit it.
  */
 function isInsideTempRoot(target: string, roots: string[]): boolean {
-  return roots.some((root) => {
-    const relative = path.relative(root, target)
-    return relative !== '' && !escapesRoot(root, target)
-  })
+  // A configured temp root can itself be nested under the POSIX fallback.
+  // Reject every root entry before checking containment in another root.
+  if (roots.some((root) => path.relative(root, target) === '')) return false
+  return roots.some((root) => !escapesRoot(root, target))
 }
 
 /**
@@ -617,6 +617,46 @@ let externalReadComparisonRoots: string[] | undefined
 // roots would stay in force while project B's never applied.
 let externalReadRootsOwner: string | undefined
 
+declare const hostReadPolicyBrand: unique symbol
+export type HostReadPolicy = Readonly<{ [hostReadPolicyBrand]: 'host-read-policy' }>
+const hostReadPolicies = new WeakMap<object, Readonly<{
+  projectRoot: string; realProjectRoot: string; roots: readonly string[]; realRoots: readonly string[]
+}>>()
+
+/** Capture one run's read boundary; copied or deserialized objects grant no reads. */
+export function createHostReadPolicy(
+  projectRoot: string,
+  roots: readonly string[],
+  captureRealpath: (root: string) => string = realpathOrLexical,
+): HostReadPolicy {
+  if (!path.isAbsolute(projectRoot) || projectRoot.includes('\0') ||
+    !Array.isArray(roots) || roots.some(root => typeof root !== 'string' || !path.isAbsolute(root) || root.includes('\0')))
+    throw new Error('Host read policy requires captured absolute roots')
+  const policy = Object.freeze(Object.create(null)) as HostReadPolicy
+  const capturedRoots = Object.freeze(normalizeExternalReadRoots(roots))
+  const canonical = (root: string) => {
+    const resolved = captureRealpath(root)
+    if (typeof resolved !== 'string' || !path.isAbsolute(resolved) || resolved.includes('\0'))
+      throw new Error('Host read policy requires absolute canonical roots')
+    return path.resolve(resolved)
+  }
+  hostReadPolicies.set(policy, Object.freeze({ projectRoot: path.resolve(projectRoot),
+    realProjectRoot: canonical(path.resolve(projectRoot)), roots: capturedRoots,
+    realRoots: Object.freeze(capturedRoots.map(canonical)) }))
+  return policy
+}
+
+export function getHostReadRoots(policy: HostReadPolicy): readonly string[] {
+  const state = hostReadPolicies.get(policy)
+  if (!state) throw new Error('Invalid host read policy')
+  return state.roots
+}
+
+function matchesHostReadPolicy(projectRoot: string, policy?: HostReadPolicy): boolean {
+  if (policy === undefined) return true
+  return hostReadPolicies.get(policy)?.projectRoot === path.resolve(projectRoot)
+}
+
 /**
  * Canonical normalization for external read root entries: `path.resolve`,
  * empty/whitespace-only entries dropped, deduped and sorted so the stored value
@@ -810,7 +850,12 @@ export function resetExternalReadRootsForTesting(): void {
  * be a symlink (e.g. a home directory on macOS), so a file's realpath only
  * lands under the dereferenced root.
  */
-function getExternalReadComparisonRoots(): string[] {
+function getExternalReadComparisonRoots(readPolicy?: HostReadPolicy): string[] {
+  if (readPolicy !== undefined) {
+    const state = hostReadPolicies.get(readPolicy)
+    if (!state || state.roots.some((root, index) => realpathOrLexical(root) !== state.realRoots[index])) return []
+    return [...new Set([...state.roots, ...state.realRoots])]
+  }
   if (!externalReadComparisonRoots) {
     const roots = getExternalReadRoots()
     externalReadComparisonRoots = [
@@ -828,10 +873,18 @@ function getExternalReadComparisonRoots(): string[] {
  */
 async function getExternalReadComparisonRootsForFileSystem(
   fileSystem: CodebuffFileSystem,
+  readPolicy?: HostReadPolicy,
 ): Promise<string[]> {
-  const roots = getExternalReadRoots()
+  if (readPolicy !== undefined) {
+    const state = hostReadPolicies.get(readPolicy)
+    if (!state) return []
+    const current = await Promise.all(state.roots.map(root => realpathOrLexicalForFileSystem(root, fileSystem)))
+    if (current.some((root, index) => root !== state.realRoots[index])) return []
+    return [...new Set([...state.roots, ...state.realRoots])]
+  }
+  const roots = readPolicy === undefined ? getExternalReadRoots() : [...getHostReadRoots(readPolicy)]
   const realRoots = await Promise.all(
-    roots.map((root) => realpathCachedForFileSystemRoot(root, fileSystem)),
+    roots.map((root) => readPolicy === undefined ? realpathCachedForFileSystemRoot(root, fileSystem) : realpathOrLexicalForFileSystem(root, fileSystem)),
   )
   return [...new Set([...roots, ...realRoots])]
 }
@@ -872,8 +925,8 @@ function isInsideExternalReadRoot(target: string, roots: string[]): boolean {
  * too closes the symlink escape — a file inside an allowlisted root that
  * points at `/etc/shadow`.
  */
-function resolveExternalReadRealPath(fullPath: string): string | null {
-  const roots = getExternalReadComparisonRoots()
+function resolveExternalReadRealPath(fullPath: string, readPolicy?: HostReadPolicy): string | null {
+  const roots = getExternalReadComparisonRoots(readPolicy)
   if (!isInsideExternalReadRoot(fullPath, roots)) return null
 
   const realFullPath = realpathOrLexical(fullPath)
@@ -916,8 +969,9 @@ function resolveExternalReadRealPath(fullPath: string): string | null {
 async function resolveExternalReadRealPathForFileSystem(
   fullPath: string,
   fileSystem: CodebuffFileSystem,
+  readPolicy?: HostReadPolicy,
 ): Promise<string | null> {
-  const roots = await getExternalReadComparisonRootsForFileSystem(fileSystem)
+  const roots = await getExternalReadComparisonRootsForFileSystem(fileSystem, readPolicy)
   if (!isInsideExternalReadRoot(fullPath, roots)) return null
 
   // Resolved once, exactly like the sync helper: the validated string is the
@@ -986,8 +1040,9 @@ export function isExternalReadPath(input: string): boolean {
  */
 function externalReadContainedPath(
   fullPath: string,
+  readPolicy?: HostReadPolicy,
 ): ContainedProjectPath | null {
-  const realFullPath = resolveExternalReadRealPath(fullPath)
+  const realFullPath = resolveExternalReadRealPath(fullPath, readPolicy)
   if (realFullPath === null) return null
   return {
     fullPath,
@@ -1005,10 +1060,12 @@ function externalReadContainedPath(
 async function externalReadContainedPathForFileSystem(
   fullPath: string,
   fileSystem: CodebuffFileSystem,
+  readPolicy?: HostReadPolicy,
 ): Promise<ContainedProjectPath | null> {
   const realFullPath = await resolveExternalReadRealPathForFileSystem(
     fullPath,
     fileSystem,
+    readPolicy,
   )
   if (realFullPath === null) return null
   return {
@@ -1156,13 +1213,16 @@ export async function resolveProjectPathForFileSystem(
 export function resolveProjectPathForRead(
   projectRoot: string,
   input: string,
+  readPolicy?: HostReadPolicy,
 ): ContainedProjectPath | null {
+  if (!matchesHostReadPolicy(projectRoot, readPolicy)) return null
+  if (readPolicy !== undefined && realpathOrLexical(path.resolve(projectRoot)) !== hostReadPolicies.get(readPolicy)!.realProjectRoot) return null
   const contained = resolveProjectPath(projectRoot, input)
   if (contained !== null) return contained
   if (!input || hasTraversalSegment(input)) return null
   // Anchored on the project root exactly like the owned-temp fallback, so a
   // relative input never depends on `process.cwd()`.
-  return externalReadContainedPath(resolveAgainstRoot(projectRoot, input))
+  return externalReadContainedPath(resolveAgainstRoot(projectRoot, input), readPolicy)
 }
 
 /**
@@ -1175,7 +1235,10 @@ export async function resolveProjectPathForFileSystemRead(
   projectRoot: string,
   input: string,
   fileSystem: CodebuffFileSystem,
+  readPolicy: HostReadPolicy | undefined = fileSystem.hostReadPolicy,
 ): Promise<ContainedProjectPath | null> {
+  if (!matchesHostReadPolicy(projectRoot, readPolicy)) return null
+  if (readPolicy !== undefined && await realpathOrLexicalForFileSystem(path.resolve(projectRoot), fileSystem) !== hostReadPolicies.get(readPolicy)!.realProjectRoot) return null
   const contained = await resolveProjectPathForFileSystem(
     projectRoot,
     input,
@@ -1186,6 +1249,7 @@ export async function resolveProjectPathForFileSystemRead(
   return externalReadContainedPathForFileSystem(
     resolveAgainstRoot(projectRoot, input),
     fileSystem,
+    readPolicy,
   )
 }
 

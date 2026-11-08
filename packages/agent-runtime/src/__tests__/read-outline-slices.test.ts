@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'bun:test'
 import { handleReadOutline } from '../tools/handlers/tool/read-outline'
 import { extractSlices } from '../structural-read'
-import { decodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
+import {
+  decodeReadCapabilityToken,
+  encodeReadCapabilityToken,
+  readCapabilityMatchesScope,
+} from '@codebuff/common/util/content-hash'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 describe('read_outline handler', () => {
   it('returns outline of exports, imports, functions, classes, and types', async () => {
@@ -86,11 +94,32 @@ const myArrow = (y: string) => {
 describe('symbol slices', () => {
   it('covers a contiguous preceding documentation block in content and capability', async () => {
     const content = '/** doc */\nexport function greet() {\n  return 1\n}\n'
-    const slices = await extractSlices(content, 'src/file.ts', ['greet'], 5, {
+    const document = captureTextDocument(content)
+    const scope = {
       projectId: '/repo',
       path: 'src/file.ts',
       runId: 'symbol-slice-test',
+    }
+    const sourceReadCapability = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: document.maxCapabilityLine,
+      hash: document.observationHash,
+      scope,
+      rawBasis: getRawReadBasis(
+        document,
+        1,
+        document.maxCapabilityLine,
+        'whole',
+      ),
     })
+    const slices = await extractSlices(
+      content,
+      'src/file.ts',
+      ['greet'],
+      5,
+      scope,
+      sourceReadCapability,
+    )
 
     expect(slices).toHaveLength(1)
     expect(slices[0]).toMatchObject({
@@ -103,6 +132,9 @@ describe('symbol slices', () => {
     if (typeof decoded !== 'string') {
       expect(decoded.startLine).toBe(1)
       expect(decoded.endLine).toBe(4)
+      expect(decoded.tokenVersion).toBe('v4')
+      expect(readCapabilityMatchesScope(decoded, scope)).toBe(true)
+      expect(decoded.rawBasis).toEqual(getRawReadBasis(document, 1, 4, 'lines'))
     }
   })
 })

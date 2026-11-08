@@ -618,7 +618,7 @@ describe('runProgrammaticStep', () => {
             const toolResult: ToolMessage = {
               role: 'tool',
               toolName: 'find_files',
-              toolCallId: 'find-files-call-id',
+              toolCallId: options.toolCallId ?? 'find-files-call-id',
               content: jsonToolResult({
                 files: [
                   { path: 'src/auth.ts', relevance: 0.9 },
@@ -836,7 +836,7 @@ describe('runProgrammaticStep', () => {
           const toolResult: ToolMessage = {
             role: 'tool',
             toolName,
-            toolCallId: `${toolName}-call-id`,
+            toolCallId: options.toolCallId ?? `${toolName}-call-id`,
             content: [
               {
                 type: 'json',
@@ -964,7 +964,7 @@ describe('runProgrammaticStep', () => {
             options.toolResults.push({
               role: 'tool',
               toolName: 'read_files',
-              toolCallId: 'test-id',
+              toolCallId: options.toolCallId ?? 'test-id',
               content: [
                 {
                   type: 'json',
@@ -984,6 +984,96 @@ describe('runProgrammaticStep', () => {
           value: 'file content',
         },
       ])
+    })
+  })
+
+
+  describe('current invocation result ownership', () => {
+    it.each(['absent', 'foreign'] as const)('does not return or journal a preceding result when the current result is %s', async mode => {
+      const first = jsonToolResult({ marker: 'preceding-result' })
+      const events: Parameters<NonNullable<typeof mockParams.journalWriter>['append']>[1][] = []
+      mockParams.journalWriter = { append: (_runId, event) => { events.push(event) } }
+      mockTemplate.toolNames = ['read_files', 'code_search']
+      let current: ToolResultOutput[] | undefined
+      mockTemplate.handleSteps = () => (function* () {
+        yield { toolName: 'read_files', input: { paths: ['test.txt'] } }
+        current = (yield { toolName: 'code_search', input: { pattern: 'marker' } }).toolResult
+        yield 'STEP'
+      })() as StepGenerator
+      executeToolCallSpy.mockImplementation(async options => {
+        if (options.toolName === 'read_files') {
+          options.toolResults.push({ role: 'tool', toolName: options.toolName,
+            toolCallId: options.toolCallId!, content: first })
+        } else if (mode === 'foreign') {
+          options.toolResults.push({ role: 'tool', toolName: options.toolName,
+            toolCallId: 'foreign-call', content: jsonToolResult({ marker: 'foreign-result' }) })
+        }
+      })
+      const result = await runProgrammaticStep(mockParams)
+      expect(result.endTurn).toBe(false)
+      expect(current).toEqual([])
+      expect(events.filter(event => event.eventType === 'tool_result').map(event => event.payload))
+        .toEqual([{ toolName: 'read_files', result: first }, { toolName: 'code_search', result: null }])
+      const context = result.agentState.messageHistory
+        .filter(message => message.role === 'user')
+        .flatMap(message => message.content)
+        .filter(part => part.type === 'text' && part.text.includes('<programmatic_tool_result>'))
+      expect(JSON.stringify(context)).toContain('Tool: read_files')
+      expect(JSON.stringify(context)).toContain('preceding-result')
+      expect(JSON.stringify(context)).not.toContain('Tool: code_search')
+      expect(JSON.stringify(context)).not.toContain('foreign-result')
+    })
+
+    it.each([
+      ['missing', undefined], ['missing', true],
+      ['schema-invalid', undefined], ['schema-invalid', true],
+    ] as const)('retains the current %s external refusal with includeToolCall=%s', async (mode, includeToolCall) => {
+      const name = 'fixture_echo'
+      const first = jsonToolResult({ marker: 'preceding-result' })
+      const events: Parameters<NonNullable<typeof mockParams.journalWriter>['append']>[1][] = []
+      const requestToolCall = mock(async () => ({ output: jsonToolResult({ marker: 'unexpected-dispatch' }) }))
+      mockParams.journalWriter = { append: (_runId, event) => { events.push(event) } }
+      mockParams.requestToolCall = requestToolCall
+      mockParams.fileContext = { ...mockFileContext, customToolDefinitions: mode === 'missing' ? {} : {
+        [name]: { description: 'Validation refusal fixture', endsAgentStep: false,
+          inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] } },
+      } }
+      mockTemplate.toolNames = ['read_files', name]
+      let current: ToolResultOutput[] | undefined
+      mockTemplate.handleSteps = () => (function* () {
+        yield { toolName: 'read_files', input: { paths: ['test.txt'] } }
+        current = (yield { toolName: name, input: {},
+          ...(includeToolCall === true ? { includeToolCall: true } : {}) }).toolResult
+        yield 'STEP'
+      })() as StepGenerator
+      executeToolCallSpy.mockImplementation(async options => {
+        options.toolResults.push({ role: 'tool', toolName: options.toolName,
+          toolCallId: options.toolCallId!, content: first })
+      })
+      const result = await runProgrammaticStep(mockParams)
+      expect(result.endTurn).toBe(false)
+      expect(requestToolCall).not.toHaveBeenCalled()
+      expect(current?.[0]).toMatchObject({ type: 'json', value: { errorMessage: expect.any(String) } })
+      if (mode === 'missing') expect(current).toEqual(jsonToolResult({ errorMessage: `Tool ${name} not found` }))
+      expect(JSON.stringify(current)).not.toContain('preceding-result')
+      const resultEvents = events.filter(event => event.eventType === 'tool_result')
+      expect(resultEvents.map(event => event.payload)).toEqual([
+        { toolName: 'read_files', result: first }, { toolName: name, result: current },
+      ])
+      if (includeToolCall) {
+        expect(mockAgentState.messageHistory.filter(message => message.role === 'tool'))
+          .toContainEqual(expect.objectContaining({ toolName: name, content: current,
+            toolCallId: resultEvents[1]!.correlation }))
+      } else {
+        const context = mockAgentState.messageHistory
+          .filter(message => message.role === 'user')
+          .flatMap(message => message.content)
+          .filter(part => part.type === 'text' && part.text.includes(`Tool: ${name}`))
+        expect(context).toHaveLength(1)
+        expect(JSON.stringify(context)).toContain('errorMessage')
+        expect(JSON.stringify(context)).not.toContain('preceding-result')
+      }
+      expect(mockAgentState.actionOutcomes).toContainEqual(expect.objectContaining({ toolName: name, outcome: 'refused' }))
     })
   })
 

@@ -4,10 +4,19 @@ import {
   decodeReadCapabilityToken,
   getContentHash,
   getExactContentHash,
+  getObservationContentHash,
   normalizeLineEndings,
   readCapabilityMatchesScope,
   type ReadCapabilityScope,
 } from '../../util/content-hash'
+import {
+  rawReadBasisV1Schema,
+  rawReadBasesMatch,
+} from '../../util/raw-read-basis'
+import {
+  captureTextDocument,
+  reanchorRawReadCapability,
+} from '../../util/byte-text'
 
 export const FILESYSTEM_RESULT_CONTENT_MAX_BYTES = 10 * 1024 * 1024
 export const FILESYSTEM_RESULT_AGGREGATE_CONTENT_MAX_BYTES = 20 * 1024 * 1024
@@ -132,7 +141,7 @@ const fileCapabilityBaseV1Schema = z.object({
     .string()
     .min(1)
     .describe(
-      'Fresh opaque read capability for the snapshot. Active cap.v3 tokens are authenticated and bound to the issuing project, path, and run; copy them verbatim only to the matching edit target.',
+      'Fresh opaque read capability for the snapshot. Active cap.v4 tokens are authenticated and bound to the issuing project, path, and run; copy them verbatim only to the matching edit target.',
     ),
   snapshot: fileSnapshotV1Schema,
 })
@@ -169,6 +178,7 @@ export const readFilesEditAnchorSchema = z.object({
   endLine: z.number().int().positive(),
   contentHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
   readCapability: z.string().min(1),
+  rawBasis: rawReadBasisV1Schema.optional(),
 })
 
 export const fileActionKindV1Schema = z.enum([
@@ -271,7 +281,7 @@ export const fileMutationActionV1Schema = z
         value.editAnchor.endLine !==
           normalizeLineEndings(value.afterContent ?? '').split('\n').length ||
         value.editAnchor.contentHash !==
-          getContentHash(value.afterContent ?? ''))
+          getObservationContentHash(value.afterContent ?? ''))
     ) {
       ctx.addIssue({
         code: 'custom',
@@ -617,6 +627,9 @@ const readFilesFileItemSchema = z
     content: z.string().optional(),
     contentOmittedForLength: z.literal(true).optional(),
     complete: z.boolean(),
+    metadataComplete: z.boolean().optional(),
+    /** Complete raw source on the host callback channel; omit before model rendering. */
+    rawSourceContent: z.string().optional(),
     template: z.boolean(),
     editAnchor: readFilesEditAnchorSchema.optional(),
     referencedBy: readReferencedBySchema.optional(),
@@ -639,6 +652,23 @@ const readFilesFileItemSchema = z
     (value) => value.complete || value.editAnchor === undefined,
     'partial file results cannot expose edit capabilities',
   )
+  .superRefine((value, ctx) => {
+    if (value.rawSourceContent === undefined) return
+    const basis = value.editAnchor?.rawBasis
+    if (
+      !value.complete ||
+      value.metadataComplete !== true ||
+      !basis ||
+      basis.scope !== 'whole' ||
+      basis.rawHash !== getExactContentHash(value.rawSourceContent) ||
+      basis.documentBytes !== Buffer.byteLength(value.rawSourceContent)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Raw source requires a complete matching whole-byte basis',
+      })
+    }
+  })
 
 const readFilesRangeItemSchema = z
   .object({
@@ -654,6 +684,7 @@ const readFilesRangeItemSchema = z
     endLine: z.number().int().positive(),
     totalLines: z.number().int().nonnegative(),
     complete: z.boolean(),
+    metadataComplete: z.boolean().optional(),
     editAnchor: readFilesEditAnchorSchema.optional(),
     referencedBy: readReferencedBySchema.optional(),
     truncation: z.object({ reason: z.literal('character_limit') }).optional(),
@@ -1486,11 +1517,31 @@ export function reconcileFileMutationResultV1({
         }
         const capability = matchingCapabilities[0]!
         const decoded = decodeReadCapabilityToken(capability.token)
-        if (typeof decoded === 'string') continue
+        if (
+          typeof decoded === 'string' ||
+          decoded.tokenVersion !== 'v4' ||
+          decoded.rawBasis?.scope !== 'whole' ||
+          !rawReadBasesMatch(editAnchor.rawBasis, decoded.rawBasis)
+        )
+          continue
+
+        let document
+        try {
+          document = captureTextDocument(afterContent)
+        } catch {
+          continue
+        }
+        if (
+          !reanchorRawReadCapability({
+            content: document.rawText,
+            capability: decoded,
+          }).ok
+        )
+          continue
 
         const targetPath = receiptAction.destinationPath ?? receiptAction.path
-        const normalizedHash = getContentHash(afterContent)
-        const endLine = normalizeLineEndings(afterContent).split('\n').length
+        const normalizedHash = document.observationHash
+        const endLine = document.maxCapabilityLine
         const canonicalProject = capabilityScope.projectId
           .replaceAll('\\', '/')
           .replace(/\/+$/, '')

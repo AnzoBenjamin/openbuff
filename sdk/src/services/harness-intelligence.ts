@@ -2,7 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { spawn } from 'node:child_process'
+import { runToolchainNode, ToolchainExecutionError } from './toolchain-execution'
+import type { ToolchainExecutionContext } from './toolchain-execution'
 
 import {
   resolveProjectPath,
@@ -541,22 +542,9 @@ const toolVersionTimeoutMs = 3_000
 /** Upper bound on bytes retained from one probe's stdout/stderr. */
 const toolVersionMaxBytes = 64 * 1_024
 
-/**
- * Production spawn for the `--version` probe.
- *
- * Node's `ChildProcess` is structurally wider than `ToolProbeChild`, so the
- * handle is narrowed rather than cast: a missing `kill` or a pipe absent from
- * the narrowed shape degrades to a no-op instead of throwing at the seam.
- */
-const defaultToolProbeSpawn: ToolProbeSpawn = (command, args) => {
-  const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'pipe'] })
-  return {
-    stdout: child.stdout ?? undefined,
-    stderr: child.stderr ?? undefined,
-    onError: (listener) => child.on('error', listener),
-    onClose: (listener) => child.on('close', listener),
-    kill: (signal) => child.kill(signal),
-  }
+/** Unbound callers cannot launch probes; production uses the captured adapter. */
+const defaultToolProbeSpawn: ToolProbeSpawn = () => {
+  throw new ToolchainExecutionError({ ok: false, reason: 'unavailable', cause: 'Tool probe execution context is unavailable.' })
 }
 
 let toolProbeSpawn: ToolProbeSpawn = defaultToolProbeSpawn
@@ -720,6 +708,7 @@ let toolsCache: ToolProbeCacheEntry | undefined
 /** Drop the cached tool-probe record (tests; toolchain installs in long runs). */
 export function clearHarnessToolsCache(): void {
   toolsCache = undefined
+  capturedToolProbes = new WeakMap()
 }
 
 /**
@@ -751,8 +740,11 @@ function ownsToolProbeSlot(snapshot: object): boolean {
  */
 async function probeToolsAsync(
   signal?: AbortSignal,
+  executionContext?: ToolchainExecutionContext,
 ): Promise<EnvironmentInspection['tools']> {
   throwIfAborted(signal)
+  if (executionContext) return probeCapturedTools(executionContext, signal)
+  if (toolProbeSpawn === defaultToolProbeSpawn) throw new ToolchainExecutionError({ ok: false, reason: 'unavailable', cause: 'Tool probe execution context is unavailable.' })
   const cached = toolsCache
   if (cached) {
     // The shared group is never cancellable on one caller's behalf — another
@@ -1355,9 +1347,51 @@ function trackInspectPhase<T>(
   )
 }
 
+let capturedToolProbes = new WeakMap<object, {
+  pending?: Promise<EnvironmentInspection['tools']>
+  result?: EnvironmentInspection['tools']
+  expiresAt: number
+}>()
+
+async function probeCapturedTools(context: ToolchainExecutionContext, signal?: AbortSignal): Promise<EnvironmentInspection['tools']> {
+  throwIfAborted(signal)
+  // Coalesce only the same immutable context object. A changed profile, root,
+  // spawner, or request context cannot adopt another context's cached result.
+  // Cross-request sharing requires a separately registered resource lifetime.
+  const cached = capturedToolProbes.get(context)
+  if (cached?.result && cached.expiresAt > Date.now()) return cached.result
+  let pending = cached?.pending
+  if (!pending) {
+    const entry: NonNullable<ReturnType<typeof capturedToolProbes.get>> = { expiresAt: 0 }
+    const table = [
+      ['git', 'git'], ['bun', 'bun'], ['node', 'node'], ['python', 'python3'],
+      ['rust', 'rustc'], ['go', 'go'], ['k6', 'k6'], ['cargo', 'cargo'],
+      ['uv', 'uv'], ['poetry', 'poetry'], ['maven', 'mvn'], ['gradle', 'gradle'],
+      ['dotnet', 'dotnet'], ['blender', 'blender'],
+    ] as const
+    pending = Promise.all(table.map(async ([key, command]) => {
+      const result = await runToolchainNode({ context, branchId: `version.${command}`,
+        argv: [command, command === 'go' ? 'version' : '--version'], cwd: context.projectRoot,
+        timeoutMs: toolVersionTimeoutMs, maxBufferBytes: toolVersionMaxBytes })
+      const version = (result.stdout || result.stderr).trim().split('\n')[0]
+      return [key, { available: result.exitCode === 0, ...(result.exitCode === 0 && version ? { version } : {}) }] as const
+    })).then(entries => Object.freeze(Object.fromEntries(entries.map(([key, value]) => [key, Object.freeze(value)]))) as EnvironmentInspection['tools'])
+    entry.pending = pending
+    capturedToolProbes.set(context, entry)
+    void pending.then(result => {
+      if (capturedToolProbes.get(context) !== entry) return
+      entry.result = result
+      entry.expiresAt = Date.now() + toolsCacheTtlMs
+      delete entry.pending
+    }, () => { if (capturedToolProbes.get(context) === entry) capturedToolProbes.delete(context) })
+  }
+  return raceAbort(pending, signal)
+}
+
 export async function inspectHarnessEnvironment(
   cwd: string,
   signal?: AbortSignal,
+  executionContext?: ToolchainExecutionContext,
 ): Promise<EnvironmentInspection> {
   throwIfAborted(signal)
   // Discovery and the tool probes are independent, so they run together: a
@@ -1366,7 +1400,7 @@ export async function inspectHarnessEnvironment(
   // in the phase log instead of only as summed latency.
   const [discovery, tools] = await Promise.all([
     trackInspectPhase('discovery', discoverWorkspacesAsync(cwd, signal)),
-    trackInspectPhase('toolProbes', probeToolsAsync(signal)),
+    trackInspectPhase('toolProbes', probeToolsAsync(signal, executionContext)),
   ])
   const { root, manifests, lockfiles, workspaces } = discovery
   const packageManager = workspaces.find(

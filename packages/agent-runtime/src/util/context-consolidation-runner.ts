@@ -106,6 +106,12 @@ export function maybeRunBackgroundConsolidation(
         )
         const result = await executeSubagent({
           ...extractSubagentContextParams(params),
+          executionIdentity: undefined,
+          executionHostOperation: agentState.runId ? {
+            actor: { runId: agentState.runId, rootRunId: agentState.ancestorRunIds[0] ?? agentState.runId,
+              agentId: agentState.agentId },
+            purpose: 'snapshot-consolidation',
+          } : undefined,
           agentState: childAgentState,
           agentTemplate: template,
           parentAgentState: agentState,

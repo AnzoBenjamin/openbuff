@@ -448,6 +448,24 @@ describe('/index scip', () => {
     expect(result).not.toContain('adopted')
   })
 
+  test('forwards the execution context and preserves policy refusal without a PATH install hint', async () => {
+    const { deps } = createDeps()
+    const context = { execution: {} } as NonNullable<import('../index-command').IndexCommandDeps['executionContext']>
+    let received: unknown
+    const result = await handleIndexCommand('scip', { ...deps, executionContext: context,
+      runScipIngest: async (_root, options) => {
+        received = options?.executionContext
+        return { results: [{ indexer: 'typescript', status: 'unavailable',
+          error: 'execution-denied: policy rejected launch',
+          executionRefusal: { ok: false, reason: 'denied', cause: 'policy rejected launch' },
+        }], mergedTotal: 0 }
+      },
+    })
+    expect(received).toBe(context)
+    expect(result).toContain('execution-denied: policy rejected launch')
+    expect(result).not.toContain('PATH')
+  })
+
   test('renders a runner failure fail-open instead of throwing', async () => {
     const { deps } = createDeps()
     const runScipIngest = async () => {

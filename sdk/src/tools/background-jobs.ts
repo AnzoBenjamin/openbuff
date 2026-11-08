@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'child_process'
+import { type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -10,6 +10,17 @@ import {
   jobRegistry,
   type JobOwner,
 } from '@codebuff/common/util/job-registry'
+import {
+  dispatchNodeLaunch,
+  executionRefusal,
+  ExecutionRefusalError,
+  refusalForSignal,
+  scheduleNodeDeadline,
+  trustedNodeSpawn,
+} from '../services/execution-launch'
+
+import type { AdmittedNodeLaunch, NodeDispatchHandle } from '../services/execution-launch'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 
 /**
  * Thin ProcessJobAdapter over the shared `jobRegistry` core (M2). The
@@ -53,7 +64,8 @@ export function isProcessTreeAlive(child: Pick<ChildProcess, 'pid'>): boolean {
 }
 
 export function terminateProcessTree(
-  child: Pick<ChildProcess, 'pid' | 'kill'>,
+  child: Pick<ChildProcess, 'pid' | 'kill'> &
+    Partial<Pick<ChildProcess, 'exitCode' | 'signalCode'>>,
   signal: 'SIGTERM' | 'SIGKILL',
 ): boolean {
   if (!child.pid) return false
@@ -66,6 +78,9 @@ export function terminateProcessTree(
       // available (for example, recovered legacy jobs).
     }
   }
+  // The group may still contain descendants after the parent exits. Preserve
+  // that attempt, but do not trust a closed child's kill() return value.
+  if (child.exitCode != null || child.signalCode != null) return false
   try {
     return child.kill(signal)
   } catch {
@@ -77,6 +92,9 @@ export interface BackgroundJob {
   jobId: string
   command: string
   child: ChildProcess
+  /** In-process launch capability/state; never reconstructed from metadata. */
+  nodeLaunch?: NodeDispatchHandle
+  executionContext?: ExecutionAdapterContext
   logFile: string
   metadataFile: string
   /**
@@ -673,17 +691,23 @@ function isUsableRecoveredLogFile(logFile: string): boolean {
  */
 export function startBackgroundJob(params: {
   command: string
-  shell: string
-  shellArgs: string[]
-  cwd: string
-  env: NodeJS.ProcessEnv
+  /** Legacy descriptive inputs carry no launch authority. */
+  shell?: string
+  shellArgs?: readonly string[]
+  cwd?: string
+  env?: NodeJS.ProcessEnv
+  admittedLaunch?: AdmittedNodeLaunch
+  executionContext?: ExecutionAdapterContext
   owner?: BackgroundJob['owner']
   /** Project root for settlement dirty-delta attribution (in-memory only). */
   projectRoot?: string
   /** Pre-start dirty paths snapshot; omitted when git unavailable. */
   dirtyBeforePaths?: string[]
 }): BackgroundJob {
-  const { command, shell, shellArgs, cwd, env } = params
+  const { command } = params
+  if (!params.admittedLaunch) {
+    throw new ExecutionRefusalError(executionRefusal('unavailable', 'Admitted background execution is unavailable'))
+  }
   const owner = params.owner ?? UNKNOWN_JOB_OWNER
   sweepOrphanedJobFiles()
   // Bound the Map at every spawn to the jobs settled within the TTL window,
@@ -708,17 +732,23 @@ export function startBackgroundJob(params: {
   // foreign/pre-existing file this process must never delete.
   let logFileCreatedByThisSpawn = false
   let child: ChildProcess
+  let nodeLaunch: NodeDispatchHandle
   try {
     rejectIfSymlink(logFile)
     rejectIfSymlink(metadataFile)
     outFd = safeCreateJobLogFile(logFile)
     logFileCreatedByThisSpawn = true
-    child = spawn(shell, [...shellArgs, command], {
-      cwd,
-      env,
-      stdio: ['ignore', outFd, outFd],
-      detached: os.platform() !== 'win32',
-    })
+    const logFd = outFd
+    const spawn = trustedNodeSpawn(params.executionContext)
+    const dispatched = dispatchNodeLaunch(params.admittedLaunch, (input) => spawn(input.executable, input.argv, {
+      cwd: input.cwd, env: input.env, signal: input.resourceSignal,
+      stdio: ['ignore', logFd, logFd],
+      detached: input.adapterOptions.detached === true,
+      shell: false, windowsHide: false,
+    }), { terminate: terminateProcessTree })
+    if (!dispatched.ok) throw new ExecutionRefusalError(dispatched)
+    nodeLaunch = dispatched.value
+    child = nodeLaunch.child
   } catch (error) {
     // If safeCreateJobLogFile succeeded but spawn threw, the already-opened
     // log fd would otherwise leak. Close it best-effort before folding the
@@ -755,6 +785,8 @@ export function startBackgroundJob(params: {
     jobId,
     command,
     child,
+    nodeLaunch,
+    executionContext: params.executionContext,
     logFile,
     metadataFile,
     status: 'running',
@@ -779,6 +811,13 @@ export function startBackgroundJob(params: {
   jobRegistry.start(jobId)
 
   let quotaExceeded = false
+  let resourceDeadlineExpired = false
+  let cancelLifetimeTimer: (() => void) | undefined
+  const resourceSignal = nodeLaunch.input.resourceSignal
+  const onResourceAbort = () => {
+    resourceDeadlineExpired ||= refusalForSignal(resourceSignal).reason === 'deadline-exhausted'
+    killBackgroundJob(jobId, resourceDeadlineExpired ? 'SIGKILL' : 'SIGTERM')
+  }
   const logQuotaTimer = setInterval(() => {
     try {
       // Job-owned drainer: drain newly-written log bytes into the registry as
@@ -820,6 +859,8 @@ export function startBackgroundJob(params: {
 
   const closeLog = () => {
     clearInterval(logQuotaTimer)
+    cancelLifetimeTimer?.()
+    resourceSignal.removeEventListener('abort', onResourceAbort)
     try {
       fs.closeSync(outFd)
     } catch {
@@ -828,6 +869,7 @@ export function startBackgroundJob(params: {
   }
   writeBackgroundJobMetadata(job)
   child.on('exit', (code) => {
+    resourceDeadlineExpired ||= nodeLaunch.resourceRefusal()?.reason === 'deadline-exhausted'
     // A prior killBackgroundJob call folds the registry into the NON-terminal
     // 'stopping' state when the signal is delivered (M2-T4, Fix 3) and only
     // THIS exit handler settles 'stopped'. SIGTERM produces a non-zero exit
@@ -836,7 +878,7 @@ export function startBackgroundJob(params: {
     // Quota termination still wins (the job already settled as 'error').
     const intentionallyStopped =
       job.status === 'stopped' || job.status === 'stopping'
-    const status = quotaExceeded
+    const status = quotaExceeded || resourceDeadlineExpired
       ? 'error'
       : intentionallyStopped
         ? 'stopped'
@@ -863,10 +905,19 @@ export function startBackgroundJob(params: {
     // Terminal lifecycle is emitted exactly once per job: the registry folds
     // the first transition in and ignores this one when kill/quota already
     // settled the job, keeping the final state/exit code servable after exit.
-    settleBackgroundJob(job, status, code)
+    settleBackgroundJob(job, status, code, resourceDeadlineExpired ? 'Background resource deadline exhausted' : undefined)
     closeLog()
   })
   child.on('error', (error) => {
+    const refusal = nodeLaunch.resourceRefusal()
+    if (refusal && nodeLaunch.facts().profile.active !== null &&
+      (refusal.reason === 'cancelled' || refusal.reason === 'deadline-exhausted')) {
+      // Native AbortError reports cancellation, not an observed exit. Keep
+      // the job stopping and its log drainer alive until the exit handler.
+      resourceDeadlineExpired ||= refusal.reason === 'deadline-exhausted'
+      killBackgroundJob(jobId, resourceDeadlineExpired ? 'SIGKILL' : 'SIGTERM')
+      return
+    }
     // Final drain + carry flush before settle (same ordering as exit above).
     readNewJobOutput(job)
     flushJobLineCarry(job)
@@ -875,6 +926,16 @@ export function startBackgroundJob(params: {
   })
 
   jobs.set(jobId, job)
+  if (nodeLaunch.input.resourceRemainingMs !== null) {
+    cancelLifetimeTimer = scheduleNodeDeadline(nodeLaunch.remainingResourceMs, () => {
+      const refusal = nodeLaunch.resourceRefusal() ?? (resourceSignal.aborted
+        ? refusalForSignal(resourceSignal) : executionRefusal('deadline-exhausted', 'Background resource deadline exhausted'))
+      resourceDeadlineExpired ||= refusal.reason === 'deadline-exhausted'
+      killBackgroundJob(jobId, 'SIGKILL')
+    })
+  }
+  resourceSignal.addEventListener('abort', onResourceAbort, { once: true })
+  if (resourceSignal.aborted) onResourceAbort()
   return job
 }
 

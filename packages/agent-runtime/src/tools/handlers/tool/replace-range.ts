@@ -1,6 +1,5 @@
 import {
   formatUnsafeToolPathError,
-  grantWholeFileReadAuthorization,
   hasWholeFileReadAuthorization,
   isWholeFileReadAuthorizationFresh,
   normalizeToolPath,
@@ -14,6 +13,14 @@ import {
   decodeReadCapabilityToken,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
+import type { ReplacementReadCapability } from '@codebuff/common/util/content-hash'
+import {
+  captureTextDocument,
+  describeRawReadFailure,
+  reanchorRawReadCapability,
+  spliceDocumentRange,
+} from '@codebuff/common/util/byte-text'
+import { MAX_TRANSACTION_FILE_BYTES } from '@codebuff/common/actions'
 
 import { resolveOccurrenceRangeInCapabilityRange } from '../../../structural-read'
 
@@ -54,6 +61,7 @@ export const handleReplaceRange = (async (params) => {
   const recoveryEndLine =
     toolCall.input.endLine ?? toolCall.input.capabilityEndLine
   let hasBoundReadCapability = false
+  let boundCapability: ReplacementReadCapability | undefined
   // `readCapability` is a required `min(1)` string once the call passes
   // `replaceRangeParams`, so this guard only exists for pre-schema/legacy call
   // shapes that reach the handler without one; those fall through to the
@@ -62,6 +70,8 @@ export const handleReplaceRange = (async (params) => {
     const decoded = decodeReadCapabilityToken(toolCall.input.readCapability)
     if (
       typeof decoded === 'string' ||
+      decoded.tokenVersion !== 'v4' ||
+      !decoded.rawBasis ||
       !readCapabilityMatchesScope(decoded, {
         projectId: params.fileContext?.projectRoot ?? '',
         path,
@@ -77,7 +87,7 @@ export const handleReplaceRange = (async (params) => {
               errorMessage:
                 typeof decoded === 'string'
                   ? decoded
-                  : `replace_range blocked: the readCapability belongs to a different project, path, or agent run. Re-read ${path} in this run and copy its cap.v3 token.`,
+                  : `replace_range blocked: the readCapability requires a current authenticated raw basis for this project, path and run. Re-read ${path} and copy its cap.v4 token.`,
               errorCode: 'fresh_read_required',
               recovery: {
                 tool: 'read_files',
@@ -98,12 +108,11 @@ export const handleReplaceRange = (async (params) => {
       }
     }
     hasBoundReadCapability = true
+    boundCapability = decoded
   }
 
-  // Lazy content load: fetch only for whole-file auth freshness before the
-  // strict gate, or later for occurrence resolution. Unauthenticated strict
-  // calls must hit fresh_read_required without first attempting occurrence
-  // resolution (which would surface occurrence_not_found / content-unavailable).
+  // Authenticate before loading current content or resolving an occurrence.
+  // The same lossless capture supplies raw freshness and the prepared splice.
   let currentContent: string | null | undefined
   const loadCurrentContent = async (): Promise<string | null> => {
     if (currentContent !== undefined) {
@@ -120,8 +129,35 @@ export const handleReplaceRange = (async (params) => {
     fileProcessingState,
     path,
   )
-  if (hadStoredWholeFileAuthorization) {
+  if (hadStoredWholeFileAuthorization || boundCapability) {
     await loadCurrentContent()
+  }
+  const relocated =
+    boundCapability && typeof currentContent === 'string'
+      ? reanchorRawReadCapability({
+          content: currentContent,
+          capability: boundCapability,
+        })
+      : undefined
+  if (boundCapability && (!relocated || !relocated.ok)) {
+    invalidatePreparedEditPaths({
+      fileProcessingState,
+      paths: [path],
+      reason: 'stale_capability',
+      sourceTool: 'replace_range',
+    })
+    return {
+      output: [
+        {
+          type: 'json' as const,
+          value: {
+            file: path,
+            errorCode: 'fresh_read_required',
+            errorMessage: `replace_range blocked: ${relocated && !relocated.ok ? describeRawReadFailure(relocated) : 'a lossless current source is unavailable'}. Re-read the range before editing.`,
+          },
+        },
+      ],
+    }
   }
   const contentForAuth = currentContent === undefined ? null : currentContent
   const hadFreshWholeFileAuthorization =
@@ -146,8 +182,8 @@ export const handleReplaceRange = (async (params) => {
           value: {
             file: path,
             errorMessage: hadStoredWholeFileAuthorization
-              ? `replace_range blocked: ${path} changed after its last whole-file read, so the stored authorization was revoked. Call read_files with ranges: [{ "path": "${path}", "startLine": ${recoveryStartLine}, "endLine": ${recoveryEndLine} }] and retry with only its cap.v3 readCapability plus newContent.`
-              : `replace_range blocked: strict read-before-edit is enabled and no fresh path-bound read authorization exists for ${path}. Call read_files with ranges: [{ "path": "${path}", "startLine": ${recoveryStartLine}, "endLine": ${recoveryEndLine} }] and retry with its cap.v3 readCapability plus newContent.`,
+              ? `replace_range blocked: ${path} changed after its last whole-file read, so the stored authorization was revoked. Call read_files with ranges: [{ "path": "${path}", "startLine": ${recoveryStartLine}, "endLine": ${recoveryEndLine} }] and retry with only its cap.v4 readCapability plus newContent.`
+              : `replace_range blocked: strict read-before-edit is enabled and no fresh path-bound read authorization exists for ${path}. Call read_files with ranges: [{ "path": "${path}", "startLine": ${recoveryStartLine}, "endLine": ${recoveryEndLine} }] and retry with its cap.v4 readCapability plus newContent.`,
             errorCode: 'fresh_read_required',
             recovery: {
               tool: 'read_files',
@@ -168,14 +204,13 @@ export const handleReplaceRange = (async (params) => {
     }
   }
 
-  // This handler is the sole occurrence resolver in the codebase: it resolves
-  // the requested occurrence against content read after auth gates pass and
-  // forwards absolute lines to the client. The SDK applicator deliberately does
-  // not re-resolve occurrence, because two resolutions against two separate
-  // reads could diverge.
+  // Resolve an occurrence once against the authenticated current raw capture.
+  // The SDK receives exact prepared content and verifies its raw preimage.
   const occurrenceTarget = toolCall.input.occurrence
-  let resolvedStartLine = toolCall.input.startLine
-  let resolvedEndLine = toolCall.input.endLine
+  const shift = relocated?.ok ? (relocated.shiftedBy ?? 0) : 0
+  let resolvedStartLine =
+    (toolCall.input.startLine ?? recoveryStartLine) + shift
+  let resolvedEndLine = (toolCall.input.endLine ?? recoveryEndLine) + shift
   if (occurrenceTarget) {
     const occurrenceContent = await loadCurrentContent()
     if (typeof occurrenceContent !== 'string') {
@@ -199,11 +234,15 @@ export const handleReplaceRange = (async (params) => {
     const authStart = toolCall.input.capabilityStartLine ?? recoveryStartLine
     const authEnd = toolCall.input.capabilityEndLine ?? recoveryEndLine
     const resolved = resolveOccurrenceRangeInCapabilityRange({
-      content: occurrenceContent,
+      content: captureTextDocument(occurrenceContent).observation,
       match: occurrenceTarget.match,
       occurrence: occurrenceTarget.occurrence,
-      capabilityStartLine: toolCall.input.capabilityStartLine,
-      capabilityEndLine: toolCall.input.capabilityEndLine,
+      capabilityStartLine: relocated?.ok
+        ? relocated.startLine
+        : toolCall.input.capabilityStartLine,
+      capabilityEndLine: relocated?.ok
+        ? relocated.endLine
+        : toolCall.input.capabilityEndLine,
     })
     if (!resolved.range) {
       const requested = occurrenceTarget.occurrence ?? 1
@@ -228,24 +267,65 @@ export const handleReplaceRange = (async (params) => {
     resolvedEndLine = resolved.range.endLine
   }
 
-  // The forwarded payload must match `providerInputSchema` exactly: `sdk/src/
-  // run.ts` re-validates it with `clientToolCallSchema.parse` and the SDK
-  // applicator re-parses it with `replaceRangeParams.inputSchema`, both of
-  // which are `.strict()`. So enumerate provider-shaped fields only: no
-  // `occurrence` (already resolved into absolute lines) and none of the derived
-  // `capability*` keys added by the input transform.
+  if (
+    typeof currentContent !== 'string' ||
+    !relocated?.ok ||
+    !Number.isSafeInteger(resolvedStartLine) ||
+    !Number.isSafeInteger(resolvedEndLine) ||
+    resolvedStartLine < relocated.startLine ||
+    resolvedEndLine > relocated.endLine ||
+    resolvedEndLine < resolvedStartLine
+  ) {
+    return {
+      output: [
+        {
+          type: 'json' as const,
+          value: {
+            file: path,
+            errorCode: 'fresh_read_required',
+            errorMessage:
+              'replace_range requires a lossless current source and a contained authenticated range. Re-read the range before editing.',
+          },
+        },
+      ],
+    }
+  }
+  const document = captureTextDocument(currentContent)
+  let updatedContent: string
+  try {
+    updatedContent = spliceDocumentRange(
+      document,
+      resolvedStartLine,
+      resolvedEndLine,
+      toolCall.input.newContent,
+    )
+    if (Buffer.byteLength(updatedContent) > MAX_TRANSACTION_FILE_BYTES) {
+      throw new RangeError('Prepared content exceeds the per-file byte limit')
+    }
+  } catch {
+    return {
+      output: [
+        {
+          type: 'json' as const,
+          value: {
+            file: path,
+            errorMessage:
+              'replace_range rejected invalid replacement text, bounds or an oversized prepared file.',
+          },
+        },
+      ],
+    }
+  }
+
   const clientToolCall = {
     toolCallId: toolCall.toolCallId,
     toolName: 'replace_range' as const,
     input: {
+      type: 'file' as const,
       path,
-      readCapability: toolCall.input.readCapability,
-      // The input transform fills startLine/endLine for the non-occurrence
-      // path and the resolver above fills them for the occurrence path; the
-      // capability bounds are a fallback for pre-schema/legacy call shapes.
-      startLine: resolvedStartLine ?? toolCall.input.capabilityStartLine,
-      endLine: resolvedEndLine ?? toolCall.input.capabilityEndLine,
-      newContent: toolCall.input.newContent,
+      content: updatedContent,
+      expectedHash: document.observationHash,
+      expectedRawHash: document.rawHash,
     },
   }
   const application = await coordinateEditApplication<'replace_range'>({
@@ -254,6 +334,7 @@ export const handleReplaceRange = (async (params) => {
     projectId: params.fileContext?.projectRoot ?? '',
     runId: params.runId ?? '',
     paths: [path],
+    wholeFileContentByPath: new Map([[path, updatedContent]]),
     apply: () => requestClientToolCall(clientToolCall),
   })
   if (application.status === 'threw') {
@@ -272,16 +353,6 @@ export const handleReplaceRange = (async (params) => {
       ],
     }
   }
-  if (application.status === 'applied' && hadFreshWholeFileAuthorization) {
-    const updatedContent =
-      typeof requestOptionalFile === 'function'
-        ? await requestOptionalFile({ ...params, filePath: path })
-        : null
-    if (typeof updatedContent === 'string') {
-      grantWholeFileReadAuthorization(fileProcessingState, path, updatedContent)
-    } else {
-      revokeWholeFileReadAuthorization(fileProcessingState, path)
-    }
-  }
+  // The coordinator refreshes authority only from exact confirmed after-content.
   return { output: application.output }
 }) satisfies CodebuffToolHandlerFunction<'replace_range'>

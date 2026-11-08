@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'bun:test'
 import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
+import {
   decodeReadCapabilityToken,
   encodeReadCapabilityToken,
   getContentHash,
@@ -12,7 +16,7 @@ import {
   coordinateEditApplication,
   editOutputHasError,
 } from '../edit-application-coordinator'
-import { getFileProcessingValues } from '../write-file'
+import { getFileProcessingValues, handleWriteFile } from '../write-file'
 
 const applicationScope = { projectId: '/project', runId: 'run' }
 
@@ -22,15 +26,24 @@ function canonicalAppliedOutput(
   capabilityScope = { ...applicationScope, path },
 ) {
   const afterHash = getExactContentHash(content)
+  const document = captureTextDocument(content)
+  const rawBasis = getRawReadBasis(
+    document,
+    1,
+    document.maxCapabilityLine,
+    'whole',
+  )
   const editAnchor = {
     startLine: 1,
-    endLine: content.split('\n').length,
-    contentHash: getContentHash(content),
+    endLine: document.maxCapabilityLine,
+    contentHash: document.observationHash,
+    rawBasis,
     readCapability: encodeReadCapabilityToken({
       startLine: 1,
-      endLine: content.split('\n').length,
-      hash: getContentHash(content),
+      endLine: document.maxCapabilityLine,
+      hash: document.observationHash,
       scope: capabilityScope,
+      rawBasis,
     }),
   }
   const receipt = {
@@ -87,7 +100,207 @@ function canonicalAppliedOutput(
   ]
 }
 
+function canonicalAppliedOutputWithoutContent(path: string, content: string) {
+  const output = canonicalAppliedOutput(path, content) as any
+  delete output[0].value.actions[0].afterContent
+  delete output[0].value.actions[0].editAnchor
+  delete output[0].value.authorityReceipt.actions[0].afterContent
+  delete output[0].value.authorityReceipt.actions[0].editAnchor
+  return output
+}
+
 describe('edit application coordinator', () => {
+  it('grants a local whole raw basis from receipt-covered exact after-content', async () => {
+    const content = '\uFEFFheader\r\n😀e\u0301\nfooter\r\n'
+    const state = getFileProcessingValues({})
+    const result = await coordinateEditApplication({
+      toolName: 'edit_transaction',
+      fileProcessingState: state,
+      ...applicationScope,
+      paths: ['bytes.txt'],
+      apply: async () => canonicalAppliedOutput('bytes.txt', content) as any,
+    })
+    expect(result.status).toBe('applied')
+    expect(state.rawReadAuthorizationHashesByPath?.['bytes.txt']).toBe(
+      getExactContentHash(content),
+    )
+    expect(state.readAuthorizationHashesByPath?.['bytes.txt']).toBe(
+      captureTextDocument(content).observationHash,
+    )
+    const anchor = state.confirmedPostEditAnchorsByPath?.['bytes.txt']
+    expect(anchor?.rawBasis).toMatchObject({
+      scope: 'whole',
+      includesBom: true,
+      endTerminator: 'crlf',
+    })
+    expect(anchor?.readCapability).toMatch(/^cap\.v4\./)
+  })
+
+  it('preserves an unconfirmed no-op path without minting authority in a mixed transaction', async () => {
+    const state = getFileProcessingValues({
+      editRereadRequirementsByPath: {
+        'noop.txt': {
+          reason: 'context_compacted',
+          sourceTool: 'context compaction',
+        },
+      },
+    })
+    const marker = state.editRereadRequirementsByPath?.['noop.txt']
+    const result = await coordinateEditApplication({
+      toolName: 'edit_transaction',
+      fileProcessingState: state,
+      ...applicationScope,
+      paths: ['changed.txt', 'noop.txt'],
+      confirmationPaths: ['changed.txt'],
+      wholeFileContentByPath: new Map([
+        ['changed.txt', 'new'],
+        ['noop.txt', 'unobserved source'],
+      ]),
+      apply: async () => canonicalAppliedOutput('changed.txt', 'new') as any,
+    })
+    expect(result.status).toBe('applied')
+    expect(state.confirmedPostEditAnchorsByPath?.['noop.txt']).toBeUndefined()
+    expect(state.rawReadAuthorizationHashesByPath?.['noop.txt']).toBeUndefined()
+    expect(state.readAuthorizationsByPath?.['noop.txt']).toBeUndefined()
+    expect(state.editRereadRequirementsByPath?.['noop.txt']).toBe(marker)
+  })
+
+  it('does not surface new capabilities for extra receipt envelopes outside confirmationPaths', async () => {
+    const state = getFileProcessingValues({})
+    const result = await coordinateEditApplication({
+      toolName: 'edit_transaction',
+      fileProcessingState: state,
+      ...applicationScope,
+      paths: ['requested.txt'],
+      apply: async () =>
+        [
+          ...canonicalAppliedOutput('requested.txt', 'requested'),
+          ...canonicalAppliedOutput('extra.txt', 'extra'),
+        ] as any,
+    })
+    expect(result.status).toBe('applied')
+    if (result.status !== 'applied') return
+    expect([...result.confirmedAnchorsByPath.keys()]).toEqual(['requested.txt'])
+    expect(
+      state.rawReadAuthorizationHashesByPath?.['extra.txt'],
+    ).toBeUndefined()
+    const added = result.output.at(-1)?.value as any
+    expect(
+      added.postEditCapabilities.map((cap: { path: string }) => cap.path),
+    ).toEqual(['requested.txt'])
+  })
+
+  it('supersedes earlier whole-write promises after confirmed range, delete and move operations', async () => {
+    const path = 'source.txt'
+    const before = 'before\r\n'
+    const after = 'after\n'
+    const final = 'final\n'
+    for (const operation of ['range', 'delete', 'move'] as const) {
+      const previous = Promise.resolve({
+        tool: 'write_file' as const,
+        path,
+        toolCallId: 'earlier-write',
+        content: before,
+        messages: [],
+      })
+      const state = getFileProcessingValues({
+        promisesByPath: { [path]: [previous] },
+        allPromises: [previous],
+      })
+      const output = canonicalAppliedOutput(
+        path,
+        operation === 'move' ? before : after,
+      ) as any
+      if (operation !== 'range') {
+        const action = output[0].value.actions[0]
+        const receipt = output[0].value.authorityReceipt
+        const committed = receipt.actions[0]
+        action.action = committed.action = operation
+        receipt.finalHashes[path] = null
+        if (operation === 'delete') {
+          action.afterHash = committed.afterHash = null
+          delete action.afterContent
+          delete action.editAnchor
+        } else {
+          action.destinationPath = committed.destinationPath = 'destination.txt'
+          receipt.finalHashes['destination.txt'] = getExactContentHash(before)
+        }
+      }
+      const confirmationPaths =
+        operation === 'move' ? [path, 'destination.txt'] : [path]
+      const applied = await coordinateEditApplication({
+        toolName: 'edit_transaction',
+        fileProcessingState: state,
+        ...applicationScope,
+        paths: confirmationPaths,
+        apply: async () => output,
+      })
+      expect(applied.status).toBe('applied')
+      expect(state.promisesByPath[path]).toBeUndefined()
+      expect(state.allPromises[0]).toBe(previous)
+      let observedHash: string | null | undefined
+      let observedRawHash: string | null | undefined
+      const written = await handleWriteFile({
+        previousToolCallFinished: Promise.resolve(),
+        fileProcessingState: state,
+        fileContext: { projectRoot: '/project' },
+        runId: 'run',
+        toolCall: {
+          toolName: 'write_file',
+          toolCallId: 'follow-up',
+          input: { path, content: final },
+        },
+        logger: { debug() {}, info() {}, warn() {}, error() {} },
+        writeToClient() {},
+        requestOptionalFile: async () => (operation === 'range' ? after : null),
+        requestClientToolCall: async (call: any) => {
+          observedHash = call.input.expectedHash
+          observedRawHash = call.input.expectedRawHash
+          return canonicalAppliedOutput(path, final) as any
+        },
+      } as any)
+      expect(observedHash).toBe(
+        operation === 'range' ? getContentHash(after) : null,
+      )
+      expect(observedRawHash).toBe(
+        operation === 'range' ? getExactContentHash(after) : null,
+      )
+      expect(editOutputHasError(written.output)).toBe(false)
+    }
+  })
+
+  it('refuses malformed lossless after-content without throwing or granting state', async () => {
+    const output = canonicalAppliedOutput('bytes.txt', 'valid') as any
+    const malformed = '\ud800'
+    const hash = getExactContentHash(malformed)
+    output[0].value.actions[0].afterContent = malformed
+    output[0].value.actions[0].afterHash = hash
+    output[0].value.actions[0].editAnchor.contentHash = hash
+    output[0].value.authorityReceipt.actions[0].afterHash = hash
+    output[0].value.authorityReceipt.finalHashes['bytes.txt'] = hash
+    const state = getFileProcessingValues({})
+    const result = await coordinateEditApplication({
+      toolName: 'edit_transaction',
+      fileProcessingState: state,
+      ...applicationScope,
+      paths: ['bytes.txt'],
+      wholeFileContentByPath: new Map([['bytes.txt', malformed]]),
+      apply: async () => output,
+    })
+    expect(result.status).toBe('rejected')
+    expect(
+      state.rawReadAuthorizationHashesByPath?.['bytes.txt'],
+    ).toBeUndefined()
+    expect(() =>
+      commitAppliedEditPaths({
+        fileProcessingState: getFileProcessingValues({}),
+        ...applicationScope,
+        paths: ['bytes.txt'],
+        wholeFileContentByPath: new Map([['bytes.txt', malformed]]),
+      }),
+    ).not.toThrow()
+  })
+
   it('detects explicit errors in later and nested output parts', () => {
     expect(
       editOutputHasError([
@@ -258,7 +471,7 @@ describe('edit application coordinator', () => {
     )
     expect(state.confirmedPostEditAnchorsByPath?.['a.ts']).toMatchObject({
       contentHash: getContentHash('new content'),
-      readCapability: expect.stringMatching(/^cap\.v3\./),
+      readCapability: expect.stringMatching(/^cap\.v4\./),
     })
   })
 
@@ -287,14 +500,13 @@ describe('edit application coordinator', () => {
       {
         path: 'a.ts',
         contentHash: getContentHash('new content'),
-        readCapability: expect.stringMatching(/^cap\.v3\./),
+        readCapability: expect.stringMatching(/^cap\.v4\./),
       },
     ])
   })
 
   it('applied output omits postEditCapabilities when no anchor is granted', async () => {
-    // wholeFileContentByPath is empty, so the confirmed apply cannot mint an
-    // anchor (matching the 'grants no anchor or authorization' scenario).
+    // Neither the runtime nor the receipt supplies exact after-content.
     const state = getFileProcessingValues({
       promisesByPath: { 'a.ts': [] },
       readAuthorizationsByPath: { 'a.ts': true },
@@ -308,7 +520,7 @@ describe('edit application coordinator', () => {
       paths: ['a.ts'],
       wholeFileContentByPath: new Map(),
       apply: async () =>
-        canonicalAppliedOutput('a.ts', 'forged content') as any,
+        canonicalAppliedOutputWithoutContent('a.ts', 'new content'),
     })
 
     expect(result.status).toBe('applied')
@@ -543,7 +755,7 @@ describe('edit application coordinator', () => {
     const anchor = state.confirmedPostEditAnchorsByPath?.['a.ts']
     expect(anchor).toBeDefined()
     expect(anchor?.contentHash).toBe(getContentHash('new content'))
-    expect(anchor?.readCapability).toMatch(/^cap\.v3\./)
+    expect(anchor?.readCapability).toMatch(/^cap\.v4\./)
     expect(anchor?.readCapability).not.toBe('malformed')
   })
 
@@ -579,7 +791,7 @@ describe('edit application coordinator', () => {
       const anchor = state.confirmedPostEditAnchorsByPath?.['a.ts']
       expect(anchor).toBeDefined()
       expect(anchor?.contentHash).toBe(getContentHash('new content'))
-      expect(anchor?.readCapability).toMatch(/^cap\.v3\./)
+      expect(anchor?.readCapability).toMatch(/^cap\.v4\./)
       // The synthesized token is bound to the REAL scope (applicationScope
       // + path 'a.ts'), not to the foreign path/run of the untrusted client
       // anchor.
@@ -837,13 +1049,7 @@ describe('edit application coordinator', () => {
     expect(anchor?.contentHash).toBe(getContentHash('deleted snapshot'))
   })
 
-  it('grants no anchor or authorization when the runtime has no known post-edit content to mint from', async () => {
-    // wholeFileContentByPath omits 'a.ts': the runtime has no known-good
-    // content, so even though the genuine committed receipt still confirms the
-    // apply, no anchor or sticky authorization can be minted. The prior stale
-    // authorization remains untouched (it is only revoked by an explicit
-    // rejection or a fresh read), but nothing new is granted — fail-closed on
-    // the grant side.
+  it('revokes stale authority when a confirmed receipt has no exact after-content', async () => {
     const state = getFileProcessingValues({
       promisesByPath: { 'a.ts': [] },
       readAuthorizationsByPath: { 'a.ts': true },
@@ -857,7 +1063,7 @@ describe('edit application coordinator', () => {
       paths: ['a.ts'],
       wholeFileContentByPath: new Map(),
       apply: async () =>
-        canonicalAppliedOutput('a.ts', 'forged content') as any,
+        canonicalAppliedOutputWithoutContent('a.ts', 'new content'),
       onApplied: () => {
         committed = true
       },
@@ -865,12 +1071,10 @@ describe('edit application coordinator', () => {
 
     expect(result.status).toBe('applied')
     expect(committed).toBe(true)
-    // No anchor is minted without runtime-known content.
+    // A signed token alone does not provide the missing lossless after-content.
     expect(state.confirmedPostEditAnchorsByPath?.['a.ts']).toBeUndefined()
-    // The stale hash is NOT overwritten with the unverified client content.
-    expect(state.readAuthorizationHashesByPath?.['a.ts']).toBe(
-      getContentHash('stale'),
-    )
+    expect(state.readAuthorizationHashesByPath?.['a.ts']).toBeUndefined()
+    expect(state.rawReadAuthorizationHashesByPath?.['a.ts']).toBeUndefined()
   })
 
   it('honors rejectionRequiresRead:false on deterministic client rejection through handleEditTransaction so read authorization is preserved', async () => {
@@ -1184,7 +1388,7 @@ describe('edit application coordinator', () => {
     // The minted anchor is still stored for the applied path.
     expect(blindState.confirmedPostEditAnchorsByPath?.['a.ts']).toMatchObject({
       contentHash: getContentHash('replaced all'),
-      readCapability: expect.stringMatching(/^cap\.v3\./),
+      readCapability: expect.stringMatching(/^cap\.v4\./),
     })
 
     // A unique str_replace apply may clear a generic failed-edit marker and
@@ -1207,7 +1411,7 @@ describe('edit application coordinator', () => {
     expect(uniqueState.failedEditRequiresReadByPath['a.ts']).toBeUndefined()
     expect(uniqueState.confirmedPostEditAnchorsByPath?.['a.ts']).toMatchObject({
       contentHash: getContentHash('replaced once'),
-      readCapability: expect.stringMatching(/^cap\.v3\./),
+      readCapability: expect.stringMatching(/^cap\.v4\./),
     })
   })
 
@@ -1245,7 +1449,7 @@ describe('edit application coordinator', () => {
     expect(state.failedEditRequiresReadByPath[path]).toBe(true)
     expect(granted.get(path)).toMatchObject({
       contentHash: getContentHash(content),
-      readCapability: expect.stringMatching(/^cap\.v3\./),
+      readCapability: expect.stringMatching(/^cap\.v4\./),
     })
 
     const coordinated = await coordinateEditApplication({

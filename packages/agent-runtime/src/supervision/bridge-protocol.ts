@@ -53,14 +53,12 @@
  * chunks into an unbounded array with no consumer (continued provider spend
  * + memory growth).
  *
- * CAPABILITY FORWARDING: `requestFiles`' `capabilityIssuer`
- * ({ projectId, runId }) is JSON-serializable and CROSSES the bridge; the
- * parent's real dep mints cap.v3 editAnchors (contentHash + line range) for
- * complete reads, and the child's read_files handler RE-MINTS that anchor
- * with the child's own in-process HMAC key — a cap.v3 token is verifiable
- * only in the process that minted it, so capability-bearing edits
- * (str_replace / replace_range / rewrite_symbol / edit_transaction) work in
- * a flag-on supervised child without replaying a parent-signed token.
+ * READ AUTHORITY: the parent authenticates original v4 read observations for
+ * its host-pinned project and this table's host-issued run IDs. Only validated
+ * raw basis/anchor facts cross the existing requestFiles response; the child
+ * validates those facts against the returned source and mints a local v4 token.
+ * Parent HMACs, callbacks, signing keys and approval authority do not cross.
+ * Raw/legacy handler replies remain display-only.
  *
  * ErrorOr discipline: a handler failure NEVER throws across the bridge — it
  * is encoded as `{ ok: false, error: { message } }`. A malformed line or an
@@ -72,6 +70,9 @@
  * secrecy. No Date.now/randomUUID in this module.
  */
 import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
+import type { ReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
+import type { RawReadBasisV1 } from '@codebuff/common/util/raw-read-basis'
+import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 import type { ConsumeCreditsWithFallbackFn } from '@codebuff/common/types/contracts/billing'
 import type {
   HandleStepsLogChunkFn,
@@ -138,6 +139,7 @@ export const BRIDGE_METHODS = [
   'promptAiSdkStructured',
   'sendAction',
   'requestToolCall',
+  'onExecutionActionStart',
   'requestFiles',
   'requestOptionalFile',
   'requestMcpToolData',
@@ -311,7 +313,10 @@ export function encodeBridgeMessage(value: unknown): string {
     )
   }
   if (line === undefined) {
-    throw new BridgeProtocolError('malformed', 'bridge message serialized to undefined')
+    throw new BridgeProtocolError(
+      'malformed',
+      'bridge message serialized to undefined',
+    )
   }
   if (Buffer.byteLength(line, 'utf8') > BRIDGE_MAX_MESSAGE_BYTES) {
     throw new BridgeProtocolError(
@@ -665,8 +670,7 @@ const RESULT_SAFETY_MAX_OFFENSES = 8
 
 function isZodSchemaLike(record: Record<string, unknown>): boolean {
   return (
-    typeof record.parse === 'function' &&
-    typeof record.safeParse === 'function'
+    typeof record.parse === 'function' && typeof record.safeParse === 'function'
   )
 }
 
@@ -881,4 +885,108 @@ export type {
   FetchAgentFromDatabaseFn,
   ConsumeCreditsWithFallbackFn,
   Logger,
+}
+
+/** Facts authenticated by this parent table, correlated to one returned item. */
+export type ParentValidatedReadAnchor = {
+  itemIndex: number
+  path: string
+  selector: 'file' | 'range'
+  anchor: {
+    startLine: number
+    endLine: number
+    contentHash: string
+    rawBasis: RawReadBasisV1
+  }
+}
+
+/** The existing requestFiles RPC's parent-owned response; never a peer claim. */
+export type ParentValidatedReadFilesResponse = {
+  kind: 'parent_validated_read_files'
+  version: 1
+  bridgeNonce: string
+  issuer?: ReadCapabilityIssuer
+  result: ReadFilesResultV1
+  validatedAnchors: ParentValidatedReadAnchor[]
+}
+
+/** Replace header copies only; sourceContent and source text stay untouched. */
+export function rewriteBridgedRangeHeader(
+  content: string,
+  token?: string,
+): string {
+  return content.replace(/^\[RANGE_BLOCK [^\n]*\]\n/, (header) =>
+    header
+      .replace(
+        /readCapability=[^;\s\]]+/g,
+        `readCapability=${token ?? 'omitted'}`,
+      )
+      .replace(
+        /readCapability:\s*"[^"]*"/g,
+        `readCapability: "${token ?? 'omitted'}"`,
+      )
+      .replace(/basedOnRead="[^"]*"/g, `basedOnRead="${token ?? 'omitted'}"`),
+  )
+}
+
+/** Authority follows the requested item and bounds, never just a returned path. */
+export function bridgedReadMatchesRequest(
+  item: ReadFilesResultV1['results'][number],
+  params: Parameters<RequestFilesFn>[0],
+  itemIndex: number,
+): boolean {
+  if (
+    !item ||
+    item.requestIndex !== itemIndex ||
+    !Array.isArray(params.filePaths)
+  )
+    return false
+  if (itemIndex < params.filePaths.length) {
+    return item.selector === 'file' && item.path === params.filePaths[itemIndex]
+  }
+  const range = params.ranges?.[itemIndex - params.filePaths.length]
+  if (
+    !range ||
+    item.selector !== 'range' ||
+    item.path !== range.path ||
+    item.status !== 'ok'
+  )
+    return false
+  const requestedStart = Math.max(1, range.startLine ?? 1)
+  const requestedEnd = range.endLine ?? Math.max(1, item.totalLines)
+  return (
+    item.startLine === requestedStart &&
+    item.endLine <= requestedEnd &&
+    item.endLine >= Math.min(requestedEnd, Math.max(1, item.totalLines))
+  )
+}
+
+/** Drop authority claims from ordinary callback data before transporting it. */
+export function stripBridgedReadAuthority(
+  result: ReadFilesResultV1,
+): ReadFilesResultV1 {
+  if (!result || typeof result !== 'object' || !Array.isArray(result.results))
+    return result
+  const strip = (value: unknown): unknown => {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return value
+    const clean = { ...(value as Record<string, unknown>) }
+    for (const field of [
+      'editAnchor',
+      'rawBasis',
+      'readCapability',
+      'rawSourceContent',
+      'capability',
+      'capabilities',
+    ])
+      delete clean[field]
+    if (Array.isArray(clean.slices)) clean.slices = clean.slices.map(strip)
+    if (clean.selector === 'range' && typeof clean.content === 'string')
+      clean.content = rewriteBridgedRangeHeader(clean.content)
+    return clean
+  }
+  return {
+    ...result,
+    results: result.results.map((item) => strip(item) as typeof item),
+  }
 }

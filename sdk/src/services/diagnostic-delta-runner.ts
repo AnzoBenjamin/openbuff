@@ -1,12 +1,23 @@
-import { preflightDiagnosticDelta } from './diagnostic-delta'
-import { getSystemProcessEnv } from '../env'
+import { capturedDiagnosticInvocation, preflightDiagnosticDelta } from './diagnostic-delta'
+import {
+  admitNodeLaunch,
+  deriveExecutionContext,
+  dispatchNodeLaunch,
+  executionLimitSeconds,
+  executionRefusal,
+  isExecutionRefusalError,
+  prepareNodeLaunch,
+  refusalForSignal,
+  scheduleNodeDeadline,
+} from './execution-launch'
 
-import type { ChildProcess } from 'node:child_process'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import type { ExecutionAdapterContext, Refusal } from '@codebuff/common/types/contracts/execution-context'
 import type {
   DiagnosticCapture,
   DiagnosticCommandRunner,
   DiagnosticRunResult,
+  DeltaMatchMode,
 } from './diagnostic-delta'
 import type { DiagnosticDeltaHook } from '../tools/file-change-hooks'
 import type { LanguageDiagnostic } from '../tools/language-diagnostics'
@@ -32,7 +43,8 @@ import type { LanguageDiagnostic } from '../tools/language-diagnostics'
 export const MAX_CAPTURED_STREAM_BYTES = 2 * 1024 * 1024
 
 /**
- * Grace period between the deadline SIGTERM and the SIGKILL escalation
+ * Grace between resource cancellation and SIGKILL escalation. An exhausted
+ * resource deadline kills immediately.
  * (perf: diagnostic-runner-timeout-no-sigkill-escalation) — the same guard
  * shape the sibling semgrep runner (makeSpawnRunner) enforces. Injectable per
  * runner for tests.
@@ -72,15 +84,12 @@ export class BoundedStreamCapture {
 
 /**
  * Spawn-agnostic {@link DiagnosticCommandRunner} over the run's child-process
- * seam. The command strings come from the fixed `DIAGNOSTIC_COMMANDS` table in
- * services/diagnostic-delta.ts and are never interpolated with tool, file, or
- * user input, so a whitespace split yields the exact argv — the process is
- * spawned directly (argv array), never through a shell.
+ * seam. Exact argv comes from the frozen diagnostic invocation table. Command
+ * text is retained for presentation; it is never split or reparsed for spawn.
  *
- * Per the runner contract, honors `timeoutSeconds` (SIGTERM at the deadline,
- * escalating to SIGKILL after a short unref'd grace so a SIGTERM-ignoring
- * child is reaped instead of leaking with live pipes on the hot file-change
- * path, + `timedOut`) and treats a missing/failing tool as a non-fatal
+ * Honors the captured resource deadline with immediate SIGKILL and `timedOut`.
+ * Request cancellation keeps a bounded SIGTERM-to-SIGKILL grace until close.
+ * A missing/failing tool produces a non-fatal
  * `errorMessage` result rather than a rejection, so an absent linter can
  * never fabricate diagnostics.
  */
@@ -89,137 +98,99 @@ export function createDiagnosticCommandRunner(params: {
   /** Injected for tests to shorten the SIGTERM→SIGKILL grace window. */
   sigtermGraceMs?: number
 }): DiagnosticCommandRunner {
-  const spawn = params.spawn
+  const factorySpawn = params.spawn
   const sigtermGraceMs = params.sigtermGraceMs ?? DIAGNOSTIC_SIGTERM_GRACE_MS
-  return ({ command, cwd, timeoutSeconds, env, signal }) =>
-    new Promise<DiagnosticRunResult>((resolve) => {
-      const argv = command.split(/\s+/).filter(Boolean)
-      const file = argv.shift()
-      if (!file) {
-        resolve({
-          errorMessage: 'empty diagnostic command',
-          errorCode: 'EMPTY_COMMAND',
-        })
-        return
-      }
+  return async ({ command, cwd, timeoutSeconds, env, signal, executionContext, phase = 'current' }) => {
+    const refused = (refusal: Refusal): DiagnosticRunResult => ({
+      errorMessage: refusal.cause, executionRefusal: refusal,
+      ...(refusal.reason === 'cancelled' ? { cancelled: true } : {}),
+      ...(refusal.reason === 'deadline-exhausted' ? { timedOut: true } : {}),
+    })
+    const invocation = capturedDiagnosticInvocation(command)
+    if (!invocation) return {
+      ...refused(executionRefusal('unavailable', 'Exact diagnostic command argv is unavailable')),
+      errorCode: command.trim() ? 'UNSUPPORTED_COMMAND' : 'EMPTY_COMMAND',
+    }
+    if (signal?.aborted) return refused(refusalForSignal(signal))
+    if (!Number.isSafeInteger(sigtermGraceMs) || sigtermGraceMs < 0) {
+      return refused(executionRefusal('invalid-context', 'Diagnostic termination grace is invalid'))
+    }
+    const capturedEnv = env ? { ...env } : undefined
+    const spawn = executionContext?.spawn ?? factorySpawn
+    const limit = executionLimitSeconds(timeoutSeconds)
+    if (!limit.ok) return refused(limit)
+    const context = deriveExecutionContext(executionContext, `diagnostic:${invocation.id}:${phase}`, limit.value)
+    if (!context.ok) return refused(context)
+    const launch = prepareNodeLaunch({
+      executionContext: context.value,
+      executable: invocation.executable, argv: invocation.argv, cwd,
+      branchId: `diagnostic.${invocation.id}.${phase}`,
+      family: 'diagnostic-build-version-scip',
+      environmentOverlay: capturedEnv,
+      adapterOptions: {
+        stdio: 'ignore-pipe-pipe', shell: false, detached: false,
+        windowsHide: false, sigtermGraceMs, phase,
+      },
+    })
+    if (!launch.ok) return refused(launch)
+    const admitted = await admitNodeLaunch(launch.value, context.value.signal ?? signal)
+    if (!admitted.ok) return refused(admitted)
+    const dispatched = dispatchNodeLaunch(admitted.value, (input) => spawn(input.executable, input.argv, {
+      cwd: input.cwd, env: input.env, signal: input.resourceSignal,
+      stdio: ['ignore', 'pipe', 'pipe'], shell: false, detached: false, windowsHide: false,
+    }), { sigtermGraceMs })
+    if (!dispatched.ok) return refused(dispatched)
+    const node = dispatched.value
+    const child = node.child
+    const resourceSignal = node.input.resourceSignal
+    return await new Promise<DiagnosticRunResult>((resolve) => {
       const stdoutCapture = new BoundedStreamCapture()
       const stderrCapture = new BoundedStreamCapture()
       let settled = false
-      let deadlineExpired = false
-      let timer: ReturnType<typeof setTimeout> | undefined
-      // Tracked in the outer scope so finish() can cancel it (P3 audit): a
-      // child that exits before the SIGTERM→SIGKILL grace elapses must not
-      // leave a dangling escalation timer — the same settle() shape the
-      // sibling semgrep runner (makeSpawnRunner) enforces.
-      let escalate: ReturnType<typeof setTimeout> | undefined
-      let onAbort: (() => void) | undefined
+      let cancelTimer: (() => void) | undefined
       const finish = (result: DiagnosticRunResult) => {
         if (settled) return
         settled = true
-        if (timer) clearTimeout(timer)
-        if (escalate) clearTimeout(escalate)
-        if (onAbort) signal?.removeEventListener('abort', onAbort)
+        cancelTimer?.()
+        resourceSignal.removeEventListener('abort', onAbort)
+        const refusal = result.executionRefusal ?? node.resourceRefusal()
         resolve({
           ...result,
-          ...(deadlineExpired ? { timedOut: true } : {}),
+          ...(refusal ? refused(refusal) : {}),
           stdout: result.stdout ?? stdoutCapture.text(),
           stderr: result.stderr ?? stderrCapture.text(),
           outputTruncated: stdoutCapture.truncated || stderrCapture.truncated,
         })
       }
-      if (signal?.aborted) {
-        finish({
-          cancelled: true,
-          errorMessage: 'diagnostic command cancelled before spawn',
-        })
-        return
+      const onAbort = () => finish(refused(refusalForSignal(resourceSignal)))
+      if (node.input.resourceRemainingMs !== null) {
+        cancelTimer = scheduleNodeDeadline(node.remainingResourceMs, () => finish(refused(
+          node.resourceRefusal() ?? (resourceSignal.aborted ? refusalForSignal(resourceSignal)
+            : executionRefusal('deadline-exhausted', 'Diagnostic resource deadline exhausted')),
+        )))
       }
-      let child: ChildProcess
-      try {
-        child = spawn(file, argv, {
-          cwd,
-          ...(env ? { env: { ...getSystemProcessEnv(), ...env } } : {}),
-          ...(signal ? { signal } : {}),
-          stdio: ['ignore', 'pipe', 'pipe'],
-        })
-      } catch (error) {
+      child.stdout?.on('data', (chunk: Buffer | string) => { if (!settled) stdoutCapture.push(chunk) })
+      child.stderr?.on('data', (chunk: Buffer | string) => { if (!settled) stderrCapture.push(chunk) })
+      child.on('error', (error: NodeJS.ErrnoException) => {
+        const observation = node.observation()
         finish({
-          errorMessage: error instanceof Error ? error.message : String(error),
-          errorCode: (error as NodeJS.ErrnoException)?.code,
-          cancelled:
-            signal?.aborted ||
-            (error instanceof Error && error.name === 'AbortError'),
-        })
-        return
-      }
-      onAbort = () =>
-        finish({
-          cancelled: true,
-          errorMessage: 'diagnostic command cancelled',
-        })
-      signal?.addEventListener('abort', onAbort, { once: true })
-      if (signal?.aborted) onAbort()
-      timer = setTimeout(() => {
-        deadlineExpired = true
-        try {
-          child.kill('SIGTERM')
-        } catch {
-          // The child already exited; the close handler settles the result.
-        }
-        finish({
-          timedOut: true,
-          errorMessage: `diagnostic command timed out after ${timeoutSeconds}s`,
-        })
-        // SIGKILL escalation (perf:
-        // diagnostic-runner-timeout-no-sigkill-escalation): a child that
-        // ignores SIGTERM would otherwise leak with live pipes on the hot
-        // file-change path. A short unref'd grace timer reaps it — the same
-        // guard the sibling semgrep runner (makeSpawnRunner) enforces. The
-        // result is already settled above, so the escalation never delays
-        // callers; it only bounds the leaked child's lifetime.
-        escalate = setTimeout(() => {
-          try {
-            child.kill('SIGKILL')
-          } catch {
-            /* already gone */
-          }
-        }, sigtermGraceMs)
-        escalate.unref?.()
-      }, timeoutSeconds * 1000)
-      timer.unref?.()
-      // Raw-byte accumulation with ONE decode at stream end (perf:
-      // diagnostic-capture-utf8-chunk-split): per-chunk toString() split
-      // multibyte UTF-8 sequences at chunk boundaries, and the old cap
-      // compared UTF-16 string length instead of bytes.
-      child.stdout?.on('data', (chunk: Buffer | string) => {
-        stdoutCapture.push(chunk)
-      })
-      child.stderr?.on('data', (chunk: Buffer | string) => {
-        stderrCapture.push(chunk)
-      })
-      child.on('error', (error: Error) => {
-        // Missing tool (ENOENT) and similar spawn failures: no diagnostics,
-        // never a fabricated rejection.
-        finish({
-          errorMessage: error.message,
-          errorCode: (error as NodeJS.ErrnoException).code,
-          cancelled: signal?.aborted || error.name === 'AbortError',
+          ...refused(node.resourceRefusal() ?? (!observation.ok ? observation
+            : executionRefusal('unavailable', error.message))),
+          ...(error.code ? { errorCode: error.code } : {}),
         })
       })
       child.on('close', (code: number | null, terminationSignal?: string) => {
+        const observation = node.observation()
+        if (!observation.ok) { finish(refused(observation)); return }
         finish({
           exitCode: code ?? undefined,
-          cancelled: signal?.aborted,
-          ...(terminationSignal
-            ? {
-                errorMessage: `diagnostic command terminated by ${terminationSignal}`,
-              }
-            : {}),
-          stdout: stdoutCapture.text(),
-          stderr: stderrCapture.text(),
+          ...(terminationSignal ? { errorMessage: `diagnostic command terminated by ${terminationSignal}` } : {}),
         })
       })
+      resourceSignal.addEventListener('abort', onAbort, { once: true })
+      if (resourceSignal.aborted) onAbort()
     })
+  }
 }
 
 /**
@@ -232,6 +203,8 @@ export function createDiagnosticDeltaHook(params: {
   spawn: CodebuffSpawn
   /** Injected for tests so a throwing preflight can prove the fail-open path. */
   preflight?: typeof preflightDiagnosticDelta
+  /** Captured host mode; child env cannot choose the delta policy. */
+  deltaMode?: DeltaMatchMode
   /**
    * Optional pre-edit baseline provider (P3 audit fix D). When the caller
    * captured diagnostics BEFORE the mutating tool ran, the provider returns
@@ -246,6 +219,7 @@ export function createDiagnosticDeltaHook(params: {
     cwd: string
     env?: Record<string, string | undefined>
     signal?: AbortSignal
+    executionContext?: ExecutionAdapterContext
   }) =>
     | Promise<DiagnosticCapture | LanguageDiagnostic[] | undefined>
     | DiagnosticCapture
@@ -254,16 +228,24 @@ export function createDiagnosticDeltaHook(params: {
 }): DiagnosticDeltaHook {
   const runCommand = createDiagnosticCommandRunner(params)
   const preflight = params.preflight ?? preflightDiagnosticDelta
-  return async ({ files, cwd, env, signal }) => {
+  const deltaMode = params.deltaMode ?? 'tolerant'
+  const getBaseline = params.getBaseline
+  return async input => {
+    const files = [...input.files]
+    const cwd = input.cwd
+    const env = input.env ? { ...input.env } : undefined
+    const executionContext = input.executionContext
+    const signal = executionContext?.signal ?? input.signal
     try {
       let baseline: DiagnosticCapture | LanguageDiagnostic[] | undefined
       try {
-        baseline = await params.getBaseline?.({ files, cwd, env, signal })
-      } catch {
+        baseline = await getBaseline?.({ files, cwd, env, signal, executionContext })
+      } catch (error) {
         return {
           rejected: false,
           diagnosticStatus: signal?.aborted ? 'cancelled' : 'unknown',
           observations: { basis: 'unknown', reason: 'baseline_capture_failed' },
+          ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
         }
       }
       // File-change hooks observe already-changed files. Without a pre-edit
@@ -291,13 +273,16 @@ export function createDiagnosticDeltaHook(params: {
             }),
         env,
         signal,
+        executionContext,
+        deltaMode,
       })
-    } catch {
+    } catch (error) {
       // Work may continue, but missing observation never becomes passed evidence.
       return {
         rejected: false,
         diagnosticStatus: signal?.aborted ? 'cancelled' : 'unknown',
         observations: { basis: 'unknown', reason: 'preflight_failed' },
+        ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
       }
     }
   }

@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 
 import { getOwnedTempRoots } from '@codebuff/common/util/project-path-containment'
 
@@ -55,6 +55,19 @@ const FAKE_PROBE_LATENCY_MS = 400
 // bound on the discovery cache, which has to cover the in-flight (pending)
 // entries as well as the resolved ones.
 const DISCOVERY_CACHE_MAX_ENTRIES = 32
+
+// These legacy discovery/cache tests explicitly inject the narrowed process seam.
+// Production admission and authority isolation are covered in toolchain-execution.test.ts.
+beforeEach(() => {
+  __setToolProbeSpawnForTest((command, args) => {
+    const child = spawn(command, args, { env: { PATH: '/usr/bin:/bin' }, stdio: ['ignore', 'pipe', 'pipe'] })
+    return { stdout: child.stdout, stderr: child.stderr,
+      onError: listener => child.on('error', listener),
+      onClose: listener => child.on('close', listener),
+      kill: signal => child.kill(signal),
+    }
+  })
+})
 
 afterEach(() => {
   clearHarnessDiscoveryCache()

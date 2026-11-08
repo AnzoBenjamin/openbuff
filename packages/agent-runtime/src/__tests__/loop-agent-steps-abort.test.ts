@@ -111,10 +111,20 @@ describe('loopAgentSteps abort signal handling', () => {
       async (_params: Parameters<typeof baseParams.finishAgentRun>[0]) => {},
     )
     const journalEvents: any[] = []
+    const discover = mock(async () => [])
+    agentTemplate.mcpServers = {
+      fixture: {
+        type: 'http',
+        url: 'https://fixture.invalid',
+        params: {},
+        headers: {},
+      },
+    }
 
     const result = await loopAgentSteps({
       ...baseParams,
       finishAgentRun: finish,
+      requestMcpToolData: discover,
       journalWriter: {
         append: (_runId: string, event: unknown) => journalEvents.push(event),
       } as any,
@@ -130,6 +140,7 @@ describe('loopAgentSteps abort signal handling', () => {
       termination: 'cancelled',
     })
     expect(finish).toHaveBeenCalledTimes(1)
+    expect(discover).not.toHaveBeenCalled()
     expect(finish.mock.calls[0]?.[0]).toMatchObject({ status: 'cancelled' })
     expect(journalEvents.filter((event) => event.payload?.terminal)).toEqual([
       expect.objectContaining({
@@ -140,6 +151,68 @@ describe('loopAgentSteps abort signal handling', () => {
       }),
     ])
   })
+
+  for (const [label, reason] of [
+    ['default abort', undefined],
+    ['Error reason', new Error('cancel during discovery')],
+    ['string reason', 'cancel during discovery'],
+  ] as const) {
+    it(`settles cancellation during MCP setup once with ${label}`, async () => {
+      setup()
+      const controller = new AbortController()
+      agentTemplate.mcpServers = {
+        fixture: {
+          type: 'http',
+          url: 'https://fixture.invalid',
+          params: {},
+          headers: {},
+        },
+      }
+      let generatorCalls = 0
+      agentTemplate.handleSteps = function* () {
+        generatorCalls += 1
+        yield 'STEP'
+      }
+      const discover = mock(async () => {
+        await Promise.resolve()
+        controller.abort(reason)
+        return []
+      })
+      const finish = mock(
+        async (_params: Parameters<typeof baseParams.finishAgentRun>[0]) => {},
+      )
+      const journalEvents: any[] = []
+      const result = await loopAgentSteps({
+        ...baseParams,
+        signal: controller.signal,
+        requestMcpToolData: discover,
+        finishAgentRun: finish,
+        journalWriter: {
+          append: (_runId: string, event: unknown) => journalEvents.push(event),
+        } as any,
+      })
+      expect(discover).toHaveBeenCalledTimes(1)
+      expect(generatorCalls).toBe(0)
+      expect(result.agentState.runOutcome?.termination).toBe('cancelled')
+      expect(result.output).toMatchObject({
+        type: 'error',
+        message: 'Run cancelled by user',
+      })
+      expect(finish).toHaveBeenCalledTimes(1)
+      expect(finish.mock.calls[0]?.[0]).toMatchObject({
+        status: 'cancelled',
+        totalSteps: 0,
+      })
+      expect(journalEvents.filter((event) => event.payload?.terminal)).toEqual([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            status: 'cancelled',
+            terminal: true,
+          }),
+        }),
+      ])
+    })
+  }
 
   it('exits the step loop as cancelled when the signal aborts mid-run (line ~1104 checkpoint) instead of looping forever', async () => {
     setup()

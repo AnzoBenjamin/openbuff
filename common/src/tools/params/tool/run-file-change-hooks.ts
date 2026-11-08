@@ -2,6 +2,7 @@ import z from 'zod/v4'
 
 import { terminalCommandOutputSchema } from './run-terminal-command'
 import { $getNativeToolCallExampleString, jsonToolResultSchema } from '../utils'
+import { executionRefusalSchema } from '../execution-refusal'
 
 import type { $ToolParams } from '../../constants'
 
@@ -66,6 +67,8 @@ export const diagnosticCaptureSchema = z.object({
     status: z.enum(['completed', 'failed', 'timed_out', 'cancelled', 'unavailable', 'unknown']),
     exitCode: z.number().optional(),
     errorMessage: z.string().optional(),
+    phase: z.enum(['baseline', 'current', 'after']).optional(),
+    executionRefusal: executionRefusalSchema.optional(),
     outputTruncated: z.boolean(),
     diagnosticCount: z.number().int().nonnegative(),
     coverageStatus: diagnosticCoverageStatusSchema,
@@ -122,6 +125,8 @@ export const runFileChangeHooksParams = {
         z.object({
           errorMessage: z.string(),
           hookName: z.string().optional(),
+          executionRefusal: executionRefusalSchema.optional(),
+          validationStatus: z.literal('hooks_unavailable').optional(),
         }),
         z.object({
           validationStatus: z.enum(['no_hooks_configured', 'hooks_skipped']),
@@ -148,6 +153,7 @@ export const runFileChangeHooksParams = {
           ]),
           diagnosticStatus: z.enum(['passed', 'new_errors', 'failed', 'cancelled', 'unavailable', 'incomplete', 'unknown']).optional(),
           observations: diagnosticObservationsSchema.optional(),
+          executionRefusal: executionRefusalSchema.optional(),
           newDiagnostics: z.array(diagnosticSchema).optional(),
           fixIts: z.array(textEditSchema).optional(),
         }),

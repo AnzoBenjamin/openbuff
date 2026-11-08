@@ -65,6 +65,7 @@
     "@jitl/quickjs-wasmfile-release-sync": "0.31.0",
     "@vscode/tree-sitter-wasm": "0.1.4",
     "ai": "^5.0.52",
+    "ajv": "6.12.6",
     "diff": "8.0.3",
     "gray-matter": "^4.0.3",
     "ignore": "7.0.5",

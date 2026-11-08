@@ -6,11 +6,11 @@ import { afterEach, describe, expect, test } from 'bun:test'
 
 import {
   clearRootResolutionCache,
-  createLspMultiplexer,
   defaultRootResolver,
   LspServerError,
   LspServerUnavailableError,
 } from '../services/lsp-multiplexer'
+import { createTestLspMultiplexer as createLspMultiplexer } from './lsp-execution-fixture'
 
 import type { LspChildHandle, LspSpawnSpec } from '../services/lsp-multiplexer'
 

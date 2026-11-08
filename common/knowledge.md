@@ -2,6 +2,8 @@
 
 ## Polyglot outcome and mutation contracts
 
+- `byte-text.ts` separates exact UTF-8 bytes from BOM-free, LF-normalized observation text. Fresh `cap.v4` read authority binds both identities; complete scoped reads retain their raw slice scope. Partial or unverifiable reads provide no edit authority.
+- Temporary-path containment rejects every configured root entry, including a root nested under the POSIX `/tmp` fallback. Descendants still undergo containment, realpath and sensitive-path checks.
 - `common/src/types/run-outcome.ts` distinguishes run settlement, task acceptance and action outcome. Consumers retain failed actions after successful recovery and never infer task acceptance from run completion alone.
 - `common/src/tools/results/filesystem.ts` selects confirmed mutations from observed forward effects. Attempted, partial and uncertain receipts remain visible; rollback failure alone grants no applied authority. SDK, runtime and CLI projections consume the same selection.
 - Shared tool types include audit maturity/status fields and hook configuration. The [body checkpoint](../docs/execution/body-roadmap/STATE.md) records their accepted source scope and remaining byte/read and execution-context work.

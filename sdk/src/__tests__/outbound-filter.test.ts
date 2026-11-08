@@ -3,11 +3,22 @@ import { describe, expect, test } from 'bun:test'
 import { sanitizeOutbound } from '../serve/outbound-filter'
 
 describe('sanitizeOutbound', () => {
-  test('redacts a cap.v3 capability token', () => {
-    const token = 'cap.v3.1.2.ABCdef-._token'
+  test.each(['v3', 'v4'])('redacts a cap.%s capability token', (version) => {
+    const token = `cap.${version}.1.2.ABCdef-._token`
     const out = sanitizeOutbound(`here is ${token} and more`)
-    expect(out).not.toContain('cap.v3.')
+    expect(out).not.toContain(`cap.${version}.`)
     expect(out).toBe('here is [REDACTED_CAPABILITY] and more')
+  })
+
+  test('redacts both capability versions inside JSON text', () => {
+    const text = JSON.stringify({
+      editAnchor: { readCapability: 'cap.v4.payload.signature' },
+      message: 'Previous read: cap.v3.1.2.legacy-signature',
+    })
+    expect(JSON.parse(sanitizeOutbound(text))).toEqual({
+      editAnchor: { readCapability: '[REDACTED_CAPABILITY]' },
+      message: 'Previous read: [REDACTED_CAPABILITY]',
+    })
   })
 
   test('redacts sk-or-v1 / sk-ant / sk-<20+> provider secrets', () => {

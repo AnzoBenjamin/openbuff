@@ -147,33 +147,10 @@ export function assembleLocalAgentTemplates(params: {
     logger,
   })
 
-  // Origin marking for the validated templates that reach getMCPClient.
-  // Provenance — not the WeakMap alone — decides trust here: agentTemplates
-  // flowing through fileContext may have been cloned or serialized on the way
-  // in (client.run clones agentDefinitions; session-state overrides round-trip
-  // through JSON), which erases WeakMap origin marks. The string
-  // `executionSource` field survives those hops, so it is the durable
-  // provenance signal:
-  //
-  // - 'local'/'bundled' (trusted on-disk material, stamped by loadLocalAgents
-  //   and bundled templates): re-attach any source marks that survived the
-  //   hop (NEW-1 no-upgrade invariant), then blanket-mark the remaining
-  //   configs 'project' so $VAR substitution keeps working.
-  // - 'database' (untrusted protocol content fetched from the database, e.g.
-  //   re-passed through client.run({ agentDefinitions }) into
-  //   fileContext.agentTemplates): the 'client' mark applied at fetch time
-  //   does not survive serialization, so re-mark 'client' here — $VAR
-  //   references stay literal and an erased mark can never be silently
-  //   upgraded.
-  // - no recorded executionSource (unknown provenance): no blanket mark.
-  //   Unmarked configs fail closed to 'client' at resolve time, with the
-  //   one-time diagnosability warning when they still contain $VAR
-  //   references — never a silent 'project' upgrade.
-  //
-  // validateSingleAgent's Zod re-parse creates fresh mcpServers objects with
-  // no origin mark, so propagation must happen before any blanket mark: a
-  // 'client' source mark always propagates and can never be upgraded by the
-  // trusted blanket mark below.
+  // Validation reparses configs, so propagate the host's per-server origin
+  // marks to the validated copies. Session/child bindings restore those marks
+  // before this boundary; serialized executionSource labels cannot grant trust.
+  // A database source can only downgrade configs to client origin.
   for (const rawTemplate of Object.values(fileContext.agentTemplates ?? {})) {
     const validated =
       rawTemplate && typeof rawTemplate.id === 'string'
@@ -183,12 +160,7 @@ export function assembleLocalAgentTemplates(params: {
       continue
     }
     propagateMCPConfigOrigins(rawTemplate.mcpServers, validated.mcpServers)
-    if (
-      rawTemplate.executionSource === 'local' ||
-      rawTemplate.executionSource === 'bundled'
-    ) {
-      markAllMCPConfigOrigins(validated.mcpServers, 'project')
-    } else if (rawTemplate.executionSource === 'database') {
+    if (rawTemplate.executionSource === 'database') {
       markAllMCPConfigOrigins(validated.mcpServers, 'client')
     }
   }

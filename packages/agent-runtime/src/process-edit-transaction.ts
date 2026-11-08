@@ -1,18 +1,20 @@
 import { applyPatch, createPatch, diffChars } from 'diff'
 import {
   decodeReadCapabilityToken,
-  getContentHash,
-  normalizeLineEndings,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
 import {
   describeLineBounds,
-  describeReanchorFailure,
   getLineCoordinates,
-  getRangeSlice,
-  reanchorCapabilityRange,
   resolveLineRange,
 } from '@codebuff/common/util/line-coordinates'
+import {
+  captureTextDocument,
+  describeRawReadFailure,
+  reanchorRawReadCapability,
+  spliceDocumentObservation,
+  spliceDocumentRange,
+} from '@codebuff/common/util/byte-text'
 
 import { processStrReplace } from './process-str-replace'
 import { processStructuredEdit } from './process-structured-edit'
@@ -30,7 +32,6 @@ import type {
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 import type { StructuredEditErrorCode } from '@codebuff/common/util/error'
-
 
 type StrReplaceTransactionEdit = {
   id?: string
@@ -332,8 +333,8 @@ export async function processEditTransaction(params: {
     // the ledger cannot split it back per originating edit.
     const ledgerResult = appendTransformationLedgerEntries(
       transformationLedgerByPath.get(effectiveEdit.path) ?? [],
-      normalizeLineEndings(priorContent),
-      normalizeLineEndings(result.content),
+      captureTextDocument(priorContent).observation,
+      captureTextDocument(result.content).observation,
       editIndex,
     )
     if ('error' in ledgerResult) {
@@ -669,7 +670,9 @@ function originalLineSpan(
   startLine: number,
   endLine: number,
 ): { startOffset: number; endOffset: number } | null {
-  const coordinates = getLineCoordinates(content)
+  const coordinates = getLineCoordinates(
+    captureTextDocument(content).observation,
+  )
   // Resolve in capability space: read_files mints whole-file capabilities that
   // bind the trailing entry past the final newline, so resolving in visible
   // space here would drop provenance for exactly the whole-file case and let it
@@ -731,12 +734,16 @@ function resolveReplaceRangeEdit(
   | { error: string; failureKind?: TransactionFailureKind } {
   if (edit.type !== 'replace_range') return { edit }
   const decoded = decodeReadCapabilityToken(edit.readCapability)
-  if (typeof decoded === 'string' || decoded.tokenVersion !== 'v3') {
+  if (
+    typeof decoded === 'string' ||
+    decoded.tokenVersion !== 'v4' ||
+    !decoded.rawBasis
+  ) {
     return {
       error:
         typeof decoded === 'string'
           ? decoded
-          : 'readCapability requires an authenticated project/path/run-bound cap.v3 token.',
+          : 'readCapability requires an authenticated project/path/run-bound cap.v4 raw basis.',
       // Only a decode failure carries the structured capability-invalid kind;
       // a wrong-version token is classified by classifyTransactionFailureKind.
       ...(typeof decoded === 'string'
@@ -753,15 +760,13 @@ function resolveReplaceRangeEdit(
   let capabilityEndLine = decoded.endLine
   let reanchoredBy: number | undefined
   if (typeof currentContent === 'string') {
-    const reanchored = reanchorCapabilityRange({
-      coordinates: getLineCoordinates(currentContent),
-      startLine: decoded.startLine,
-      endLine: decoded.endLine,
-      expectedHash: decoded.hash,
+    const reanchored = reanchorRawReadCapability({
+      content: currentContent,
+      capability: decoded,
     })
     if (!reanchored.ok) {
       return {
-        error: `replace_range blocked for ${edit.path}: the readCapability-covered content is stale. Re-read lines ${decoded.startLine}-${decoded.endLine} and retry with the fresh token. Cause: ${describeReanchorFailure(reanchored)}.`,
+        error: `replace_range blocked for ${edit.path}: the readCapability-covered content is stale. Re-read lines ${decoded.startLine}-${decoded.endLine} and retry with the fresh token. Cause: ${describeRawReadFailure(reanchored)}.`,
         failureKind: 'capability_stale' as const,
       }
     }
@@ -793,7 +798,7 @@ function resolveReplaceRangeEdit(
       }
     }
     const resolved = resolveOccurrenceRangeInCapabilityRange({
-      content: currentContent,
+      content: captureTextDocument(currentContent).observation,
       match: edit.occurrence.match,
       occurrence: edit.occurrence.occurrence,
       capabilityStartLine,
@@ -1140,8 +1145,8 @@ async function processTransactionEdit(params: {
       if (initialContent === null) {
         return { error: `Cannot replace a range in missing file ${edit.path}.` }
       }
-      const coordinates = getLineCoordinates(initialContent)
-      const { normalized, lines } = coordinates
+      const document = captureTextDocument(initialContent)
+      const coordinates = getLineCoordinates(document.observation)
       const authorizationTarget = edit.originalRange ?? {
         startLine: edit.startLine,
         endLine: edit.endLine,
@@ -1181,12 +1186,18 @@ async function processTransactionEdit(params: {
         // Freshness is re-verified at the ACTUAL located bounds: after a
         // re-anchor the proven bytes live there, and re-slicing the token's
         // original bounds would re-report the staleness the re-anchor resolved.
-        const observedContent = getRangeSlice(
-          getLineCoordinates(originalContent ?? ''),
-          edit.capabilityStartLine,
-          edit.capabilityEndLine,
-        )
-        if (getContentHash(observedContent) !== decoded.hash) {
+        const fresh =
+          originalContent === null
+            ? undefined
+            : reanchorRawReadCapability({
+                content: originalContent,
+                capability: decoded,
+              })
+        if (
+          !fresh?.ok ||
+          fresh.startLine !== edit.capabilityStartLine ||
+          fresh.endLine !== edit.capabilityEndLine
+        ) {
           return {
             error: `replace_range blocked for ${edit.path}: the readCapability-covered content is stale. Re-read lines ${edit.capabilityStartLine}-${edit.capabilityEndLine} and retry with the fresh token.`,
             failureKind: 'capability_stale',
@@ -1238,18 +1249,19 @@ async function processTransactionEdit(params: {
         edit.reanchoredBy === undefined
           ? ''
           : ` (re-anchored ${edit.reanchoredBy > 0 ? '+' : ''}${edit.reanchoredBy} lines after content shifted above the target)`
-      const replacementContent = normalizeLineEndings(edit.newContent)
       const content = edit.mappedRange
-        ? `${normalized.slice(0, edit.mappedRange.startOffset)}${replacementContent}${normalized.slice(edit.mappedRange.endOffset)}`
-        : (() => {
-            const replacementLines = replacementContent.split('\n')
-            lines.splice(
-              targetStartLine - 1,
-              targetEndLine - targetStartLine + 1,
-              ...replacementLines,
-            )
-            return lines.join('\n')
-          })()
+        ? spliceDocumentObservation(
+            document,
+            edit.mappedRange.startOffset,
+            edit.mappedRange.endOffset,
+            edit.newContent,
+          )
+        : spliceDocumentRange(
+            document,
+            targetStartLine,
+            targetEndLine,
+            edit.newContent,
+          )
       return {
         content,
         messages: [
@@ -1308,22 +1320,22 @@ async function processTransactionEdit(params: {
           path: edit.path,
           slice: originalMatch,
           scope: readCapabilityIssuer,
+          rawContent: originalContent ?? undefined,
         })
-        if (capabilityError) return { error: capabilityError }
+        if (capabilityError) return capabilityError
         if (match.content !== originalMatch.content) {
           return {
             error: `rewrite_symbol blocked for ${edit.path}: the symbol replacement bytes were changed earlier in this transaction.`,
           }
         }
       }
-      const lines = normalizeLineEndings(initialContent).split('\n')
-      lines.splice(
-        match.startLine - 1,
-        match.endLine - match.startLine + 1,
-        ...normalizeLineEndings(edit.content).split('\n'),
-      )
       return {
-        content: lines.join('\n'),
+        content: spliceDocumentRange(
+          captureTextDocument(initialContent),
+          match.startLine,
+          match.endLine,
+          edit.content,
+        ),
         messages: [`Rewrote symbol ${edit.symbol} in ${edit.path}.`],
       }
     }

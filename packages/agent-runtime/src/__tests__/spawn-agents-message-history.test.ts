@@ -15,6 +15,7 @@ import {
   mock,
   spyOn,
 } from 'bun:test'
+import { z } from 'zod/v4'
 
 import { mockFileContext } from './test-utils'
 import {
@@ -154,9 +155,7 @@ describe('Spawn Agents Message History', () => {
     displayName: `Mock ${id}`,
     outputMode: 'last_message' as const,
     inputSchema: {
-      prompt: {
-        safeParse: () => ({ success: true }),
-      } as unknown as AgentTemplate['inputSchema']['prompt'],
+      prompt: z.string(),
     },
     spawnerPrompt: '',
     model: '',

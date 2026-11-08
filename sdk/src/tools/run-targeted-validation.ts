@@ -2,11 +2,13 @@ import { computeWorktreeSnapshotIdentity } from './get-change-review-bundle'
 import {
   runFileChangeHooks,
   type DiagnosticDeltaHook,
+  type CapturedHookConfiguration,
 } from './file-change-hooks'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { WorkspaceStateV1 } from '@codebuff/common/types/workspace-state'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 
 export async function runTargetedValidation(params: {
   cwd: string
@@ -23,7 +25,26 @@ export async function runTargetedValidation(params: {
    */
   diagnosticDelta?: DiagnosticDeltaHook
   workspaceState?: WorkspaceStateV1
+  executionContext?: ExecutionAdapterContext
+  capturedConfiguration?: CapturedHookConfiguration
+  diagnosticPreflightEnabled?: boolean
+  terminalShell?: Parameters<typeof runFileChangeHooks>[0]['terminalShell']
+  getTerminalLaunchMetadata?: Parameters<typeof runFileChangeHooks>[0]['getTerminalLaunchMetadata']
 }): Promise<CodebuffToolOutput<'run_targeted_validation'>> {
+  params = {
+    ...params,
+    files: [...params.files],
+    artifactKinds: params.artifactKinds ? [...params.artifactKinds] : undefined,
+    env: params.env ? { ...params.env } : undefined,
+    signal: params.executionContext?.signal ?? params.signal,
+    capturedConfiguration: params.capturedConfiguration ? Object.freeze({
+      autoFileChangeHooks: params.capturedConfiguration.autoFileChangeHooks,
+      fileChangeHooks: Object.freeze(params.capturedConfiguration.fileChangeHooks.map(hook => Object.freeze({ ...hook }))),
+    }) : undefined,
+    terminalShell: params.terminalShell ? {
+      executable: params.terminalShell.executable, args: [...params.terminalShell.args],
+    } : undefined,
+  }
   const artifactKinds = params.artifactKinds ?? []
   // Snapshot identity only (perf: bundle-identity-unbounded-sync-io): both
   // drift checks used to build two FULL change-review bundles per call — each
@@ -43,6 +64,8 @@ export async function runTargetedValidation(params: {
     cwd: params.cwd,
     workspaceState: params.workspaceState,
     signal: params.signal,
+    executionContext: params.executionContext,
+    phase: 'before',
   })
   if ('errorMessage' in before || before.snapshotId !== params.snapshotId) {
     return [
@@ -61,6 +84,7 @@ export async function runTargetedValidation(params: {
           summary:
             'Validation refused because the requested snapshot is stale or unavailable.',
           results: [],
+          ...('errorMessage' in before && before.executionRefusal ? { executionRefusal: before.executionRefusal } : {}),
         },
       },
     ]
@@ -72,6 +96,11 @@ export async function runTargetedValidation(params: {
     signal: params.signal,
     fileSystem: params.fileSystem,
     diagnosticDelta: params.diagnosticDelta,
+    executionContext: params.executionContext,
+    capturedConfiguration: params.capturedConfiguration,
+    diagnosticPreflightEnabled: params.diagnosticPreflightEnabled,
+    terminalShell: params.terminalShell,
+    getTerminalLaunchMetadata: params.getTerminalLaunchMetadata,
   })
   const results = hookOutput.flatMap((part) =>
     part.type === 'json' && Array.isArray(part.value) ? part.value : [],
@@ -80,6 +109,8 @@ export async function runTargetedValidation(params: {
     cwd: params.cwd,
     workspaceState: params.workspaceState,
     signal: params.signal,
+    executionContext: params.executionContext,
+    phase: 'after',
   })
   // A FAILED post-validation identity recomputation is not worktree drift
   // (reliability: after-identity-error-reported-as-drift): the after pass can
@@ -142,6 +173,7 @@ export async function runTargetedValidation(params: {
                   ? 'No matching configured validation checks ran.'
                   : 'Targeted validation checks passed for the attested snapshot.',
         results,
+        ...('errorMessage' in after && after.executionRefusal ? { executionRefusal: after.executionRefusal } : {}),
       },
     },
   ]

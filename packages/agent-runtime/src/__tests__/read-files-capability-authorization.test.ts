@@ -1,4 +1,9 @@
+import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 import { editTransactionParams } from '@codebuff/common/tools/params/tool/edit-transaction'
+import { replaceRangeParams } from '@codebuff/common/tools/params/tool/replace-range'
 import {
   buildReadFilesResultV1,
   fileMutationResultV1Schema,
@@ -23,6 +28,8 @@ import {
 } from '../process-str-replace'
 import { remintConfirmedPostEditAnchors } from '../util/read-authorization'
 import {
+  buildReadFilesResponseV1,
+  buildRangeReadItemV1,
   buildWholeFileReadResultV1,
   confirmedMutationOutput,
   createFileProcessingState,
@@ -30,6 +37,9 @@ import {
   logger,
   mockFileContext,
 } from './read-files-edit-state-fixtures'
+
+import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
+import type { RequestFilesFn } from '@codebuff/common/types/contracts/client'
 
 describe('read_files edit-state recovery', () => {
   it('blocks a capability-bearing edit when the authoritative scope is empty', async () => {
@@ -281,8 +291,12 @@ describe('read_files edit-state recovery', () => {
         input: { paths: [path] },
       },
       fileProcessingState,
-      requestFiles: async () =>
-        buildWholeFileReadResultV1([path], () => diskContent),
+      requestFiles: async ({
+        capabilityIssuer,
+      }: {
+        capabilityIssuer?: ReadCapabilityIssuer
+      }) =>
+        buildWholeFileReadResultV1([path], () => diskContent, capabilityIssuer),
       logger,
     } as any)
 
@@ -355,7 +369,8 @@ describe('read_files edit-state recovery', () => {
         input: { symbols: [{ path: symbolPath, names: ['target'] }] },
       },
       fileProcessingState,
-      requestFiles: async () => buildWholeFileReadResultV1([], () => null),
+      requestFiles: async (input: Parameters<RequestFilesFn>[0]) =>
+        buildReadFilesResponseV1(input, () => symbolContent),
       requestOptionalFile: async ({ filePath }: { filePath: string }) =>
         filePath === symbolPath ? symbolContent : null,
       logger,
@@ -394,8 +409,16 @@ describe('read_files edit-state recovery', () => {
         },
         fileContext: mockFileContext,
         fileProcessingState,
-        requestFiles: async () =>
-          buildWholeFileReadResultV1([path], () => diskContent),
+        requestFiles: async ({
+          capabilityIssuer,
+        }: {
+          capabilityIssuer?: ReadCapabilityIssuer
+        }) =>
+          buildWholeFileReadResultV1(
+            [path],
+            () => diskContent,
+            capabilityIssuer,
+          ),
         logger,
         runId,
       } as any)
@@ -404,12 +427,13 @@ describe('read_files edit-state recovery', () => {
       if (readOutput.type !== 'json') return
       const readCapability = (readOutput.value as any).results[0].editAnchor
         .readCapability as string
-      expect(readCapability).toMatch(/^cap\.v3\./)
+      expect(readCapability).toMatch(/^cap\.v4\./)
 
       // Prove that the visible capability is independently sufficient rather
       // than accidentally relying on the handler's hidden per-path state.
       delete fileProcessingState.readAuthorizationsByPath?.[path]
       delete fileProcessingState.readAuthorizationHashesByPath?.[path]
+      delete fileProcessingState.rawReadAuthorizationHashesByPath?.[path]
       let applied = false
       const editResult = await handleStrReplace({
         ...defaultTestHandlerAuthority,
@@ -464,6 +488,9 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(readContent),
       }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(readContent),
+      }
       let applied = false
 
       const result = await handleStrReplace({
@@ -480,6 +507,12 @@ describe('read_files edit-state recovery', () => {
                 newString: 'export const value = 3',
                 allowMultiple: false,
                 basedOnRead: encodeReadCapabilityToken({
+                  rawBasis: getRawReadBasis(
+                    captureTextDocument(diskContent),
+                    1,
+                    1,
+                    'lines',
+                  ),
                   startLine: 1,
                   endLine: 1,
                   hash: getContentHash(currentLine),
@@ -527,6 +560,12 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
       const basedOnRead = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(
+          captureTextDocument(diskContent),
+          1,
+          2,
+          'whole',
+        ),
         startLine: 1,
         endLine: diskContent.split('\n').length,
         hash: getContentHash(diskContent),
@@ -587,6 +626,12 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
       const basedOnRead = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(
+          captureTextDocument('export const value = 0\n'),
+          1,
+          2,
+          'whole',
+        ),
         startLine: 1,
         endLine: diskContent.split('\n').length,
         hash: getContentHash('export const value = 0\n'),
@@ -632,7 +677,7 @@ describe('read_files edit-state recovery', () => {
       expect(result.output[0]?.type).toBe('json')
       if (result.output[0]?.type === 'json') {
         expect(String((result.output[0].value as any).errorMessage)).toMatch(
-          /stale hash|did not match the current file content/i,
+          /whole-file raw bytes changed after observation/i,
         )
       }
     })
@@ -644,6 +689,12 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
       const basedOnRead = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(
+          captureTextDocument(diskContent),
+          1,
+          2,
+          'whole',
+        ),
         startLine: 1,
         endLine: diskContent.split('\n').length,
         hash: getContentHash(diskContent),
@@ -700,6 +751,12 @@ describe('read_files edit-state recovery', () => {
       const rangeContent = 'export const value = 1'
       const runId = 'strict-transaction-run'
       const readCapability = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(
+          captureTextDocument(diskContent),
+          1,
+          1,
+          'lines',
+        ),
         startLine: 1,
         endLine: 1,
         hash: getContentHash(rangeContent),
@@ -762,6 +819,12 @@ describe('read_files edit-state recovery', () => {
       const rangeContent = 'export const value = 1'
       const runId = 'strict-transaction-range-run'
       const readCapability = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(
+          captureTextDocument(diskContent),
+          1,
+          1,
+          'lines',
+        ),
         startLine: 1,
         endLine: 1,
         hash: getContentHash(rangeContent),
@@ -834,6 +897,12 @@ describe('read_files edit-state recovery', () => {
                 newString: 'export const value = 2',
                 allowMultiple: false,
                 basedOnRead: encodeReadCapabilityToken({
+                  rawBasis: getRawReadBasis(
+                    captureTextDocument('export const value = 0\n'),
+                    1,
+                    1,
+                    'lines',
+                  ),
                   startLine: 1,
                   endLine: 1,
                   hash: getContentHash('export const value = 0'),
@@ -864,7 +933,7 @@ describe('read_files edit-state recovery', () => {
       if (result.output[0]?.type === 'json') {
         const value = result.output[0].value as { errorMessage?: string }
         expect(String(value.errorMessage)).toContain(
-          'basedOnRead did not match the current file content',
+          'basedOnRead range is stale',
         )
       }
     })
@@ -895,6 +964,12 @@ describe('read_files edit-state recovery', () => {
                 newString: 'export const value = 2',
                 allowMultiple: false,
                 basedOnRead: encodeReadCapabilityToken({
+                  rawBasis: getRawReadBasis(
+                    captureTextDocument(diskContent),
+                    1,
+                    1,
+                    'lines',
+                  ),
                   startLine: 1,
                   endLine: 1,
                   hash: getContentHash(firstLine),
@@ -961,6 +1036,12 @@ describe('read_files edit-state recovery', () => {
                     newString: 'export const value = 2',
                     allowMultiple: false,
                     basedOnRead: encodeReadCapabilityToken({
+                      rawBasis: getRawReadBasis(
+                        captureTextDocument('export const value = 0\n'),
+                        1,
+                        1,
+                        'lines',
+                      ),
                       startLine: 1,
                       endLine: 1,
                       hash: getContentHash('export const value = 0'),
@@ -998,7 +1079,7 @@ describe('read_files edit-state recovery', () => {
           'edit_transaction aborted during preflight at edit 1 of 1',
         )
         expect(String(value.failures?.[0]?.errorMessage)).toContain(
-          'basedOnRead did not match the current file content',
+          'basedOnRead range is stale',
         )
       }
     })
@@ -1019,7 +1100,17 @@ describe('read_files edit-state recovery', () => {
         [symbolPath]: getContentHash(symbolContent),
         [otherPath]: getContentHash(otherContent),
       }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [symbolPath]: getExactContentHash(symbolContent),
+        [otherPath]: getExactContentHash(otherContent),
+      }
       const staleSymbolCapability = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(
+          captureTextDocument('export function target() {\n  return 0\n}\n'),
+          1,
+          3,
+          'lines',
+        ),
         startLine: 1,
         endLine: 3,
         hash: getContentHash('export function target() {\n  return 0\n}'),
@@ -1104,7 +1195,7 @@ describe('read_files edit-state recovery', () => {
           failures?: Array<{ errorMessage?: string }>
         }
         expect(String(value.failures?.[0]?.errorMessage)).toContain(
-          'readCapability-covered symbol content is stale',
+          'the observed raw bytes and line boundaries were not found in the current file',
         )
         expect(String(value.errorMessage)).toContain('lost read authorization')
         expect(String(value.errorMessage)).toContain(
@@ -1164,30 +1255,50 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(diskContent),
       }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(diskContent),
+      }
 
+      const initialRead = buildRangeReadItemV1({
+        path,
+        rawContent: diskContent,
+        startLine: 1,
+        endLine: 1,
+      })
+      let clientCalls = 0
       const successResult = await handleReplaceRange({
         ...defaultTestHandlerAuthority,
         previousToolCallFinished: Promise.resolve(),
         toolCall: {
           toolCallId: 'replace-range-success',
           toolName: 'replace_range',
-          input: {
+          input: replaceRangeParams.inputSchema.parse({
             path,
-            startLine: 1,
-            endLine: 1,
-            expectedHash: 'sha256:current',
+            readCapability: initialRead.editAnchor!.readCapability,
             newContent: 'export const value = 2',
-          },
+          }),
         },
         fileProcessingState,
         requestOptionalFile: async () => diskContent,
         requestClientToolCall: async (toolCall: any) => {
-          diskContent = 'export const value = 2\n'
+          clientCalls += 1
+          expect(toolCall.input).toEqual({
+            type: 'file',
+            path,
+            content: 'export const value = 2\n',
+            expectedHash: getContentHash(diskContent),
+            expectedRawHash: getExactContentHash(diskContent),
+          })
+          diskContent = toolCall.input.content
           return confirmedMutationOutput(toolCall, { [path]: diskContent })
         },
       } as any)
 
       expect(successResult.output[0]?.type).toBe('json')
+      expect(clientCalls).toBe(1)
+      expect(successResult.output[0]?.value).toMatchObject({
+        outcome: 'applied',
+      })
       // Sticky auth: a successful replace_range does NOT consume the auth.
       expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
       expect(
@@ -1200,29 +1311,43 @@ describe('read_files edit-state recovery', () => {
         toolCall: {
           toolCallId: 'replace-range-error',
           toolName: 'replace_range',
-          input: {
+          input: replaceRangeParams.inputSchema.parse({
             path,
             startLine: 1,
             endLine: 1,
-            expectedHash: 'sha256:stale',
+            readCapability:
+              fileProcessingState.confirmedPostEditAnchorsByPath![path]!
+                .readCapability,
             newContent: 'export const value = 3',
-          },
+          }),
         },
         fileProcessingState,
         requestOptionalFile: async () => diskContent,
-        requestClientToolCall: async (toolCall: any) => [
-          {
-            type: 'json' as const,
-            value: {
-              file: toolCall.input.path,
-              errorCode: 'stale_snapshot',
-              errorMessage: 'replace_range rejected: stale range',
+        requestClientToolCall: async (toolCall: any) => {
+          clientCalls += 1
+          expect(toolCall.input).toEqual({
+            type: 'file',
+            path,
+            content: 'export const value = 3\n',
+            expectedHash: getContentHash(diskContent),
+            expectedRawHash: getExactContentHash(diskContent),
+          })
+          return [
+            {
+              type: 'json' as const,
+              value: {
+                file: toolCall.input.path,
+                errorCode: 'stale_snapshot',
+                errorMessage: 'replace_range rejected: stale range',
+              },
             },
-          },
-        ],
+          ]
+        },
       } as any)
 
       expect(errorResult.output[0]?.type).toBe('json')
+      expect(clientCalls).toBe(2)
+      expect(diskContent).toBe('export const value = 2\n')
       expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
       expect(
         fileProcessingState.editRereadRequirementsByPath?.[path],
@@ -1270,12 +1395,12 @@ describe('read_files edit-state recovery', () => {
           'no fresh path-bound read authorization exists',
         )
         expect(String((output.value as any).errorMessage)).toContain(
-          'cap.v3 readCapability plus newContent',
+          'cap.v4 readCapability plus newContent',
         )
       }
     })
 
-    it('strict replace_range accepts a cap.v3 token bound to the target and run', async () => {
+    it('strict replace_range accepts a cap.v4 token bound to the target and run', async () => {
       const path = 'src/helper.ts'
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
@@ -1285,6 +1410,12 @@ describe('read_files edit-state recovery', () => {
         runId: 'replace-range-run',
       }
       const readCapability = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(
+          captureTextDocument('export const value = 1\n'),
+          1,
+          1,
+          'lines',
+        ),
         startLine: 1,
         endLine: 1,
         hash: getContentHash('export const value = 1'),
@@ -1334,6 +1465,12 @@ describe('read_files edit-state recovery', () => {
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
       const rangeCapability = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(
+          captureTextDocument(diskContent),
+          1,
+          1,
+          'lines',
+        ),
         startLine: 1,
         endLine: 1,
         // Exactly the slice a `1..1` range read hashes: the first line's text
@@ -1630,17 +1767,16 @@ describe('read_files edit-state recovery', () => {
       const runId = 'partial-anchor-delete-strict-run'
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
-      // Partial/scoped anchor: startLine is 3 (NOT 1) but the contentHash DOES
-      // match the snapshot, so ONLY the whole-file startLine guard can block
-      // the delete. No readAuthorizationsByPath is seeded, so the delete has
-      // no other authorization source and must rely on the (partial) anchor.
+      // A genuine scoped v4 anchor never authorizes a whole-file delete.
+      // No sticky authority is seeded, so this exercises the anchor alone.
       fileProcessingState.confirmedPostEditAnchorsByPath = {
-        [path]: {
+        [path]: buildRangeReadItemV1({
+          path,
+          rawContent: diskContent,
           startLine: 3,
-          endLine: 10,
-          contentHash: getContentHash(diskContent),
-          readCapability: 'cap.v3.partial',
-        },
+          endLine: 3,
+          scope: { projectId: mockFileContext.projectRoot, runId },
+        }).editAnchor!,
       }
 
       let applied = false
@@ -1685,23 +1821,24 @@ describe('read_files edit-state recovery', () => {
       }
     })
 
-    it('a whole-file (startLine 1) post-edit anchor with a matching hash authorizes a delete', async () => {
-      // Contrast: the SAME anchor as the partial case above with only
-      // startLine flipped to 1 (same contentHash, same readCapability string,
-      // still no sticky readAuthorizationsByPath). The delete is now
-      // authorized, proving the guard keys on startLine specifically.
+    it('a signed v4 whole-file post-edit anchor with matching exact bytes authorizes a delete', async () => {
       const path = 'src/partial-anchor.ts'
       const diskContent = 'line1\nline2\nline3\n'
       const runId = 'whole-anchor-delete-strict-run'
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
+      const source = buildWholeFileReadResultV1([path], () => diskContent, {
+        projectId: mockFileContext.projectRoot,
+        runId,
+      }).results[0]
+      if (
+        source.status !== 'ok' ||
+        source.selector !== 'file' ||
+        !source.editAnchor
+      )
+        throw new Error('Expected a signed whole source')
       fileProcessingState.confirmedPostEditAnchorsByPath = {
-        [path]: {
-          startLine: 1,
-          endLine: 10,
-          contentHash: getContentHash(diskContent),
-          readCapability: 'cap.v3.whole',
-        },
+        [path]: source.editAnchor,
       }
 
       let applied = false
@@ -1997,7 +2134,7 @@ describe('read_files edit-state recovery', () => {
         expect(destinationAnchor?.contentHash).toBe(
           getContentHash(createdContent),
         )
-        expect(destinationAnchor?.readCapability).toMatch(/^cap\.v3\./)
+        expect(destinationAnchor?.readCapability).toMatch(/^cap\.v4\./)
 
         // Sticky whole-file authorization + hash are also granted on the
         // destination path.
@@ -2066,6 +2203,9 @@ describe('read_files edit-state recovery', () => {
       }
       nextTurnState.readAuthorizationHashesByPath = {
         ...(fileProcessingState.readAuthorizationHashesByPath ?? {}),
+      }
+      nextTurnState.rawReadAuthorizationHashesByPath = {
+        ...(fileProcessingState.rawReadAuthorizationHashesByPath ?? {}),
       }
       nextTurnState.editRereadRequirementsByPath = {
         ...(fileProcessingState.editRereadRequirementsByPath ?? {}),
@@ -2316,9 +2456,18 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(diskContent),
       }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(diskContent),
+      }
       // Mint a capability bound to a DIFFERENT run (and the authoritative
       // project/path) so the scope check fails with capability_scope.
       const wrongRunCapability = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(
+          captureTextDocument(diskContent),
+          1,
+          1,
+          'lines',
+        ),
         startLine: 1,
         endLine: 1,
         hash: getContentHash(firstLine),
@@ -2393,6 +2542,10 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationHashesByPath = {
         [pathA]: getContentHash(contentA),
         [pathB]: getContentHash(contentB),
+      }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [pathA]: getExactContentHash(contentA),
+        [pathB]: getExactContentHash(contentB),
       }
 
       let clientCalls = 0
@@ -2516,15 +2669,21 @@ describe('read_files edit-state recovery', () => {
         [pathA]: getContentHash(contentA),
         [pathB]: getContentHash(contentB),
       }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [pathA]: getExactContentHash(contentA),
+        [pathB]: getExactContentHash(contentB),
+      }
       // Fresh capability covering ONLY line 1 of pathA, while the oldString
       // lives on line 3.
       const wrongWindowCapability = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(captureTextDocument(contentA), 1, 1, 'lines'),
         startLine: 1,
         endLine: 1,
         hash: getContentHash('export const first = 1'),
         scope: { projectId: mockFileContext.projectRoot, path: pathA, runId },
       })
       const wholeFileCapabilityB = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(captureTextDocument(contentB), 1, 2, 'whole'),
         startLine: 1,
         endLine: contentB.split('\n').length,
         hash: getContentHash(contentB),

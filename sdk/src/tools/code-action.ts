@@ -6,6 +6,7 @@ import {
 } from './semantic-edit-apply'
 
 import type { LanguageIntelligenceService } from '../services/language-intelligence'
+import type { LspRequestContext } from '../services/lsp-multiplexer'
 
 /**
  * P4-T2 (code_action, v1: organize imports) apply tool: identical thin
@@ -21,8 +22,9 @@ export async function codeAction(
   service: LanguageIntelligenceService,
   params: { path: string; line: number; character: number; kind: string },
   opts: SemanticEditApplyDeps,
+  executionContext?: LspRequestContext,
 ): Promise<SemanticEditApplyResult<'code_action'>> {
-  const [first] = await service.codeAction(params)
+  const [first] = await service.codeAction(params, executionContext)
   const applied = await applySemanticEdit(
     first?.value ?? { errorMessage: NO_RESULT_ERROR },
     opts,

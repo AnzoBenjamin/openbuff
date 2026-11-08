@@ -43,8 +43,8 @@ import {
 
 describe('compileToolJsonSchemas golden vectors', () => {
   it('pins the exact serialized JSON Schema for the glob tool', () => {
-    // Fixture produced by the real pipeline: z.toJSONSchema(glob
-    // providerInputSchema, { io: 'input' }) serialized with JSON.stringify(
+    // Fixture produced by the real pipeline: projectZodSchema(glob
+    // providerInputSchema, 'input') targets draft-7, then JSON.stringify(
     // schema, null, 2). zod v4 resolves `.describe()` metadata on a clone
     // whose parent schema is flattened back into it at finalize time, so the
     // registry description precedes the processor-emitted keys at every level
@@ -54,7 +54,7 @@ describe('compileToolJsonSchemas golden vectors', () => {
     const schema = compileToolJsonSchemas()['glob']
 
     expect(JSON.stringify(schema, null, 2)).toBe(`{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "description": "Search for files matching a glob pattern. Returns matching file paths sorted by modification time (newest first, then path for deterministic ties).",
   "type": "object",
   "properties": {

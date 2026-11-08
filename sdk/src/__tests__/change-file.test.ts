@@ -12,7 +12,10 @@ import {
 import {
   getContentHash,
   getExactContentHash,
+  getObservationContentHash,
 } from '@codebuff/common/util/content-hash'
+import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type { PathLike } from 'node:fs'
 
 import { changeFile, changeFiles } from '../tools/change-file'
 import { createTransactionIntentLogForWorkspace } from '../tools/transaction-intent-log'
@@ -20,6 +23,14 @@ import { createTransactionIntentLogForWorkspace } from '../tools/transaction-int
 const capabilityIssuer = {
   projectId: '/repo',
   runId: 'change-file-tests',
+}
+
+function returnRawBytes(fs: CodebuffFileSystem): void {
+  const read = fs.readFile.bind(fs)
+  fs.readFile = (async (filePath: PathLike, encoding?: unknown) => {
+    const content = await read(filePath, 'utf8')
+    return encoding ? content : Buffer.from(content)
+  }) as CodebuffFileSystem['readFile']
 }
 
 describe('changeFile', () => {
@@ -55,7 +66,7 @@ describe('changeFile', () => {
             startLine: 1,
             endLine: 2,
             contentHash: getContentHash('const value = 2\n'),
-            readCapability: expect.stringContaining('cap.v3.'),
+            readCapability: expect.stringContaining('cap.v4.'),
           }),
         }),
       ],
@@ -1368,6 +1379,172 @@ describe('changeFile', () => {
     expect(files['/repo/src/one.ts']).toBe('const one = 1\n')
     expect(files['/repo/src/two.ts']).toBe('const two = 1\n')
     expect(files['/repo/src/three.ts']).toBe('const three = 1\n')
+  })
+
+  test('[B05] rejects raw-only drift before single or transaction staging', async () => {
+    const observed = 'a\nb\n'
+    for (const current of ['a\r\nb\r\n', '\uFEFFa\nb\n']) {
+      const fs = createMockFs({ files: { '/repo/a.txt': current } })
+      let commits = 0
+      const commit = fs.conditionalCommit!
+      fs.conditionalCommit = async (...args) => {
+        commits++
+        return commit(...args)
+      }
+      const parameters = {
+        type: 'file' as const,
+        path: 'a.txt',
+        content: 'updated\n',
+        expectedHash: getObservationContentHash(observed),
+        expectedRawHash: getExactContentHash(observed),
+      }
+      for (const output of [
+        await changeFile({ parameters, cwd: '/repo', fs, capabilityIssuer }),
+        await changeFiles({
+          parameters: [parameters],
+          cwd: '/repo',
+          fs,
+          capabilityIssuer,
+        }),
+      ]) {
+        expect(
+          output[0]?.type === 'json' ? output[0].value : null,
+        ).toMatchObject({
+          outcome: 'not_applied',
+          errors: [expect.objectContaining({ code: 'stale_state' })],
+        })
+      }
+      expect(commits).toBe(0)
+      expect(await fs.readFile('/repo/a.txt', 'utf8')).toBe(current)
+    }
+  })
+
+  test('[B05] byte-returning transaction preimages preserve BOM through move and delete', async () => {
+    const raw = '\uFEFFa\r\nb\nc\rlast\n'
+    const fs = createMockFs({
+      files: { '/repo/move.txt': raw, '/repo/delete.txt': raw },
+    })
+    returnRawBytes(fs)
+    const result = await changeFiles({
+      parameters: [
+        {
+          type: 'move',
+          path: 'move.txt',
+          destinationPath: 'moved.txt',
+          expectedHash: getObservationContentHash(raw),
+          destinationExpectedHash: null,
+        },
+        {
+          type: 'delete',
+          path: 'delete.txt',
+          expectedHash: getObservationContentHash(raw),
+        },
+      ],
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+    const value = fileMutationResultV1Schema.parse(
+      result[0].type === 'json' ? result[0].value : null,
+    )
+    expect(value.outcome).toBe('applied')
+    expect(
+      Buffer.from(await fs.readFile('/repo/moved.txt')).equals(
+        Buffer.from(raw),
+      ),
+    ).toBe(true)
+    expect(value.actions[0]).toMatchObject({
+      beforeHash: getExactContentHash(raw),
+      afterHash: getExactContentHash(raw),
+      afterContent: raw,
+      editAnchor: {
+        rawBasis: { scope: 'whole', includesBom: true, documentBom: 'utf8' },
+      },
+    })
+    await expect(fs.readFile('/repo/move.txt')).rejects.toThrow()
+    await expect(fs.readFile('/repo/delete.txt')).rejects.toThrow()
+  })
+
+  test('[B05] failed later commits roll back the exact byte-returning BOM preimage', async () => {
+    const raw = '\uFEFFa\r\nb\nc\rlast\n'
+    const fs = createMockFs({
+      files: { '/repo/a.txt': raw, '/repo/b.txt': 'before\n' },
+    })
+    returnRawBytes(fs)
+    const commit = fs.conditionalCommit!
+    let rejected = false
+    fs.conditionalCommit = async (...args) => {
+      if (String(args[0]) === '/repo/b.txt' && !rejected) {
+        rejected = true
+        throw new Error('forced later failure')
+      }
+      return commit(...args)
+    }
+    const output = await changeFiles({
+      parameters: [
+        {
+          type: 'file',
+          path: 'a.txt',
+          content: '\uFEFFupdated\r\nb\nc\rlast\n',
+          expectedHash: getObservationContentHash(raw),
+          expectedRawHash: getExactContentHash(raw),
+        },
+        {
+          type: 'file',
+          path: 'b.txt',
+          content: 'after\n',
+          expectedHash: getContentHash('before\n'),
+          expectedRawHash: getExactContentHash('before\n'),
+        },
+      ],
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+    const value = fileMutationResultV1Schema.parse(
+      output[0].type === 'json' ? output[0].value : null,
+    )
+    expect(value.outcome).toBe('rolled_back')
+    expect(value.freshCapabilities).toEqual([])
+    expect(
+      Buffer.from(await fs.readFile('/repo/a.txt')).equals(Buffer.from(raw)),
+    ).toBe(true)
+    expect(value.authorityReceipt?.actions[0]).toMatchObject({
+      beforeHash: getExactContentHash(raw),
+      afterHash: getExactContentHash(raw),
+      status: 'rolled_back',
+    })
+  })
+
+  test('[B05] invalid string source or replacement grants no text mutation authority', async () => {
+    const fs = createMockFs({ files: { '/repo/a.txt': '\ud800' } })
+    const result = await changeFile({
+      parameters: { type: 'file', path: 'a.txt', content: 'valid' },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+    expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
+      outcome: 'not_applied',
+      freshCapabilities: [],
+    })
+    expect(await fs.readFile('/repo/a.txt', 'utf8')).toBe('\ud800')
+    const emptyFs = createMockFs()
+    const invalid = await changeFile({
+      parameters: {
+        type: 'file',
+        path: 'a.txt',
+        content: '\ud800',
+        expectedRawHash: null,
+      },
+      cwd: '/repo',
+      fs: emptyFs,
+      capabilityIssuer,
+    })
+    expect(invalid[0]?.type === 'json' ? invalid[0].value : null).toMatchObject(
+      { outcome: 'not_applied', freshCapabilities: [] },
+    )
+    await expect(emptyFs.readFile('/repo/a.txt')).rejects.toThrow()
   })
 
   test('returns a structured resource-limit result for oversized transactions', async () => {

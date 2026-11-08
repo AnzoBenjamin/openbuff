@@ -3,6 +3,7 @@ import {
   getConfirmedAppliedActionsV1,
   mutationResultExceedsCheapBoundsV1,
 } from '@codebuff/common/tools/results/filesystem'
+import { isMcpToolResultEnvelope } from '@codebuff/common/mcp/result'
 
 import type { ToolContentBlock } from '../types/chat'
 
@@ -102,6 +103,25 @@ export function getStructuredErrorMessages(outputRaw: unknown): string[] {
     if (typeof value !== 'object') return
 
     const record = value as ToolResultRecord
+    if (isMcpToolResultEnvelope(record)) {
+      if (record.isError === true) {
+        const text = record.content.flatMap((part) =>
+          part &&
+          typeof part === 'object' &&
+          !Array.isArray(part) &&
+          part.type === 'text' &&
+          typeof part.text === 'string' &&
+          part.text.trim()
+            ? [part.text.trim()]
+            : [],
+        )
+        messages.push(
+          ...(text.length ? text : ['The MCP tool reported an error result.']),
+        )
+      }
+      // structuredContent and content metadata are payload data, not status.
+      return
+    }
     const error = record.error
     if (typeof error === 'string') messages.push(error.trim())
     else if (

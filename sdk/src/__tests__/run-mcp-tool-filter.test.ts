@@ -49,7 +49,12 @@ describe('MCP tool filtering', () => {
     spyOn(databaseModule, 'addAgentStep').mockResolvedValue('step-1')
 
     spyOn(mcpClientModule, 'getMCPClient').mockResolvedValue('mcp-client-id')
-    spyOn(mcpClientModule, 'listMCPTools').mockResolvedValue({
+    spyOn(mcpClientModule, 'listMCPToolCatalog').mockResolvedValue({
+      kind: 'mcp_tool_catalog',
+      schemaVersion: 1,
+      generation: 1,
+      complete: true,
+      incompleteReasons: [],
       tools: [
         {
           name: 'browser_navigate',
@@ -67,7 +72,7 @@ describe('MCP tool filtering', () => {
           inputSchema: { type: 'object', properties: {} },
         },
       ],
-    } as Awaited<ReturnType<typeof mcpClientModule.listMCPTools>>)
+    } satisfies Awaited<ReturnType<typeof mcpClientModule.listMCPToolCatalog>>)
 
     let filteredTools: Array<{ name: string }> = []
 
@@ -76,12 +81,13 @@ describe('MCP tool filtering', () => {
         const { sendAction, promptId, requestMcpToolData } = params
         const sessionState = getInitialSessionState(getStubProjectFileContext())
 
-        filteredTools = await requestMcpToolData({
+        const catalog = await requestMcpToolData({
           mcpConfig: browserMcpConfig,
           toolNames: TEST_AGENT.toolNames!.filter((toolName) =>
             toolName.startsWith('browser/'),
           ).map((toolName) => toolName.slice('browser/'.length)),
         })
+        filteredTools = Array.isArray(catalog) ? catalog : catalog.tools
 
         await sendAction({
           action: {

@@ -6,6 +6,7 @@ import {
 } from './semantic-edit-apply'
 
 import type { LanguageIntelligenceService } from '../services/language-intelligence'
+import type { LspRequestContext } from '../services/lsp-multiplexer'
 
 /**
  * P4-T2 (extract_symbol) apply tool: identical thin wrapper to rename_symbol
@@ -28,8 +29,9 @@ export async function extractSymbol(
     symbol_name: string
   },
   opts: SemanticEditApplyDeps,
+  executionContext?: LspRequestContext,
 ): Promise<SemanticEditApplyResult<'extract_symbol'>> {
-  const [first] = await service.extractSymbol(params)
+  const [first] = await service.extractSymbol(params, executionContext)
   const applied = await applySemanticEdit(
     first?.value ?? { errorMessage: NO_RESULT_ERROR },
     opts,

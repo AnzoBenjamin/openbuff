@@ -1,11 +1,14 @@
 import { gitStatus, runGit } from './git-status'
 
+import type { ExecutionAdapterContext, Refusal } from '@codebuff/common/types/contracts/execution-context'
+
 export interface GitBranchResult {
   branch: string
   created: boolean
   switched: boolean
   previousBranch?: string
   errorMessage?: string
+  executionRefusal?: Refusal
 }
 
 /**
@@ -30,6 +33,8 @@ export async function gitBranch(params: {
   switch?: boolean
   /** When true, skip the dirty-tree refusal check. Defaults to false. */
   allowDirty?: boolean
+  signal?: AbortSignal
+  executionContext?: ExecutionAdapterContext
 }): Promise<GitBranchResult> {
   const { cwd, branchName } = params
   const doSwitch = params.switch ?? true
@@ -47,7 +52,11 @@ export async function gitBranch(params: {
 
   // Reuse gitStatus for dirty-tree refusal
   if (!allowDirty) {
-    const statusResult = await gitStatus({ cwd })
+    const statusResult = await gitStatus({
+      cwd,
+      signal: params.signal,
+      executionContext: params.executionContext,
+    })
     const firstEntry = statusResult[0]
     if (!firstEntry || firstEntry.type !== 'json') {
       return {
@@ -64,6 +73,9 @@ export async function gitBranch(params: {
         created: false,
         switched: false,
         errorMessage: `git_status error: ${statusValue.errorMessage}`,
+        ...('executionRefusal' in statusValue
+          ? { executionRefusal: statusValue.executionRefusal as Refusal }
+          : {}),
       }
     }
     if ('status' in statusValue && statusValue.status.trim().length > 0) {
@@ -79,7 +91,19 @@ export async function gitBranch(params: {
   // Capture previous branch for return info (only meaningful when switching)
   let previousBranch: string | undefined
   if (doSwitch) {
-    const revResult = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd)
+    const revResult = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd, params.signal, {
+      executionContext: params.executionContext,
+      branchId: 'git-branch.prior',
+    })
+    if (revResult.executionRefusal) {
+      return {
+        branch: branchName,
+        created: false,
+        switched: false,
+        errorMessage: revResult.stderr,
+        executionRefusal: revResult.executionRefusal,
+      }
+    }
     if (revResult.exitCode === 0) {
       previousBranch = revResult.stdout.trim()
     }
@@ -88,7 +112,10 @@ export async function gitBranch(params: {
   const branchArgs = doSwitch
     ? ['checkout', '-b', branchName]
     : ['branch', branchName]
-  const result = await runGit(branchArgs, cwd)
+  const result = await runGit(branchArgs, cwd, params.signal, {
+    executionContext: params.executionContext,
+    branchId: doSwitch ? 'git-branch.create-switch' : 'git-branch.create',
+  })
   if (result.exitCode !== 0) {
     return {
       branch: branchName,
@@ -97,6 +124,7 @@ export async function gitBranch(params: {
       errorMessage:
         result.stderr.trim() ||
         `git ${branchArgs.join(' ')} exited with code ${result.exitCode}.`,
+      ...(result.executionRefusal ? { executionRefusal: result.executionRefusal } : {}),
     }
   }
 

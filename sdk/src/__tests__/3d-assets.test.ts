@@ -18,10 +18,19 @@ import {
 import { hashFileContent } from '../tools/filesystem-authority'
 import { createNodeFileSystem } from '../tools/node-filesystem'
 import { prune3dMutationArtifacts } from '../tools/3d-artifact-retention'
+import { executionFixture } from '../../../common/src/mcp/__tests__/execution-fixture'
 
 const roots: string[] = []
+const closeExecutions: Array<() => void> = []
+
+function capturedBlenderExecution(root: string) {
+  const fixture = executionFixture()
+  closeExecutions.push(fixture.close)
+  return { ...fixture.context(), projectRoot: root, allowedPaths: [root] }
+}
 
 afterEach(() => {
+  for (const close of closeExecutions.splice(0)) close()
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true })
   }
@@ -626,6 +635,7 @@ describe('inspect3dAsset', () => {
         cwd: root,
         fs: fileSystem,
         operationId: 'commit-unknown',
+        execution: capturedBlenderExecution(root),
       })
 
       const receipt = valueOf(
@@ -838,6 +848,7 @@ describe('inspect3dAsset', () => {
           path: 'portfolio.blend',
           cwd: root,
           fs: fileSystem,
+          execution: capturedBlenderExecution(root),
         }),
       )
       expect(before.summary.objects).toEqual(
@@ -857,6 +868,7 @@ describe('inspect3dAsset', () => {
         height: 128,
         cwd: root,
         fs: fileSystem,
+        execution: capturedBlenderExecution(root),
       })
       if (!preview.some((part) => part.type === 'media')) {
         throw new Error(
@@ -891,6 +903,7 @@ describe('inspect3dAsset', () => {
         cwd: root,
         fs: fileSystem,
         operationId: 'blender-e2e',
+        execution: capturedBlenderExecution(root),
       })
       expect(edit[0]).toMatchObject({
         type: 'json',
@@ -919,6 +932,7 @@ describe('inspect3dAsset', () => {
           path: 'portfolio.blend',
           cwd: root,
           fs: fileSystem,
+          execution: capturedBlenderExecution(root),
         }),
       )
       expect(after.sourceHash).not.toBe(before.sourceHash)

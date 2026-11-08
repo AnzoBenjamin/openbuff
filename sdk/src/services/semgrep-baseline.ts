@@ -1,4 +1,6 @@
-import { spawn } from 'node:child_process'
+import { withToolchainChild, ToolchainExecutionError } from './toolchain-execution'
+import type { ToolchainExecutionContext } from './toolchain-execution'
+import { raceAbort } from '../tools/concurrency'
 
 import { parseLanguageDiagnostics } from '../tools/language-diagnostics'
 
@@ -49,8 +51,8 @@ export type SemgrepBaselineResult =
       /** Set when the file list was capped at MAX_SEMGREP_FILES. */
       truncated?: boolean
     }
-  | { status: 'unavailable'; reason: string; findings: LanguageDiagnostic[] }
-  | { status: 'error'; reason: string; findings: LanguageDiagnostic[] }
+  | { status: 'unavailable'; reason: string; findings: LanguageDiagnostic[]; executionRefusal?: ToolchainExecutionError['refusal'] }
+  | { status: 'error'; reason: string; findings: LanguageDiagnostic[]; executionRefusal?: ToolchainExecutionError['refusal'] }
   | {
       status: 'skipped'
       reason: string
@@ -108,11 +110,17 @@ function isSafeBaselineRef(ref: string): boolean {
  */
 export function makeSpawnRunner(
   command: string,
-  options?: { sigtermGraceMs?: number },
+  options?: { sigtermGraceMs?: number; executionContext?: ToolchainExecutionContext },
 ): SemgrepRunner {
   const graceMs = options?.sigtermGraceMs ?? SIGTERM_GRACE_MS
-  return (argv, cwd, timeoutMs, signal) =>
-    new Promise<SemgrepRunResult>((resolve) => {
+  return (argv, cwd, timeoutMs, requestSignal) => {
+    if (requestSignal?.aborted) return Promise.reject(new ToolchainExecutionError({ ok: false, reason: 'cancelled', cause: 'Semgrep request was cancelled.' }))
+    const context = options?.executionContext
+    return withToolchainChild({ context: context && { ...context, signal: requestSignal ?? context.signal }, argv: [command, ...argv], cwd,
+      branchId: argv[0] === '--version' ? 'semgrep.version' : 'semgrep.scan', timeoutMs, maxBufferBytes: MAX_SARIF_BYTES },
+      (child, input) => new Promise<SemgrepRunResult>((resolve) => {
+      const signal = input.resourceSignal
+      const remainingTimeoutMs = input.resourceRemainingMs === null ? timeoutMs : Math.min(timeoutMs, input.resourceRemainingMs)
       // An already-aborted caller must settle promptly instead of spawning a
       // child it will immediately have to kill (fail-open: an honest error
       // status, not a hang).
@@ -121,24 +129,6 @@ export function makeSpawnRunner(
           exitCode: -1,
           stdout: '',
           stderr: 'semgrep aborted before spawn',
-        })
-        return
-      }
-      let child: ReturnType<typeof spawn>
-      try {
-        child = spawn(command, argv, {
-          cwd,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          // Forward the caller's cancellation into the child process itself:
-          // node kills the child on abort (SIGTERM by default), which the
-          // close handler below then surfaces via the `signal` field.
-          ...(signal ? { signal } : {}),
-        })
-      } catch (error) {
-        resolve({
-          exitCode: -1,
-          stdout: '',
-          stderr: error instanceof Error ? error.message : String(error),
         })
         return
       }
@@ -191,7 +181,7 @@ export function makeSpawnRunner(
           }
         }, graceMs)
         escalate.unref()
-      }, timeoutMs)
+      }, Math.max(1, Math.ceil(remainingTimeoutMs)))
       // A deadline timer must never hold the process open on its own.
       timer.unref()
       // Bound the buffered SARIF document (the async equivalent of spawnSync's
@@ -268,10 +258,21 @@ export function makeSpawnRunner(
         }
         signal.addEventListener('abort', onAbort, { once: true })
       }
-    })
+    }))
+  }
 }
 
 const defaultRunner: SemgrepRunner = makeSpawnRunner('semgrep')
+let contextualRunners = new WeakMap<object, SemgrepRunner>()
+
+function capturedRunner(context: ToolchainExecutionContext): SemgrepRunner {
+  let runner = contextualRunners.get(context)
+  if (!runner) {
+    runner = makeSpawnRunner('semgrep', { executionContext: context })
+    contextualRunners.set(context, runner)
+  }
+  return runner
+}
 
 type SemgrepAvailability =
   | { available: true; toolVersion?: string }
@@ -300,6 +301,7 @@ let availabilityCache = new WeakMap<
 /** Drop cached availability probes (tests, freshly installed sidecars). */
 export function clearSemgrepAvailabilityCache(): void {
   availabilityCache = new WeakMap()
+  contextualRunners = new WeakMap()
 }
 
 /** FIFO trim (scip-runner detection-cache pattern): oldest entries first. */
@@ -355,7 +357,8 @@ async function probeAvailability(
         return { available: true, ...(toolVersion ? { toolVersion } : {}) }
       }
       return { available: false }
-    } catch {
+    } catch (error) {
+      if (error instanceof ToolchainExecutionError) throw error
       return { available: false }
     } finally {
       const map = inFlightProbes.get(runner)
@@ -394,6 +397,7 @@ export async function runSemgrepBaseline(params: {
   baselineCommit: string
   files: string[]
   runner?: SemgrepRunner
+  executionContext?: ToolchainExecutionContext
   timeoutMs?: number
   /**
    * Caller already ran an identical scan for an earlier snapshot of this
@@ -419,8 +423,17 @@ export async function runSemgrepBaseline(params: {
       findings: [],
     }
   }
-  const runner = params.runner ?? defaultRunner
-  const availability = await probeAvailability(runner, params.cwd)
+  const cancelled = (): SemgrepBaselineResult => ({ status: 'error', reason: 'execution-cancelled: Semgrep request was cancelled.', findings: [], executionRefusal: { ok: false, reason: 'cancelled', cause: 'Semgrep request was cancelled.' } })
+  if (params.signal?.aborted) return cancelled()
+  const runner = params.runner ?? (params.executionContext ? capturedRunner(params.executionContext) : defaultRunner)
+  let availability: SemgrepAvailability
+  try {
+    availability = await raceAbort(probeAvailability(runner, params.cwd), params.signal)
+  } catch (error) {
+    if (params.signal?.aborted) return cancelled()
+    if (error instanceof ToolchainExecutionError) return { status: 'unavailable', reason: `execution-${error.refusal.reason}: ${error.refusal.cause}`, findings: [], executionRefusal: error.refusal }
+    throw error
+  }
   if (!availability.available) {
     return { status: 'unavailable', reason: 'semgrep-not-found', findings: [] }
   }
@@ -465,9 +478,11 @@ export async function runSemgrepBaseline(params: {
       params.signal,
     )
   } catch (error) {
+    if (params.signal?.aborted) return cancelled()
     return {
       status: 'error',
-      reason: error instanceof Error ? error.message : String(error),
+      reason: error instanceof ToolchainExecutionError ? `execution-${error.refusal.reason}: ${error.refusal.cause}` : error instanceof Error ? error.message : String(error),
+      ...(error instanceof ToolchainExecutionError ? { executionRefusal: error.refusal } : {}),
       findings: [],
     }
   }

@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,6 +5,12 @@ import { StringDecoder } from 'node:string_decoder'
 import { withEvaluationEnvironment } from './evaluation-environment'
 import type { OpenbuffClient } from '@openbuff/sdk'
 import type { AgentDefinition } from '@openbuff/sdk'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
+import {
+  createEvaluationExecution,
+  deriveEvaluationExecution,
+  prepareEvaluationCommand,
+} from './execution'
 
 const isolatedClients = new WeakSet<object>()
 const isolatedClientMarker = Symbol('isolated SDK adapter')
@@ -55,11 +60,26 @@ export function createIsolatedEvaluationClient(
     agentDefinitions?: AgentDefinition[]
     /** Fixture-only fetch refusal; this is not OS/network confinement. */
     refuseFetchForFixture?: boolean
+    /** Host-only callback; never serialized into the worker request. */
+    executionForRun?: (
+      input: Parameters<OpenbuffClient['run']>[0],
+    ) => ExecutionAdapterContext
   } = {},
 ) {
-  requireSerializable(options)
+  const { executionForRun, ...serializedOptions } = options
+  requireSerializable(serializedOptions)
   const observations: Record<string, unknown>[] = []
   const run: OpenbuffClient['run'] = async (input) => {
+    const execution = deriveEvaluationExecution(
+      executionForRun?.(input) ??
+        createEvaluationExecution({
+          cwd: input.cwd ?? process.cwd(),
+          env: input.env,
+          inheritEnv: false,
+          signal: input.signal,
+        }),
+      'evaluator.worker',
+    )
     const { handleEvent, signal, ...serialized } = input
     for (const name of [
       'overrideTools',
@@ -110,7 +130,7 @@ export function createIsolatedEvaluationClient(
         fs.writeFileSync(events, '', { flag: 'wx' })
         try {
           signal?.throwIfAborted()
-          const child = spawn(
+          const dispatch = await prepareEvaluationCommand(
             process.execPath,
             [
               '--no-env-file',
@@ -124,8 +144,11 @@ export function createIsolatedEvaluationClient(
               env: { ...env, OPENBUFF_TELEMETRY: '0', DO_NOT_TRACK: '1' },
               stdio: ['ignore', stderrFd, stderrFd],
               detached: process.platform !== 'win32',
+              execution,
+              branchId: 'supplemental.evaluator.isolated-worker',
             },
           )
+          const child = dispatch()
           let escalation: ReturnType<typeof setTimeout> | undefined
           let evidenceError: Error | undefined
           let eventOffset = 0

@@ -259,7 +259,7 @@ export interface EditTransactionParams {
               newString: string
               allowMultiple?: boolean
               occurrenceIndex?: number
-              /** Optional authenticated cap.v3 readCapability copied verbatim from the matching fresh read_files editAnchor. */
+              /** Optional authenticated cap.v4 readCapability copied verbatim from the matching fresh read_files editAnchor. */
               basedOnRead?: string
               /** For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied. Only valid when newString is empty; both the input and provider schemas reject any other combination. */
               skipIfMissing?: boolean
@@ -350,7 +350,7 @@ export interface EditTransactionParams {
             symbol: string
             content: string
             occurrence?: number
-            /** Optional cap.v3 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block. */
+            /** Optional cap.v4 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block. */
             readCapability?: string
           }
         | {
@@ -368,7 +368,7 @@ export interface EditTransactionParams {
             path: string
             type: 'write_file'
             content: string
-            /** Optional whole-file-covering cap.v3 from a fresh complete whole-file read. Only a full-file capability with a hash matching current content may authorize overwrite; partial ranges never authorize write_file. */
+            /** Optional cap.v4 with an explicit whole raw basis from a complete read_files.paths read. Its exact bytes must match the current file; line and structural capabilities cannot authorize a whole-file overwrite. */
             basedOnRead?: string
           }
       )[]
@@ -589,6 +589,16 @@ export interface EvaluateAuditCoverageParams {
     snapshot_id: string
     feature: string
     evidence_kind: 'heuristic' | 'verified'
+    maturity?: 'unknown' | 'absent' | 'partial' | 'unwired'
+    status?:
+      | 'complete'
+      | 'partial'
+      | 'implemented_but_unreachable'
+      | 'documented_but_unimplemented'
+      | 'tested_without_runtime_wiring'
+      | 'runtime_wired_without_failure_coverage'
+      | 'unknown'
+    missing?: string[]
     evidence: {
       entrypoints: string[]
       implementation: string[]
@@ -735,7 +745,7 @@ export interface ReadFilesParams {
     /** 1-indexed inclusive end line. Defaults to the last line. */
     endLine?: number
   }[]
-  /** Contiguous line windows; each complete window mints a scoped cap.v3 editAnchor. */
+  /** Contiguous line windows; each complete window mints a scoped cap.v4 editAnchor. */
   windows?: {
     /** File path to read in contiguous line windows, relative to the project root. */
     path: string
@@ -744,7 +754,7 @@ export interface ReadFilesParams {
     /** 1-indexed window number to return. Omit to get the window manifest (totalLines, windowSize, windowCount) plus the first window. */
     window?: number
   }[]
-  /** Literal-anchored context blocks with a scoped cap.v3 editAnchor per block. */
+  /** Literal-anchored context blocks with a scoped cap.v4 editAnchor per block. */
   around?: {
     /** File path to read a content-anchored block from, relative to the project root. */
     path: string
@@ -826,12 +836,12 @@ export interface ReadSubtreeParams {
 }
 
 /**
- * Replace all of, a contained sub-range of, or the Nth literal occurrence inside content observed through one fresh cap.v3 read capability.
+ * Replace all of, a contained sub-range of, or the Nth literal occurrence inside content observed through one fresh cap.v4 read capability.
  */
 export interface ReplaceRangeParams {
   /** The path to the file to edit. */
   path: string
-  /** Copy the cap.v3 readCapability verbatim from the matching fresh read_files editAnchor. The token supplies the observed line bounds and content hash. */
+  /** Copy the cap.v4 readCapability verbatim from the matching fresh read_files editAnchor. The token supplies the observed line bounds and content hash. */
   readCapability: string
   /** Optional 1-indexed target start within the capability-covered range. Omit with endLine to replace the complete observed range. */
   startLine?: number
@@ -858,7 +868,7 @@ export interface RewriteSymbolParams {
   content: string
   /** When multiple top-level symbols share this name, the 1-indexed one to replace. */
   occurrence?: number
-  /** Optional cap.v3 copied from the matching read_files symbol slice. Under strict read-before-edit this authorizes exactly the symbol and its contiguous preceding comment block. */
+  /** Optional cap.v4 copied from the matching read_files symbol slice. Under strict read-before-edit this authorizes exactly the symbol and its contiguous preceding comment block. */
   readCapability?: string
 }
 
@@ -917,11 +927,11 @@ export interface RunTerminalCommandParams {
   command: string
   /** SYNC (default) for finite commands that exit: waits and returns output. BACKGROUND only for long-running or never-exiting processes (dev servers, watchers, log tails): starts a detached job and returns a jobId immediately so the turn is not blocked. Live job_update already drives the user UI; use check_job for agent-side readiness/exitCode/join, not solely for user progress. */
   process_type?: 'SYNC' | 'BACKGROUND'
-  /** For BACKGROUND commands only: keep the job running if the owning request is cancelled. Defaults to false. */
+  /** For BACKGROUND commands only: transfer the job to the registered session receiver so request cancellation does not stop it. A finite timeout remains in force. Defaults to false. */
   detach?: boolean
   /** The working directory to run the command in. Default is the project root. */
   cwd?: string
-  /** Wall-clock bound in seconds for SYNC commands. Omit or use -1 for no timeout (the default). Does not apply to BACKGROUND commands. */
+  /** Wall-clock bound in seconds for SYNC and BACKGROUND commands, including startup and approval waits. Omit or use -1 for no local timeout (the default). A finite parent deadline still applies. */
   timeout_seconds?: number
   /** Runtime-managed background job owner; agents must omit. */
   owner?: {
@@ -1153,7 +1163,7 @@ export interface StrReplaceParams {
     newString: string
     allowMultiple?: boolean
     occurrenceIndex?: number
-    /** Optional authenticated cap.v3 readCapability copied verbatim from the matching fresh read_files editAnchor. */
+    /** Optional authenticated cap.v4 readCapability copied verbatim from the matching fresh read_files editAnchor. */
     basedOnRead?: string
     /** For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied. Only valid when newString is empty; both the input and provider schemas reject any other combination. */
     skipIfMissing?: boolean
@@ -1279,7 +1289,7 @@ export interface WriteFileParams {
   instructions: string
   /** Complete file content to write to the file. */
   content: string
-  /** Optional whole-file-covering cap.v3 from a fresh complete whole-file read (paths or full-file range). Only a capability that covers the entire current file (startLine=1 through the current line count) with a hash matching current content may authorize overwrite; partial range capabilities never authorize write_file. */
+  /** Optional cap.v4 with an explicit whole raw basis from a complete read_files.paths read. Its exact bytes must match the current file. Line and structural capabilities stay scoped even when their slice covers the visible file. */
   basedOnRead?: string
 }
 

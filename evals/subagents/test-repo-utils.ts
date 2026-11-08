@@ -1,10 +1,18 @@
-import { execFile, spawn } from 'child_process'
+import { execFile } from 'child_process'
 import { promises as fs } from 'fs'
 import * as os from 'os'
 import path from 'path'
 import { promisify } from 'util'
 
 import { getErrorObject } from '@codebuff/common/util/error'
+import {
+  captureEvaluationCommand,
+  createEvaluationExecution,
+  deriveEvaluationExecution,
+  isExecutionRefusal,
+  prepareEvaluationCommand,
+} from '../buffbench/execution'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 
 /**
  * Build the `git clone` invocation for a repo URL. `file://` URLs pointing at
@@ -15,21 +23,26 @@ import { getErrorObject } from '@codebuff/common/util/error'
 const execFileAsync = promisify(execFile)
 
 /** Discard setup output as before, and stop the command tree on cancellation. */
-function runInit(
+async function runInit(
   command: string,
   cwd: string,
   env: NodeJS.ProcessEnv,
   signal?: AbortSignal,
+  execution?: ExecutionAdapterContext,
 ): Promise<void> {
+  const dispatch = await prepareEvaluationCommand(command, [], {
+    cwd,
+    env,
+    signal,
+    shell: true,
+    stdio: 'ignore',
+    detached: process.platform !== 'win32',
+    execution,
+    branchId: 'supplemental.evaluator.setup.init',
+  })
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(signal.reason ?? new Error('Aborted'))
-    const child = spawn(command, {
-      cwd,
-      env,
-      shell: true,
-      stdio: 'ignore',
-      detached: process.platform !== 'win32',
-    })
+    const child = dispatch()
     const abort = () => {
       try {
         if (process.platform !== 'win32' && child.pid)
@@ -50,6 +63,20 @@ function runInit(
       else if (code === 0) resolve()
       else reject(new Error(`Init command exited with code ${code}`))
     })
+  })
+}
+
+async function runSetupGit(
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+  execution: ExecutionAdapterContext | undefined,
+  step: string,
+): Promise<{ stdout: string; stderr: string }> {
+  if (!execution) return execFileAsync('git', args, options)
+  return captureEvaluationCommand('git', args, {
+    ...options,
+    execution,
+    branchId: `supplemental.evaluator.setup.${step}`,
   })
 }
 
@@ -78,6 +105,7 @@ export const withTestRepo = async <T>(
     env?: Record<string, string>
     inheritEnv?: boolean
     signal?: AbortSignal
+    execution?: ExecutionAdapterContext
   },
   fn: (cwd: string) => Promise<T>,
 ): Promise<T> => {
@@ -89,34 +117,66 @@ export const withTestRepo = async <T>(
     signal,
     inheritEnv = true,
   } = repoConfig
-  const executionEnv = inheritEnv ? { ...process.env, ...env } : env
+  const execution = deriveEvaluationExecution(
+    repoConfig.execution ??
+      createEvaluationExecution({
+        cwd: process.cwd(),
+        env,
+        inheritEnv,
+        signal,
+      }),
+    'evaluator.setup',
+  )
+  const executionEnv = env
 
   // Create a temporary directory for the test repo
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codebuff-eval-'))
   const repoDir = path.join(tempDir, 'repo')
 
   try {
-    await execFileAsync('git', cloneArgs(repoUrl, repoDir), {
-      signal,
-      env: executionEnv,
-    })
-    await execFileAsync('git', ['fetch', '--depth', '1', 'origin', parentSha], {
-      cwd: repoDir,
-      signal,
-      env: executionEnv,
-    })
-    await execFileAsync('git', ['checkout', parentSha], {
-      cwd: repoDir,
-      signal,
-      env: executionEnv,
-    })
+    await runSetupGit(
+      cloneArgs(repoUrl, repoDir),
+      {
+        cwd: tempDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'clone',
+    )
+    await runSetupGit(
+      ['fetch', '--depth', '1', 'origin', parentSha],
+      {
+        cwd: repoDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'fetch',
+    )
+    await runSetupGit(
+      ['checkout', parentSha],
+      {
+        cwd: repoDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'checkout',
+    )
 
     if (initCommand) {
       console.log(`Running init command: ${initCommand}...`)
       try {
-        await runInit(initCommand, repoDir, executionEnv ?? {}, signal)
+        await runInit(
+          initCommand,
+          repoDir,
+          executionEnv ?? {},
+          signal,
+          execution,
+        )
       } catch (error) {
-        if (signal?.aborted) throw error
+        if (signal?.aborted || isExecutionRefusal(error)) throw error
         console.error(
           `Error running init command: ${getErrorObject(error).message}`,
         )
@@ -141,37 +201,69 @@ export const withTestRepoAndParent = async <T>(
     commitSha: string
     initCommand?: string
     signal?: AbortSignal
+    env?: Record<string, string>
+    inheritEnv?: boolean
+    execution?: ExecutionAdapterContext
   },
   fn: (cwd: string, commitSha: string, parentSha: string) => Promise<T>,
 ): Promise<T | null> => {
   const { repoUrl, commitSha, initCommand, signal } = repoConfig
+  const execution = deriveEvaluationExecution(
+    repoConfig.execution ??
+      createEvaluationExecution({
+        cwd: process.cwd(),
+        env: repoConfig.env,
+        inheritEnv: repoConfig.inheritEnv,
+        signal,
+      }),
+    'evaluator.setup-parent',
+  )
+  const executionEnv = repoConfig.env
 
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codebuff-eval-'))
   const repoDir = path.join(tempDir, 'repo')
 
   try {
-    await execFileAsync('git', cloneArgs(repoUrl, repoDir), { signal })
+    await runSetupGit(
+      cloneArgs(repoUrl, repoDir),
+      { cwd: tempDir, signal, env: executionEnv },
+      execution,
+      'clone',
+    )
 
-    await execFileAsync('git', ['fetch', '--depth', '2', 'origin', commitSha], {
-      cwd: repoDir,
-      signal,
-    })
+    await runSetupGit(
+      ['fetch', '--depth', '2', 'origin', commitSha],
+      {
+        cwd: repoDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'fetch-parent',
+    )
 
-    await execFileAsync('git', ['checkout', commitSha], {
-      cwd: repoDir,
-      signal,
-    })
+    await runSetupGit(
+      ['checkout', commitSha],
+      {
+        cwd: repoDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'checkout-commit',
+    )
 
     let parentSha: string
     try {
-      const { stdout } = await execFileAsync(
-        'git',
+      const { stdout } = await runSetupGit(
         ['log', '--pretty=%P', '-n', '1', commitSha],
         {
           cwd: repoDir,
-          encoding: 'utf-8',
           signal,
+          env: executionEnv,
         },
+        execution,
+        'parent-log',
       )
       const parents = stdout.trim()
 
@@ -192,19 +284,25 @@ export const withTestRepoAndParent = async <T>(
 
       parentSha = parentList[0]
     } catch (error) {
-      if (signal?.aborted) throw error
+      if (signal?.aborted || isExecutionRefusal(error)) throw error
       console.error(`Error getting parent for ${commitSha.slice(0, 8)}:`, error)
       return null
     }
 
-    await execFileAsync('git', ['checkout', parentSha], {
-      cwd: repoDir,
-      signal,
-    })
+    await runSetupGit(
+      ['checkout', parentSha],
+      {
+        cwd: repoDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'checkout-parent',
+    )
 
     if (initCommand) {
       console.log(`Running init command: ${initCommand}...`)
-      await runInit(initCommand, repoDir, process.env, signal)
+      await runInit(initCommand, repoDir, executionEnv ?? {}, signal, execution)
     }
 
     return await fn(repoDir, commitSha, parentSha)

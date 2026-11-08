@@ -19,12 +19,48 @@ import {
   __parseStagedDiffHeaderForTest,
   __resetStagedDiffScanStatsForTest,
   findWindowsBash,
+  listDirtyPaths,
   runTerminalCommand,
 } from '../tools/run-terminal-command'
 import {
-  hashCommand,
-  hashTerminalExecutionContext,
-} from '../services/harness-enforcement'
+  createControlledExecutionClock,
+  createExecutionProcessRecorder,
+  createRealExecutionProcessRecorder,
+  createTerminalExecutionFixture,
+  executionValue,
+} from './fixtures/b19-terminal-execution'
+import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import { executionLimitSeconds } from '../services/execution-launch'
+
+const executionHosts: ReturnType<typeof createTerminalExecutionFixture>[] = []
+const fixtureTempRoot = os.tmpdir()
+afterEach(() => { for (const host of executionHosts.splice(0)) host.dispose() })
+
+function runMediatedTerminal(
+  params: Parameters<typeof runTerminalCommand>[0],
+  options: Parameters<typeof createTerminalExecutionFixture>[0] = {},
+) {
+  const host = createTerminalExecutionFixture({
+    projectRoot: params.projectRoot ?? process.cwd(),
+    scratchRoot: fixtureTempRoot,
+    allowedPaths: params.allowed_paths,
+    policy: params.permission_profile ?? 'workspace-write',
+    mode: params.mode ?? 'assistant',
+    signal: params.signal,
+    owner: params.owner,
+    inheritEnv: params.inheritEnv,
+    ...(params.detach ? { transferLimit: executionValue(executionLimitSeconds(params.timeout_seconds)) } : {}),
+    ...options,
+  })
+  executionHosts.push(host)
+  return runTerminalCommand({
+    ...params,
+    executionContext: host.context,
+    terminalShell: { executable: '/bin/bash', args: ['-c'] },
+    getTerminalLaunchMetadata: host.getTerminalLaunchMetadata,
+    ...(params.detach ? { prepareTransferredLaunch: host.prepareTransferredLaunch } : {}),
+  })
+}
 
 describe('Windows bash prerequisite', () => {
   it('honors the Openbuff-specific Git Bash override', () => {
@@ -38,6 +74,78 @@ describe('Windows bash prerequisite', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('B19 terminal termination mediation', () => {
+  it.each(['deadline-exhausted', 'cancelled'] as const)('%s uses one physical termination schedule', async reason => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'b19-terminal-termination-'))
+    const manual = createControlledExecutionClock()
+    const abort = new AbortController()
+    const processes = createExecutionProcessRecorder({ autoClose: false, closeOnKill: false })
+    const spawn: CodebuffSpawn = (executable, argv, options) => {
+      const child = processes.spawn(executable, argv, options)
+      const actual = processes.calls.find(call => call.child === child)!
+      if (executable === 'git') queueMicrotask(() => actual.finish())
+      return child
+    }
+    const host = createTerminalExecutionFixture({
+      ...manual, projectRoot: cwd, spawn, signal: abort.signal,
+      actionLimit: { kind: 'finite', durationMs: 100 },
+    })
+    executionHosts.push(host)
+    try {
+      const pending = runTerminalCommand({
+        command: 'printf started; sleep 30', process_type: 'SYNC', cwd, projectRoot: cwd,
+        timeout_seconds: reason === 'deadline-exhausted' ? 0.05 : -1,
+        executionContext: host.context, terminalShell: { executable: '/bin/bash', args: ['-c'] },
+        getTerminalLaunchMetadata: host.getTerminalLaunchMetadata,
+      })
+      for (let turn = 0; !processes.calls.some(call => call.executable === '/bin/bash') && turn < 50; turn++) {
+        await new Promise(resolve => setImmediate(resolve))
+      }
+      const actual = processes.calls.find(call => call.executable === '/bin/bash')!
+      expect(actual).toBeDefined()
+      actual.child.stdout?.emit('data', Buffer.from('started'))
+      if (reason === 'deadline-exhausted') manual.advance(50)
+      else abort.abort(new Error('terminal requester cancelled'))
+      expect(actual.signals).toEqual([reason === 'deadline-exhausted' ? 'SIGKILL' : 'SIGTERM'])
+      actual.finish(undefined, reason === 'deadline-exhausted' ? 'SIGKILL' : 'SIGTERM')
+      const output = await pending
+      expect(output[0].value).toMatchObject({ executionRefusal: { reason } })
+      if (reason === 'deadline-exhausted') expect(output[0].value).toMatchObject({ timedOut: true, stdout: 'started' })
+      await new Promise(resolve => setTimeout(resolve, 60))
+      expect(actual.signals).toHaveLength(1)
+    } finally {
+      for (const actual of processes.calls) actual.finish()
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it.each([false, true])('terminal.legacy-dirty captures real Git with explicit overlay %s', async overlay => {
+    const cwd = initTempGitRepo('b19-direct-dirty-')
+    const processes = createRealExecutionProcessRecorder()
+    const host = createTerminalExecutionFixture({
+      projectRoot: cwd, policy: 'read-only', spawn: processes.spawn,
+      actionLimit: { kind: 'finite', durationMs: 10_000 },
+    })
+    executionHosts.push(host)
+    try {
+      fs.writeFileSync(path.join(cwd, 'changed.ts'), 'fixture\n')
+      const env = overlay ? { PROJECT_VALUE: 'explicit-dirty-overlay', OPENAI_API_KEY: 'reinsert-attempt' } : undefined
+      expect(await listDirtyPaths(cwd, undefined, env, host.context)).toEqual(new Set(['changed.ts']))
+      expect(processes.calls).toHaveLength(1)
+      const actual = processes.calls[0]
+      expect(actual.spawnObserved).toBe(true)
+      expect(actual.argv).toEqual(['--no-pager', '--no-optional-locks', '--no-lazy-fetch', '-c', 'core.fsmonitor=false',
+        'status', '--porcelain', '-uall'])
+      expect(actual.options.env?.PROJECT_VALUE).toBe(overlay ? 'explicit-dirty-overlay' : 'captured-value')
+      expect(actual.options.env?.OPENAI_API_KEY).toBeUndefined()
+      expect(actual.options.env?.CUSTOM_PROVIDER_KEY).toBeUndefined()
+      expect(host.policyInputs[0].facts.branchId).toBe('terminal.legacy-dirty')
+      await expect(listDirtyPaths(cwd, undefined, env)).rejects.toMatchObject({ refusal: { reason: 'unavailable' } })
+      expect(processes.calls).toHaveLength(1)
+    } finally { fs.rmSync(cwd, { recursive: true, force: true }) }
   })
 })
 
@@ -55,7 +163,7 @@ describe('runTerminalCommand cwd containment', () => {
         projectRoot,
         timeout_seconds: 5,
       }
-      const denied = await runTerminalCommand({
+      const denied = await runMediatedTerminal({
         ...input,
         allowed_paths: ['a b.txt'],
       })
@@ -66,7 +174,7 @@ describe('runTerminalCommand cwd containment', () => {
           encoding: 'utf8',
         }).stdout,
       ).toBe('')
-      const allowed = await runTerminalCommand({
+      const allowed = await runMediatedTerminal({
         ...input,
         allowed_paths: ['a  b.txt'],
       })
@@ -82,312 +190,119 @@ describe('runTerminalCommand cwd containment', () => {
     }
   })
 
-  it('requires approval authorization before a high-impact assistant command', async () => {
-    let classifiedAction: string | undefined
+  it('requires captured host mediation despite public pre-approval metadata', async () => {
+    let legacyCalls = 0
     const result = await runTerminalCommand({
-      command: 'git push -u origin feature/safe',
-      process_type: 'SYNC',
-      mode: 'assistant',
-      permission_profile: 'git-commit',
-      cwd: process.cwd(),
-      projectRoot: process.cwd(),
-      timeout_seconds: 5,
-      authorizeHighImpactAction: async (action) => {
-        classifiedAction = action.action
-        return {
-          allowed: false,
-          approvalRequired: true,
-          reason: 'No matching receipt.',
-        }
-      },
+      command: 'git push -u origin feature/safe', process_type: 'SYNC',
+      mode: 'assistant', permission_profile: 'git-commit',
+      cwd: process.cwd(), projectRoot: process.cwd(), timeout_seconds: 5,
+      preApprovedAction: { action: 'push', target: 'origin/feature/safe', commandHash: 'f'.repeat(64), approvalReceiptId: 'fabricated-v1' },
+      authorizeHighImpactAction: async () => { legacyCalls++; return { allowed: true } },
     })
-
-    expect(classifiedAction).toBe('push')
-    expect(result[0].value).toMatchObject({
-      permissionDenied: true,
-      approvalRequired: true,
-      harnessAction: 'push',
-    })
+    expect(result[0].value).toMatchObject({ executionRefusal: { reason: 'unavailable' } })
+    expect(legacyCalls).toBe(0)
   })
 
-  it('carries a commandHash on the classified action and ignores a mismatched one-shot pre-approval', async () => {
-    // The one-shot pre-approval binds to the EXACT command hash: a pre-approval
-    // for the same action+target but a different command must NOT short-circuit
-    // approval, so authorizeHighImpactAction is still invoked.
-    let classifiedHash: string | undefined
-    const result = await runTerminalCommand({
-      command: 'git push origin feature-x',
-      process_type: 'SYNC',
-      mode: 'assistant',
-      permission_profile: 'git-commit',
-      cwd: process.cwd(),
-      projectRoot: process.cwd(),
-      timeout_seconds: 5,
-      preApprovedAction: {
-        action: 'push',
-        target: 'origin/feature-x',
-        commandHash: hashCommand('git push origin some-other-branch'),
-      },
-      authorizeHighImpactAction: async (action) => {
-        classifiedHash = action.commandHash
-        return {
-          allowed: false,
-          approvalRequired: true,
-          reason: 'No matching receipt.',
-        }
-      },
-    })
-
-    expect(classifiedHash).toBe(hashCommand('git push origin feature-x'))
-    expect(result[0].value).toMatchObject({
-      permissionDenied: true,
-      approvalRequired: true,
-      harnessAction: 'push',
-    })
+  it('uses the real frozen classifier for a denied captured target', async () => {
+    let effect: string | undefined
+    const result = await runMediatedTerminal({
+      command: 'git push -u origin feature/safe', process_type: 'SYNC',
+      mode: 'assistant', permission_profile: 'git-commit',
+      cwd: process.cwd(), projectRoot: process.cwd(), timeout_seconds: 5,
+    }, { authorize: input => {
+      effect = input.classification.effects[0]?.action
+      expect(Object.isFrozen(input.classification.effects)).toBe(true)
+      return { ok: false, reason: 'denied', cause: 'Controlled host policy denied this target' }
+    } })
+    expect(effect).toBe('push')
+    expect(result[0].value).toMatchObject({ permissionDenied: true, executionRefusal: { reason: 'denied' } })
+    expect(executionHosts.at(-1)!.events.some(event => event.phase === 'dispatched')).toBe(false)
   })
 
-  it('reauthorizes a caller-created pre-approval even when every public field matches', async () => {
-    // Public receipt metadata does not mint an internal one-shot rerun token.
-    // A temp repo with no origin makes the authorized push fail locally.
-    const projectRoot = initTempGitRepo('terminal-hash-match-')
-    let approvalCalls = 0
-    try {
-      const result = await runTerminalCommand({
-        command: 'git push origin feature-x',
-        process_type: 'SYNC',
-        mode: 'assistant',
-        permission_profile: 'git-commit',
-        cwd: projectRoot,
-        projectRoot,
-        timeout_seconds: 15,
-        preApprovedAction: {
-          action: 'push',
-          target: 'origin/feature-x',
-          commandHash: hashCommand('git push origin feature-x'),
-          approvalReceiptId: 'r1',
-        },
-        authorizeHighImpactAction: async () => {
-          approvalCalls += 1
-          return { allowed: true, approvalReceiptId: 'r1' }
-        },
-      })
-      const value = result[0].value as {
-        permissionDenied?: boolean
-        approvalReceiptId?: string
-        harnessAction?: string
-        harnessTarget?: string
-      }
-
-      expect(approvalCalls).toBe(1)
-      expect(value.permissionDenied).toBeUndefined()
-      expect(value.approvalReceiptId).toBe('r1')
-      expect(value.harnessAction).toBe('push')
-      expect(value.harnessTarget).toBe('origin/feature-x')
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true })
-    }
+  it('ignores matching v1 metadata and legacy callbacks when live host policy denies', async () => {
+    let legacyCalls = 0
+    const result = await runMediatedTerminal({
+      command: 'git push origin feature-x', process_type: 'SYNC',
+      mode: 'assistant', permission_profile: 'git-commit',
+      cwd: process.cwd(), projectRoot: process.cwd(), timeout_seconds: 5,
+      preApprovedAction: { action: 'push', target: 'origin/feature-x', commandHash: 'a'.repeat(64), approvalReceiptId: 'public-receipt' },
+      authorizeHighImpactAction: async () => { legacyCalls++; return { allowed: true } },
+    }, { authorize: () => ({ ok: false, reason: 'denied', cause: 'No live captured authority' }) })
+    expect(legacyCalls).toBe(0)
+    expect(result[0].value).toMatchObject({ executionRefusal: { reason: 'denied' } })
+    expect(result[0].value).not.toHaveProperty('approvalReceiptId')
   })
 
-  it('keeps the permission profile enforced even when a high-impact command is approved', async () => {
-    // read-only both classifies `git push origin main` as a high-impact
-    // 'push' action AND denies git mutation. Approval being granted must not
-    // let it run: the fix keeps the approved rerun in mode:'assistant' with
-    // the original profile instead of the old mode:'user' full-policy bypass,
-    // so the profile still denies the command.
-    const result = await runTerminalCommand({
-      command: 'git push origin main',
-      process_type: 'SYNC',
-      mode: 'assistant',
-      permission_profile: 'read-only',
-      cwd: process.cwd(),
-      projectRoot: process.cwd(),
-      timeout_seconds: 5,
-      authorizeHighImpactAction: async () => ({
-        allowed: true,
-        approvalReceiptId: 'r1',
-      }),
+  it('keeps the captured read-only permission profile enforced', async () => {
+    const result = await runMediatedTerminal({
+      command: 'git push origin main', process_type: 'SYNC',
+      mode: 'assistant', permission_profile: 'read-only',
+      cwd: process.cwd(), projectRoot: process.cwd(), timeout_seconds: 5,
     })
-    const value = result[0].value as {
-      permissionDenied?: boolean
-      permissionProfile?: string
-      errorMessage?: string
-    }
-    expect(value.permissionDenied).toBe(true)
-    expect(value.permissionProfile).toBe('read-only')
-    expect(value.errorMessage).toContain('read-only')
+    expect(result[0].value).toMatchObject({ permissionDenied: true, permissionProfile: 'read-only', executionRefusal: { reason: 'denied' } })
+    expect(executionHosts.at(-1)!.policyInputs).toHaveLength(0)
   })
 
-  it('propagates cancellation even when the awaited authorizer returns a denial', async () => {
+  it('retains cancellation during captured policy admission with zero dispatch', async () => {
     const controller = new AbortController()
-    await expect(
-      runTerminalCommand({
-        command: 'git push --force origin feature',
-        process_type: 'SYNC',
-        permission_profile: 'full-access',
-        cwd: process.cwd(),
-        projectRoot: process.cwd(),
-        timeout_seconds: 5,
-        signal: controller.signal,
-        authorizeHighImpactAction: async () => {
-          controller.abort(new Error('cancelled during approval'))
-          return {
-            allowed: false,
-            approvalRequired: false,
-            reason: 'Run cancelled while awaiting approval.',
-          }
-        },
-      }),
-    ).rejects.toThrow('cancelled during approval')
+    const result = await runMediatedTerminal({
+      command: 'git push --force origin feature', process_type: 'SYNC',
+      permission_profile: 'full-access', cwd: process.cwd(), projectRoot: process.cwd(),
+      timeout_seconds: 5, signal: controller.signal,
+    }, { authorize: () => {
+      controller.abort(new Error('cancelled during captured policy'))
+      return { ok: false, reason: 'denied', cause: 'Late denial' }
+    } })
+    expect(result[0].value).toMatchObject({ executionRefusal: { reason: 'cancelled' } })
+    expect(executionHosts.at(-1)!.events.some(event => event.phase === 'dispatched')).toBe(false)
   })
 
-  it('refuses fabricated receipt metadata repeatedly and binds approved execution to its context', async () => {
-    const projectRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'openbuff-sealed-approval-'),
-    )
-    const bin = path.join(projectRoot, 'bin')
-    const trace = path.join(projectRoot, 'trace')
-    fs.mkdirSync(bin)
-    fs.writeFileSync(
-      path.join(bin, 'rm'),
-      '#!/bin/sh\nprintf "%s\\n" executed >> "$TRACE_FILE"\n',
-      { mode: 0o700 },
-    )
-    const command = 'rm -rf fixture'
-    const executionContextHash = hashTerminalExecutionContext({
-      permissionProfile: 'full-access',
-      cwd: projectRoot,
-      projectRoot,
-      processType: 'SYNC',
-    })
-    const publicMetadata = {
-      action: 'workspace-delete',
-      target: 'fixture',
-      commandHash: hashCommand(command),
-      executionContextHash,
-      approvalReceiptId: 'public-receipt',
-    }
-    const input = {
-      command,
-      process_type: 'SYNC' as const,
-      mode: 'assistant' as const,
-      permission_profile: 'full-access' as const,
-      cwd: projectRoot,
-      projectRoot,
-      timeout_seconds: 5,
-      inheritEnv: false,
-      env: { PATH: bin + ':/usr/bin:/bin', TRACE_FILE: trace },
-    }
-    let decisions = 0
+  it('dispatches a captured high-impact target once and exposes its same v2 binding', async () => {
+    const projectRoot = initTempGitRepo('terminal-host-admission-')
+    let terminalDecisions = 0
+    let bindingDigest: string | undefined
     try {
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const output = await runTerminalCommand({
-          ...input,
-          preApprovedAction: publicMetadata,
-          authorizeHighImpactAction: async (action) => {
-            decisions++
-            expect(action.executionContextHash).toBe(executionContextHash)
-            return {
-              allowed: false,
-              approvalRequired: true,
-              reason: 'No live approval.',
-            }
-          },
-        })
-        expect(output[0].value).toMatchObject({ permissionDenied: true })
-        expect(fs.existsSync(trace)).toBe(false)
-      }
-      const approved = await runTerminalCommand({
-        ...input,
-        authorizeHighImpactAction: async (action) => {
-          decisions++
-          expect(action.commandHash).toBe(hashCommand(command))
-          expect(action.executionContextHash).toBe(executionContextHash)
-          return { allowed: true, approvalReceiptId: 'public-receipt' }
-        },
-      })
-      expect(approved[0].value).toMatchObject({
-        exitCode: 0,
-        approvalReceiptId: 'public-receipt',
-      })
-      expect(fs.readFileSync(trace, 'utf8')).toBe('executed\n')
-      expect(decisions).toBe(3)
-      expect(approved[0].value).not.toHaveProperty('preApprovedAction')
-      const replay = await runTerminalCommand({
-        ...input,
-        preApprovedAction: publicMetadata,
-        authorizeHighImpactAction: async () => ({
-          allowed: false,
-          approvalRequired: true,
-          reason: 'Receipt already consumed.',
-        }),
-      })
-      expect(replay[0].value).toMatchObject({ permissionDenied: true })
-      expect(fs.readFileSync(trace, 'utf8')).toBe('executed\n')
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true })
-    }
-  })
-
-  it('re-runs an approved high-impact command exactly once via the one-shot pre-approval and threads its metadata', async () => {
-    // git-commit allows `git push origin feature-x` and classifies it as a
-    // 'push' high-impact action. With approval granted the command runs via
-    // the internal mode:'assistant' rerun (profile re-enforced) exactly once,
-    // and the harness metadata threads onto the output. A temp repo with no
-    // 'origin' remote makes the push fail fast without touching the network.
-    const projectRoot = initTempGitRepo('terminal-preapproval-')
-    let approvalCalls = 0
-    try {
-      const result = await runTerminalCommand({
-        command: 'git push origin feature-x',
-        process_type: 'SYNC',
-        mode: 'assistant',
-        permission_profile: 'git-commit',
-        cwd: projectRoot,
-        projectRoot,
-        timeout_seconds: 15,
-        authorizeHighImpactAction: async () => {
-          approvalCalls += 1
-          return { allowed: true, approvalReceiptId: 'r1' }
-        },
-      })
-      const value = result[0].value as {
-        permissionDenied?: boolean
-        approvalReceiptId?: string
-        harnessAction?: string
-        harnessTarget?: string
-      }
-
-      // Approval requested exactly once: the rerun consumes the one-shot
-      // pre-approval instead of prompting again (no approve->rerun->approve loop).
-      expect(approvalCalls).toBe(1)
-      // The command executed (was not blocked) and carries the harness
-      // metadata from the single approval.
-      expect(value.permissionDenied).toBeUndefined()
-      expect(value.approvalReceiptId).toBe('r1')
-      expect(value.harnessAction).toBe('push')
-      expect(value.harnessTarget).toBe('origin/feature-x')
-    } finally {
-      fs.rmSync(projectRoot, { recursive: true, force: true })
-    }
+      const result = await runMediatedTerminal({
+        command: 'git push origin feature-x', process_type: 'SYNC',
+        mode: 'assistant', permission_profile: 'git-commit', cwd: projectRoot,
+        projectRoot, timeout_seconds: 15,
+      }, { authorize: input => {
+        if (input.facts.branchId === 'terminal.sync') {
+          terminalDecisions++
+          bindingDigest = input.bindingDigest
+          expect(input.binding.format).toBe('openbuff.execution.v2')
+          expect(input.classification.effects[0]?.action).toBe('push')
+        }
+        return { ok: true, basis: 'explicit-policy', decisionId: 'controlled-fixture-policy' }
+      } })
+      expect(terminalDecisions).toBe(1)
+      expect(result[0].value).toMatchObject({ harnessAction: 'push', harnessTarget: 'origin/feature-x', executionBindingVersion: 2, executionBindingDigest: bindingDigest })
+      expect(executionHosts.at(-1)!.events.filter(event => event.phase === 'dispatched' && event.facts.branchId === 'terminal.sync')).toHaveLength(1)
+      // The fixture policy does not certify B18 stored-approval behavior.
+      expect(result[0].value).not.toHaveProperty('approvalReceiptId')
+    } finally { fs.rmSync(projectRoot, { recursive: true, force: true }) }
   })
 
   it('returns a structured timeout result with partial output', async () => {
-    const result = await runTerminalCommand({
-      command: 'printf started; sleep 30',
-      process_type: 'SYNC',
-      cwd: process.cwd(),
-      projectRoot: process.cwd(),
-      timeout_seconds: 0.05,
-    })
-    const value = result[0].value as {
-      timedOut?: boolean
-      errorMessage?: string
-      stdout?: string
-    }
+    const projectRoot = initTempGitRepo('terminal-partial-timeout-')
+    try {
+      const result = await runMediatedTerminal({
+        command: 'printf started; sleep 30',
+        process_type: 'SYNC',
+        cwd: projectRoot,
+        projectRoot,
+        timeout_seconds: 0.3,
+      })
+      const value = result[0].value as {
+        timedOut?: boolean
+        errorMessage?: string
+        stdout?: string
+      }
 
-    expect(value.timedOut).toBe(true)
-    expect(value.errorMessage).toContain('timed out')
-    expect(value.stdout).toContain('started')
+      expect(value.timedOut).toBe(true)
+      expect(value.errorMessage).toContain('deadline exhausted')
+      expect(value.stdout).toContain('started')
+    } finally { fs.rmSync(projectRoot, { recursive: true, force: true }) }
   })
 
   it('cancels an owned background job when the request aborts', async () => {
@@ -400,7 +315,7 @@ describe('runTerminalCommand cwd containment', () => {
     }
     let value: { jobId?: string; detached?: boolean } | undefined
     try {
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'sleep 30',
         process_type: 'BACKGROUND',
         cwd: process.cwd(),
@@ -439,13 +354,14 @@ describe('runTerminalCommand cwd containment', () => {
   })
 
   it('terminates a background job that exceeds the bounded log quota', async () => {
+    const projectRoot = initTempGitRepo('terminal-background-quota-')
     let value: { jobId?: string } | undefined
     try {
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'yes x | head -c 12000000; sleep 30',
         process_type: 'BACKGROUND',
-        cwd: process.cwd(),
-        projectRoot: process.cwd(),
+        cwd: projectRoot,
+        projectRoot,
         timeout_seconds: 5,
       })
       value = result[0].value as { jobId?: string }
@@ -466,11 +382,12 @@ describe('runTerminalCommand cwd containment', () => {
       if (value?.jobId !== undefined) {
         killBackgroundJob(value.jobId, 'SIGKILL')
       }
+      fs.rmSync(projectRoot, { recursive: true, force: true })
     }
   })
 
   it('accepts the project root itself as cwd', async () => {
-    const result = await runTerminalCommand({
+    const result = await runMediatedTerminal({
       command: 'pwd',
       process_type: 'SYNC',
       cwd: process.cwd(),
@@ -483,7 +400,7 @@ describe('runTerminalCommand cwd containment', () => {
   })
 
   it('rejects an absolute cwd outside the project with a structured error', async () => {
-    const result = await runTerminalCommand({
+    const result = await runMediatedTerminal({
       command: 'echo hello',
       process_type: 'SYNC',
       cwd: '/etc',
@@ -496,7 +413,7 @@ describe('runTerminalCommand cwd containment', () => {
   })
 
   it('rejects a parent-traversal cwd with a structured error', async () => {
-    const result = await runTerminalCommand({
+    const result = await runMediatedTerminal({
       command: 'echo hello',
       process_type: 'SYNC',
       cwd: '../../outside',
@@ -508,7 +425,7 @@ describe('runTerminalCommand cwd containment', () => {
   })
 
   it('rejects a BACKGROUND process whose cwd escapes the project', async () => {
-    const result = await runTerminalCommand({
+    const result = await runMediatedTerminal({
       command: 'echo hello',
       process_type: 'BACKGROUND',
       cwd: '/etc',
@@ -520,7 +437,7 @@ describe('runTerminalCommand cwd containment', () => {
   })
 
   it('rejects a BACKGROUND process whose cwd escapes the explicit project root', async () => {
-    const result = await runTerminalCommand({
+    const result = await runMediatedTerminal({
       command: 'echo hello',
       process_type: 'BACKGROUND',
       cwd: '/etc',
@@ -542,7 +459,7 @@ describe('runTerminalCommand cwd containment', () => {
     )
     const sentinel = path.join(ownedTempDir, 'executed.txt')
     try {
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: `printf executed > '${sentinel}'`,
         process_type: 'SYNC',
         cwd: ownedTempDir,
@@ -566,7 +483,7 @@ describe('runTerminalCommand cwd containment', () => {
   })
 
   it('preserves the command field in the error result for debugging', async () => {
-    const result = await runTerminalCommand({
+    const result = await runMediatedTerminal({
       command: 'rm -rf /',
       process_type: 'SYNC',
       cwd: '/etc',
@@ -583,7 +500,7 @@ describe('runTerminalCommand cwd containment', () => {
       fs.mkdirSync(realDirectory)
       fs.symlinkSync(realDirectory, path.join(projectRoot, 'link'))
 
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'pwd -P',
         process_type: 'SYNC',
         cwd: 'link',
@@ -610,7 +527,7 @@ describe('runTerminalCommand cwd containment', () => {
     try {
       fs.symlinkSync(outsideRoot, path.join(projectRoot, 'escape'))
 
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'pwd',
         process_type: 'SYNC',
         cwd: 'escape',
@@ -627,6 +544,83 @@ describe('runTerminalCommand cwd containment', () => {
   })
 })
 
+describe('captured terminal and background execution', () => {
+  it('launches Bash with the exact captured scrubbed child environment', async () => {
+    const result = await runMediatedTerminal({
+      command: 'printf "%s|%s|%s" "$PROJECT_VALUE" "${OPENAI_API_KEY-unset}" "${CUSTOM_PROVIDER_KEY-unset}"',
+      process_type: 'SYNC', permission_profile: 'full-access',
+      cwd: process.cwd(), projectRoot: process.cwd(), timeout_seconds: 5,
+      env: { PROJECT_VALUE: 'explicit-overlay', OPENAI_API_KEY: 'fixture-reinsertion' },
+    })
+    expect(result[0].value).toMatchObject({ exitCode: 0, stdout: 'explicit-overlay|unset|unset' })
+    expect(result[0].value).toHaveProperty('executionBindingVersion', 2)
+    const host = executionHosts.at(-1)!
+    expect(host.events.some(event => event.phase === 'spawn-observed' && event.facts.branchId === 'terminal.sync')).toBe(true)
+    expect(JSON.stringify(host.events)).not.toContain('fixture-reinsertion')
+  })
+
+  it('background jobs keep execution handles in memory and write only descriptive metadata', async () => {
+    const result = await runMediatedTerminal({
+      command: 'printf "%s" "$PROJECT_VALUE"; sleep 0.05', process_type: 'BACKGROUND',
+      permission_profile: 'full-access', cwd: process.cwd(), projectRoot: process.cwd(), timeout_seconds: 5,
+    })
+    const value = result[0].value as { jobId?: string; processId?: number }
+    expect(value.processId).toBeGreaterThan(0)
+    const job = getBackgroundJob(value.jobId!)!
+    try {
+      expect(job.nodeLaunch?.input.env.PROJECT_VALUE).toBe('captured-value')
+      expect(job.executionContext).toBeDefined()
+      for (let tries = 0; job.status === 'running' && tries < 100; tries++) await new Promise(resolve => setTimeout(resolve, 10))
+      expect(fs.readFileSync(job.logFile, 'utf8')).toBe('captured-value')
+      const metadata = JSON.parse(fs.readFileSync(job.metadataFile, 'utf8'))
+      expect(metadata).not.toHaveProperty('executionContext')
+      expect(metadata).not.toHaveProperty('nodeLaunch')
+      expect(metadata).not.toHaveProperty('env')
+    } finally { killBackgroundJob(job.jobId, 'SIGKILL') }
+  })
+
+  it('refuses detached execution when the host supplies no authenticated transfer', async () => {
+    const host = createTerminalExecutionFixture({ projectRoot: process.cwd() })
+    executionHosts.push(host)
+    const result = await runTerminalCommand({
+      command: 'sleep 30', process_type: 'BACKGROUND', detach: true,
+      cwd: process.cwd(), projectRoot: process.cwd(), timeout_seconds: 1,
+      executionContext: host.context,
+    })
+    expect(result[0].value).toMatchObject({ executionRefusal: { reason: 'unavailable' } })
+    expect(host.events.some(event => event.phase === 'dispatched')).toBe(false)
+  })
+
+  it.each([0.3, -1])('a transferred background job retains a finite originating cap for local limit %s', async localLimit => {
+    const abort = new AbortController()
+    const projectRoot = initTempGitRepo('terminal-transferred-limit-')
+    let jobId: string | undefined
+    try {
+      const result = await runMediatedTerminal({
+        command: 'sleep 30', process_type: 'BACKGROUND', detach: true,
+        cwd: projectRoot, projectRoot, timeout_seconds: localLimit, signal: abort.signal,
+      }, { actionLimit: { kind: 'finite', durationMs: 400 } })
+      const value = result[0].value as { jobId?: string; detached?: boolean }
+      jobId = value.jobId
+      expect(value.detached).toBe(true)
+      const job = getBackgroundJob(value.jobId!)!
+      expect(job.nodeLaunch!.input.resourceRemainingMs).toBeGreaterThan(0)
+      expect(job.nodeLaunch!.input.resourceRemainingMs).toBeLessThanOrEqual(localLimit === -1 ? 400 : 300)
+      expect(job.nodeLaunch!.facts().deadlines.resourceLifetime.kind).toBe('finite')
+      abort.abort(new Error('original requester stopped waiting'))
+      await new Promise(resolve => setTimeout(resolve, 15))
+      expect(job.nodeLaunch!.input.resourceSignal.aborted).toBe(false)
+      for (let tries = 0; !job.nodeLaunch!.resourceRefusal() && tries < 100; tries++) await new Promise(resolve => setTimeout(resolve, 10))
+      expect(job.nodeLaunch!.resourceRefusal()).toMatchObject({ reason: 'deadline-exhausted' })
+      expect(executionHosts.at(-1)!.events.filter(event => event.phase === 'resource-transferred')).toHaveLength(1)
+      // These controls observe B19 transfer/cap behavior; B20 owns death and cleanup proof.
+    } finally {
+      if (jobId) killBackgroundJob(jobId, 'SIGKILL')
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('runTerminalCommand staged-commit safety preflight', () => {
   // Mirrors GIT_SAFETY_SCAN_SLICE_CHARS in run-terminal-command.ts: one drain
   // tick scans at most this many characters of the staged patch, so a
@@ -637,7 +631,7 @@ describe('runTerminalCommand staged-commit safety preflight', () => {
   // so these tests drive the real git repo path end to end: each case proves
   // the safety verdict still matches the previous synchronous behavior.
   async function runApprovedCommit(projectRoot: string, command: string) {
-    return runTerminalCommand({
+    return runMediatedTerminal({
       command,
       process_type: 'SYNC',
       mode: 'assistant',
@@ -645,12 +639,8 @@ describe('runTerminalCommand staged-commit safety preflight', () => {
       cwd: projectRoot,
       projectRoot,
       timeout_seconds: 15,
-      // `git commit` classifies as a high-impact action; approving it runs the
-      // post-approval rerun that reaches the staged-diff preflight.
-      authorizeHighImpactAction: async () => ({
-        allowed: true,
-        approvalReceiptId: 'r1',
-      }),
+      // The fixture supplies one explicit host decision for this captured
+      // commit; the same admitted launch reaches the staged-diff preflight.
     })
   }
 
@@ -1017,7 +1007,7 @@ describe('runTerminalCommand SYNC dirty-delta touchedPaths', () => {
       // Pre-existing dirt must not appear in the delta.
       fs.writeFileSync(path.join(projectRoot, 'already-dirty.txt'), 'old\n')
 
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'printf new > created-by-sync.txt',
         process_type: 'SYNC',
         cwd: projectRoot,
@@ -1044,7 +1034,7 @@ describe('runTerminalCommand SYNC dirty-delta touchedPaths', () => {
       const sub = path.join(projectRoot, 'pkg')
       fs.mkdirSync(sub)
 
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'printf nested > from-sub.txt',
         process_type: 'SYNC',
         cwd: 'pkg',
@@ -1068,7 +1058,7 @@ describe('runTerminalCommand SYNC dirty-delta touchedPaths', () => {
       path.join(os.tmpdir(), 'terminal-nongit-'),
     )
     try {
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'printf x > bare.txt',
         process_type: 'SYNC',
         cwd: projectRoot,
@@ -1101,7 +1091,7 @@ describe('runTerminalCommand BACKGROUND dirty snapshot at start', () => {
     try {
       fs.writeFileSync(path.join(projectRoot, 'already-dirty.txt'), 'old\n')
 
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'printf new > created-by-bg.txt; sleep 30',
         process_type: 'BACKGROUND',
         cwd: projectRoot,
@@ -1138,7 +1128,7 @@ describe('runTerminalCommand BACKGROUND dirty snapshot at start', () => {
     )
     let value: { jobId?: string; touchedPaths?: string[] } | undefined
     try {
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'sleep 30',
         process_type: 'BACKGROUND',
         cwd: projectRoot,
@@ -1184,7 +1174,7 @@ describe('runTerminalCommand BACKGROUND abort window around job start', () => {
     try {
       // runTerminalCommand executes synchronously up to the dirty-snapshot
       // await, so an abort issued right after the call lands inside it.
-      const pending = runTerminalCommand({
+      const pending = runMediatedTerminal({
         command: 'sleep 30',
         process_type: 'BACKGROUND',
         cwd: projectRoot,
@@ -1195,14 +1185,8 @@ describe('runTerminalCommand BACKGROUND abort window around job start', () => {
       })
       controller.abort()
 
-      let thrown: unknown
-      await pending.catch((error: unknown) => {
-        thrown = error
-      })
-      // The swallowed-abort re-check surfaces the signal's own reason, not a
-      // normal command result.
-      expect(thrown).toBeInstanceOf(Error)
-      expect((thrown as Error).name).toBe('AbortError')
+      const result = await pending
+      expect(result[0].value).toMatchObject({ executionRefusal: { reason: 'cancelled' } })
       // ...and the aborted run owns no background job at all.
       expect(jobRegistry.list(owner)).toHaveLength(0)
       expect(jobRegistry.listRunning(owner)).toHaveLength(0)
@@ -1211,7 +1195,7 @@ describe('runTerminalCommand BACKGROUND abort window around job start', () => {
     }
   })
 
-  it('kills a fresh job immediately when the signal aborted before the kill listener was wired', async () => {
+  it('refuses background dispatch when cancellation lands during job registration', async () => {
     // The kill listener is registered AFTER startBackgroundJob, so a signal
     // that aborts inside that synchronous window (here: during
     // jobRegistry.create) can never fire 'abort' on the signal: an
@@ -1235,7 +1219,7 @@ describe('runTerminalCommand BACKGROUND abort window around job start', () => {
     })
     let value: { jobId?: string; detached?: boolean } | undefined
     try {
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'sleep 30',
         process_type: 'BACKGROUND',
         cwd: process.cwd(),
@@ -1245,16 +1229,10 @@ describe('runTerminalCommand BACKGROUND abort window around job start', () => {
         owner,
       })
       value = result[0].value as { jobId?: string; detached?: boolean }
-      expect(value.jobId).toBeDefined()
-
-      // The registration-time kill delivered SIGTERM ('stopping'); the exit
-      // event then settles 'stopped'. Give the process a moment to exit.
-      let job = getBackgroundJob(value.jobId!)
-      for (let i = 0; i < 200 && job?.status === 'stopping'; i++) {
-        await new Promise((resolve) => setTimeout(resolve, 10))
-        job = getBackgroundJob(value.jobId!)
-      }
-      expect(job?.status === 'stopped' || job?.status === 'stopping').toBe(true)
+      expect(value.jobId).toBeUndefined()
+      expect(result[0].value).toMatchObject({ executionRefusal: { reason: 'cancelled' } })
+      expect(jobRegistry.listRunning(owner)).toHaveLength(0)
+      expect(executionHosts.at(-1)!.events.some(event => event.phase === 'dispatched' && event.facts.branchId === 'background.attached')).toBe(false)
     } finally {
       spy.mockRestore()
       if (value?.jobId !== undefined) {
@@ -1281,6 +1259,7 @@ describe('startBackgroundJob failed-spawn log file preservation', () => {
   })
 
   it('preserves a pre-existing foreign log when creation hits EEXIST', () => {
+    executionHosts.push(createTerminalExecutionFixture({ projectRoot: process.cwd(), scratchRoot: fixtureTempRoot }))
     foreignLogFile = path.join(os.tmpdir(), `openbuff-${FORCED_ID}.log`)
     fs.writeFileSync(foreignLogFile, FOREIGN_CONTENT)
 
@@ -1298,10 +1277,8 @@ describe('startBackgroundJob failed-spawn log file preservation', () => {
       expect(() =>
         startBackgroundJob({
           command: 'sleep 30',
-          shell: 'sh',
-          shellArgs: ['-c'],
-          cwd: process.cwd(),
-          env: { ...process.env },
+          admittedLaunch: executionHosts.at(-1)!.admitBackground('sleep 30'),
+          executionContext: executionHosts.at(-1)!.context,
           owner: {
             clientSessionId: 'session-eexist',
             rootRunId: 'root-eexist',
@@ -1329,7 +1306,7 @@ describe('runTerminalCommand SYNC full-output persistence on truncation', () => 
   const OVER_LIMIT_BYTES = 60_000
 
   it('omits fullLogPath when output fits under the inline limit', async () => {
-    const result = await runTerminalCommand({
+    const result = await runMediatedTerminal({
       command: `printf ${JSON.stringify('a'.repeat(1000))}`,
       process_type: 'SYNC',
       cwd: process.cwd(),
@@ -1350,7 +1327,7 @@ describe('runTerminalCommand SYNC full-output persistence on truncation', () => 
   })
 
   it('recovers the middle of both streams beyond the old accumulation cap', async () => {
-    const result = await runTerminalCommand({
+    const result = await runMediatedTerminal({
       command:
         "head -c 150000 /dev/zero | tr '\\0' A; printf '😀MIDDLE\\n'; head -c 150000 /dev/zero | tr '\\0' Z; head -c 160000 /dev/zero | tr '\\0' B >&2",
       process_type: 'SYNC',
@@ -1392,7 +1369,7 @@ describe('runTerminalCommand SYNC full-output persistence on truncation', () => 
     const previous = process.env.TMPDIR
     process.env.TMPDIR = blocker
     try {
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'head -c 160000 /dev/zero',
         process_type: 'SYNC',
         permission_profile: 'full-access',
@@ -1412,7 +1389,7 @@ describe('runTerminalCommand SYNC full-output persistence on truncation', () => 
 
   it('persists the full untruncated output and returns a pointer when stdout exceeds the limit', async () => {
     // head -c + tr produce exactly OVER_LIMIT_BYTES of stdout deterministically.
-    const result = await runTerminalCommand({
+    const result = await runMediatedTerminal({
       command: `yes a | tr -d '\\n' | head -c ${OVER_LIMIT_BYTES}`,
       process_type: 'SYNC',
       cwd: process.cwd(),
@@ -1468,7 +1445,7 @@ describe('runTerminalCommand SYNC full-output persistence on truncation', () => 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-safety-'))
     try {
       __resetStagedDiffScanStatsForTest()
-      const result = await runTerminalCommand({
+      const result = await runMediatedTerminal({
         command: 'git commit -m "Add staged diff inspection failure handling"',
         process_type: 'SYNC',
         mode: 'assistant',
@@ -1476,10 +1453,6 @@ describe('runTerminalCommand SYNC full-output persistence on truncation', () => 
         cwd: dir,
         projectRoot: dir,
         timeout_seconds: 10,
-        authorizeHighImpactAction: async () => ({
-          allowed: true,
-          approvalReceiptId: 'r1',
-        }),
       })
       const value = result[0].value as {
         errorMessage?: string
@@ -1502,7 +1475,7 @@ describe('runTerminalCommand SYNC full-output persistence on truncation', () => 
   })
 
   it('includes the pointer on a truncated, timed-out command result', async () => {
-    const result = await runTerminalCommand({
+    const result = await runMediatedTerminal({
       command: `yes a | tr -d '\\n' | head -c ${OVER_LIMIT_BYTES}; sleep 30`,
       process_type: 'SYNC',
       cwd: process.cwd(),

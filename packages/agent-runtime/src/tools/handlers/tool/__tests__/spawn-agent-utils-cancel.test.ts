@@ -12,6 +12,7 @@
  * as a crash outcome.
  */
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { z } from 'zod/v4'
 
 import { getInitialAgentState } from '@codebuff/common/types/session-state'
 import { createTestAgentRuntimeParams } from '@codebuff/common/testing/fixtures/agent-runtime'
@@ -76,9 +77,7 @@ const makeTemplate = (id: string): AgentTemplate => {
     displayName: `Mock ${id}`,
     outputMode: 'last_message' as const,
     inputSchema: {
-      prompt: {
-        safeParse: () => ({ success: true }),
-      } as unknown as AgentTemplate['inputSchema']['prompt'],
+      prompt: z.string(),
     },
     spawnerPrompt: '',
     model: '',
@@ -158,202 +157,187 @@ describe('supervised spawn parent-abort cancellation (cancel-softlock fix)', () 
     )
   }
 
-  test(
-    'parent abort during a supervised child kills the child group and the await settles as cancelled',
-    async () => {
-      expectLoopUntouched()
-      const controller = new AbortController()
-      const finishEvents: Array<Record<string, unknown>> = []
-      const parentAgentState = makeParentState()
-      let seamOptionsSignal: AbortSignal | undefined
-      let killObserved = false
+  test('parent abort during a supervised child kills the child group and the await settles as cancelled', async () => {
+    expectLoopUntouched()
+    const controller = new AbortController()
+    const finishEvents: Array<Record<string, unknown>> = []
+    const parentAgentState = makeParentState()
+    let seamOptionsSignal: AbortSignal | undefined
+    let killObserved = false
 
-      // Fake seam mimicking the real supervisor: it receives the threaded
-      // parent signal as its SECOND argument and — like the supervisor's
-      // abort listener — group-kills the child on abort, settling the killed
-      // child as an exit-code crash (never a clean abort). Without a parent
-      // abort it NEVER settles: only the abort can end this await, which is
-      // exactly the softlock this fix removes.
-      const fakeSeam = (
-        _request: SupervisedSpawnRequest,
-        options?: { signal?: AbortSignal },
-      ): Promise<SettledSubagentResult> => {
-        seamOptionsSignal = options?.signal
-        return new Promise<SettledSubagentResult>((resolve) => {
-          options?.signal?.addEventListener(
-            'abort',
-            () => {
-              killObserved = true
-              resolve(KILLED_CHILD_CRASH)
-            },
-            { once: true },
-          )
-        })
-      }
+    // Fake seam mimicking the real supervisor: it receives the threaded
+    // parent signal as its SECOND argument and — like the supervisor's
+    // abort listener — group-kills the child on abort, settling the killed
+    // child as an exit-code crash (never a clean abort). Without a parent
+    // abort it NEVER settles: only the abort can end this await, which is
+    // exactly the softlock this fix removes.
+    const fakeSeam = (
+      _request: SupervisedSpawnRequest,
+      options?: { signal?: AbortSignal },
+    ): Promise<SettledSubagentResult> => {
+      seamOptionsSignal = options?.signal
+      return new Promise<SettledSubagentResult>((resolve) => {
+        options?.signal?.addEventListener(
+          'abort',
+          () => {
+            killObserved = true
+            resolve(KILLED_CHILD_CRASH)
+          },
+          { once: true },
+        )
+      })
+    }
 
-      const execution = executeSubagent(
+    const execution = executeSubagent(
+      buildExecuteParams({
+        parentAgentState,
+        spawnSupervised: fakeSeam,
+        signal: controller.signal,
+        onResponseChunk: (chunk: unknown) => {
+          if (typeof chunk === 'object' && chunk !== null) {
+            finishEvents.push(chunk as Record<string, unknown>)
+          }
+        },
+      }),
+    )
+
+    // The child is running (the await is pending) when the user terminates
+    // the run.
+    await Bun.sleep(10)
+    // The parent signal was threaded into the seam (the supervisor's kill
+    // channel).
+    expect(seamOptionsSignal).toBe(controller.signal)
+    controller.abort()
+
+    // The await settles as CANCELLED — executeSubagent rethrows the
+    // cancellation error exactly like the in-process abort path; it must
+    // NOT resolve with a crash envelope (the settle chain would otherwise
+    // record outcome 'crashed' for a cancelled run).
+    await expect(execution).rejects.toThrow('Subagent thinker was cancelled')
+    // The (fake) supervisor kill actually fired.
+    expect(killObserved).toBe(true)
+    expect(loopSpy).not.toHaveBeenCalled()
+
+    // The finish event fired before the rethrow (no started-but-never-
+    // finished subagent) and the abandoned child runId was registered for
+    // the journal/step-boundary machinery.
+    const finish = finishEvents.find(
+      (event) => event.type === 'subagent_finish',
+    )
+    expect(finish).toBeDefined()
+    expect(String(finish?.error)).toContain('was cancelled')
+    expect(parentAgentState.childRunIds).toContain('cancel-child-run-1')
+  })
+
+  test('an already-aborted parent signal throws cancellation before any child is spawned', async () => {
+    expectLoopUntouched()
+    const controller = new AbortController()
+    controller.abort()
+    const finishEvents: Array<Record<string, unknown>> = []
+    const parentAgentState = makeParentState()
+    let seamCalled = false
+    await expect(
+      executeSubagent(
         buildExecuteParams({
           parentAgentState,
-          spawnSupervised: fakeSeam,
           signal: controller.signal,
+          spawnSupervised: async () => {
+            seamCalled = true
+            return settledOk(OK_RECEIPT)
+          },
           onResponseChunk: (chunk: unknown) => {
             if (typeof chunk === 'object' && chunk !== null) {
               finishEvents.push(chunk as Record<string, unknown>)
             }
           },
         }),
-      )
+      ),
+    ).rejects.toThrow('Subagent thinker was cancelled')
+    // No child was ever spawned for the already-cancelled run.
+    expect(seamCalled).toBe(false)
+    // The prologue guard's contract holds: the finish event fires BEFORE
+    // the rethrow, and the (never-started) child runId is registered
+    // defensively — parity with the in-process abort path.
+    expect(finishEvents.some((event) => event.type === 'subagent_finish')).toBe(
+      true,
+    )
+    expect(parentAgentState.childRunIds).toContain('cancel-child-run-1')
+  })
 
-      // The child is running (the await is pending) when the user terminates
-      // the run.
-      await Bun.sleep(10)
-      // The parent signal was threaded into the seam (the supervisor's kill
-      // channel).
-      expect(seamOptionsSignal).toBe(controller.signal)
-      controller.abort()
+  test('a signal that never aborts keeps the byte-identical ok settle (no false cancellation)', async () => {
+    expectLoopUntouched()
+    const controller = new AbortController()
+    let seenSignal: AbortSignal | undefined
+    const result = await executeSubagent(
+      buildExecuteParams({
+        signal: controller.signal,
+        spawnSupervised: async (
+          _request: SupervisedSpawnRequest,
+          options?: { signal?: AbortSignal },
+        ) => {
+          seenSignal = options?.signal
+          return settledOk(OK_RECEIPT)
+        },
+      }),
+    )
+    // The signal rides the seam's second argument even on the happy path.
+    expect(seenSignal).toBe(controller.signal)
+    // The happy path is unchanged: the receipt rides supervisedReceipt and
+    // the parent-visible output is the structured completion.
+    expect(result.supervisedReceipt).toEqual(OK_RECEIPT)
+    expect(result.output).toEqual({
+      type: 'structuredOutput',
+      value: { message: 'Supervised subagent thinker completed.' },
+    })
+    // A late abort after a normal settle must not retroactively cancel.
+    controller.abort()
+  })
 
-      // The await settles as CANCELLED — executeSubagent rethrows the
-      // cancellation error exactly like the in-process abort path; it must
-      // NOT resolve with a crash envelope (the settle chain would otherwise
-      // record outcome 'crashed' for a cancelled run).
-      await expect(execution).rejects.toThrow('Subagent thinker was cancelled')
-      // The (fake) supervisor kill actually fired.
-      expect(killObserved).toBe(true)
-      expect(loopSpy).not.toHaveBeenCalled()
+  test('a signal-absent caller keeps the legacy crash-envelope settle (byte-identical older callers)', async () => {
+    expectLoopUntouched()
+    const result = await executeSubagent(
+      buildExecuteParams({
+        signal: undefined,
+        spawnSupervised: async () => ({
+          outcome: 'crashed' as const,
+          crashReason: 'nonzero_exit' as const,
+          exitCode: 1,
+          durationMs: 5,
+          stdoutBytes: 0,
+          killed: false,
+          stderrTail: 'child died on its own',
+        }),
+      }),
+    )
+    // Byte-identical legacy behavior: a crash settle maps to the crash
+    // envelope the settle chain classifies as outcome 'crashed' — no
+    // cancellation classification without a parent signal.
+    const output = result.output as { type: string; message: string }
+    expect(output.type).toBe('error')
+    expect(output.message).toContain('Subagent thinker crashed:')
+    expect(output.message).toContain('child died on its own')
+    expect('supervisedReceipt' in result).toBe(false)
+  })
 
-      // The finish event fired before the rethrow (no started-but-never-
-      // finished subagent) and the abandoned child runId was registered for
-      // the journal/step-boundary machinery.
-      const finish = finishEvents.find(
-        (event) => event.type === 'subagent_finish',
-      )
-      expect(finish).toBeDefined()
-      expect(String(finish?.error)).toContain('was cancelled')
-      expect(parentAgentState.childRunIds).toContain('cancel-child-run-1')
-    },
-  )
-
-  test(
-    'an already-aborted parent signal throws cancellation before any child is spawned',
-    async () => {
-      expectLoopUntouched()
-      const controller = new AbortController()
-      controller.abort()
-      const finishEvents: Array<Record<string, unknown>> = []
-      const parentAgentState = makeParentState()
-      let seamCalled = false
-      await expect(
-        executeSubagent(
-          buildExecuteParams({
-            parentAgentState,
-            signal: controller.signal,
-            spawnSupervised: async () => {
-              seamCalled = true
-              return settledOk(OK_RECEIPT)
-            },
-            onResponseChunk: (chunk: unknown) => {
-              if (typeof chunk === 'object' && chunk !== null) {
-                finishEvents.push(chunk as Record<string, unknown>)
-              }
-            },
-          }),
-        ),
-      ).rejects.toThrow('Subagent thinker was cancelled')
-      // No child was ever spawned for the already-cancelled run.
-      expect(seamCalled).toBe(false)
-      // The prologue guard's contract holds: the finish event fires BEFORE
-      // the rethrow, and the (never-started) child runId is registered
-      // defensively — parity with the in-process abort path.
-      expect(
-        finishEvents.some((event) => event.type === 'subagent_finish'),
-      ).toBe(true)
-      expect(parentAgentState.childRunIds).toContain('cancel-child-run-1')
-    },
-  )
-
-  test(
-    'a signal that never aborts keeps the byte-identical ok settle (no false cancellation)',
-    async () => {
-      expectLoopUntouched()
-      const controller = new AbortController()
-      let seenSignal: AbortSignal | undefined
-      const result = await executeSubagent(
+  test('a killed-child crash settle racing the parent abort classifies as cancellation, never outcome crashed', async () => {
+    expectLoopUntouched()
+    const controller = new AbortController()
+    // The seam settles the killed-child crash WHILE aborting the parent
+    // signal in the same synchronous turn: the settle lands after the
+    // abort, so the cancellation classification (not the transport
+    // outcome) must decide — the settle chain must never see this as
+    // outcome 'crashed'.
+    await expect(
+      executeSubagent(
         buildExecuteParams({
           signal: controller.signal,
-          spawnSupervised: async (
-            _request: SupervisedSpawnRequest,
-            options?: { signal?: AbortSignal },
-          ) => {
-            seenSignal = options?.signal
-            return settledOk(OK_RECEIPT)
+          spawnSupervised: () => {
+            const settled = Promise.resolve(KILLED_CHILD_CRASH)
+            controller.abort()
+            return settled
           },
         }),
-      )
-      // The signal rides the seam's second argument even on the happy path.
-      expect(seenSignal).toBe(controller.signal)
-      // The happy path is unchanged: the receipt rides supervisedReceipt and
-      // the parent-visible output is the structured completion.
-      expect(result.supervisedReceipt).toEqual(OK_RECEIPT)
-      expect(result.output).toEqual({
-        type: 'structuredOutput',
-        value: { message: 'Supervised subagent thinker completed.' },
-      })
-      // A late abort after a normal settle must not retroactively cancel.
-      controller.abort()
-    },
-  )
-
-  test(
-    'a signal-absent caller keeps the legacy crash-envelope settle (byte-identical older callers)',
-    async () => {
-      expectLoopUntouched()
-      const result = await executeSubagent(
-        buildExecuteParams({
-          signal: undefined,
-          spawnSupervised: async () => ({
-            outcome: 'crashed' as const,
-            crashReason: 'nonzero_exit' as const,
-            exitCode: 1,
-            durationMs: 5,
-            stdoutBytes: 0,
-            killed: false,
-            stderrTail: 'child died on its own',
-          }),
-        }),
-      )
-      // Byte-identical legacy behavior: a crash settle maps to the crash
-      // envelope the settle chain classifies as outcome 'crashed' — no
-      // cancellation classification without a parent signal.
-      const output = result.output as { type: string; message: string }
-      expect(output.type).toBe('error')
-      expect(output.message).toContain('Subagent thinker crashed:')
-      expect(output.message).toContain('child died on its own')
-      expect('supervisedReceipt' in result).toBe(false)
-    },
-  )
-
-  test(
-    'a killed-child crash settle racing the parent abort classifies as cancellation, never outcome crashed',
-    async () => {
-      expectLoopUntouched()
-      const controller = new AbortController()
-      // The seam settles the killed-child crash WHILE aborting the parent
-      // signal in the same synchronous turn: the settle lands after the
-      // abort, so the cancellation classification (not the transport
-      // outcome) must decide — the settle chain must never see this as
-      // outcome 'crashed'.
-      await expect(
-        executeSubagent(
-          buildExecuteParams({
-            signal: controller.signal,
-            spawnSupervised: () => {
-              const settled = Promise.resolve(KILLED_CHILD_CRASH)
-              controller.abort()
-              return settled
-            },
-          }),
-        ),
-      ).rejects.toThrow('Subagent thinker was cancelled')
-    },
-  )
+      ),
+    ).rejects.toThrow('Subagent thinker was cancelled')
+  })
 })

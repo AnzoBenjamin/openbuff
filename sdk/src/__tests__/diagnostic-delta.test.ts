@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 
 import {
   createDiagnosticCommandRunner,
@@ -30,6 +30,42 @@ import type {
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { ChildProcess } from 'node:child_process'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import type { AsyncDecision, ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
+
+
+import {
+  createControlledExecutionClock,
+  createExecutionProcessRecorder,
+  createTerminalExecutionFixture,
+  executionDeadlineMs,
+} from './fixtures/b19-terminal-execution'
+import { executionRefusal } from '../services/execution-launch'
+
+const executionHosts: ReturnType<typeof createTerminalExecutionFixture>[] = []
+afterEach(() => { for (const host of executionHosts.splice(0)) host.dispose() })
+function capturedExecution(cwd: string, signal?: AbortSignal) {
+  const host = createTerminalExecutionFixture({ projectRoot: cwd, signal })
+  executionHosts.push(host)
+  return host.context
+}
+function createMediatedDiagnosticRunner(params: Parameters<typeof createDiagnosticCommandRunner>[0]) {
+  const run = createDiagnosticCommandRunner(params)
+  return (input: Parameters<typeof run>[0]) => run({
+    ...input, executionContext: input.executionContext ?? capturedExecution(input.cwd, input.signal),
+  })
+}
+function createMediatedDeltaHook(params: Parameters<typeof createDiagnosticDeltaHook>[0]) {
+  const hook = createDiagnosticDeltaHook(params)
+  return (input: Parameters<typeof hook>[0]) => hook({
+    ...input, executionContext: input.executionContext ?? capturedExecution(input.cwd, input.signal),
+  })
+}
+function runCapturedHooks(params: Parameters<typeof runFileChangeHooks>[0]) {
+  return runFileChangeHooks({
+    ...params, executionContext: params.executionContext ?? capturedExecution(params.cwd, params.signal),
+    capturedConfiguration: { autoFileChangeHooks: false, fileChangeHooks: [] },
+  })
+}
 
 function makeDiagnostic(
   overrides: Partial<LanguageDiagnostic> = {},
@@ -666,7 +702,7 @@ describe('preflightDiagnosticDelta', () => {
     expect(result.rejected).toBe(true)
   })
 
-  test('strict delta mode is opt-in via OPENBUFF_DIAGNOSTIC_DELTA_MODE', async () => {
+  test('ambient strict mode does not replace the captured delta policy', async () => {
     const previous = process.env[DELTA_MODE_ENV_FLAG]
     process.env[DELTA_MODE_ENV_FLAG] = 'strict'
     try {
@@ -679,7 +715,7 @@ describe('preflightDiagnosticDelta', () => {
         runCommand: run,
         applyEdit: () => {},
       })
-      expect(result.rejected).toBe(true)
+      expect(result.rejected).toBe(false)
     } finally {
       if (previous === undefined) delete process.env[DELTA_MODE_ENV_FLAG]
       else process.env[DELTA_MODE_ENV_FLAG] = previous
@@ -843,10 +879,11 @@ describe('B36 diagnostic observation truth', () => {
         applyEdit: () => {},
       })
       expect(delta.diagnosticStatus).toBe(diagnosticStatus)
-      const output = await runFileChangeHooks({
+      const output = await runCapturedHooks({
         files: ['src/lib.rs'],
         cwd: '/repo',
         env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true' },
+      diagnosticPreflightEnabled: true,
         hooks: [{ name: 'check', command: 'true' }],
         runCommand: async () => [
           { type: 'json', value: { command: 'true', exitCode: 0 } },
@@ -1094,7 +1131,7 @@ describe('runFileChangeHooks diagnostic-delta gating', () => {
   test('flag OFF yields byte-identical results (no delta block runs)', async () => {
     const { run } = fakeRunner({ 'tsc --noEmit': { exitCode: 0 } })
     let deltaInvoked = false
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       env: {}, // flag unset
@@ -1116,10 +1153,11 @@ describe('runFileChangeHooks diagnostic-delta gating', () => {
     const { run } = fakeRunner({ 'tsc --noEmit': { exitCode: 0 } })
     const newDiagnostic = makeDiagnostic({ code: 'F401' })
     const fixIt = makeFix()
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: '1' },
+      diagnosticPreflightEnabled: true,
       hooks: baseHooks,
       runCommand: run,
       diagnosticDelta: async () => ({
@@ -1139,10 +1177,11 @@ describe('runFileChangeHooks diagnostic-delta gating', () => {
 
   test('flag ON with passing preflight surfaces a passed marker', async () => {
     const { run } = fakeRunner({ 'tsc --noEmit': { exitCode: 0 } })
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true' },
+      diagnosticPreflightEnabled: true,
       hooks: baseHooks,
       runCommand: run,
       diagnosticDelta: async () =>
@@ -1167,10 +1206,11 @@ describe('runFileChangeHooks diagnostic-delta gating', () => {
     { rejected: false as const, diagnosticStatus: 'passed' as const },
   ])('legacy or unsupported pass assertions remain unknown', async (result) => {
     const { run } = fakeRunner({ 'tsc --noEmit': { exitCode: 0 } })
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true' },
+      diagnosticPreflightEnabled: true,
       hooks: baseHooks,
       runCommand: run,
       diagnosticDelta: async () => result,
@@ -1183,10 +1223,11 @@ describe('runFileChangeHooks diagnostic-delta gating', () => {
   test('flag ON keeps unsupported files visible to the delta preflight', async () => {
     const { run } = fakeRunner({ 'tsc --noEmit': { exitCode: 0 } })
     let deltaInvoked = false
-    await runFileChangeHooks({
+    await runCapturedHooks({
       files: ['README.md'],
       cwd: '/repo',
       env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: '1' },
+      diagnosticPreflightEnabled: true,
       hooks: baseHooks,
       runCommand: run,
       diagnosticDelta: async () => {
@@ -1220,14 +1261,16 @@ describe('createDiagnosticDeltaHook', () => {
       calls.push({ file, args: [...(args ?? [])], options })
       const stdout = new EventEmitter()
       const child = Object.assign(new EventEmitter(), {
-        stdout,
+        pid: 42_424_001, stdout, kill: () => true,
       }) as unknown as ChildProcess
       process.nextTick(() => {
         const spec = results[file]
         if (spec === 'error') {
           child.emit('error', new Error('spawn ENOENT'))
+          child.emit('close', -1)
           return
         }
+        child.emit('spawn')
         if (spec?.stdout) stdout.emit('data', spec.stdout)
         child.emit('close', spec?.exitCode ?? 0)
       })
@@ -1238,7 +1281,7 @@ describe('createDiagnosticDeltaHook', () => {
 
   test('runs preflightDiagnosticDelta over the argv-array child-process seam', async () => {
     const { spawn, calls } = fakeSpawn({})
-    const hook = createDiagnosticDeltaHook({ spawn })
+    const hook = createMediatedDeltaHook({ spawn })
     const result = await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
     // No tool output -> empty baseline and after-capture -> acceptance; a
     // hook-seam preflight never fabricates a rejection.
@@ -1256,7 +1299,7 @@ describe('createDiagnosticDeltaHook', () => {
       tsc: { exitCode: 0, stdout: '[]' },
       eslint: { exitCode: 0, stdout: '[]' },
     })
-    const hook = createDiagnosticDeltaHook({ spawn })
+    const hook = createMediatedDeltaHook({ spawn })
     await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
     // The hook seam's applyEdit is a no-op, so each diagnostic command must
     // run exactly once per hook invocation — not once per capture (twice).
@@ -1268,7 +1311,7 @@ describe('createDiagnosticDeltaHook', () => {
 
   test('is fail-open: a throwing preflight preserves unknown observation', async () => {
     const { spawn } = fakeSpawn({})
-    const hook = createDiagnosticDeltaHook({
+    const hook = createMediatedDeltaHook({
       spawn,
       preflight: (async () => {
         throw new Error('preflight exploded')
@@ -1281,7 +1324,7 @@ describe('createDiagnosticDeltaHook', () => {
 
   test('an absent diagnostic tool yields no diagnostics and no rejection', async () => {
     const { spawn } = fakeSpawn({ tsc: 'error' })
-    const hook = createDiagnosticDeltaHook({ spawn })
+    const hook = createMediatedDeltaHook({ spawn })
     const result = await hook({ files: ['src/a.ts'], cwd: '/repo' })
     expect(result).toMatchObject({ rejected: false })
   })
@@ -1296,7 +1339,7 @@ describe('createDiagnosticDeltaHook', () => {
       return { rejected: false }
     }) as unknown as typeof preflightDiagnosticDelta
     const baseline = [makeDiagnostic()]
-    const hook = createDiagnosticDeltaHook({
+    const hook = createMediatedDeltaHook({
       spawn: fakeSpawn({}).spawn,
       preflight: spyPreflight,
       getBaseline: () => baseline,
@@ -1313,7 +1356,7 @@ describe('createDiagnosticDeltaHook', () => {
       seen.push(params)
       return { rejected: false }
     }) as unknown as typeof preflightDiagnosticDelta
-    const hook = createDiagnosticDeltaHook({
+    const hook = createMediatedDeltaHook({
       spawn: fakeSpawn({}).spawn,
       preflight: spyPreflight,
       getBaseline: () => undefined,
@@ -1325,7 +1368,7 @@ describe('createDiagnosticDeltaHook', () => {
   })
 
   test('a throwing baseline provider retains unknown evidence instead of fabricating a new baseline', async () => {
-    const hook = createDiagnosticDeltaHook({
+    const hook = createMediatedDeltaHook({
       spawn: fakeSpawn({}).spawn,
       getBaseline: () => {
         throw new Error('baseline failed')
@@ -1346,7 +1389,7 @@ describe('createDiagnosticDeltaHook', () => {
     const { spawn } = fakeSpawn({
       tsc: { exitCode: 2, stdout: 'src/a.ts(1,1): error TS2: brand new error' },
     })
-    const hook = createDiagnosticDeltaHook({
+    const hook = createMediatedDeltaHook({
       spawn,
       getBaseline: () => observedBaseline([], ['src/a.ts']),
     })
@@ -1364,7 +1407,7 @@ describe('createDiagnosticDeltaHook', () => {
         stdout: 'src/a.ts(1,1): error TS1: pre-existing error',
       },
     })
-    const hook = createDiagnosticDeltaHook({
+    const hook = createMediatedDeltaHook({
       spawn,
       getBaseline: () =>
         observedBaseline(
@@ -1386,7 +1429,7 @@ describe('createDiagnosticDeltaHook', () => {
     const { spawn } = fakeSpawn({
       tsc: { exitCode: 2, stdout: 'src/a.ts(1,1): error TS2: brand new error' },
     })
-    const hook = createDiagnosticDeltaHook({ spawn })
+    const hook = createMediatedDeltaHook({ spawn })
     const result = await hook({ files: ['src/a.ts'], cwd: '/repo', env: {} })
     expect(result).toMatchObject({ rejected: false })
   })
@@ -1402,9 +1445,10 @@ describe('createDiagnosticCommandRunner stream capture', () => {
     return ((file: string) => {
       const stdout = new EventEmitter()
       const child = Object.assign(new EventEmitter(), {
-        stdout,
+        pid: 42_424_001, stdout, kill: () => true,
       }) as unknown as ChildProcess
       process.nextTick(() => {
+        child.emit('spawn')
         for (const chunk of stdoutChunks) stdout.emit('data', chunk)
         child.emit('close', 0)
       })
@@ -1416,7 +1460,7 @@ describe('createDiagnosticCommandRunner stream capture', () => {
     // '😀' is 4 UTF-8 bytes; the fake stream splits it mid-sequence. The old
     // per-chunk chunk.toString() decode turned each half into U+FFFD.
     const emoji = Buffer.from('😀', 'utf8')
-    const runCommand = createDiagnosticCommandRunner({
+    const runCommand = createMediatedDiagnosticRunner({
       spawn: bufferSpawn([
         Buffer.from('prefix '),
         emoji.subarray(0, 2),
@@ -1425,7 +1469,7 @@ describe('createDiagnosticCommandRunner stream capture', () => {
       ]),
     })
     const result = await runCommand({
-      command: 'tsc --noEmit',
+      command: 'tsc --noEmit --pretty false',
       cwd: '/repo',
       timeoutSeconds: 5,
     })
@@ -1448,11 +1492,11 @@ describe('createDiagnosticCommandRunner stream capture', () => {
     for (let i = 0; i < payload.length; i += 63) {
       chunks.push(payload.subarray(i, i + 63))
     }
-    const runCommand = createDiagnosticCommandRunner({
+    const runCommand = createMediatedDiagnosticRunner({
       spawn: bufferSpawn(chunks),
     })
     const result = await runCommand({
-      command: 'tsc --noEmit',
+      command: 'tsc --noEmit --pretty false',
       cwd: '/repo',
       timeoutSeconds: 5,
     })
@@ -1468,7 +1512,7 @@ describe('createDiagnosticCommandRunner stream capture', () => {
 })
 
 // ---------------------------------------------------------------------------
-// createDiagnosticCommandRunner — SIGTERM→SIGKILL escalation
+// createDiagnosticCommandRunner — immediate deadline termination
 // (perf: diagnostic-runner-timeout-no-sigkill-escalation)
 // ---------------------------------------------------------------------------
 describe('createDiagnosticCommandRunner timeout escalation', () => {
@@ -1481,15 +1525,17 @@ describe('createDiagnosticCommandRunner timeout escalation', () => {
     const spawn = ((file: string) => {
       const stdout = new EventEmitter()
       const child = Object.assign(new EventEmitter(), {
-        stdout,
+        pid: 42_424_001, stdout,
         kill: (signal?: string) => {
           signals.push(signal ?? 'SIGTERM')
           if (signal === 'SIGKILL') {
             // A SIGTERM-ignoring child only terminates on SIGKILL.
             process.nextTick(() => child.emit('close', null))
           }
+          return true
         },
       }) as unknown as ChildProcess
+      process.nextTick(() => child.emit('spawn'))
       return child
     }) as unknown as CodebuffSpawn
     return { spawn, signals }
@@ -1498,46 +1544,257 @@ describe('createDiagnosticCommandRunner timeout escalation', () => {
   test('a synchronous successful close during timeout kill cannot erase the timeout', async () => {
     const spawn = (() => {
       const child = Object.assign(new EventEmitter(), {
-        stdout: new EventEmitter(),
+        pid: 42_424_001, stdout: new EventEmitter(),
         stderr: new EventEmitter(),
         kill: () => {
           child.emit('close', 0)
           return true
         },
       })
+      process.nextTick(() => child.emit('spawn'))
       return child as unknown as ChildProcess
     }) as CodebuffSpawn
-    const run = createDiagnosticCommandRunner({ spawn, sigtermGraceMs: 5 })
+    const run = createMediatedDiagnosticRunner({ spawn, sigtermGraceMs: 5 })
     const result = await run({
-      command: 'tsc --noEmit',
+      command: 'tsc --noEmit --pretty false',
       cwd: '/repo',
       timeoutSeconds: 0.01,
     })
     expect(result.timedOut).toBe(true)
   })
 
-  test('settles at the deadline and reaps a SIGTERM-ignoring child via SIGKILL', async () => {
+  test('settles and kills immediately at the captured resource deadline', async () => {
     const { spawn, signals } = sigtermIgnoringSpawn()
-    const runCommand = createDiagnosticCommandRunner({
+    const runCommand = createMediatedDiagnosticRunner({
       spawn,
       sigtermGraceMs: 25,
     })
     const started = performance.now()
     const result = await runCommand({
-      command: 'tsc --noEmit',
+      command: 'tsc --noEmit --pretty false',
       cwd: '/repo',
       timeoutSeconds: 0.05,
     })
-    // The result settles AT the deadline (the SIGTERM), not at the SIGKILL
-    // escalation: the escalation bounds the leaked child's lifetime without
-    // delaying callers on the hot file-change path.
+    // Deadline exhaustion settles the result and requests SIGKILL immediately.
     expect(performance.now() - started).toBeLessThan(1_000)
     expect(result.timedOut).toBe(true)
-    // SIGTERM at the deadline, then the SIGKILL escalation after the grace.
-    // The escalation deliberately does NOT delay the settled result, so it
-    // fires after the promise resolves — wait past the injected grace before
-    // asserting the escalation sequence.
+    // Waiting past the cancellation grace also checks that no second kill is armed.
     await new Promise((resolve) => setTimeout(resolve, 100))
-    expect(signals).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(signals).toEqual(['SIGKILL'])
+  })
+})
+
+describe('B19 diagnostic launch controls', () => {
+  const vectors = [
+    ['tsc --noEmit --pretty false', 'tsc', ['--noEmit', '--pretty', 'false']],
+    ['eslint --format=json .', 'eslint', ['--format=json', '.']],
+    ['ruff check --output-format=json', 'ruff', ['check', '--output-format=json']],
+    ['pyright --outputjson', 'pyright', ['--outputjson']],
+    ['cargo check --message-format=json', 'cargo', ['check', '--message-format=json']],
+    ['go vet ./...', 'go', ['vet', './...']],
+  ] as const
+
+  for (const [command, executable, argv] of vectors) {
+    for (const phase of ['baseline', 'current', 'after'] as const) {
+      test(`diagnostic.${executable}.${phase} binds exact argv, env and remaining cap`, async () => {
+        const manual = createControlledExecutionClock()
+        const recorder = createExecutionProcessRecorder()
+        const host = createTerminalExecutionFixture({
+          ...manual, projectRoot: '/repo', spawn: recorder.spawn,
+          actionLimit: { kind: 'finite', durationMs: 100 },
+          authorize: () => {
+            manual.advance(20)
+            return { ok: true, basis: 'explicit-policy', decisionId: 'diagnostic-control' }
+          },
+        })
+        executionHosts.push(host)
+        const run = createDiagnosticCommandRunner({ spawn: recorder.spawn })
+        const result = await run({
+          command, phase, cwd: '/repo', timeoutSeconds: 0.08,
+          env: { PROJECT_VALUE: 'diagnostic-overlay', OPENAI_API_KEY: 'reinsert-attempt' },
+          executionContext: host.context,
+        })
+        expect(result.exitCode).toBe(0)
+        expect(recorder.calls).toHaveLength(1)
+        const actual = recorder.calls[0]
+        expect(actual.executable).toBe(executable)
+        expect(actual.argv).toEqual(argv)
+        expect(actual.options).toMatchObject({ cwd: '/repo', shell: false, detached: false, windowsHide: false })
+        expect(actual.options.env?.PROJECT_VALUE).toBe('diagnostic-overlay')
+        expect(actual.options.env?.OPENAI_API_KEY).toBeUndefined()
+        expect(actual.options.env?.CUSTOM_PROVIDER_KEY).toBeUndefined()
+        expect(Object.isFrozen(actual.options.env)).toBe(true)
+        expect(actual.options.signal).not.toBe(host.context.signal)
+        const input = host.policyInputs[0]
+        expect(input.facts.branchId).toBe(`diagnostic.${executable}.${phase}`)
+        expect(input.target.argv).toEqual(actual.argv)
+        expect(input.target.adapterOptions.phase).toBe(phase)
+        expect(executionDeadlineMs(input.facts.deadlines.resourceLifetime)! - manual.clock.nowMs()).toBe(60)
+        expect(host.events.filter(event => event.phase === 'spawn-observed')).toHaveLength(1)
+      })
+    }
+  }
+
+  test.each([
+    ['', 'EMPTY_COMMAND'],
+    ['__proto__', 'UNSUPPORTED_COMMAND'],
+    ['constructor', 'UNSUPPORTED_COMMAND'],
+    ['toString', 'UNSUPPORTED_COMMAND'],
+    ['tsc --noEmit', 'UNSUPPORTED_COMMAND'],
+    [' tsc --noEmit --pretty false', 'UNSUPPORTED_COMMAND'],
+    ['tsc --noEmit --pretty false; printf extra', 'UNSUPPORTED_COMMAND'],
+  ] as const)('unsupported diagnostic bytes %j never launch', async (command, errorCode) => {
+    const recorder = createExecutionProcessRecorder()
+    const host = createTerminalExecutionFixture({ projectRoot: '/repo', spawn: recorder.spawn })
+    executionHosts.push(host)
+    const run = createDiagnosticCommandRunner({ spawn: recorder.spawn })
+    const result = await run({ command, cwd: '/repo', timeoutSeconds: 1, executionContext: host.context })
+    expect(result).toMatchObject({ errorCode, executionRefusal: { reason: 'unavailable' } })
+    expect(recorder.calls).toHaveLength(0)
+    expect(host.policyInputs).toHaveLength(0)
+  })
+
+  test.each([
+    ['missing', 'unavailable'],
+    ['denied', 'denied'],
+    ['expired', 'deadline-exhausted'],
+    ['fabricated', 'stale-authority'],
+    ['cancelled', 'cancelled'],
+  ] as const)('%s diagnostic context refuses with zero spawn', async (kind, reason) => {
+    const manual = createControlledExecutionClock()
+    const recorder = createExecutionProcessRecorder()
+    const abort = new AbortController()
+    const host = createTerminalExecutionFixture({
+      ...manual, projectRoot: '/repo', spawn: recorder.spawn, signal: abort.signal,
+      actionLimit: { kind: 'finite', durationMs: 50 },
+      ...(kind === 'denied' ? { authorize: () => executionRefusal('denied', 'controlled diagnostic denial') } : {}),
+    })
+    executionHosts.push(host)
+    let executionContext: ExecutionAdapterContext | undefined = host.context
+    if (kind === 'missing') executionContext = undefined
+    if (kind === 'fabricated') executionContext = { ...host.context, execution: { ...host.context.execution } }
+    if (kind === 'expired') manual.advance(50)
+    if (kind === 'cancelled') abort.abort(new Error('diagnostic request cancelled'))
+    const run = createDiagnosticCommandRunner({ spawn: recorder.spawn })
+    const result = await run({ command: vectors[0][0], cwd: '/repo', timeoutSeconds: -1, executionContext })
+    expect(result.executionRefusal).toMatchObject({ reason })
+    expect(recorder.calls).toHaveLength(0)
+    expect(host.events.some(event => event.phase === 'dispatched')).toBe(false)
+  })
+
+  test.each(['cancelled', 'deadline-exhausted'] as const)('%s during diagnostic admission grants no spawn', async reason => {
+    const manual = createControlledExecutionClock()
+    const abort = new AbortController()
+    const recorder = createExecutionProcessRecorder()
+    let allow!: (decision: AsyncDecision) => void
+    let entered!: () => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const decision = new Promise<AsyncDecision>(resolve => { allow = resolve })
+    const host = createTerminalExecutionFixture({
+      ...manual, projectRoot: '/repo', spawn: recorder.spawn, signal: abort.signal,
+      authorize: () => { entered(); return decision },
+    })
+    executionHosts.push(host)
+    const run = createDiagnosticCommandRunner({ spawn: recorder.spawn })
+    const pending = run({ command: vectors[0][0], cwd: '/repo', timeoutSeconds: 0.05, executionContext: host.context })
+    await waiting
+    if (reason === 'cancelled') abort.abort(new Error('cancelled while waiting'))
+    else manual.advance(50)
+    allow({ ok: true, basis: 'explicit-policy', decisionId: 'late-diagnostic-allow' })
+    expect((await pending).executionRefusal).toMatchObject({ reason })
+    expect(recorder.calls).toHaveLength(0)
+  })
+
+  test.each([80, 100])('queued diagnostics retain their original 100ms cap after %sms', async delay => {
+    const manual = createControlledExecutionClock()
+    const recorder = createExecutionProcessRecorder({ autoClose: false })
+    const host = createTerminalExecutionFixture({ ...manual, projectRoot: '/repo', spawn: recorder.spawn })
+    executionHosts.push(host)
+    const env = { PROJECT_VALUE: 'before-queue' }
+    const files = ['src/a.ts', 'src/a.py']
+    const runCommand = createDiagnosticCommandRunner({ spawn: recorder.spawn })
+    const pending = captureDiagnosticObservation({
+      files, cwd: '/repo', env, timeoutSeconds: 0.1,
+      runCommand, executionContext: host.context, phase: 'current',
+    })
+    const waitForCalls = async (count: number) => {
+      for (let turn = 0; recorder.calls.length < count && turn < 50; turn++) {
+        await new Promise(resolve => setImmediate(resolve))
+      }
+      expect(recorder.calls).toHaveLength(count)
+    }
+    await waitForCalls(2)
+    env.PROJECT_VALUE = 'after-queue'
+    files.splice(0, files.length, 'src/changed.go')
+    manual.advance(delay)
+    if (delay === 80) {
+      recorder.calls[0].finish()
+      recorder.calls[1].finish()
+      await waitForCalls(4)
+      for (const actual of recorder.calls.slice(2)) expect(actual.options.env?.PROJECT_VALUE).toBe('before-queue')
+      const queued = host.policyInputs.filter(input => input.target.executable === 'ruff' || input.target.executable === 'pyright')
+      expect(queued).toHaveLength(2)
+      for (const input of queued) {
+        expect(executionDeadlineMs(input.facts.deadlines.resourceLifetime)! - manual.clock.nowMs()).toBe(20)
+      }
+      manual.advance(20)
+    }
+    const capture = await pending
+    expect(capture.commands.map(command => command.command)).toEqual(vectors.slice(0, 4).map(vector => vector[0]))
+    expect(capture.commands.slice(2).every(command => command.status === 'timed_out')).toBe(true)
+    expect(recorder.calls).toHaveLength(delay === 100 ? 2 : 4)
+    for (const [index, actual] of recorder.calls.entries()) {
+      expect(actual.signals).toEqual(delay === 80 && index < 2 ? [] : ['SIGKILL'])
+    }
+  })
+
+  test('preflight and hook producers retain baseline, after and current phase attribution', async () => {
+    const recorder = createExecutionProcessRecorder({ reply: executable => ({ stdout: executable === 'eslint' ? '[]' : '' }) })
+    const host = createTerminalExecutionFixture({ projectRoot: '/repo', spawn: recorder.spawn })
+    executionHosts.push(host)
+    const runCommand = createDiagnosticCommandRunner({ spawn: recorder.spawn })
+    await preflightDiagnosticDelta({
+      files: ['src/a.ts'], cwd: '/repo', applyEdit: () => {}, runCommand, executionContext: host.context,
+    })
+    const hook = createDiagnosticDeltaHook({ spawn: recorder.spawn })
+    await hook({ files: ['src/a.ts'], cwd: '/repo', executionContext: host.context })
+    expect(host.policyInputs.map(input => input.facts.branchId)).toEqual([
+      'diagnostic.tsc.baseline', 'diagnostic.eslint.baseline',
+      'diagnostic.tsc.after', 'diagnostic.eslint.after',
+      'diagnostic.tsc.current', 'diagnostic.eslint.current',
+    ])
+  })
+
+  test('delta hook captures files, env and mode before awaiting its baseline', async () => {
+    const recorder = createExecutionProcessRecorder({ reply: executable => ({
+      stdout: executable === 'tsc' ? 'src/a.ts(8,1): error TS2322: type mismatch\n' : '[]',
+      exitCode: executable === 'tsc' ? 2 : 0,
+    }) })
+    const host = createTerminalExecutionFixture({ projectRoot: '/repo', spawn: recorder.spawn })
+    executionHosts.push(host)
+    let release!: (value: DiagnosticCapture) => void
+    let entered!: () => void
+    const baseline = new Promise<DiagnosticCapture>(resolve => { release = resolve })
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const factory: Parameters<typeof createDiagnosticDeltaHook>[0] = {
+      spawn: recorder.spawn, deltaMode: 'tolerant', getBaseline: () => { entered(); return baseline },
+    }
+    const hook = createDiagnosticDeltaHook(factory)
+    const files = ['src/a.ts']
+    const env = { PROJECT_VALUE: 'before-baseline' }
+    const pending = hook({ files, env, cwd: '/repo', executionContext: host.context })
+    await waiting
+    files[0] = 'src/late.py'
+    env.PROJECT_VALUE = 'after-baseline'
+    factory.deltaMode = 'strict'
+    factory.getBaseline = () => undefined
+    release(observedBaseline([makeDiagnostic({
+      file: 'src/a.ts', code: 'TS2322', source: 'tsc', command: vectors[0][0], message: 'type mismatch',
+      range: { start: { line: 2, column: 1 }, end: { line: 2, column: 1 } },
+    })], ['src/a.ts']))
+    const result = await pending
+    expect(result?.rejected).toBe(false)
+    expect(host.policyInputs.map(input => input.facts.branchId)).toEqual(['diagnostic.tsc.after', 'diagnostic.eslint.after'])
+    for (const actual of recorder.calls) expect(actual.options.env?.PROJECT_VALUE).toBe('before-baseline')
   })
 })

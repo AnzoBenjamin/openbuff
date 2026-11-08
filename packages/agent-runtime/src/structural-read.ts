@@ -2,9 +2,17 @@ import {
   decodeReadCapabilityToken,
   encodeReadCapabilityToken,
   getContentHash,
+  hasAuthoritativeReadCapabilityScope,
   normalizeLineEndings,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
+import {
+  captureTextDocument,
+  describeRawReadFailure,
+  getRawReadBasis,
+  reanchorRawReadCapability,
+} from '@codebuff/common/util/byte-text'
+import type { RawReadBasisV1 } from '@codebuff/common/util/raw-read-basis'
 
 import type { SymbolRange } from '@codebuff/code-map'
 import type {
@@ -135,21 +143,41 @@ export function mintSliceCapability(params: {
   startLine: number
   endLine: number
   scope?: ReadCapabilityScope
+  sourceReadCapability?: string
 }): { readCapability?: string; rangeHash: string; sliceContent: string } {
   const { content, startLine, endLine } = params
-  const lines = content.replace(/\r\n/g, '\n').split('\n')
+  const original = params.sourceReadCapability
+    ? decodeReadCapabilityToken(params.sourceReadCapability)
+    : undefined
+  const verified =
+    original &&
+    typeof original !== 'string' &&
+    original.tokenVersion === 'v4' &&
+    original.rawBasis?.scope === 'whole' &&
+    params.scope &&
+    hasAuthoritativeReadCapabilityScope(params.scope) &&
+    readCapabilityMatchesScope(original, params.scope) &&
+    reanchorRawReadCapability({ content, capability: original }).ok
+  const document = captureTextDocument(
+    content,
+    verified && original && typeof original !== 'string'
+      ? original.rawBasis
+      : undefined,
+  )
+  const lines = document.observation.split('\n')
   const start = Math.max(1, startLine)
   const end = Math.min(lines.length, Math.max(start, endLine))
   const sliceContent = lines.slice(start - 1, end).join('\n')
   const rangeHash = getContentHash(sliceContent)
   return {
-    ...(params.scope
+    ...(verified && params.scope
       ? {
           readCapability: encodeReadCapabilityToken({
             startLine: start,
             endLine: end,
             hash: rangeHash,
             scope: params.scope,
+            rawBasis: getRawReadBasis(document, start, end, 'lines'),
           }),
         }
       : {}),
@@ -163,11 +191,30 @@ export function validateRewriteSymbolReadCapability(params: {
   path: string
   slice: Pick<ExtractedSlice, 'content' | 'startLine' | 'endLine'>
   scope?: Omit<ReadCapabilityScope, 'path'>
-}): string | undefined {
+  rawContent?: string
+}):
+  | {
+      error: string
+      failureKind:
+        | 'capability_invalid'
+        | 'capability_scope'
+        | 'capability_stale'
+    }
+  | undefined {
   const decoded = decodeReadCapabilityToken(params.readCapability)
-  if (typeof decoded === 'string') return decoded
+  if (typeof decoded === 'string')
+    return { error: decoded, failureKind: 'capability_invalid' }
+  if (decoded.tokenVersion !== 'v4' || !decoded.rawBasis) {
+    return {
+      error: `rewrite_symbol blocked for ${params.path}: the capability has no authenticated raw byte basis. Obtain a fresh cap.v4 symbol read.`,
+      failureKind: 'capability_invalid',
+    }
+  }
   if (!params.scope?.projectId || !params.scope.runId) {
-    return `rewrite_symbol blocked for ${params.path}: authenticated readCapability scope is unavailable.`
+    return {
+      error: `rewrite_symbol blocked for ${params.path}: authenticated readCapability scope is unavailable.`,
+      failureKind: 'capability_scope',
+    }
   }
   if (
     !readCapabilityMatchesScope(decoded, {
@@ -175,16 +222,39 @@ export function validateRewriteSymbolReadCapability(params: {
       path: params.path,
     })
   ) {
-    return `rewrite_symbol blocked for ${params.path}: the readCapability belongs to a different project, path, or agent run.`
+    return {
+      error: `rewrite_symbol blocked for ${params.path}: the readCapability belongs to a different project, path, or agent run.`,
+      failureKind: 'capability_scope',
+    }
   }
+  if (params.rawContent === undefined)
+    return {
+      error: `rewrite_symbol blocked for ${params.path}: a lossless current source is required for raw freshness verification.`,
+      failureKind: 'capability_stale',
+    }
+  const fresh = reanchorRawReadCapability({
+    content: params.rawContent,
+    capability: decoded,
+  })
+  if (!fresh.ok)
+    return {
+      error: `rewrite_symbol blocked for ${params.path}: ${describeRawReadFailure(fresh)}.`,
+      failureKind: 'capability_stale',
+    }
   if (
-    decoded.startLine !== params.slice.startLine ||
-    decoded.endLine !== params.slice.endLine
+    fresh.startLine !== params.slice.startLine ||
+    fresh.endLine !== params.slice.endLine
   ) {
-    return `rewrite_symbol blocked for ${params.path}: the readCapability does not cover the exact original symbol replacement span ${params.slice.startLine}-${params.slice.endLine}.`
+    return {
+      error: `rewrite_symbol blocked for ${params.path}: the readCapability does not cover the exact original symbol replacement span ${params.slice.startLine}-${params.slice.endLine}.`,
+      failureKind: 'capability_stale',
+    }
   }
   if (getContentHash(params.slice.content) !== decoded.hash) {
-    return `rewrite_symbol blocked for ${params.path}: the readCapability-covered symbol content is stale.`
+    return {
+      error: `rewrite_symbol blocked for ${params.path}: the readCapability-covered symbol content is stale.`,
+      failureKind: 'capability_stale',
+    }
   }
   return undefined
 }
@@ -359,10 +429,12 @@ export async function extractSlices(
   symbols: string[],
   maxMatchesPerSymbol: number = DEFAULT_MAX_MATCHES_PER_SYMBOL,
   capabilityScope?: ReadCapabilityScope,
+  sourceReadCapability?: string,
 ): Promise<ExtractedSlice[]> {
   const slices: ExtractedSlice[] = []
-  const structure = await getFileStructure(rawContent, filePath)
-  const lines = rawContent.replace(/\r\n/g, '\n').split('\n')
+  const observation = captureTextDocument(rawContent).observation
+  const structure = await getFileStructure(observation, filePath)
+  const lines = observation.split('\n')
 
   for (const symbol of symbols) {
     const astMatches =
@@ -381,6 +453,7 @@ export async function extractSlices(
           startLine,
           endLine: match.endLine,
           scope: capabilityScope,
+          sourceReadCapability,
         })
         slices.push({
           symbol,
@@ -394,7 +467,7 @@ export async function extractSlices(
       continue
     }
 
-    const fallback = regexSlice(rawContent, symbol, filePath)
+    const fallback = regexSlice(observation, symbol, filePath)
     if (fallback) {
       const { startLine } = extendRangeToPrecedingComment(
         lines,
@@ -428,6 +501,7 @@ export async function selectSymbolSlice(params: {
   name: string
   occurrence?: number
   capabilityScope?: ReadCapabilityScope
+  sourceReadCapability?: string
 }): Promise<ExtractedSlice | null> {
   const occurrence = params.occurrence ?? 1
   const slices = await extractSlices(
@@ -436,6 +510,7 @@ export async function selectSymbolSlice(params: {
     [params.name],
     occurrence,
     params.capabilityScope,
+    params.sourceReadCapability,
   )
   return slices[occurrence - 1] ?? null
 }
@@ -527,9 +602,12 @@ export type ReadBlockBuilderContext = {
   /** Memoized per-path file loader (single underlying read per path). */
   loadFile: (
     path: string,
-  ) => Promise<{ content: string } | { error: FilesystemError }>
-  /** Mint a cap.v3 editAnchor for a complete block, or undefined when the
-   * authoritative scope is unavailable. */
+  ) => Promise<
+    | { content: string; sourceReadCapability?: string }
+    | { error: FilesystemError }
+  >
+  /** Mint a scoped cap.v4 editAnchor from the complete raw block, or undefined
+   * when the original basis or authoritative issuer is unavailable. */
   mintBlockEditAnchor: (
     path: string,
     startLine: number,
@@ -541,6 +619,7 @@ export type ReadBlockBuilderContext = {
         endLine: number
         contentHash: string
         readCapability: string
+        rawBasis?: RawReadBasisV1
       }
     | undefined
   /** Run the shared coverage → authority ladder for a completed block. */
@@ -551,6 +630,7 @@ export type ReadBlockBuilderContext = {
     totalLines: number
     sourceContent: string
     capabilityEligible?: boolean
+    rawBasis?: RawReadBasisV1
   }) => void
   /** Return a too_large error when a block exceeds the per-block byte budget. */
   overBudgetError: (blockContent: string) => FilesystemError | undefined
@@ -580,7 +660,7 @@ export async function buildWindowBlock(
       error: loaded.error,
     }
   }
-  const lines = normalizeLineEndings(loaded.content).split('\n')
+  const lines = captureTextDocument(loaded.content).observation.split('\n')
   const totalLines = lines.length
   const windowSize = request.windowSize ?? DEFAULT_WINDOW_SIZE
   const windowCount = Math.max(1, Math.ceil(totalLines / windowSize))
@@ -618,7 +698,7 @@ export async function buildWindowBlock(
     endLine,
     blockContent,
   )
-  ctx.successfulReadPaths.add(path)
+  if (editAnchor) ctx.successfulReadPaths.add(path)
   const item: ReadFilesItemV1 = {
     selector: 'window',
     requestIndex,
@@ -641,6 +721,7 @@ export async function buildWindowBlock(
     endLine,
     totalLines,
     sourceContent: blockContent,
+    rawBasis: editAnchor?.rawBasis,
   })
   return item
 }
@@ -667,7 +748,7 @@ export async function buildAroundBlock(
       error: loaded.error,
     }
   }
-  const normalized = normalizeLineEndings(loaded.content)
+  const normalized = captureTextDocument(loaded.content).observation
   const lines = normalized.split('\n')
   const totalLines = lines.length
   const occurrence = request.occurrence ?? 1
@@ -707,7 +788,7 @@ export async function buildAroundBlock(
     endLine,
     blockContent,
   )
-  ctx.successfulReadPaths.add(path)
+  if (editAnchor) ctx.successfulReadPaths.add(path)
   const item: ReadFilesItemV1 = {
     selector: 'around',
     requestIndex,
@@ -730,6 +811,7 @@ export async function buildAroundBlock(
     endLine,
     totalLines,
     sourceContent: blockContent,
+    rawBasis: editAnchor?.rawBasis,
   })
   return item
 }
@@ -758,6 +840,7 @@ export async function buildSymbolBlock(
     name: request.name,
     occurrence,
     capabilityScope: { ...ctx.capabilityIssuer, path },
+    sourceReadCapability: loaded.sourceReadCapability,
   })
   if (!slice) {
     return {
@@ -773,7 +856,7 @@ export async function buildSymbolBlock(
       },
     }
   }
-  const totalLines = normalizeLineEndings(loaded.content).split('\n').length
+  const totalLines = captureTextDocument(loaded.content).maxCapabilityLine
   const tooLarge = ctx.overBudgetError(slice.content)
   if (tooLarge) {
     return {
@@ -795,7 +878,7 @@ export async function buildSymbolBlock(
         slice.content,
       )
     : undefined
-  ctx.successfulReadPaths.add(path)
+  if (editAnchor) ctx.successfulReadPaths.add(path)
   const item: ReadFilesItemV1 = {
     selector: 'symbol',
     requestIndex,
@@ -821,6 +904,7 @@ export async function buildSymbolBlock(
     totalLines,
     sourceContent: slice.content,
     capabilityEligible: Boolean(slice.readCapability),
+    rawBasis: editAnchor?.rawBasis,
   })
   return item
 }

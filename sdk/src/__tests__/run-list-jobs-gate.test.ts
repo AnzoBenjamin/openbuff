@@ -1,10 +1,9 @@
 import * as mainPromptModule from '@codebuff/agent-runtime/main-prompt'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { getStubProjectFileContext } from '@codebuff/common/util/file'
-import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
 
 import { OpenbuffClient } from '../client'
+import { beginSdkCallback, createSdkCallbackFixture } from './sdk-callback-fixture'
 import * as databaseModule from '../impl/database'
 import { applyListJobsDigestGate, getTrustedSessionClientId } from '../run'
 import { __clearJobsForTest } from '../tools/background-jobs'
@@ -126,8 +125,13 @@ describe('applyListJobsDigestGate', () => {
 // seam — the actual injection point where tool results reach the model — so
 // the mock is the right assertion surface, not missing end-to-end coverage.
 describe('list_jobs per-turn change-gating (run integration)', () => {
+  let fixture: ReturnType<typeof createSdkCallbackFixture>
+  beforeEach(() => {
+    fixture = createSdkCallbackFixture('run-list-jobs-gate')
+  })
   afterEach(() => {
     mock.restore()
+    fixture.close()
     __clearJobsForTest()
   })
 
@@ -152,6 +156,8 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
 
   const seedRunningJob = (
     clientSessionId: string,
+    rootRunId: string,
+    agentId: string,
     command = 'bun dev',
   ): string => {
     const job = jobRegistry.create({
@@ -159,9 +165,9 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
       label: command,
       owner: {
         clientSessionId,
-        rootRunId: 'main-agent',
-        parentRunId: 'main-agent',
-        parentAgentId: 'main-agent',
+        rootRunId,
+        parentRunId: rootRunId,
+        parentAgentId: agentId,
       },
     })
     jobRegistry.start(job.jobId)
@@ -170,8 +176,9 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
 
   const makeClient = () =>
     new OpenbuffClient({
+      ...fixture.options,
       apiKey: 'test-key',
-      cwd: '/repo',
+      cwd: fixture.cwd,
       handleEvent: () => {},
     })
 
@@ -181,10 +188,11 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
     const results: ToolResultOutput[][] = []
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: CallMainPromptParams) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const { sessionState, request: requestToolCall } = callback
 
-        seedRunningJob(getTrustedSessionClientId())
+        seedRunningJob(getTrustedSessionClientId(), callback.runId, callback.agentId)
 
         results.push(
           (
@@ -242,13 +250,14 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
     const results: ToolResultOutput[][] = []
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: CallMainPromptParams) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const { sessionState, request: requestToolCall } = callback
 
         // Seed with the same stable per-process session owner production
         // scopes list_jobs by (see run.ts getTrustedSessionClientId); the
         // old per-run promptId seed is invisible to the scoped listing.
-        const jobId = seedRunningJob(getTrustedSessionClientId())
+        const jobId = seedRunningJob(getTrustedSessionClientId(), callback.runId, callback.agentId)
 
         results.push(
           (
@@ -309,10 +318,11 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
     const runResults: ToolResultOutput[][][] = []
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: CallMainPromptParams) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const { sessionState, request: requestToolCall } = callback
 
-        seedRunningJob(promptId)
+        seedRunningJob(getTrustedSessionClientId(), callback.runId, callback.agentId)
 
         const outputs: ToolResultOutput[][] = []
         outputs.push(
@@ -350,7 +360,7 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
       },
     )
 
-    // Two independent runs; each gets its own promptId/clientSessionId, but
+    // Two independent registered roots share the trusted session;
     // the key point is the per-turn closure state resets between run() calls.
     await makeClient().run({ agent: 'base2', prompt: 'first' })
     await makeClient().run({ agent: 'base2', prompt: 'second' })
@@ -365,4 +375,24 @@ describe('list_jobs per-turn change-gating (run integration)', () => {
       expect(value.unchanged).toBeUndefined()
     }
   })
+
+  it('excludes foreign session and root jobs from the actual registered callback', async () => {
+    let observed: ToolResultOutput[] | undefined
+    let ownJobId: string | undefined
+    spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(async params => {
+      const callback = await beginSdkCallback(params)
+      ownJobId = seedRunningJob(getTrustedSessionClientId(), callback.runId, callback.agentId)
+      seedRunningJob(getTrustedSessionClientId(), 'foreign-root', callback.agentId)
+      seedRunningJob('foreign-session', callback.runId, callback.agentId)
+      observed = (await callback.request({ toolName: 'list_jobs', input: {} })).output
+      return { sessionState: callback.sessionState, output: { type: 'lastMessage' as const, value: [] } }
+    })
+    const result = await makeClient().run({ agent: 'base2', prompt: 'owned jobs' })
+    expect(result.output.type).toBe('lastMessage')
+    expect(observed?.[0]?.type).toBe('json')
+    if (observed?.[0]?.type !== 'json') throw new Error('Expected an owned jobs digest')
+    const jobs = (observed[0].value as { jobs: Array<{ jobId: string }> }).jobs
+    expect(jobs.map(job => job.jobId)).toEqual([ownJobId!])
+  })
+
 })

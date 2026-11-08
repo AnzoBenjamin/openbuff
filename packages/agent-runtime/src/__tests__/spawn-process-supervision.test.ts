@@ -30,6 +30,7 @@ import { afterEach, describe, expect, it, spyOn } from 'bun:test'
 import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname } from 'node:path'
+import { z } from 'zod/v4'
 
 import * as runAgentStep from '../run-agent-step'
 import {
@@ -132,15 +133,16 @@ function settledSchemaInvalid(): SettledSubagentResult {
   }
 }
 
-function makeTemplate(id: string, spawnableAgents: string[] = []): AgentTemplate {
+function makeTemplate(
+  id: string,
+  spawnableAgents: string[] = [],
+): AgentTemplate {
   return {
     id,
     displayName: `Mock ${id}`,
     outputMode: 'last_message' as const,
     inputSchema: {
-      prompt: {
-        safeParse: () => ({ success: true }),
-      } as unknown as AgentTemplate['inputSchema']['prompt'],
+      prompt: z.string(),
     },
     spawnerPrompt: '',
     model: '',
@@ -244,7 +246,9 @@ function buildExecuteParams(overrides: Record<string, unknown> = {}) {
  * read through the same additive cast here (mirrors
  * spawn-agents-message-history.test.ts).
  */
-function parentSessionEvidenceEntries(state: AgentState): SessionEvidenceEntry[] {
+function parentSessionEvidenceEntries(
+  state: AgentState,
+): SessionEvidenceEntry[] {
   return (
     (state as AgentState & { sessionEvidenceLog?: SessionEvidenceLog })
       .sessionEvidenceLog?.entries ?? []
@@ -308,9 +312,9 @@ describe('processSupervision flag routing (P2-T8)', () => {
     )
     expect(loopSpy).toHaveBeenCalledTimes(1)
     expect('supervisedReceipt' in result).toBe(false)
-    expect(warnCalls.some((msg) => String(msg).includes('spawnSupervised'))).toBe(
-      true,
-    )
+    expect(
+      warnCalls.some((msg) => String(msg).includes('spawnSupervised')),
+    ).toBe(true)
   })
 
   it('flag on with an injected seam: ok receipt routes to supervisedReceipt, loopAgentSteps untouched', async () => {
@@ -343,6 +347,58 @@ describe('processSupervision flag routing (P2-T8)', () => {
       value: { message: 'Supervised subagent thinker completed.' },
     })
   })
+
+  for (const [label, projectRoot] of [
+    ['missing', undefined],
+    ['empty', ''],
+  ] as const) {
+    it(`refuses supervised MCP binding with a ${label} project root before spawning a child`, async () => {
+      loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+        async () => {
+          throw new Error('Missing MCP roots must not fall back in-process')
+        },
+      )
+      const template = makeTemplate('thinker')
+      template.mcpServers = {
+        fixture: {
+          type: 'http',
+          url: 'https://fixture.invalid',
+          params: {},
+          headers: {},
+        },
+      }
+      let spawnCalls = 0
+      const chunks: Array<Record<string, unknown>> = []
+      const result = await executeSubagent(
+        buildExecuteParams({
+          agentTemplate: template,
+          fileContext: { ...mockFileContext, projectRoot },
+          processSupervision: true,
+          spawnSupervised: async () => {
+            spawnCalls += 1
+            return settledOk(OK_RECEIPT)
+          },
+          onResponseChunk: (chunk: unknown) => {
+            chunks.push(chunk as Record<string, unknown>)
+          },
+        }),
+      )
+      expect(spawnCalls).toBe(0)
+      expect(loopSpy).not.toHaveBeenCalled()
+      expect(result.output).toMatchObject({
+        type: 'error',
+        message:
+          'Subagent thinker crashed: supervised spawn prologue threw: Supervised MCP tools require a project root.',
+      })
+      expect(
+        chunks.filter((chunk) => chunk.type === 'subagent_start'),
+      ).toHaveLength(1)
+      expect(
+        chunks.filter((chunk) => chunk.type === 'subagent_finish'),
+      ).toHaveLength(1)
+      expect('supervisedReceipt' in result).toBe(false)
+    })
+  }
 
   it('flag on: a supervised receipt carrying sessionEvidence folds its entries into the parent ledger on settle', async () => {
     loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
@@ -482,9 +538,9 @@ describe('processSupervision flag routing (P2-T8)', () => {
     // Additive contract: a request from a parent without playbook rules stays
     // byte-identical to the pre-playbook shape — the key is absent from the
     // child slice, not present-with-undefined.
-    expect(
-      Object.hasOwn(seenRequests[0].child ?? {}, 'playbookContext'),
-    ).toBe(false)
+    expect(Object.hasOwn(seenRequests[0].child ?? {}, 'playbookContext')).toBe(
+      false,
+    )
   })
 
   it('flag on: crashed settle maps to the crash-envelope output with the stderr tail folded in', async () => {
@@ -707,9 +763,8 @@ describe('extractSubagentContextParams supervision propagation (P2-T8)', () => {
 // dangling spawns, no active leases.
 describe('inline handler settle chain under supervision (P2-T8)', () => {
   it('ok receipt from the seam reconciles into the parent with no dangling spawns or leases', async () => {
-    const { handleSpawnAgentInline } = await import(
-      '../tools/handlers/tool/spawn-agent-inline'
-    )
+    const { handleSpawnAgentInline } =
+      await import('../tools/handlers/tool/spawn-agent-inline')
     // Own spy (the flag-routing describe's spy + afterEach live in that
     // describe's scope; this describe restores explicitly below).
     const inlineLoopSpy = spyOn(
@@ -719,51 +774,52 @@ describe('inline handler settle chain under supervision (P2-T8)', () => {
       throw new Error('loopAgentSteps must not run when supervision is on')
     })
     try {
-    const parent = getInitialSessionState(mockFileContext).mainAgentState
-    const { output } = await handleSpawnAgentInline({
-      ...TEST_AGENT_RUNTIME_IMPL,
-      tools: {},
-      agentState: parent,
-      agentTemplate: makeTemplate('parent', ['thinker']),
-      localAgentTemplates: { thinker: makeTemplate('thinker') },
-      fileContext: mockFileContext,
-      fingerprintId: 'test-fingerprint',
-      previousToolCallFinished: Promise.resolve(),
-      clientSessionId: 'test-session',
-      userId: TEST_USER_ID,
-      userInputId: 'test-input',
-      writeToClient: () => {},
-      processSupervision: true,
-      spawnSupervised: async () => settledOk(OK_RECEIPT),
-      toolCall: {
-        toolName: 'spawn_agent_inline',
-        toolCallId: 'sup-inline-1',
-        input: { agent_type: 'thinker', prompt: 'Probe' },
-      },
-    } as never)
-    expect(inlineLoopSpy).not.toHaveBeenCalled()
+      const parent = getInitialSessionState(mockFileContext).mainAgentState
+      const { output } = await handleSpawnAgentInline({
+        ...TEST_AGENT_RUNTIME_IMPL,
+        tools: {},
+        agentState: parent,
+        agentTemplate: makeTemplate('parent', ['thinker']),
+        localAgentTemplates: { thinker: makeTemplate('thinker') },
+        fileContext: mockFileContext,
+        fingerprintId: 'test-fingerprint',
+        previousToolCallFinished: Promise.resolve(),
+        clientSessionId: 'test-session',
+        userId: TEST_USER_ID,
+        userInputId: 'test-input',
+        writeToClient: () => {},
+        processSupervision: true,
+        spawnSupervised: async () => settledOk(OK_RECEIPT),
+        toolCall: {
+          toolName: 'spawn_agent_inline',
+          toolCallId: 'sup-inline-1',
+          input: { agent_type: 'thinker', prompt: 'Probe' },
+        },
+      } as never)
+      expect(inlineLoopSpy).not.toHaveBeenCalled()
 
-    // The child's validated receipt was reconciled verbatim.
-    const report = (output as Array<{ type: string; value: Record<string, unknown> }>)[0]
-      .value as { agentReceipt: AgentReceipt }
-    expect(report.agentReceipt.receiptId).toBe('sup-fixture-receipt')
-    expect(report.agentReceipt.taskId).toBe('sup-fixture-task')
+      // The child's validated receipt was reconciled verbatim.
+      const report = (
+        output as Array<{ type: string; value: Record<string, unknown> }>
+      )[0].value as { agentReceipt: AgentReceipt }
+      expect(report.agentReceipt.receiptId).toBe('sup-fixture-receipt')
+      expect(report.agentReceipt.taskId).toBe('sup-fixture-task')
 
-    // Same no-dangling / no-lease invariants the fault-injection suite asserts.
-    const events = parent.orchestrationLedger?.events ?? []
-    const finished = new Set(
-      events
-        .filter((event) => event.type === 'spawn_finished')
-        .map((event) => event.spawnId),
-    )
-    const started = events.filter((event) => event.type === 'spawn_started')
-    expect(started.length).toBeGreaterThan(0)
-    for (const event of started) {
-      expect(finished.has(event.spawnId)).toBe(true)
-    }
-    for (const lease of parent.workspacePathLeases ?? []) {
-      expect(lease.status).not.toBe('active')
-    }
+      // Same no-dangling / no-lease invariants the fault-injection suite asserts.
+      const events = parent.orchestrationLedger?.events ?? []
+      const finished = new Set(
+        events
+          .filter((event) => event.type === 'spawn_finished')
+          .map((event) => event.spawnId),
+      )
+      const started = events.filter((event) => event.type === 'spawn_started')
+      expect(started.length).toBeGreaterThan(0)
+      for (const event of started) {
+        expect(finished.has(event.spawnId)).toBe(true)
+      }
+      for (const lease of parent.workspacePathLeases ?? []) {
+        expect(lease.status).not.toBe('active')
+      }
     } finally {
       inlineLoopSpy.mockRestore()
     }
@@ -837,15 +893,12 @@ describe('ancestorRunIds fallback for an unset parent runId', () => {
 describe('buildDefaultSpawnSupervised request-file permissions', () => {
   it('writes the request file inside the mkdtemp sandbox with mode 0o600', async () => {
     const fs = await import('node:fs')
-    const writeSpy = spyOn(fs, 'writeFileSync').mockImplementation(
-      (() => {
-        throw new Error('stop before spawning a real child')
-      }) as unknown as typeof writeFileSync,
-    )
+    const writeSpy = spyOn(fs, 'writeFileSync').mockImplementation((() => {
+      throw new Error('stop before spawning a real child')
+    }) as unknown as typeof writeFileSync)
     try {
-      const { buildDefaultSpawnSupervised } = await import(
-        '../supervision/supervised-spawn'
-      )
+      const { buildDefaultSpawnSupervised } =
+        await import('../supervision/supervised-spawn')
       const seam = buildDefaultSpawnSupervised({})
       const request = {
         agentType: 'thinker',
@@ -901,9 +954,7 @@ describe('context-pruner supervision carve-out routing (P2-T8)', () => {
           agentTemplate: makeTemplate('acme/context-pruner@1.2.3'),
           processSupervision: true,
           spawnSupervised: async () => {
-            throw new Error(
-              'supervised seam must not run for pruner children',
-            )
+            throw new Error('supervised seam must not run for pruner children')
           },
           logger: {
             debug: () => {},
@@ -929,29 +980,25 @@ describe('context-pruner supervision carve-out routing (P2-T8)', () => {
     }
   })
 
-  it(
-    'a non-pruner child still routes to the supervised seam under the same deps (contrast)',
-    async () => {
-      const loopSpy = spyOn(
-        runAgentStep,
-        'loopAgentSteps',
-      ).mockImplementation(async () => {
+  it('a non-pruner child still routes to the supervised seam under the same deps (contrast)', async () => {
+    const loopSpy = spyOn(runAgentStep, 'loopAgentSteps').mockImplementation(
+      async () => {
         throw new Error('loopAgentSteps must not run when supervision is on')
-      })
-      try {
-        const result = await executeSubagent(
-          buildExecuteParams({
-            agentTemplate: makeTemplate('thinker'),
-            processSupervision: true,
-            spawnSupervised: async () => settledOk(OK_RECEIPT),
-          }),
-        )
-        expect(loopSpy).not.toHaveBeenCalled()
-        expect('supervisedReceipt' in result).toBe(true)
-        expect(result.supervisedReceipt).toEqual(OK_RECEIPT)
-      } finally {
-        loopSpy.mockRestore()
-      }
-    },
-  )
+      },
+    )
+    try {
+      const result = await executeSubagent(
+        buildExecuteParams({
+          agentTemplate: makeTemplate('thinker'),
+          processSupervision: true,
+          spawnSupervised: async () => settledOk(OK_RECEIPT),
+        }),
+      )
+      expect(loopSpy).not.toHaveBeenCalled()
+      expect('supervisedReceipt' in result).toBe(true)
+      expect(result.supervisedReceipt).toEqual(OK_RECEIPT)
+    } finally {
+      loopSpy.mockRestore()
+    }
+  })
 })

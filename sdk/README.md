@@ -103,6 +103,62 @@ does not represent the same workspace.
 
 ## High-impact action approvals
 
+Each SDK run captures its host configuration, provider credentials and read
+roots before setup. `env` and `inheritEnv` control child commands; an explicit
+`undefined` value removes a child environment entry. They do not select a
+different provider config or alter provider credentials. A host can supply
+`hostConfiguration` and `configReadFs` to select all configuration inputs
+explicitly. Disabled global discovery reads no global config or OAuth store;
+an explicit required config that cannot be read makes the run unavailable.
+
+The run timeout starts before configuration capture. Terminal timeouts also
+cover approval and startup, and apply to both synchronous and background
+commands. Configured hooks default to 300 seconds; `timeoutSeconds: -1`
+selects no local cap. A finite parent cap still applies. Hook inference runs
+only when `autoFileChangeHooks` is explicitly true.
+
+Process helpers called directly require a registered host context. Create one
+once at the host boundary and pass its facade and captured shell:
+
+```ts
+import { createDirectHostExecution, runTerminalCommand } from '@openbuff/sdk'
+
+const host = createDirectHostExecution({ cwd: '/path/to/project' })
+if (!host.ok) throw new Error(host.cause)
+const result = await runTerminalCommand({
+  command: 'git status --short', process_type: 'SYNC', timeout_seconds: 30,
+  cwd: '/path/to/project',
+  executionContext: host.value.executionContext,
+  terminalShell: host.value.hostServices.terminalShell,
+  getTerminalLaunchMetadata: host.value.hostServices.getTerminalLaunchMetadata,
+})
+```
+
+The portable backend passes an exact scrubbed child environment and supports
+cooperative cancellation. `executionProfile` declares the policy, preferred
+backend and required capabilities; a missing required backend returns
+unavailable. These facts do not certify OS isolation or process-tree death.
+`recordExecution` reports planned, admitted, dispatched and observed starts
+separately. An observed start requires the runtime PID/event; dispatch and
+cache reuse do not invent one. Standalone helpers with no context return a
+structured refusal.
+
+Workspace broker and journal factories support legacy direct callers by
+capturing a bootstrap host context once before asynchronous work. Their
+`identitySource` reports observed Git identity or an observed non-Git
+filesystem fallback. Permission, I/O, empty Git responses and execution
+refusals cannot silently choose a different identity. Direct calls and runs
+therefore address the same journal and mutation broker for a Git workspace.
+
+Background detachment transfers ownership to a registered session receiver
+before binding and admission. It preserves a finite original deadline.
+Run-owned LSP/MCP resources have separate request leases: cancelling a waiter
+releases that lease while the registered run still controls the process.
+Every terminal run path ends that lifetime and closes its captured MCP clients.
+Transferred background jobs retain their receiver lifetime and original cap.
+Sharing is confined to the same host, owner, configuration and lifetime. A
+direct host operation uses the caller's signal and selected lifetime.
+
 Approval behavior is controlled by `approvalMode`:
 
 - `balanced` (default) allows routine dependency changes, commits, feature

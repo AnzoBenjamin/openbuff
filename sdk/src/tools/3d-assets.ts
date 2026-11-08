@@ -4,7 +4,7 @@ import path from 'node:path'
 
 import { get3dAssetFormat } from '@codebuff/common/util/file'
 
-import { getChildProcessEnv } from '../env'
+import { executionRefusal, ExecutionRefusalError, isExecutionRefusalError } from '../services/execution-launch'
 import { resolveFilePathForFileSystemOperation } from './path-utils'
 import { readImages } from './read-image'
 import { prune3dMutationArtifacts } from './3d-artifact-retention'
@@ -20,6 +20,8 @@ import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { FileFilter } from './read-files'
+import type { ExecutionAdapterContext, Refusal } from '@codebuff/common/types/contracts/execution-context'
+import type { ChildProcess } from 'node:child_process'
 
 const MAX_INSPECT_BYTES = 256 * 1024 * 1024
 const MAX_TEXT_ASSET_BYTES = 24 * 1024 * 1024
@@ -331,23 +333,125 @@ function jsonOutput<T extends 'inspect_3d_asset' | 'render_3d_preview'>(
  */
 type BlenderResult =
   | { ok: true; stdout: string; exitCode: 0 }
-  | { ok: false; error: string }
+  | { ok: false; error: string; executionRefusal?: Refusal }
+
+function blenderExecution(
+  context: ExecutionAdapterContext | undefined,
+  durationMs: number,
+): ExecutionAdapterContext | undefined {
+  if (!context) return undefined
+  const derived = context.execution.derive({
+    memoKey: 'blender.action',
+    limit: { kind: 'finite', durationMs },
+  })
+  if (!derived.ok) throw new ExecutionRefusalError(derived)
+  return {
+    ...context,
+    execution: derived.value,
+    signal: derived.value.signal ?? context.signal,
+  }
+}
 
 async function runBlender(
   args: string[],
   timeout = BLENDER_TIMEOUT_MS,
   environment: Record<string, string> = {},
   signal?: AbortSignal,
+  execution?: ExecutionAdapterContext,
+  branchId = 'blender.inspect-blend',
+  cwd?: string,
 ): Promise<BlenderResult> {
   if (signal?.aborted) {
     return { ok: false, error: 'Blender operation cancelled.' }
   }
+  if (!execution) {
+    const refusal = executionRefusal('unavailable', 'Captured Blender execution context is unavailable')
+    return { ok: false, error: refusal.cause, executionRefusal: refusal }
+  }
+  const prepared = execution.execution.prepareTarget({
+    target: {
+      executable: 'blender',
+      argv: ['--disable-autoexec', ...args],
+      cwd: cwd ?? execution.projectRoot,
+      projectRoot: execution.projectRoot,
+      allowedPaths: execution.allowedPaths,
+      mode: execution.mode,
+      processType: 'SYNC',
+      profile: execution.profile,
+      family: 'blender',
+      branchId,
+      environmentOverlay: environment,
+      adapterOptions: {
+        runtime: 'node',
+        shell: false,
+        stdio: 'ignore,pipe,pipe',
+        windowsHide: true,
+      },
+    },
+  })
+  if (!prepared.ok)
+    return { ok: false, error: prepared.cause, executionRefusal: prepared }
+  const admission = await prepared.value.admit()
+  if (!admission.ok)
+    return { ok: false, error: admission.cause, executionRefusal: admission }
   return new Promise((resolve) => {
-    const child = spawn('blender', ['--disable-autoexec', ...args], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-      env: { ...getChildProcessEnv(), ...environment },
-    })
+    const dispatched = prepared.value.dispatchNow(
+      admission.value.permit,
+      (input, observer) => {
+        const child = (execution.spawn ?? spawn)(
+          input.executable,
+          input.argv,
+          {
+            cwd: input.cwd,
+            env: input.env,
+            signal: input.resourceSignal,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            windowsHide: true,
+          },
+        )
+        child.once('spawn', () => {
+          let failure: string | undefined
+          if (
+            typeof child.pid === 'number' &&
+            Number.isInteger(child.pid) &&
+            child.pid > 0
+          ) {
+            const observed = observer.spawnObserved({
+              source: 'node-spawn-event',
+              pid: child.pid,
+            })
+            if (!observed.ok) failure = observed.cause
+          } else {
+            observer.failure({
+              source: 'adapter-observation-error',
+              cause: 'Blender child has no valid runtime PID',
+            })
+            failure = 'Blender child has no valid runtime PID'
+          }
+          if (failure) {
+            stop(failure)
+            finish({ ok: false, error: failure })
+          }
+        })
+        child.on('error', (error: NodeJS.ErrnoException) =>
+          observer.failure({
+            source: 'node-error-event',
+            errorCode: error.code,
+            cause: error.message,
+          }),
+        )
+        return child
+      },
+    )
+    if (!dispatched.ok) {
+      resolve({
+        ok: false,
+        error: dispatched.cause,
+        ...(dispatched.reason === 'dispatch-failed' ? {} : { executionRefusal: dispatched }),
+      })
+      return
+    }
+    const child = dispatched.value.handle
     const maxOutputBytes = 8 * 1024 * 1024
     // Separate stdout/stderr buffers: the OPENBUFF_3D_JSON: marker is printed
     // on stdout only, so stderr noise interleaved into one merged buffer can
@@ -385,11 +489,11 @@ async function runBlender(
         sink(chunk.toString('utf8'))
       }
     }
-    child.stdout.on(
+    child.stdout?.on(
       'data',
       makeAppendOutput((text) => (stdout += text)),
     )
-    child.stderr.on(
+    child.stderr?.on(
       'data',
       makeAppendOutput((text) => (stderr += text)),
     )
@@ -623,11 +727,13 @@ export async function inspect3dAsset(params: {
   cwd: string
   fs: CodebuffFileSystem
   signal?: AbortSignal
+  execution?: ExecutionAdapterContext
   fileFilter?: FileFilter
   logger?: Logger
 }): Promise<CodebuffToolOutput<'inspect_3d_asset'>> {
   try {
     if (params.signal?.aborted) throw new Error('3D inspection cancelled.')
+    const execution = blenderExecution(params.execution, BLENDER_TIMEOUT_MS)
     const asset = await readContainedAsset({
       assetPath: params.path,
       cwd: params.cwd,
@@ -678,8 +784,11 @@ export async function inspect3dAsset(params: {
         BLENDER_TIMEOUT_MS,
         {},
         params.signal,
+        execution,
+        'blender.inspect-blend',
+        params.cwd,
       )
-      if (!blender.ok) throw new Error(blender.error)
+      if (!blender.ok) throw blender.executionRefusal ? new ExecutionRefusalError(blender.executionRefusal) : new Error(blender.error)
       const markerIndex = blender.stdout.lastIndexOf(BLENDER_JSON_MARKER)
       if (markerIndex < 0)
         throw new Error('Blender did not return a scene summary.')
@@ -696,8 +805,11 @@ export async function inspect3dAsset(params: {
           OPENBUFF_3D_SOURCE_FORMAT: asset.format,
         },
         params.signal,
+        execution,
+        'blender.inspect-import',
+        params.cwd,
       )
-      if (!blender.ok) throw new Error(blender.error)
+      if (!blender.ok) throw blender.executionRefusal ? new ExecutionRefusalError(blender.executionRefusal) : new Error(blender.error)
       const markerIndex = blender.stdout.lastIndexOf(BLENDER_JSON_MARKER)
       if (markerIndex < 0)
         throw new Error('Blender did not return a scene summary.')
@@ -778,6 +890,7 @@ export async function inspect3dAsset(params: {
     return jsonOutput<'inspect_3d_asset'>({
       path: params.path,
       error: error instanceof Error ? error.message : String(error),
+      ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
     })
   }
 }
@@ -791,10 +904,15 @@ export async function render3dPreview(params: {
   cwd: string
   fs: CodebuffFileSystem
   signal?: AbortSignal
+  execution?: ExecutionAdapterContext
   fileFilter?: FileFilter
 }): Promise<CodebuffToolOutput<'render_3d_preview'>> {
   try {
     if (params.signal?.aborted) throw new Error('Blender operation cancelled.')
+    const execution = blenderExecution(
+      params.execution,
+      Math.max(BLENDER_TIMEOUT_MS, params.views.length * 90_000),
+    )
     const asset = await readContainedAsset({
       assetPath: params.path,
       cwd: params.cwd,
@@ -838,8 +956,11 @@ export async function render3dPreview(params: {
         OPENBUFF_3D_SOURCE_FORMAT: asset.format,
       },
       params.signal,
+      execution,
+      'blender.preview',
+      params.cwd,
     )
-    if (!blender.ok) throw new Error(blender.error)
+    if (!blender.ok) throw blender.executionRefusal ? new ExecutionRefusalError(blender.executionRefusal) : new Error(blender.error)
 
     const createdAt = new Date().toISOString()
     const receipts: AssetReceipt[] = []
@@ -889,6 +1010,7 @@ export async function render3dPreview(params: {
     return jsonOutput<'render_3d_preview'>({
       path: params.path,
       error: error instanceof Error ? error.message : String(error),
+      ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
     })
   }
 }
@@ -901,6 +1023,7 @@ export async function edit3dAsset(params: {
   fs: CodebuffFileSystem
   operationId?: string
   signal?: AbortSignal
+  execution?: ExecutionAdapterContext
   fileFilter?: FileFilter
 }): Promise<CodebuffToolOutput<'edit_3d_asset'>> {
   const operationId =
@@ -1042,6 +1165,7 @@ export async function edit3dAsset(params: {
   const notApplied = async (
     message: string,
     beforeHash: string | null = null,
+    refusal?: Refusal,
   ): Promise<CodebuffToolOutput<'edit_3d_asset'>> => {
     // Cleanup is best-effort and must never replace the receipt: a throw here
     // would turn a structured `not_applied` result into an exception, which is
@@ -1055,6 +1179,7 @@ export async function edit3dAsset(params: {
           version: 1 as const,
           operationId,
           outcome: 'not_applied' as const,
+          ...(refusal ? { executionRefusal: refusal } : {}),
           actions: [
             {
               actionId,
@@ -1089,6 +1214,7 @@ export async function edit3dAsset(params: {
     if (params.signal?.aborted) {
       return await notApplied('Blender operation cancelled.')
     }
+    const execution = blenderExecution(params.execution, BLENDER_TIMEOUT_MS)
     if (!params.fs.conditionalCommit) {
       return await notApplied(
         'Guarded 3D edits require a filesystem adapter with conditionalCommit authority.',
@@ -1179,6 +1305,9 @@ export async function edit3dAsset(params: {
           OPENBUFF_3D_OPERATIONS_PATH: operationsPath,
         },
         params.signal,
+        execution,
+        'blender.edit',
+        params.cwd,
       )
       // A clean exit is REQUIRED, not implied by "the process started and
       // returned": a Blender that crashed after writing a partial or complete
@@ -1192,6 +1321,7 @@ export async function edit3dAsset(params: {
             ? "Blender exited without a clean status, so this attempt's working copy is not trusted."
             : blender.error,
           `sha256:${asset.sourceHash}`,
+          blender.ok ? undefined : blender.executionRefusal,
         )
       }
       const markerIndex = blender.stdout.lastIndexOf(BLENDER_JSON_MARKER)
@@ -1214,6 +1344,9 @@ export async function edit3dAsset(params: {
         BLENDER_TIMEOUT_MS,
         {},
         params.signal,
+        execution,
+        'blender.validate',
+        params.cwd,
       )
       if (!validation.ok || !validation.stdout.includes(BLENDER_JSON_MARKER)) {
         return await notApplied(
@@ -1221,6 +1354,7 @@ export async function edit3dAsset(params: {
             ? 'The edited Blender file failed structured validation.'
             : validation.error,
           `sha256:${asset.sourceHash}`,
+          validation.ok ? undefined : validation.executionRefusal,
         )
       }
       if (params.signal?.aborted) {
@@ -1313,6 +1447,7 @@ export async function edit3dAsset(params: {
         cwd: params.cwd,
         fs: params.fs,
         signal: params.signal,
+        execution,
         fileFilter: params.fileFilter,
       })
       const previewJsonPart = preview.find((part) => part.type === 'json')
@@ -1397,6 +1532,8 @@ export async function edit3dAsset(params: {
   } catch (error) {
     return await notApplied(
       error instanceof Error ? error.message : String(error),
+      null,
+      isExecutionRefusalError(error) ? error.refusal : undefined,
     )
   }
 }

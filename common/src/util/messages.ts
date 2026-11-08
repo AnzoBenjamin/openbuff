@@ -4,6 +4,11 @@ import {
 } from 'ai'
 import { has, isEqual } from 'lodash'
 
+import {
+  isMcpToolResultEnvelope,
+  projectMcpToolResultForProvider,
+} from '../mcp/result'
+
 import type { Logger } from '../types/contracts/logger'
 import type { JSONValue } from '../types/json'
 import type {
@@ -129,7 +134,19 @@ function assistantToCodebuffMessage(
 function convertToolResultMessage(
   message: ToolMessage,
 ): ModelMessageWithAuxiliaryData[] {
-  if (message.content.length === 0) {
+  const content = message.content.flatMap((part) =>
+    part.type === 'json' && isMcpToolResultEnvelope(part.value)
+      ? projectMcpToolResultForProvider(part.value)
+      : [part],
+  )
+  const hasMcpResult = message.content.some(
+    (part) => part.type === 'json' && isMcpToolResultEnvelope(part.value),
+  )
+  // Historical result parts carry message metadata. Do not also attach the
+  // original byte-bearing MCP envelope as auxiliary `content` on each part.
+  const { content: _originalContent, ...metadata } = message
+  const resultMetadata = hasMcpResult ? metadata : message
+  if (content.length === 0) {
     return [
       structuredClone<ToolModelMessage>({
         ...message,
@@ -144,14 +161,14 @@ function convertToolResultMessage(
       }),
     ]
   }
-  return message.content.map((c) => {
+  return content.map((c) => {
     if (c.type === 'json') {
       return structuredClone<ToolModelMessage>({
         ...message,
         role: 'tool',
         content: [
           {
-            ...message,
+            ...resultMetadata,
             output: {
               ...c,
               value: sanitizeJsonToolResultValue(c.value),

@@ -8,6 +8,11 @@ import type { RunOutcome } from '@codebuff/common/types/run-outcome'
 
 import type { Runner, RunnerResult, AgentStep, RunnerOptions } from './runner'
 import type { OpenbuffClient } from '@openbuff/sdk'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
+import {
+  captureEvaluationCommand,
+  deriveEvaluationExecution,
+} from '../execution'
 
 const DEBUG_ERROR = true
 
@@ -22,6 +27,7 @@ export class CodebuffRunner implements Runner {
   private parentSha: string
   private artifactSink?: EvaluationArtifactSink
   private inheritEnv: boolean
+  private execution?: ExecutionAdapterContext
 
   constructor(options: {
     cwd: string
@@ -34,6 +40,7 @@ export class CodebuffRunner implements Runner {
     parentSha: string
     artifactSink?: EvaluationArtifactSink
     inheritEnv?: boolean
+    execution?: ExecutionAdapterContext
   }) {
     this.cwd = options.cwd
     this.env = options.env
@@ -45,6 +52,7 @@ export class CodebuffRunner implements Runner {
     this.parentSha = options.parentSha
     this.artifactSink = options.artifactSink
     this.inheritEnv = options.inheritEnv ?? true
+    this.execution = options.execution
   }
 
   async run(
@@ -202,18 +210,46 @@ export class CodebuffRunner implements Runner {
     // Get git diff after Codebuff has made changes
     let diff = ''
     try {
-      execFileSync('git', ['add', '--', '.'], {
-        cwd: this.cwd,
-        env: this.env,
-        stdio: 'ignore',
-      })
-      diff = execFileSync('git', ['diff', this.parentSha, '--'], {
-        cwd: this.cwd,
-        env: this.env,
-        encoding: 'utf-8',
-        maxBuffer: 10 * 1024 * 1024,
-      })
-    } catch {
+      if (this.execution) {
+        const execution = deriveEvaluationExecution(
+          this.execution,
+          'evaluator.post-run-diff',
+        )
+        await captureEvaluationCommand('git', ['add', '--', '.'], {
+          cwd: this.cwd,
+          env: this.env,
+          signal: options.signal,
+          execution,
+          branchId: 'supplemental.evaluator.post-run-add',
+        })
+        diff = (
+          await captureEvaluationCommand(
+            'git',
+            ['diff', this.parentSha, '--'],
+            {
+              cwd: this.cwd,
+              env: this.env,
+              signal: options.signal,
+              execution,
+              branchId: 'supplemental.evaluator.post-run-diff',
+            },
+          )
+        ).stdout
+      } else {
+        execFileSync('git', ['add', '--', '.'], {
+          cwd: this.cwd,
+          env: this.env,
+          stdio: 'ignore',
+        })
+        diff = execFileSync('git', ['diff', this.parentSha, '--'], {
+          cwd: this.cwd,
+          env: this.env,
+          encoding: 'utf-8',
+          maxBuffer: 10 * 1024 * 1024,
+        })
+      }
+    } catch (error) {
+      if (this.execution) throw error
       // Ignore git errors
     }
 

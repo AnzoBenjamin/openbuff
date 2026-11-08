@@ -10,7 +10,8 @@ import { delimiter, join, resolve } from 'path'
 import { generateDtsBundle } from 'dts-bundle-generator'
 import { resolveGrammarWasmSource } from '../../packages/code-map/src/grammar-wasm-repair'
 import { LANGUAGE_WASM_FILES } from '../../packages/code-map/src/wasm-files'
-import { repairEsmExportRenames } from './esm-export-fixup'
+import { normalizeEntryReexports, repairCjsExportGetters, repairEsmExportRenames } from './esm-export-fixup'
+import { verifyPublicDeclarations } from './verify-public-declarations'
 
 const workspaceNodeModules = join(import.meta.dir, '..', 'node_modules')
 const existingNodePath = process.env.NODE_PATH ?? ''
@@ -58,6 +59,19 @@ async function build() {
     'events',
   ]
 
+  // Keep named reexports as local live bindings before Bun's tree shaking.
+  // A post-build alias fix cannot recover a function removed with its module.
+  const sdkEntry = resolve('src/index.ts')
+  const publicReexports: import('bun').BunPlugin = {
+    name: 'sdk-public-reexports',
+    setup(builder) {
+      builder.onLoad({ filter: /[/\\]src[/\\]index\.ts$/ }, async (args) => {
+        if (args.path !== sdkEntry) return undefined
+        return { contents: normalizeEntryReexports(await readFile(args.path, 'utf8')), loader: 'ts' }
+      })
+    },
+  }
+
   console.log('📦 Building ESM format...')
   await Bun.build({
     entrypoints: ['src/index.ts'],
@@ -78,7 +92,7 @@ async function build() {
     loader: {
       '.scm': 'text',
     },
-    plugins: [],
+    plugins: [publicReexports],
   })
 
   console.log('📦 Building CJS format...')
@@ -102,7 +116,7 @@ async function build() {
     loader: {
       '.scm': 'text',
     },
-    plugins: [],
+    plugins: [publicReexports],
   })
 
   console.log('📝 Generating and bundling TypeScript declarations...')
@@ -111,17 +125,12 @@ async function build() {
       [
         {
           filePath: 'src/index.ts',
+          // The generator imports third-party types by default, including MCP
+          // and Zod. An importedLibraries allowlist drops every unlisted import
+          // while retaining its type references in the public declaration.
           libraries: {
-            // Keep @modelcontextprotocol/sdk's types as external imports in the
-            // public .d.ts instead of inlining them. Its bundled Server class
-            // types reference zod-v3-only symbols (`objectOutputType`,
-            // `objectInputType`, …) that do not exist under this workspace's
-            // hoisted zod 4.x, so inlining them makes declaration bundling fail
-            // with `Cannot find symbol for node "objectOutputType"` and breaks
-            // the CI `cd sdk && bun run build` step (P1-T4 follow-up). The
-            // public MCP surface (createMcpServer/runMcp/options types) keeps
-            // working; the Server's own zod-typed internals stay external.
-            importedLibraries: ['@modelcontextprotocol/sdk'],
+            // Inline the private type helper so Node consumers do not need Bun.
+            inlinedLibraries: ['bun-types'],
           },
           output: {
             exportReferencedTypes: false,
@@ -135,6 +144,11 @@ async function build() {
 
     await writeFile('dist/index.d.ts', bundle)
     await fixDuplicateImports()
+    verifyPublicDeclarations(
+      join(import.meta.dir, 'fixtures/custom-tool-consumer.ts'),
+      resolve('dist/index.d.ts'),
+    )
+    console.log('  ✓ Verified public consumer and SDK declaration')
     console.log('  ✓ Created bundled type definitions')
   } catch (error) {
     console.error(
@@ -150,6 +164,14 @@ async function build() {
   console.log('📂 Copying vendored ripgrep binaries...')
   await copyRipgrepVendor()
 
+  // Work around Bun bundler tree-shaking: the `ToolHelpers` aggregation object
+  // (from `sdk/src/tools/index.ts`) is only re-exported, never used internally,
+  // so the bundler can strip its definition. The
+  // individual tool functions ARE bundled (they're used by `sdk/src/run.ts`).
+  // This step reconstructs `ToolHelpers` from those already-bundled functions
+  // and adds it to the export block.
+  await fixToolHelpers()
+
   // Work around Bun CJS bundler bug: some `export { X } from './module'`
   // statements produce export getters referencing `import_X.Y` but drop the
   // `var import_X = ...` declaration, causing "import_X is not defined" at
@@ -161,14 +183,6 @@ async function build() {
   // causing "Export 'X2' is not defined in module" at runtime. This patches
   // the ESM bundle to replace broken `X2 as X` with just `X`.
   await fixEsmExportRenames()
-
-  // Work around Bun bundler tree-shaking: the `ToolHelpers` aggregation object
-  // (from `sdk/src/tools/index.ts`) is only re-exported, never used internally,
-  // so the bundler can strip its definition. The
-  // individual tool functions ARE bundled (they're used by `sdk/src/run.ts`).
-  // This step reconstructs `ToolHelpers` from those already-bundled functions
-  // and adds it to the export block.
-  await fixToolHelpers()
 
   // The repair steps above must not turn missing public exports into a
   // successful build. Exercise both published entry points in Node, including
@@ -187,9 +201,14 @@ async function build() {
     ['CJS', "Promise.resolve(require('./dist/index.cjs'))"],
   ]) {
     const script = `${expression}.then(m => { const missing = ${JSON.stringify(requiredExports)}.filter(name => m[name] == null); if (missing.length) { console.error('Missing SDK exports: ' + missing.join(', ')); process.exitCode = 1 } }).catch(error => { console.error(error); process.exitCode = 1 })`
-    const result = spawnSync('node', ['-e', script], { encoding: 'utf8', timeout: 30_000 })
+    const result = spawnSync('node', ['-e', script], {
+      encoding: 'utf8',
+      timeout: 30_000,
+    })
     if (result.error || result.status !== 0) {
-      throw new Error(`${format} SDK bundle verification failed: ${result.error?.message ?? result.stderr ?? `exit ${result.status}`}`)
+      throw new Error(
+        `${format} SDK bundle verification failed: ${result.error?.message ?? result.stderr ?? `exit ${result.status}`}`,
+      )
     }
   }
 
@@ -219,6 +238,30 @@ async function fixDuplicateImports() {
       content = content.replace(zodDefaultImportRegex, '')
     }
 
+    // Node's legacy and node: specifiers name the same declarations. Merge
+    // their named imports so the generated file defines each binding once.
+    const childProcessImports =
+      /import\s+\{([^}]+)\}\s+from\s+(['"])(?:node:)?child_process\2;?/g
+    const imports = [...content.matchAll(childProcessImports)]
+    if (imports.length > 1) {
+      const names = [
+        ...new Set(
+          imports.flatMap((match) =>
+            match[1]
+              .split(',')
+              .map((name) => name.trim())
+              .filter(Boolean),
+          ),
+        ),
+      ]
+      let first = true
+      content = content.replace(childProcessImports, () => {
+        if (!first) return ''
+        first = false
+        return `import { ${names.join(', ')} } from 'node:child_process';`
+      })
+    }
+
     await writeFile('dist/index.d.ts', content)
     console.log('  ✓ Fixed duplicate imports in bundled types')
   } catch (error) {
@@ -241,164 +284,17 @@ async function fixDuplicateImports() {
  */
 async function fixCjsImportVars() {
   const cjsPath = 'dist/index.cjs'
-  let content = await readFile(cjsPath, 'utf-8')
-
-  // Step 1: Find all declared `var import_*` variables.
-  const declaredImports = new Set<string>()
-  const varDeclRegex = /var\s+(import_\w+)/g
-  let match: RegExpExecArray | null
-  while ((match = varDeclRegex.exec(content)) !== null) {
-    declaredImports.add(match[1])
-  }
-
-  // Step 2: Find all `import_*.Y` patterns in export getters.
-  // Match: `exportName: () => import_module.symbolName,`
-  const getterRegex = /(\w+):\s*\(\)\s*=>\s*(import_\w+)\.(\w+)/g
-  const replacements: { from: string; to: string }[] = []
-  const brokenVars = new Set<string>()
-
-  while ((match = getterRegex.exec(content)) !== null) {
-    const importVar = match[2]
-    if (!declaredImports.has(importVar)) {
-      brokenVars.add(importVar)
-    }
-  }
-
-  if (brokenVars.size === 0) {
-    console.log('  ✓ CJS import vars fixup: no broken references found')
-    return
-  }
-
-  // Step 3: For each broken import_* variable, find the corresponding
-  // internal `exports_*` object and build a replacement map.
-  // The pattern in the CJS bundle is:
-  //   var exports_<name> = {};
-  //   __export(exports_<name>, { ... symbolName: () => symbolName, ... });
-  // And the broken getter is:
-  //   exportName: () => import_<name>.symbolName,
-  //
-  // We need to map `import_<name>.symbolName` -> `exports_<name>.symbolName`
-  // where `<name>` is derived from the import variable name.
-  // `import_code_map` -> `exports_src` (code-map's index.ts)
-  // `import_code_map_exports` -> `exports_src` (our wrapper)
-  // `import_validate_agents2` -> `exports_validate_agents`
-  // etc.
-  //
-  // Rather than guessing the mapping, we look for `exports_*` objects that
-  // contain the same symbol names.
-
-  // Build a map: symbolName -> exports_varName for all __export calls.
-  // Skip the main SDK export object (the one that has `module.exports =
-  // __toCommonJS(exports_*)`) — that's the object we're fixing, not a source.
-  // Identify it by finding the `module.exports = __toCommonJS(exports_X)` line.
-  const moduleExportsRegex =
-    /module\.exports\s*=\s*__toCommonJS\((exports_\w+)\)/
-  const moduleExportsMatch = content.match(moduleExportsRegex)
-  const mainExportVar = moduleExportsMatch
-    ? moduleExportsMatch[1]
-    : 'exports_src2'
-
-  const exportObjRegex =
-    /var\s+(exports_\w+)\s*=\s*\{\s*\}[;]?\s*\n__export\(\s*\1\s*,\s*\{([\s\S]*?)\}\)/g
-  const symbolToExports = new Map<string, string>()
-
-  while ((match = exportObjRegex.exec(content)) !== null) {
-    const exportsVar = match[1]
-    // Skip the main SDK export object — it's the one we're fixing
-    if (exportsVar === mainExportVar) continue
-    const body = match[2]
-    const symRegex = /(\w+):\s*\(\)\s*=>\s*/g
-    let symMatch: RegExpExecArray | null
-    while ((symMatch = symRegex.exec(body)) !== null) {
-      // Only set if not already mapped (prefer first/internal module definitions)
-      if (!symbolToExports.has(symMatch[1])) {
-        symbolToExports.set(symMatch[1], exportsVar)
-      }
-    }
-  }
-
-  // Step 4: Replace broken `import_*.symbolName` with `exports_*.symbolName`
-  for (const brokenVar of brokenVars) {
-    // Find all getters referencing this broken var
-    const brokenGetterRegex = new RegExp(
-      `(\\w+):\\s*\\(\\)\\s*=>\\s*${brokenVar}\.(\\w+)`,
-      'g',
-    )
-    let bgMatch: RegExpExecArray | null
-    while ((bgMatch = brokenGetterRegex.exec(content)) !== null) {
-      const exportName = bgMatch[1]
-      const symbolName = bgMatch[2]
-      const exportsVar = symbolToExports.get(symbolName)
-      if (exportsVar) {
-        const from = `${bgMatch[0]}`
-        const to = `${exportName}: () => ${exportsVar}.${symbolName}`
-        replacements.push({ from, to })
-      } else {
-        // Try direct function/variable reference
-        // Check if `function symbolName` or `var symbolName` exists in the bundle
-        const fnRegex = new RegExp(
-          `^(?:async\\s+)?function\\s+${symbolName}\\b`,
-          'm',
-        )
-        const varRegex = new RegExp(`var\\s+${symbolName}\\b`)
-        let directRef: string | null = null
-        if (fnRegex.test(content)) {
-          directRef = symbolName
-        } else if (varRegex.test(content)) {
-          directRef = symbolName
-        }
-        if (directRef) {
-          replacements.push({
-            from: bgMatch[0],
-            to: `${exportName}: () => ${directRef}`,
-          })
-        } else {
-          console.warn(
-            `    ⚠ Could not find replacement for ${brokenVar}.${symbolName}`,
-          )
-        }
-      }
-    }
-  }
-
-  // Step 5: Apply replacements
-  let fixCount = 0
-  for (const { from, to } of replacements) {
-    if (content.includes(from)) {
-      content = content.replace(from, to)
-      fixCount++
-    }
-  }
-
-  await writeFile(cjsPath, content)
-  console.log(
-    `  ✓ CJS import vars fixup: replaced ${fixCount} broken export getters (for ${brokenVars.size} undeclared import_* vars)`,
-  )
+  const result = repairCjsExportGetters(await readFile(cjsPath, 'utf8'))
+  await writeFile(cjsPath, result.content)
+  console.log(`  ✓ CJS import vars fixup: replaced ${result.fixCount} broken export getters`)
 }
 
-/**
- * Work around Bun ESM bundler bugs:
- *
- * 1. Dedup renames: `X2 as X` where `X2` is never defined in the bundle
- *    but the original `X` IS defined. Fix: replace `X2 as X` with just `X`.
- *
- * 2. Tree-shaken exports: symbols that appear in the export block but were
- *    stripped from the bundle body entirely (neither the symbol nor any
- *    suffixed variant is defined). Fix: remove the export entry from the
- *    export block to prevent `Export is not defined` errors.
- */
-
+/** Repair declared dedup aliases; unresolved exports fail instead of disappearing. */
 async function fixEsmExportRenames() {
   const esmPath = 'dist/index.mjs'
-  const { content, fixCount, removalCount } = repairEsmExportRenames(
-    await readFile(esmPath, 'utf-8'),
-  )
+  const { content, fixCount } = repairEsmExportRenames(await readFile(esmPath, 'utf8'))
   await writeFile(esmPath, content)
-  const rMsg = fixCount > 0 ? `replaced ${fixCount} dedup renames` : ''
-  const dMsg =
-    removalCount > 0 ? `removed ${removalCount} tree-shaken exports` : ''
-  const summary = [rMsg, dMsg].filter(Boolean).join(', ')
-  console.log(`  ✓ ESM export renames fixup: ${summary}`)
+  console.log(`  ✓ ESM export renames fixup: replaced ${fixCount} dedup renames`)
 }
 
 /**

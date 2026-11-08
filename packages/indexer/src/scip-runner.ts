@@ -13,6 +13,7 @@ import {
 } from './scip-parse-worker'
 
 import type { ChildProcess } from 'node:child_process'
+import type { ExecutionAdapterContext, PreparedLaunch } from '@codebuff/common/types/contracts/execution-context'
 import type { IndexEdge, MetadataIndex } from './types'
 import type { ScipParseWorkerResult } from './scip-parse-worker'
 
@@ -64,6 +65,8 @@ export interface ScipRunnerInvocation {
   cwd: string
   timeoutMs: number
   maxBufferBytes: number
+  executionContext?: ExecutionAdapterContext
+  branchId?: string
 }
 
 /** `status === null` means the process was killed (e.g. timeout). */
@@ -225,17 +228,63 @@ export const SCIP_INDEXER_COMMANDS: readonly ScipIndexerCommand[] = [
   },
 ]
 
+export class ScipExecutionError extends Error {
+  constructor(readonly refusal: { ok: false; reason: string; cause: string }) {
+    super(refusal.cause)
+    this.name = 'ScipExecutionError'
+  }
+}
+
+function requireActiveScipRequest(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new ScipExecutionError({ ok: false, reason: 'cancelled', cause: 'SCIP request was cancelled.' })
+}
+
+function waitForScipRequest<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new ScipExecutionError({ ok: false, reason: 'cancelled', cause: 'SCIP request was cancelled.' }))
+    signal.addEventListener('abort', onAbort, { once: true })
+    pending.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+    if (signal.aborted) onAbort()
+  })
+}
+
+function prepareScipLaunch(invocation: ScipRunnerInvocation, sync: boolean): PreparedLaunch {
+  const context = invocation.executionContext
+  if (!context) throw new ScipExecutionError({ ok: false, reason: 'unavailable', cause: 'SCIP execution context is unavailable.' })
+  requireActiveScipRequest(context.signal)
+  const branchId = invocation.branchId ?? `scip.${sync ? 'sync' : 'async'}.${invocation.argv[0] === '--version' ? 'detect' : 'index'}.${invocation.command.replace(/^scip-/, '')}`
+  const derived = context.execution.derive({ memoKey: branchId, limit: { kind: 'finite', durationMs: invocation.timeoutMs } })
+  if (!derived.ok) throw new ScipExecutionError(derived)
+  const prepared = derived.value.prepareTarget({ target: {
+    executable: invocation.command, argv: invocation.argv, cwd: invocation.cwd,
+    projectRoot: context.projectRoot, allowedPaths: context.allowedPaths,
+    profile: context.profile, mode: context.mode, processType: 'SYNC',
+    family: 'diagnostic-build-version-scip', branchId,
+    adapterOptions: { runtime: sync ? 'spawn-sync' : 'node', stdio: 'ignore,pipe,pipe', maxBufferBytes: invocation.maxBufferBytes },
+  } })
+  if (!prepared.ok) throw new ScipExecutionError(prepared)
+  return prepared.value
+}
+
 /** Legacy sync runner over `spawnSync` (kept for compatibility). */
 export const defaultScipRunner: ScipRunner = (invocation) => {
   try {
-    const result = spawnSync(invocation.command, invocation.argv, {
-      cwd: invocation.cwd,
-      encoding: 'utf8',
-      timeout: invocation.timeoutMs,
-      // spawnSync buffers stdout/stderr fully; maxBuffer is the hard byte cap.
-      maxBuffer: invocation.maxBufferBytes,
-      stdio: ['ignore', 'pipe', 'pipe'],
+    const launch = prepareScipLaunch(invocation, true)
+    const admission = launch.admitSync()
+    if (!admission.ok) throw new ScipExecutionError(admission)
+    const dispatched = launch.dispatchNow(admission.value.permit, (input, observer) => {
+      const result = spawnSync(input.executable, input.argv, {
+        cwd: input.cwd, env: input.env, encoding: 'utf8',
+        ...(input.resourceRemainingMs === null ? {} : { timeout: Math.max(1, Math.ceil(input.resourceRemainingMs)) }),
+        maxBuffer: input.adapterOptions.maxBufferBytes as number, stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      if (Number.isInteger(result.pid) && result.pid > 0) observer.spawnObserved({ source: 'spawn-sync-result', pid: result.pid })
+      if (result.error) observer.failure({ source: 'spawn-sync-error', errorCode: (result.error as NodeJS.ErrnoException).code, cause: result.error.message })
+      return result
     })
+    if (!dispatched.ok) throw new ScipExecutionError(dispatched)
+    const result = dispatched.value.handle
     const timedOut =
       !!result.error &&
       ((result.error as NodeJS.ErrnoException).code === 'ETIMEDOUT' ||
@@ -269,6 +318,7 @@ export const defaultScipRunner: ScipRunner = (invocation) => {
           : (result.error?.message ?? ''),
     }
   } catch (error) {
+    if (error instanceof ScipExecutionError) throw error
     return {
       status: -1,
       stdout: '',
@@ -315,34 +365,49 @@ export class BoundedStreamCapture {
  * `timeout` option's SIGTERM kill maps to `status: null` (timeout), matching
  * the legacy sync runner's contract.
  */
-export const defaultAsyncScipRunner: AsyncScipRunner = (invocation) =>
-  new Promise((resolve) => {
+export const defaultAsyncScipRunner: AsyncScipRunner = async (invocation) => {
+  const requestSignal = invocation.executionContext?.signal
+  requireActiveScipRequest(requestSignal)
+  const launch = prepareScipLaunch(invocation, false)
+  const admission = await waitForScipRequest(launch.admit(), requestSignal)
+  if (!admission.ok) throw new ScipExecutionError(admission)
+  requireActiveScipRequest(requestSignal)
+  return waitForScipRequest(new Promise((resolve, reject) => {
     let child: ChildProcess
-    try {
-      child = spawn(invocation.command, invocation.argv, {
-        cwd: invocation.cwd,
-        timeout: invocation.timeoutMs,
-        // spawn has no maxBuffer option (that is spawnSync-only); output is
-        // bounded by the data handlers below, which stop accumulating at
-        // maxBufferBytes.
+    let resourceSignal!: AbortSignal
+    let remainingMs!: number | null
+    let maxBufferBytes!: number
+    const dispatched = launch.dispatchNow(admission.value.permit, (input, observer) => {
+      resourceSignal = input.resourceSignal
+      remainingMs = input.resourceRemainingMs
+      maxBufferBytes = input.adapterOptions.maxBufferBytes as number
+      const process = (invocation.executionContext?.spawn ?? spawn)(input.executable, input.argv, {
+        cwd: input.cwd, env: input.env, signal: input.resourceSignal,
+        ...(remainingMs === null ? {} : { timeout: Math.max(1, Math.ceil(remainingMs)) }),
         stdio: ['ignore', 'pipe', 'pipe'],
       })
-    } catch (error) {
-      resolve({
-        status: -1,
-        stdout: '',
-        stderr: error instanceof Error ? error.message : String(error),
+      process.once('spawn', () => {
+        if (Number.isInteger(process.pid) && (process.pid ?? 0) > 0) observer.spawnObserved({ source: 'node-spawn-event', pid: process.pid! })
+        else observer.failure({ source: 'adapter-observation-error', cause: 'Node spawn event has no valid process PID.' })
       })
-      return
-    }
-    const stdout = new BoundedStreamCapture(invocation.maxBufferBytes)
-    const stderr = new BoundedStreamCapture(invocation.maxBufferBytes)
+      process.on('error', (error: NodeJS.ErrnoException) => observer.failure({ source: 'node-error-event', errorCode: error.code, cause: error.message }))
+      return process
+    })
+    if (!dispatched.ok) { reject(new ScipExecutionError(dispatched)); return }
+    child = dispatched.value.handle
+    const stdout = new BoundedStreamCapture(maxBufferBytes)
+    const stderr = new BoundedStreamCapture(maxBufferBytes)
     let settled = false
     const finish = (result: ScipRunnerResult) => {
       if (settled) return
       settled = true
+      if (timer !== undefined) clearTimeout(timer)
+      resourceSignal.removeEventListener('abort', onAbort)
       resolve(result)
     }
+    const onAbort = () => finish({ status: -1, stdout: stdout.text(), stderr: 'SCIP resource cancelled' })
+    const timer = remainingMs === null ? undefined : setTimeout(() => finish({ status: null, stdout: '', stderr: 'SCIP resource deadline exhausted' }), Math.max(1, Math.ceil(remainingMs)))
+    resourceSignal.addEventListener('abort', onAbort, { once: true })
     // Raw-byte accumulation with ONE decode at stream end (perf:
     // scip-runner-stdout-char-cap-mismatch): per-chunk chunk.toString()
     // split multibyte UTF-8 sequences at chunk boundaries, and the old cap
@@ -368,10 +433,9 @@ export const defaultAsyncScipRunner: AsyncScipRunner = (invocation) =>
       }
       finish({ status: code, stdout: stdout.text(), stderr: stderr.text() })
     })
-  })
-
-/** Adapt a legacy sync runner to the async seam (identity-stable per runner). */
-const asyncWrapperMemo = new WeakMap<ScipRunner, AsyncScipRunner>()
+    if (resourceSignal!.aborted) onAbort()
+  }), requestSignal)
+}
 
 /**
  * Wrap a sync `ScipRunner` so it satisfies the async seam. The default runner
@@ -384,22 +448,17 @@ function toAsyncRunner(runner: ScipRunner): AsyncScipRunner {
 }
 
 function resolveAsyncRunner(opts: {
+  executionContext?: ExecutionAdapterContext
   runner?: ScipRunner
   asyncRunner?: AsyncScipRunner
 }): { run: AsyncScipRunner; identity: object } {
-  if (opts.asyncRunner) return { run: opts.asyncRunner, identity: opts.asyncRunner }
-  if (opts.runner) {
-    // Memoize the wrapper per original runner so the detection cache keys off
-    // a stable identity: detectAvailableScipIndexers (sync) and runScipIngest
-    // (async) sharing one injected runner must share one cache namespace.
-    let wrapped = asyncWrapperMemo.get(opts.runner)
-    if (!wrapped) {
-      wrapped = toAsyncRunner(opts.runner)
-      asyncWrapperMemo.set(opts.runner, wrapped)
-    }
-    return { run: wrapped, identity: opts.runner }
+  const original = opts.asyncRunner ?? (opts.runner ? toAsyncRunner(opts.runner) : defaultAsyncScipRunner)
+  const context = opts.executionContext
+  return {
+    run: invocation => original({ ...invocation, executionContext: context ?? invocation.executionContext,
+      branchId: invocation.branchId?.replace('scip.async.', opts.runner && !opts.asyncRunner ? 'scip.sync.' : 'scip.async.') }),
+    identity: context ?? opts.asyncRunner ?? opts.runner ?? defaultScipRunner,
   }
-  return { run: defaultAsyncScipRunner, identity: defaultScipRunner }
 }
 
 export type ScipIndexerStatus = 'ok' | 'error' | 'unavailable' | 'timeout'
@@ -414,6 +473,7 @@ export interface ScipIndexerRunResult {
    */
   edgesMerged?: number
   error?: string
+  executionRefusal?: ScipExecutionError['refusal']
 }
 
 export interface ScipIngestRunResult {
@@ -425,6 +485,7 @@ export interface ScipIngestRunResult {
 }
 
 export interface ScipIngestRunOptions {
+  executionContext?: ExecutionAdapterContext
   /**
    * Injectable async process seam; defaults to the non-blocking `spawn`
    * runner. Prefer this over the legacy sync `runner`.
@@ -453,18 +514,20 @@ export interface ScipIngestRunOptions {
 
 /**
  * Probe every table entry with its detection argv (2s timeout each) and
- * return the ids of the installed indexers in table order. Never throws.
+ * return the ids of the installed indexers in table order. Admission refusals
+ * throw ScipExecutionError instead of being mistaken for missing binaries.
  * Probe results are cached (short TTL) and shared with `runScipIngest`, so a
  * detect-then-ingest sequence probes each binary once.
  */
 export function detectAvailableScipIndexers(
   root: string,
-  opts: { runner?: ScipRunner } = {},
+  opts: { runner?: ScipRunner; executionContext?: ExecutionAdapterContext } = {},
 ): string[] {
-  const runner = opts.runner ?? defaultScipRunner
+  const originalRunner = opts.runner ?? defaultScipRunner
+  const runner: ScipRunner = invocation => originalRunner({ ...invocation, executionContext: opts.executionContext })
   const available: string[] = []
   for (const entry of SCIP_INDEXER_COMMANDS) {
-    if (detectionStatusSync(root, entry, runner) === 0) available.push(entry.id)
+    if (detectionStatusSync(root, entry, runner, opts.executionContext ?? originalRunner) === 0) available.push(entry.id)
   }
   return available
 }
@@ -479,6 +542,7 @@ export function detectAvailableScipIndexers(
 export async function detectAvailableScipIndexersAsync(
   root: string,
   opts: {
+    executionContext?: ExecutionAdapterContext
     runner?: ScipRunner
     asyncRunner?: AsyncScipRunner
     detectionHardTimeoutMs?: number
@@ -523,6 +587,7 @@ function detectionStatusSync(
       cwd: root,
       timeoutMs: DETECTION_TIMEOUT_MS,
       maxBufferBytes: DETECTION_BUFFER_BYTES,
+      branchId: `scip.sync.detect.${entry.id}`,
     })
     detectionCache.set(key, {
       status: detection.status,
@@ -530,7 +595,8 @@ function detectionStatusSync(
     })
     trimDetectionCache()
     return detection.status
-  } catch {
+  } catch (error) {
+    if (error instanceof ScipExecutionError) throw error
     // A throwing runner is not an available indexer; nothing is cached so a
     // transient failure is retried on the next call.
     return -1
@@ -579,6 +645,7 @@ async function detectionStatusAsync(
   identity: object,
   hardTimeoutMs: number = DETECTION_PROBE_HARD_TIMEOUT_MS,
 ): Promise<number | null> {
+  if (!Number.isSafeInteger(hardTimeoutMs) || hardTimeoutMs <= 0) throw new ScipExecutionError({ ok: false, reason: 'invalid-context', cause: 'Invalid SCIP detection deadline.' })
   const key = detectionCacheKey(identity, root, entry.bin)
   const cached = detectionCache.get(key)
   if (cached && cached.expiresAt > Date.now()) return cached.status
@@ -598,8 +665,9 @@ async function detectionStatusAsync(
           command: entry.bin,
           argv: entry.detectionArgv,
           cwd: root,
-          timeoutMs: DETECTION_TIMEOUT_MS,
+          timeoutMs: Math.min(DETECTION_TIMEOUT_MS, hardTimeoutMs),
           maxBufferBytes: DETECTION_BUFFER_BYTES,
+          branchId: `scip.async.detect.${entry.id}`,
         }),
         entry,
         hardTimeoutMs,
@@ -610,7 +678,8 @@ async function detectionStatusAsync(
       })
       trimDetectionCache()
       return detection.status
-    } catch {
+    } catch (error) {
+      if (error instanceof ScipExecutionError) throw error
       // A throwing runner is not an available indexer; nothing is cached so
       // a transient failure is retried on the next call. The hard-timeout
       // race above also lands here: a runner that never settles must not
@@ -665,8 +734,10 @@ export async function runScipIngest(
   // 1. Probe every candidate's availability ONCE (parallel, cached, and
   // shared with detectAvailableScipIndexers) before any indexer is launched.
   const detectionStatuses = new Map<string, number | null>()
+  const detectionRefusals = new Map<string, ScipExecutionError['refusal']>()
   await Promise.all(
     candidates.map(async (entry) => {
+      try {
       detectionStatuses.set(
         entry.id,
         await detectionStatusAsync(
@@ -677,6 +748,11 @@ export async function runScipIngest(
           opts.detectionHardTimeoutMs,
         ),
       )
+      } catch (error) {
+        if (!(error instanceof ScipExecutionError)) throw error
+        detectionStatuses.set(entry.id, -1)
+        detectionRefusals.set(entry.id, error.refusal)
+      }
     }),
   )
   const runnable = candidates.filter(
@@ -687,7 +763,7 @@ export async function runScipIngest(
   // the event loop, and never more than MAX_INDEXER_CONCURRENCY at once.
   const outcomes = new Map<
     string,
-    { status: ScipIndexerStatus; error?: string; edges?: IndexEdge[] }
+    { status: ScipIndexerStatus; error?: string; executionRefusal?: ScipExecutionError['refusal']; edges?: IndexEdge[] }
   >()
   await mapWithConcurrency(runnable, MAX_INDEXER_CONCURRENCY, async (entry) => {
     outcomes.set(
@@ -710,10 +786,15 @@ export async function runScipIngest(
   for (const entry of candidates) {
     const status = detectionStatuses.get(entry.id)
     const result: ScipIndexerRunResult = { indexer: entry.id, status: 'unavailable' }
-    if (status === 0) {
+    if (detectionRefusals.has(entry.id)) {
+      result.status = 'unavailable'
+      result.executionRefusal = detectionRefusals.get(entry.id)
+      result.error = `execution-${result.executionRefusal!.reason}: ${result.executionRefusal!.cause}`
+    } else if (status === 0) {
       const outcome = outcomes.get(entry.id)!
       result.status = outcome.status
       if (outcome.error !== undefined) result.error = outcome.error
+      if (outcome.executionRefusal) result.executionRefusal = outcome.executionRefusal
       if (opts.index && outcome.edges) {
         if (outcome.edges.length > batchBudget) {
           result.status = 'error'
@@ -955,7 +1036,7 @@ async function runSingleIndexer(
   timeoutMs: number,
   nonce: string,
   maxEdges: number,
-): Promise<{ status: ScipIndexerStatus; error?: string; edges?: IndexEdge[] }> {
+): Promise<{ status: ScipIndexerStatus; error?: string; executionRefusal?: ScipExecutionError['refusal']; edges?: IndexEdge[] }> {
   // The availability probe already ran (cached) for every candidate before
   // any indexer was launched, so no re-probe happens here.
 
@@ -978,9 +1059,10 @@ async function runSingleIndexer(
       cwd: root,
       timeoutMs,
       maxBufferBytes: MAX_PROCESS_BUFFER_BYTES,
+      branchId: `scip.async.index.${entry.id}`,
     })
   } catch (error) {
-    return { status: 'error', error: `indexer invocation failed: ${errorMessage(error)}` }
+    return { status: 'error', error: error instanceof ScipExecutionError ? `execution-${error.refusal.reason}: ${error.refusal.cause}` : `indexer invocation failed: ${errorMessage(error)}`, ...(error instanceof ScipExecutionError ? { executionRefusal: error.refusal } : {}) }
   }
   if (run.status === null) {
     return { status: 'timeout', error: `${entry.bin} timed out after ${timeoutMs}ms` }

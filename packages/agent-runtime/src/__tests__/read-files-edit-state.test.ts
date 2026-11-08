@@ -1,3 +1,8 @@
+import { getExactContentHash } from '@codebuff/common/util/content-hash'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
 import { editTransactionParams } from '@codebuff/common/tools/params/tool/edit-transaction'
 import { MAX_READ_BLOCK_BYTES } from '@codebuff/common/tools/params/tool/read-files'
@@ -21,6 +26,8 @@ import {
 import { processStream } from '../tools/stream-parser'
 import { revokeImplicitReadAuthorizationsAfterCompaction } from '../util/read-authorization'
 import {
+  buildReadFilesResponseV1,
+  buildRangeReadItemV1,
   buildWholeFileReadResultV1,
   confirmedMutationOutput,
   createFileProcessingState,
@@ -36,6 +43,8 @@ import type {
   AgentRuntimeScopedDeps,
 } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
+import type { RequestFilesFn } from '@codebuff/common/types/contracts/client'
 import type { AgentTemplate } from '../templates/types'
 import { strReplaceParams } from '@codebuff/common/tools/params/tool/str-replace'
 
@@ -201,9 +210,17 @@ describe('read_files edit-state recovery', () => {
       },
       fileContext: mockFileContext,
       fileProcessingState,
-      requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-        buildWholeFileReadResultV1(filePaths, (filePath) =>
-          filePath === path ? diskContent : null,
+      requestFiles: async ({
+        filePaths,
+        capabilityIssuer,
+      }: {
+        filePaths: string[]
+        capabilityIssuer?: ReadCapabilityIssuer
+      }) =>
+        buildWholeFileReadResultV1(
+          filePaths,
+          (filePath) => (filePath === path ? diskContent : null),
+          capabilityIssuer,
         ),
       logger,
     } as any)
@@ -230,9 +247,10 @@ describe('read_files edit-state recovery', () => {
       expect(value.results[0].editAnchor).toMatchObject({
         startLine: 1,
         contentHash: getContentHash(diskContent),
-        readCapability: expect.stringMatching(/^cap\.v3\./),
+        readCapability: expect.stringMatching(/^cap\.v4\./),
       })
       expect(value.results[0].readCapability).toBeUndefined()
+      expect(value.results[0]).not.toHaveProperty('rawSourceContent')
       const duplicated = {
         ...value.results[0],
         readCapability: value.results[0].editAnchor.readCapability,
@@ -259,13 +277,19 @@ describe('read_files edit-state recovery', () => {
     fileProcessingState.strictReadBeforeEdit = true
     fileProcessingState.readAuthorizationsByPath = { [path]: true }
     fileProcessingState.readAuthorizationHashesByPath = { [path]: contentHash }
+    fileProcessingState.rawReadAuthorizationHashesByPath = {
+      [path]: getExactContentHash(diskContent),
+    }
+    const confirmedRead = buildWholeFileReadResultV1([path], () => diskContent)
+      .results[0]
+    if (
+      confirmedRead.status !== 'ok' ||
+      confirmedRead.selector !== 'file' ||
+      !confirmedRead.editAnchor
+    )
+      throw new Error('Expected a signed whole source')
     fileProcessingState.confirmedPostEditAnchorsByPath = {
-      [path]: {
-        startLine: 1,
-        endLine: 2,
-        contentHash,
-        readCapability: 'redacted-test-capability',
-      },
+      [path]: confirmedRead.editAnchor,
     }
     fileProcessingState.promisesByPath[path] = []
 
@@ -279,8 +303,18 @@ describe('read_files edit-state recovery', () => {
       },
       fileContext: mockFileContext,
       fileProcessingState,
-      requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-        buildWholeFileReadResultV1(filePaths, () => diskContent),
+      requestFiles: async ({
+        filePaths,
+        capabilityIssuer,
+      }: {
+        filePaths: string[]
+        capabilityIssuer?: ReadCapabilityIssuer
+      }) =>
+        buildWholeFileReadResultV1(
+          filePaths,
+          () => diskContent,
+          capabilityIssuer,
+        ),
       logger: telemetryLogger,
     } as any)
 
@@ -321,8 +355,13 @@ describe('read_files edit-state recovery', () => {
       },
       fileContext: mockFileContext,
       fileProcessingState,
-      requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-        buildWholeFileReadResultV1(filePaths, () => null),
+      requestFiles: async ({
+        filePaths,
+        capabilityIssuer,
+      }: {
+        filePaths: string[]
+        capabilityIssuer?: ReadCapabilityIssuer
+      }) => buildWholeFileReadResultV1(filePaths, () => null, capabilityIssuer),
       logger,
     } as any)
 
@@ -419,8 +458,18 @@ describe('read_files edit-state recovery', () => {
       },
       fileContext: mockFileContext,
       fileProcessingState,
-      requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-        buildWholeFileReadResultV1(filePaths, () => null),
+      requestFiles: async ({
+        filePaths,
+        capabilityIssuer,
+      }: {
+        filePaths: string[]
+        capabilityIssuer?: ReadCapabilityIssuer
+      }) =>
+        buildWholeFileReadResultV1(
+          filePaths,
+          (filePath) => (filePath === path ? diskContent : null),
+          capabilityIssuer,
+        ),
       requestOptionalFile: async ({ filePath }: { filePath: string }) =>
         filePath === path ? diskContent : null,
       logger,
@@ -456,7 +505,8 @@ describe('read_files edit-state recovery', () => {
       },
       fileContext: mockFileContext,
       fileProcessingState,
-      requestFiles: async () => buildReadFilesResultV1([]),
+      requestFiles: async (input: Parameters<RequestFilesFn>[0]) =>
+        buildReadFilesResponseV1(input, () => diskContent),
       requestOptionalFile: async () => diskContent,
       logger,
     } as any)
@@ -529,6 +579,70 @@ describe('read_files edit-state recovery', () => {
     expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
   })
 
+  it('does not grant authority or clear recovery from incomplete metadata, missing raw source, or unsigned legacy basis', async () => {
+    const path = 'src/unsigned.ts'
+    const raw = '\uFEFFone\r\n'
+    const source = buildWholeFileReadResultV1([path], () => raw).results[0]
+    if (
+      source.status !== 'ok' ||
+      source.selector !== 'file' ||
+      !source.editAnchor
+    )
+      throw new Error('Expected a signed whole source')
+    const legacy = encodeReadCapabilityToken({
+      startLine: source.editAnchor.startLine,
+      endLine: source.editAnchor.endLine,
+      hash: source.editAnchor.contentHash,
+      scope: {
+        projectId: mockFileContext.projectRoot,
+        path,
+        runId: defaultTestHandlerAuthority.runId,
+      },
+    })
+    const { rawSourceContent: _raw, ...withoutRaw } = source
+    for (const { item, status } of [
+      { item: { ...source, metadataComplete: false }, status: 'error' },
+      { item: withoutRaw, status: 'ok' },
+      {
+        item: {
+          ...source,
+          editAnchor: { ...source.editAnchor, readCapability: legacy },
+        },
+        status: 'ok',
+      },
+    ]) {
+      const fileProcessingState = createFileProcessingState()
+      fileProcessingState.failedEditRequiresReadByPath[path] = true
+      const result = await handleReadFiles({
+        ...defaultTestHandlerAuthority,
+        previousToolCallFinished: Promise.resolve(),
+        toolCall: {
+          toolCallId: 'read-untrusted',
+          toolName: 'read_files',
+          input: { paths: [path] },
+        },
+        fileProcessingState,
+        requestFiles: async () => buildReadFilesResultV1([item]),
+        logger,
+      } as any)
+      expect(fileProcessingState.failedEditRequiresReadByPath[path]).toBe(true)
+      expect(
+        fileProcessingState.readAuthorizationsByPath?.[path],
+      ).toBeUndefined()
+      expect(
+        fileProcessingState.rawReadAuthorizationHashesByPath?.[path],
+      ).toBeUndefined()
+      if (result.output[0]?.type !== 'json')
+        throw new Error('Expected structured output')
+      const visible = (result.output[0].value as any).results[0]
+      expect(visible.status).toBe(status)
+      if (status === 'ok') expect(visible.content).toBe('one\n')
+      else expect(visible.error.code).toBe('invalid_request')
+      expect(visible.editAnchor).toBeUndefined()
+      expect(visible).not.toHaveProperty('rawSourceContent')
+    }
+  })
+
   it('returns a symbol larger than the former hidden 100k limit', async () => {
     const path = 'src/large-symbol.ts'
     const content = `export function target() {\n  return '${'x'.repeat(101_000)}'\n}\n`
@@ -545,7 +659,8 @@ describe('read_files edit-state recovery', () => {
       },
       fileContext: mockFileContext,
       fileProcessingState,
-      requestFiles: async () => buildReadFilesResultV1([]),
+      requestFiles: async (input: Parameters<RequestFilesFn>[0]) =>
+        buildReadFilesResponseV1(input, () => content),
       requestOptionalFile: async () => content,
       logger,
     } as any)
@@ -554,7 +669,9 @@ describe('read_files edit-state recovery', () => {
       type: 'json',
       value: { results: [{ status: 'ok', slices: [{ symbol: 'target' }] }] },
     })
-    expect(fileProcessingState.failedEditRequiresReadByPath[path]).not.toBe(true)
+    expect(fileProcessingState.failedEditRequiresReadByPath[path]).not.toBe(
+      true,
+    )
   })
 
   it.each([
@@ -579,7 +696,8 @@ describe('read_files edit-state recovery', () => {
         },
         fileContext: mockFileContext,
         fileProcessingState: createFileProcessingState(),
-        requestFiles: async () => buildReadFilesResultV1([]),
+        requestFiles: async (input: Parameters<RequestFilesFn>[0]) =>
+          buildReadFilesResponseV1(input, () => content),
         requestOptionalFile: async () => content,
         logger,
       } as any)
@@ -673,24 +791,12 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState,
       requestFiles: async () =>
         buildReadFilesResultV1([
-          {
-            selector: 'range',
-            requestIndex: 0,
+          buildRangeReadItemV1({
             path,
-            status: 'ok',
-            content: '1\tline 1',
-            sourceContent,
+            rawContent: 'line 1\nline 2',
             startLine: 1,
             endLine: 1,
-            totalLines: 2,
-            complete: true,
-            editAnchor: {
-              startLine: 1,
-              endLine: 1,
-              contentHash: rangeHash,
-              readCapability: 'cap.v3.test',
-            },
-          },
+          }),
         ]),
       logger,
     } as any)
@@ -704,21 +810,22 @@ describe('read_files edit-state recovery', () => {
         startLine: 1,
         endLine: 1,
         contentHash: rangeHash,
-        readCapability: expect.stringMatching(/^cap\.v3\./),
+        readCapability: expect.stringMatching(/^cap\.v4\./),
+        rawBasis: expect.objectContaining({ scope: 'lines' }),
       })
       expect(value.results[0].rangeHash).toBeUndefined()
       expect(value.results[0].readCapability).toBeUndefined()
     }
   })
 
-  it('promotes a complete full-file range read (1..totalLines) to sticky whole-file auth', async () => {
+  it('keeps a complete full-looking range read scoped without whole-file authority', async () => {
     const path = 'src/full-range.ts'
     const sourceContent = 'line 1\nline 2'
     const rangeHash = getContentHash(sourceContent)
     const fileProcessingState = createFileProcessingState()
     fileProcessingState.strictReadBeforeEdit = true
 
-    await handleReadFiles({
+    const result = await handleReadFiles({
       ...defaultTestHandlerAuthority,
       previousToolCallFinished: Promise.resolve(),
       toolCall: {
@@ -730,31 +837,32 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState,
       requestFiles: async () =>
         buildReadFilesResultV1([
-          {
-            selector: 'range',
-            requestIndex: 0,
+          buildRangeReadItemV1({
             path,
-            status: 'ok',
-            content: '1\tline 1\n2\tline 2',
-            sourceContent,
+            rawContent: sourceContent,
             startLine: 1,
             endLine: 2,
-            totalLines: 2,
-            complete: true,
-            editAnchor: {
-              startLine: 1,
-              endLine: 2,
-              contentHash: rangeHash,
-              readCapability: 'cap.v3.test',
-            },
-          },
+          }),
         ]),
       logger,
     } as any)
 
-    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
-    expect(fileProcessingState.readAuthorizationHashesByPath?.[path]).toBe(
-      getContentHash(sourceContent),
+    expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBeUndefined()
+    expect(
+      fileProcessingState.readAuthorizationHashesByPath?.[path],
+    ).toBeUndefined()
+    expect(
+      fileProcessingState.rawReadAuthorizationHashesByPath?.[path],
+    ).toBeUndefined()
+    if (result.output[0]?.type !== 'json')
+      throw new Error('Expected a structured range result')
+    expect((result.output[0].value as any).results[0].editAnchor).toMatchObject(
+      {
+        startLine: 1,
+        endLine: 2,
+        contentHash: rangeHash,
+        rawBasis: expect.objectContaining({ scope: 'lines' }),
+      },
     )
   })
 
@@ -935,6 +1043,9 @@ describe('read_files edit-state recovery', () => {
     fileProcessingState.readAuthorizationHashesByPath = {
       [path]: getContentHash(diskContent),
     }
+    fileProcessingState.rawReadAuthorizationHashesByPath = {
+      [path]: getExactContentHash(diskContent),
+    }
 
     const result = await handleStrReplace({
       ...defaultTestHandlerAuthority,
@@ -989,6 +1100,7 @@ describe('read_files edit-state recovery', () => {
       path: string
       content: string
       expectedHash?: string | null
+      expectedRawHash?: string | null
     }> = []
 
     const result = await handleWriteFile({
@@ -1025,6 +1137,7 @@ describe('read_files edit-state recovery', () => {
         path,
         content: newContent,
         expectedHash: getContentHash(diskContent),
+        expectedRawHash: getExactContentHash(diskContent),
       },
     ])
     expect(result.output[0]?.type).toBe('json')
@@ -1048,6 +1161,9 @@ describe('read_files edit-state recovery', () => {
     fileProcessingState.readAuthorizationsByPath = { [path]: true }
     fileProcessingState.readAuthorizationHashesByPath = {
       [path]: getContentHash(diskContent),
+    }
+    fileProcessingState.rawReadAuthorizationHashesByPath = {
+      [path]: getExactContentHash(diskContent),
     }
 
     const result = await handleWriteFile({
@@ -1315,9 +1431,10 @@ describe('read_files edit-state recovery', () => {
     }
   })
 
-  it('chains edit_transaction from prior same-step str_replace in-memory content', async () => {
+  it('chains edit_transaction from confirmed same-step str_replace content', async () => {
     const path = 'src/helper.ts'
     const diskContent = 'export const value = 1\nexport const other = 1\n'
+    let currentContent = diskContent
     const fileProcessingState = createFileProcessingState()
     const appliedPatches: string[] = []
 
@@ -1341,11 +1458,15 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState,
       logger,
       requestOptionalFile: async ({ filePath }: { filePath: string }) =>
-        filePath === path ? diskContent : null,
+        filePath === path ? currentContent : null,
       requestClientToolCall: async (toolCall: any) => {
+        expect(toolCall.input.expectedRawHash).toBe(
+          getExactContentHash(currentContent),
+        )
         appliedPatches.push(toolCall.input.content)
+        currentContent = 'export const value = 2\nexport const other = 1\n'
         return confirmedMutationOutput(toolCall, {
-          [path]: 'export const value = 2\nexport const other = 1\n',
+          [path]: currentContent,
         })
       },
       writeToClient: () => {},
@@ -1379,11 +1500,15 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState,
       logger,
       requestOptionalFile: async ({ filePath }: { filePath: string }) =>
-        filePath === path ? diskContent : null,
+        filePath === path ? currentContent : null,
       requestClientToolCall: async (toolCall: any) => {
+        expect(toolCall.input[0].expectedRawHash).toBe(
+          getExactContentHash(currentContent),
+        )
         appliedPatches.push(toolCall.input[0].content)
+        currentContent = 'export const value = 3\nexport const other = 1\n'
         return confirmedMutationOutput(toolCall, {
-          [path]: 'export const value = 3\nexport const other = 1\n',
+          [path]: currentContent,
         })
       },
     } as any)
@@ -1396,6 +1521,9 @@ describe('read_files edit-state recovery', () => {
       expect(appliedPatches[1]).toContain('-export const value = 2')
       expect(appliedPatches[1]).toContain('+export const value = 3')
     }
+    expect(currentContent).toBe(
+      'export const value = 3\nexport const other = 1\n',
+    )
   })
 
   it('chains later str_replace calls from edit_transaction in-memory content', async () => {
@@ -1499,6 +1627,9 @@ describe('read_files edit-state recovery', () => {
     fileProcessingState.readAuthorizationHashesByPath = {
       [path]: getContentHash(diskContent),
     }
+    fileProcessingState.rawReadAuthorizationHashesByPath = {
+      [path]: getExactContentHash(diskContent),
+    }
 
     const transactionResult = await handleEditTransaction({
       ...defaultTestHandlerAuthority,
@@ -1572,6 +1703,10 @@ describe('read_files edit-state recovery', () => {
     fileProcessingState.readAuthorizationHashesByPath = {
       [path]: getContentHash(diskContentByPath[path]),
       [otherPath]: getContentHash(diskContentByPath[otherPath]),
+    }
+    fileProcessingState.rawReadAuthorizationHashesByPath = {
+      [path]: getExactContentHash(diskContentByPath[path]),
+      [otherPath]: getExactContentHash(diskContentByPath[otherPath]),
     }
 
     const transactionResult = await handleEditTransaction({
@@ -1905,6 +2040,12 @@ describe('read_files edit-state recovery', () => {
     const diskContent = diskLines.join('\n')
     const rangeContent = diskLines.slice(3_359, 3_360).join('\n')
     const readCapability = encodeReadCapabilityToken({
+      rawBasis: getRawReadBasis(
+        captureTextDocument(diskContent),
+        3_360,
+        3_360,
+        'lines',
+      ),
       startLine: 3_360,
       endLine: 3_360,
       hash: getContentHash(rangeContent),
@@ -1998,6 +2139,12 @@ describe('read_files edit-state recovery', () => {
     const diskContent = diskLines.join('\n')
     const rangeContent = diskLines.slice(1_200, 1_201).join('\n')
     const readCapability = encodeReadCapabilityToken({
+      rawBasis: getRawReadBasis(
+        captureTextDocument(diskContent),
+        1_201,
+        1_201,
+        'lines',
+      ),
       startLine: 1_201,
       endLine: 1_201,
       hash: getContentHash(rangeContent),
@@ -2024,26 +2171,20 @@ describe('read_files edit-state recovery', () => {
     let appliedPatchContent = ''
     const requestOptionalFile = async ({ filePath }: { filePath: string }) =>
       filePath === path ? diskContent : null
-    const requestFiles = async () =>
+    const requestFiles = async ({
+      capabilityIssuer,
+    }: {
+      capabilityIssuer?: ReadCapabilityIssuer
+    }) =>
       buildReadFilesResultV1([
-        {
-          selector: 'range',
-          requestIndex: 0,
+        buildRangeReadItemV1({
           path,
-          status: 'ok',
-          content: rangeContent,
-          sourceContent: rangeContent,
+          rawContent: diskContent,
           startLine: 1_201,
           endLine: 1_201,
-          totalLines: 1_501,
-          complete: true,
-          editAnchor: {
-            startLine: 1_201,
-            endLine: 1_201,
-            contentHash: getContentHash(rangeContent),
-            readCapability,
-          },
-        },
+          content: rangeContent,
+          scope: capabilityIssuer,
+        }),
       ])
 
     await handleReadFiles({
@@ -2137,6 +2278,12 @@ describe('read_files edit-state recovery', () => {
     const diskContent = diskLines.join('\n')
     const rangeContent = diskLines.slice(1_200, 1_201).join('\n')
     const readCapability = encodeReadCapabilityToken({
+      rawBasis: getRawReadBasis(
+        captureTextDocument(diskContent),
+        1_201,
+        1_201,
+        'lines',
+      ),
       startLine: 1_201,
       endLine: 1_201,
       hash: getContentHash(rangeContent),
@@ -2179,27 +2326,21 @@ describe('read_files edit-state recovery', () => {
       },
       fileContext: mockFileContext,
       fileProcessingState,
-      requestFiles: async () => {
+      requestFiles: async ({
+        capabilityIssuer,
+      }: {
+        capabilityIssuer?: ReadCapabilityIssuer
+      }) => {
         await readFinished
         return buildReadFilesResultV1([
-          {
-            selector: 'range',
-            requestIndex: 0,
+          buildRangeReadItemV1({
             path,
-            status: 'ok',
-            content: rangeContent,
-            sourceContent: rangeContent,
+            rawContent: diskContent,
             startLine: 1_201,
             endLine: 1_201,
-            totalLines: 1_501,
-            complete: true,
-            editAnchor: {
-              startLine: 1_201,
-              endLine: 1_201,
-              contentHash: getContentHash(rangeContent),
-              readCapability,
-            },
-          },
+            content: rangeContent,
+            scope: capabilityIssuer,
+          }),
         ])
       },
       logger,
@@ -2546,6 +2687,9 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(readContent),
       }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(readContent),
+      }
       let applied = false
 
       const result = await handleStrReplace({
@@ -2644,6 +2788,7 @@ describe('read_files edit-state recovery', () => {
     it('strict read_files authorizes consecutive str_replaces via sticky read authorization', async () => {
       const path = 'src/helper.ts'
       const diskContent = 'export const value = 1\n'
+      let currentContent = diskContent
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
@@ -2657,9 +2802,17 @@ describe('read_files edit-state recovery', () => {
         },
         fileContext: mockFileContext,
         fileProcessingState,
-        requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-          buildWholeFileReadResultV1(filePaths, (filePath) =>
-            filePath === path ? diskContent : null,
+        requestFiles: async ({
+          filePaths,
+          capabilityIssuer,
+        }: {
+          filePaths: string[]
+          capabilityIssuer?: ReadCapabilityIssuer
+        }) =>
+          buildWholeFileReadResultV1(
+            filePaths,
+            (filePath) => (filePath === path ? diskContent : null),
+            capabilityIssuer,
           ),
         logger,
       } as any)
@@ -2690,11 +2843,15 @@ describe('read_files edit-state recovery', () => {
         fileProcessingState,
         logger,
         requestOptionalFile: async ({ filePath }: { filePath: string }) =>
-          filePath === path ? diskContent : null,
+          filePath === path ? currentContent : null,
         requestClientToolCall: async (toolCall: any) => {
+          expect(toolCall.input.expectedRawHash).toBe(
+            getExactContentHash(currentContent),
+          )
           firstApplyCount += 1
+          currentContent = 'export const value = 2\n'
           return confirmedMutationOutput(toolCall, {
-            [path]: 'export const value = 2\n',
+            [path]: currentContent,
           })
         },
         writeToClient: () => {},
@@ -2739,11 +2896,15 @@ describe('read_files edit-state recovery', () => {
         fileProcessingState,
         logger,
         requestOptionalFile: async ({ filePath }: { filePath: string }) =>
-          filePath === path ? diskContent : null,
+          filePath === path ? currentContent : null,
         requestClientToolCall: async (toolCall: any) => {
+          expect(toolCall.input.expectedRawHash).toBe(
+            getExactContentHash(currentContent),
+          )
           secondApplyCount += 1
+          currentContent = 'export const value = 3\n'
           return confirmedMutationOutput(toolCall, {
-            [path]: 'export const value = 3\n',
+            [path]: currentContent,
           })
         },
         writeToClient: () => {},
@@ -2761,11 +2922,16 @@ describe('read_files edit-state recovery', () => {
       expect(fileProcessingState.readAuthorizationHashesByPath?.[path]).toBe(
         getContentHash('export const value = 3\n'),
       )
+      expect(currentContent).toBe('export const value = 3\n')
+      expect(fileProcessingState.rawReadAuthorizationHashesByPath?.[path]).toBe(
+        getExactContentHash(currentContent),
+      )
     })
 
     it('strict read_files grants sticky read authorization that survives four consecutive str_replaces (read -> edit -> edit -> edit)', async () => {
       const path = 'src/helper.ts'
       const diskContent = 'export const value = 1\n'
+      let currentContent = diskContent
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
@@ -2780,9 +2946,17 @@ describe('read_files edit-state recovery', () => {
         },
         fileContext: mockFileContext,
         fileProcessingState,
-        requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-          buildWholeFileReadResultV1(filePaths, (filePath) =>
-            filePath === path ? diskContent : null,
+        requestFiles: async ({
+          filePaths,
+          capabilityIssuer,
+        }: {
+          filePaths: string[]
+          capabilityIssuer?: ReadCapabilityIssuer
+        }) =>
+          buildWholeFileReadResultV1(
+            filePaths,
+            (filePath) => (filePath === path ? diskContent : null),
+            capabilityIssuer,
           ),
         logger,
       } as any)
@@ -2822,11 +2996,15 @@ describe('read_files edit-state recovery', () => {
           fileProcessingState,
           logger,
           requestOptionalFile: async ({ filePath }: { filePath: string }) =>
-            filePath === path ? diskContent : null,
+            filePath === path ? currentContent : null,
           requestClientToolCall: async (toolCall: any) => {
+            expect(toolCall.input.expectedRawHash).toBe(
+              getExactContentHash(currentContent),
+            )
             totalApplies += 1
+            currentContent = `export const value = ${step.to}\n`
             return confirmedMutationOutput(toolCall, {
-              [path]: `export const value = ${step.to}\n`,
+              [path]: currentContent,
             })
           },
           writeToClient: () => {},
@@ -2849,6 +3027,10 @@ describe('read_files edit-state recovery', () => {
       expect(
         fileProcessingState.failedEditRequiresReadByPath?.[path],
       ).toBeUndefined()
+      expect(currentContent).toBe('export const value = 5\n')
+      expect(fileProcessingState.rawReadAuthorizationHashesByPath?.[path]).toBe(
+        getExactContentHash(currentContent),
+      )
     })
 
     it('strict read_files authorizes str_replace with equivalent normalized path spellings', async () => {
@@ -2867,9 +3049,17 @@ describe('read_files edit-state recovery', () => {
         },
         fileContext: mockFileContext,
         fileProcessingState,
-        requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-          buildWholeFileReadResultV1(filePaths, (filePath) =>
-            filePath === path ? diskContent : null,
+        requestFiles: async ({
+          filePaths,
+          capabilityIssuer,
+        }: {
+          filePaths: string[]
+          capabilityIssuer?: ReadCapabilityIssuer
+        }) =>
+          buildWholeFileReadResultV1(
+            filePaths,
+            (filePath) => (filePath === path ? diskContent : null),
+            capabilityIssuer,
           ),
         logger,
       } as any)
@@ -2947,10 +3137,17 @@ describe('read_files edit-state recovery', () => {
         },
         fileContext: mockFileContext,
         fileProcessingState,
-        requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
+        requestFiles: async ({
+          filePaths,
+          capabilityIssuer,
+        }: {
+          filePaths: string[]
+          capabilityIssuer?: ReadCapabilityIssuer
+        }) =>
           buildWholeFileReadResultV1(
             filePaths,
             (filePath) => diskContentByPath[filePath] ?? null,
+            capabilityIssuer,
           ),
         logger,
       } as any)
@@ -3331,8 +3528,16 @@ describe('read_files edit-state recovery', () => {
         fileContext: mockFileContext,
         runId,
         fileProcessingState,
-        requestFiles: async () =>
-          buildWholeFileReadResultV1([path], () => diskContent),
+        requestFiles: async ({
+          capabilityIssuer,
+        }: {
+          capabilityIssuer?: ReadCapabilityIssuer
+        }) =>
+          buildWholeFileReadResultV1(
+            [path],
+            () => diskContent,
+            capabilityIssuer,
+          ),
         logger,
       } as any)
 
@@ -3692,6 +3897,7 @@ describe('read_files edit-state recovery', () => {
     it('strict write_file new-file creation grants read auth so a follow-up str_replace can edit without re-reading', async () => {
       const path = 'src/newly-written-helper.ts'
       const writtenContent = 'export const value = 1\n'
+      const file = { content: null as string | null }
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
 
@@ -3716,11 +3922,13 @@ describe('read_files edit-state recovery', () => {
         prompt: undefined,
         userId: undefined,
         userInputId: 'test-input',
-        requestOptionalFile: async () => null,
+        requestOptionalFile: async () => file.content,
         requestClientToolCall: async (toolCall: any) => {
+          expect(toolCall.input.expectedRawHash).toBeNull()
           writeApplied = true
+          file.content = writtenContent
           return confirmedMutationOutput(toolCall, {
-            [path]: writtenContent,
+            [path]: file.content,
           })
         },
         writeToClient: () => {},
@@ -3761,11 +3969,15 @@ describe('read_files edit-state recovery', () => {
         fileProcessingState,
         logger,
         requestOptionalFile: async ({ filePath }: { filePath: string }) =>
-          filePath === path ? writtenContent : null,
+          filePath === path ? file.content : null,
         requestClientToolCall: async (toolCall: any) => {
+          expect(toolCall.input.expectedRawHash).toBe(
+            getExactContentHash(file.content!),
+          )
           strReplaceApplied = true
+          file.content = 'export const value = 2\n'
           return confirmedMutationOutput(toolCall, {
-            [path]: 'export const value = 2\n',
+            [path]: file.content,
           })
         },
         writeToClient: () => {},
@@ -3804,11 +4016,15 @@ describe('read_files edit-state recovery', () => {
         fileProcessingState,
         logger,
         requestOptionalFile: async ({ filePath }: { filePath: string }) =>
-          filePath === path ? writtenContent : null,
+          filePath === path ? file.content : null,
         requestClientToolCall: async (toolCall: any) => {
+          expect(toolCall.input.expectedRawHash).toBe(
+            getExactContentHash(file.content!),
+          )
           thirdApplyCount += 1
+          file.content = 'export const value = 3\n'
           return confirmedMutationOutput(toolCall, {
-            [path]: 'export const value = 3\n',
+            [path]: file.content,
           })
         },
         writeToClient: () => {},
@@ -3824,6 +4040,10 @@ describe('read_files edit-state recovery', () => {
       // Auth remains true across the entire write -> edit -> edit -> edit
       // chain with no intervening read_files calls.
       expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
+      expect(file.content).toBe('export const value = 3\n')
+      expect(fileProcessingState.rawReadAuthorizationHashesByPath?.[path]).toBe(
+        getExactContentHash(file.content!),
+      )
     })
 
     it('strict read_files authorizes one write_file overwrite and the authorization is preserved after success', async () => {
@@ -3842,9 +4062,17 @@ describe('read_files edit-state recovery', () => {
         },
         fileContext: mockFileContext,
         fileProcessingState,
-        requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-          buildWholeFileReadResultV1(filePaths, (filePath) =>
-            filePath === path ? diskContent : null,
+        requestFiles: async ({
+          filePaths,
+          capabilityIssuer,
+        }: {
+          filePaths: string[]
+          capabilityIssuer?: ReadCapabilityIssuer
+        }) =>
+          buildWholeFileReadResultV1(
+            filePaths,
+            (filePath) => (filePath === path ? diskContent : null),
+            capabilityIssuer,
           ),
         logger,
       } as any)
@@ -3966,9 +4194,17 @@ describe('read_files edit-state recovery', () => {
         },
         fileContext: mockFileContext,
         fileProcessingState: stateA,
-        requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-          buildWholeFileReadResultV1(filePaths, (filePath) =>
-            filePath === path ? diskContent : null,
+        requestFiles: async ({
+          filePaths,
+          capabilityIssuer,
+        }: {
+          filePaths: string[]
+          capabilityIssuer?: ReadCapabilityIssuer
+        }) =>
+          buildWholeFileReadResultV1(
+            filePaths,
+            (filePath) => (filePath === path ? diskContent : null),
+            capabilityIssuer,
           ),
         logger,
       } as any)
@@ -3981,13 +4217,18 @@ describe('read_files edit-state recovery', () => {
       const persistedHashes = {
         ...(stateA.readAuthorizationHashesByPath ?? {}),
       }
+      const persistedRawHashes = {
+        ...(stateA.rawReadAuthorizationHashesByPath ?? {}),
+      }
       expect(persistedAuth[path]).toBe(true)
       expect(persistedHashes[path]).toBe(getContentHash(diskContent))
+      expect(persistedRawHashes[path]).toBe(getExactContentHash(diskContent))
 
       const stateB = createFileProcessingState()
       stateB.strictReadBeforeEdit = strictReadBeforeEdit
       stateB.readAuthorizationsByPath = { ...persistedAuth }
       stateB.readAuthorizationHashesByPath = { ...persistedHashes }
+      stateB.rawReadAuthorizationHashesByPath = { ...persistedRawHashes }
 
       // --- Turn 2: str_replace on the fresh state B must succeed without
       // requiring the agent to re-read the file. ---
@@ -4052,9 +4293,17 @@ describe('read_files edit-state recovery', () => {
         },
         fileContext: mockFileContext,
         fileProcessingState: stateA,
-        requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-          buildWholeFileReadResultV1(filePaths, (filePath) =>
-            filePath === path ? diskContent : null,
+        requestFiles: async ({
+          filePaths,
+          capabilityIssuer,
+        }: {
+          filePaths: string[]
+          capabilityIssuer?: ReadCapabilityIssuer
+        }) =>
+          buildWholeFileReadResultV1(
+            filePaths,
+            (filePath) => (filePath === path ? diskContent : null),
+            capabilityIssuer,
           ),
         logger,
       } as any)
@@ -4117,6 +4366,9 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationsByPath = { [path]: true }
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(diskContent),
+      }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(diskContent),
       }
       fileProcessingState.editRereadRequirementsByPath = {
         [path]: { reason: 'context_compacted', sourceTool: 'compaction' },
@@ -4254,6 +4506,9 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(diskContent),
       }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(diskContent),
+      }
       fileProcessingState.editRereadRequirementsByPath = {
         [path]: { reason: 'context_compacted', sourceTool: 'compaction' },
       }
@@ -4353,6 +4608,9 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationsByPath = { [path]: true }
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(initialContent),
+      }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(initialContent),
       }
       fileProcessingState.editRereadRequirementsByPath = {
         [path]: { reason: 'context_compacted', sourceTool: 'compaction' },
@@ -4459,6 +4717,9 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(initialContent),
       }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(initialContent),
+      }
       fileProcessingState.editRereadRequirementsByPath = {
         [path]: { reason: 'context_compacted', sourceTool: 'compaction' },
       }
@@ -4563,6 +4824,9 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(diskContent),
       }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(diskContent),
+      }
       fileProcessingState.editRereadRequirementsByPath = {
         [path]: { reason: 'context_compacted', sourceTool: 'compaction' },
       }
@@ -4580,24 +4844,12 @@ describe('read_files edit-state recovery', () => {
         fileProcessingState,
         requestFiles: async () =>
           buildReadFilesResultV1([
-            {
-              selector: 'range',
-              requestIndex: 0,
+            buildRangeReadItemV1({
               path,
-              status: 'ok',
-              content: '1\texport const value = 1',
-              sourceContent,
+              rawContent: diskContent,
               startLine: 1,
               endLine: 1,
-              totalLines: 2,
-              complete: true,
-              editAnchor: {
-                startLine: 1,
-                endLine: 1,
-                contentHash: rangeHash,
-                readCapability: 'cap.v3.test',
-              },
-            },
+            }),
           ]),
         logger,
       } as any)
@@ -4647,6 +4899,9 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(diskContent),
       }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(diskContent),
+      }
       fileProcessingState.editRereadRequirementsByPath = {
         [path]: { reason: 'context_compacted', sourceTool: 'compaction' },
       }
@@ -4662,9 +4917,17 @@ describe('read_files edit-state recovery', () => {
         },
         fileContext: mockFileContext,
         fileProcessingState,
-        requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-          buildWholeFileReadResultV1(filePaths, (filePath) =>
-            filePath === path ? diskContent : null,
+        requestFiles: async ({
+          filePaths,
+          capabilityIssuer,
+        }: {
+          filePaths: string[]
+          capabilityIssuer?: ReadCapabilityIssuer
+        }) =>
+          buildWholeFileReadResultV1(
+            filePaths,
+            (filePath) => (filePath === path ? diskContent : null),
+            capabilityIssuer,
           ),
         logger,
       } as any)
@@ -4718,11 +4981,20 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(diskContent),
       }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(diskContent),
+      }
       fileProcessingState.editRereadRequirementsByPath = {
         [path]: { reason: 'context_compacted', sourceTool: 'compaction' },
       }
       fileProcessingState.failedEditRequiresReadByPath[path] = true
       const basedOnRead = encodeReadCapabilityToken({
+        rawBasis: getRawReadBasis(
+          captureTextDocument(diskContent),
+          1,
+          2,
+          'whole',
+        ),
         startLine: 1,
         endLine: diskContent.split('\n').length,
         hash: getContentHash(diskContent),
@@ -4782,8 +5054,10 @@ describe('read_files edit-state recovery', () => {
       const path = 'src/auth-miss.ts'
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
-      const capability =
-        'cap.v3.1.1.test-whole-file-capability-token-for-recovery-message'
+      const read = buildWholeFileReadResultV1([path], () => 'one\n').results[0]
+      if (read.status !== 'ok' || read.selector !== 'file' || !read.editAnchor)
+        throw new Error('Expected a signed whole source')
+      const capability = read.editAnchor.readCapability
 
       const withCap = strictEditAuthorizationError({
         fileProcessingState,
@@ -4819,13 +5093,11 @@ describe('read_files edit-state recovery', () => {
       const path = 'src/created-earlier.ts'
       const fileProcessingState = createFileProcessingState()
       fileProcessingState.strictReadBeforeEdit = true
+      const read = buildWholeFileReadResultV1([path], () => 'one\n').results[0]
+      if (read.status !== 'ok' || read.selector !== 'file' || !read.editAnchor)
+        throw new Error('Expected a signed whole source')
       fileProcessingState.confirmedPostEditAnchorsByPath = {
-        [path]: {
-          startLine: 1,
-          endLine: 2,
-          contentHash: 'sha256:x',
-          readCapability: 'cap.v3.test',
-        },
+        [path]: read.editAnchor,
       }
 
       const result = strictEditAuthorizationError({
@@ -4849,9 +5121,9 @@ describe('read_files edit-state recovery', () => {
         'Next: retry with basedOnRead',
       )
       expect(String(result?.errorMessage)).toContain(
-        'basedOnRead="cap.v3.test"',
+        'basedOnRead="' + read.editAnchor.readCapability + '"',
       )
-      expect(result?.recovery.basedOnRead).toBe('cap.v3.test')
+      expect(result?.recovery.basedOnRead).toBe(read.editAnchor.readCapability)
     })
 
     it('strictEditAuthorizationError uses the generic no-fresh-read message without a confirmed post-edit anchor', () => {
@@ -4933,6 +5205,9 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationsByPath = { [path]: true }
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(diskContent),
+      }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(diskContent),
       }
       fileProcessingState.editRereadRequirementsByPath = {
         [path]: { reason: 'context_compacted', sourceTool: 'compaction' },
@@ -5046,6 +5321,9 @@ describe('read_files edit-state recovery', () => {
       fileProcessingState.readAuthorizationsByPath = { [path]: true }
       fileProcessingState.readAuthorizationHashesByPath = {
         [path]: getContentHash(diskContent),
+      }
+      fileProcessingState.rawReadAuthorizationHashesByPath = {
+        [path]: getExactContentHash(diskContent),
       }
 
       const result = await handleEditTransaction({
@@ -5236,36 +5514,14 @@ describe('read_files unified five-selector surface (M2)', () => {
       },
       fileContext: mockFileContext,
       fileProcessingState,
-      requestFiles: async () =>
-        buildReadFilesResultV1([
-          {
-            selector: 'file',
-            requestIndex: 0,
-            path: 'src/file.ts',
-            status: 'ok',
-            content: fileContent,
-            complete: true,
-            template: false,
-          },
-          {
-            selector: 'range',
-            requestIndex: 1,
-            path: 'src/file.ts',
-            status: 'ok',
-            content: '1\texport const value = 1',
-            sourceContent: 'export const value = 1',
-            startLine: 1,
-            endLine: 1,
-            totalLines: 1,
-            complete: true,
-            editAnchor: {
-              startLine: 1,
-              endLine: 1,
-              contentHash: getContentHash('export const value = 1'),
-              readCapability: 'cap.v3.range',
-            },
-          },
-        ]),
+      requestFiles: async (input: Parameters<RequestFilesFn>[0]) =>
+        buildReadFilesResponseV1(input, (filePath) => {
+          if (filePath === 'src/file.ts') return fileContent
+          if (filePath === 'src/large.ts') return largeContent
+          if (filePath === 'src/around.ts') return aroundContent
+          if (filePath === 'src/symbol.ts') return symbolContent
+          return null
+        }),
       requestOptionalFile: async ({ filePath }: { filePath: string }) => {
         if (filePath === 'src/large.ts') return largeContent
         if (filePath === 'src/around.ts') return aroundContent
@@ -5380,36 +5636,15 @@ describe('read_files unified five-selector surface (M2)', () => {
       },
       fileContext: mockFileContext,
       fileProcessingState,
-      requestFiles: async () =>
-        buildReadFilesResultV1([
-          {
-            selector: 'file',
-            requestIndex: 0,
-            path: 'src/file.ts',
-            status: 'ok',
-            content: fileContent,
-            complete: true,
-            template: false,
-          },
-          {
-            selector: 'range',
-            requestIndex: 1,
-            path: 'src/file.ts',
-            status: 'ok',
-            content: '1\texport const value = 1',
-            sourceContent: 'export const value = 1',
-            startLine: 1,
-            endLine: 1,
-            totalLines: 1,
-            complete: true,
-            editAnchor: {
-              startLine: 1,
-              endLine: 1,
-              contentHash: getContentHash('export const value = 1'),
-              readCapability: 'cap.v3.range',
-            },
-          },
-        ]),
+      requestFiles: async (input: Parameters<RequestFilesFn>[0]) =>
+        buildReadFilesResponseV1(input, (filePath) => {
+          if (filePath === 'src/file.ts') return fileContent
+          if (filePath === 'src/large.ts') return largeContent
+          if (filePath === 'src/around.ts') return aroundContent
+          if (filePath === 'src/dup.ts') return duplicateSymbolContent
+          if (filePath === 'src/symbol.ts') return symbolContent
+          return null
+        }),
       requestOptionalFile: async ({ filePath }: { filePath: string }) => {
         if (filePath === 'src/large.ts') return largeContent
         if (filePath === 'src/around.ts') return aroundContent
@@ -5461,7 +5696,8 @@ describe('read_files unified five-selector surface (M2)', () => {
     expect(symbol.editAnchor).toMatchObject({
       startLine: symbol.startLine,
       endLine: symbol.endLine,
-      readCapability: expect.stringMatching(/^cap\.v3\./),
+      readCapability: expect.stringMatching(/^cap\.v4\./),
+      rawBasis: expect.objectContaining({ scope: 'lines' }),
     })
 
     const symbols = value.results[5]
@@ -5498,7 +5734,8 @@ describe('read_files unified five-selector surface (M2)', () => {
       },
       fileContext: mockFileContext,
       fileProcessingState,
-      requestFiles: async () => buildReadFilesResultV1([]),
+      requestFiles: async (input: Parameters<RequestFilesFn>[0]) =>
+        buildReadFilesResponseV1(input, () => duplicateSymbolContent),
       requestOptionalFile: async ({ filePath }: { filePath: string }) =>
         filePath === 'src/dup.ts' ? duplicateSymbolContent : null,
       logger,
@@ -5531,12 +5768,13 @@ describe('read_files unified five-selector surface (M2)', () => {
     ).toBeUndefined()
   })
 
-  it('emits a window manifest plus first window for an oversized whole-file read', async () => {
+  it('keeps an oversized bounded read partial without an unbounded structural fallback', async () => {
     const fileProcessingState = createFileProcessingState()
     const largeContent = Array.from(
       { length: 450 },
       (_, index) => `line ${index + 1}`,
     ).join('\n')
+    let optionalFileReads = 0
 
     const result = await handleReadFiles({
       ...defaultTestHandlerAuthority,
@@ -5561,8 +5799,10 @@ describe('read_files unified five-selector surface (M2)', () => {
             truncation: { reason: 'character_limit' },
           },
         ]),
-      requestOptionalFile: async ({ filePath }: { filePath: string }) =>
-        filePath === 'src/big.ts' ? largeContent : null,
+      requestOptionalFile: async ({ filePath }: { filePath: string }) => {
+        optionalFileReads += 1
+        return filePath === 'src/big.ts' ? largeContent : null
+      },
       logger,
     } as any)
 
@@ -5570,35 +5810,17 @@ describe('read_files unified five-selector surface (M2)', () => {
     if (result.output[0]?.type !== 'json') return
     const value = result.output[0].value as any
 
-    // The truncated file item stays partial; a window manifest item follows it.
+    // A partial bounded source cannot authenticate structural edit authority.
     expect(value.results[0]).toMatchObject({
       selector: 'file',
       path: 'src/big.ts',
       status: 'partial',
       complete: false,
     })
-    const manifest = value.results.find(
-      (item: any) => item.selector === 'window',
-    )
-    expect(manifest).toBeDefined()
-    expect(manifest).toMatchObject({
-      selector: 'window',
-      path: 'src/big.ts',
-      status: 'ok',
-      window: 1,
-      totalLines: 450,
-      complete: true,
-    })
-    expect(manifest.windowCount).toBeGreaterThan(1)
-    // The first window is a strict sub-file window, so it earns a scoped
-    // anchor (never a whole-file grant from a truncated read).
-    expect(manifest.editAnchor).toMatchObject({ startLine: 1, endLine: 400 })
-    // requestIndex stays contiguous after the manifest splice.
-    expect(value.results.map((item: any) => item.requestIndex)).toEqual(
-      value.results.map((_: any, index: number) => index),
-    )
-    // Summary counts the extra manifest item.
-    expect(value.summary.requested).toBe(value.results.length)
+    expect(value.results).toHaveLength(1)
+    expect(value.results[0].editAnchor).toBeUndefined()
+    expect(optionalFileReads).toBe(0)
+    expect(value.summary.requested).toBe(1)
     // No whole-file authorization was granted for the truncated path.
     expect(
       fileProcessingState.readAuthorizationsByPath?.['src/big.ts'],
@@ -5641,9 +5863,17 @@ describe('processStream cross-turn read-before-edit', () => {
     const agentRuntimeImpl = {
       ...TEST_AGENT_RUNTIME_IMPL,
       sendAction: () => {},
-      requestFiles: async () => {
+      requestFiles: async ({
+        capabilityIssuer,
+      }: {
+        capabilityIssuer?: ReadCapabilityIssuer
+      }) => {
         await new Promise((resolve) => setTimeout(resolve, 10))
-        return buildWholeFileReadResultV1([targetPath], () => diskContent)
+        return buildWholeFileReadResultV1(
+          [targetPath],
+          () => diskContent,
+          capabilityIssuer,
+        )
       },
       requestOptionalFile: async ({ filePath }: { filePath: string }) =>
         filePath === targetPath ? diskContent : null,
@@ -5746,13 +5976,24 @@ describe('processStream cross-turn read-before-edit', () => {
     agentState.readAuthorizationHashesByPath = {
       [targetPath]: getContentHash(previouslyReadContent),
     }
+    agentState.rawReadAuthorizationHashesByPath = {
+      [targetPath]: getExactContentHash(previouslyReadContent),
+    }
     let applyCount = 0
 
     const agentRuntimeImpl = {
       ...TEST_AGENT_RUNTIME_IMPL,
       sendAction: () => {},
-      requestFiles: async () =>
-        buildWholeFileReadResultV1([targetPath], () => diskContent),
+      requestFiles: async ({
+        capabilityIssuer,
+      }: {
+        capabilityIssuer?: ReadCapabilityIssuer
+      }) =>
+        buildWholeFileReadResultV1(
+          [targetPath],
+          () => diskContent,
+          capabilityIssuer,
+        ),
       requestOptionalFile: async ({ filePath }: { filePath: string }) =>
         filePath === targetPath ? diskContent : null,
       requestToolCall: async () => {
@@ -5822,6 +6063,9 @@ describe('processStream cross-turn read-before-edit', () => {
     agentState.readAuthorizationHashesByPath = {
       [targetPath]: getContentHash(diskContent),
     }
+    agentState.rawReadAuthorizationHashesByPath = {
+      [targetPath]: getExactContentHash(diskContent),
+    }
     revokeImplicitReadAuthorizationsAfterCompaction(agentState)
     expect(agentState.editRereadRequirementsByPath?.[targetPath]?.reason).toBe(
       'context_compacted',
@@ -5833,8 +6077,16 @@ describe('processStream cross-turn read-before-edit', () => {
     const agentRuntimeImpl = {
       ...TEST_AGENT_RUNTIME_IMPL,
       sendAction: () => {},
-      requestFiles: async () =>
-        buildWholeFileReadResultV1([targetPath], () => currentContent),
+      requestFiles: async ({
+        capabilityIssuer,
+      }: {
+        capabilityIssuer?: ReadCapabilityIssuer
+      }) =>
+        buildWholeFileReadResultV1(
+          [targetPath],
+          () => currentContent,
+          capabilityIssuer,
+        ),
       requestOptionalFile: async ({ filePath }: { filePath: string }) =>
         filePath === targetPath ? currentContent : null,
       requestToolCall: async (params: any) => {
@@ -6007,6 +6259,9 @@ describe('edit_transaction idempotent skipIfMissing deletions', () => {
     fileProcessingState.readAuthorizationsByPath = { [path]: true }
     fileProcessingState.readAuthorizationHashesByPath = {
       [path]: getContentHash(diskContent),
+    }
+    fileProcessingState.rawReadAuthorizationHashesByPath = {
+      [path]: getExactContentHash(diskContent),
     }
     let clientCalls = 0
 

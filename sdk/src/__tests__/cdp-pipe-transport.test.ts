@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { authenticatedHostFixture } from './authenticated-host-fixture'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { type ChildProcess } from 'node:child_process'
 import type { Log } from '@codebuff/common/browser-actions'
-import { existsSync, mkdtempSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
@@ -24,6 +25,7 @@ import {
   stopBrowserSessionsByOwner,
   type BrowserSessionOwner,
   type RoutableSession,
+  type PipeProbeHooks,
 } from '../tools/browser-logs'
 import {
   CdpPipeTransport,
@@ -1015,8 +1017,31 @@ describe('connectPage orphaned flatten-session cleanup', () => {
 })
 
 describe('detectPipeSupport (pipe compatibility probe)', () => {
+  let root: string
+  let host: ReturnType<typeof authenticatedHostFixture>
+  beforeEach(() => {
+    root = mkdtempSync(path.join(tmpdir(), 'cdp-authenticated-probe-'))
+    host = authenticatedHostFixture(root)
+  })
   afterEach(() => {
     __resetPipeSupportProbeCacheForTest()
+    host.close()
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  // Protocol peers remain injected; the cache scope and host context are authentic.
+  function probePipeSupport(overrides?: Partial<PipeProbeHooks>) {
+    return detectPipeSupport(overrides, { ...host.context, resources: host.resources,
+      executablePath: '/usr/bin/fake-chrome', sandboxArgs: [] })
+  }
+
+  test('missing captured authority refuses before the injected probe spawn', async () => {
+    let spawns = 0
+    await expect(detectPipeSupport({ spawn: () => {
+      spawns++
+      throw new Error('An unauthenticated probe must not reach its adapter')
+    } })).rejects.toThrow(/Captured browser execution context is unavailable/)
+    expect(spawns).toBe(0)
   })
 
   function makeProbeAttempt(
@@ -1055,7 +1080,7 @@ describe('detectPipeSupport (pipe compatibility probe)', () => {
     const probe = makeProbeAttempt(transport)
 
     await expect(
-      detectPipeSupport({
+      probePipeSupport({
         executablePath: () => '/usr/bin/fake-chrome',
         spawn: () => probe.attempt,
         probeTimeoutMs: 200,
@@ -1091,7 +1116,7 @@ describe('detectPipeSupport (pipe compatibility probe)', () => {
     transport.close()
 
     await expect(
-      detectPipeSupport({
+      probePipeSupport({
         executablePath: () => '/usr/bin/fake-chrome',
         spawn: () => probe.attempt,
         probeTimeoutMs: 200,
@@ -1123,7 +1148,7 @@ describe('detectPipeSupport (pipe compatibility probe)', () => {
     // the port transport), not pass the probe and only blow up later at
     // connectPage with "Chrome did not attach to target" and no fallback.
     await expect(
-      detectPipeSupport({
+      probePipeSupport({
         executablePath: () => '/usr/bin/fake-chrome',
         spawn: () => probe.attempt,
         probeTimeoutMs: 200,
@@ -1158,7 +1183,7 @@ describe('detectPipeSupport (pipe compatibility probe)', () => {
     // attach that resolves without one is a demonstrable failure, not a
     // timeout, so the probe resolves false instead of failing closed.
     await expect(
-      detectPipeSupport({
+      probePipeSupport({
         executablePath: () => '/usr/bin/fake-chrome',
         spawn: () => probe.attempt,
         probeTimeoutMs: 200,
@@ -1182,7 +1207,7 @@ describe('detectPipeSupport (pipe compatibility probe)', () => {
     // page target (waitForPageTarget), so the pipe path cannot work even
     // though the command itself round-tripped.
     await expect(
-      detectPipeSupport({
+      probePipeSupport({
         executablePath: () => '/usr/bin/fake-chrome',
         spawn: () => probe.attempt,
         probeTimeoutMs: 200,
@@ -1228,12 +1253,12 @@ describe('detectPipeSupport (pipe compatibility probe)', () => {
       now: () => 5_000,
     }
 
-    await expect(detectPipeSupport(hooks)).resolves.toBe(true)
-    await expect(detectPipeSupport(hooks)).resolves.toBe(true)
+    await expect(probePipeSupport(hooks)).resolves.toBe(true)
+    await expect(probePipeSupport(hooks)).resolves.toBe(true)
     expect(spawns).toBe(1)
 
     await expect(
-      detectPipeSupport({ ...hooks, now: () => 5_000 + 60_001 }),
+      probePipeSupport({ ...hooks, now: () => 5_000 + 60_001 }),
     ).resolves.toBe(true)
     expect(spawns).toBe(2)
   })
@@ -1259,13 +1284,13 @@ describe('detectPipeSupport (pipe compatibility probe)', () => {
     // A timeout is not evidence the browser lacks pipe support: the probe
     // fails closed (rejects) instead of resolving false and routing the
     // session to the --remote-debugging-port=0 fallback.
-    await expect(detectPipeSupport(hooks)).rejects.toThrow(
+    await expect(probePipeSupport(hooks)).rejects.toThrow(
       /probe timed out after 20ms/,
     )
     // The negative is never cached, so a later session within the TTL still
     // re-probes rather than silently reusing the failed verdict.
     await expect(
-      detectPipeSupport({ ...hooks, now: () => 5_000 + 1 }),
+      probePipeSupport({ ...hooks, now: () => 5_000 + 1 }),
     ).rejects.toThrow(/probe timed out/)
     expect(spawns).toBe(2)
   })
@@ -1273,7 +1298,7 @@ describe('detectPipeSupport (pipe compatibility probe)', () => {
   test('returns false when the probe spawn throws synchronously (missing fds)', async () => {
     let spawns = 0
     await expect(
-      detectPipeSupport({
+      probePipeSupport({
         executablePath: () => '/usr/bin/fake-chrome',
         spawn: () => {
           spawns++
@@ -1318,14 +1343,14 @@ describe('detectPipeSupport (pipe compatibility probe)', () => {
       now: () => 5_000,
     }
 
-    await expect(detectPipeSupport(hooks)).resolves.toBe(true)
+    await expect(probePipeSupport(hooks)).resolves.toBe(true)
     expect(spawnedExecutables).toEqual(['/usr/bin/fake-chrome-a'])
 
     // A different Chromium binary resolved within the TTL must not inherit
     // the first binary's positive verdict: it gets its own probe, and the
     // spawned binary is exactly the executable the cache key came from.
     await expect(
-      detectPipeSupport({
+      probePipeSupport({
         ...hooks,
         executablePath: () => '/usr/bin/fake-chrome-b',
       }),

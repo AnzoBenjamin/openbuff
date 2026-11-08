@@ -16,6 +16,7 @@ import {
 const originalProjectRoot = process.cwd()
 const originalCwd = process.cwd()
 let tempDir: string | undefined
+let originalProviderConfig: string | undefined
 
 function readOpenbuffConfig() {
   return JSON.parse(
@@ -26,12 +27,10 @@ function readOpenbuffConfig() {
 describe('openbuff-provider custom setup', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-provider-cli-'))
+    originalProviderConfig = process.env.OPENBUFF_PROVIDER_CONFIG
+    process.env.OPENBUFF_PROVIDER_CONFIG = path.join(tempDir, 'openbuff.json')
     setProjectRoot(tempDir)
-    // loadProviderConfigSync() resolves config paths from process.cwd(), not
-    // getProjectRoot(). Chdir to the temp dir so the status command finds the
-    // openbuff.json that addCustomOpenbuffProvider writes there. Without this,
-    // CI (which has no openbuff.json at the repo root) fails because the status
-    // command reads "Config: not found" instead of the written config.
+    // Select the fixture config even when the runner supplies an explicit path.
     process.chdir(tempDir)
     clearProviderConfigCacheForTest()
   })
@@ -39,6 +38,9 @@ describe('openbuff-provider custom setup', () => {
   afterEach(() => {
     setProjectRoot(originalProjectRoot)
     process.chdir(originalCwd)
+    if (originalProviderConfig === undefined)
+      delete process.env.OPENBUFF_PROVIDER_CONFIG
+    else process.env.OPENBUFF_PROVIDER_CONFIG = originalProviderConfig
     clearProviderConfigCacheForTest()
     if (tempDir) {
       fs.rmSync(tempDir, { recursive: true, force: true })

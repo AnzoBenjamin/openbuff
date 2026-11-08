@@ -1,6 +1,0 @@
-Copied tree-sitter.wasm sibling: /home/ben/Code/CLI/openbuff/node_modules/web-tree-sitter/tree-sitter.wasm → /home/ben/Code/CLI/openbuff/cli/bin/tree-sitter.wasm
-Copied 15 tree-sitter language grammars
-Copied 14 tree-sitter tag queries
-Running standalone-binary smoke on /home/ben/Code/CLI/openbuff/cli/bin/openbuff (--smoke-opentui, 60s timeout)
-✅ Standalone-binary smoke passed: the built binary resolves the OpenTUI native library (opentui smoke ok)
-✅ Built openbuff (linux-x64)

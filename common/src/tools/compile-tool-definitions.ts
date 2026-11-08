@@ -1,4 +1,5 @@
 import z from 'zod/v4'
+import { projectZodSchema } from '../util/json-schema'
 
 import { publishedTools } from './constants'
 import { toolParams } from './list'
@@ -28,7 +29,7 @@ export function compileToolJsonSchemas(): Record<string, unknown> {
   for (const toolName of publishedTools) {
     const parameterSchema = resolveToolParameterSchema(toolParams[toolName])
     artifacts[toolName] = applyToolSchemaConstraints(
-      z.toJSONSchema(parameterSchema, { io: 'input' }) as JSONSchema7,
+      projectZodSchema(parameterSchema, 'input') as JSONSchema7,
       toolName,
     )
   }

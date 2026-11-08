@@ -13,6 +13,7 @@ import { isReadPathBlocked } from './read-policy'
 
 import type { BackgroundJobOwner } from './background-jobs'
 import type { FileFilter } from './read-files'
+import type { HostReadPolicy } from '@codebuff/common/util/project-path-containment'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
 const DEFAULT_LINES = 200
@@ -55,6 +56,8 @@ type ReadLogsParams = {
    * branch (see the filter block below).
    */
   fileFilter?: FileFilter
+  /** Captured host boundary for the path branch; never supplied by tool JSON. */
+  readPolicy?: HostReadPolicy
 }
 
 export async function readLogs(
@@ -145,7 +148,7 @@ export async function readLogs(
   // paths strictly inside an explicitly allowlisted external read root) pass;
   // traversal, sibling-prefix and escaping-symlink paths are refused. This is a
   // read-only tool, so it uses the read-only resolver.
-  const resolved = resolveFilePathForReadOperation(params.cwd, requested)
+  const resolved = resolveFilePathForReadOperation(params.cwd, requested, params.readPolicy)
   if (!resolved) {
     return [
       {

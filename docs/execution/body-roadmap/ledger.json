@@ -369,8 +369,13 @@
         "docs/execution/body-roadmap/evidence/B01/tail-store/fixture.ts": "a74e117ae30527916468ab808288d5b748a79b0bcbf94ea00de6b7aac304f9d8",
         "docs/execution/body-roadmap/evidence/B01/tail-store/independent-review/producer-fixture.ts": "58b56869a4d573e25c1e4cbe348a86d9e1876b53f83525b5d1f418a131ef5d28",
         "docs/execution/body-roadmap/evidence/B01/tail-store/independent-review/quarantine-counterexamples.ts": "baa3c08d06acf6fe38210069c9c698e629d3897db73f7466219f83ef0f4a691a",
+        "scripts/__tests__/byok-wording-guard.test.ts": "971dc070eb4a0e83a007aeab5b5efdcd02a47e7d364792d47db7be5f691b2380",
+        "scripts/__tests__/memory-drift-guard.test.ts": "13c8cae14a7152e635d232cb70e4e7595be6bec1edafea2420301d4d00505d5a",
+        "scripts/byok-wording-guard.ts": "2c0ac81433437286716493fd2be5a31404581f6db79b1b0b1fdf9baa44749d25",
+        "scripts/lib/historical-source-copies.ts": "1dd04817aa6d66cc86249fb471fab02b17e73bd6e2d3c879b588b5256460860c",
+        "scripts/memory-drift-guard.ts": "bb9f5a12bdbcfa24cba758ba515ff48d8a5b6b366b81b510df575e3f9cb914da",
         "sdk/src/__tests__/audit-intelligence.test.ts": "64bf7f70c704a00c5dc72928aa0081eea54ca6b0ba9fe4a1f478e0d4c56bafa4",
-        "sdk/src/__tests__/get-change-review-bundle.test.ts": "228532d137a420e96c87e8c6a34bdd781a6849f027ccdb02061563fd5938d8d8",
+        "sdk/src/__tests__/get-change-review-bundle.test.ts": "976c1b17d47e4da4eab22d442c0ccfcc58080558c83a99618b9c754fa0e08e39",
         "sdk/src/__tests__/local-harness-store.test.ts": "34b9bca73ee997e3adaa93509e79944306ce81dca27ff67e50c7b7a07b09e6f3",
         "sdk/src/__tests__/run-git-bounded.test.ts": "207c4c6b8d0e79acfab45d8c1fa76e15d62fd76193278c03b29743291749809f",
         "sdk/src/__tests__/run-targeted-validation.test.ts": "1a2aed086bb0d78c8e8159bc7760f93861ce94702c8119605c4af02f5d4ec279",
@@ -387,47 +392,35 @@
       },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+      "epoch": "b05-r8:cdf15b5ec41b6252f374b52bb1623931f65c0ac2228bd67154583940865917a7",
       "coverageTier": "Source TypeScript/Bun coverage, maturity, source identity, reviewer gating and persistent evidence diagnostics",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance/B01/manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B01/accepted/20261108T085830253963Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "/root/b03_mutation_evidence",
+            "reviewer": "/root/b05_prerequisite_arch",
             "implementationOwners": [
-              "/root"
+              "/root",
+              "/root/b03_mutation_evidence"
             ],
-            "scope": "Independent approval of the 11 leader-owned B01 coverage/maturity/source-inventory and ordinary/specialist reviewer-gating source files only. The 37 declared dependencies are integrity inputs, not separately approved implementation.",
+            "scope": "Source TypeScript/Bun coverage, maturity, source identity, reviewer gating and persistent evidence diagnostics",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-node-review/B01/review.json",
-              "sha256": "3a1e33ff35f3f0f83d8f135900b8bcee7fc6d218876a5370b3e0188476243e8f"
-            }
-          },
-          {
-            "reviewer": "/root/b04_lock_cas",
-            "implementationOwners": [
-              "/root/b03_mutation_evidence",
-              "/root"
-            ],
-            "scope": "B01 tail/store subset only: full untracked-file and bounded Git-output identity, complete status membership refusal, mid-validation drift rejection, and persistent corrupt/quarantined finding evidence in actual bundle/store consumers. Canonical attribution is the original independent tail/store reviewer, /root/b04_lock_cas.",
-            "decision": "approve",
-            "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/B01/tail-store/independent-approval/review.json",
-              "sha256": "ebfddf584d94d29fde404f00301669e8b827944a79944489fec82f2456d31746"
+              "path": "docs/execution/body-roadmap/evidence/B05/resume-20261108/prerequisite-architecture-review/final-approvals-r8-2/B01/review.json",
+              "sha256": "89e3f4218e65b0712519c1a61407a4744d842b8abd961b5f4b4c0689a3c1f97c"
             }
           }
         ],
-        "requiredCommandCount": 11
+        "requiredCommandCount": 16
       },
       "risks": [
-        "Inspection completeness remains separate from capability readiness.",
-        "Source observation is not an atomic OS snapshot; no native or installed-platform assurance is claimed."
+        "Source and cooperative runtime evidence; no atomic filesystem snapshot or native/installed claim.",
+        "Tail fixture copies differ only by four/two relative import-prefix relocations; all assertion/fixture bodies are unchanged and original/copy hashes are retained in the execution plan."
       ],
-      "acceptedAt": "2026-11-06T23:29:34.718720+00:00",
+      "acceptedAt": "2026-11-08T08:58:30.337082+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance/B01/acceptance.json",
-        "sha256": "ff12aa5b76cf0dbdba35985673f5791639a874317ccd66202b2d734532d6a5b2"
+        "path": "docs/execution/body-roadmap/evidence/B01/accepted/20261108T085830253963Z-acceptance.json",
+        "sha256": "af22f198afc17d3d9fd23b08cf6ff8e76751eb85ca52199858faa21d9c464efa"
       }
     },
     {
@@ -444,35 +437,35 @@
         "cli/src/hooks/helpers/send-message.ts": "95e97799598d0c4e43752088ddf7f7d2745d3b2de3077c191f8550caf59ad8bf",
         "cli/src/types/chat.ts": "7992abfd4988dc1da67b5ef79104e3cb27ce356a6e5f15916fcad0000219b436",
         "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "e8b7d57647c884525be4f6ca117772601bac42cc62082362905512e6513ad5b9",
-        "cli/src/utils/output-outcome.ts": "0a63e14e7f447187599d0fda4c322edcb83694460900f7d547e3cfe26390f8c4",
+        "cli/src/utils/output-outcome.ts": "2d2238fe9b16daff45a6fce0dea09666adba0ee41a7831440afc26acc29bdabd",
         "cli/src/utils/sdk-event-handlers.ts": "e44e11f88b8655b45c29542491b3bdd1ad5bdbe15fdd4d624528be6e909ee236",
         "common/src/types/agent-handoff.ts": "f02d9d198e92faa11da37827c535d714174c8d92ccfa114267fe6973fd72fef9",
         "common/src/types/contracts/database.ts": "82d1532ebf1e4d9db8d423f1b97e762aaa80441ce9789b900a44c6bb1e5947a0",
-        "common/src/types/dynamic-agent-template.ts": "542ca3708e6a3febe581f9e99e3e2d9910af802363e1eaec99f32f8e1a82839e",
+        "common/src/types/dynamic-agent-template.ts": "6401783af251770c7c9498b0fd59217870cdda765439967e8ec7a2af47ca4404",
         "common/src/types/print-mode.ts": "64edf6e5bacd3aaec9c3213d1221866dbd322e68caa3cd97a1458c62d6b0728b",
         "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
-        "common/src/types/session-state.ts": "d2677f3db048aa349bd1db75b3e554b2b2ee8fed9a0d73701dfed4a35a46344a",
+        "common/src/types/session-state.ts": "6528469c982bdd741f3361cf6623b51d435a4979f454c3d099ac04900ef78436",
         "common/src/util/__tests__/action-outcomes.test.ts": "6ad7eb58f254061d8ae8257cc2fa1dc2780a89d41dd290e85994e1b2420deacb",
-        "common/src/util/action-outcomes.ts": "c3f9776e96ca92a7f3d44df8b50b6fcec93b694564466e5a6e58fa1580ca95fe",
+        "common/src/util/action-outcomes.ts": "772eb4702b8c53b0eea7b50360bfa6384e4fafd87ea9b69de0ed1ce29da6f20f",
         "docs/execution/body-roadmap/evidence/B02/final-binding/counterexamples.ts": "61a5cb8f4818ddd234f701996a2c24c5f7ac4dfea3f74a547e16bf455a0d7ba2",
         "docs/execution/body-roadmap/evidence/B02/independent-review/counterexamples.ts": "61a5cb8f4818ddd234f701996a2c24c5f7ac4dfea3f74a547e16bf455a0d7ba2",
-        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "08080b61104c798d9b6dd8bccfbaa51299c571c4b07bf39f24ce4168ef1bfcfd",
+        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "27d9e177fd7f67bf5059d9358d9a36800ddbe28be64b93cbe69c6dc1cb28c994",
         "packages/agent-runtime/src/__tests__/budget-enforcement.test.ts": "a3318eb09907e8417f5452922ff90eee67b43c6a6bc9ceacedcf8b82449c81fb",
-        "packages/agent-runtime/src/__tests__/loop-agent-steps-abort.test.ts": "c3dff5fc1c2fd9d8dd728784dcb62a764e7fb72ddd0112d1a2d8006f80b0e7fd",
+        "packages/agent-runtime/src/__tests__/loop-agent-steps-abort.test.ts": "fb9994f0737ce5af7e68d3d586cbef0e6d7ecbb86a263ac6dcfcc7a0511f40da",
         "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts": "b6d878112cf7b3fb31f2dc96663768551f5a869c30f35075f77690b8e0b345db",
         "packages/agent-runtime/src/__tests__/run-agent-step-tools.test.ts": "1ded4ac4e2ffdd96b61ec06507e8da45dadfc9a3aaf8840e4d175db3840e18b3",
         "packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts": "6adfa2c76cab46ecaa2ea6b8b6bf4df603ac51ac3297193261810fad5ec1a178",
         "packages/agent-runtime/src/__tests__/spawn-agents-image-content.test.ts": "5f9fb7d2a47ec53d520642cb04c4bde6a909799c77b1c8846f774f144a3bfaf4",
-        "packages/agent-runtime/src/__tests__/spawn-agents-message-history.test.ts": "42356eee9e69372a41d075c4e93173411252460a71cb4007a5c49c327667bf00",
-        "packages/agent-runtime/src/__tests__/spawn-agents-permissions.test.ts": "ad52ff30ea488631f495791d2b1134355afaefd67d65688b403b3ba68f061873",
+        "packages/agent-runtime/src/__tests__/spawn-agents-message-history.test.ts": "2bff4f4b05ee02a2df4604c3c4e843f862157b9288e77c3b6d6acc09a4de3bcf",
+        "packages/agent-runtime/src/__tests__/spawn-agents-permissions.test.ts": "8fdb2fb2a7f6cfce3fc2a23193b2553428248fc2d7e4981a91728927a58abffa",
         "packages/agent-runtime/src/main-prompt.ts": "e90f7953181a6b3e1650bf69c00524bfb5abaf5dbc6ab897d1c659e5fffbcb76",
-        "packages/agent-runtime/src/run-agent-step.ts": "af05624c9f2c864946cb234fa777ad18e6d789e080f7cd96ccf6426f3437e785",
-        "packages/agent-runtime/src/run-programmatic-step.ts": "6a405a2ea01ccb3fa4ef005bbf4c45f4b91acd96b836ba818f221965165a42db",
+        "packages/agent-runtime/src/run-agent-step.ts": "cdc47399633ef1f692e575bc5770cf88e9bd4eb049b1b606428d177705702a6e",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "a3a0707611d7ae41e9ca6b7faaf07ec0e576db0f12fba9ec640fa1bb95e7f753",
         "packages/agent-runtime/src/supervision/child-entry.ts": "3c3bbfca3ddf909b6495b4cc857ac6a3d342bdeb5712629f9ed7d737d0675701",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-output.test.ts": "9e6d17b1039e193bee3891bfa1b65323acbb3285486b11462ecef31dc6f1746c",
-        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "e24f83f424667a13f302c76eadb5d34f6b1b3cb349104c76938fd37552f69f0a",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "d56e02c9528002b36dbe07787b3693e60529e28a49c4c77b51625f4ed1af79b6",
         "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts": "3b7e63acd059f2f4122fd4d88a56851ef4f95323a90eb531802b4c18eeea9703",
-        "packages/agent-runtime/src/tools/tool-executor.ts": "2865e32af22ec49c57bc396ea6b1ba491c1ca3c466842343c9a181387d3208db",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "de771f2b89ddccc87debf9c0321813e2c03967c0e106b24e0dc5e48d69466b05",
         "packages/agent-runtime/src/util/__tests__/run-outcome-replay.test.ts": "e237cfa8a75d311f69f98b58384fdc014c2aea7aa0f56ab9c2132c3a034ce8fb",
         "packages/agent-runtime/src/util/background-agent-jobs.ts": "fd30c145fd41b7f12d6597e8877063f318f23de5f528108ae6ecba20b9beeac2",
         "packages/agent-runtime/src/util/run-journal.ts": "45af7fbb3646e28d508154f2b7816da883df13d5f5a58114774d98fd38982aa6",
@@ -484,11 +477,11 @@
         "sdk/src/__tests__/serve-bridge.test.ts": "930442f30f6c2924129dcd607b3fea3d9bd6c8bd8bd94dfe0db8581af9bcbb6c",
         "sdk/src/client.ts": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7",
         "sdk/src/client/acp-client.ts": "117452e520084f72791314bc23d39f96e38d121044b5445dc3e24722c1ca03d8",
-        "sdk/src/run-state.ts": "131d5e2a0fe1470dd26312952b199db3ef481386cb03fa3593035129589b2a68",
-        "sdk/src/run.ts": "c80be3b62a436b92b851cde37d00ae569b860b33ffee597016e0462715fa7562",
-        "sdk/src/serve/__tests__/event-bridge.test.ts": "ba3153d009a9735210a1bfe46fa47b4c9c49ea32089a81bf61eab3a88253df76",
+        "sdk/src/run-state.ts": "c0ab2c7f5c04f9ba443a5474c96ba6008461f1cd8ccb2b82f7ecd23f15823bcc",
+        "sdk/src/run.ts": "b025e8455ea5fd7feb473a2e423941a162527f2ab27d88a64b24f9708c57bbc4",
+        "sdk/src/serve/__tests__/event-bridge.test.ts": "88f9dfeedb7cf25f8433f6afb209eb9dcf722fc3fa535d95a7bb8dbdb314b693",
         "sdk/src/serve/bridge.ts": "7e77aac98fde3882aa471dfa0e897acdc3de8098a0f6eebc7286f9f8ccc2560d",
-        "sdk/src/serve/event-bridge.ts": "20daae14096a76c175ec2478219c9cf4a0aa0ba071c1533d6be6bcfbca824768",
+        "sdk/src/serve/event-bridge.ts": "a8fbddf5a1c387f0ac29ef14ddad35c420eaeb9f9f792a514057bf2b001106fb",
         "sdk/src/services/acp/acp-agent.ts": "14c57e87b3f57412be8cbc90a7c94e16558cef50ac5b69b0e0e3228687dd656a",
         "sdk/src/services/harness-enforcement.ts": "0391312e7311a1f42f862a5f41d255cb1e55b52455d973c5be0672c4e0900f73",
         "sdk/src/services/local-harness-store.ts": "390668ee7b67ed33d830e72c714ea66d7e43339d78f80a852942af9b0e506ba2",
@@ -497,23 +490,26 @@
       },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+      "epoch": "b05-r8:cdf15b5ec41b6252f374b52bb1623931f65c0ac2228bd67154583940865917a7",
       "coverageTier": "Source TypeScript/Bun action/run/task outcomes through runtime, SDK, headless, journal, ACP and CLI consumers",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B02/accepted/20261106T215030348965Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B02/accepted/20261108T085830253963Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "/root/b03_mutation_evidence",
+            "reviewer": "/root/b05_final_prerequisite_v2",
             "implementationOwners": [
               "/root/b02_runtime_outcomes",
               "/root",
-              "/root/b04_lock_cas"
+              "/root/b04_lock_cas",
+              "/root/b28_code_native",
+              "/root/b08_b18_evidence_followup",
+              "/root/b05_prerequisite_code"
             ],
-            "scope": "B02 source TS/Bun runtime execution/action/task outcome separation, cancellation checkpoints and SDK/serve/CLI consumers, including approval-cancel unwinding and preserved journal/headless/CLI outcome identity. Scope is the bounded independently reviewed B02 lane only. The current refresh also approves b04\u2019s exact two dead-statement deletions in event-bridge.ts; original B02 implementation scope is otherwise unchanged.",
+            "scope": "Source TypeScript/Bun action/run/task outcomes through runtime, SDK, headless, journal, ACP and CLI consumers; exactly 57 current source contracts and the complete 10-command successor set.",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/review.json",
-              "sha256": "d9c15ae0d94edc8807206e6cae61d089caa3149f6c82258bd28c22ec8cbb2bec"
+              "path": "docs/execution/body-roadmap/evidence/B05/resume-20261108/final-prerequisite-review/final-approvals-r8-2/B02/review.json",
+              "sha256": "bb68a6ad73b23064c3b435c8ba9db1fad3313fad4ace083d1caa491d2cd86e39"
             }
           }
         ],
@@ -521,12 +517,13 @@
       },
       "risks": [
         "No native enforcement, complete process-tree cleanup, cross-process budgets or universal trusted-generator replay guarantee.",
-        "The recorded CI producer subset is distinct from the full package schedule."
+        "The recorded CI producer subset is distinct from the full package schedule.",
+        "Renewal controls are offline source fixtures; no live provider, billing or installed-package assurance."
       ],
-      "acceptedAt": "2026-11-06T21:50:30.414722+00:00",
+      "acceptedAt": "2026-11-08T08:58:30.387680+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B02/accepted/20261106T215030348965Z-acceptance.json",
-        "sha256": "63cc1a8a420216466dd17b5af32f385795baf32c4245d9ec485f6c31247ffde5"
+        "path": "docs/execution/body-roadmap/evidence/B02/accepted/20261108T085830253963Z-acceptance.json",
+        "sha256": "c8e4bfbb0d13a584b4f5211d8cb44c30f26278a77dc3976f0d8af24e1de19bd2"
       }
     },
     {
@@ -538,7 +535,7 @@
       "sourceContractHashes": {
         ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
         ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
-        "bun.lock": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6",
+        "bun.lock": "68e1eca71585792abca3891f08933e4ba630c419777aae25e84e8bd585882a43",
         "cli/package.json": "cb6557b3cdbc58e38dc9eeb9c2a4c073325c6dd06891e7f8ba81f88e105a3de4",
         "cli/scripts/preload-opentui.ts": "6a83c323664f2406c2b839aa22100779e22d3cf571151e3dc6b9f76d9dc2c301",
         "cli/src/components/__tests__/completion-summary-box.test.tsx": "ccaca73eb12b6874983e62e782ef133e553bc1e07364834d0f3050ee9afe90de",
@@ -557,62 +554,62 @@
         "cli/src/utils/__tests__/tool-result-normalizer.test.ts": "47909dc00c902c92a16ad723e6f235e64789e559c9f2443e65474e124b08f34a",
         "cli/src/utils/completion-summary.ts": "4bab8611ffbc7437beb9dfc13d1062582d5be3d378c4ec01852f8aa4ddadf551",
         "cli/src/utils/implementor-helpers.ts": "89c1364732ccbe9ee0f7788b0a6ba27ec371aae6c93f8570cc20fa16b27f47d4",
-        "cli/src/utils/output-outcome.ts": "0a63e14e7f447187599d0fda4c322edcb83694460900f7d547e3cfe26390f8c4",
+        "cli/src/utils/output-outcome.ts": "2d2238fe9b16daff45a6fce0dea09666adba0ee41a7831440afc26acc29bdabd",
         "cli/src/utils/sdk-event-handlers.ts": "e44e11f88b8655b45c29542491b3bdd1ad5bdbe15fdd4d624528be6e909ee236",
-        "cli/src/utils/tool-result-normalizer.ts": "8169822411e71ff8df0f4992149bdc468863f8c8ab06af87448a3a9a6bd8b018",
+        "cli/src/utils/tool-result-normalizer.ts": "9e108810743a2883bb69e46097cfcd001cd88c42adab3090017d1dfaca9978a4",
         "cli/tsconfig.json": "ac970656163e4a82300b0bce1d19260654eaf2876ff983e3559c654014dd4c3f",
-        "common/package.json": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c",
+        "common/package.json": "94c59bca2f982113fefd65a188dd682116900ca7052024e70836f4ed05ba7454",
         "common/src/protocol/__tests__/acp-ext-v1.golden.test.ts": "718b0cd2ea4da8c813035408dceb4482403cb9f19c407327a14a0b2eb41c8ab5",
         "common/src/protocol/acp-ext-v1.ts": "7e5c4922e5c46101a4da2aaa17f61881493cbe023337154f62d0bd7ed3ee7b27",
         "common/src/testing/fixtures/file-mutation.ts": "037b7af51cd940d804ac873500cc5b781a11a3f4a8290f27148ca7b421a76e7d",
         "common/src/testing/mocks/filesystem.ts": "34887e3ebce8aebb09821a3c74ebb579599ec222a7f9a4f2c98779fddd716f50",
-        "common/src/tools/params/tool/edit-transaction.ts": "522011c0aec188159cd601fa823c93e0f4f7f59be80593fdfeca6ab480d2ca4e",
-        "common/src/tools/params/tool/str-replace.ts": "e17fef5c2ddbc69c44f5a232ba36b10d06570d101cdd0966ef8603c9076d8365",
-        "common/src/tools/results/__tests__/filesystem.test.ts": "9ddda93fd37dfa9687c345962bdeb0d5d8a2f81a46aeb7fe212ca58302ecfe2f",
-        "common/src/tools/results/filesystem.ts": "e70350e56f10b251b8a243a1a4bcebf5e61cd76d033fd622413c4e1a804b8a61",
-        "common/src/types/dynamic-agent-template.ts": "542ca3708e6a3febe581f9e99e3e2d9910af802363e1eaec99f32f8e1a82839e",
+        "common/src/tools/params/tool/edit-transaction.ts": "6cc5ce68dcedd4940774b031e76b30be47b08d6992ab16b177c4e670c3122408",
+        "common/src/tools/params/tool/str-replace.ts": "044802c878bc3093414bc5c29f0e6781b1e9b0fa7030444424c6a4085c52e059",
+        "common/src/tools/results/__tests__/filesystem.test.ts": "33676729233808c83c9ad7a96db2a6fcbbccc16f923dc4fac61353ab399face5",
+        "common/src/tools/results/filesystem.ts": "f784e0072793952697fd8ce0194805851bb309813e6be75767d6ec9b0a85a206",
+        "common/src/types/dynamic-agent-template.ts": "6401783af251770c7c9498b0fd59217870cdda765439967e8ec7a2af47ca4404",
         "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
         "common/src/util/__tests__/action-outcomes.test.ts": "6ad7eb58f254061d8ae8257cc2fa1dc2780a89d41dd290e85994e1b2420deacb",
-        "common/src/util/action-outcomes.ts": "c3f9776e96ca92a7f3d44df8b50b6fcec93b694564466e5a6e58fa1580ca95fe",
-        "common/src/util/content-hash.ts": "0edd44426e18f18bea429ecf19c1f3634a6e7879d106f2dc9c9210eb09e50ae7",
+        "common/src/util/action-outcomes.ts": "772eb4702b8c53b0eea7b50360bfa6384e4fafd87ea9b69de0ed1ce29da6f20f",
+        "common/src/util/content-hash.ts": "a3748f1905babc3301b9d8c222cb39e01008e46ecdb72799d6745a90db222f58",
         "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
         "evals/buffbench/evaluation-environment.ts": "5b5a310fd3ac13164fb874e2f31e823c8c507ed33a12cc83137835a7c74b0626",
         "package.json": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8",
         "packages/agent-runtime/package.json": "0ecb330281d325d02c339c86fb2f52a2875b0d957abdd0b097b1ab959d281d3d",
-        "packages/agent-runtime/src/__tests__/tool-validation-error.test.ts": "a55428528a127b78d96df0295f77a4125922ece1096126fedd3998a331627bc3",
-        "packages/agent-runtime/src/run-programmatic-step.ts": "6a405a2ea01ccb3fa4ef005bbf4c45f4b91acd96b836ba818f221965165a42db",
-        "packages/agent-runtime/src/tools/tool-executor.ts": "2865e32af22ec49c57bc396ea6b1ba491c1ca3c466842343c9a181387d3208db",
+        "packages/agent-runtime/src/__tests__/tool-validation-error.test.ts": "6738400f6aebbe7f03755e2df3340c3b670d40ede4d906b66855bd469fc45baf",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "a3a0707611d7ae41e9ca6b7faaf07ec0e576db0f12fba9ec640fa1bb95e7f753",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "de771f2b89ddccc87debf9c0321813e2c03967c0e106b24e0dc5e48d69466b05",
         "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
         "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts": "58fbe85769982c8be114fa457a509df15477e5ebcf119101f4997d24d26fabaf",
         "packages/internal/src/openai-compatible/openai-compatible-error.ts": "a696f1cfeafb07fa10dea86e4b41fb11d15e87d484d0445668a2195233f3daca",
-        "sdk/package.json": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d",
+        "sdk/package.json": "e4f7dcc28c4bb4e77f8d1d11d019ee497a9cda033ee155255d3872484561d717",
         "sdk/src/__tests__/acp-outcomes.test.ts": "afef7a65bb163d70a41d95a64c0c82eac5cc1501690a498b415328740fe243e5",
-        "sdk/src/__tests__/change-file.test.ts": "211b6e47dcf8afcdf73861a61da1d698d1d86c1d40efd7ca6004076bcc608c51",
+        "sdk/src/__tests__/change-file.test.ts": "94f6f574681a68f9fe0c8ffae3003d2dd8ab258a10806a66a53ac90666622b9c",
         "sdk/src/__tests__/filesystem-authority.test.ts": "3843376251f7550f33005ef6bd436133740d974828762f3bf320d376b7b18e7f",
         "sdk/src/__tests__/language-intelligence.test.ts": "221e53e9c26f89b422b43305dc1d32c876154ce52b2a5d08d72cbc7e2fea3c90",
-        "sdk/src/__tests__/mutation-capabilities.test.ts": "5f9a505090d7609b5593952033df49d23ce2d969ba3c7abd7dcc29b1b7547455",
+        "sdk/src/__tests__/mutation-capabilities.test.ts": "b4cbc78520012f380dfa8a78f2a13ef457302f366dad3612b6c5e652d1836eac",
         "sdk/src/__tests__/provider-contract-regressions.test.ts": "904140141f77414577f46b498c71c64dca1c83dfd1a44eb1d559b7c23fde323b",
-        "sdk/src/__tests__/run-mutation-dispatch.test.ts": "308e7436fb7340dbfbdc02ac7058a9d4420ae4008c8ea3907334fd706b9b0ffa",
+        "sdk/src/__tests__/run-mutation-dispatch.test.ts": "3096f04e1c8f184c3e518b7aa63b58f4fefb1f2a3628e577d2b289bb8e45f19c",
         "sdk/src/client.ts": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7",
         "sdk/src/client/acp-client.ts": "117452e520084f72791314bc23d39f96e38d121044b5445dc3e24722c1ca03d8",
         "sdk/src/error-utils.ts": "11565db8d9f430fcbb617f040a7807beafac0e521dd2ec9341bf35a371743b29",
         "sdk/src/impl/failover.ts": "62930f709bc5be8975375b50ec1e200eec7dd46ce4df5482da4c46ba06b2e793",
         "sdk/src/impl/llm.ts": "76b1b88454eb1471eeb3a71ae2ec60e97b83603c40799d3ce3cdbc6abe226be5",
         "sdk/src/impl/model-provider.ts": "2e14b4aa5534c0e8761b16c234eca300052f4419178ed3ab1d3137af82b2c11e",
-        "sdk/src/index.ts": "36bfe777b384462ac3a4740751579a3a8b4d8508b4bf90f7a1458d14774adae1",
+        "sdk/src/index.ts": "f98d7361b7cefb502e69f02347710a8bb537685f473fba06d5c3995a26f5b9c3",
         "sdk/src/provider-config.ts": "6a659575360e14a8fba319cf6e7e406faa8505d681342a6911835bc870dd8922",
         "sdk/src/retry-config.ts": "fab975fea396f8333ca7ed9787515dfa858a445056409daffee5ea0f6f50c91b",
-        "sdk/src/run-state.ts": "131d5e2a0fe1470dd26312952b199db3ef481386cb03fa3593035129589b2a68",
-        "sdk/src/run.ts": "c80be3b62a436b92b851cde37d00ae569b860b33ffee597016e0462715fa7562",
-        "sdk/src/serve/__tests__/event-bridge.test.ts": "ba3153d009a9735210a1bfe46fa47b4c9c49ea32089a81bf61eab3a88253df76",
+        "sdk/src/run-state.ts": "c0ab2c7f5c04f9ba443a5474c96ba6008461f1cd8ccb2b82f7ecd23f15823bcc",
+        "sdk/src/run.ts": "b025e8455ea5fd7feb473a2e423941a162527f2ab27d88a64b24f9708c57bbc4",
+        "sdk/src/serve/__tests__/event-bridge.test.ts": "88f9dfeedb7cf25f8433f6afb209eb9dcf722fc3fa535d95a7bb8dbdb314b693",
         "sdk/src/serve/bridge.ts": "7e77aac98fde3882aa471dfa0e897acdc3de8098a0f6eebc7286f9f8ccc2560d",
-        "sdk/src/serve/event-bridge.ts": "20daae14096a76c175ec2478219c9cf4a0aa0ba071c1533d6be6bcfbca824768",
+        "sdk/src/serve/event-bridge.ts": "a8fbddf5a1c387f0ac29ef14ddad35c420eaeb9f9f792a514057bf2b001106fb",
         "sdk/src/services/diagnostic-baseline.ts": "a4b1a4c3447dfb315b0fae4ebcd2eb12140619a41ce1aa9685d9db82a1c49015",
         "sdk/src/services/harness-enforcement.ts": "0391312e7311a1f42f862a5f41d255cb1e55b52455d973c5be0672c4e0900f73",
         "sdk/src/services/language-intelligence.ts": "0cd54de453fe1c048aa8950528fe1ed39192ab1b7a0a5bd90ba7ac4db2926bed",
-        "sdk/src/tools/change-file.ts": "35f509db6d220b07efaed3caecfefdc06e2bcfb1607a7cc813e8e29eecf45569",
+        "sdk/src/tools/change-file.ts": "415e501433ac20e50d985b95a666487640da20421ece2a512937b95fd8599bb1",
         "sdk/src/tools/filesystem-authority.ts": "0d582e5fe8988a813c101b04d169ed8b8a6ce646773b647ccbe2ce20dfa9e64e",
-        "sdk/src/tools/node-filesystem.ts": "1044dad8b2b4d89112aa7648ef62d4210ee9e426aca3f7885b5c1482a114c46f",
+        "sdk/src/tools/node-filesystem.ts": "eb73c817b4f6ae536649e2e567a7293d0b680d3994a574940e98fe4b4734701e",
         "sdk/src/tools/run-terminal-command.ts": "0ad82faa2597d6b9d4d1b7e1420f75a8ee3c5961b3bf276d77f70cd4c1b5db74",
         "sdk/src/tools/semantic-edit-apply.ts": "db96219babbd190dbea0ffe4ec62aae8d11b1374893612978f4d3d2ad1e07df0",
         "sdk/src/tools/transaction-intent-log.ts": "b8d477968c7761f04dfe63050ae1d7044ddd46192f833b712222c4235dd17539",
@@ -622,35 +619,39 @@
       },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+      "epoch": "b05-r8:cdf15b5ec41b6252f374b52bb1623931f65c0ac2228bd67154583940865917a7",
       "coverageTier": "Source SDK mutation authority, controlled filesystem effects and actual journal, CLI, headless and ACP consumers",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B03/accepted/20261106T215030348965Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B03/accepted/20261108T085830253963Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "/root/b02_runtime_outcomes",
+            "reviewer": "/root/b05_prerequisite_arch",
             "implementationOwners": [
               "/root/b03_mutation_evidence",
               "/root",
-              "/root/b04_lock_cas"
+              "/root/b04_lock_cas",
+              "/root/b28_code_native",
+              "/root/b08_b18_evidence_followup",
+              "/root/b05_prerequisite_code"
             ],
-            "scope": "B03 current source SDK mutation authority, controlled filesystem, journal, JSON/headless/CLI/ACP tier after settled root build; 83 accepted contracts and six fresh actual-source controls; unchanged assurance limits.",
+            "scope": "Source SDK mutation authority, controlled filesystem effects and actual journal, CLI, headless and ACP consumers",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/B03/post-build/independent-review-b02/review.json",
-              "sha256": "063b5dc0a11be2759d12075fb0ce2444e25fce8ce737fa078376697b4a8c5fb1"
+              "path": "docs/execution/body-roadmap/evidence/B05/resume-20261108/prerequisite-architecture-review/final-approvals-r8-2/B03/review.json",
+              "sha256": "60ef6e1ea2f867f21283141d10873353c0960fcbc9eaaa2a8f5d0506a221a661"
             }
           }
         ],
-        "requiredCommandCount": 6
+        "requiredCommandCount": 11
       },
       "risks": [
-        "Cooperative TypeScript authority only; no native fencing, automatic crash reclamation, remote billing or general task acceptance guarantee."
+        "Mutation effect confirmation is distinct from B02 task acceptance.",
+        "No native/installed, external-writer fencing, crash-reclamation, live provider or billing claim."
       ],
-      "acceptedAt": "2026-11-06T21:50:30.449518+00:00",
+      "acceptedAt": "2026-11-08T08:58:30.458438+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B03/accepted/20261106T215030348965Z-acceptance.json",
-        "sha256": "e7c4b8df28b151cee909ae13371edc9eaebac18aafad61040d9befe3e30bc0de"
+        "path": "docs/execution/body-roadmap/evidence/B03/accepted/20261108T085830253963Z-acceptance.json",
+        "sha256": "9ae1814019390067e495bd09a7d5c0c31bf9464582cc6a106fe7c71c94f09270"
       }
     },
     {
@@ -662,13 +663,13 @@
       "sourceContractHashes": {
         ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
         ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
-        "bun.lock": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6",
+        "bun.lock": "68e1eca71585792abca3891f08933e4ba630c419777aae25e84e8bd585882a43",
         "cli/src/project-files.ts": "0fd152870a583e4df147cc928d9be7adde06819cbaf91795f8a9edae55ed035c",
         "cli/src/utils/__tests__/turn-snapshots.test.ts": "1b32d756e592b62b224250ea0dee30e15154af8229cad4d9e0fd41b4737bbb8a",
         "cli/src/utils/env.ts": "029b7c4d309803b7cfc867d835808e7478fd297ab949e8659f26ee756952d4c5",
         "cli/src/utils/logger.ts": "8f695de8fd69a87d8f234a9e90891fb64157c79bf727a9c4d54179c26e7d4297",
         "cli/src/utils/turn-snapshots.ts": "2729f329316f138dd1c213b1e02a641c25854c5b22f452355ea4821e37683e43",
-        "common/package.json": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c",
+        "common/package.json": "94c59bca2f982113fefd65a188dd682116900ca7052024e70836f4ed05ba7454",
         "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
         "package.json": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8",
         "packages/agent-runtime/package.json": "0ecb330281d325d02c339c86fb2f52a2875b0d957abdd0b097b1ab959d281d3d",
@@ -678,7 +679,7 @@
         "packages/indexer/src/index-manager.ts": "46cda46b4c09180fa51328a24c934214db1cc99c406e6c861f0b40940dbe1bc1",
         "packages/indexer/src/index-store.test.ts": "145bf6492f4b1b2f8495d14b5c1a549b1de6f7cb633cb63221e8cc7b42fab123",
         "packages/indexer/src/index-store.ts": "773242747855e16e0e296934ec1d4d482c0666ccbb2c884d4b0f9eb106308b6f",
-        "sdk/package.json": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d",
+        "sdk/package.json": "e4f7dcc28c4bb4e77f8d1d11d019ee497a9cda033ee155255d3872484561d717",
         "sdk/src/__tests__/workspace-mutation-broker.test.ts": "9a2a138c10065035f3e3e2a0b060c6492db0340ab76c3d365bda88afba0b1592",
         "sdk/src/services/repository-identity.ts": "9f678dc1977c8b5a472652b234fd954e05e5239549f2fdb14d4537df4aad9657",
         "sdk/src/services/workspace-mutation-broker.ts": "af865e30f270622c8adbfa2911f8a0f008d172676fe6484cf6a5e7c95034c083",
@@ -687,53 +688,153 @@
       },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+      "epoch": "b05-r8:cdf15b5ec41b6252f374b52bb1623931f65c0ac2228bd67154583940865917a7",
       "coverageTier": "Cooperative TypeScript lock exclusivity and snapshot/index CAS with fail-closed ambiguous ownership",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B04/accepted/20261106T215030348965Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B04/accepted/20261108T085830253963Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "/root/b02_runtime_outcomes",
+            "reviewer": "/root/b05_prerequisite_arch",
             "implementationOwners": [
               "/root/b04_lock_cas",
               "/root"
             ],
-            "scope": "B04 unchanged current-source cooperative TypeScript ownership/CAS tier: direct broker, index publication and turn/Git snapshot consumers plus actual runtime records. No shipped-base2/B01 or SDK LLM/runtime/provider compatibility approval; external lock deletion, mixed-version writers, native OS fencing, automatic crashed-owner reclamation and broader shared integration remain excluded.",
+            "scope": "Cooperative TypeScript lock exclusivity and snapshot/index CAS with fail-closed ambiguous ownership",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/B04/final-binding/independent-countersignature/review.json",
-              "sha256": "83f963a2d91137658af39813544b85f517b6a6dcda687adae2bc839607052903"
+              "path": "docs/execution/body-roadmap/evidence/B05/resume-20261108/prerequisite-architecture-review/final-approvals-r8-2/B04/review.json",
+              "sha256": "ed7de26d6708ab38c1658aba982a18e1fe0377962b3c20b3e3911d07d8bc137a"
             }
           }
         ],
-        "requiredCommandCount": 2
+        "requiredCommandCount": 5
       },
       "risks": [
-        "No native fencing, mixed-version exclusion or automatic crash reclamation.",
-        "Unknown/crashed owners remain inspectable recovery-needed; liveness migration belongs to B22."
+        "Cooperative TypeScript fail-closed ownership only; no external-writer fence, mixed-version or automatic crash-reclamation liveness claim."
       ],
-      "acceptedAt": "2026-11-06T21:50:30.489505+00:00",
+      "acceptedAt": "2026-11-08T08:58:30.485056+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B04/accepted/20261106T215030348965Z-acceptance.json",
-        "sha256": "f85d1ef5aa4b749338e108ec9fe2b596bf9bbbcdebc34b151b0aff9f36dbf25a"
+        "path": "docs/execution/body-roadmap/evidence/B04/accepted/20261108T085830253963Z-acceptance.json",
+        "sha256": "ac2e1f32896fb45b4f3b1cd83e8b0132e88ae54984f1c926fb7198bd8e83f972"
       }
     },
     {
       "nodeId": "B05",
       "parentCardId": null,
-      "status": "pending",
+      "status": "accepted",
       "prerequisites": [
         "B03"
       ],
-      "acceptedPrerequisites": [],
-      "sourceContractHashes": {},
+      "acceptedPrerequisites": [
+        "B03"
+      ],
+      "sourceContractHashes": {
+        "common/src/tools/params/based-on-read.ts": "681ab79beebd6580d2cf7d0aefae96f5ac44453e3bbff3e2ff6ea1dec9ad5234",
+        "common/src/tools/params/tool/replace-range.ts": "89681af454236ebdc659ea37692dd34559df0c06dff7fdab184de3da9c443009",
+        "common/src/tools/results/__tests__/filesystem-raw-authority.test.ts": "6945c8ff48be19711f2517262b4d5de78e6bae3a8f483b27be44fe477ca28e84",
+        "common/src/tools/results/filesystem.ts": "f784e0072793952697fd8ce0194805851bb309813e6be75767d6ec9b0a85a206",
+        "common/src/types/contracts/client.ts": "5ff8df3904b100f98a9a1b52eec707c776fee61cd6d0480f55193ab206079c10",
+        "common/src/types/filesystem.ts": "cec0029348e2a5490b82dd697f134cda0c3481f2b329ca792e0532f5fefc9a8b",
+        "common/src/types/session-state.ts": "6528469c982bdd741f3361cf6623b51d435a4979f454c3d099ac04900ef78436",
+        "common/src/util/__tests__/byte-text.test.ts": "69b2289190892be8ca3a3dbdbbdf9c8276773bbd8c4ebad7a95f90fe115554ce",
+        "common/src/util/__tests__/content-hash.test.ts": "938a88c9cc666203ae713a9b3cccc46ac223da0dc18e825070333d37e415c483",
+        "common/src/util/byte-text.ts": "f142c9636c4bc3cfeaca2a985b12c3298e615ca3267d7ee43d5830a040e8dc5c",
+        "common/src/util/content-hash.ts": "a3748f1905babc3301b9d8c222cb39e01008e46ecdb72799d6745a90db222f58",
+        "common/src/util/line-coordinates.ts": "bf9cb0c582988ce116388753e94347e1f281b3ecb3d08a016a30374a57d15cda",
+        "common/src/util/raw-read-basis.ts": "817b499da208dc0a18d76be7970c011d63709f501bea7e5c218d3419492d22d5",
+        "packages/agent-runtime/src/__tests__/edit-transaction-multi-file-recovery.e2e.test.ts": "7d77749ab8dfa81b963524a77073b604c550839af906d9664a956d6bc3f5e6dc",
+        "packages/agent-runtime/src/__tests__/post-edit-output-publication.test.ts": "7f8860b0d0356948ae2e90b601a20de26466e6bf4b6e47eee4f2e9969e8fc0fe",
+        "packages/agent-runtime/src/__tests__/process-str-replace.test.ts": "4ac3fd2899a2d817ec17d3a1eae66b8aa564271a73a132e9332d57941801dabe",
+        "packages/agent-runtime/src/__tests__/read-authority-ladder.test.ts": "81d065c12a8d99839d7f2444a277f5ff3aa07955deb8ab5401eefd5ca1b7e26d",
+        "packages/agent-runtime/src/__tests__/read-files-capability-authorization.test.ts": "d8c6c6920ef1f91406faceb90c6eece197d58ee4aff22c702e12cd9d4ad2e528",
+        "packages/agent-runtime/src/__tests__/read-outline-slices.test.ts": "c96d9066d43b2ff5f0e3ab0590744c1d7c1b0bed30ee4e6cab83504fc91237d6",
+        "packages/agent-runtime/src/__tests__/replace-range-occurrence.test.ts": "9cac403c722f3d3be7e76108c5458b0a446350bb53d3f631a1d48249186a5888",
+        "packages/agent-runtime/src/__tests__/rewrite-symbol.test.ts": "6ba697c7820f677dc550aeb275cb4bc5d41f1218de59a5fb5c8e1eb20f54cb08",
+        "packages/agent-runtime/src/__tests__/tool-validation-error.test.ts": "6738400f6aebbe7f03755e2df3340c3b670d40ede4d906b66855bd469fc45baf",
+        "packages/agent-runtime/src/get-file-reading-updates.ts": "aa658806e3d9866dae6a0da3194ce477c02df05bd8eec91eedfb31a83884850c",
+        "packages/agent-runtime/src/process-edit-transaction.ts": "39044a3039efe53cf89b064c39783f17e5c81b41a2bcc344dee38d2539fac836",
+        "packages/agent-runtime/src/process-str-replace.ts": "90dc1a5386367bbf698b431719f328fa71dad4e0fbf22e694e5715e7b40efabc",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "a3a0707611d7ae41e9ca6b7faaf07ec0e576db0f12fba9ec640fa1bb95e7f753",
+        "packages/agent-runtime/src/structural-read.ts": "f1e13ac91b97d462a82ed1a33960fd27d5b91f41835660d71421a62950563e52",
+        "packages/agent-runtime/src/supervision/__tests__/raw-read-handoff-b05.test.ts": "8a32554c21959b279fecac5a155ce2e691bf05b223b27fda7223f782373d768f",
+        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "27561a0faca3e381a9860848078862eb273a19603fb30fdc2b97fa792a4dbd10",
+        "packages/agent-runtime/src/supervision/child-bridge-client.ts": "36e8f925249939810c0589b3864c1273f99a527e35fae4fb674541546fdc8699",
+        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "4f11168523bb09afb701a38aa3cbaea9f680e0d080363925d5b32312599b09dd",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-application-coordinator.ts": "f7f91de82778237e3fde7dc0dbb2b30d1d137f59c05e10876f89f1b1677688d3",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-read-state.ts": "3de5e7c03195d3a9b2e9ef45bebf8be956e71bb6704eeb44991998dcce0311a6",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts": "130b241ea397b306590dab3089b1d7cc4546460f552ec0d6d0173aa5a78b07fa",
+        "packages/agent-runtime/src/tools/handlers/tool/read-authority-ladder.ts": "e3a8d30bef3340932cc6eab21f48cdab5c55eadaf57444f24c3b8b0c0416d39a",
+        "packages/agent-runtime/src/tools/handlers/tool/read-files.ts": "1643b5ac7c734e9f2795b5d89dd5790b72b765b1e44a6b329fc54855912e6392",
+        "packages/agent-runtime/src/tools/handlers/tool/replace-range.ts": "98cc61c66277c791785f0a61aaadb7c1469e8c934f4bd3163f3c76a11be6d19f",
+        "packages/agent-runtime/src/tools/handlers/tool/rewrite-symbol.ts": "21f1e47141c52b2482ffec4a110f79c0120f442b3ec00175d369090079f68455",
+        "packages/agent-runtime/src/tools/handlers/tool/str-replace.ts": "8a36ea4e5c1b3c139220a00b4a857c09caf67266fc5420b65b81d1941dd01439",
+        "packages/agent-runtime/src/tools/handlers/tool/write-file.ts": "9322afe1b280770f3c1d8faac221aa2ff867c7e5ad73ae194ccdb98a9652af61",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "de771f2b89ddccc87debf9c0321813e2c03967c0e106b24e0dc5e48d69466b05",
+        "packages/agent-runtime/src/util/authenticated-read-source.ts": "83872133a901ab39bff0693cfe96b1e14f25047ef2a003dff079f57eb144f214",
+        "packages/agent-runtime/src/util/read-authorization.ts": "d0643e1d3cfcf394acde126995585f664448a222edebc00a85d03e41cce163b2",
+        "sdk/scripts/build.ts": "2b75a105756b8cd4b62e75f1e6d9be7ee19f725ae4815077ce848e4414837521",
+        "sdk/src/__tests__/change-file.test.ts": "94f6f574681a68f9fe0c8ffae3003d2dd8ab258a10806a66a53ac90666622b9c",
+        "sdk/src/__tests__/mcp-server.test.ts": "14072124d8010a3995148f16011c6633c5e93fa130711cedb936a6864d1ad4d5",
+        "sdk/src/__tests__/node-filesystem.test.ts": "5cbc03e60eb9a04f8e93360f15a9c3e31408cc52e95ea5ca38ad156eed228665",
+        "sdk/src/__tests__/outbound-filter.test.ts": "0b9701dd901f2daa0fd9559caf3f50f002d8208f51763b0cc88267c7df4c6840",
+        "sdk/src/__tests__/read-files.test.ts": "0c0eef10f162c3d725f1b8a0fd3f68f9c43d6e8d5fc4f46eb83b0ce3789dd31a",
+        "sdk/src/__tests__/replace-range.test.ts": "8956856be13f2af72de954d9df4dfe67fe3e2912cc07b2c238f706a97e2fb35f",
+        "sdk/src/__tests__/run-mutation-dispatch.test.ts": "3096f04e1c8f184c3e518b7aa63b58f4fefb1f2a3628e577d2b289bb8e45f19c",
+        "sdk/src/impl/agent-runtime.ts": "bf4eeb6f8856c7f3168403cf4b797392726ecfcf32b39fe090d82fd81a29dbb3",
+        "sdk/src/index.ts": "f98d7361b7cefb502e69f02347710a8bb537685f473fba06d5c3995a26f5b9c3",
+        "sdk/src/run.ts": "b025e8455ea5fd7feb473a2e423941a162527f2ab27d88a64b24f9708c57bbc4",
+        "sdk/src/serve/outbound-filter.ts": "f8586bac8a8ecc2c04009c3c8db2c526e9d2fa935dc2816bf8f215b84e805ca3",
+        "sdk/src/tools/change-file.ts": "415e501433ac20e50d985b95a666487640da20421ece2a512937b95fd8599bb1",
+        "sdk/src/tools/concurrency.ts": "d3154988c171b59da65e938c3c1539fb1a96f6fbf1795d913d23b8b1863c7560",
+        "sdk/src/tools/mutation-capabilities.ts": "c69cf2abfd82e4f44fbba5221e510121eb49a0cc5a8ca8a992ba5dd75ed4a767",
+        "sdk/src/tools/node-filesystem.ts": "eb73c817b4f6ae536649e2e567a7293d0b680d3994a574940e98fe4b4734701e",
+        "sdk/src/tools/read-files.ts": "f82ffd13bd09a8e4f7cfcf46a4ea7ac3d9230f0ac057e321a0b79891779be0e2",
+        "sdk/src/tools/replace-range.ts": "13b421fc65d123282abfc7469a03b3398243265f6019d20818b21bedc6a138cd",
+        "test/fixtures/body/byte-observation-edit.ts": "ea3b1d382a0c174464ec4709009c3aebe993736b9d4407685a47d7b5d27d4684"
+      },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": null,
-      "coverageTier": null,
-      "evidenceManifest": null,
-      "verification": null,
-      "risks": []
+      "epoch": "b05-r8:cdf15b5ec41b6252f374b52bb1623931f65c0ac2228bd67154583940865917a7",
+      "coverageTier": "Source TypeScript/Bun and emitted Node SDK exact-byte observation/edit authority, bounded backing allocation and confirmed canonical publication through SDK/runtime/supervised child consumers",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B05/accepted/20261108T085830253963Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b05_final_architect",
+            "implementationOwners": [
+              "/root",
+              "/root/b28_code_native",
+              "/root/b08_b18_evidence_followup",
+              "/root/b05_prerequisite_code"
+            ],
+            "scope": "Source TypeScript/Bun and emitted Node SDK exact-byte observation/edit authority, bounded backing allocation and confirmed canonical publication through SDK/runtime/supervised child consumers",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B05/resume-20261108/architect-review/final-approvals-r8-2/B05/implementation-review.json",
+              "sha256": "2caece71fde984c8254118c1b208fe7019f2f4a0d155282cb38b0698a012608e"
+            }
+          }
+        ],
+        "requiredCommandCount": 25
+      },
+      "risks": [
+        "Exact raw-byte authority and cooperative mutation confirmation; task acceptance and crash/native ownership remain separate contracts.",
+        "All 24 final root checks plus the SDK build passed. CLI retains 146 explicit skips. Focused runs overlap package schedules and are not unique extra tests.",
+        "Node evidence preserves three absolute external toolchain keys as behavior artifacts only; none is normalized into repository command inputs.",
+        "Measured reader backing peak is 66,560 bytes = B(1,024)+C(65,536). H=262,144 is a declared bookkeeping allowance, not measured allocation. RSS is measured separately.",
+        "Parent summary declared 5,999 bytes versus actual 6,005 and obsolete coordinates are outside B05 authority claims; canonical actual journals retain mutation revision 1.",
+        "Source/offline and emitted Node coverage grants no installed/native B05, live-provider, universal descendant cleanup, global dependency declaration success or empirical model-gain assurance."
+      ],
+      "startedAt": "2026-11-07T17:48:32.351884+00:00",
+      "implementationActivation": {
+        "path": "docs/execution/body-roadmap/evidence/B05/implementation/activation.json",
+        "sha256": "50461c356c916b92e846e5cff496c6b32559303a1af87949dd44acf90c0bfaaa"
+      },
+      "acceptedAt": "2026-11-08T08:58:31.680923+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B05/accepted/20261108T085830253963Z-acceptance.json",
+        "sha256": "f8096585f6a9040df72fbc6204e52cedce37514e01f7185c75f0e08398904287"
+      }
     },
     {
       "nodeId": "B06",
@@ -783,23 +884,23 @@
       "sourceContractHashes": {
         ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
         ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
-        "bun.lock": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6",
-        "common/package.json": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c",
+        "bun.lock": "68e1eca71585792abca3891f08933e4ba630c419777aae25e84e8bd585882a43",
+        "common/package.json": "94c59bca2f982113fefd65a188dd682116900ca7052024e70836f4ed05ba7454",
         "common/src/constants/chatgpt-oauth.ts": "639d8588df5410689cffec29efdb08d8e700a96c63812d02ecceeb9a8c7f2a58",
         "common/src/old-constants.ts": "bff89d506a20df1c1948ac67c325c537c29f840e3611ae3e11f4375441d877e1",
         "common/src/tools/constants.ts": "8064a62829d99bb3276de0b38d9a32cfc0137fb40596a819b3202629642b83b0",
         "common/src/types/contracts/llm.ts": "5f4a39d3d236fe6f8c616d8d14cd1034fbbb7dd7a6b295e7ab4508128ffefad0",
         "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
         "common/src/util/error.ts": "bba70d5e459a97e83e972cb28c3bd6e7ebae1d4584c5da11bde634bdfd5f5d93",
-        "common/src/util/messages.ts": "4a547583f363a22bc9f64629ce6d741dd9316f4dfcba874cc8db99110429c363",
+        "common/src/util/messages.ts": "d6e18a6cdc9f6fe66332bc14e8acfcb83c19ec99c3e40237a7c8b5280bf0d864",
         "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
         "docs/configuration.md": "b7ee0ad4537e2e0cc3b3c2c11b18bb6d5a031ee2f6f236fcf519136add2b38d8",
         "docs/execution/body-roadmap/evidence/B08/independent-review/route-metadata.ts": "36ca44a15f8c9c256971e7a506edc4e6d93ce86cc629228951037a55823c93ef",
         "evals/buffbench/isolated-sdk-client.ts": "0be0e1e719de62ac305501f68f84f661927c7db91a800aeba91966344894c54c",
         "evals/buffbench/isolated-sdk-worker.ts": "185f58d9f7a59ce9776586a07a6cd83bb66b6d322ddf82d9bf4359341656b15f",
         "package.json": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8",
-        "packages/agent-runtime/src/run-programmatic-step.ts": "6a405a2ea01ccb3fa4ef005bbf4c45f4b91acd96b836ba818f221965165a42db",
-        "packages/agent-runtime/src/tools/tool-executor.ts": "2865e32af22ec49c57bc396ea6b1ba491c1ca3c466842343c9a181387d3208db",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "a3a0707611d7ae41e9ca6b7faaf07ec0e576db0f12fba9ec640fa1bb95e7f753",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "de771f2b89ddccc87debf9c0321813e2c03967c0e106b24e0dc5e48d69466b05",
         "packages/agent-runtime/src/util/context-pruning.ts": "e626ed6dcc282e0e0baf6acc0546b5d11f372b660bb55836e649f73b7dd72a78",
         "packages/agent-runtime/src/util/messages.ts": "d4be968a48002a8df376e775ce2e767e6c8e2698d97b00147a3b9830b618b540",
         "packages/agent-runtime/src/util/parse-tool-calls-from-text.ts": "fa47ed268c911b2ec525a732f90110f21190c2ee433fd6fbd19e1e3c28b3ed76",
@@ -810,7 +911,7 @@
         "packages/internal/src/openai-compatible/openai-compatible-error.ts": "a696f1cfeafb07fa10dea86e4b41fb11d15e87d484d0445668a2195233f3daca",
         "packages/internal/tsconfig.json": "fc5a4782a724725b8bccf080a1bb69df84ddda28f573ba2cf76a364d745dc9fe",
         "scripts/body-fixtures/evaluator-isolation.ts": "d768957e94d8801251474b170cc80bf9abbd082e5d4fbc722a3dd18f3dd1cc7a",
-        "sdk/package.json": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d",
+        "sdk/package.json": "e4f7dcc28c4bb4e77f8d1d11d019ee497a9cda033ee155255d3872484561d717",
         "sdk/src/__tests__/error-utils.test.ts": "db88099c212ddf0379a0b019b29dcb055e87587e658b9a02e673de2a977d05ba",
         "sdk/src/__tests__/model-provider.test.ts": "e70bf67fad3ff1d7bcd9cc02d7b04a643be11d98a6b809e2ed2366f166df99e6",
         "sdk/src/__tests__/provider-config-band.test.ts": "1de2f4c0bfba9d9042148c99fb4fca44a8a0b205b8e580a6ac1a71ed1bc6e01d",
@@ -836,11 +937,11 @@
         "sdk/src/impl/llm.ts": "76b1b88454eb1471eeb3a71ae2ec60e97b83603c40799d3ce3cdbc6abe226be5",
         "sdk/src/impl/model-provider.ts": "2e14b4aa5534c0e8761b16c234eca300052f4419178ed3ab1d3137af82b2c11e",
         "sdk/src/impl/opencode-go-responses-fetch.ts": "613beb8bfe008368aa8e68d692c0bbcace004054e2ef4f788be39d39b17040ca",
-        "sdk/src/index.ts": "36bfe777b384462ac3a4740751579a3a8b4d8508b4bf90f7a1458d14774adae1",
+        "sdk/src/index.ts": "f98d7361b7cefb502e69f02347710a8bb537685f473fba06d5c3995a26f5b9c3",
         "sdk/src/provider-config.ts": "6a659575360e14a8fba319cf6e7e406faa8505d681342a6911835bc870dd8922",
         "sdk/src/retry-config.ts": "fab975fea396f8333ca7ed9787515dfa858a445056409daffee5ea0f6f50c91b",
-        "sdk/src/run-state.ts": "131d5e2a0fe1470dd26312952b199db3ef481386cb03fa3593035129589b2a68",
-        "sdk/src/run.ts": "c80be3b62a436b92b851cde37d00ae569b860b33ffee597016e0462715fa7562",
+        "sdk/src/run-state.ts": "c0ab2c7f5c04f9ba443a5474c96ba6008461f1cd8ccb2b82f7ecd23f15823bcc",
+        "sdk/src/run.ts": "b025e8455ea5fd7feb473a2e423941a162527f2ab27d88a64b24f9708c57bbc4",
         "sdk/src/tools/run-terminal-command.ts": "0ad82faa2597d6b9d4d1b7e1420f75a8ee3c5961b3bf276d77f70cd4c1b5db74",
         "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
         "test/fixtures/body/provider-retry.ts": "d306802367c40f470e9c36cca42c12793091250036dc36498b3c3ea781bad896",
@@ -848,34 +949,38 @@
       },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+      "epoch": "b05-r8:cdf15b5ec41b6252f374b52bb1623931f65c0ac2228bd67154583940865917a7",
       "coverageTier": "Offline configured provider request/error/retry, metadata, reasoning and route-fidelity contract",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B08/accepted/20261106T215030348965Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B08/accepted/20261108T085830253963Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "/root/b03_mutation_evidence",
+            "reviewer": "/root/b05_final_prerequisite_v2",
             "implementationOwners": [
               "/root/b02_runtime_outcomes",
-              "/root"
+              "/root",
+              "/root/b28_code_native",
+              "/root/b08_b18_evidence_followup",
+              "/root/b05_prerequisite_code"
             ],
-            "scope": "Canonical B08 offline source-SDK request/error/retry/actual-route-metadata/settings contract under the frozen 64-source and 11-config inputs; no live provider or installed-client graduation.",
+            "scope": "Offline configured provider request/error/retry, metadata, reasoning and route-fidelity contract; exactly 64 current source contracts and the complete 9-command successor set.",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/B08/typed-independent-review/review.json",
-              "sha256": "0faa601f14c0eb4d584b9cb98f6ce14babe389fca7d979ec8747589afb5bd4c6"
+              "path": "docs/execution/body-roadmap/evidence/B05/resume-20261108/final-prerequisite-review/final-approvals-r8-2/B08/review.json",
+              "sha256": "2752926956addcc077dd5ba817016797a489210dcc66e2d8cc3622186644cf8e"
             }
           }
         ],
-        "requiredCommandCount": 6
+        "requiredCommandCount": 9
       },
       "risks": [
-        "No live provider/OAuth availability, remote billing, installed client or OS/network confinement assurance."
+        "No live provider/OAuth availability, remote billing, installed client or OS/network confinement assurance.",
+        "Shared compiler slots credit one actual root workspace invocation, with truthful package labels; no package reruns are inferred."
       ],
-      "acceptedAt": "2026-11-06T21:50:30.505038+00:00",
+      "acceptedAt": "2026-11-08T08:58:30.525141+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B08/accepted/20261106T215030348965Z-acceptance.json",
-        "sha256": "ecbb7b50ec3451febd0203ca6426b4e6599c8c17b9894b4b404f9f2d4a313c91"
+        "path": "docs/execution/body-roadmap/evidence/B08/accepted/20261108T085830253963Z-acceptance.json",
+        "sha256": "e88ee7b776be4064e277621143ffc5271469d3c3026a2a6ea8c88fbcfdbbe202"
       }
     },
     {
@@ -1043,24 +1148,24 @@
       "sourceContractHashes": {
         ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
         ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
-        "bun.lock": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6",
-        "common/package.json": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c",
+        "bun.lock": "68e1eca71585792abca3891f08933e4ba630c419777aae25e84e8bd585882a43",
+        "common/package.json": "94c59bca2f982113fefd65a188dd682116900ca7052024e70836f4ed05ba7454",
         "common/src/tools/params/tool/run-terminal-command.ts": "1b9a65bfd725912039c80b50160dee178f47de25c851cde62cbb784c5596a694",
         "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
         "package.json": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8",
         "packages/agent-runtime/package.json": "0ecb330281d325d02c339c86fb2f52a2875b0d957abdd0b097b1ab959d281d3d",
         "packages/agent-runtime/src/__tests__/run-agent-step-tools.test.ts": "1ded4ac4e2ffdd96b61ec06507e8da45dadfc9a3aaf8840e4d175db3840e18b3",
         "packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts": "6adfa2c76cab46ecaa2ea6b8b6bf4df603ac51ac3297193261810fad5ec1a178",
-        "packages/agent-runtime/src/run-programmatic-step.ts": "6a405a2ea01ccb3fa4ef005bbf4c45f4b91acd96b836ba818f221965165a42db",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "a3a0707611d7ae41e9ca6b7faaf07ec0e576db0f12fba9ec640fa1bb95e7f753",
         "packages/agent-runtime/src/tools/handlers/tool/__tests__/run-terminal-command.test.ts": "dc494c21606234b7bf9c509db2664234b1645667e81caf4cad611f4e438e6bef",
         "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts": "0822ce4f15f2eed194401619439f563cab834d7c0e189b84ff4d21bb42672554",
-        "packages/agent-runtime/src/tools/tool-executor.ts": "2865e32af22ec49c57bc396ea6b1ba491c1ca3c466842343c9a181387d3208db",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "de771f2b89ddccc87debf9c0321813e2c03967c0e106b24e0dc5e48d69466b05",
         "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
         "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts": "58fbe85769982c8be114fa457a509df15477e5ebcf119101f4997d24d26fabaf",
         "packages/internal/src/openai-compatible/openai-compatible-error.ts": "a696f1cfeafb07fa10dea86e4b41fb11d15e87d484d0445668a2195233f3daca",
         "scripts/body-fixtures/sdk-terminal-approval-identity.ts": "8009dd642a67b9530c023ea377b4dedf04e4f3987829eeb7ca2c2cc7b6d45a01",
         "scripts/body-fixtures/terminal-approval-identity.ts": "63124fe922741497e5725b47807a805d7543d2e419e37561c8f3646baa2b6a55",
-        "sdk/package.json": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d",
+        "sdk/package.json": "e4f7dcc28c4bb4e77f8d1d11d019ee497a9cda033ee155255d3872484561d717",
         "sdk/src/__tests__/harness-command-identity.test.ts": "1d7a5107c04cef3add8ba0f7966d7d8fc68d09901ee2c56580093dea88fb3545",
         "sdk/src/__tests__/harness-enforcement.test.ts": "0859310c38c4f029fe43490e83900f843cf238345470765a248ec65251fbc507",
         "sdk/src/__tests__/local-harness-store.test.ts": "34b9bca73ee997e3adaa93509e79944306ce81dca27ff67e50c7b7a07b09e6f3",
@@ -1074,11 +1179,11 @@
         "sdk/src/impl/failover.ts": "62930f709bc5be8975375b50ec1e200eec7dd46ce4df5482da4c46ba06b2e793",
         "sdk/src/impl/llm.ts": "76b1b88454eb1471eeb3a71ae2ec60e97b83603c40799d3ce3cdbc6abe226be5",
         "sdk/src/impl/model-provider.ts": "2e14b4aa5534c0e8761b16c234eca300052f4419178ed3ab1d3137af82b2c11e",
-        "sdk/src/index.ts": "36bfe777b384462ac3a4740751579a3a8b4d8508b4bf90f7a1458d14774adae1",
+        "sdk/src/index.ts": "f98d7361b7cefb502e69f02347710a8bb537685f473fba06d5c3995a26f5b9c3",
         "sdk/src/provider-config.ts": "6a659575360e14a8fba319cf6e7e406faa8505d681342a6911835bc870dd8922",
         "sdk/src/retry-config.ts": "fab975fea396f8333ca7ed9787515dfa858a445056409daffee5ea0f6f50c91b",
-        "sdk/src/run-state.ts": "131d5e2a0fe1470dd26312952b199db3ef481386cb03fa3593035129589b2a68",
-        "sdk/src/run.ts": "c80be3b62a436b92b851cde37d00ae569b860b33ffee597016e0462715fa7562",
+        "sdk/src/run-state.ts": "c0ab2c7f5c04f9ba443a5474c96ba6008461f1cd8ccb2b82f7ecd23f15823bcc",
+        "sdk/src/run.ts": "b025e8455ea5fd7feb473a2e423941a162527f2ab27d88a64b24f9708c57bbc4",
         "sdk/src/serve/bridge.ts": "7e77aac98fde3882aa471dfa0e897acdc3de8098a0f6eebc7286f9f8ccc2560d",
         "sdk/src/services/harness-enforcement.ts": "0391312e7311a1f42f862a5f41d255cb1e55b52455d973c5be0672c4e0900f73",
         "sdk/src/services/local-harness-store.ts": "390668ee7b67ed33d830e72c714ea66d7e43339d78f80a852942af9b0e506ba2",
@@ -1096,40 +1201,44 @@
       },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+      "epoch": "b05-r8:cdf15b5ec41b6252f374b52bb1623931f65c0ac2228bd67154583940865917a7",
       "coverageTier": "Source TypeScript exact command and approval identity through policy, actual launcher, SDK and approval bridge",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B18/accepted/20261106T215030348965Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B18/accepted/20261108T085830253963Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "/root/b02_runtime_outcomes",
+            "reviewer": "/root/b05_final_prerequisite_v2",
             "implementationOwners": [
-              "/root"
+              "/root",
+              "/root/b28_code_native",
+              "/root/b08_b18_evidence_followup",
+              "/root/b05_prerequisite_code"
             ],
-            "scope": "B18 current-source exact command/approval identity reattestation after leader-authored B08 route delta within prior cooperative TypeScript scanner/harness and actual source SDK/terminal/ACP consumers with harmless local effects. No independent approval of reviewer-authored B02/B08 prerequisites, shipped-base2/B01 integration, complete shell AST/effect-ordering guarantee, OS isolation/cross-process fencing, remote Git/live provider/billing/native-parser/installed-package claim.",
+            "scope": "Source TypeScript exact command and approval identity through policy, actual launcher, SDK and approval bridge; exactly 52 current source contracts and the complete 10-command successor set.",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/B18/post-route/independent-countersignature/review.json",
-              "sha256": "486b41aa3c3d00796dab2d0bc53cdc0df5f4d5d9679c509411724b38fc1bed2e"
+              "path": "docs/execution/body-roadmap/evidence/B05/resume-20261108/final-prerequisite-review/final-approvals-r8-2/B18/review.json",
+              "sha256": "bd9a3caa3e4b5d1349e8c8c2cda75c2675db008ab6555a68e84adf609ab3f987"
             }
           }
         ],
-        "requiredCommandCount": 8
+        "requiredCommandCount": 10
       },
       "risks": [
         "Conservative recognized-effect hints are not a complete shell AST or arbitrary external effect oracle.",
-        "Uncredited historical prerequisite packaging defects remain preserved; no prerequisite implementation approval is inferred."
+        "Uncredited historical prerequisite packaging defects remain preserved; no prerequisite implementation approval is inferred.",
+        "Source fixtures provide no complete shell AST, OS isolation, native enforcement, live provider or billing assurance."
       ],
-      "acceptedAt": "2026-11-06T21:50:30.781213+00:00",
+      "acceptedAt": "2026-11-08T08:58:30.583953+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B18/accepted/20261106T215030348965Z-acceptance.json",
-        "sha256": "d6259e9150f3f14e9173fa59b4fef74fafc5f207c57ced50b0044bc1582fe53b"
+        "path": "docs/execution/body-roadmap/evidence/B18/accepted/20261108T085830253963Z-acceptance.json",
+        "sha256": "8122f73130f79d9b574f4a39a90fb8580e7a581fa62c554c1a5b3c6a943bab24"
       }
     },
     {
       "nodeId": "B19",
       "parentCardId": null,
-      "status": "pending",
+      "status": "in_progress",
       "prerequisites": [
         "B02",
         "B18"
@@ -1295,17 +1404,151 @@
     {
       "nodeId": "B28",
       "parentCardId": null,
-      "status": "pending",
+      "status": "accepted",
       "prerequisites": [],
       "acceptedPrerequisites": [],
-      "sourceContractHashes": {},
+      "sourceContractHashes": {
+        ".github/workflows/ci.yml": "3626386e7d25e65e42f9e0c96cbd6d9aef004ec0b16a83e27f412f7a89c3cf24",
+        "bun.lock": "68e1eca71585792abca3891f08933e4ba630c419777aae25e84e8bd585882a43",
+        "cli/src/__tests__/unit/openbuff-provider-readiness.test.ts": "51f1a05fda781d9c92a1c3f1c868dc2e04dd3d5537b451d25959ce33fce5ccca",
+        "cli/src/data/initial-agent-type-sources.generated.ts": "f41717f41a60b02e7e71fb4ae4362af33ac3632dfa08ce9ff35323448ad21fc3",
+        "cli/src/utils/__tests__/mcp-result-projection.test.ts": "4a86ab6c753fb805193c0bb04865022d138266da0f355237acecab9ee40d5cc3",
+        "cli/src/utils/__tests__/openbuff-provider.test.ts": "6030c47f76935782d3ed197a545c9d6936ed4570e0513455989a0901d718ff1e",
+        "cli/src/utils/message-block-helpers.ts": "cdacf0d0a7e9a0ccfd57360b2e52599618f8bd60ddf5a9f06c58526fea5535c8",
+        "cli/src/utils/output-outcome.ts": "2d2238fe9b16daff45a6fce0dea09666adba0ee41a7831440afc26acc29bdabd",
+        "cli/src/utils/payload-sanitizer.ts": "2434e3d1a9f2e95de08bfbc4bce221ae89eb8922250ee17cedd438a94cb99b24",
+        "cli/src/utils/tool-result-normalizer.ts": "9e108810743a2883bb69e46097cfcd001cd88c42adab3090017d1dfaca9978a4",
+        "common/package.json": "94c59bca2f982113fefd65a188dd682116900ca7052024e70836f4ed05ba7454",
+        "common/src/__tests__/agent-validation.test.ts": "36a2f0c32fd96de8add0db7d76ffe81dfbd3899832e7c6eba9be9567a91bff59",
+        "common/src/__tests__/json-schema.test.ts": "5a6a6953f46e7a9c2e3ece3e659d75f21942402413427ca6c6b67f31ffb49780",
+        "common/src/actions.ts": "c56ed46e6fcfe914d84c3caf9b99d08a97f46cc6f62e5f81916bd42affbd0a4f",
+        "common/src/mcp/__tests__/catalog.test.ts": "6e8399bb17f0f173a3275cc62b086e883fe9e6bd8ea5bd88b4a5ad435ac140d9",
+        "common/src/mcp/__tests__/fixtures/mcp-catalog-server.mjs": "a5a4b63ad9df98b635aa9d4f257a5e2c8a54d2149e4e009baef793c16b8ce480",
+        "common/src/mcp/__tests__/fixtures/mcp-empty-server.mjs": "e96383b8c1949aa7e9dd6ed8afdc960fc45e5d4622d86009d2633277882fc940",
+        "common/src/mcp/__tests__/fixtures/mcp-result-server.mjs": "451029fad60f16de763a159fc9e31e5119103d07dafe8806dcad8d9ae9232f1b",
+        "common/src/mcp/__tests__/provenance.test.ts": "9f20d841930b2723e7285dac291efdad1d7657614c4cd6142aecfde6e359888a",
+        "common/src/mcp/__tests__/result-client.test.ts": "2e3b86748a9a49565e791cffd657720084d1fb2a4bac40c411c173c6c18d3b9e",
+        "common/src/mcp/__tests__/result.test.ts": "b5e27f9f1058d6a52607d2b79213d23507ddfd61c2bbbb2bebcbca8cbac61b4a",
+        "common/src/mcp/client.ts": "e58cc344de9a4b7bb7fa5ee43de94fb8d5c5384ff433644ed0cca6522602aeba",
+        "common/src/mcp/provenance.ts": "378b7158c82821092bba9eec0cbb03bf4ec31a2e7e65aa4a8a94b9c54d317304",
+        "common/src/mcp/result.ts": "b71fd7715290edb972bf0166b22702a423c96c8f32f214dff6519c4e14e679bf",
+        "common/src/templates/agent-validation.ts": "dbe8e46a3d80331126197b63cfdae66f75147d3a3c738e30715f0f989a27c939",
+        "common/src/templates/initial-agents-dir/types/agent-definition.ts": "58c68f27b510fe246b82e0e52917804b7cd71c2fd6d02e9ff7777b0d8100e19a",
+        "common/src/tools/compile-tool-definitions.ts": "a8f547ab5de0b6c81f1b45c295cfaf2cb4e9b20acc8d98b475dcd1b2c59269c9",
+        "common/src/tools/external-tool.ts": "5cfd57405d96ea49e244a458b952cff3c26e0fbce3bfef065b902ac0abe659f6",
+        "common/src/types/agent-template.ts": "5773dfc72ba5993f12b5ed65b1f330b56979194dd559307c3988b85a7ad02a33",
+        "common/src/types/contracts/client.ts": "5ff8df3904b100f98a9a1b52eec707c776fee61cd6d0480f55193ab206079c10",
+        "common/src/types/dynamic-agent-template.ts": "6401783af251770c7c9498b0fd59217870cdda765439967e8ec7a2af47ca4404",
+        "common/src/types/mcp.ts": "508f214feb3c32cebed9160f8f0649b0aa367d6e1d4f137c084f0f45ec2527a3",
+        "common/src/util/action-outcomes.ts": "772eb4702b8c53b0eea7b50360bfa6384e4fafd87ea9b69de0ed1ce29da6f20f",
+        "common/src/util/file.ts": "98f8ad86d09c856b118b9e9ec380847daa9c31626f4b1fb2db6e8f8710428cf5",
+        "common/src/util/json-schema.ts": "fc8509c1c32f1c1f2630e161fbf8ce94b965b05c157ac0a11db4c9d6481dabfc",
+        "common/src/util/messages.ts": "d6e18a6cdc9f6fe66332bc14e8acfcb83c19ec99c3e40237a7c8b5280bf0d864",
+        "docs/development.md": "dc681d11780f62f51953df502b993e4b8fdfb4ad8006fbf851c237afaee2cfe9",
+        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "27d9e177fd7f67bf5059d9358d9a36800ddbe28be64b93cbe69c6dc1cb28c994",
+        "packages/agent-runtime/src/__tests__/loop-agent-steps-abort.test.ts": "fb9994f0737ce5af7e68d3d586cbef0e6d7ecbb86a263ac6dcfcc7a0511f40da",
+        "packages/agent-runtime/src/__tests__/prompts-schema-handling.test.ts": "e081255b78838b2e3c39dbd6d7fa00df3742225fd2e61c6384e72c62d5a09c8d",
+        "packages/agent-runtime/src/__tests__/provider-tool-contracts.test.ts": "e0619b208997e149262a1d497e41dba58d275785c1b202ffd46cc70e785321b1",
+        "packages/agent-runtime/src/__tests__/spawn-agent-inline-nesting.test.ts": "81f35ff09ef1b287f36a00afc499379669ab3cccbee3a978435e261b3b125bd1",
+        "packages/agent-runtime/src/__tests__/spawn-agents-message-history.test.ts": "2bff4f4b05ee02a2df4604c3c4e843f862157b9288e77c3b6d6acc09a4de3bcf",
+        "packages/agent-runtime/src/__tests__/spawn-agents-permissions.test.ts": "8fdb2fb2a7f6cfce3fc2a23193b2553428248fc2d7e4981a91728927a58abffa",
+        "packages/agent-runtime/src/__tests__/spawn-process-supervision.test.ts": "6fd72619ffdbdfea524e401cf1afb578e443bb390ade1e6421db5d560bbc09d9",
+        "packages/agent-runtime/src/__tests__/spawn-settle-fault-injection.test.ts": "3cc6af945a0cec58c6a4245e9f3741f78c469e6b473cc4569cf1b6298f65877c",
+        "packages/agent-runtime/src/__tests__/subagent-streaming.test.ts": "366d0785d9527024e19972d572527310e3607b9c3fc437e912d3803ee824bd61",
+        "packages/agent-runtime/src/__tests__/tool-validation-error.test.ts": "6738400f6aebbe7f03755e2df3340c3b670d40ede4d906b66855bd469fc45baf",
+        "packages/agent-runtime/src/mcp.ts": "aece5c6e202136f91db3a608e7e685eac748bd8af04fd3bbbad662430873bb4e",
+        "packages/agent-runtime/src/run-agent-step.ts": "cdc47399633ef1f692e575bc5770cf88e9bd4eb049b1b606428d177705702a6e",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "a3a0707611d7ae41e9ca6b7faaf07ec0e576db0f12fba9ec640fa1bb95e7f753",
+        "packages/agent-runtime/src/supervision/__tests__/bridge.test.ts": "2e9d011d11ad4e174ba0d8104bb81cc0cde70a43316c592484c01a91c4df71ef",
+        "packages/agent-runtime/src/supervision/__tests__/child-entry.test.ts": "dc4d6ddd1a5534711e0d103af0b119964e49ec07b1348ac3efc64e0d38b794a4",
+        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "4f11168523bb09afb701a38aa3cbaea9f680e0d080363925d5b32312599b09dd",
+        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "8562437fc67e3193991253042c830821ef9093c740271e99bd4211830bd4b814",
+        "packages/agent-runtime/src/templates/__tests__/agent-registry.test.ts": "4c5b006746836cdd1957aff5d53e583f9917b1bf6fccf29d861b4100d5d64c1e",
+        "packages/agent-runtime/src/templates/agent-registry.ts": "1548265b451c6628524b2d6cde7c8a50753b381b37ba7945e4955e1f3bb2dbd3",
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-cancel.test.ts": "3eb0db5899f46e4547ba9ebdd14c80f7a327d9a7cc047b069f61db10e4c81b1b",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "d56e02c9528002b36dbe07787b3693e60529e28a49c4c77b51625f4ed1af79b6",
+        "packages/agent-runtime/src/tools/prompts.ts": "5364bbc1ccea5b0a2466c2e488a63cd8c50e130c3633e46f7c66ea2d03338fab",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "de771f2b89ddccc87debf9c0321813e2c03967c0e106b24e0dc5e48d69466b05",
+        "scripts/__tests__/ci-workflow.test.ts": "e29fba8dc44f5a498c72ba600ad627f7a2d0c2389a4bdfe4f81b037b72aee597",
+        "scripts/__tests__/provenance-change-guard.test.ts": "17589e080655e3edf811bf64a9e794f77392a20335b8893c7b72764da2bca34b",
+        "scripts/dependency-provenance.json": "be20510b1f281f103d3cda3e4bc330e3226234a01044f937017ba9377d2ea7ba",
+        "scripts/provenance-change-guard.ts": "74a03a9b6aa21f047643def0919fb93ae7f051e4970a4ac576b8ecc8205119bb",
+        "sdk/package.json": "e4f7dcc28c4bb4e77f8d1d11d019ee497a9cda033ee155255d3872484561d717",
+        "sdk/scripts/build.ts": "2b75a105756b8cd4b62e75f1e6d9be7ee19f725ae4815077ce848e4414837521",
+        "sdk/scripts/fixtures/custom-tool-consumer.ts": "32293921a49631c565fd1cfe4d8193ed7cb588a199b41e4164edb41fa9923950",
+        "sdk/scripts/verify-public-declarations.ts": "c66c4a360ac2ed930f42f00c9046dcd79758b5faa94c1b128b374ce1395f21cd",
+        "sdk/src/__tests__/custom-tool-dispatch.test.ts": "92bf709b6ebbf7c4dbdd593f94e115056acbdba7cc116bb0507ef961cd2d6e7d",
+        "sdk/src/__tests__/custom-tool-types.test.ts": "bc20f7b74b17d6ce85b59b0c325405c3984d70349256e12fc8ca706f1f8678d3",
+        "sdk/src/__tests__/external-tool-consumers.test.ts": "4b5d7e8e7f91be97b33125b26ec7b47314b7b97a46fe99a8083c09a002038f11",
+        "sdk/src/__tests__/fixtures/mcp-external-tool-server.mjs": "38278a8ce1f29aa3473ca61f420dd3a71de4b2ada31c4f82297207d23e5304ef",
+        "sdk/src/__tests__/mcp-origin-continuation.test.ts": "e80ee2349ec59be81d008963c2a84daea994b68d90a79a8b583c5639c5415d48",
+        "sdk/src/__tests__/mcp-server.test.ts": "14072124d8010a3995148f16011c6633c5e93fa130711cedb936a6864d1ad4d5",
+        "sdk/src/__tests__/run-mcp-tool-filter.test.ts": "5fea9347d140ba9455d33a8e8adf7e6742e350b352575bd6377cf22e40cdbf64",
+        "sdk/src/custom-tool.ts": "c2ea5cc1e9e71b71587897323a07a2eb6db59517254313301647c9b62eb3f716",
+        "sdk/src/impl/agent-runtime.ts": "bf4eeb6f8856c7f3168403cf4b797392726ecfcf32b39fe090d82fd81a29dbb3",
+        "sdk/src/mcp/server.ts": "bc60c5f045db1f3dd5e5a4d659da876c33b5ab9cccb6ef2149cb266c7ab498e2",
+        "sdk/src/run-state.ts": "c0ab2c7f5c04f9ba443a5474c96ba6008461f1cd8ccb2b82f7ecd23f15823bcc",
+        "sdk/src/run.ts": "b025e8455ea5fd7feb473a2e423941a162527f2ab27d88a64b24f9708c57bbc4",
+        "sdk/src/serve/__tests__/event-bridge.test.ts": "88f9dfeedb7cf25f8433f6afb209eb9dcf722fc3fa535d95a7bb8dbdb314b693",
+        "sdk/src/serve/event-bridge.ts": "a8fbddf5a1c387f0ac29ef14ddad35c420eaeb9f9f792a514057bf2b001106fb"
+      },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": null,
-      "coverageTier": null,
-      "evidenceManifest": null,
-      "verification": null,
-      "risks": []
+      "epoch": "b05-r8:cdf15b5ec41b6252f374b52bb1623931f65c0ac2228bd67154583940865917a7",
+      "coverageTier": "Source TypeScript/Bun/Node MCP/custom-tool schema, result, catalog and provenance contracts through runtime, SDK and CLI; public SDK artifact/declaration, supervision and dependency/CI controls",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B28/accepted/20261108T085830253963Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b05_prerequisite_arch",
+            "implementationOwners": [
+              "/root",
+              "/root/b28_code_native",
+              "/root/b08_b18_evidence_followup",
+              "/root/b05_prerequisite_code"
+            ],
+            "scope": "Independent current renewal of B28 architecture17 plus dependencyCi9 only: 26 disjoint source paths covering MCP provenance/catalog, supervision and registry, original169-case bridge diagnostic, dependency/CI bindings and bounded public SDK declarations. B28 code57 is excluded and remains a separate reviewer responsibility.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B05/resume-20261108/prerequisite-architecture-review/final-approvals-r8-2/B28/review.json",
+              "sha256": "a5cde43b32598a8dac1222a71fde6328675ed3f30e597816f402a02163373328"
+            }
+          },
+          {
+            "reviewer": "/root/b05_final_prerequisite_v2",
+            "implementationOwners": [
+              "/root",
+              "/root/b28_code_native",
+              "/root/b08_b18_evidence_followup",
+              "/root/b05_prerequisite_code"
+            ],
+            "scope": "B28 code57 only: exactly 57 current MCP/custom-tool schema, result, catalog, runtime/SDK publication and CLI source contracts; all 32 exact indexed B28 commands, including eleven original code diagnostics and shared package/guard/help/public/bridge evidence. Architecture17 and dependencyCi9 source approval is supplied separately.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B05/resume-20261108/final-prerequisite-review/final-approvals-r8-2/B28/review.json",
+              "sha256": "cbbb67f1dc88bf43394da5767c3f6b8b8e45adfeb3191921b1f65cdd26d45d4b"
+            }
+          }
+        ],
+        "requiredCommandCount": 32
+      },
+      "risks": [
+        "Implementation source authority is the 57-path code lane; the other 26 semantic paths and bridge diagnostic are separately reviewed.",
+        "Passing SDK-owned declaration checks and the mandatory public consumer do not establish global dependency declaration correctness; six external dependency diagnostics are preserved.",
+        "Root package schedules, focused regressions, ESM/CJS source artifacts and CLI help smoke controls provide no installed/native, live provider, real billing, empirical improvement or universal confinement assurance.",
+        "The full 3186-input union binds integrity. Subset and runner-augmented renewal maps remain exact original invocation records.",
+        "The context alias exception applies only to the frozen CLAUDE.md -> AGENTS.md in the complete root map; strict contract/artifact checks and both fresh strict attachment refusals are preserved.",
+        "Architecture17 only; B28 code57 is independently owned and is not approved here.",
+        "Source hash integrity is not a claim that every transitive dependency was read or a native process-fencing guarantee.",
+        "Public consumer uses skipLibCheck=true; SDK-owned declaration diagnostics use skipLibCheck=false.",
+        "External declaration diagnostics are not globally asserted. The three external package metadata inputs remain separate, immutable named inputs.",
+        "Package/lock/provenance consistency does not imply upstream authenticity or isolated-install/native success."
+      ],
+      "acceptedAt": "2026-11-08T08:58:30.845253+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B28/accepted/20261108T085830253963Z-acceptance.json",
+        "sha256": "fbe9cc46b26e96cecfdd2113fbdc1b61ddd4e3c6edebbfb3a3129aacd8b08b03"
+      }
     },
     {
       "nodeId": "B29",
@@ -1335,8 +1578,8 @@
       "sourceContractHashes": {
         ".agents/sessions/body-capability-review-2026-11-05/PLAN.md": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
         ".agents/sessions/body-capability-review-2026-11-05/SPEC.md": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
-        "bun.lock": "78867cf8be30ef5ac4928c30662ad3c0ec983e4fcfd0e47fdc363b97f59ecab6",
-        "common/package.json": "cc8f18dbf15c71320043800470918d69423aafdf9a9a663fd38bfc7bb15efb9c",
+        "bun.lock": "68e1eca71585792abca3891f08933e4ba630c419777aae25e84e8bd585882a43",
+        "common/package.json": "94c59bca2f982113fefd65a188dd682116900ca7052024e70836f4ed05ba7454",
         "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
         "common/src/util/promise.ts": "827dfea95828d72c186f56d6ef26da8e7a5e2a9813fe1a2b345bc0f24b9cb2d2",
         "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
@@ -1367,15 +1610,15 @@
         "evals/tsconfig.json": "a2ed752ea995d7c86c22165a2d6e69cc2e0748abff95401cdb20032443a9b75a",
         "package.json": "7637448b1b3b6d42379f8421ef02e010bae1ee6b180bbcce6ae4de019d2bd6d8",
         "packages/agent-runtime/package.json": "0ecb330281d325d02c339c86fb2f52a2875b0d957abdd0b097b1ab959d281d3d",
-        "packages/agent-runtime/src/run-programmatic-step.ts": "6a405a2ea01ccb3fa4ef005bbf4c45f4b91acd96b836ba818f221965165a42db",
-        "packages/agent-runtime/src/tools/tool-executor.ts": "2865e32af22ec49c57bc396ea6b1ba491c1ca3c466842343c9a181387d3208db",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "a3a0707611d7ae41e9ca6b7faaf07ec0e576db0f12fba9ec640fa1bb95e7f753",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "de771f2b89ddccc87debf9c0321813e2c03967c0e106b24e0dc5e48d69466b05",
         "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
         "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts": "58fbe85769982c8be114fa457a509df15477e5ebcf119101f4997d24d26fabaf",
         "packages/internal/src/openai-compatible/openai-compatible-error.ts": "a696f1cfeafb07fa10dea86e4b41fb11d15e87d484d0445668a2195233f3daca",
         "scripts/__tests__/compare-buffbench-runs.test.ts": "db623b0771a918a5157e0c71e210994aa5aae4c14ab3e2505b87977f91561acd",
         "scripts/body-fixtures/evaluator-isolation.ts": "d768957e94d8801251474b170cc80bf9abbd082e5d4fbc722a3dd18f3dd1cc7a",
         "scripts/compare-buffbench-runs.ts": "e069312c7ef8f6f090f22c6833376ece5442028f0eba384ad7dbda3d1d1ef561",
-        "sdk/package.json": "2ef3d75736168c66d6ed102a4a89ff5a4f91f284e3efc9cd236df3a09dcd274d",
+        "sdk/package.json": "e4f7dcc28c4bb4e77f8d1d11d019ee497a9cda033ee155255d3872484561d717",
         "sdk/src/__tests__/provider-contract-regressions.test.ts": "904140141f77414577f46b498c71c64dca1c83dfd1a44eb1d559b7c23fde323b",
         "sdk/src/__tests__/terminal-environment.test.ts": "d55b7ba506f806d1c7cf96250fa10c0f9002cfebd9448d1427e453444011664e",
         "sdk/src/client.ts": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7",
@@ -1383,13 +1626,13 @@
         "sdk/src/impl/failover.ts": "62930f709bc5be8975375b50ec1e200eec7dd46ce4df5482da4c46ba06b2e793",
         "sdk/src/impl/llm.ts": "76b1b88454eb1471eeb3a71ae2ec60e97b83603c40799d3ce3cdbc6abe226be5",
         "sdk/src/impl/model-provider.ts": "2e14b4aa5534c0e8761b16c234eca300052f4419178ed3ab1d3137af82b2c11e",
-        "sdk/src/index.ts": "36bfe777b384462ac3a4740751579a3a8b4d8508b4bf90f7a1458d14774adae1",
+        "sdk/src/index.ts": "f98d7361b7cefb502e69f02347710a8bb537685f473fba06d5c3995a26f5b9c3",
         "sdk/src/provider-config.ts": "6a659575360e14a8fba319cf6e7e406faa8505d681342a6911835bc870dd8922",
         "sdk/src/retry-config.ts": "fab975fea396f8333ca7ed9787515dfa858a445056409daffee5ea0f6f50c91b",
-        "sdk/src/run-state.ts": "131d5e2a0fe1470dd26312952b199db3ef481386cb03fa3593035129589b2a68",
-        "sdk/src/run.ts": "c80be3b62a436b92b851cde37d00ae569b860b33ffee597016e0462715fa7562",
+        "sdk/src/run-state.ts": "c0ab2c7f5c04f9ba443a5474c96ba6008461f1cd8ccb2b82f7ecd23f15823bcc",
+        "sdk/src/run.ts": "b025e8455ea5fd7feb473a2e423941a162527f2ab27d88a64b24f9708c57bbc4",
         "sdk/src/serve/bridge.ts": "7e77aac98fde3882aa471dfa0e897acdc3de8098a0f6eebc7286f9f8ccc2560d",
-        "sdk/src/serve/event-bridge.ts": "20daae14096a76c175ec2478219c9cf4a0aa0ba071c1533d6be6bcfbca824768",
+        "sdk/src/serve/event-bridge.ts": "a8fbddf5a1c387f0ac29ef14ddad35c420eaeb9f9f792a514057bf2b001106fb",
         "sdk/src/services/harness-enforcement.ts": "0391312e7311a1f42f862a5f41d255cb1e55b52455d973c5be0672c4e0900f73",
         "sdk/src/tools/run-terminal-command.ts": "0ad82faa2597d6b9d4d1b7e1420f75a8ee3c5961b3bf276d77f70cd4c1b5db74",
         "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
@@ -1398,22 +1641,25 @@
       },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+      "epoch": "b05-r8:cdf15b5ec41b6252f374b52bb1623931f65c0ac2228bd67154583940865917a7",
       "coverageTier": "Source evaluator controlled sinks, isolated SDK environment, refusal boundaries, complete accounting and immutable artifacts",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B30/accepted/20261108T085830253963Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "/root/b02_runtime_outcomes",
+            "reviewer": "/root/b05_final_prerequisite_v2",
             "implementationOwners": [
               "/root",
-              "/root/b03_mutation_evidence"
+              "/root/b03_mutation_evidence",
+              "/root/b28_code_native",
+              "/root/b08_b18_evidence_followup",
+              "/root/b05_prerequisite_code"
             ],
-            "scope": "B30 current controlled process/environment/accounting/artifact isolation after falsy-cause/empty-error/attempt-identity cleanup and comparator eligibility/finite-cost repair, following settled root build; 62 accepted contracts and eight fresh actual-source controls; unchanged assurance limits.",
+            "scope": "Source evaluator controlled sinks, isolated SDK environment, refusal boundaries, complete accounting and immutable artifacts; exactly 62 current source contracts and the complete 8-command successor set.",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/B30/post-build/independent-review-b02/review.json",
-              "sha256": "d053739246f203b807ca9179fdd295efcf4bab5dc5d76ee89f950539708bd4a4"
+              "path": "docs/execution/body-roadmap/evidence/B05/resume-20261108/final-prerequisite-review/final-approvals-r8-2/B30/review.json",
+              "sha256": "ebed0f7ef92f459bcebc0a00045a89fe3c096fe22901b56ae21dfa3587be5fcc"
             }
           }
         ],
@@ -1421,12 +1667,13 @@
       },
       "risks": [
         "Application-level fetch/environment controls are not OS isolation or arbitrary trusted-JS confinement.",
-        "No live held-out model gain, promotion or remote cost exactness claim."
+        "No live held-out model gain, promotion or remote cost exactness claim.",
+        "Unknown auxiliary provider costs are explicitly incomplete; fixture comparisons do not establish empirical model gain or real charges."
       ],
-      "acceptedAt": "2026-11-06T21:50:30.843270+00:00",
+      "acceptedAt": "2026-11-08T08:58:30.909662+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/B30/accepted/20261106T215030348965Z-acceptance.json",
-        "sha256": "502d97750b6a12ce62a4029410bac3ae8f65bd2044597622fb0943d56c30034e"
+        "path": "docs/execution/body-roadmap/evidence/B30/accepted/20261108T085830253963Z-acceptance.json",
+        "sha256": "153ef0fe4b78deb95281a8f2719510cdae5482ac7a49ecc1b1bff4b33c6e9634"
       }
     },
     {
@@ -1537,53 +1784,57 @@
       "prerequisites": [],
       "acceptedPrerequisites": [],
       "sourceContractHashes": {
-        "cli/src/utils/output-outcome.ts": "0a63e14e7f447187599d0fda4c322edcb83694460900f7d547e3cfe26390f8c4",
+        "cli/src/utils/output-outcome.ts": "2d2238fe9b16daff45a6fce0dea09666adba0ee41a7831440afc26acc29bdabd",
         "common/src/tools/params/tool/run-file-change-hooks.ts": "600c821ef9392e5b7bd96a6748d06f7cd32e8c8f4dd1935ca54e730045bdb111",
         "scripts/body-fixtures/diagnostic-outcomes.ts": "34e817f474c786364b596533323d5bdb0162760745588dec635bb8d4f4fc135b",
         "sdk/src/__tests__/diagnostic-delta.test.ts": "1fd6cf93fafc82517db5e183bf6ff87777e99ace7821bdfb9c01c1b4fd972e37",
         "sdk/src/__tests__/file-change-hooks.test.ts": "61f74c55336298a826f7561bce865f46d9e473e3ccb6e951982de46b077c1367",
         "sdk/src/__tests__/language-diagnostics.test.ts": "31dd6282a75b2e6c4caaa47f7fe2be7393bc85c6694335e706da45eadcf44dc2",
-        "sdk/src/__tests__/node-filesystem.test.ts": "f989a42cd7a760cff1821988ce2b4b88c022c59d5d09cc083dcd8949144880a9",
-        "sdk/src/__tests__/run-mutation-dispatch.test.ts": "308e7436fb7340dbfbdc02ac7058a9d4420ae4008c8ea3907334fd706b9b0ffa",
-        "sdk/src/run.ts": "c80be3b62a436b92b851cde37d00ae569b860b33ffee597016e0462715fa7562",
+        "sdk/src/__tests__/node-filesystem.test.ts": "5cbc03e60eb9a04f8e93360f15a9c3e31408cc52e95ea5ca38ad156eed228665",
+        "sdk/src/__tests__/run-mutation-dispatch.test.ts": "3096f04e1c8f184c3e518b7aa63b58f4fefb1f2a3628e577d2b289bb8e45f19c",
+        "sdk/src/run.ts": "b025e8455ea5fd7feb473a2e423941a162527f2ab27d88a64b24f9708c57bbc4",
         "sdk/src/services/diagnostic-baseline.ts": "a4b1a4c3447dfb315b0fae4ebcd2eb12140619a41ce1aa9685d9db82a1c49015",
         "sdk/src/services/diagnostic-delta-runner.ts": "1bcc3577f2c24583811f18fff2e8e84f8cc9db93283974091e45e9835995a7ac",
         "sdk/src/services/diagnostic-delta.ts": "4eda6ef7f38a71c96a596a2f8d99a061f2402f6cc45539a62919b2cf5ec4219f",
         "sdk/src/tools/file-change-hooks.ts": "352b214b2544dc31e4a7d11ed916062276554e80685d3e6dd39cf8984b9a360a",
         "sdk/src/tools/language-diagnostics.ts": "18f40cbf0180b6fbc97b54a67d572be37bceaf5e8faae4fb44182d5f3204b461",
-        "sdk/src/tools/node-filesystem.ts": "1044dad8b2b4d89112aa7648ef62d4210ee9e426aca3f7885b5c1482a114c46f"
+        "sdk/src/tools/node-filesystem.ts": "eb73c817b4f6ae536649e2e567a7293d0b680d3994a574940e98fe4b4734701e"
       },
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": "03a1c562717b1794c898510c694db6d6f5b485d9",
+      "epoch": "b05-r8:cdf15b5ec41b6252f374b52bb1623931f65c0ac2228bd67154583940865917a7",
       "coverageTier": "Real diagnostic child outcomes through delta/hooks, source SDK dispatch, retained baselines and CLI classification",
-      "evidenceManifest": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance/B36/manifest.json",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B36/accepted/20261108T085830253963Z-manifest.json",
       "verification": {
         "independentReviews": [
           {
-            "reviewer": "/root/b03_mutation_evidence",
+            "reviewer": "/root/b05_prerequisite_arch",
             "implementationOwners": [
               "/root/b04_lock_cas",
-              "/root"
+              "/root",
+              "/root/b28_code_native",
+              "/root/b08_b18_evidence_followup",
+              "/root/b05_prerequisite_code"
             ],
-            "scope": "Real fixed diagnostic children \u2192 delta/hooks \u2192 source SDK dispatch/JSON \u2192 CLI classifier, retained source-SDK client baselines and actual Node bounded reads.",
+            "scope": "Real diagnostic child outcomes through delta/hooks, source SDK dispatch, retained baselines and CLI classification",
             "decision": "approve",
             "evidence": {
-              "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/independent-node-review/B36/review.json",
-              "sha256": "6da014174c0d5a3cb5dfc096ca8ea5f67f0890310d2bd6d2fa0aeef4e60a6852"
+              "path": "docs/execution/body-roadmap/evidence/B05/resume-20261108/prerequisite-architecture-review/final-approvals-r8-2/B36/review.json",
+              "sha256": "4c4d90de6ae27b86f70f4f890580bcc5edbf583703feef743389b281361cc395"
             }
           }
         ],
-        "requiredCommandCount": 3
+        "requiredCommandCount": 5
       },
       "risks": [
-        "No native validator, installed ecosystem toolchain or OS/descendant termination graduation.",
-        "Original independent diagnostic evidence remains distinct from fresh integration checks."
+        "Validator programs are injected; no installed language-toolchain or native assurance.",
+        "Direct-child observations do not certify descendant death; that remains B20 scope.",
+        "The historical fixture field toolchain.bun contains process.version; exact Bun1.3.5 executable/hash is authoritative in the raw command envelope."
       ],
-      "acceptedAt": "2026-11-06T23:29:34.769968+00:00",
+      "acceptedAt": "2026-11-08T08:58:30.957848+00:00",
       "acceptanceReceipt": {
-        "path": "docs/execution/body-roadmap/evidence/publication-20261107/post-remote-ci-repair/acceptance/B36/acceptance.json",
-        "sha256": "4d2cd5ca5c5bcd0bb4eb27a26c3ac5a5f957ce458e8cdebbeb3ae20d1cf29aba"
+        "path": "docs/execution/body-roadmap/evidence/B36/accepted/20261108T085830253963Z-acceptance.json",
+        "sha256": "9c752a2283be1bbeb6ddd20accd6e1e871a0f5e59d91974053a5a69f58a1a826"
       }
     },
     {
@@ -1644,5 +1895,5 @@
       "risks": []
     }
   ],
-  "updatedAt": "2026-11-07T00:36:22.196189+00:00"
+  "updatedAt": "2026-11-08T09:32:09.358734+00:00"
 }

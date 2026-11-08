@@ -1,6 +1,8 @@
 import { z } from 'zod/v4'
 
 import { MAX_AGENT_STEPS_DEFAULT } from '../constants/agents'
+import { rawReadBasisV1Schema } from '../util/raw-read-basis'
+import type { RawReadBasisV1 } from '../util/raw-read-basis'
 
 import type { Message } from './messages/codebuff-message'
 import type { ContextArchiveSnapshot } from './context-archive'
@@ -60,7 +62,7 @@ export type EditRereadRequirement = {
 }
 
 /**
- * Whole-file post-edit anchor: hash+bounds are durable; cap.v3 is reminted only
+ * Whole-file post-edit anchor: hashes, raw basis and bounds are durable; cap.v4 is reminted only
  * when the stored issuer matches the current project+run or the stored token
  * still authenticates for that scope. Optional projectId/runId stamp the minting
  * issuer so process restart can remint without a live HMAC (legacy anchors
@@ -71,6 +73,8 @@ export type ConfirmedPostEditAnchor = {
   endLine: number
   contentHash: string
   readCapability: string
+  /** Original authenticated exact-byte authority; missing on legacy anchors. */
+  rawBasis?: RawReadBasisV1
   /** Issuing project identity; optional for legacy session parse. */
   projectId?: string
   /** Issuing run identity; optional for legacy session parse. */
@@ -96,7 +100,8 @@ export const confirmedPostEditAnchorSchema = z
       .string()
       .min(1)
       .max(4096)
-      .regex(/^cap\.v3\./),
+      .regex(/^cap\.v[34]\./),
+    rawBasis: rawReadBasisV1Schema.optional(),
     projectId: z.string().optional(),
     runId: z.string().optional(),
   })
@@ -113,6 +118,7 @@ export const confirmedPostEditAnchorSchema = z
 type AgentStateSecurityMapsView = {
   readAuthorizationsByPath?: unknown
   readAuthorizationHashesByPath?: unknown
+  rawReadAuthorizationHashesByPath?: unknown
   confirmedPostEditAnchorsByPath?: unknown
 }
 
@@ -162,6 +168,7 @@ export function sanitizeAgentStateSecurityMaps<
     AgentState,
     | 'readAuthorizationsByPath'
     | 'readAuthorizationHashesByPath'
+    | 'rawReadAuthorizationHashesByPath'
     | 'confirmedPostEditAnchorsByPath'
   >,
 >(state: T): T {
@@ -176,6 +183,11 @@ export function sanitizeAgentStateSecurityMaps<
       maps.readAuthorizationHashesByPath,
       (value): value is string =>
         typeof value === 'string' && SHA256_CONTENT_HASH_PATTERN.test(value),
+    ),
+    rawReadAuthorizationHashesByPath: sanitizeSecurityMapEntries(
+      maps.rawReadAuthorizationHashesByPath,
+      (value): value is string =>
+        typeof value === 'string' && /^sha256:[a-f0-9]{64}$/.test(value),
     ),
     confirmedPostEditAnchorsByPath: sanitizeSecurityMapEntries(
       maps.confirmedPostEditAnchorsByPath,
@@ -487,9 +499,11 @@ export type AgentState = {
    * content the agent read or most recently wrote successfully.
    */
   readAuthorizationHashesByPath?: Record<string, string>
+  /** Exact whole-file byte hash granted only from verified raw basis or a confirmed write. */
+  rawReadAuthorizationHashesByPath?: Record<string, string>
   /**
    * Durable confirmed whole-file post-edit anchors (hash + bounds + remintable
-   * cap.v3). Hydrated into per-turn FileProcessingState the same way sticky
+   * capabilities). Hydrated into per-turn FileProcessingState the same way sticky
    * hashes are; tokens are reminted only when the stored issuer matches the
    * current project+run or the stored token authenticates for that scope.
    * Cross-project/run restore drops anchors. Optional so old sessions parse
@@ -737,6 +751,7 @@ export function getInitialAgentState(): AgentState {
     contextWindowTokens: undefined,
     readAuthorizationsByPath: {},
     readAuthorizationHashesByPath: {},
+    rawReadAuthorizationHashesByPath: {},
     confirmedPostEditAnchorsByPath: {},
     editRereadRequirementsByPath: {},
     taskMemory: undefined,

@@ -27,6 +27,18 @@
 import * as net from 'node:net'
 
 import z from 'zod/v4'
+import { encodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
+import { captureTextDocument } from '@codebuff/common/util/byte-text'
+import {
+  parseRawReadBasis,
+  rawReadBasisV1Schema,
+} from '@codebuff/common/util/raw-read-basis'
+import type {
+  ReadFilesResultV1,
+  ReadFilesItemV1,
+} from '@codebuff/common/tools/results/filesystem'
+import type { RequestFilesFn } from '@codebuff/common/types/contracts/client'
+import { authenticateReadFilesItem } from '../util/authenticated-read-source'
 
 import type { ConsumeCreditsWithFallbackFn } from '@codebuff/common/types/contracts/billing'
 import type { FetchAgentFromDatabaseFn } from '@codebuff/common/types/contracts/database'
@@ -48,6 +60,10 @@ import {
   isBridgeMarkerShaped,
   isBridgeReply,
   isIncrementalStreamUnsupportedError,
+  stripBridgedReadAuthority,
+  rewriteBridgedRangeHeader,
+  bridgedReadMatchesRequest,
+  type ParentValidatedReadFilesResponse,
   type BridgedFetchParams,
   type BridgedFetchResult,
   type BridgedPromptStreamResult,
@@ -68,6 +84,159 @@ import {
  * the parent is gone — fail closed instead of hanging. */
 const CONNECT_TIMEOUT_MS = 10_000
 
+const parentReadProofSchema = z
+  .object({
+    itemIndex: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+    path: z.string(),
+    selector: z.enum(['file', 'range']),
+    anchor: z
+      .object({
+        startLine: z.number().int().positive(),
+        endLine: z.number().int().positive(),
+        contentHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+        rawBasis: rawReadBasisV1Schema,
+      })
+      .strict(),
+  })
+  .strict()
+
+/** Remint facts only from the owned host response, never from a peer anchor. */
+function restoreBridgedReadFiles(
+  reply: unknown,
+  params: Parameters<RequestFilesFn>[0],
+  bridgeNonce: string | undefined,
+): ReadFilesResultV1 {
+  const response = reply as Partial<ParentValidatedReadFilesResponse> | null
+  const wrapped =
+    response?.kind === 'parent_validated_read_files' &&
+    response.version === 1 &&
+    response.result &&
+    Array.isArray(response.result.results)
+  const data = wrapped ? response.result! : (reply as ReadFilesResultV1)
+  const result = stripBridgedReadAuthority(data)
+  if (!result || !Array.isArray(result.results)) return result
+  // A compact whole source still provides read-only display on old/mismatched
+  // wrappers; displaying text never upgrades its claims to raw authority.
+  result.results = result.results.map((item, index) => {
+    const raw = data.results[index]
+    if (
+      !item ||
+      item.selector !== 'file' ||
+      item.status === 'error' ||
+      raw?.selector !== 'file' ||
+      raw.status === 'error' ||
+      typeof raw.rawSourceContent !== 'string' ||
+      typeof item.content === 'string'
+    )
+      return item
+    try {
+      const displayed = {
+        ...item,
+        content: captureTextDocument(raw.rawSourceContent).observation,
+      }
+      delete displayed.contentOmittedForLength
+      return displayed
+    } catch {
+      return item
+    }
+  })
+  const issuer = params.capabilityIssuer
+  if (
+    !wrapped ||
+    !bridgeNonce ||
+    response.bridgeNonce !== bridgeNonce ||
+    !issuer ||
+    response.issuer?.projectId !== issuer.projectId ||
+    response.issuer.runId !== issuer.runId ||
+    !Array.isArray(response.validatedAnchors) ||
+    Object.keys(response).some(
+      (key) =>
+        ![
+          'kind',
+          'version',
+          'bridgeNonce',
+          'issuer',
+          'result',
+          'validatedAnchors',
+        ].includes(key),
+    )
+  )
+    return result
+  const parsedProofs = parentReadProofSchema
+    .array()
+    .safeParse(response.validatedAnchors)
+  if (!parsedProofs.success) return result
+  const counts = new Map<number, number>()
+  for (const proof of parsedProofs.data)
+    counts.set(proof.itemIndex, (counts.get(proof.itemIndex) ?? 0) + 1)
+  for (const proof of parsedProofs.data) {
+    const index = proof.itemIndex
+    const item = result.results[index]
+    if (
+      !Number.isSafeInteger(index) ||
+      index < 0 ||
+      counts.get(index) !== 1 ||
+      !item ||
+      item.status !== 'ok' ||
+      item.path !== proof.path ||
+      item.selector !== proof.selector ||
+      (item.selector !== 'file' && item.selector !== 'range') ||
+      !item.complete ||
+      item.metadataComplete !== true ||
+      !bridgedReadMatchesRequest(item, params, index) ||
+      !proof.anchor ||
+      Object.keys(proof.anchor).sort().join(',') !==
+        'contentHash,endLine,rawBasis,startLine'
+    )
+      continue
+    try {
+      const rawBasis = parseRawReadBasis(proof.anchor.rawBasis)
+      const readCapability = encodeReadCapabilityToken({
+        startLine: proof.anchor.startLine,
+        endLine: proof.anchor.endLine,
+        hash: proof.anchor.contentHash,
+        rawBasis,
+        scope: { ...issuer, path: item.path },
+      })
+      let candidate: ReadFilesItemV1 = {
+        ...item,
+        editAnchor: { ...proof.anchor, rawBasis, readCapability },
+      }
+      if (candidate.selector === 'file') {
+        const original = data.results[index]
+        if (
+          original.selector !== 'file' ||
+          original.status === 'error' ||
+          typeof original.rawSourceContent !== 'string'
+        )
+          continue
+        const { contentOmittedForLength: _omitted, ...whole } = candidate
+        candidate = {
+          ...whole,
+          rawSourceContent: original.rawSourceContent,
+          content: captureTextDocument(original.rawSourceContent, rawBasis)
+            .observation,
+        }
+      }
+      const verified = authenticateReadFilesItem(candidate, issuer)
+      if (!verified) continue
+      if (
+        candidate.selector === 'range' &&
+        typeof candidate.content === 'string'
+      ) {
+        candidate.content = rewriteBridgedRangeHeader(
+          candidate.content,
+          readCapability,
+        )
+      }
+      result.results[index] = candidate
+    } catch {
+      // Malformed/partial source or proof stays display-only; no remint authority.
+    }
+  }
+  return result
+}
+
 export type ChildBridgeClient = {
   /** Request/response RPC: awaits the parent's reply. */
   call: (method: BridgeMethod, params: unknown) => Promise<unknown>
@@ -82,7 +251,9 @@ export type ChildBridgeClient = {
 /**
  * Connects to the parent bridge socket. Rejects on connect failure/timeout.
  */
-export function connectChildBridge(socketPath: string): Promise<ChildBridgeClient> {
+export function connectChildBridge(
+  socketPath: string,
+): Promise<ChildBridgeClient> {
   return new Promise<ChildBridgeClient>((resolve, reject) => {
     const socket = net.connect({ path: socketPath })
     let settled = false
@@ -90,7 +261,11 @@ export function connectChildBridge(socketPath: string): Promise<ChildBridgeClien
       if (settled) return
       settled = true
       socket.destroy()
-      reject(new BridgeClosedError(`bridge connect timed out after ${CONNECT_TIMEOUT_MS}ms`))
+      reject(
+        new BridgeClosedError(
+          `bridge connect timed out after ${CONNECT_TIMEOUT_MS}ms`,
+        ),
+      )
     }, CONNECT_TIMEOUT_MS)
     socket.once('connect', () => {
       if (settled) return
@@ -149,12 +324,22 @@ function createChildBridgeClient(socket: net.Socket): ChildBridgeClient {
       try {
         parsed = JSON.parse(line)
       } catch {
-        failClosed(new BridgeProtocolError('malformed', 'parent sent a malformed bridge line'))
+        failClosed(
+          new BridgeProtocolError(
+            'malformed',
+            'parent sent a malformed bridge line',
+          ),
+        )
         socket.destroy()
         return
       }
       if (!isBridgeReply(parsed)) {
-        failClosed(new BridgeProtocolError('malformed', 'parent sent a non-reply bridge line'))
+        failClosed(
+          new BridgeProtocolError(
+            'malformed',
+            'parent sent a non-reply bridge line',
+          ),
+        )
         socket.destroy()
         return
       }
@@ -204,7 +389,11 @@ function createChildBridgeClient(socket: net.Socket): ChildBridgeClient {
     failClosed(new BridgeClosedError('bridge socket closed'))
   })
 
-  const writeMessage = (method: BridgeMethod, id: string | null, params: unknown): boolean => {
+  const writeMessage = (
+    method: BridgeMethod,
+    id: string | null,
+    params: unknown,
+  ): boolean => {
     if (closed) return false
     try {
       socket.write(
@@ -284,7 +473,10 @@ const SANITIZE_MAX_DEPTH = 12
  *  - depth-bounded so runaway structures cannot balloon a message past the
  *    16 MiB cap unnoticed (the cap itself is the backstop).
  */
-export function sanitizeBridgeParams(params: unknown, bridgeNonce?: string): unknown {
+export function sanitizeBridgeParams(
+  params: unknown,
+  bridgeNonce?: string,
+): unknown {
   const signalMarker = (): unknown =>
     bridgeNonce === undefined
       ? BRIDGE_SIGNAL_MARKER
@@ -362,6 +554,7 @@ export function toBridgeJsonSchema(
  * boundary (documented per-method below).
  */
 export type BridgedChildDeps = {
+  onExecutionActionStart: import('@codebuff/common/types/contracts/client').OnExecutionActionStart
   promptAiSdkStream: PromptAiSdkStreamFn
   promptAiSdk: PromptAiSdkFn
   promptAiSdkStructured: PromptAiSdkStructuredFn
@@ -404,11 +597,10 @@ export type BridgedChildDeps = {
  *    RE-VALIDATED against the authored schema (the JSON-Schema round trip
  *    drops refinements/transforms — a violating reply is a fail-closed
  *    rejection);
- *  - `requestFiles`: `capabilityIssuer` ({ projectId, runId }) is
- *    JSON-serializable and CROSSES the bridge; see the member comment below
- *    for the child-side cap.v3 re-mint contract (a token is verifiable only
- *    in the process that minted it, so the child re-mints from the parent's
- *    returned contentHash instead of replaying a parent-signed token);
+ *  - `requestFiles`: the host authenticates its original v4 observation and
+ *    owner, then sends basis facts over this owned RPC. The child verifies the
+ *    returned source against those facts and mints under its own local key;
+ *    it never attempts to verify a parent HMAC with the child key;
  *  - `fetch`: string/URL inputs only; the Response is reconstructed from the
  *    flattened status/headers/bodyText (init body must be a string);
  *  - fire-and-forget methods resolve on write acceptance, not on an ack.
@@ -431,9 +623,18 @@ export function buildBridgedChildDeps(
     sanitizeBridgeParams(params, bridgeNonce)
 
   const dropPromptChannelKeys = (
-    params: PromptAiSdkStreamParams | PromptAiSdkParams | PromptAiSdkStructuredParams,
+    params:
+      | PromptAiSdkStreamParams
+      | PromptAiSdkParams
+      | PromptAiSdkStructuredParams,
   ): Record<string, unknown> => {
-    const { sendAction: _sendAction, trackEvent: _trackEvent, logger: _logger, signal: _signal, ...rest } = params as Record<string, unknown>
+    const {
+      sendAction: _sendAction,
+      trackEvent: _trackEvent,
+      logger: _logger,
+      signal: _signal,
+      ...rest
+    } = params as Record<string, unknown>
     return rest
   }
 
@@ -488,7 +689,9 @@ export function buildBridgedChildDeps(
     // re-applies it to the loop's callback locally so a mid-run failover to a
     // different-window model keeps the child's compaction budget accurate.
     const onModelContextResolved = (
-      params as { onModelContextResolved?: (window: number | undefined) => void }
+      params as {
+        onModelContextResolved?: (window: number | undefined) => void
+      }
     ).onModelContextResolved
     const relayWindow = (value: unknown): void => {
       if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
@@ -560,42 +763,43 @@ export function buildBridgedChildDeps(
      * fallback decision comes from {@link isIncrementalStreamUnsupportedError}
      * against the parent's structured missing-method error reply).
      */
-    const legacyFullCollectionPromptAiSdkStream = async function* (): AsyncGenerator<
-      import('@codebuff/common/types/contracts/llm').StreamChunk,
-      PromptResultType<string | null>,
-      void
-    > {
-      const wire = (await client.call(
-        'promptAiSdkStream',
-        wireParams,
-      )) as BridgedPromptStreamResult
-      // Re-apply the relayed route window (defensive: a non-finite/absent
-      // value means "no update", never a reset of the loop's seed).
-      relayWindow(
-        (wire as { contextWindowTokens?: unknown }).contextWindowTokens,
-      )
-      // Re-apply the relayed provider cost BEFORE yielding chunks (defensive:
-      // an absent/non-finite/negative value means "no update", never a
-      // 0-cost call — the loop's cost accounting is credited exactly once).
-      relayCost((wire as { providerCostCents?: unknown }).providerCostCents)
-      // The observational telemetry relay rides the legacy reply too:
-      // re-apply every present member BEFORE yielding chunks.
-      relayTelemetryReply(wire)
-      // A truncated reply means the parent DROPPED chunk bytes to keep the
-      // single stream reply under the 16 MiB per-message cap (see
-      // bridge-protocol.ts BRIDGE_MAX_STREAM_CHUNKS_BYTES). Loud on stderr — a
-      // bounded bridge is never a silent drop.
-      if (wire.truncated) {
-        createBridgeStderrLogger('child-bridge').warn(
-          { deliveredChunks: wire.chunks.length },
-          'bridge stream reply was truncated: the parent dropped chunk bytes past BRIDGE_MAX_STREAM_CHUNKS_BYTES to stay under the 16 MiB per-message cap',
+    const legacyFullCollectionPromptAiSdkStream =
+      async function* (): AsyncGenerator<
+        import('@codebuff/common/types/contracts/llm').StreamChunk,
+        PromptResultType<string | null>,
+        void
+      > {
+        const wire = (await client.call(
+          'promptAiSdkStream',
+          wireParams,
+        )) as BridgedPromptStreamResult
+        // Re-apply the relayed route window (defensive: a non-finite/absent
+        // value means "no update", never a reset of the loop's seed).
+        relayWindow(
+          (wire as { contextWindowTokens?: unknown }).contextWindowTokens,
         )
+        // Re-apply the relayed provider cost BEFORE yielding chunks (defensive:
+        // an absent/non-finite/negative value means "no update", never a
+        // 0-cost call — the loop's cost accounting is credited exactly once).
+        relayCost((wire as { providerCostCents?: unknown }).providerCostCents)
+        // The observational telemetry relay rides the legacy reply too:
+        // re-apply every present member BEFORE yielding chunks.
+        relayTelemetryReply(wire)
+        // A truncated reply means the parent DROPPED chunk bytes to keep the
+        // single stream reply under the 16 MiB per-message cap (see
+        // bridge-protocol.ts BRIDGE_MAX_STREAM_CHUNKS_BYTES). Loud on stderr — a
+        // bounded bridge is never a silent drop.
+        if (wire.truncated) {
+          createBridgeStderrLogger('child-bridge').warn(
+            { deliveredChunks: wire.chunks.length },
+            'bridge stream reply was truncated: the parent dropped chunk bytes past BRIDGE_MAX_STREAM_CHUNKS_BYTES to stay under the 16 MiB per-message cap',
+          )
+        }
+        for (const chunk of wire.chunks) {
+          yield chunk
+        }
+        return wire.result
       }
-      for (const chunk of wire.chunks) {
-        yield chunk
-      }
-      return wire.result
-    }
 
     /**
      * INCREMENTAL path (P2-T8c): one `promptAiSdkStreamStart` call opens a
@@ -764,7 +968,10 @@ export function buildBridgedChildDeps(
       : undefined
     const wire = (await client.call(
       'fetch',
-      callParams({ input: url, ...(wireInit ? { init: wireInit } : {}) } satisfies BridgedFetchParams),
+      callParams({
+        input: url,
+        ...(wireInit ? { init: wireInit } : {}),
+      } satisfies BridgedFetchParams),
     )) as BridgedFetchResult
     return new Response(wire.bodyText, {
       status: wire.status,
@@ -932,30 +1139,19 @@ export function buildBridgedChildDeps(
     sendAction: (params) => {
       client.notify('sendAction', callParams(params))
     },
+    onExecutionActionStart: async (params) => {
+      await client.call('onExecutionActionStart', callParams(params))
+    },
     requestToolCall: (params) =>
       client.call('requestToolCall', callParams(params)) as ReturnType<
         import('@codebuff/common/types/contracts/client').RequestToolCallFn
       >,
-    requestFiles: (params) => {
-      // `capabilityIssuer` ({ projectId, runId }) is JSON-serializable and
-      // CROSSES the bridge (compatibility-reviewer:
-      // child-minted-cap-v3-unverifiable-parent-side): the parent's real
-      // requestFiles mints cap.v3 editAnchors — contentHash + line range over
-      // the content it actually read — for every COMPLETE read, and the
-      // child's read_files handler re-mints that anchor into a child-local
-      // token with the CHILD's own in-process HMAC key. A cap.v3 token is
-      // verifiable only in the process that minted it, so this forwarding —
-      // not a replayable parent-signed token — is what makes
-      // capability-bearing edits (str_replace / replace_range /
-      // rewrite_symbol / edit_transaction) work in a flag-on supervised
-      // child instead of looping on 'fresh_read_required' despite fresh
-      // reads. (The parent-signed token itself never reaches a child
-      // consumer: the read_files handler overwrites editAnchor with its own
-      // re-mint, or strips it entirely for incomplete reads.)
-      return client.call('requestFiles', callParams(params)) as ReturnType<
-        import('@codebuff/common/types/contracts/client').RequestFilesFn
-      >
-    },
+    requestFiles: async (params) =>
+      restoreBridgedReadFiles(
+        await client.call('requestFiles', callParams(params)),
+        params,
+        bridgeNonce,
+      ),
     requestOptionalFile: (params) =>
       client.call('requestOptionalFile', callParams(params)) as ReturnType<
         import('@codebuff/common/types/contracts/client').RequestOptionalFileFn
@@ -979,20 +1175,20 @@ export function buildBridgedChildDeps(
         import('@codebuff/common/types/contracts/database').StartAgentRunFn
       >,
     finishAgentRun: (params) =>
-      client
-        .call('finishAgentRun', callParams(params))
-        .then(() => undefined),
+      client.call('finishAgentRun', callParams(params)).then(() => undefined),
     addAgentStep: (params) =>
       client.call('addAgentStep', callParams(params)) as ReturnType<
         import('@codebuff/common/types/contracts/database').AddAgentStepFn
       >,
     fetchAgentFromDatabase: (params) =>
-      client.call('fetchAgentFromDatabase', callParams(params)) as ReturnType<
-        FetchAgentFromDatabaseFn
-      >,
+      client.call(
+        'fetchAgentFromDatabase',
+        callParams(params),
+      ) as ReturnType<FetchAgentFromDatabaseFn>,
     consumeCreditsWithFallback: (params) =>
-      client.call('consumeCreditsWithFallback', callParams(params)) as ReturnType<
-        ConsumeCreditsWithFallbackFn
-      >,
+      client.call(
+        'consumeCreditsWithFallback',
+        callParams(params),
+      ) as ReturnType<ConsumeCreditsWithFallbackFn>,
   }
 }

@@ -11,6 +11,7 @@ import {
   mock,
   spyOn,
 } from 'bun:test'
+import { z } from 'zod/v4'
 
 import { mockFileContext } from './test-utils'
 import * as runAgentStep from '../run-agent-step'
@@ -185,9 +186,7 @@ describe('spawn settle fault injection (M2-T1)', () => {
     displayName: `Mock ${id}`,
     outputMode: 'last_message' as const,
     inputSchema: {
-      prompt: {
-        safeParse: () => ({ success: true }),
-      } as unknown as AgentTemplate['inputSchema']['prompt'],
+      prompt: z.string(),
     },
     spawnerPrompt: '',
     model: '',

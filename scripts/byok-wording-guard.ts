@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { HISTORICAL_SOURCE_COPY_PREFIXES } from './lib/historical-source-copies'
 
 export type WordingViolation = {
   path: string
@@ -39,8 +40,7 @@ const SKIP_DIRECTORIES = new Set([
 const SKIP_PATH_PREFIXES = [
   '.agents/sessions/',
   '.omx/',
-  // Immutable partial copies are evidence, not live repository documentation.
-  'docs/execution/body-roadmap/evidence/B30/independent-review/source-snapshot/',
+  ...HISTORICAL_SOURCE_COPY_PREFIXES,
   'evals/test-repos/',
   'packages/billing/',
   'packages/bigquery/',

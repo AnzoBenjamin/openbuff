@@ -40,6 +40,8 @@ import {
 } from './chatgpt-backend-fetch'
 import { createOpenCodeGoResponsesFetch } from './opencode-go-responses-fetch'
 import { getSystemProcessEnv } from '../env'
+import { assertProviderHostContext, getCapturedProviderConfig } from '../host-config'
+import type { ProviderHostContext } from '../host-config'
 import { resolveModelsToTry } from './failover'
 
 import type {
@@ -139,6 +141,8 @@ export function isOpenCodeGoResponsesModel(providerModel: string): boolean {
  * Parameters for requesting a model.
  */
 export interface ModelRequestParams {
+  /** SDK host dependency; never sourced from a model or wire payload. */
+  providerContext?: ProviderHostContext
   /** Historical Codebuff API key slot. Openbuff local provider routing does not require it. */
   apiKey: string
   /** Model ID requested by an agent. Can be remapped by openbuff.json. If omitted, resolved entirely from openbuff.json. */
@@ -235,7 +239,8 @@ export async function getModelForRequest(
 ): Promise<ModelResult> {
   const { model, agentId, skipChatGptOAuth, preferModelParam } = params
   const sessionId = params.sessionId
-  const loadedProviderConfig = loadProviderConfigSync()
+  if (params.providerContext) assertProviderHostContext(params.providerContext)
+  const loadedProviderConfig = params.providerContext ? getCapturedProviderConfig(params.providerContext.snapshot) : loadProviderConfigSync()
   const effectiveAgentModelConfig = resolveConfiguredAgentModelConfig({
     agentId,
     model,
@@ -298,6 +303,7 @@ export async function getModelForRequest(
     ? resolveConfiguredProviderModel({
         model: effectiveModel,
         loadedConfig: loadedProviderConfig,
+        env: params.providerContext?.credentialEnvironment,
       })
     : undefined
   const resolvedCapabilities = configuredProviderModel
@@ -342,7 +348,7 @@ export async function getModelForRequest(
       }
     }
     if (configuredProviderModel.provider.type === 'chatgpt-oauth') {
-      const chatGptOAuthCredentials = await getValidChatGptOAuthCredentials()
+      const chatGptOAuthCredentials = await (params.providerContext ? params.providerContext.credentials.getValidChatGptOAuthCredentials() : getValidChatGptOAuthCredentials())
       if (!chatGptOAuthCredentials) {
         throw new Error(
           `ChatGPT/Codex OAuth credentials unavailable for provider '${configuredProviderModel.providerId}'. Please reconnect with /connect.`,
@@ -398,6 +404,7 @@ export async function getModelForRequest(
   const responsesFallback = resolveOpenCodeGoResponsesFallback({
     effectiveModel,
     loadedConfig: loadedProviderConfig,
+    credentialEnvironment: params.providerContext?.credentialEnvironment,
   })
   if (responsesFallback) {
     return {
@@ -428,7 +435,7 @@ export async function getModelForRequest(
         'ChatGPT rate limit reached. Please wait a few minutes and try again.',
       )
     } else {
-      const chatGptOAuthCredentials = await getValidChatGptOAuthCredentials()
+      const chatGptOAuthCredentials = await (params.providerContext ? params.providerContext.credentials.getValidChatGptOAuthCredentials() : getValidChatGptOAuthCredentials())
 
       if (chatGptOAuthCredentials) {
         return {
@@ -471,8 +478,9 @@ export async function getModelForRequest(
 export function resolveModelContextWindow(params: {
   agentId?: string
   model?: string
+  loadedConfig?: LoadedProviderConfig
 }): number | undefined {
-  const loadedConfig = loadProviderConfigSync()
+  const loadedConfig = params.loadedConfig ?? loadProviderConfigSync()
   const effectiveModel = resolveConfiguredAgentModelConfig({
     agentId: params.agentId,
     model: params.model,
@@ -508,8 +516,9 @@ export function resolveModelContextWindow(params: {
 export function resolveModelContextWindows(params: {
   agentId?: string
   model?: string
+  loadedConfig?: LoadedProviderConfig
 }): { primary?: number; failoverFloor?: number } {
-  const loadedConfig = loadProviderConfigSync()
+  const loadedConfig = params.loadedConfig ?? loadProviderConfigSync()
   const effectiveModel = resolveConfiguredAgentModelConfig({
     agentId: params.agentId,
     model: params.model,
@@ -792,6 +801,7 @@ function createConfiguredOpenCodeGoResponsesModel(
 function resolveOpenCodeGoResponsesFallback(params: {
   effectiveModel: string
   loadedConfig: LoadedProviderConfig
+  credentialEnvironment?: Readonly<Record<string, string | undefined>>
 }): ResolvedProviderModel | undefined {
   const { effectiveModel, loadedConfig } = params
   const providerModel = effectiveModel.includes('/')
@@ -818,7 +828,7 @@ function resolveOpenCodeGoResponsesFallback(params: {
   if (provider.type !== 'openai-compatible') {
     return undefined
   }
-  const env = getSystemProcessEnv()
+  const env = params.credentialEnvironment ?? getSystemProcessEnv()
   return {
     providerId,
     provider,

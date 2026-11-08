@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'bun:test'
 import { applyPatch } from 'diff'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+  spliceDocumentRange,
+} from '@codebuff/common/util/byte-text'
+import {
+  getLineCoordinates,
+  getRangeSlice,
+} from '@codebuff/common/util/line-coordinates'
 
 import { processEditTransaction } from '../process-edit-transaction'
 import {
@@ -26,6 +35,8 @@ function readAuthorization(params: {
   startLine: number
   endLine: number
   content: string
+  sourceContent: string
+  basisScope?: 'whole' | 'lines'
   issuer?: { projectId: string; runId: string }
 }) {
   const {
@@ -33,9 +44,23 @@ function readAuthorization(params: {
     startLine,
     endLine,
     content,
+    sourceContent,
+    basisScope = 'lines',
     issuer = defaultReadCapabilityIssuer,
   } = params
-  const capabilityHash = getContentHash(content)
+  const document = captureTextDocument(
+    basisScope === 'whole'
+      ? sourceContent
+      : spliceDocumentRange(
+          captureTextDocument(sourceContent),
+          startLine,
+          endLine,
+          content,
+        ),
+  )
+  const capabilityHash = getContentHash(
+    getRangeSlice(getLineCoordinates(document.observation), startLine, endLine),
+  )
   return {
     capabilityStartLine: startLine,
     capabilityEndLine: endLine,
@@ -45,6 +70,7 @@ function readAuthorization(params: {
       endLine,
       hash: capabilityHash,
       scope: { ...issuer, path },
+      rawBasis: getRawReadBasis(document, startLine, endLine, basisScope),
     }),
   }
 }
@@ -54,6 +80,7 @@ function basedOnRead(params: {
   startLine: number
   endLine: number
   content: string
+  sourceContent: string
 }): string {
   return readAuthorization(params).readCapability
 }
@@ -62,17 +89,44 @@ describe('processEditTransaction', () => {
   it('reports original snapshot ranges after a preceding structured edit', async () => {
     const path = 'src/helper.ts'
     const result = await processEditTransaction({
-      initialContentByPath: new Map([[path, 'const header = 1;\nconst targetValue = 123;\nconst tail = 3;\n']]),
+      initialContentByPath: new Map([
+        [
+          path,
+          'const header = 1;\nconst targetValue = 123;\nconst tail = 3;\n',
+        ],
+      ]),
       logger,
       edits: [
-        { type: 'structured', path, operation: { kind: 'insert_text', position: { line: 1, column: 1 }, text: '// staged\n' } },
-        { type: 'str_replace', path, replacements: [{ oldString: 'const targetValue = 999;', newString: 'const targetValue = 456;', allowMultiple: false }] },
+        {
+          type: 'structured',
+          path,
+          operation: {
+            kind: 'insert_text',
+            position: { line: 1, column: 1 },
+            text: '// staged\n',
+          },
+        },
+        {
+          type: 'str_replace',
+          path,
+          replacements: [
+            {
+              oldString: 'const targetValue = 999;',
+              newString: 'const targetValue = 456;',
+              allowMultiple: false,
+            },
+          ],
+        },
       ],
     })
     expect('error' in result).toBe(true)
     if ('error' in result) {
-      expect(result.failures[0]?.errorMessage).toContain('unchanged file snapshot')
-      expect(result.failures[0]?.errorMessage).toContain('startLine: 2, endLine: 2')
+      expect(result.failures[0]?.errorMessage).toContain(
+        'unchanged file snapshot',
+      )
+      expect(result.failures[0]?.errorMessage).toContain(
+        'startLine: 2, endLine: 2',
+      )
     }
   })
 
@@ -971,6 +1025,7 @@ describe('processEditTransaction', () => {
               newString: 'const a = 1\nconst inserted = true',
               allowMultiple: false,
               basedOnRead: basedOnRead({
+                sourceContent: initialContent,
                 path: 'src/helper.ts',
                 startLine: 1,
                 endLine: 1,
@@ -988,6 +1043,7 @@ describe('processEditTransaction', () => {
               newString: 'const b = 2',
               allowMultiple: false,
               basedOnRead: basedOnRead({
+                sourceContent: initialContent,
                 path: 'src/helper.ts',
                 startLine: 2,
                 endLine: 2,
@@ -1025,6 +1081,7 @@ describe('processEditTransaction', () => {
               newString: 'const a = 1\nconst inserted = true',
               allowMultiple: false,
               basedOnRead: basedOnRead({
+                sourceContent: initialContent,
                 path: 'src/helper.ts',
                 startLine: 1,
                 endLine: 1,
@@ -1043,6 +1100,7 @@ describe('processEditTransaction', () => {
               newString: 'const b = 2',
               allowMultiple: false,
               basedOnRead: basedOnRead({
+                sourceContent: initialContent,
                 path: 'src/helper.ts',
                 startLine: 2,
                 endLine: 2,
@@ -1263,6 +1321,7 @@ describe('processEditTransaction', () => {
           startLine: 3,
           endLine: 3,
           ...readAuthorization({
+            sourceContent: initialContent,
             path: 'src/helper.ts',
             startLine: 3,
             endLine: 3,
@@ -1371,6 +1430,7 @@ describe('processEditTransaction', () => {
           startLine: 1,
           endLine: 1,
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 1,
             endLine: 1,
@@ -1385,6 +1445,7 @@ describe('processEditTransaction', () => {
           startLine: 3,
           endLine: 3,
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 3,
             endLine: 3,
@@ -1415,6 +1476,7 @@ describe('processEditTransaction', () => {
           startLine: 1,
           endLine: 2,
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 1,
             endLine: 2,
@@ -1428,6 +1490,7 @@ describe('processEditTransaction', () => {
           startLine: 2,
           endLine: 3,
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 2,
             endLine: 3,
@@ -1462,6 +1525,7 @@ describe('processEditTransaction', () => {
           startLine: 2,
           endLine: 2,
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 2,
             endLine: 2,
@@ -1498,6 +1562,7 @@ describe('processEditTransaction', () => {
           startLine: 3,
           endLine: 2,
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 3,
             endLine: 3,
@@ -1575,11 +1640,13 @@ describe('processEditTransaction', () => {
   })
 
   it('applies a whole-file readCapability to a contained sub-range', async () => {
-    // A whole-file cap.v3 authorizes a narrower target while its authenticated
+    // A whole-file cap.v4 authorizes a narrower target while its authenticated
     // bounds and hash remain the authorization metadata for preflight.
     const initial = 'export const value = 1\nexport const other = 2\n'
     const issuer = { projectId: '/project', runId: 'run-wholefile-subrange' }
     const wholeFileAuthorization = readAuthorization({
+      sourceContent: initial,
+      basisScope: 'whole',
       path: 'src/helper.ts',
       startLine: 1,
       endLine: initial.split('\n').length,
@@ -1624,6 +1691,8 @@ describe('processEditTransaction', () => {
     const currentInitial = 'export const value = 99\nexport const other = 2\n'
     const issuer = { projectId: '/project', runId: 'run-wholefile-stale' }
     const staleWholeFileAuthorization = readAuthorization({
+      sourceContent: staleInitial,
+      basisScope: 'whole',
       path: 'src/helper.ts',
       startLine: 1,
       endLine: staleInitial.split('\n').length,
@@ -1680,6 +1749,7 @@ describe('processEditTransaction', () => {
     const currentInitial = 'export const value = 99\nexport const other = 2\n'
     const issuer = { projectId: '/project', runId: 'run-range-stale' }
     const staleRangeAuthorization = readAuthorization({
+      sourceContent: currentInitial,
       path: 'src/helper.ts',
       startLine: 1,
       endLine: 1,
@@ -1735,6 +1805,7 @@ describe('processEditTransaction', () => {
           type: 'replace_range',
           path: 'src/file.ts',
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 1,
             endLine: 3,
@@ -1769,6 +1840,7 @@ describe('processEditTransaction', () => {
           type: 'replace_range',
           path: 'src/file.ts',
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 1,
             endLine: 2,
@@ -1783,6 +1855,7 @@ describe('processEditTransaction', () => {
           type: 'replace_range',
           path: 'src/file.ts',
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 2,
             endLine: 3,
@@ -1812,6 +1885,7 @@ describe('processEditTransaction', () => {
     const path = 'src/file.ts'
     const initial = '/** doc */\nexport function greet() {\n  return 1\n}\n'
     const readCapability = basedOnRead({
+      sourceContent: initial,
       path,
       startLine: 1,
       endLine: 4,
@@ -1846,12 +1920,14 @@ describe('processEditTransaction', () => {
     const initial = '/** doc */\nexport function greet() {\n  return 1\n}\n'
     const attempts = [
       basedOnRead({
+        sourceContent: initial,
         path: 'src/other.ts',
         startLine: 1,
         endLine: 4,
         content: '/** doc */\nexport function greet() {\n  return 1\n}',
       }),
       readAuthorization({
+        sourceContent: initial,
         path,
         startLine: 1,
         endLine: 4,
@@ -1859,18 +1935,21 @@ describe('processEditTransaction', () => {
         issuer: { projectId: '/project', runId: 'other-run' },
       }).readCapability,
       basedOnRead({
+        sourceContent: initial,
         path,
         startLine: 1,
         endLine: 5,
         content: initial,
       }),
       basedOnRead({
+        sourceContent: initial,
         path,
         startLine: 2,
         endLine: 4,
         content: 'export function greet() {\n  return 1\n}',
       }),
       basedOnRead({
+        sourceContent: initial,
         path,
         startLine: 1,
         endLine: 4,
@@ -1912,6 +1991,7 @@ describe('processEditTransaction', () => {
           startLine: 1,
           endLine: 1,
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 1,
             endLine: 1,
@@ -1953,6 +2033,7 @@ describe('processEditTransaction', () => {
           type: 'replace_range',
           path: 'src/file.ts',
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 3,
             endLine: 3,
@@ -1990,6 +2071,7 @@ describe('processEditTransaction', () => {
           type: 'replace_range',
           path: 'src/file.ts',
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 1,
             endLine: 5,
@@ -2021,6 +2103,7 @@ describe('processEditTransaction', () => {
           type: 'replace_range',
           path: 'src/file.ts',
           ...readAuthorization({
+            sourceContent: initial,
             path: 'src/file.ts',
             startLine: 1,
             endLine: 5,
@@ -2065,6 +2148,7 @@ describe('processEditTransaction', () => {
               newString: 'export const value = 2',
               allowMultiple: false,
               basedOnRead: basedOnRead({
+                sourceContent: initial,
                 path: 'src/other.ts',
                 startLine: 1,
                 endLine: 1,

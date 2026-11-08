@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { isMcpToolResultEnvelope } from '../mcp/result'
 
 import {
   fileMutationResultV1Schema,
@@ -72,6 +73,11 @@ export function classifyActionOutput(
 
   const results = records
     .map((value): ActionResult | undefined => {
+      if (isMcpToolResultEnvelope(value)) {
+        return value.isError === true
+          ? failed('mcp_tool_error', 'The MCP tool reported an error result.')
+          : undefined
+      }
       if (value.kind === 'file_mutation_result') {
         const parsed = fileMutationResultV1Schema.safeParse(value)
         if (!parsed.success)

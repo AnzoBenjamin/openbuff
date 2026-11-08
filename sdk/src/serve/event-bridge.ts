@@ -9,6 +9,10 @@ import {
   isFileMutationResultV1,
 } from '@codebuff/common/tools/results/filesystem'
 import { classifyActionOutput } from '@codebuff/common/util/action-outcomes'
+import {
+  isMcpToolResultEnvelope,
+  projectMcpToolResultForDisplay,
+} from '@codebuff/common/mcp/result'
 import { runFailureMessage } from '@codebuff/common/types/run-outcome'
 import type {
   ActionOutcome,
@@ -617,7 +621,12 @@ function jsonValuesOf(output: ToolResultOutput[]): unknown[] {
   const values: unknown[] = []
   for (const part of output) {
     // `media` parts carry raw output bytes; they are never emitted (§12.1).
-    if (part.type === 'json') values.push(part.value)
+    if (part.type === 'json')
+      values.push(
+        isMcpToolResultEnvelope(part.value)
+          ? projectMcpToolResultForDisplay(part.value)
+          : part.value,
+      )
   }
   return values
 }
@@ -793,6 +802,9 @@ export function printModeToSessionUpdates(
       let canonicalMutation: FileMutationResultV1 | undefined
       for (const value of values) {
         if (!isRecord(value)) continue
+        // The classifier consumed the MCP envelope's authoritative isError.
+        // Its other fields are peer data, never native error/mutation receipts.
+        if (isMcpToolResultEnvelope(value)) continue
         const errorMessage = value.errorMessage
         if (typeof errorMessage === 'string' && errorMessage.length > 0) {
           failed = true

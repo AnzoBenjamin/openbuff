@@ -8,6 +8,9 @@ import type {
   RequestToolCallFn,
   SendActionFn,
   SendSubagentChunkFn,
+  OnExecutionActionStart,
+  ToolExecutionIdentity,
+  ExecutionHostOperationOrigin,
 } from './client'
 import type {
   AddAgentStepFn,
@@ -149,6 +152,9 @@ export interface JournalReader {
  * to a temp file the child entrypoint reads from argv.
  */
 export type SupervisedSpawnRequest = {
+  /** Original parent B02 attempt, captured before supervised setup starts. */
+  executionIdentity?: ToolExecutionIdentity
+  executionHostOperation?: ExecutionHostOperationOrigin
   agentType: string
   prompt: string | undefined
   spawnParams: Record<string, unknown> | undefined
@@ -264,6 +270,8 @@ export type SettledSubagentResult = {
     | 'truncated'
     | 'crashed'
   crashReason?: string
+  /** Host admission refusal is distinct from a child process crash. */
+  executionRefusal?: import('./execution-context').Refusal
   /** A validated `AgentReceipt` envelope; present for ok/truncated. */
   receipt?: unknown
   schemaError?: string
@@ -326,6 +334,7 @@ export interface SupervisedRestartPolicy {
 
 /** Shared dependencies */
 export type AgentRuntimeDeps = {
+  onExecutionActionStart?: OnExecutionActionStart
   // Environment
   clientEnv: ClientEnv
   ciEnv: CiEnv
@@ -420,6 +429,10 @@ export type AgentRuntimeDeps = {
 
 /** Per-run dependencies */
 export type AgentRuntimeScopedDeps = {
+  /** Current runtime-owned attempt; never constructed from a model tool payload. */
+  executionIdentity?: ToolExecutionIdentity
+  /** Explicit infrastructure child origin; ordinary tool attempts clear it. */
+  executionHostOperation?: ExecutionHostOperationOrigin
   // Client (WebSocket)
   handleStepsLogChunk: HandleStepsLogChunkFn
   requestToolCall: RequestToolCallFn

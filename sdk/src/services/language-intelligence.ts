@@ -7,13 +7,17 @@ import {
   SUPPORTED_LANGUAGE_IDS,
   type SupportedLanguageId,
 } from '@codebuff/common/util/language-capabilities'
-import { resolveProjectPathForFileSystemRead } from '@codebuff/common/util/project-path-containment'
+import { resolveProjectPathForFileSystemRead, type HostReadPolicy } from '@codebuff/common/util/project-path-containment'
 
 import {
   createLspMultiplexer,
   LspServerError,
   LspServerUnavailableError,
+  LspExecutionError,
+  type LspResourceFactory,
+  type LspRequestContext,
 } from './lsp-multiplexer'
+import { observeNodeChild } from './toolchain-execution'
 import { mapWithConcurrency } from '../tools/concurrency'
 import { LRUCache } from '@codebuff/common/util/lru-cache'
 
@@ -66,20 +70,20 @@ export type LanguageIntelligenceService = {
     path: string
     line: number
     character: number
-  }): Promise<CodebuffToolOutput<'go_to_definition'>>
+  }, executionContext?: LspRequestContext): Promise<CodebuffToolOutput<'go_to_definition'>>
   findReferences(params: {
     path: string
     line: number
     character: number
-  }): Promise<CodebuffToolOutput<'find_references'>>
+  }, executionContext?: LspRequestContext): Promise<CodebuffToolOutput<'find_references'>>
   hoverType(params: {
     path: string
     line: number
     character: number
-  }): Promise<CodebuffToolOutput<'hover_type'>>
+  }, executionContext?: LspRequestContext): Promise<CodebuffToolOutput<'hover_type'>>
   workspaceSymbol(params: {
     query: string
-  }): Promise<CodebuffToolOutput<'workspace_symbol'>>
+  }, executionContext?: LspRequestContext): Promise<CodebuffToolOutput<'workspace_symbol'>>
   /**
    * P4-T2 (rename_symbol): prepareRename-then-rename through the language
    * server. The 1-based `line` is shifted to the 0-based LSP position HERE
@@ -95,7 +99,7 @@ export type LanguageIntelligenceService = {
     line: number
     character: number
     new_name: string
-  }): Promise<Array<{ type: 'json'; value: RenameCodeActionResult }>>
+  }, executionContext?: LspRequestContext): Promise<Array<{ type: 'json'; value: RenameCodeActionResult }>>
   /**
    * P4-T2 (code_action, v1): `source.organizeImports` only. Any other kind
    * is an honest typed unavailable, not a silent no-op. Same splice-on-disk
@@ -106,7 +110,7 @@ export type LanguageIntelligenceService = {
     line: number
     character: number
     kind: string
-  }): Promise<Array<{ type: 'json'; value: RenameCodeActionResult }>>
+  }, executionContext?: LspRequestContext): Promise<Array<{ type: 'json'; value: RenameCodeActionResult }>>
   /**
    * P4-T2 (extract_symbol): extract the symbol at a file position into a NEW
    * file. The destination gate is fail-closed: a server that offers only an
@@ -128,7 +132,7 @@ export type LanguageIntelligenceService = {
     character: number
     destination_path: string
     symbol_name: string
-  }): Promise<Array<{ type: 'json'; value: RenameCodeActionResult }>>
+  }, executionContext?: LspRequestContext): Promise<Array<{ type: 'json'; value: RenameCodeActionResult }>>
   /**
    * P3 audit fix (C): push committed file contents into any already-running
    * language server so post-edit LSP answers are not stale. Bounded (32 paths
@@ -145,6 +149,7 @@ export type LanguageIntelligenceService = {
   syncMutatedFiles(
     paths: string[],
     opts?: { closedPaths?: string[] },
+    executionContext?: LspRequestContext,
   ): Promise<void>
   dispose(): Promise<void>
 }
@@ -162,8 +167,10 @@ function toUnavailable(error: LspServerUnavailableError): UnavailableResult {
   }
 }
 
-function toErrorMessage(error: LspServerError): { errorMessage: string } {
-  return { errorMessage: `Language server error (${error.reason}): ${error.message}` }
+function toErrorMessage(error: LspServerError): { errorMessage: string; executionRefusal?: LspExecutionError['refusal'] } {
+  return { errorMessage: `Language server error (${error.reason}): ${error.message}`,
+    ...(error instanceof LspExecutionError ? { executionRefusal: error.refusal } : {}),
+  }
 }
 
 function uriToPath(uri: string): string {
@@ -298,6 +305,7 @@ const NODE_PROMISES_FS: CodebuffFileSystem = Object.freeze(
  * it is opened.
  */
 type FileReadContext = {
+  readPolicy?: HostReadPolicy
   fs: CodebuffFileSystem
   cwd: string
 }
@@ -310,12 +318,13 @@ type FileReadContext = {
  */
 async function resolveSplicePath(
   projectPath: string,
-  { fs, cwd }: FileReadContext,
+  { fs, cwd, readPolicy }: FileReadContext,
 ): Promise<string | null> {
   const contained = await resolveProjectPathForFileSystemRead(
     cwd,
     projectPath,
     fs,
+    readPolicy,
   )
   return contained?.fullPath ?? null
 }
@@ -563,6 +572,8 @@ function toLspChildHandle(child: ChildProcess): LspChildHandle {
 }
 
 export type LanguageIntelligenceOptions = {
+  resourceFactory?: LspResourceFactory
+  readPolicy?: HostReadPolicy
   cwd: string
   /** Required to lazily build the real multiplexer; unused when `multiplexer` is injected. */
   spawn?: CodebuffSpawn
@@ -587,6 +598,7 @@ export function createLanguageIntelligence(
   const readContext: FileReadContext = {
     fs: options.fs ?? NODE_PROMISES_FS,
     cwd: options.cwd,
+    readPolicy: options.readPolicy,
   }
   let multiplexer: LspMultiplexer | undefined = options.multiplexer
   let built = options.multiplexer !== undefined
@@ -610,9 +622,18 @@ export function createLanguageIntelligence(
         )
       }
       multiplexer = createLspMultiplexer({
-        spawner: (spec): LspChildHandle => {
-          const [command, ...args] = spec.argv
-          return toLspChildHandle(spawn(command, args, { cwd: spec.cwd }))
+        resourceFactory: options.resourceFactory,
+        spawner: (_spec, admitted): LspChildHandle => {
+          const dispatched = admitted.launch.dispatchNow(admitted.permit, (input, observer) => {
+            const child = spawn(input.executable, input.argv, {
+              cwd: input.cwd, env: input.env, signal: input.resourceSignal,
+              stdio: ['pipe', 'pipe', 'pipe'],
+            })
+            observeNodeChild(child, observer)
+            return child
+          })
+          if (!dispatched.ok) throw new LspExecutionError(dispatched)
+          return toLspChildHandle(dispatched.value.handle)
         },
         // P4-T2 (real-server seam): strict servers refuse document queries
         // for a file they never received via didOpen, so the service supplies
@@ -658,12 +679,12 @@ export function createLanguageIntelligence(
   }
 
   return {
-    async goToDefinition(params) {
+    async goToDefinition(params, executionContext) {
       const result = await runQuery((mux) =>
         mux.definition({
           filePath: path.resolve(options.cwd, params.path),
           position: toLspPosition(params.line, params.character),
-        }),
+        }, executionContext),
       )
       if (result !== null && ('unavailable' in result || 'errorMessage' in result)) {
         return [{ type: 'json', value: result }]
@@ -671,12 +692,12 @@ export function createLanguageIntelligence(
       return [{ type: 'json', value: { locations: toStructuredLocations(result) } }]
     },
 
-    async findReferences(params) {
+    async findReferences(params, executionContext) {
       const result = await runQuery((mux) =>
         mux.references({
           filePath: path.resolve(options.cwd, params.path),
           position: toLspPosition(params.line, params.character),
-        }),
+        }, executionContext),
       )
       if (result !== null && ('unavailable' in result || 'errorMessage' in result)) {
         return [{ type: 'json', value: result }]
@@ -684,12 +705,12 @@ export function createLanguageIntelligence(
       return [{ type: 'json', value: { locations: toStructuredLocations(result) } }]
     },
 
-    async hoverType(params) {
+    async hoverType(params, executionContext) {
       const result = await runQuery((mux) =>
         mux.hover({
           filePath: path.resolve(options.cwd, params.path),
           position: toLspPosition(params.line, params.character),
-        }),
+        }, executionContext),
       )
       if (result !== null && ('unavailable' in result || 'errorMessage' in result)) {
         return [{ type: 'json', value: result }]
@@ -719,8 +740,8 @@ export function createLanguageIntelligence(
       ]
     },
 
-    async workspaceSymbol(params) {
-      const result = await runQuery((mux) => mux.workspaceSymbol(params.query))
+    async workspaceSymbol(params, executionContext) {
+      const result = await runQuery((mux) => mux.workspaceSymbol(params.query, undefined, executionContext))
       if (result !== null && ('unavailable' in result || 'errorMessage' in result)) {
         return [{ type: 'json', value: result }]
       }
@@ -733,7 +754,7 @@ export function createLanguageIntelligence(
       return [{ type: 'json', value: { symbols } }]
     },
 
-    async renameSymbol(params) {
+    async renameSymbol(params, executionContext) {
       const result = await runQuery(async (mux) => {
         const filePath = path.resolve(options.cwd, params.path)
         const position = toLspPosition(params.line, params.character)
@@ -741,7 +762,7 @@ export function createLanguageIntelligence(
         // null (not an identifier, out of range, or a server without rename
         // support) must surface as an honest unavailable, never a blind
         // splice.
-        const prepared = await mux.prepareRenameParams({ filePath, position })
+        const prepared = await mux.prepareRenameParams({ filePath, position }, executionContext)
         if (prepared === null) {
           throw new LspServerUnavailableError(
             'the language server reports this position is not renameable.',
@@ -753,7 +774,7 @@ export function createLanguageIntelligence(
             filePath,
             position,
             newName: params.new_name,
-          }),
+          }, executionContext),
         }
       })
       if ('unavailable' in result || 'errorMessage' in result) {
@@ -771,7 +792,7 @@ export function createLanguageIntelligence(
       ]
     },
 
-    async codeAction(params) {
+    async codeAction(params, executionContext) {
       const result = await runQuery(async (mux) => {
         // v1 gate: anything but organize imports is an honest unavailable so
         // the model never mistakes an unsupported kind for a completed edit.
@@ -787,7 +808,7 @@ export function createLanguageIntelligence(
           filePath,
           position,
           only: [ORGANIZE_IMPORTS_KIND],
-        })
+        }, executionContext)
         // First edit-carrying action wins; command-only actions are skipped
         // upstream (never resolved via textDocument/codeAction round-trips).
         const winner = actions.find(
@@ -816,7 +837,7 @@ export function createLanguageIntelligence(
       ]
     },
 
-    async extractSymbol(params) {
+    async extractSymbol(params, executionContext) {
       const result = await runQuery(async (mux) => {
         const filePath = path.resolve(options.cwd, params.path)
         const position = toLspPosition(params.line, params.character)
@@ -825,7 +846,7 @@ export function createLanguageIntelligence(
         // match nothing. Selection is heuristic and documented: prefer an
         // extract-titled action carrying edits or a command, then any
         // edit-carrying action, then any command-carrying action.
-        const actions = await mux.codeAction({ filePath, position })
+        const actions = await mux.codeAction({ filePath, position }, executionContext)
         const winner =
           actions.find(
             (action) =>
@@ -852,7 +873,7 @@ export function createLanguageIntelligence(
             filePath,
             command: winner.command.command,
             arguments: winner.command.arguments,
-          })
+          }, executionContext)
           const merged: LspWorkspaceEditChanges = { ...changesByUri }
           for (const [uri, edits] of Object.entries(commandEdit.changesByUri)) {
             merged[uri] = [...(merged[uri] ?? []), ...edits]
@@ -935,7 +956,7 @@ export function createLanguageIntelligence(
       return [{ type: 'json', value: result }]
     },
 
-    async syncMutatedFiles(paths, opts) {
+    async syncMutatedFiles(paths, opts, executionContext) {
       // Sync is only meaningful for an already-built multiplexer: building one
       // here would cold-start language servers just to push updates, which the
       // sync seam must never do. Paths whose extension maps to no registered
@@ -978,7 +999,7 @@ export function createLanguageIntelligence(
             const text = await readContext.fs.readFile(containedPath, 'utf8')
             const version = (syncVersions.get(filePath) ?? 0) + 1
             syncVersions.set(filePath, version)
-            await activeMultiplexer.syncFile({ filePath, version, text })
+            await activeMultiplexer.syncFile({ filePath, version, text }, executionContext)
           } catch {
             // Fail-open per path: a missing file or an unavailable server must
             // never fail the run that just committed the write.
@@ -1007,7 +1028,7 @@ export function createLanguageIntelligence(
               version: (syncVersions.get(filePath) ?? 0) + 1,
               text: '',
               close: true,
-            })
+            }, executionContext)
           } catch {
             // Fail-open per path: a missing document or an unavailable server
             // must never fail the run that just committed the delete.

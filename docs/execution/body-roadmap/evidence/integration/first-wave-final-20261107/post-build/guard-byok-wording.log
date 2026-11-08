@@ -1,2 +1,0 @@
-$ bun run byok-wording-guard.ts
-Focused BYOK wording guard passed: no unallowlisted hosted-product wording found.

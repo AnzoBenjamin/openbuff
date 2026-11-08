@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { Worker } from 'node:worker_threads'
 
 import { afterAll, describe, expect, test } from 'bun:test'
+import { executionFixture } from '../../../sdk/src/__tests__/toolchain-execution-fixture'
 
 import {
   BoundedStreamCapture,
@@ -864,6 +865,7 @@ describe('defaultAsyncScipRunner', () => {
     const scriptPath = join(root, 'emit.js')
     writeFileSync(scriptPath, "process.stdout.write('héllo€')\n")
     const result = await defaultAsyncScipRunner({
+      executionContext: executionFixture({ env: { PATH: '/usr/bin:/bin' } }).context,
       command: process.execPath,
       argv: [scriptPath],
       cwd: root,
@@ -879,6 +881,7 @@ describe('defaultAsyncScipRunner', () => {
     const scriptPath = join(root, 'emit.js')
     writeFileSync(scriptPath, "process.stdout.write('abcdefghij')\n")
     const result = await defaultAsyncScipRunner({
+      executionContext: executionFixture({ env: { PATH: '/usr/bin:/bin' } }).context,
       command: process.execPath,
       argv: [scriptPath],
       cwd: root,
@@ -890,6 +893,7 @@ describe('defaultAsyncScipRunner', () => {
 
   test('resolves status -1 with the spawn error for a missing binary', async () => {
     const result = await defaultAsyncScipRunner({
+      executionContext: executionFixture().context,
       command: 'openbuff-definitely-not-a-binary',
       argv: [],
       cwd: makeRoot(),
@@ -912,6 +916,7 @@ describe('defaultScipRunner', () => {
     // downstream (`runSingleIndexer`) misreads as a timeout; the seam must
     // translate it into a non-null failure status carrying the error message.
     const result = defaultScipRunner({
+      executionContext: executionFixture().context,
       command: 'openbuff-definitely-not-a-binary',
       argv: [],
       cwd: makeRoot(),
@@ -929,6 +934,7 @@ describe('defaultScipRunner', () => {
     // spawnSync timeout support fails slowly instead of hanging forever.
     writeFileSync(scriptPath, 'setTimeout(() => process.exit(0), 5_000)\n')
     const result = defaultScipRunner({
+      executionContext: executionFixture({ resourceRemainingMs: 250 }).context,
       command: process.execPath,
       argv: [scriptPath],
       cwd: root,

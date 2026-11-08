@@ -57,17 +57,31 @@ export const FileContentChangeSchema = z.object({
     ),
   /** Expected pre-commit content hash; null requires an exclusive create. */
   expectedHash: z.string().nullable().optional(),
+  /** Separate exact-byte preimage guard; normalized hashes cannot detect BOM/EOL drift. */
+  expectedRawHash: z
+    .string()
+    .regex(/^sha256:[a-f0-9]{64}$/)
+    .nullable()
+    .optional(),
 })
 export const FileDeleteChangeSchema = z.object({
   type: z.literal('delete'),
   path: z.string(),
   expectedHash: z.string().min(1),
+  expectedRawHash: z
+    .string()
+    .regex(/^sha256:[a-f0-9]{64}$/)
+    .optional(),
 })
 export const FileMoveChangeSchema = z.object({
   type: z.literal('move'),
   path: z.string(),
   destinationPath: z.string(),
   expectedHash: z.string().min(1),
+  expectedRawHash: z
+    .string()
+    .regex(/^sha256:[a-f0-9]{64}$/)
+    .optional(),
   destinationExpectedHash: z.null(),
 })
 export const FileChangeSchema = z.union([
@@ -249,6 +263,10 @@ type ServerActionToolCallRequest = {
   toolName: string
   input: unknown
   mcpConfig?: MCPConfig
+  mcpReference?: string
+  mcpAgentId?: string
+  mcpServerName?: string
+  mcpCatalogGeneration?: number | null
 }
 
 export type InitResponse = {

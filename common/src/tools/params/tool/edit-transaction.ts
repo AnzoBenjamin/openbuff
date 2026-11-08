@@ -3,7 +3,7 @@ import z from 'zod/v4'
 import {
   $getNativeToolCallExampleString,
   isObviousEditPlaceholder,
-  jsonToolResultSchema,
+  editToolResultSchema,
   normalizeReplacementAliases,
   normalizeReplacementList,
   normalizeTransactionEditList,
@@ -209,14 +209,17 @@ const replaceRangeEditSchema = editBaseSchema
   .strict()
   .superRefine((edit, ctx) => {
     const decoded = decodeReadCapabilityToken(edit.readCapability)
-    if (typeof decoded === 'string' || decoded.tokenVersion !== 'v3') {
+    if (
+      typeof decoded === 'string' ||
+      (decoded.tokenVersion !== 'v3' && decoded.tokenVersion !== 'v4')
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: ['readCapability'],
         message:
           typeof decoded === 'string'
             ? decoded
-            : 'readCapability requires an authenticated project/path/run-bound cap.v3 token.',
+            : 'readCapability requires an authenticated project/path/run-bound cap.v4 token.',
       })
       return
     }
@@ -261,7 +264,7 @@ const rewriteSymbolEditSchema = editBaseSchema.extend({
   }),
   occurrence: z.number().int().positive().optional(),
   readCapability: basedOnReadSchema.describe(
-    'Optional cap.v3 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block.',
+    'Optional cap.v4 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block.',
   ),
 })
 
@@ -281,7 +284,7 @@ const writeFileEditSchema = editBaseSchema.extend({
     message: 'content is an explicit placeholder; provide exact file bytes.',
   }),
   basedOnRead: basedOnReadSchema.describe(
-    'Optional whole-file-covering cap.v3 from a fresh complete whole-file read. Only a full-file capability with a hash matching current content may authorize overwrite; partial ranges never authorize write_file.',
+    'Optional cap.v4 with an explicit whole raw basis from a complete read_files.paths read. Its exact bytes must match the current file; line and structural capabilities cannot authorize a whole-file overwrite.',
   ),
 })
 
@@ -725,5 +728,5 @@ export const editTransactionParams = {
       ? providerInputSchemaFlagOn
       : providerInputSchemaFlagOff
   },
-  outputSchema: jsonToolResultSchema(editTransactionResultSchema),
+  outputSchema: editToolResultSchema(editTransactionResultSchema),
 } satisfies $ToolParams

@@ -1,3 +1,5 @@
+import { authenticatedHostFixture } from './authenticated-host-fixture'
+import { observeNodeChild } from '../services/toolchain-execution'
 /**
  * REAL-SERVER fixtures (P4-T2): the mock-LSP suites pin the multiplexer/service
  * CONTRACTS, but only a real language server proves the request shapes the
@@ -32,6 +34,7 @@ import {
   clearRootResolutionCache,
   createLspMultiplexer,
   type LspMultiplexer,
+  LspExecutionError,
 } from '../services/lsp-multiplexer'
 
 const DEMO_CPP = [
@@ -52,14 +55,22 @@ function makeCppProject(): string {
   return root
 }
 
-function makeRealMultiplexer(root: string): LspMultiplexer {
+function makeRealMultiplexer(root: string, host: ReturnType<typeof authenticatedHostFixture>): LspMultiplexer {
   // The openFile hook mirrors the production service wiring: a query for a
   // file the server never received must carry the disk bytes via didOpen,
   // because strict servers (observed clangd) reject unopened documents.
   return createLspMultiplexer({
-    spawner: (spec) => {
-      const [command, ...args] = spec.argv
-      const child = realSpawn(command, args, { cwd: spec.cwd })
+    resourceFactory: (spec, request) => host.lspResources(spec, request),
+    spawner: (_spec, admitted) => {
+      const dispatched = admitted.launch.dispatchNow(admitted.permit, (input, observer) => {
+        const child = realSpawn(input.executable, input.argv, {
+          cwd: input.cwd, env: input.env, signal: input.resourceSignal, stdio: ['pipe', 'pipe', 'pipe'],
+        })
+        observeNodeChild(child, observer)
+        return child
+      })
+      if (!dispatched.ok) throw new LspExecutionError(dispatched)
+      const child = dispatched.value.handle
       const { stdin, stdout } = child
       if (!stdin || !stdout) {
         throw new Error('real clangd spawn has no stdio pipes')
@@ -85,11 +96,18 @@ function makeRealMultiplexer(root: string): LspMultiplexer {
 }
 
 const tempRoots: string[] = []
+const hosts: ReturnType<typeof authenticatedHostFixture>[] = []
+const disposers: Array<() => Promise<void>> = []
 
-afterEach(() => {
-  clearRootResolutionCache()
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true })
+afterEach(async () => {
+  try {
+    await Promise.all(disposers.splice(0).map(dispose => dispose()))
+  } finally {
+    for (const host of hosts.splice(0)) host.close()
+    clearRootResolutionCache()
+    for (const root of tempRoots.splice(0)) {
+      rmSync(root, { recursive: true, force: true })
+    }
   }
 })
 
@@ -103,13 +121,16 @@ describe.skipIf(!HAS_CLANGD)('real clangd fixtures (P4-T2 mock-LSP gap closure)'
     async () => {
       const root = makeCppProject()
       tempRoots.push(root)
-      const mux = makeRealMultiplexer(root)
+      const host = authenticatedHostFixture(root)
+      hosts.push(host)
+      const mux = makeRealMultiplexer(root, host)
+      disposers.push(() => mux.dispose())
       // No syncFile was ever called: this query proves the auto-open seam
       // answers what strict servers (-32602 without didOpen, observed) accept.
       const location = await mux.definition({
         filePath: path.join(root, 'demo.cpp'),
         position: { line: 1, character: 22 },
-      })
+      }, host.context)
       expect(location).not.toBeNull()
       const resolved = Array.isArray(location) ? location[0] : location
       expect(resolved?.uri.endsWith('/demo.cpp')).toBe(true)
@@ -128,16 +149,19 @@ describe.skipIf(!HAS_CLANGD)('real clangd fixtures (P4-T2 mock-LSP gap closure)'
     async () => {
       const root = makeCppProject()
       tempRoots.push(root)
+      const host = authenticatedHostFixture(root)
+      hosts.push(host)
       const service = createLanguageIntelligence({
-        cwd: root,
-        spawn: realSpawn,
+        cwd: root, spawn: realSpawn, readPolicy: host.host.readPolicy,
+        resourceFactory: (spec, request) => host.lspResources(spec, request),
       })
+      disposers.push(() => service.dispose())
       const output = await service.renameSymbol({
         path: 'demo.cpp',
         line: 2,
         character: 23,
         new_name: 'renamed_helper',
-      })
+      }, host.context)
       const value = output[0]?.value as
         | { changedFiles?: Array<{ path: string; newContent: string }>; errorMessage?: string }
         | undefined
@@ -165,10 +189,13 @@ describe.skipIf(!HAS_CLANGD)('real clangd fixtures (P4-T2 mock-LSP gap closure)'
     async () => {
       const root = makeCppProject()
       tempRoots.push(root)
+      const host = authenticatedHostFixture(root)
+      hosts.push(host)
       const service = createLanguageIntelligence({
-        cwd: root,
-        spawn: realSpawn,
+        cwd: root, spawn: realSpawn, readPolicy: host.host.readPolicy,
+        resourceFactory: (spec, request) => host.lspResources(spec, request),
       })
+      disposers.push(() => service.dispose())
       // Observed on bare positions without diagnostics: some clangd
       // configurations offer NO actions at all. The service must never throw —
       // it answers with either an honest unavailable or an edit-carrying
@@ -178,7 +205,7 @@ describe.skipIf(!HAS_CLANGD)('real clangd fixtures (P4-T2 mock-LSP gap closure)'
         line: 2,
         character: 23,
         kind: 'source.organizeImports',
-      })
+      }, host.context)
       const value = output[0]?.value as
         | { unavailable?: { reason: string }; changedFiles?: unknown[]; errorMessage?: string }
         | undefined

@@ -1,4 +1,3 @@
-import { spawn } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -8,38 +7,54 @@ import {
   stripColors,
   truncateStringWithMessage,
 } from '../../../common/src/util/string'
-import { getChildProcessEnv, scrubChildProcessEnv } from '../env'
 import {
-  isProcessTreeAlive,
   killBackgroundJob,
   startBackgroundJob,
   terminateProcessTree,
 } from './background-jobs'
-import { throwIfAborted } from './concurrency'
 import { resolveFilePathForOperation } from './path-utils'
 import { runGit } from './git-status'
+import { prepareHarnessGitReadArgv } from '../services/harness-enforcement'
 import { TerminalOutputSpool } from './terminal-output-spool'
 import {
   evaluateTerminalCommandPolicy,
   type TerminalPermissionProfile,
 } from './terminal-command-policy'
 import {
-  classifyTerminalHarnessAction,
-  hashTerminalExecutionContext,
-  type ClassifiedHarnessAction,
-} from '../services/harness-enforcement'
+  admitNodeLaunch,
+  captureNodeTarget,
+  deriveExecutionContext,
+  dispatchNodeLaunch,
+  executionLimitMs,
+  executionLimitSeconds,
+  executionRefusal,
+  ExecutionRefusalError,
+  isExecutionRefusalError,
+  prepareNodeLaunch,
+  refusalForSignal,
+  scheduleNodeDeadline,
+  trustedNodeSpawn,
+} from '../services/execution-launch'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
+import type { ClassifiedHarnessAction } from '../services/harness-enforcement'
+import type {
+  ClassifiedEffect, ExecutionAdapterContext, Family, PreparedLaunch,
+  Refusal, Result, TargetDescription,
+} from '@codebuff/common/types/contracts/execution-context'
 
 const COMMAND_OUTPUT_LIMIT = 50_000
-type TerminalApprovalToken = {
-  action: string
-  target: string
-  commandHash: string
-  executionContextHash: string
+export type CapturedTerminalLaunchMetadata = Readonly<{
+  requiresCommitSafety?: boolean
   approvalReceiptId?: string
-}
-const terminalApprovalTokens = new WeakMap<object, TerminalApprovalToken>()
+  harnessAction?: string
+  harnessTarget?: string
+  harnessEffects?: readonly ClassifiedEffect[]
+  harnessParseStatus?: 'complete' | 'unsupported' | 'malformed'
+  executionContextHash?: string
+  executionBindingVersion?: 2
+  executionBindingDigest?: string
+}>
 /**
  * Byte budget for one safety spawn's TOTAL output. It bounds how much of a diff
  * the preflight is willing to inspect at all — an over-budget stream fails the
@@ -124,7 +139,7 @@ const GIT_SAFETY_SCAN_OVERLAP_CHARS = 256
  */
 const GIT_SAFETY_SCAN_SLICE_CHARS = 64 * 1024
 
-type GitSafetyResult = { exitCode: number; stdout: string; stderr: string }
+type GitSafetyResult = { exitCode: number; stdout: string; stderr: string; executionRefusal?: Refusal }
 
 type StagedDiffScan = {
   /**
@@ -734,13 +749,10 @@ async function scanWhilePending(
 }
 
 /**
- * Async git spawn for the staged-commit safety preflight. Deliberately local
- * rather than reusing git-status's `runGit`: that helper spawns with the
- * inherited agent environment (no credential scrub) and accumulates output
- * without any bound, while these checks must stay on the scrubbed child env and
- * must refuse to buffer more than GIT_SAFETY_OUTPUT_LIMIT. Spawning
- * asynchronously keeps the CLI TUI's event loop responsive while the preflight
- * runs on the same loop as rendering.
+ * Async Git adapter for the staged-commit safety preflight. Its streaming
+ * scanner inspects the patch without materializing ordinary Git output, and
+ * refuses more than GIT_SAFETY_OUTPUT_LIMIT bytes. It uses the same captured
+ * environment and lifetime mediation as the other Node launchers.
  *
  * `observeStdout` replaces stdout accumulation: the caller sees each chunk and
  * the spawn retains nothing, which is how the -U0 diff is inspected without the
@@ -753,7 +765,7 @@ async function scanWhilePending(
  * bounds how much output this check will accept, and a decoded string's code-unit
  * count is not that quantity.
  */
-function runGitForSafety(
+async function runGitForSafety(
   args: string[],
   cwd: string,
   observeStdout?: (chunk: Buffer) => void,
@@ -761,8 +773,36 @@ function runGitForSafety(
     signal?: AbortSignal
     timeoutMs?: number
     env?: NodeJS.ProcessEnv
+    executionContext?: ExecutionAdapterContext
+    branchId?: string
   },
 ): Promise<GitSafetyResult> {
+  const refuse = (refusal: Refusal): GitSafetyResult => ({
+    exitCode: -1, stdout: '', stderr: refusal.cause, executionRefusal: refusal,
+  })
+  if (options?.signal?.aborted) return refuse(refusalForSignal(options.signal))
+  const limit = executionLimitMs(options?.timeoutMs ?? GIT_SAFETY_SPAWN_TIMEOUT_MS)
+  if (!limit.ok) return refuse(limit)
+  const context = deriveExecutionContext(options?.executionContext, `git-safety:${options?.branchId ?? ''}`, limit.value)
+  if (!context.ok) return refuse(context)
+  const launch = prepareNodeLaunch({
+    executionContext: context.value,
+    executable: 'git', argv: prepareHarnessGitReadArgv(args), cwd,
+    branchId: options?.branchId ?? '',
+    environmentOverlay: { ...options?.env, GIT_OPTIONAL_LOCKS: '0' },
+    adapterOptions: { stdio: 'ignore-pipe-pipe', shell: false, detached: false, windowsHide: false },
+  })
+  if (!launch.ok) return refuse(launch)
+  const admitted = await admitNodeLaunch(launch.value, context.value.signal ?? options?.signal)
+  if (!admitted.ok) return refuse(admitted)
+  const spawn = trustedNodeSpawn(context.value)
+  const dispatched = dispatchNodeLaunch(admitted.value, (input) => spawn(input.executable, input.argv, {
+    cwd: input.cwd, env: input.env, signal: input.resourceSignal,
+    stdio: ['ignore', 'pipe', 'pipe'], shell: false, detached: false, windowsHide: false,
+  }))
+  if (!dispatched.ok) return refuse(dispatched)
+  const node = dispatched.value
+  const resourceSignal = node.input.resourceSignal
   return new Promise((resolve) => {
     let stdout = ''
     let stderr = ''
@@ -778,30 +818,13 @@ function runGitForSafety(
     let stdoutComplete = false
     /** Stateful decoder, so a code point split across chunks is not corrupted. */
     const stdoutDecoder = new StringDecoder('utf8')
-    const child = spawn('git', args, {
-      cwd,
-      // Route the preflight git spawn through the credential scrub so the
-      // safety check never runs with the agent process's provider secrets.
-      env: {
-        ...(options?.env ?? getChildProcessEnv()),
-        // These are READ-ONLY inspections, and the two remaining preflight
-        // diffs run concurrently against the same index. git refreshes the
-        // index opportunistically and may take index.lock to do it; two
-        // concurrent refreshes can then contend and surface as a failed
-        // whitespace check or 'unable to inspect staged diff content', which
-        // this path treats as fail-closed and would block a legitimate
-        // commit. GIT_OPTIONAL_LOCKS=0 tells git to skip that optional
-        // refresh, so the parallel pair cannot contend with itself while the
-        // diff output the checks read stays identical.
-        GIT_OPTIONAL_LOCKS: '0',
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    const child = node.child
+    let lifetimeRefusal: Refusal | undefined
     const settle = (exitCode: number) => {
       if (settled) return
       settled = true
-      clearTimeout(spawnTimer)
-      options?.signal?.removeEventListener('abort', onAbort)
+      cancelSpawnTimer()
+      resourceSignal.removeEventListener('abort', onAbort)
       // Whatever the decoder still held is part of the head: a stream that ends
       // mid-code-point must not lose the diagnostic that straddles that boundary.
       stdout += stdoutDecoder.end()
@@ -813,10 +836,13 @@ function runGitForSafety(
       // or caller abort settles the same way: a stalled or killed `git diff`
       // produced an untrustworthy partial diff, and the preflight must not
       // hang the tool call waiting for it.
+      const observation = node.observation()
+      const refusal = lifetimeRefusal ?? node.resourceRefusal() ?? (!observation.ok ? observation : undefined)
       resolve({
-        exitCode: overflowed || aborted ? -1 : exitCode,
+        exitCode: overflowed || aborted || refusal ? -1 : exitCode,
         stdout,
-        stderr,
+        stderr: stderr || refusal?.cause || '',
+        ...(refusal ? { executionRefusal: refusal } : {}),
       })
     }
     /**
@@ -826,22 +852,19 @@ function runGitForSafety(
      * forever — the tool's own timeout does not bound a preflight the caller
      * never sees.
      */
-    const spawnTimer = setTimeout(() => {
+    const cancelSpawnTimer = scheduleNodeDeadline(node.remainingResourceMs, () => {
       aborted = true
-      child.kill('SIGKILL')
+      lifetimeRefusal = node.resourceRefusal() ?? (resourceSignal.aborted ? refusalForSignal(resourceSignal)
+        : executionRefusal('deadline-exhausted', 'Git safety resource deadline exhausted'))
       settle(-1)
-    }, options?.timeoutMs ?? GIT_SAFETY_SPAWN_TIMEOUT_MS)
+    })
     let aborted = false
     const onAbort = (): void => {
       aborted = true
-      child.kill('SIGKILL')
+      lifetimeRefusal = refusalForSignal(resourceSignal)
       settle(-1)
     }
-    if (options?.signal?.aborted) {
-      onAbort()
-      return
-    }
-    options?.signal?.addEventListener('abort', onAbort)
+    resourceSignal.addEventListener('abort', onAbort, { once: true })
     const withinBudget = (bytes: number): boolean => {
       if (overflowed) return false
       if (bytes <= GIT_SAFETY_OUTPUT_LIMIT) return true
@@ -862,6 +885,7 @@ function runGitForSafety(
       stderr = firstLineBreak === -1 ? tail : tail.slice(firstLineBreak + 1)
     }
     child.stdout?.on('data', (chunk: Buffer) => {
+      if (settled) return
       stdoutBytes += chunk.byteLength
       if (!withinBudget(stdoutBytes)) return
       if (observeStdout) {
@@ -882,6 +906,7 @@ function runGitForSafety(
       }
     })
     child.stderr?.on('data', (chunk: Buffer) => {
+      if (settled) return
       stderrBytes += chunk.byteLength
       if (!withinBudget(stderrBytes)) return
       appendStderrTail(chunk.toString('utf8'))
@@ -891,6 +916,7 @@ function runGitForSafety(
       settle(-1)
     })
     child.on('close', (code) => settle(code ?? -1))
+    if (resourceSignal.aborted) onAbort()
   })
 }
 
@@ -908,13 +934,14 @@ function runGitForSafety(
  */
 type StagedCommitSafetyResult =
   | { kind: 'blocked'; detail: string }
-  | { kind: 'inspectionFailed'; detail: string }
+  | { kind: 'inspectionFailed'; detail: string; executionRefusal?: Refusal }
   | undefined
 
 async function validateStagedCommit(
   cwd: string,
   signal?: AbortSignal,
   env?: NodeJS.ProcessEnv,
+  executionContext?: ExecutionAdapterContext,
 ): Promise<StagedCommitSafetyResult> {
   // Two independent reads of the same index: the whitespace check and ONE -U0
   // diff that supplies both the staged names (from its `diff --git` headers)
@@ -929,17 +956,21 @@ async function validateStagedCommit(
     runGitForSafety(['diff', '--cached', '--check'], cwd, undefined, {
       signal,
       env,
+      executionContext,
+      branchId: 'terminal.safety.check',
     }),
     scanWhilePending(
       runGitForSafety(
         ['diff', '--cached', '-U0'],
         cwd,
         (chunk) => scanner.enqueue(chunk),
-        { signal, env },
+        { signal, env, executionContext, branchId: 'terminal.safety.diff' },
       ),
       scanner,
     ),
   ])
+  const refusal = whitespace.executionRefusal ?? diff.executionRefusal
+  if (refusal) return { kind: 'inspectionFailed', detail: refusal.cause, executionRefusal: refusal }
   if (whitespace.exitCode !== 0) {
     const detail = (whitespace.stdout || whitespace.stderr).trim()
     // A `--check` failure that produced a whitespace DIAGNOSTIC is a real
@@ -1125,12 +1156,15 @@ export async function listDirtyPaths(
   projectRoot: string,
   signal?: AbortSignal,
   env?: NodeJS.ProcessEnv,
+  executionContext?: ExecutionAdapterContext,
+  branchId = 'terminal.legacy-dirty',
 ): Promise<Set<string> | null> {
   try {
     const args = ['status', '--porcelain', '-uall']
     const result = env
-      ? await runGitForSafety(args, projectRoot, undefined, { signal, env })
-      : await runGit(args, projectRoot, signal)
+      ? await runGitForSafety(args, projectRoot, undefined, { signal, env, executionContext, branchId })
+      : await runGit(args, projectRoot, signal, { executionContext, branchId })
+    if (result.executionRefusal) throw new ExecutionRefusalError(result.executionRefusal)
     if (result.exitCode !== 0) return null
     const paths = new Set<string>()
     for (const line of result.stdout.split('\n')) {
@@ -1140,7 +1174,8 @@ export async function listDirtyPaths(
       if (normalized.length > 0) paths.add(normalized)
     }
     return paths
-  } catch {
+  } catch (error) {
+    if (isExecutionRefusalError(error)) throw error
     return null
   }
 }
@@ -1165,18 +1200,21 @@ export async function runTerminalCommand({
   command,
   process_type,
   detach = false,
-  mode = 'assistant',
-  permission_profile = 'workspace-write',
+  mode: requestedMode = 'assistant',
+  permission_profile: requestedPermissionProfile,
   allowed_paths: requestedAllowedPaths,
   cwd,
   projectRoot,
   timeout_seconds,
   env: requestedEnv,
-  inheritEnv = true,
-  signal,
+  signal: requestedSignal,
   owner: requestedOwner,
-  authorizeHighImpactAction,
-  preApprovedAction,
+  executionContext,
+  terminalShell,
+  getTerminalLaunchMetadata,
+  prepareTransferredLaunch,
+  executionFamily,
+  executionBranchId,
 }: {
   command: string
   process_type: 'SYNC' | 'BACKGROUND'
@@ -1188,10 +1226,8 @@ export async function runTerminalCommand({
   projectRoot?: string
   timeout_seconds: number
   env?: Record<string, string | undefined>
-  /** Trusted host option, never taken from model tool input. */
+  /** Child inheritance is captured by the root host before this call. */
   inheritEnv?: boolean
-  /** Optional abort signal. Owned background jobs are cancelled unless
-   * `detach` was explicitly requested. */
   signal?: AbortSignal
   owner?: {
     clientSessionId: string
@@ -1199,246 +1235,153 @@ export async function runTerminalCommand({
     parentRunId: string
     parentAgentId: string
   }
+  /** Legacy option retained as history; actual approval belongs to the v2 host. */
   authorizeHighImpactAction?: (action: ClassifiedHarnessAction) => Promise<
     | { allowed: true; approvalReceiptId?: string }
-    | {
-        allowed: false
-        reason: string
-        approvalRequired: boolean
-      }
+    | { allowed: false; reason: string; approvalRequired: boolean }
   >
-  /** Internal rerun handle. Caller-created objects carry no approval authority. */
+  /** Legacy v1 objects cannot create a host target permit. */
   preApprovedAction?: {
-    action: string
-    target: string
-    commandHash: string
-    executionContextHash?: string
-    approvalReceiptId?: string
+    action: string; target: string; commandHash: string
+    executionContextHash?: string; approvalReceiptId?: string
   }
+  executionContext?: ExecutionAdapterContext
+  terminalShell?: Readonly<{ executable: string; args: readonly string[] }>
+  getTerminalLaunchMetadata?: (launchId: string) => CapturedTerminalLaunchMetadata | undefined
+  prepareTransferredLaunch?: (target: TargetDescription) => Result<PreparedLaunch>
+  /** SDK-only hook attribution; never accepted from model tool payloads. */
+  executionFamily?: Family
+  executionBranchId?: string
 }): Promise<CodebuffToolOutput<'run_terminal_command'>> {
-  const allowed_paths = requestedAllowedPaths
-    ? [...requestedAllowedPaths]
-    : undefined
+  const mode = executionContext?.mode ?? requestedMode
+  const permission_profile = requestedPermissionProfile ?? (executionContext?.profile.policy as TerminalPermissionProfile | undefined) ?? 'workspace-write'
   const env = requestedEnv ? { ...requestedEnv } : undefined
-  const owner = requestedOwner ? { ...requestedOwner } : undefined
-  // The contract for `cwd` is "project root or a subdirectory of it". A
-  // caller-supplied absolute path like `/etc` or a traversal like
-  // `../../outside` must be rejected before we spawn a child process so the
-  // tool cannot be used to read or mutate state outside the project.
-  // The shared helper enforces lexical + realpath/symlink containment.
-  const resolvedCwd = resolveFilePathForOperation(
-    projectRoot ?? process.cwd(),
-    cwd,
-  )
-  // The helper also honors the openbuff-owned OS temp namespace exception,
-  // which exists so path-taking tools can READ openbuff's own artifacts — not
-  // so a child process can be hosted there. Policy evaluation receives the
-  // in-project `containedCwd` so relative `..` tokens resolve from the real
-  // working directory; an owned-temp cwd would still let a policy-clean
-  // relative token land in a world-writable directory. Require an in-project
-  // result: the resolver's `scope` discriminator marks that exception
-  // explicitly, so an owned-temp path is refused without also rejecting a
-  // project root that legitimately lives under the temp dir.
+  let signal = executionContext?.signal ?? requestedSignal
+  const refused = (refusal: Refusal): CodebuffToolOutput<'run_terminal_command'> => [{
+    type: 'json',
+    value: {
+      command, errorMessage: refusal.cause, executionRefusal: refusal,
+      permissionProfile: permission_profile,
+      ...(refusal.reason === 'denied' ? { permissionDenied: true } : {}),
+      ...(refusal.reason === 'deadline-exhausted' ? { timedOut: true } : {}),
+    },
+  }]
+  if (signal?.aborted) return refused(refusalForSignal(signal))
+  const limit = executionLimitSeconds(timeout_seconds)
+  if (!limit.ok) return refused(limit)
+  const branchId = executionBranchId ?? (process_type === 'BACKGROUND'
+    ? detach ? 'background.transferred' : 'background.attached'
+    : 'terminal.sync')
+  const context = deriveExecutionContext(executionContext, `terminal:${branchId}`, limit.value)
+  if (!context.ok) return refused(context)
+  signal = context.value.signal ?? signal
+  if (requestedPermissionProfile && requestedPermissionProfile !== context.value.profile.policy) {
+    return refused(executionRefusal('invalid-context', 'Terminal profile differs from the captured host profile'))
+  }
+  if (context.value.profile.policy === 'validation-diagnosis') {
+    return refused(executionRefusal('unavailable', 'The terminal policy adapter does not implement validation-diagnosis'))
+  }
+  if (projectRoot !== undefined && path.resolve(projectRoot) !== path.resolve(context.value.projectRoot)) {
+    return refused(executionRefusal('invalid-context', 'Terminal project root differs from captured execution context'))
+  }
+  const effectiveProjectRoot = context.value.projectRoot
+  const allowed_paths = requestedAllowedPaths ? [...requestedAllowedPaths] : [...context.value.allowedPaths]
+  const resolvedCwd = resolveFilePathForOperation(effectiveProjectRoot, cwd)
   if (resolvedCwd === null || resolvedCwd.scope === 'owned-temp') {
-    return Promise.resolve([
-      {
-        type: 'json',
-        value: {
-          command,
-          errorMessage: `Invalid cwd: Path '${cwd}' is outside the project directory.`,
-        },
-      },
-    ])
+    return [{ type: 'json', value: { command, errorMessage: `Invalid cwd: Path '${cwd}' is outside the project directory.` } }]
   }
   const containedCwd = resolvedCwd.operationPath
-  const processEnv = scrubChildProcessEnv({
-    ...(inheritEnv ? getChildProcessEnv() : {}),
-    ...(env ?? {}),
-  })
-
   const policy = evaluateTerminalCommandPolicy({
-    command,
-    mode,
-    permissionProfile: permission_profile,
-    projectRoot: projectRoot ?? process.cwd(),
-    allowedPaths: allowed_paths,
-    cwd: containedCwd,
+    command, mode, permissionProfile: permission_profile,
+    projectRoot: effectiveProjectRoot, allowedPaths: allowed_paths, cwd: containedCwd,
   })
   if (!policy.allowed) {
-    return Promise.resolve([
-      {
-        type: 'json',
-        value: {
-          command,
-          errorMessage: `Command denied by ${permission_profile} terminal policy: ${policy.reason}`,
-          permissionDenied: true,
-          permissionProfile: permission_profile,
-        },
-      },
-    ])
+    return refused(executionRefusal('denied', `Command denied by ${permission_profile} terminal policy: ${policy.reason}`))
   }
-
-  const classifiedAction =
-    mode === 'assistant' ? classifyTerminalHarnessAction(command) : undefined
-  const highImpactAction = classifiedAction
-    ? Object.freeze({
-        ...classifiedAction,
-        executionContextHash: hashTerminalExecutionContext({
-          permissionProfile: permission_profile,
-          cwd: containedCwd,
-          projectRoot: projectRoot ?? process.cwd(),
-          allowedPaths: allowed_paths,
-          processType: process_type,
-          detach,
-          mode,
-        }),
-      })
-    : undefined
-  const registeredPreApproval = preApprovedAction
-    ? terminalApprovalTokens.get(preApprovedAction)
-    : undefined
-  if (preApprovedAction) terminalApprovalTokens.delete(preApprovedAction)
-  const matchedPreApproval =
-    highImpactAction &&
-    registeredPreApproval &&
-    registeredPreApproval.action === highImpactAction.action &&
-    registeredPreApproval.target === highImpactAction.target &&
-    registeredPreApproval.commandHash === highImpactAction.commandHash &&
-    registeredPreApproval.executionContextHash ===
-      highImpactAction.executionContextHash
-      ? registeredPreApproval
-      : undefined
-  // Harness metadata threaded onto the eventual output on the matched
-  // pre-approval path so callers see identical metadata whether the command
-  // took one hop (old user mode) or two (assistant approve -> assistant rerun).
-  const pendingHarnessMetadata =
-    highImpactAction && matchedPreApproval
-      ? {
-          ...(matchedPreApproval.approvalReceiptId
-            ? { approvalReceiptId: matchedPreApproval.approvalReceiptId }
-            : {}),
-          harnessAction: highImpactAction.action,
-          harnessTarget: highImpactAction.target,
-          harnessEffects: highImpactAction.effects,
-          harnessParseStatus: highImpactAction.parseStatus,
-          executionContextHash: highImpactAction.executionContextHash,
-        }
-      : undefined
-  const finalizeHarnessMetadata = (
+  if (detach && process_type !== 'BACKGROUND') {
+    return refused(executionRefusal('invalid-context', 'Ownership transfer applies only to background commands'))
+  }
+  const isWindows = os.platform() === 'win32'
+  const shell = terminalShell
+    ? { executable: terminalShell.executable, args: [...terminalShell.args] }
+    : isWindows ? undefined : { executable: 'bash', args: ['-c'] }
+  if (!shell) return refused(executionRefusal('unavailable', createWindowsBashNotFoundError().message))
+  const target = captureNodeTarget({
+    executionContext: context.value,
+    executable: shell.executable, argv: [...shell.args, command], shellCommandBytes: command,
+    cwd: containedCwd, branchId,
+    family: executionFamily ?? (process_type === 'BACKGROUND' ? 'background-job' : 'sync-shell'),
+    processType: process_type,
+    environmentOverlay: env,
+    adapterOptions: {
+      runtime: 'node', platform: os.platform(), shell: false,
+      stdio: process_type === 'BACKGROUND' ? 'owned-log-fd' : 'pipe',
+      detached: !isWindows, windowsHide: false,
+    },
+  })
+  if (!target.ok) return refused(target)
+  let prepared: Result<PreparedLaunch>
+  try {
+    prepared = detach
+      ? prepareTransferredLaunch?.(target.value) ?? executionRefusal('unavailable', 'Authenticated background transfer is unavailable')
+      : context.value.execution.prepareTarget({ target: target.value })
+  } catch {
+    return refused(executionRefusal('invalid-context', 'Terminal launch preparation failed'))
+  }
+  if (!prepared.ok) return refused(prepared)
+  const preparedLaunch = prepared.value
+  const admitted = await admitNodeLaunch(preparedLaunch, signal)
+  if (!admitted.ok) return refused(admitted)
+  const launchFacts = preparedLaunch.facts()
+  const owner = launchFacts.correlation.kind === 'action'
+    ? { ...launchFacts.correlation.owner }
+    : requestedOwner ? { ...requestedOwner } : undefined
+  let metadata: CapturedTerminalLaunchMetadata | undefined
+  try { metadata = getTerminalLaunchMetadata?.(launchFacts.launchId) }
+  catch { return refused(executionRefusal('unavailable', 'Captured terminal classification metadata is unavailable')) }
+  if (mode === 'assistant' && permission_profile === 'git-commit' && !metadata) {
+    return refused(executionRefusal('unavailable', 'Captured commit classification is unavailable'))
+  }
+  const {
+    requiresCommitSafety: _privateCommitSafety,
+    harnessEffects: capturedEffects,
+    ...capturedPublicFields
+  } = metadata ?? {}
+  const publicMetadata = {
+    ...capturedPublicFields,
+    harnessEffects: capturedEffects?.map(effect => ({
+      ...effect,
+      pushRisks: effect.pushRisks ? [...effect.pushRisks] : undefined,
+    })),
+  }
+  const finalizeHarnessMetadata = async (
     result: Promise<CodebuffToolOutput<'run_terminal_command'>>,
-  ): Promise<CodebuffToolOutput<'run_terminal_command'>> =>
-    pendingHarnessMetadata
-      ? result.then((output) => {
-          const part = output[0]
-          return [
-            {
-              ...part,
-              value: { ...part.value, ...pendingHarnessMetadata },
-            },
-          ]
-        })
-      : result
-  if (highImpactAction && !matchedPreApproval) {
-    if (!authorizeHighImpactAction) {
-      return Promise.resolve([
-        {
-          type: 'json',
-          value: {
-            command,
-            errorMessage: `Command denied by harness approval policy: Action '${highImpactAction.action}' requires a snapshot-scoped user approval for '${highImpactAction.target}'.`,
-            permissionDenied: true,
-            approvalRequired: true,
-            harnessAction: highImpactAction.action,
-            harnessTarget: highImpactAction.target,
-            harnessEffects: highImpactAction.effects,
-            harnessParseStatus: highImpactAction.parseStatus,
-            executionContextHash: highImpactAction.executionContextHash,
-            permissionProfile: permission_profile,
-          },
-        },
-      ])
+  ): Promise<CodebuffToolOutput<'run_terminal_command'>> => {
+    const output = await result
+    const part = output[0]
+    return [{ ...part, value: {
+      ...part.value, ...publicMetadata,
+      executionBindingVersion: 2,
+      executionBindingDigest: preparedLaunch.facts().executionBindingDigest,
+    } }]
+  }
+  let dirtyObservationRefusal: Refusal | undefined
+  const observeDirty = async (dirtyBranchId: string) => {
+    try {
+      return await listDirtyPaths(effectiveProjectRoot, signal, env, context.value, dirtyBranchId)
+    } catch (error) {
+      if (!isExecutionRefusalError(error)) throw error
+      dirtyObservationRefusal = error.refusal
+      return null
     }
-    return authorizeHighImpactAction(highImpactAction).then((decision) => {
-      throwIfAborted(signal)
-      if (!decision.allowed) {
-        return [
-          {
-            type: 'json' as const,
-            value: {
-              command,
-              errorMessage: `Command denied by harness approval policy: ${decision.reason}`,
-              permissionDenied: true,
-              approvalRequired: decision.approvalRequired,
-              harnessAction: highImpactAction.action,
-              harnessTarget: highImpactAction.target,
-              harnessEffects: highImpactAction.effects,
-              harnessParseStatus: highImpactAction.parseStatus,
-              executionContextHash: highImpactAction.executionContextHash,
-              permissionProfile: permission_profile,
-            },
-          },
-        ]
-      }
-      const token: TerminalApprovalToken = Object.freeze({
-        action: highImpactAction.action,
-        target: highImpactAction.target,
-        commandHash: highImpactAction.commandHash,
-        executionContextHash: highImpactAction.executionContextHash,
-        ...(decision.approvalReceiptId
-          ? { approvalReceiptId: decision.approvalReceiptId }
-          : {}),
-      })
-      terminalApprovalTokens.set(token, token)
-      // Approved: re-run with mode unchanged (still 'assistant') and the
-      // permission profile unchanged so the profile policy is STILL enforced
-      // on the rerun. A one-shot preApprovedAction lets that rerun skip only
-      // the harness re-authorization for this same action+target, never the
-      // profile — a command that escapes its profile stays denied.
-      return runTerminalCommand({
-        command,
-        process_type,
-        detach,
-        mode,
-        permission_profile,
-        allowed_paths,
-        cwd,
-        projectRoot,
-        timeout_seconds,
-        env,
-        inheritEnv,
-        signal,
-        owner,
-        authorizeHighImpactAction,
-        preApprovedAction: token,
-      }).then((output) => {
-        const part = output[0]
-        return [
-          {
-            ...part,
-            value: {
-              ...part.value,
-              ...(decision.approvalReceiptId
-                ? { approvalReceiptId: decision.approvalReceiptId }
-                : {}),
-              harnessAction: highImpactAction.action,
-              harnessTarget: highImpactAction.target,
-              harnessEffects: highImpactAction.effects,
-              harnessParseStatus: highImpactAction.parseStatus,
-              executionContextHash: highImpactAction.executionContextHash,
-            },
-          },
-        ]
-      })
-    })
   }
 
   if (
     mode === 'assistant' &&
     permission_profile === 'git-commit' &&
-    (highImpactAction?.effects?.some((effect) => effect.action === 'commit') ||
-      /^\s*git\s+commit\b/i.test(command))
+    metadata?.requiresCommitSafety === true
   ) {
-    const safety = await validateStagedCommit(containedCwd, signal, processEnv)
+    const safety = await validateStagedCommit(containedCwd, signal, env, context.value)
     if (safety?.kind === 'blocked') {
       return finalizeHarnessMetadata(
         Promise.resolve([
@@ -1467,6 +1410,7 @@ export async function runTerminalCommand({
               command,
               errorMessage: `Commit safety preflight could not inspect the staged diff: ${safety.detail}`,
               safetyPreflightFailed: true,
+              ...(safety.executionRefusal ? { executionRefusal: safety.executionRefusal } : {}),
               permissionProfile: permission_profile,
             },
           },
@@ -1476,133 +1420,68 @@ export async function runTerminalCommand({
   }
 
   if (process_type === 'BACKGROUND') {
-    // Capture pre-start dirty set (best-effort) so check_job can credit a
-    // one-shot settlement dirty delta — same SYNC semantics, deferred to the
-    // first settled observation. Soft-fail omits snapshot without failing start.
-    return finalizeHarnessMetadata(
-      (async () => {
-        if (signal?.aborted) {
-          const reason = signal.reason
-          throw reason instanceof Error
-            ? reason
-            : Object.assign(new Error('Aborted'), { name: 'AbortError' })
-        }
-        const isWindows = os.platform() === 'win32'
-        let shell: string
-        let shellArgs: string[]
-        if (isWindows) {
-          const bashPath = findWindowsBash(processEnv)
-          if (!bashPath) {
-            throw createWindowsBashNotFoundError()
-          }
-          shell = bashPath
-          shellArgs = ['-c']
-        } else {
-          shell = 'bash'
-          shellArgs = ['-c']
-        }
-
-        const gitRoot = projectRoot ?? containedCwd
-        const dirtyBefore = await listDirtyPaths(gitRoot, signal, processEnv)
-        // The await above swallows aborts: listDirtyPaths resolves null on any
-        // rejection, including this signal's own abort reason. Re-check so an
-        // aborted run never spawns the job it would no longer own.
-        throwIfAborted(signal)
-
-        const job = startBackgroundJob({
-          command,
-          shell,
-          shellArgs,
-          cwd: containedCwd,
-          env: processEnv,
-          owner,
-          projectRoot: gitRoot,
+    return finalizeHarnessMetadata((async () => {
+      const dirtyBefore = await observeDirty('terminal.safety.dirty-before')
+      let job
+      try {
+        job = startBackgroundJob({
+          command, cwd: containedCwd, owner,
+          projectRoot: effectiveProjectRoot,
           dirtyBeforePaths: dirtyBefore ? [...dirtyBefore] : undefined,
+          admittedLaunch: admitted.value,
+          executionContext: context.value,
         })
-
-        if (signal && !detach) {
-          const onAbort = () => {
-            killBackgroundJob(job.jobId, 'SIGTERM')
-          }
-          const clearAbortListener = () =>
-            signal.removeEventListener('abort', onAbort)
-          // Mirror the SYNC pre-spawn wiring: an already-aborted signal never
-          // fires 'abort' events, so a listener registered now would silently
-          // never run — kill the fresh job directly instead.
-          if (signal.aborted) {
-            killBackgroundJob(job.jobId, 'SIGTERM')
-          } else {
-            signal.addEventListener('abort', onAbort, { once: true })
-          }
-          job.child.once('exit', clearAbortListener)
-          job.child.once('error', clearAbortListener)
-        }
-
-        // Start result is jobId-only; never credit touchedPaths while running.
-        return [
-          {
-            type: 'json' as const,
-            value: {
-              command,
-              processId: job.child.pid ?? -1,
-              backgroundProcessStatus: 'running' as const,
-              detached: detach,
-              jobId: job.jobId,
-              logFile: job.logFile,
-              startingCwd: containedCwd,
-            },
-          },
-        ]
-      })(),
-    )
+      } catch (error) {
+        if (isExecutionRefusalError(error)) return refused(error.refusal)
+        throw error
+      }
+      const observed = await job.nodeLaunch!.started
+      if (!observed.ok) {
+        killBackgroundJob(job.jobId, 'SIGTERM')
+        return refused(observed)
+      }
+      return [{
+        type: 'json' as const,
+        value: {
+          command, processId: observed.value.pid,
+          backgroundProcessStatus: 'running' as const,
+          detached: detach, jobId: job.jobId, logFile: job.logFile,
+          startingCwd: containedCwd,
+          ...(dirtyObservationRefusal ? { dirtyObservationRefusal } : {}),
+        },
+      }]
+    })())
   }
 
   // SYNC: capture pre/post dirty paths against projectRoot so cwd subdirectory
   // commands still attribute project-relative paths. Soft-fail omits touchedPaths.
   return finalizeHarnessMetadata(
     (async () => {
-      const gitRoot = projectRoot ?? containedCwd
-      const dirtyBefore = await listDirtyPaths(gitRoot, signal, processEnv)
+      const dirtyBefore = await observeDirty('terminal.safety.dirty-before')
 
       const commandResult = await new Promise<
         CodebuffToolOutput<'run_terminal_command'>
-      >((resolve, reject) => {
-        const isWindows = os.platform() === 'win32'
-        let shell: string
-        let shellArgs: string[]
-
-        if (isWindows) {
-          const bashPath = findWindowsBash(processEnv)
-          if (!bashPath) {
-            reject(createWindowsBashNotFoundError())
-            return
-          }
-          shell = bashPath
-          shellArgs = ['-c']
-        } else {
-          shell = 'bash'
-          shellArgs = ['-c']
-        }
-
-        // Use the already-resolved, project-contained cwd from the entry guard.
-        // Local name differs from the outer `resolvedCwd` (the PATH RESOLVER
-        // RESULT object) so the two are not confused: this is the cwd STRING
-        // the child process spawns in.
+      >((resolve) => {
         const spawnCwd = containedCwd
-
-        const childProcess = spawn(shell, [...shellArgs, command], {
-          cwd: spawnCwd,
-          env: processEnv,
-          stdio: 'pipe',
-          detached: !isWindows,
-        })
+        const spawn = trustedNodeSpawn(context.value)
+        const dispatched = dispatchNodeLaunch(admitted.value, (input) => spawn(input.executable, input.argv, {
+          cwd: input.cwd, env: input.env, signal: input.resourceSignal,
+          stdio: 'pipe', detached: !isWindows, shell: false, windowsHide: false,
+        }), { terminate: terminateProcessTree })
+        if (!dispatched.ok) {
+          resolve(refused(dispatched))
+          return
+        }
+        const node = dispatched.value
+        const childProcess = node.child
+        const resourceSignal = node.input.resourceSignal
 
         // These mutable bookkeeping fields are read by `onAbort`, the timeout
         // callback, and the close/error handlers below. Declare them BEFORE
         // wiring the abort listener so `onAbort` never references a binding
         // that is still in the temporal dead zone (the JS engine hoists `let`
         // but throws on access until the declaration line runs).
-        let timer: NodeJS.Timeout | null = null
+        let cancelTimer: (() => void) | null = null
         let settled = false
         let terminationReason: 'abort' | 'timeout' | null = null
         let stdout = ''
@@ -1624,48 +1503,30 @@ export async function runTerminalCommand({
               spoolError = error
             }
           }
-          outputSpool?.append(name, text, childProcess[name])
+          const source = childProcess[name]
+          if (source) outputSpool?.append(name, text, source)
         }
 
-        // Honor an external AbortSignal: SIGTERM the child on abort, with a
-        // SIGKILL fallback if it doesn't exit promptly. The promise rejects
-        // with the signal's reason (or a generic `AbortError`). Only applies
-        // to SYNC runs — background jobs keep running and can be cleaned up
-        // via `kill_job` against the returned `jobId`.
-        let abortKillTimer: NodeJS.Timeout | null = null
-        const requestTermination = (reason: 'abort' | 'timeout') => {
+        // The shared launch helper controls physical termination. These flags
+        // only select the output shape and never arm another kill schedule.
+        const markTermination = (reason: 'abort' | 'timeout') => {
           if (settled || terminationReason) return
           terminationReason = reason
-          const success = terminateProcessTree(childProcess, 'SIGTERM')
-          if (!success) {
-            terminateProcessTree(childProcess, 'SIGKILL')
-            return
-          }
-          abortKillTimer = setTimeout(() => {
-            if (isProcessTreeAlive(childProcess)) {
-              terminateProcessTree(childProcess, 'SIGKILL')
-            }
-          }, 5_000)
-          abortKillTimer.unref?.()
         }
         const onAbort = () => {
-          requestTermination('abort')
-          if (timer) clearTimeout(timer)
+          markTermination(refusalForSignal(resourceSignal).reason === 'deadline-exhausted' ? 'timeout' : 'abort')
+          cancelTimer?.()
         }
-        const signalAlreadyAborted = signal?.aborted ?? false
-        if (signal && !signalAlreadyAborted) {
-          signal.addEventListener('abort', onAbort, { once: true })
+        const signalAlreadyAborted = resourceSignal.aborted
+        if (!signalAlreadyAborted) {
+          resourceSignal.addEventListener('abort', onAbort, { once: true })
         }
 
-        // Set up timeout if timeout_seconds >= 0 (infinite timeout when < 0)
-        if (timeout_seconds >= 0) {
-          timer = setTimeout(() => {
-            requestTermination('timeout')
-          }, timeout_seconds * 1000)
-          // Never hold the event loop open just for the timeout: after the
-          // child settles (or the run aborts) the pending timer must not keep
-          // the process alive briefly.
-          timer.unref?.()
+        // Admission/preflight elapsed time is already deducted by the host.
+        if (node.input.resourceRemainingMs !== null) {
+          cancelTimer = scheduleNodeDeadline(node.remainingResourceMs, () => {
+            markTermination('timeout')
+          })
         }
 
         // Collect stdout. Cap accumulation during streaming so a chatty process
@@ -1687,14 +1548,16 @@ export async function runTerminalCommand({
             tail
           )
         }
-        childProcess.stdout.on('data', (data: Buffer) => {
+        childProcess.stdout?.on('data', (data: Buffer) => {
+          if (settled) return
           const text = stdoutDecoder.write(data)
           spoolChunk('stdout', text)
           stdout = appendCapped(stdout, text)
         })
 
         // Collect stderr (same cap)
-        childProcess.stderr.on('data', (data: Buffer) => {
+        childProcess.stderr?.on('data', (data: Buffer) => {
+          if (settled) return
           const text = stderrDecoder.write(data)
           spoolChunk('stderr', text)
           stderr = appendCapped(stderr, text)
@@ -1704,17 +1567,12 @@ export async function runTerminalCommand({
         childProcess.on('close', async (exitCode) => {
           if (settled) return
           settled = true
+          const resourceRefusal = node.resourceRefusal()
+          if (resourceRefusal?.reason === 'deadline-exhausted') terminationReason = 'timeout'
+          else if (resourceRefusal?.reason === 'cancelled') terminationReason = 'abort'
 
-          if (timer) {
-            clearTimeout(timer)
-          }
-          if (abortKillTimer) {
-            clearTimeout(abortKillTimer)
-            abortKillTimer = null
-          }
-          if (signal) {
-            signal.removeEventListener('abort', onAbort)
-          }
+          cancelTimer?.()
+          resourceSignal.removeEventListener('abort', onAbort)
 
           // Join disk writes before returning a recovery path. Inline accumulation
           // stays bounded, while the artifact contains every streamed character.
@@ -1726,14 +1584,14 @@ export async function runTerminalCommand({
           stderr = appendCapped(stderr, stderrTail)
           if (terminationReason === 'abort') {
             await outputSpool?.discard()
-            const reason = signal?.reason
-            if (reason instanceof Error) {
-              reject(reason)
-            } else {
-              const error = new Error('Aborted')
-              error.name = 'AbortError'
-              reject(error)
-            }
+            resolve(refused(resourceRefusal ?? refusalForSignal(resourceSignal)))
+            return
+          }
+
+          const observation = node.observation()
+          if (!observation.ok) {
+            await outputSpool?.discard()
+            resolve(refused(observation))
             return
           }
 
@@ -1770,8 +1628,9 @@ export async function runTerminalCommand({
                 type: 'json',
                 value: {
                   command,
-                  errorMessage: `Command timed out after ${timeout_seconds} seconds`,
+                  errorMessage: 'Command resource deadline exhausted',
                   timedOut: true,
+                  executionRefusal: executionRefusal('deadline-exhausted', 'Command resource deadline exhausted'),
                   startingCwd: spawnCwd,
                   ...fullLogFields,
                   stdout: truncatedStdout,
@@ -1800,28 +1659,46 @@ export async function runTerminalCommand({
           if (settled) return
           settled = true
 
-          if (timer) {
-            clearTimeout(timer)
-          }
-          if (abortKillTimer) {
-            clearTimeout(abortKillTimer)
-            abortKillTimer = null
-          }
-          if (signal) {
-            signal.removeEventListener('abort', onAbort)
-          }
+          cancelTimer?.()
+          resourceSignal.removeEventListener('abort', onAbort)
 
-          await outputSpool?.discard()
+          const observation = node.observation()
+          const refusal = node.resourceRefusal() ?? (resourceSignal.aborted ? refusalForSignal(resourceSignal)
+            : !observation.ok ? observation : executionRefusal('unavailable', error.message))
+          let fullLogFields = {}
+          if (refusal.reason === 'deadline-exhausted') {
+            const stdoutTail = stdoutDecoder.end()
+            const stderrTail = stderrDecoder.end()
+            spoolChunk('stdout', stdoutTail)
+            spoolChunk('stderr', stderrTail)
+            stdout = appendCapped(stdout, stdoutTail)
+            stderr = appendCapped(stderr, stderrTail)
+            fullLogFields = outputSpool
+              ? await outputSpool.finish({ command, startingCwd: spawnCwd })
+              : spoolError ? {
+                logPersisted: false as const,
+                logError: 'Full command output could not be saved; only the bounded inline output remains.',
+              } : {}
+          } else await outputSpool?.discard()
+          const truncatedStdout = truncateStringWithMessage({
+            str: stripColors(stdout), maxLength: COMMAND_OUTPUT_LIMIT, remove: 'MIDDLE',
+          })
+          const truncatedStderr = truncateStringWithMessage({
+            str: stripColors(stderr), maxLength: COMMAND_OUTPUT_LIMIT, remove: 'MIDDLE',
+          })
           resolve([
             {
               type: 'json',
               value: {
                 command,
-                errorMessage: `Failed to spawn command: ${error.message}`,
-                spawnFailed: true,
+                errorMessage: refusal.cause,
+                executionRefusal: refusal,
+                ...(node.facts().profile.active === null ? { spawnFailed: true } : {}),
+                ...(refusal.reason === 'deadline-exhausted' ? { timedOut: true } : {}),
                 startingCwd: spawnCwd,
-                stdout: stripColors(stdout),
-                ...(stderr ? { stderr: stripColors(stderr) } : {}),
+                ...fullLogFields,
+                stdout: truncatedStdout,
+                ...(truncatedStderr ? { stderr: truncatedStderr } : {}),
               },
             },
           ])
@@ -1840,14 +1717,15 @@ export async function runTerminalCommand({
       ) {
         return commandResult
       }
-      const dirtyAfter = await listDirtyPaths(gitRoot, signal, processEnv)
+      if ('executionRefusal' in part.value && !('timedOut' in part.value && part.value.timedOut)) return commandResult
+      const dirtyAfter = await observeDirty('terminal.safety.dirty-after')
       const touched =
         dirtyBefore && dirtyAfter ? dirtyDelta(dirtyBefore, dirtyAfter) : []
       return [
         {
           type: 'json' as const,
           value: withTouchedPaths(
-            part.value as Record<string, unknown>,
+            { ...part.value, ...(dirtyObservationRefusal ? { dirtyObservationRefusal } : {}) } as Record<string, unknown>,
             touched,
           ) as typeof part.value,
         },

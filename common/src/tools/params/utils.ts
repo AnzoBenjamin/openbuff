@@ -8,6 +8,8 @@ import {
 } from '../constants'
 
 import { areEditBlocksEnabled, parseEditBlocks } from './edit-blocks'
+import { FILESYSTEM_RESULT_MAX_CAPABILITIES } from '../results/filesystem'
+import { decodeReadCapabilityToken } from '../../util/content-hash'
 
 import type { JSONValue } from '../../types/json'
 import type { ToolResultOutput } from '../../types/messages/content-part'
@@ -271,8 +273,7 @@ export function tryRecoverTruncatedToolArguments(
   ): OpenStackNode => ({ ch, parent })
   const popOpenNode = (
     node: OpenStackNode | undefined,
-  ): OpenStackNode | undefined =>
-    node === undefined ? undefined : node.parent
+  ): OpenStackNode | undefined => (node === undefined ? undefined : node.parent)
   const candidates: CandidateSnapshot[] = []
   let stackHead: OpenStackNode | undefined = undefined
   let inString = false
@@ -635,7 +636,10 @@ export function normalizeSpawnAgentList(value: unknown, depth = 0): unknown {
     // A spawn entry is nested inside `agents`, so the top-level alias
     // normalizer cannot see its camelCase agentType. Accept the mechanical
     // alias without overriding an explicitly supplied canonical field.
-    if (record.agent_type === undefined && typeof record.agentType === 'string') {
+    if (
+      record.agent_type === undefined &&
+      typeof record.agentType === 'string'
+    ) {
       repairedRecord.agent_type = record.agentType
       repaired = true
     }
@@ -1021,6 +1025,66 @@ export function jsonToolResultSchema<T extends JSONValue>(
       type: z.literal('json'),
       value: valueSchema,
     }) satisfies z.ZodType<ToolResultOutput>,
+  ])
+}
+
+export const postEditCapabilitiesPartSchema = z
+  .object({
+    type: z.literal('json'),
+    value: z
+      .object({
+        postEditCapabilities: z
+          .array(
+            z
+              .object({
+                path: z.string().min(1).max(4096),
+                contentHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+                readCapability: z.string().min(1).max(4096),
+              })
+              .strict(),
+          )
+          .min(1)
+          .max(FILESYSTEM_RESULT_MAX_CAPABILITIES)
+          .superRefine((capabilities, ctx) => {
+            const paths = new Set<string>()
+            const tokens = new Set<string>()
+            for (let index = 0; index < capabilities.length; index++) {
+              const capability = capabilities[index]!
+              const decoded = decodeReadCapabilityToken(
+                capability.readCapability,
+              )
+              if (
+                paths.has(capability.path) ||
+                tokens.has(capability.readCapability) ||
+                typeof decoded === 'string' ||
+                decoded.tokenVersion !== 'v4' ||
+                decoded.rawBasis?.scope !== 'whole' ||
+                decoded.hash !== capability.contentHash
+              ) {
+                ctx.addIssue({
+                  code: 'custom',
+                  path: [index],
+                  message:
+                    'Post-edit authority requires unique paths and authenticated v4 whole raw capabilities.',
+                })
+              }
+              paths.add(capability.path)
+              tokens.add(capability.readCapability)
+            }
+          }),
+      })
+      .strict(),
+  })
+  .strict()
+
+/** One edit result, optionally followed by its bounded confirmed authorities. */
+export function editToolResultSchema<T extends JSONValue>(
+  valueSchema: z.ZodType<T>,
+) {
+  const result = z.object({ type: z.literal('json'), value: valueSchema })
+  return z.union([
+    z.tuple([result]),
+    z.tuple([result, postEditCapabilitiesPartSchema]),
   ])
 }
 

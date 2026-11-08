@@ -1,10 +1,19 @@
-import { createHash } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { isIP } from 'node:net'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import {
+  CallToolResultSchema,
+  ErrorCode,
+  McpError,
+  ToolListChangedNotificationSchema,
+} from '@modelcontextprotocol/sdk/types.js'
+import { mcpToolResult } from './result'
+import { OwnedStdioTransport } from './stdio-transport'
+import { jsonSchemaToZod } from '../util/json-schema'
 
 import {
   allowedLoopbackMcpFromEnv,
@@ -13,27 +22,58 @@ import {
   resolvePinnedMcpAddress,
 } from './dns-pinning'
 
-import type { MCPConfig, MCPConfigOrigin } from '../types/mcp'
+import type {
+  MCPConfig,
+  MCPConfigOrigin,
+  McpCatalogTool,
+  McpToolCatalog,
+} from '../types/mcp'
 import type { ToolResultOutput } from '../types/messages/content-part'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import type {
-  BlobResourceContents,
-  CallToolResult,
-  TextResourceContents,
-} from '@modelcontextprotocol/sdk/types.js'
+  ActionExecutionPort,
+  BoundResourcePort,
+} from '../types/contracts/execution-context'
+import type { CodebuffSpawn } from '../types/spawn'
+import type { McpToolCallArguments, McpToolCatalogOptions, MediatedMcpRequest } from './request'
+
+export type { McpToolCatalogOptions, MediatedMcpRequest } from './request'
 
 const runningClients: Record<string, Client> = {}
 const listToolsCache: Record<
   string,
   ReturnType<typeof Client.prototype.listTools>
 > = {}
+const listToolsExpiry = new Map<string, number>()
+const catalogCache = new Map<
+  string,
+  { generation: number; expiresAt: number; promise: Promise<McpToolCatalog> }
+>()
+const cacheTtlMs = 30_000
+let nextClientGeneration = 0
+
+type ClientState = {
+  client: Client
+  generation: number
+  origin: MCPConfigOrigin
+  closed: boolean
+  /** A string client ID never grants access to a mediated resource. */
+  mediated?: boolean
+  invalidation: AbortController
+  outputContracts: Map<
+    string,
+    { schema: unknown; validator?: ReturnType<typeof jsonSchemaToZod> }
+  >
+}
+const clientStates = new Map<string, ClientState>()
 
 /**
  * Hard cap on concurrently live MCP clients. Each registry entry holds an
  * OPEN transport (a spawned stdio process or a kept-alive HTTP connection),
  * so an unbounded registry leaks processes/file descriptors for the process
  * lifetime. Eviction is LRU-by-registration: the oldest registered id is
- * dropped (with its listTools cache entry) when the cap is exceeded.
+ * closed and removed (with its tool caches) when the cap is exceeded.
  */
 const maxRunningClients = 64
 
@@ -47,21 +87,82 @@ const runningClientOrder = new Set<string>()
  * promise settles, so a rejected connect is retried by the next call.
  */
 const pendingConnects = new Map<string, Promise<string>>()
+const capturedRemoteKeys = new WeakMap<CapturedMcpConfig, string>()
+type MediatedResourceState = {
+  port: BoundResourcePort
+  connected: boolean
+  restartReason?: 'observed-adapter-failure' | 'dead-entry-reacquire'
+}
+const mediatedResources = new Map<string, MediatedResourceState>()
 
-function registerRunningClient(key: string): void {
+function clearClientToolCaches(key: string): void {
+  const prefix = `${key}\0`
+  for (const cacheKey of Object.keys(listToolsCache)) {
+    if (cacheKey.startsWith(prefix)) {
+      delete listToolsCache[cacheKey]
+      listToolsExpiry.delete(cacheKey)
+    }
+  }
+  catalogCache.delete(key)
+}
+
+function invalidateClientState(key: string, state: ClientState): void {
+  state.generation = ++nextClientGeneration
+  state.invalidation.abort(new Error('MCP tool catalog generation changed'))
+  state.invalidation = new AbortController()
+  state.outputContracts.clear()
+  if (clientStates.get(key) === state) clearClientToolCaches(key)
+}
+
+function observeOutputContracts(
+  state: ClientState,
+  tools: McpCatalogTool[],
+  replace = false,
+): void {
+  const contracts: ClientState['outputContracts'] = replace
+    ? new Map()
+    : state.outputContracts
+  for (const tool of tools) {
+    if (tool.outputSchema !== undefined)
+      contracts.set(tool.name, { schema: structuredClone(tool.outputSchema) })
+    else contracts.delete(tool.name)
+  }
+  state.outputContracts = contracts
+}
+
+function detachRunningClient(key: string, state: ClientState): void {
+  state.closed = true
+  invalidateClientState(key, state)
+  if (clientStates.get(key) !== state) return
+  delete runningClients[key]
+  clientStates.delete(key)
+  runningClientOrder.delete(key)
+}
+
+export function getMCPClientGeneration(clientId: string): number | undefined {
+  const state = clientStates.get(clientId)
+  return state && !state.closed ? state.generation : undefined
+}
+
+/** Explicitly release a transport; old callbacks cannot detach its replacement. */
+export async function closeMCPClient(clientId: string): Promise<void> {
+  const state = clientStates.get(clientId)
+  if (!state) return
+  detachRunningClient(clientId, state)
+  await state.client.close()
+}
+
+async function registerRunningClient(
+  key: string,
+  state: ClientState,
+): Promise<void> {
+  runningClients[key] = state.client
+  clientStates.set(key, state)
   runningClientOrder.add(key)
   while (runningClientOrder.size > maxRunningClients) {
     const oldest = runningClientOrder.values().next()
     if (oldest.done || oldest.value === key) break
-    runningClientOrder.delete(oldest.value)
-    delete runningClients[oldest.value]
-    // listTools cache entries are keyed `${clientId}\0${argsHash}` (see
-    // listMCPTools), so eviction must sweep every per-args entry belonging to
-    // the evicted client rather than a single bare-clientId key.
-    const evictedPrefix = `${oldest.value}\0`
-    for (const cacheKey of Object.keys(listToolsCache)) {
-      if (cacheKey.startsWith(evictedPrefix)) delete listToolsCache[cacheKey]
-    }
+    await closeMCPClient(oldest.value).catch(() => {})
   }
 }
 
@@ -97,10 +198,13 @@ export class MissingMcpEnvVarError extends Error {
  * verbatim. Undefined vars are collected during the pass; if any were missing,
  * a {@link MissingMcpEnvVarError} listing all of them is thrown after the pass.
  */
-function substituteEnvInValue(value: string): string {
+function substituteEnvInValue(
+  value: string,
+  environment: Readonly<Record<string, string | undefined>>,
+): string {
   const missing: string[] = []
   const result = value.replace(/\$([A-Z_][A-Z0-9_]*)/g, (match, varName) => {
-    const envValue = process.env[varName]
+    const envValue = environment[varName]
     if (envValue === undefined) {
       missing.push(varName)
       // Keep the literal in the (discarded-on-throw) output; the missing var
@@ -120,10 +224,11 @@ function substituteEnvInValue(value: string): string {
  */
 function substituteEnvInRecord(
   record: Record<string, string>,
+  environment: Readonly<Record<string, string | undefined>>,
 ): Record<string, string> {
   const result: Record<string, string> = {}
   for (const [key, value] of Object.entries(record)) {
-    result[key] = substituteEnvInValue(value)
+    result[key] = substituteEnvInValue(value, environment)
   }
   return result
 }
@@ -547,6 +652,7 @@ export type ResolvedMCPConfigValues =
 export function resolveMCPConfigValues(
   config: MCPConfig,
   origin: MCPConfigOrigin,
+  environment: Readonly<Record<string, string | undefined>> = process.env,
 ): ResolvedMCPConfigValues {
   const substitute = originAllowsEnvSubstitution(origin)
   if (config.type === 'stdio') {
@@ -554,7 +660,9 @@ export function resolveMCPConfigValues(
       type: 'stdio',
       command: config.command,
       args: [...config.args],
-      env: substitute ? substituteEnvInRecord(config.env) : { ...config.env },
+      env: substitute
+        ? substituteEnvInRecord(config.env, environment)
+        : { ...config.env },
     }
   }
   if (config.type === 'http' || config.type === 'sse') {
@@ -563,7 +671,7 @@ export function resolveMCPConfigValues(
       url: config.url,
       params: { ...config.params },
       headers: substitute
-        ? substituteEnvInRecord(config.headers)
+        ? substituteEnvInRecord(config.headers, environment)
         : { ...config.headers },
     }
   }
@@ -596,6 +704,278 @@ function hashRecordValues(
   return Object.fromEntries(
     Object.entries(normalized).sort(([a], [b]) => a.localeCompare(b)),
   )
+}
+
+/** Captured configuration is data. Only the separately registered resource grants access. */
+export type CapturedMcpConfig = Readonly<{
+  origin: MCPConfigOrigin
+  resolved: ResolvedMCPConfigValues
+  allowedLoopbackMcp: readonly string[]
+}>
+
+export function captureMcpConfig(
+  config: MCPConfig,
+  options: {
+    origin: MCPConfigOrigin
+    environment: Readonly<Record<string, string | undefined>>
+    allowedLoopbackMcp?: readonly string[]
+  },
+): CapturedMcpConfig {
+  const resolved = resolveMCPConfigValues(
+    config,
+    options.origin,
+    options.environment,
+  )
+  if (resolved.type === 'stdio') {
+    Object.freeze(resolved.args)
+    Object.freeze(resolved.env)
+  } else {
+    Object.freeze(resolved.params)
+    Object.freeze(resolved.headers)
+  }
+  return Object.freeze({
+    origin: options.origin,
+    resolved: Object.freeze(resolved),
+    allowedLoopbackMcp: Object.freeze([...(options.allowedLoopbackMcp ?? [])]),
+  })
+}
+
+/** Remote transports retain origin/DNS/result behavior and use captured values once. */
+export async function getCapturedMCPClient(
+  captured: CapturedMcpConfig,
+  options: { signal?: AbortSignal } = {},
+): Promise<string> {
+  options.signal?.throwIfAborted()
+  if (captured.resolved.type === 'stdio')
+    throw new Error('Captured stdio MCP requires a registered process resource')
+  let key = capturedRemoteKeys.get(captured)
+  if (!key) {
+    key = `mcp-remote:${randomUUID()}`
+    capturedRemoteKeys.set(captured, key)
+  }
+  if (key in runningClients) return key
+  const existing = pendingConnects.get(key)
+  if (existing) return existing
+  const clientId = key
+  const pending = connectMCPClient(
+    undefined,
+    captured.origin,
+    captured.allowedLoopbackMcp,
+    clientId,
+    captured.resolved,
+    undefined,
+    options.signal,
+  ).finally(() => {
+    if (pendingConnects.get(clientId) === pending)
+      pendingConnects.delete(clientId)
+  })
+  pendingConnects.set(clientId, pending)
+  return pending
+}
+
+/**
+ * One request lease over a host-registered stdio resource. The root constructs
+ * the resource from the same captured config/destination and supplies a fresh
+ * action port for every caller. Returned string IDs alone cannot invoke it.
+ */
+export async function getMediatedMCPClient(
+  captured: CapturedMcpConfig,
+  options: {
+    resource: BoundResourcePort
+    execution: ActionExecutionPort
+    signal?: AbortSignal
+    spawn?: CodebuffSpawn
+  },
+): Promise<MediatedMcpRequest> {
+  if (captured.resolved.type !== 'stdio')
+    throw new Error('A process resource is required only for stdio MCP')
+  options.signal?.throwIfAborted()
+  let resourceState = mediatedResources.get(options.resource.key)
+  if (!resourceState) {
+    resourceState = { port: options.resource, connected: false }
+    mediatedResources.set(options.resource.key, resourceState)
+  }
+  let clientId = `mcp-resource:${resourceState.port.key}`
+  if (
+    !runningClients[clientId] &&
+    !pendingConnects.has(clientId) &&
+    (resourceState.connected || resourceState.restartReason)
+  ) {
+    // Authenticate this caller before the host creates another generation.
+    const previous = resourceState.port.request(options.execution)
+    if (!previous.ok) throw executionError(previous)
+    previous.value.release()
+    const replacement = resourceState.port.restart(
+      resourceState.restartReason ?? 'dead-entry-reacquire',
+    )
+    if (!replacement.ok) throw executionError(replacement)
+    resourceState.port = replacement.value
+    mediatedResources.set(replacement.value.key, resourceState)
+    resourceState.connected = false
+    resourceState.restartReason = undefined
+    clientId = `mcp-resource:${replacement.value.key}`
+  }
+  const requested = resourceState.port.request(options.execution)
+  if (!requested.ok) throw executionError(requested)
+  const access = requested.value
+  try {
+    options.signal?.throwIfAborted()
+    if (!(clientId in runningClients)) {
+      let pending = pendingConnects.get(clientId)
+      if (!pending) {
+        // start() calls prepareLaunch after all Client callbacks are installed.
+        const transport = new OwnedStdioTransport({
+          prepareLaunch: () => access.prepareLaunch(),
+          spawn: options.spawn,
+        })
+        pending = connectMCPClient(
+          undefined,
+          captured.origin,
+          captured.allowedLoopbackMcp,
+          clientId,
+          captured.resolved,
+          transport,
+        )
+          .then(
+            (id) => {
+              resourceState.connected = true
+              return id
+            },
+            (error) => {
+              // A policy refusal is not a crash/restart signal. A later caller
+              // can renew only an attempted transport that actually failed.
+              if (
+                !(
+                  error instanceof Error &&
+                  error.name === 'ExecutionAdmissionError'
+                ) ||
+                (error as { executionRefusal?: { reason?: string } })
+                  .executionRefusal?.reason === 'dispatch-failed'
+              )
+                resourceState.restartReason = 'observed-adapter-failure'
+              throw error
+            },
+          )
+          .finally(() => {
+            if (pendingConnects.get(clientId) === pending)
+              pendingConnects.delete(clientId)
+          })
+        pendingConnects.set(clientId, pending)
+      }
+      await waitForMcpRequest(pending, options.signal)
+    }
+    const state = clientStates.get(clientId)
+    if (
+      !state ||
+      state.closed ||
+      !state.mediated ||
+      state.origin !== captured.origin
+    )
+      throw new Error('MCP resource connection is unavailable or incompatible')
+    resourceState.connected = true
+    let released = false
+    let activeUses = 0
+    const releaseWhenIdle = () => {
+      if (released && activeUses === 0) access.release()
+    }
+    const use = async <T>(
+      operation: string,
+      invoke: () => Promise<T>,
+    ): Promise<T> => {
+      if (released) throw new Error('MCP request lease has been released')
+      activeUses++
+      try {
+        options.signal?.throwIfAborted()
+        const permit = await access.admitUse(operation)
+        if (!permit.ok) throw executionError(permit)
+        const started = access.useNow(permit.value, invoke)
+        if (!started.ok) throw executionError(started)
+        return await started.value
+      } finally {
+        activeUses--
+        releaseWhenIdle()
+      }
+    }
+    return Object.freeze({
+      id: clientId,
+      get generation() {
+        return getMCPClientGeneration(clientId)
+      },
+      listToolCatalog: (catalogOptions: McpToolCatalogOptions = {}) =>
+        use(
+          stableHash([
+            'mcp.catalog.v1',
+            catalogOptions.maxPages ?? null,
+            catalogOptions.maxTools ?? null,
+          ]),
+          () =>
+            listMCPToolCatalogInternal(clientId, {
+              ...catalogOptions,
+              signal: combineRequestSignals(
+                options.signal,
+                catalogOptions.signal,
+              ),
+            }),
+        ),
+      callTool: (...args: McpToolCallArguments) =>
+        use(stableHash(['mcp.call.v1', args[0]]), () => {
+          const [params, schema, callOptions] = args
+          return callMCPToolInternal(clientId, params, schema, {
+            ...callOptions,
+            signal: combineRequestSignals(options.signal, callOptions?.signal),
+          })
+        }),
+      release: () => {
+        if (released) return
+        released = true
+        releaseWhenIdle()
+      },
+    })
+  } catch (error) {
+    access.release()
+    throw error
+  }
+}
+
+function executionError(result: { reason: string; cause: string }): Error {
+  return Object.assign(new Error(result.cause), {
+    name: 'ExecutionAdmissionError',
+    executionRefusal: result,
+  })
+}
+
+function combineRequestSignals(
+  a?: AbortSignal,
+  b?: AbortSignal,
+): AbortSignal | undefined {
+  return a && b ? AbortSignal.any([a, b]) : (a ?? b)
+}
+
+async function waitForMcpRequest<T>(
+  pending: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return pending
+  signal.throwIfAborted()
+  let abort: (() => void) | undefined
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        abort = () =>
+          reject(signal.reason ?? new Error('MCP request cancelled'))
+        signal.addEventListener('abort', abort, { once: true })
+        if (signal.aborted) abort()
+      }),
+    ])
+  } finally {
+    if (abort) signal.removeEventListener('abort', abort)
+  }
+}
+
+function requireLegacyClient(clientId: string): void {
+  if (clientStates.get(clientId)?.mediated)
+    throw new Error('MCP resource access requires a current request lease')
 }
 
 /**
@@ -695,7 +1075,7 @@ export async function getMCPClient(
     allowedLoopbackMcp,
     key,
   ).finally(() => {
-    pendingConnects.delete(key)
+    if (pendingConnects.get(key) === connectPromise) pendingConnects.delete(key)
   })
   pendingConnects.set(key, connectPromise)
   return connectPromise
@@ -710,20 +1090,28 @@ export async function getMCPClient(
  * the connect instead of replaying a cached failure.
  */
 async function connectMCPClient(
-  config: MCPConfig,
+  config: MCPConfig | undefined,
   origin: MCPConfigOrigin,
   allowedLoopbackMcp: readonly string[] | undefined,
   key: string,
+  captured?: ResolvedMCPConfigValues,
+  ownedTransport?: Transport,
+  lifetimeSignal?: AbortSignal,
 ): Promise<string> {
-  const resolved = resolveMCPConfigValues(config, origin)
+  lifetimeSignal?.throwIfAborted()
+  const resolved =
+    captured ?? (config ? resolveMCPConfigValues(config, origin) : undefined)
+  if (!resolved) throw new Error('MCP configuration is missing')
   let transport: Transport
   if (resolved.type === 'stdio') {
-    transport = new StdioClientTransport({
-      command: resolved.command,
-      args: resolved.args,
-      env: resolved.env,
-      stderr: 'ignore',
-    })
+    transport =
+      ownedTransport ??
+      new StdioClientTransport({
+        command: resolved.command,
+        args: resolved.args,
+        env: resolved.env,
+        stderr: 'ignore',
+      })
   } else {
     const url = new URL(resolved.url)
     // SEC-3 SSRF guard: a client-origin (untrusted peer, NEW-1) remote server
@@ -735,11 +1123,7 @@ async function connectMCPClient(
     if (
       origin === 'client' &&
       isBlockedMcpAddress(hostname) &&
-      !isAllowedLoopbackMcpAuthority(
-        hostname,
-        url.port,
-        allowedLoopbackMcp,
-      )
+      !isAllowedLoopbackMcpAuthority(hostname, url.port, allowedLoopbackMcp)
     ) {
       throw new Error(
         `MCP client-origin server "${resolved.url}" refused: host ` +
@@ -806,9 +1190,43 @@ async function connectMCPClient(
     version: '1.0.0',
   })
 
-  await client.connect(transport)
-  runningClients[key] = client
-  registerRunningClient(key)
+  const state: ClientState = {
+    client,
+    generation: ++nextClientGeneration,
+    origin,
+    closed: false,
+    ...(ownedTransport ? { mediated: true } : {}),
+    invalidation: new AbortController(),
+    outputContracts: new Map(),
+  }
+  // Register before initialization so early notifications/disconnects fence
+  // discovery too. Each callback closes over its own connection state.
+  const closeForLifetime = () => {
+    detachRunningClient(key, state)
+    void client.close().catch(() => {})
+  }
+  client.onclose = () => {
+    lifetimeSignal?.removeEventListener('abort', closeForLifetime)
+    detachRunningClient(key, state)
+  }
+  client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    if (!state.closed) invalidateClientState(key, state)
+  })
+  lifetimeSignal?.addEventListener('abort', closeForLifetime, { once: true })
+  try {
+    lifetimeSignal?.throwIfAborted()
+    await client.connect(transport)
+    if (state.closed)
+      throw new Error('MCP connection closed during initialization')
+    await registerRunningClient(key, state)
+    if (state.closed || clientStates.get(key) !== state)
+      throw new Error('MCP connection closed during registration')
+  } catch (error) {
+    lifetimeSignal?.removeEventListener('abort', closeForLifetime)
+    detachRunningClient(key, state)
+    await client.close().catch(() => {})
+    throw error
+  }
 
   return key
 }
@@ -817,87 +1235,266 @@ export function listMCPTools(
   clientId: string,
   ...args: Parameters<typeof Client.prototype.listTools>
 ): ReturnType<typeof Client.prototype.listTools> {
-  const client = runningClients[clientId]
-  if (!client) {
-    throw new Error(`listTools: client not found with id: ${clientId}`)
-  }
-  // The cache is keyed per (client, serialized call args), not per client:
-  // two listTools calls with different arguments (e.g. a no-args listing and
-  // a cursor-paged one) have different responses, so an entry cached for one
-  // call shape must never be replayed for another. Distinct keys also mean
-  // the rejection deletion below fires for the exact call that failed instead
-  // of being masked by an entry cached under different args.
-  const cacheKey = `${clientId}\0${stableHash(args)}`
-  if (!listToolsCache[cacheKey]) {
-    const pending = client.listTools(...args)
-    listToolsCache[cacheKey] = pending
-    // A REJECTED listTools must not poison the cache forever: drop the entry
-    // once the failure settles so the next call retries against the
-    // (possibly recovered) client instead of replaying the cached rejection.
-    void pending.catch(() => {
-      if (listToolsCache[cacheKey] === pending) {
-        delete listToolsCache[cacheKey]
-      }
-    })
-  }
-  return listToolsCache[cacheKey]
+  requireLegacyClient(clientId)
+  return listMCPToolsInternal(clientId, ...args)
 }
 
-function getResourceData(
-  resource: TextResourceContents | BlobResourceContents,
-): string {
-  if ('text' in resource) return resource.text as string
-  if ('blob' in resource) return resource.blob as string
-  return ''
+function listMCPToolsInternal(
+  clientId: string,
+  ...args: Parameters<typeof Client.prototype.listTools>
+): ReturnType<typeof Client.prototype.listTools> {
+  const state = clientStates.get(clientId)
+  if (!state || state.closed) {
+    throw new Error(`listTools: client not found with id: ${clientId}`)
+  }
+  const generation = state.generation
+  // Cancellation belongs to each caller; never share a signal-bound request.
+  const cacheable = args[1]?.signal === undefined
+  const cacheKey = `${clientId}\0${stableHash(args)}`
+  const expiry = listToolsExpiry.get(cacheKey)
+  if (expiry !== undefined && expiry <= Date.now()) {
+    delete listToolsCache[cacheKey]
+    listToolsExpiry.delete(cacheKey)
+  }
+  const cachedPage = listToolsCache[cacheKey]
+  if (cacheable && cachedPage !== undefined) return cachedPage
+  const signal = args[1]?.signal
+    ? AbortSignal.any([state.invalidation.signal, args[1].signal])
+    : state.invalidation.signal
+  const pending = state.client
+    .listTools(args[0], { ...args[1], signal })
+    .then((result) => {
+      if (
+        clientStates.get(clientId) !== state ||
+        state.closed ||
+        state.generation !== generation
+      ) {
+        throw new Error(
+          'MCP tool catalog generation changed during page discovery',
+        )
+      }
+      if (cacheable && listToolsCache[cacheKey] === pending)
+        listToolsExpiry.set(cacheKey, Date.now() + cacheTtlMs)
+      observeOutputContracts(state, result.tools)
+      return result
+    })
+  if (cacheable) listToolsCache[cacheKey] = pending
+  void pending.catch(() => {
+    if (listToolsCache[cacheKey] === pending) {
+      delete listToolsCache[cacheKey]
+      listToolsExpiry.delete(cacheKey)
+    }
+  })
+  return pending
+}
+
+/** Complete discovery belongs to one connection/catalog generation. */
+export function listMCPToolCatalog(
+  clientId: string,
+  options: McpToolCatalogOptions = {},
+): Promise<McpToolCatalog> {
+  requireLegacyClient(clientId)
+  return listMCPToolCatalogInternal(clientId, options)
+}
+
+function listMCPToolCatalogInternal(
+  clientId: string,
+  options: McpToolCatalogOptions = {},
+): Promise<McpToolCatalog> {
+  const state = clientStates.get(clientId)
+  const cached = catalogCache.get(clientId)
+  const cacheable = Object.keys(options).length === 0
+  if (
+    cacheable &&
+    cached &&
+    cached.generation === state?.generation &&
+    cached.expiresAt > Date.now()
+  )
+    return cached.promise
+  const promise = discoverMCPToolCatalog(clientId, state, options)
+  if (cacheable && state) {
+    const entry = {
+      generation: state.generation,
+      expiresAt: Number.POSITIVE_INFINITY,
+      promise,
+    }
+    catalogCache.set(clientId, entry)
+    void promise.then(
+      (result) => {
+        if (catalogCache.get(clientId) !== entry) return
+        if (
+          result.complete &&
+          clientStates.get(clientId) === state &&
+          state.generation === result.generation
+        )
+          entry.expiresAt = Date.now() + cacheTtlMs
+        else catalogCache.delete(clientId)
+      },
+      () => {
+        if (catalogCache.get(clientId) === entry) catalogCache.delete(clientId)
+      },
+    )
+  }
+  return promise
+}
+
+async function discoverMCPToolCatalog(
+  clientId: string,
+  state: ClientState | undefined,
+  options: McpToolCatalogOptions,
+): Promise<McpToolCatalog> {
+  const catalog: McpToolCatalog = {
+    kind: 'mcp_tool_catalog',
+    schemaVersion: 1,
+    generation: state?.generation ?? null,
+    complete: false,
+    incompleteReasons: [],
+    tools: [],
+    ...(state ? { origin: state.origin } : {}),
+  }
+  const fail = (reason: string, discardTools = false): McpToolCatalog => {
+    catalog.incompleteReasons.push(reason)
+    if (discardTools) catalog.tools = []
+    return catalog
+  }
+  if (!state || state.closed) return fail('client_not_found')
+  const maxPages = options.maxPages ?? 128
+  const maxTools = options.maxTools ?? 5000
+  const timeoutMs = options.timeoutMs ?? 10_000
+  for (const [name, value] of Object.entries({
+    maxPages,
+    maxTools,
+    timeoutMs,
+  })) {
+    if (!Number.isSafeInteger(value) || value < 0)
+      return fail(`invalid_limit: ${name}`)
+  }
+  if (options.signal?.aborted) return fail('cancelled')
+  if (timeoutMs === 0) return fail('deadline_exceeded')
+  const deadline = new AbortController()
+  const timer = setTimeout(
+    () => deadline.abort(new Error('MCP catalog deadline exceeded')),
+    timeoutMs,
+  )
+  const signal = AbortSignal.any([
+    state.invalidation.signal,
+    deadline.signal,
+    ...(options.signal ? [options.signal] : []),
+  ])
+  const seenCursors = new Set<string>()
+  const tools = new Map<string, McpCatalogTool>()
+  let cursor: string | undefined
+  try {
+    for (let page = 0; page < maxPages; page++) {
+      if (signal.aborted) throw signal.reason
+      // Race the signal as well as forwarding it to the SDK, so the whole
+      // traversal bound also holds for a peer/request that ignores cancellation.
+      let abortListener: (() => void) | undefined
+      const aborted = new Promise<never>((_, reject) => {
+        abortListener = () => reject(signal.reason)
+        signal.addEventListener('abort', abortListener, { once: true })
+        if (signal.aborted) abortListener()
+      })
+      let listed: Awaited<ReturnType<typeof Client.prototype.listTools>>
+      try {
+        listed = await Promise.race([
+          listMCPToolsInternal(
+            clientId,
+            cursor === undefined ? undefined : { cursor },
+            { signal, timeout: timeoutMs },
+          ),
+          aborted,
+        ])
+      } finally {
+        if (abortListener) signal.removeEventListener('abort', abortListener)
+      }
+      if (signal.aborted) throw signal.reason
+      if (
+        clientStates.get(clientId) !== state ||
+        state.closed ||
+        state.generation !== catalog.generation
+      )
+        return fail('generation_changed', true)
+      for (const tool of listed.tools) {
+        const previous = tools.get(tool.name)
+        if (previous && stableHash(previous) !== stableHash(tool)) {
+          tools.delete(tool.name)
+          catalog.tools = [...tools.values()]
+          return fail(`duplicate_tool_conflict: ${tool.name}`)
+        }
+        if (!previous) {
+          if (tools.size >= maxTools) return fail('tool_limit')
+          tools.set(tool.name, tool)
+          catalog.tools.push(tool)
+        }
+      }
+      const nextCursor = listed.nextCursor
+      if (nextCursor === undefined) {
+        // Replace only on a complete traversal; earlier pages retain their
+        // contracts even though the vendor Client caches only its last page.
+        observeOutputContracts(state, catalog.tools, true)
+        catalog.complete = true
+        return catalog
+      }
+      if (seenCursors.has(nextCursor)) return fail('cursor_loop')
+      seenCursors.add(nextCursor)
+      cursor = nextCursor
+    }
+    return fail('page_limit')
+  } catch (error) {
+    if (clientStates.get(clientId) !== state || state.closed)
+      return fail('connection_closed', true)
+    if (state.generation !== catalog.generation)
+      return fail('generation_changed', true)
+    if (options.signal?.aborted) return fail('cancelled')
+    if (deadline.signal.aborted) return fail('deadline_exceeded')
+    return fail(
+      `request_failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export async function callMCPTool(
   clientId: string,
-  ...args: Parameters<typeof Client.prototype.callTool>
+  ...args: McpToolCallArguments
 ): Promise<ToolResultOutput[]> {
-  const client = runningClients[clientId]
-  if (!client) {
+  requireLegacyClient(clientId)
+  return callMCPToolInternal(clientId, ...args)
+}
+
+async function callMCPToolInternal(
+  clientId: string,
+  ...args: McpToolCallArguments
+): Promise<ToolResultOutput[]> {
+  const state = clientStates.get(clientId)
+  if (!state || state.closed) {
     throw new Error(`callTool: client not found with id: ${clientId}`)
   }
-  const callResult = await client.callTool(...args)
-  const result = callResult as CallToolResult
-  const content = result.content
-
-  return content.map((c: (typeof content)[number]) => {
-    if (c.type === 'text') {
-      return {
-        type: 'json',
-        value: c.text,
-      } satisfies ToolResultOutput
-    }
-    if (c.type === 'audio') {
-      return {
-        type: 'media',
-        data: c.data,
-        mediaType: c.mimeType,
-      } satisfies ToolResultOutput
-    }
-    if (c.type === 'image') {
-      return {
-        type: 'media',
-        data: c.data,
-        mediaType: c.mimeType,
-      } satisfies ToolResultOutput
-    }
-    if (c.type === 'resource') {
-      return {
-        type: 'media',
-        data: getResourceData(c.resource),
-        mediaType: c.resource.mimeType ?? 'text/plain',
-      } satisfies ToolResultOutput
-    }
-    const fallbackValue =
-      'uri' in c && typeof (c as { uri: unknown }).uri === 'string'
-        ? (c as { uri: string }).uri
-        : JSON.stringify(c)
-    return {
-      type: 'json',
-      value: fallbackValue,
-    } satisfies ToolResultOutput
-  })
+  const [params, resultSchema = CallToolResultSchema, options] = args
+  const contract = state.outputContracts.get(params.name)
+  // The vendor Client validates error structuredContent against a success
+  // schema, discarding valid failure detail. Keep wire validation, and enforce
+  // our generation-bound output contract only for successful peer results.
+  const callResult = await state.client.request(
+    { method: 'tools/call', params },
+    resultSchema,
+    options,
+  )
+  if (contract && !callResult.isError) {
+    if (callResult.structuredContent === undefined)
+      throw new McpError(
+        ErrorCode.InvalidRequest,
+        `Tool ${params.name} has an output schema but did not return structured content`,
+      )
+    contract.validator ??= jsonSchemaToZod(contract.schema)
+    const parsed = contract.validator.safeParse(callResult.structuredContent)
+    if (!parsed.success)
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Structured content does not match the tool's output schema: ${parsed.error.message}`,
+      )
+  }
+  return mcpToolResult(callResult as CallToolResult)
 }

@@ -1,4 +1,0 @@
-Using environment: test
-[openbuff] Loaded provider config from:
-  - /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/approval-cancellation/f2cdf15d-cd1d-4d66-8c3d-249209b60e4f/providers.json
-{"cases":7,"providerCalls":0,"evidenceDir":"/home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B02/deslop-full-refresh/approval-cancellation","fixtureSha256":"8009dd642a67b9530c023ea377b4dedf04e4f3987829eeb7ca2c2cc7b6d45a01"}

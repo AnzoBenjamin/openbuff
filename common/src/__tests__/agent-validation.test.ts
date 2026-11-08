@@ -550,6 +550,70 @@ describe('Agent Validation', () => {
     })
 
     describe('Edge Cases', () => {
+      it('reports an unsupported schema without discarding healthy sibling agents', () => {
+        const result = validateAgents({
+          agentTemplates: {
+            'healthy.ts': {
+              ...mockAgentTemplate,
+              id: 'healthy',
+              inputSchema: { params: { type: 'object' } },
+            },
+            'unsupported.ts': {
+              ...mockAgentTemplate,
+              id: 'unsupported',
+              inputSchema: {
+                params: { type: 'object', unevaluatedProperties: false },
+              },
+            },
+          },
+          logger,
+        })
+        expect(Object.keys(result.templates)).toEqual(['healthy'])
+        expect(result.validationErrors).toHaveLength(1)
+        expect(result.validationErrors[0].message).toContain(
+          'Unsupported JSON Schema',
+        )
+        expect(result.validationErrors[0].message).toContain(
+          'unevaluatedProperties',
+        )
+      })
+      for (const promptSchema of [
+        { type: 'string', enum: ['allowed'] },
+        { type: 'string', minLength: 8 },
+        { type: 'string', pattern: '^/api/v1$' },
+        { type: 'string', allOf: [{ minLength: 8 }] },
+      ]) {
+        it(`registers a structurally valid constrained prompt ${JSON.stringify(promptSchema)}`, () => {
+          const result = validateAgents({
+            agentTemplates: {
+              'constrained.ts': {
+                ...mockAgentTemplate,
+                inputSchema: { prompt: promptSchema },
+              },
+            },
+            logger,
+          })
+          expect(result.validationErrors).toEqual([])
+          expect(
+            result.templates['test-agent'].inputSchema.prompt!.safeParse(
+              'allowed long prompt',
+            ).success,
+          ).toBe(!('enum' in promptSchema) && !('pattern' in promptSchema))
+          if ('pattern' in promptSchema)
+            expect(
+              result.templates['test-agent'].inputSchema.prompt!.safeParse(
+                '/api/v1',
+              ).success,
+            ).toBe(true)
+          if ('enum' in promptSchema)
+            expect(
+              result.templates['test-agent'].inputSchema.prompt!.safeParse(
+                'allowed',
+              ).success,
+            ).toBe(true)
+        })
+      }
+
       it('should handle git-committer agent schema correctly', async () => {
         const fileContext: ProjectFileContext = {
           ...mockFileContext,
@@ -871,12 +935,8 @@ describe('agent-template schema-member coercion (JSON spawn boundary)', () => {
     expect(typeof (coerced as { safeParse?: unknown }).safeParse).toBe(
       'function',
     )
-    expect(
-      (coerced as z.ZodType).safeParse({ name: 'x' }).success,
-    ).toBe(true)
-    expect(
-      (coerced as z.ZodType).safeParse({ name: 42 }).success,
-    ).toBe(false)
+    expect((coerced as z.ZodType).safeParse({ name: 'x' }).success).toBe(true)
+    expect((coerced as z.ZodType).safeParse({ name: 42 }).success).toBe(false)
   })
 
   it('isDegradedZodHusk detects a ~standard-only husk and rejects plain JSON Schema', () => {
@@ -891,86 +951,124 @@ describe('agent-template schema-member coercion (JSON spawn boundary)', () => {
     expect(isDegradedZodHusk({ type: 'object', properties: {} })).toBe(false)
     // A live zod member (real internals present) is not a husk either.
     expect(isDegradedZodHusk({ '~standard': {}, _zod: {} })).toBe(false)
-    expect(
-      isDegradedZodHusk({ '~standard': {}, safeParse: () => ({}) }),
-    ).toBe(false)
+    expect(isDegradedZodHusk({ '~standard': {}, safeParse: () => ({}) })).toBe(
+      false,
+    )
     // Non-objects are never husks.
     expect(isDegradedZodHusk(null)).toBe(false)
     expect(isDegradedZodHusk('string')).toBe(false)
     expect(isDegradedZodHusk([])).toBe(false)
   })
 
-  it('coerceJsonSchemaMember degrades an unrepresentable/degenerate {type:object} member to the native loose-object fallback', () => {
+  it('restores an unconstrained object exactly and refuses degraded Zod husks', () => {
     const coerced = coerceJsonSchemaMember({ type: 'object' }) as z.ZodType
-    // The result is a live zod schema regardless of the degenerate input.
-    expect(typeof coerced.safeParse).toBe('function')
-    // And it is REPRESENTABLE: z.toJSONSchema must not throw (asSchema's
-    // exact crash condition).
-    expect(() => z.toJSONSchema(coerced, { io: 'input' })).not.toThrow()
-    // Loose object semantics: objectness is still enforced.
     expect(coerced.safeParse({ a: 1 }).success).toBe(true)
     expect(coerced.safeParse('not an object').success).toBe(false)
-    // A husk input (zod's degraded wire form) also lands on a live,
-    // representable result — it must never reach asSchema as a husk.
-    const husk = {
-      '~standard': { validate: () => undefined },
-    } as unknown
-    const huskCoerced = coerceJsonSchemaMember(husk) as z.ZodType
-    expect(typeof huskCoerced.safeParse).toBe('function')
-    expect(() =>
-      z.toJSONSchema(huskCoerced, { io: 'input' }),
-    ).not.toThrow()
-  })
-
-  it('serializeSchemaMemberForTransport falls back to {type:object} for a live member even unrepresentable-any cannot express', () => {
-    // A _zod-marked fake satisfies isLiveZodSchema but z.toJSONSchema reads
-    // its internals and throws — the last-resort branch of the serializer.
-    const fake = { _zod: {}, safeParse: () => ({ success: true }) }
-    const transported = serializeSchemaMemberForTransport(fake, 'input')
-    expect(transported).toEqual({ type: 'object' })
-    // The fallback must survive the JSON boundary it exists for.
-    expect(() => JSON.stringify(transported)).not.toThrow()
-    // And the child re-coercion lands on a live, representable zod schema.
-    const coerced = coerceJsonSchemaMember(transported) as z.ZodType
-    expect(typeof coerced.safeParse).toBe('function')
     expect(() => z.toJSONSchema(coerced, { io: 'input' })).not.toThrow()
+    expect(() => coerceJsonSchemaMember({ '~standard': {} })).toThrow(
+      'degraded Zod',
+    )
   })
 
-  it("transports even unrepresentable-emission members verbatim; child hardening owns unrepresentability", () => {
-    // z.never() is the canonical live-but-UNREPRESENTABLE re-conversion: its
-    // 'any' emission is degenerate `{}`, which re-converts to a live zod
-    // schema carrying the z.custom base-union branch (not representable under
-    // BOTH io modes). The serializer transports it VERBATIM — the child's
-    // coerceJsonSchemaMember is hardened (try/catch + representability guard
-    // → native fallback), so unrepresentability is handled child-side and
-    // degrading here would only lose the emission's structure. The serializer
-    // degrades ONLY when the emission's JSON form is not parseable JSON
-    // Schema (convertJsonSchemaToZod throws) — that branch is defensive and
-    // not naturally reachable from a zod emission.
-    expect(
-      serializeSchemaMemberForTransport(z.never(), 'input'),
-    ).not.toEqual({ type: 'object' })
-    // The same class: formerly-gap shapes (z.record(z.string(), z.date()),
-    // z.map) emit degenerate-but-parseable schemas and transport verbatim
-    // with their structure intact.
-    const record = z.record(z.string(), z.date()) as unknown
-    const recordOut = serializeSchemaMemberForTransport(record, 'input') as {
-      type?: string
-      propertyNames?: unknown
+  it('refuses an unrepresentable live member instead of broadening its contract', () => {
+    const fake = { _zod: {}, safeParse: () => ({ success: true }) }
+    expect(() => serializeSchemaMemberForTransport(fake, 'input')).toThrow(
+      'Cannot transport',
+    )
+    expect(() =>
+      serializeSchemaMemberForTransport(z.map(z.string(), z.string()), 'input'),
+    ).toThrow('Cannot transport')
+    expect(() =>
+      serializeSchemaMemberForTransport(
+        z.record(z.string(), z.date()),
+        'input',
+      ),
+    ).toThrow('Cannot transport')
+  })
+
+  it('refuses forged native markers and invalid JSON schema member types', () => {
+    for (const marker of [null, false, 0, 'native', {}, { def: {} }]) {
+      const forged = {
+        type: 'object',
+        properties: { q: { type: 'string' } },
+        required: ['q'],
+        additionalProperties: false,
+        _zod: marker,
+      }
+      expect(() => coerceJsonSchemaMember(forged)).toThrow(
+        'Unsupported JSON Schema',
+      )
+      expect(() => serializeSchemaMemberForTransport(forged, 'input')).toThrow(
+        'Cannot transport',
+      )
     }
-    expect(recordOut.type).toBe('object')
-    expect(recordOut.propertyNames).toBeDefined()
-    expect(recordOut).not.toEqual({ type: 'object' })
-    const map = z.map(z.string(), z.string()) as unknown
-    expect(
-      serializeSchemaMemberForTransport(map, 'input'),
-    ).not.toEqual({ type: 'object' })
-    // The degraded form remains available for genuinely unparseable
-    // emissions: the child re-coerces {type:object} into a live,
-    // representable loose-object schema — the spawn survives either way.
-    const fallback = coerceJsonSchemaMember({ type: 'object' }) as z.ZodType
-    expect(typeof fallback.safeParse).toBe('function')
-    expect(() => z.toJSONSchema(fallback, { io: 'input' })).not.toThrow()
+    for (const invalid of [null, 7, 'schema', []]) {
+      expect(() => coerceJsonSchemaMember(invalid)).toThrow(
+        'Unsupported JSON Schema',
+      )
+    }
+    const live = z.object({ q: z.string() }).strict()
+    expect(coerceJsonSchemaMember(live)).toBe(live)
+  })
+
+  it('keeps never validation across the actual JSON boundary', () => {
+    const transported = serializeSchemaMemberForTransport(z.never(), 'input')
+    const restored = coerceJsonSchemaMember(
+      JSON.parse(JSON.stringify(transported)),
+    ) as z.ZodType
+    for (const value of [null, {}, [], 'value', 1, false]) {
+      expect(restored.safeParse(value).success).toBe(false)
+    }
+  })
+
+  it('preserves raw boolean schemas and refuses unsupported schemas before transport', () => {
+    expect(serializeSchemaMemberForTransport(false, 'input')).toBe(false)
+    expect(serializeSchemaMemberForTransport(true, 'output')).toBe(true)
+    expect(() =>
+      serializeSchemaMemberForTransport(
+        { type: 'object', unevaluatedProperties: false },
+        'input',
+      ),
+    ).toThrow('Unsupported JSON Schema')
+    expect(() =>
+      serializeSchemaMemberForTransport({ '~standard': {} }, 'input'),
+    ).toThrow('degraded Zod')
+  })
+
+  it('preserves live async execution and refuses transporting executable behavior', async () => {
+    const live = z.string().refine(async (value) => value === 'allowed')
+    expect(coerceJsonSchemaMember(live)).toBe(live)
+    expect((await live.safeParseAsync('allowed')).success).toBe(true)
+    expect((await live.safeParseAsync('denied')).success).toBe(false)
+    for (const schema of [
+      live,
+      z.string().default('fallback'),
+      z.string().transform((value) => value.toUpperCase()),
+      z.coerce.number(),
+    ]) {
+      expect(() => serializeSchemaMemberForTransport(schema, 'input')).toThrow(
+        'Cannot transport executable Zod',
+      )
+    }
+  })
+
+  it('refuses live string length and flagged regex projections with different acceptance sets', () => {
+    const utf16 = z.string().min(2)
+    expect(utf16.safeParse('🤖').success).toBe(true)
+    expect(() => serializeSchemaMemberForTransport(utf16, 'input')).toThrow(
+      'UTF-16',
+    )
+    const insensitive = z.string().regex(/^allowed$/i)
+    expect(insensitive.safeParse('ALLOWED').success).toBe(true)
+    expect(() =>
+      serializeSchemaMemberForTransport(insensitive, 'input'),
+    ).toThrow('regex flags')
+    expect(() =>
+      serializeSchemaMemberForTransport(
+        z.lazy(() => z.string().default('fallback')),
+        'input',
+      ),
+    ).toThrow('Zod default')
   })
 
   it("keeps a representable live member's full structure", () => {
@@ -994,19 +1092,13 @@ describe('agent-template schema-member coercion (JSON spawn boundary)', () => {
     // set_output/structuredOutput output-mode), so an input-only probe
     // would let this shape through and crash later in output mode.
     const transformSchema = z.string().transform((s) => new Date(s))
-    expect(() =>
-      z.toJSONSchema(transformSchema, { io: 'input' }),
-    ).not.toThrow()
+    expect(() => z.toJSONSchema(transformSchema, { io: 'input' })).not.toThrow()
     expect(() => z.toJSONSchema(transformSchema, { io: 'output' })).toThrow()
     expect(isRepresentableZodSchema(transformSchema)).toBe(false)
     // A schema representable in both modes passes the probe.
-    expect(isRepresentableZodSchema(z.object({ name: z.string() }))).toBe(
-      true,
-    )
+    expect(isRepresentableZodSchema(z.object({ name: z.string() }))).toBe(true)
     // z.map already throws in input mode, so the dual-mode probe rejects it
     // as well.
-    expect(isRepresentableZodSchema(z.map(z.string(), z.string()))).toBe(
-      false,
-    )
+    expect(isRepresentableZodSchema(z.map(z.string(), z.string()))).toBe(false)
   })
 })

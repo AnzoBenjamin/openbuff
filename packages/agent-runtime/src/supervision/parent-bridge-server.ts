@@ -42,10 +42,13 @@ import { convertJsonSchemaToZod } from 'zod-from-json-schema'
 import { z } from 'zod/v4'
 
 import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
+import { authenticateReadFilesItem } from '../util/authenticated-read-source'
+import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 
 import {
   coerceJsonSchemaMember,
   ensureAgentTemplateZodSchemas,
+  isLiveZodSchema as isLiveZodSchemaValue,
 } from '@codebuff/common/templates/agent-validation'
 
 import {
@@ -62,6 +65,10 @@ import {
   isBridgeMethod,
   isBridgeRequest,
   isBridgeWireMarker,
+  stripBridgedReadAuthority,
+  bridgedReadMatchesRequest,
+  type ParentValidatedReadAnchor,
+  type ParentValidatedReadFilesResponse,
   type BridgedCacheDebugRequestBuilt,
   type BridgedFetchParams,
   type BridgedPromptStreamResult,
@@ -82,10 +89,30 @@ import {
   type TrackEventFn,
 } from './bridge-protocol'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
+import {
+  resolveMcpBridgeParams,
+  type McpBridgeScope,
+} from '@codebuff/common/mcp/provenance'
 import type { ConsumeCreditsWithFallbackFn } from '@codebuff/common/types/contracts/billing'
-import type { HandleStepsLogChunkFn, RequestFilesFn, RequestMcpToolDataFn, RequestOptionalFileFn, RequestToolCallFn, SendSubagentChunkFn } from '@codebuff/common/types/contracts/client'
-import type { AddAgentStepFn, FetchAgentFromDatabaseFn, FinishAgentRunFn, StartAgentRunFn } from '@codebuff/common/types/contracts/database'
-import type { CacheDebugUsageData, RequestContextTrimInfo, StreamChunk } from '@codebuff/common/types/contracts/llm'
+import type {
+  HandleStepsLogChunkFn,
+  RequestFilesFn,
+  RequestMcpToolDataFn,
+  RequestOptionalFileFn,
+  RequestToolCallFn,
+  SendSubagentChunkFn,
+} from '@codebuff/common/types/contracts/client'
+import type {
+  AddAgentStepFn,
+  FetchAgentFromDatabaseFn,
+  FinishAgentRunFn,
+  StartAgentRunFn,
+} from '@codebuff/common/types/contracts/database'
+import type {
+  CacheDebugUsageData,
+  RequestContextTrimInfo,
+  StreamChunk,
+} from '@codebuff/common/types/contracts/llm'
 import type { PromptResult as PromptResultType } from '@codebuff/common/util/error'
 
 /** Bound on concurrently in-flight REQUEST handler invocations; beyond it
@@ -225,7 +252,10 @@ export function startParentBridgeServer(
       },
       // Malformed/oversized framing: fail closed (destroy the connection).
       onProtocolError: (error) => {
-        logger.warn({ error: error.message }, 'bridge protocol error; closing socket')
+        logger.warn(
+          { error: error.message },
+          'bridge protocol error; closing socket',
+        )
         socket.destroy()
       },
     })
@@ -416,6 +446,7 @@ export function startParentBridgeServer(
  * into the live shapes the real deps expect.
  */
 export type SupervisedBridgeHandlerDeps = {
+  onExecutionActionStart?: import('@codebuff/common/types/contracts/client').OnExecutionActionStart
   promptAiSdkStream: PromptAiSdkStreamFn
   promptAiSdk: PromptAiSdkFn
   promptAiSdkStructured: PromptAiSdkStructuredFn
@@ -494,20 +525,6 @@ function rehydrateParams(
   return walk(params, 0)
 }
 
-/**
- * Whether a value is a LIVE zod schema — the exact passthrough predicate
- * coerceJsonSchemaMember applies (v4 `_zod` internals present, or a
- * `safeParse` function), so a stashed member can never bypass coercion that
- * the coercion step itself would have applied.
- */
-function isLiveZodSchemaValue(value: unknown): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return false
-  }
-  const record = value as { _zod?: unknown; safeParse?: unknown }
-  return record._zod !== undefined || typeof record.safeParse === 'function'
-}
-
 /** Live zod schema members stashed from the RAW wire params before
  * rehydrateParams' plain-object walk (see rehydratePromptParamsForBridge
  * for why the stash exists). */
@@ -555,7 +572,11 @@ function stashLivePromptSchemaMembers(params: unknown): LivePromptSchemaStash {
   ) {
     const templateMap = localAgentTemplates as Record<string, unknown>
     for (const [id, template] of Object.entries(templateMap)) {
-      if (!template || typeof template !== 'object' || Array.isArray(template)) {
+      if (
+        !template ||
+        typeof template !== 'object' ||
+        Array.isArray(template)
+      ) {
         continue
       }
       const templateRecord = template as Record<string, unknown>
@@ -618,7 +639,11 @@ function spliceLivePromptSchemaMembers(
     const templateMap = templates as Record<string, unknown>
     for (const [id, entry] of stash.templateSchemas) {
       const template = templateMap[id]
-      if (!template || typeof template !== 'object' || Array.isArray(template)) {
+      if (
+        !template ||
+        typeof template !== 'object' ||
+        Array.isArray(template)
+      ) {
         continue
       }
       const templateRecord = template as Record<string, unknown>
@@ -639,56 +664,17 @@ function spliceLivePromptSchemaMembers(
   }
 }
 
-/** Coerces ONE schema member for the bridged prompt params. A failing
- * coercion degrades to a NATIVE permissive loose-object zod schema — the
- * same "a working agent beats a crashed one" policy
- * serializeSchemaMemberForTransport applies — instead of crashing the
- * handler. The fallback MUST be native: convertJsonSchemaToZod's output for
- * degenerate shapes carries a z.custom(...) base-union branch that
- * z.toJSONSchema rejects ("Custom types cannot be represented in JSON
- * Schema"), so a poisoned conversion can never serve as the fallback. */
+/** Restore a transported schema exactly; unsupported members refuse the prompt. */
 function coerceBridgeSchemaMember(value: unknown): unknown {
-  try {
-    return coerceJsonSchemaMember(value)
-  } catch {
-    return z.object({}).loose()
-  }
+  return coerceJsonSchemaMember(value)
 }
 
-/** Coerces ONE localAgentTemplates value through the established template
- * coercion (ensureAgentTemplateZodSchemas); on failure the template is
- * rebuilt with per-member coercion so one malformed member can never crash
- * the handler. */
+/** Restore template schemas without broadening a failed member. */
 function coerceBridgeAgentTemplate(template: unknown): unknown {
   if (!template || typeof template !== 'object' || Array.isArray(template)) {
     return template
   }
-  const record = template as Record<string, unknown>
-  try {
-    return ensureAgentTemplateZodSchemas(record as unknown as AgentTemplate)
-  } catch {
-    const rawInputSchema = record.inputSchema
-    const inputSchema =
-      rawInputSchema &&
-      typeof rawInputSchema === 'object' &&
-      !Array.isArray(rawInputSchema)
-        ? (rawInputSchema as Record<string, unknown>)
-        : {}
-    return {
-      ...record,
-      inputSchema: {
-        ...(inputSchema.prompt !== undefined
-          ? { prompt: coerceBridgeSchemaMember(inputSchema.prompt) }
-          : {}),
-        ...(inputSchema.params !== undefined
-          ? { params: coerceBridgeSchemaMember(inputSchema.params) }
-          : {}),
-      },
-      ...(record.outputSchema !== undefined
-        ? { outputSchema: coerceBridgeSchemaMember(record.outputSchema) }
-        : {}),
-    }
-  }
+  return ensureAgentTemplateZodSchemas(template as AgentTemplate)
 }
 
 /** Applies the schema coercion to the rehydrated params IN PLACE. ONLY the
@@ -704,7 +690,9 @@ function coerceBridgePromptSchemaMembers(
       if (!tool || typeof tool !== 'object' || Array.isArray(tool)) continue
       const toolRecord = tool as Record<string, unknown>
       if (toolRecord.inputSchema !== undefined) {
-        toolRecord.inputSchema = coerceBridgeSchemaMember(toolRecord.inputSchema)
+        toolRecord.inputSchema = coerceBridgeSchemaMember(
+          toolRecord.inputSchema,
+        )
       }
       if (toolRecord.outputSchema !== undefined) {
         toolRecord.outputSchema = coerceBridgeSchemaMember(
@@ -717,7 +705,11 @@ function coerceBridgePromptSchemaMembers(
   if (templates && typeof templates === 'object' && !Array.isArray(templates)) {
     const templateMap = templates as Record<string, unknown>
     for (const [id, template] of Object.entries(templateMap)) {
-      if (!template || typeof template !== 'object' || Array.isArray(template)) {
+      if (
+        !template ||
+        typeof template !== 'object' ||
+        Array.isArray(template)
+      ) {
         continue
       }
       templateMap[id] = coerceBridgeAgentTemplate(template)
@@ -733,25 +725,10 @@ function coerceBridgePromptSchemaMembers(
  * deliberately NOT routed through this helper: its schema crosses the
  * bridge as JSON Schema by design and is converted back explicitly.
  *
- * WHY (the H.typeName crash): the child's loopAgentSteps builds a live-zod
- * ToolSet and streams it through the bridge, but the child-side sanitize
- * walk degrades every zod schema into a husk that retains zod v4's
- * own-enumerable `~standard` marker while losing the prototype methods and
- * non-enumerable internals (`_zod`, `safeParse`). rehydrateParams restores
- * only the logger/signal/date markers, so a husk reaches
- * deps.promptAiSdkStream — whose streamText runs every
- * tools[name].inputSchema through the AI SDK's asSchema, routing the husk
- * to the zod-v3 converter, which reads `_def.typeName` on undefined and
- * crashes the spawn with "undefined is not an object (evaluating
- * 'H.typeName')". Every child LLM step passes at least the end_turn tool
- * through the bridge, so every spawn crashed.
- *
- * Coercion contract (coerceJsonSchemaMember): degraded husks and plain
- * JSON-Schema members are re-converted to live zod; already-live members
- * pass through BY REFERENCE (the request-file rehydrate path relies on the
- * by-reference contract — never double-convert); a member that cannot be
- * coerced degrades to a permissive `{ type: 'object' }` zod schema instead
- * of crashing the handler.
+ * Child serialization transports the original JSON Schema. Plain JSON-Schema
+ * members become live validators; degraded Zod internals and unsupported
+ * schemas refuse the prompt before any provider call. Already-live members
+ * pass through by reference.
  *
  * Live members are stashed from the RAW wire params BEFORE rehydrateParams'
  * plain-object walk and spliced back in afterwards: the walk rebuilds every
@@ -824,10 +801,32 @@ export function buildSupervisedBridgeHandlers(
      * `randomUUID` nonce is minted for this table.
      */
     bridgeNonce?: string
+    mcpScope?: McpBridgeScope
+    /** Host-owned project, independently of whether this agent has MCP servers. */
+    readCapabilityProjectId?: string
+    /** Optional already-bound issuer for hosts/tests that preallocate a run. */
+    readCapabilityIssuer?: ReadCapabilityIssuer
   },
 ): SupervisedBridgeHandlerTable {
   const logger = deps.logger ?? createBridgeStderrLogger('parent-bridge')
   const bridgeNonce = options?.bridgeNonce ?? realIdGen.uuid()
+  const readProjectId =
+    options?.readCapabilityProjectId ?? options?.readCapabilityIssuer?.projectId
+  const issuedReadRunIds = new Set<string>()
+  const ownsReadIssuer = (
+    issuer: ReadCapabilityIssuer | undefined,
+  ): issuer is ReadCapabilityIssuer =>
+    Boolean(
+      issuer &&
+      typeof issuer.projectId === 'string' &&
+      issuer.projectId.length > 0 &&
+      typeof issuer.runId === 'string' &&
+      issuer.runId.length > 0 &&
+      issuer.projectId === readProjectId &&
+      (issuedReadRunIds.has(issuer.runId) ||
+        (options?.readCapabilityIssuer?.projectId === issuer.projectId &&
+          options.readCapabilityIssuer.runId === issuer.runId)),
+    )
 
   // In-flight promptAiSdkStream cancellations (registered by
   // collectPromptStream below): close() drains this set so a killed stream
@@ -1016,9 +1015,7 @@ export function buildSupervisedBridgeHandlers(
       logger,
       signal: streamAbort.signal,
     } as unknown as PromptAiSdkStreamParams
-    const iterator = deps
-      .promptAiSdkStream(rehydrated)
-      [Symbol.asyncIterator]()
+    const iterator = deps.promptAiSdkStream(rehydrated)[Symbol.asyncIterator]()
     // Teardown parity with the in-process path (compatibility-reviewer:
     // stream-iterator-not-cancelled-on-bridge-close): when the bridge closes
     // and the server kills this handler, the collector must ALSO cancel the
@@ -1082,7 +1079,10 @@ export function buildSupervisedBridgeHandlers(
               }
         }
         if (!truncated) {
-          collectedBytes += Buffer.byteLength(JSON.stringify(next.value) ?? '', 'utf8')
+          collectedBytes += Buffer.byteLength(
+            JSON.stringify(next.value) ?? '',
+            'utf8',
+          )
           if (collectedBytes > BRIDGE_MAX_STREAM_CHUNKS_BYTES) {
             truncated = true
             logger.warn(
@@ -1144,7 +1144,7 @@ export function buildSupervisedBridgeHandlers(
       ...telemetry.callbacks,
       logger,
       signal: streamAbort.signal,
-    } as unknown as PromptAiSdkStreamStartParams)
+    }) as unknown as PromptAiSdkStreamStartParams
 
   const handleIncrementalStreamStart = async (
     params: PromptAiSdkStreamStartParams,
@@ -1164,7 +1164,9 @@ export function buildSupervisedBridgeHandlers(
     // reply can relay it alongside the cost.
     const telemetry = makeTelemetryCaptors()
     const iterator = deps
-      .promptAiSdkStream(buildStreamParams(params, streamAbort, cost, telemetry))
+      .promptAiSdkStream(
+        buildStreamParams(params, streamAbort, cost, telemetry),
+      )
       [Symbol.asyncIterator]()
     const streamId = realIdGen.uuid()
     const cancel = (): void => {
@@ -1262,7 +1264,10 @@ export function buildSupervisedBridgeHandlers(
     } catch {
       chunkBytes = Number.POSITIVE_INFINITY
     }
-    if (!Number.isFinite(chunkBytes) || chunkBytes > BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES) {
+    if (
+      !Number.isFinite(chunkBytes) ||
+      chunkBytes > BRIDGE_MAX_STREAM_NEXT_REPLY_BYTES
+    ) {
       incrementalStreams.delete(params.streamId)
       activeStreamCancels.delete(entry.cancel)
       // Registry hygiene: the truncated stream is ENDED from the child's
@@ -1361,7 +1366,10 @@ export function buildSupervisedBridgeHandlers(
         )
       }
       const result = await deps.promptAiSdkStructured({
-        ...(rehydrateParams(record, logger, bridgeNonce) as Record<string, unknown>),
+        ...(rehydrateParams(record, logger, bridgeNonce) as Record<
+          string,
+          unknown
+        >),
         apiKey: deps.apiKey,
         sendAction: deps.sendAction,
         trackEvent: deps.trackEvent,
@@ -1388,29 +1396,114 @@ export function buildSupervisedBridgeHandlers(
     // replaces nested logger-like objects / AbortSignals with wire markers,
     // and delivering those raw markers to the REAL sendAction dep would leak
     // marker garbage across the exported dep boundary.
-    sendAction: (params) => deps.sendAction(rehydrateParams(params, logger, bridgeNonce) as never),
-    requestToolCall: (params) =>
-      deps.requestToolCall(
-        rehydrateParams(params, logger, bridgeNonce) as never,
-      ),
-    // `capabilityIssuer` ({ projectId, runId }) crosses verbatim (it is
-    // JSON-serializable): the real dep mints cap.v3 editAnchors —
-    // contentHash + line range — for complete reads, and the CHILD re-mints
-    // the token with its own in-process HMAC key (a cap.v3 token is
-    // verifiable only in the process that minted it), so the parent-signed
-    // token never needs to be replayable across the bridge.
-    requestFiles: (params) => deps.requestFiles(rehydrateParams(params, logger, bridgeNonce) as never),
+    sendAction: (params) =>
+      deps.sendAction(rehydrateParams(params, logger, bridgeNonce) as never),
+    onExecutionActionStart: async (params) => {
+      await deps.onExecutionActionStart?.(rehydrateParams(params, logger, bridgeNonce) as Parameters<NonNullable<SupervisedBridgeHandlerDeps['onExecutionActionStart']>>[0])
+      return null
+    },
+    requestToolCall: (params) => {
+      const request = rehydrateParams(
+        params,
+        logger,
+        bridgeNonce,
+      ) as Parameters<RequestToolCallFn>[0]
+      return deps.requestToolCall(
+        request.mcpConfig
+          ? resolveMcpBridgeParams(
+              request as typeof request & {
+                mcpConfig: NonNullable<typeof request.mcpConfig>
+              },
+              options?.mcpScope,
+            )
+          : request,
+      )
+    },
+    requestFiles: async (params): Promise<ParentValidatedReadFilesResponse> => {
+      const request = rehydrateParams(
+        params,
+        logger,
+        bridgeNonce,
+      ) as Parameters<RequestFilesFn>[0]
+      const original = await deps.requestFiles(request)
+      const result = stripBridgedReadAuthority(original)
+      const validatedAnchors: ParentValidatedReadAnchor[] = []
+      const issuer = request.capabilityIssuer
+      if (ownsReadIssuer(issuer) && Array.isArray(original?.results)) {
+        original.results.forEach((item, itemIndex) => {
+          if (!bridgedReadMatchesRequest(item, request, itemIndex)) return
+          let anchor
+          try {
+            anchor = authenticateReadFilesItem(item, issuer)
+          } catch {
+            return
+          }
+          if (
+            !anchor?.rawBasis ||
+            (item.selector !== 'file' && item.selector !== 'range')
+          )
+            return
+          validatedAnchors.push({
+            itemIndex,
+            path: item.path,
+            selector: item.selector,
+            anchor: {
+              startLine: anchor.startLine,
+              endLine: anchor.endLine,
+              contentHash: anchor.contentHash,
+              rawBasis: anchor.rawBasis,
+            },
+          })
+          if (
+            item.selector === 'file' &&
+            item.status === 'ok' &&
+            typeof item.rawSourceContent === 'string'
+          ) {
+            // One raw payload crosses the bounded wire. The child reconstructs
+            // the already-validated observation instead of duplicating up to 10 MiB.
+            result.results[itemIndex] = {
+              ...result.results[itemIndex],
+              content: undefined,
+              contentOmittedForLength: true,
+              rawSourceContent: item.rawSourceContent,
+            } as typeof item
+          }
+        })
+      }
+      return {
+        kind: 'parent_validated_read_files',
+        version: 1,
+        bridgeNonce,
+        ...(ownsReadIssuer(issuer) ? { issuer } : {}),
+        result,
+        validatedAnchors,
+      }
+    },
     requestOptionalFile: (params) =>
       deps.requestOptionalFile(
         rehydrateParams(params, logger, bridgeNonce) as never,
       ),
     requestMcpToolData: (params) =>
-      deps.requestMcpToolData(rehydrateParams(params, logger, bridgeNonce) as never),
+      deps.requestMcpToolData(
+        resolveMcpBridgeParams(
+          rehydrateParams(
+            params,
+            logger,
+            bridgeNonce,
+          ) as Parameters<RequestMcpToolDataFn>[0],
+          options?.mcpScope,
+        ),
+      ),
     handleStepsLogChunk: (params) =>
-      deps.handleStepsLogChunk(rehydrateParams(params, logger, bridgeNonce) as never),
+      deps.handleStepsLogChunk(
+        rehydrateParams(params, logger, bridgeNonce) as never,
+      ),
     sendSubagentChunk: (params) =>
-      deps.sendSubagentChunk(rehydrateParams(params, logger, bridgeNonce) as never),
-    trackEvent: (params) => deps.trackEvent(rehydrateParams(params, logger, bridgeNonce) as never),
+      deps.sendSubagentChunk(
+        rehydrateParams(params, logger, bridgeNonce) as never,
+      ),
+    trackEvent: (params) =>
+      deps.trackEvent(rehydrateParams(params, logger, bridgeNonce) as never),
     fetch: async (params) => {
       const { input, init } = (params ?? {}) as BridgedFetchParams
       const response = await deps.fetch(input, init)
@@ -1425,24 +1518,40 @@ export function buildSupervisedBridgeHandlers(
         bodyText: await response.text(),
       }
     },
-    startAgentRun: (params) =>
-      deps.startAgentRun({
-        ...(rehydrateParams(params, logger, bridgeNonce) as Record<string, unknown>),
+    startAgentRun: async (params) => {
+      const runId = await deps.startAgentRun({
+        ...(rehydrateParams(params, logger, bridgeNonce) as Record<
+          string,
+          unknown
+        >),
         apiKey: deps.apiKey,
-      } as unknown as Parameters<StartAgentRunFn>[0]),
+      } as unknown as Parameters<StartAgentRunFn>[0])
+      if (typeof runId === 'string' && runId.length > 0)
+        issuedReadRunIds.add(runId)
+      return runId
+    },
     finishAgentRun: (params) =>
       deps.finishAgentRun({
-        ...(rehydrateParams(params, logger, bridgeNonce) as Record<string, unknown>),
+        ...(rehydrateParams(params, logger, bridgeNonce) as Record<
+          string,
+          unknown
+        >),
         apiKey: deps.apiKey,
       } as unknown as Parameters<FinishAgentRunFn>[0]),
     addAgentStep: (params) =>
       deps.addAgentStep({
-        ...(rehydrateParams(params, logger, bridgeNonce) as Record<string, unknown>),
+        ...(rehydrateParams(params, logger, bridgeNonce) as Record<
+          string,
+          unknown
+        >),
         apiKey: deps.apiKey,
       } as unknown as Parameters<AddAgentStepFn>[0]),
     fetchAgentFromDatabase: async (params) => {
       const template = await deps.fetchAgentFromDatabase({
-        ...(rehydrateParams(params, logger, bridgeNonce) as Record<string, unknown>),
+        ...(rehydrateParams(params, logger, bridgeNonce) as Record<
+          string,
+          unknown
+        >),
         apiKey: deps.apiKey,
       } as unknown as Parameters<FetchAgentFromDatabaseFn>[0])
       if (template === null) return null
@@ -1467,7 +1576,11 @@ export function buildSupervisedBridgeHandlers(
     },
     consumeCreditsWithFallback: (params) =>
       deps.consumeCreditsWithFallback(
-        rehydrateParams(params, logger, bridgeNonce) as unknown as Parameters<ConsumeCreditsWithFallbackFn>[0],
+        rehydrateParams(
+          params,
+          logger,
+          bridgeNonce,
+        ) as unknown as Parameters<ConsumeCreditsWithFallbackFn>[0],
       ),
   }
   // The per-table marker nonce rides on the returned table so the

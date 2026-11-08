@@ -1,10 +1,6 @@
 import z from 'zod/v4'
 
-import {
-  coerceToArray,
-  jsonToolResultSchema,
-  parseJsonBounded,
-} from '../utils'
+import { coerceToArray, jsonToolResultSchema, parseJsonBounded } from '../utils'
 import {
   READ_FILES_BLOCK_CONTENT_MAX_BYTES,
   readFilesResultV1Schema,
@@ -419,13 +415,13 @@ const inputSchema = z
         .preprocess(coerceToArray, z.array(readFilesWindowSelectorSchema))
         .optional()
         .describe(
-          'Contiguous line windows; each complete window mints a scoped cap.v3 editAnchor.',
+          'Contiguous line windows; each complete window mints a scoped cap.v4 editAnchor.',
         ),
       around: z
         .preprocess(coerceToArray, z.array(readFilesAroundSelectorSchema))
         .optional()
         .describe(
-          'Literal-anchored context blocks with a scoped cap.v3 editAnchor per block.',
+          'Literal-anchored context blocks with a scoped cap.v4 editAnchor per block.',
         ),
       symbol: z
         .preprocess(coerceToArray, z.array(readFilesSymbolSelectorSchema))
@@ -472,8 +468,8 @@ const description = `
 Read files from disk. Prefer ranges/windows/around/symbol slices over full reads before editing large files.
 
 - Selectors (combinable): \`paths\`, \`ranges\`, \`windows\`, \`around\`, \`symbol\`, \`symbols\`.
-- Complete reads return one editAnchor (startLine, endLine, contentHash, cap.v3 readCapability). Copy editAnchor.readCapability verbatim to basedOnRead/readCapability; other fields are diagnostics only.
-- Authority: whole-file-covering reads grant sticky whole-file auth; complete sub-file blocks mint a scoped cap.v3 for that block only. Partial/truncated reads mint nothing — do not edit from truncated content.
+- Complete reads return one editAnchor (startLine, endLine, contentHash, cap.v4 readCapability). Copy editAnchor.readCapability verbatim to basedOnRead/readCapability; other fields are diagnostics only.
+- Authority: authenticated complete paths reads with a whole raw basis grant whole-file auth. Ranges/windows/around/symbols retain a lines basis even when their slice covers the visible file. Partial/truncated or unverified reads mint no edit authority.
 - \`windows\`: contiguous line windows (default size 400); omit \`window\` for manifest + first window.
 - \`around\`: Nth literal \`match\` + contextLines (default 40).
 - \`symbol\` / \`symbols\`: named top-level slices (pair with read_outline). Prefer batch \`symbols\`; use \`symbol\` for a specific occurrence.

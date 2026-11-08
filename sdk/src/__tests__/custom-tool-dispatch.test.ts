@@ -42,6 +42,40 @@ function dispatch(
 }
 
 describe('custom tool input at SDK dispatch', () => {
+  test('JSON-only legacy handlers still validate at the host boundary', async () => {
+    const received: unknown[] = []
+    const tool = getCustomToolDefinition({
+      toolName: 'legacy_json_input',
+      description: 'Legacy host fixture',
+      inputSchema: {
+        type: 'object',
+        required: ['value'],
+        properties: { value: { type: 'integer' } },
+        additionalProperties: false,
+      } as unknown as CustomToolDefinition['inputSchema'],
+      execute: (value) => {
+        received.push(value)
+        return [{ type: 'json', value }]
+      },
+    })
+    for (const input of [
+      null,
+      [],
+      {},
+      { value: '1' },
+      { value: 1, extra: true },
+    ]) {
+      const result = await dispatch(tool, input)
+      expect(result.output[0]).toMatchObject({
+        type: 'json',
+        value: { errorMessage: expect.stringContaining('Invalid parameters') },
+      })
+    }
+    expect(received).toEqual([])
+    await dispatch(tool, { value: 1 })
+    expect(received).toEqual([{ value: 1 }])
+  })
+
   test('passes schema defaults and transforms to the handler', async () => {
     let received: unknown
     const tool = getCustomToolDefinition({

@@ -2,6 +2,8 @@ import { spawn, type ChildProcess } from 'child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
+import { createHash, randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Readable, Writable } from 'node:stream'
 import { PNG } from 'pngjs'
 import pixelmatch from 'pixelmatch'
@@ -14,6 +16,13 @@ import type {
 } from '@codebuff/common/browser-actions'
 import type { Log, NetworkEvent } from '@codebuff/common/browser-actions'
 import type { JSONValue } from '@codebuff/common/types/json'
+import type {
+  BoundResourceFactory,
+  BoundResourcePort,
+  ExecutionAdapterContext,
+  ResourceRequestPort,
+  TargetDescription,
+} from '@codebuff/common/types/contracts/execution-context'
 import { getSdkEnv } from '../env'
 import {
   CdpPipeTransport,
@@ -41,6 +50,7 @@ type RecordingState = {
 }
 
 type BrowserSession = {
+  resource?: BoundResourcePort
   owner?: BrowserSessionOwner
   projectRoot?: string
   child: ChildProcess
@@ -105,6 +115,100 @@ const CRC_TABLE = makeCrcTable()
 
 const browserSessions = new Map<string, BrowserSession>()
 const DEFAULT_BROWSER_SESSION_KEY = 'default'
+const browserExecutionScopes = new WeakMap<object, string>()
+const browserRequestSignal = new AsyncLocalStorage<AbortSignal | undefined>()
+
+export type BrowserExecutionContext = ExecutionAdapterContext &
+  Readonly<{
+    resources: BoundResourceFactory
+    executablePath: string
+    sandboxArgs: readonly string[]
+  }>
+
+function scopedBrowserKey(
+  key: string,
+  execution?: BrowserExecutionContext,
+): string {
+  if (!execution) return key
+  const scope = execution.cacheScope ?? execution.resources
+  let id = browserExecutionScopes.get(scope)
+  if (!id) {
+    id = randomUUID()
+    browserExecutionScopes.set(scope, id)
+  }
+  return `${id}:${key}`
+}
+
+function browserAdmissionError(result: {
+  reason: string
+  cause: string
+}): Error {
+  return Object.assign(new Error(`${result.reason}: ${result.cause}`), {
+    name: 'ExecutionAdmissionError',
+    executionRefusal: result,
+  })
+}
+
+async function withBrowserResourceUse<T>(
+  session: BrowserSession,
+  execution: BrowserExecutionContext | undefined,
+  action: BrowserAction,
+  use: () => Promise<T>,
+): Promise<T> {
+  if (!execution) throw browserAdmissionError({ reason: 'unavailable', cause: 'Captured browser execution context is unavailable' })
+  if (!session.resource)
+    throw new Error('Browser session has no registered process resource')
+  const requested = session.resource.request(execution.execution)
+  if (!requested.ok) throw browserAdmissionError(requested)
+  let completionOwnsLease = false
+  try {
+    execution.signal?.throwIfAborted()
+    const digest = createHash('sha256')
+      .update(JSON.stringify(['browser.use.v1', action]))
+      .digest('hex')
+    const permit = await requested.value.admitUse(digest)
+    if (!permit.ok) throw browserAdmissionError(permit)
+    const result = requested.value.useNow(permit.value, () =>
+      browserRequestSignal.run(execution.signal, use),
+    )
+    if (!result.ok) throw browserAdmissionError(result)
+    const completion = result.value.finally(() => requested.value.release())
+    completionOwnsLease = true
+    return await waitForBrowserRequest(completion, execution.signal)
+  } finally {
+    if (!completionOwnsLease) requested.value.release()
+  }
+}
+
+async function waitForBrowserRequest<T>(
+  pending: Promise<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  if (!signal) return pending
+  let onAbort: (() => void) | undefined
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        onAbort = () =>
+          reject(signal.reason ?? new Error('Browser request cancelled'))
+        signal.addEventListener('abort', onAbort, { once: true })
+        if (signal.aborted) onAbort()
+      }),
+    ])
+  } finally {
+    if (onAbort) signal.removeEventListener('abort', onAbort)
+  }
+}
+
+function sendBrowserCommand(
+  transport: CdpPipeTransport,
+  ...args: Parameters<CdpPipeTransport['send']>
+): Promise<unknown> {
+  const signal = browserRequestSignal.getStore()
+  signal?.throwIfAborted()
+  return waitForBrowserRequest(transport.send(...args), signal)
+}
 
 const MAX_RECORDING_FRAMES = 600
 const MAX_SESSION_LOG_ENTRIES = 5000
@@ -164,6 +268,7 @@ export function diagnoseNestingExceedsLimit(
 export async function browserLogs(
   action: BrowserAction,
   sessionOwnerOrKey: BrowserSessionOwner | string = DEFAULT_BROWSER_SESSION_KEY,
+  execution?: BrowserExecutionContext,
 ): Promise<CodebuffToolOutput<'browser_logs'>> {
   const owner =
     typeof sessionOwnerOrKey === 'string' ? undefined : sessionOwnerOrKey
@@ -171,18 +276,16 @@ export async function browserLogs(
     typeof sessionOwnerOrKey === 'string'
       ? undefined
       : sessionOwnerOrKey.projectRoot
-  const sessionKey =
+  const originalSessionKey =
     typeof sessionOwnerOrKey === 'string'
       ? sessionOwnerOrKey
       : getBrowserSessionKey(sessionOwnerOrKey)
+  const sessionKey = scopedBrowserKey(originalSessionKey, execution)
   try {
     // Reject an over-deep diagnose tree before any session work: a step whose
     // action is itself a 'diagnose' recurses into browserLogs, so without this
     // bound hostile or malformed input could drive unbounded recursion.
-    if (
-      action.type === 'diagnose' &&
-      diagnoseNestingExceedsLimit(action, 1)
-    ) {
+    if (action.type === 'diagnose' && diagnoseNestingExceedsLimit(action, 1)) {
       return [
         jsonResult({
           success: false,
@@ -193,414 +296,453 @@ export async function browserLogs(
       ]
     }
 
+    if (!execution || typeof execution.resources !== 'function')
+      throw browserAdmissionError({ reason: 'unavailable', cause: 'Captured browser execution context or resource factory is unavailable' })
+
     if (action.type === 'stop') {
-      await stopBrowserSession(sessionKey)
+      const existing = browserSessions.get(sessionKey)
+      if (existing)
+        await withBrowserResourceUse(existing, execution, action, () =>
+          stopBrowserSession(sessionKey),
+        )
+      else await stopBrowserSession(sessionKey)
       return [jsonResult({ success: true, action: action.type, logs: [] })]
     }
 
-    const session = await ensureBrowserSession(sessionKey, owner)
+    execution?.signal?.throwIfAborted()
+    const session = await waitForBrowserRequest(
+      ensureBrowserSession(sessionKey, owner, execution),
+      execution?.signal,
+    )
     if (owner) session.projectRoot = projectRoot
-    const page = await getActivePage(session)
-    await enablePageDomains(page)
+    return await withBrowserResourceUse(
+      session,
+      execution,
+      action,
+      async () => {
+        const page = await getActivePage(session)
+        await enablePageDomains(page)
 
-    if (action.type === 'start' || action.type === 'navigate') {
-      const url = normalizeBrowserUrl(action.url)
-      const waitUntil =
-        action.type === 'navigate' ? action.waitUntil : undefined
-      await waitForCommand(
-        page,
-        'Page.navigate',
-        { url },
-        action.timeout ?? 15_000,
-      )
-      await waitForLoad(page, waitUntil, action.timeout ?? 15_000)
-      return [jsonResult(await buildResponse(session, page, action.type))]
-    }
+        if (action.type === 'start' || action.type === 'navigate') {
+          const url = normalizeBrowserUrl(action.url)
+          const waitUntil =
+            action.type === 'navigate' ? action.waitUntil : undefined
+          await waitForCommand(
+            page,
+            'Page.navigate',
+            { url },
+            action.timeout ?? 15_000,
+          )
+          await waitForLoad(page, waitUntil, action.timeout ?? 15_000)
+          return [jsonResult(await buildResponse(session, page, action.type))]
+        }
 
-    if (action.type === 'snapshot') {
-      const snapshot = await evaluateInTarget(
-        page,
-        snapshotScript(),
-        action,
-        action.timeout,
-      )
-      const response = await buildResponse(session, page, action.type, snapshot)
-      if (isRecord(snapshot)) {
-        response.text =
-          typeof snapshot.text === 'string' ? snapshot.text : undefined
-        response.elements = Array.isArray(snapshot.elements)
-          ? (snapshot.elements as BrowserResponse['elements'])
-          : undefined
-      }
-      return [jsonResult(response)]
-    }
+        if (action.type === 'snapshot') {
+          const snapshot = await evaluateInTarget(
+            page,
+            snapshotScript(),
+            action,
+            action.timeout,
+          )
+          const response = await buildResponse(
+            session,
+            page,
+            action.type,
+            snapshot,
+          )
+          if (isRecord(snapshot)) {
+            response.text =
+              typeof snapshot.text === 'string' ? snapshot.text : undefined
+            response.elements = Array.isArray(snapshot.elements)
+              ? (snapshot.elements as BrowserResponse['elements'])
+              : undefined
+          }
+          return [jsonResult(response)]
+        }
 
-    if (action.type === 'screenshot') {
-      const designMode = action.screenshotPurpose === 'design'
-      const format =
-        action.screenshotCompression ?? (designMode ? 'png' : 'jpeg')
-      const quality =
-        format === 'png'
-          ? undefined
-          : (action.screenshotCompressionQuality ?? (designMode ? 90 : 70))
-      const result = await captureScreenshot(page, {
-        format,
-        quality,
-        fullPage: action.fullPage ?? false,
-        timeout: action.timeout,
-      })
-      const mediaType = format === 'png' ? 'image/png' : 'image/jpeg'
-      return [
-        jsonResult({
-          ...(await buildResponse(session, page, action.type)),
-          screenshotAttached: result.length > 0,
-        }),
-        ...(result
-          ? [{ type: 'media' as const, data: result, mediaType }]
-          : []),
-      ]
-    }
+        if (action.type === 'screenshot') {
+          const designMode = action.screenshotPurpose === 'design'
+          const format =
+            action.screenshotCompression ?? (designMode ? 'png' : 'jpeg')
+          const quality =
+            format === 'png'
+              ? undefined
+              : (action.screenshotCompressionQuality ?? (designMode ? 90 : 70))
+          const result = await captureScreenshot(page, {
+            format,
+            quality,
+            fullPage: action.fullPage ?? false,
+            timeout: action.timeout,
+          })
+          const mediaType = format === 'png' ? 'image/png' : 'image/jpeg'
+          return [
+            jsonResult({
+              ...(await buildResponse(session, page, action.type)),
+              screenshotAttached: result.length > 0,
+            }),
+            ...(result
+              ? [{ type: 'media' as const, data: result, mediaType }]
+              : []),
+          ]
+        }
 
-    if (action.type === 'click') {
-      const result = await clickElement(page, action)
-      if (action.waitForNavigation) {
-        await waitForLoad(page, 'load', action.timeout ?? 15_000)
-      }
-      return [
-        jsonResult(await buildResponse(session, page, action.type, result)),
-      ]
-    }
+        if (action.type === 'click') {
+          const result = await clickElement(page, action)
+          if (action.waitForNavigation) {
+            await waitForLoad(page, 'load', action.timeout ?? 15_000)
+          }
+          return [
+            jsonResult(await buildResponse(session, page, action.type, result)),
+          ]
+        }
 
-    if (action.type === 'type') {
-      const result = await typeIntoElement(page, action)
-      return [
-        jsonResult(await buildResponse(session, page, action.type, result)),
-      ]
-    }
+        if (action.type === 'type') {
+          const result = await typeIntoElement(page, action)
+          return [
+            jsonResult(await buildResponse(session, page, action.type, result)),
+          ]
+        }
 
-    if (action.type === 'key') {
-      await dispatchKey(page, action.key, {
-        text: action.text,
-        command: action.command ?? 'press',
-        modifiers: action.modifiers ?? [],
-        timeout: action.timeout,
-      })
-      return [
-        jsonResult(
-          await buildResponse(session, page, action.type, {
-            key: action.key,
+        if (action.type === 'key') {
+          await dispatchKey(page, action.key, {
+            text: action.text,
             command: action.command ?? 'press',
+            modifiers: action.modifiers ?? [],
+            timeout: action.timeout,
+          })
+          return [
+            jsonResult(
+              await buildResponse(session, page, action.type, {
+                key: action.key,
+                command: action.command ?? 'press',
+              }),
+            ),
+          ]
+        }
+
+        if (action.type === 'mouse') {
+          const point = action.selector
+            ? await elementPoint(page, action.selector, action)
+            : await pointInTarget(
+                page,
+                requirePoint(action.x, action.y),
+                action,
+              )
+          await dispatchMouse(page, action.event, point, {
+            button: action.button ?? 'left',
+            clickCount: action.clickCount ?? 1,
+            timeout: action.timeout,
+          })
+          return [
+            jsonResult(
+              await buildResponse(session, page, action.type, {
+                event: action.event,
+                ...point,
+              }),
+            ),
+          ]
+        }
+
+        if (action.type === 'hover') {
+          const point = await elementPoint(page, action.selector, action)
+          await dispatchMouse(page, 'move', point, {
+            button: 'left',
+            clickCount: 0,
+            timeout: action.timeout,
+          })
+          return [
+            jsonResult(await buildResponse(session, page, action.type, point)),
+          ]
+        }
+
+        if (action.type === 'drag') {
+          const result = await drag(page, action)
+          return [
+            jsonResult(await buildResponse(session, page, action.type, result)),
+          ]
+        }
+
+        if (action.type === 'select') {
+          const result = await evaluateInTarget(
+            page,
+            selectScript(action.selector, {
+              value: action.value,
+              label: action.label,
+              index: action.index,
+              frameSelector: action.frameSelector,
+            }),
+            action,
+            action.timeout,
+          )
+          return [
+            jsonResult(await buildResponse(session, page, action.type, result)),
+          ]
+        }
+
+        if (action.type === 'scroll') {
+          const amount = action.amount ?? 600
+          const axis =
+            action.direction === 'left' || action.direction === 'right'
+              ? 'left'
+              : 'top'
+          const sign =
+            action.direction === 'up' || action.direction === 'left' ? -1 : 1
+          const result = await evaluateInTarget(
+            page,
+            scrollScript({
+              selector: action.selector,
+              frameSelector: action.frameSelector,
+              axis,
+              delta: sign * amount,
+            }),
+            action,
+            action.timeout,
+          )
+          return [
+            jsonResult(await buildResponse(session, page, action.type, result)),
+          ]
+        }
+
+        if (action.type === 'evaluate') {
+          const result = await evaluateInTarget(
+            page,
+            action.script,
+            action,
+            action.timeout,
+          )
+          return [
+            jsonResult(await buildResponse(session, page, action.type, result)),
+          ]
+        }
+
+        if (action.type === 'design_tokens') {
+          const result = await evaluateInTarget(
+            page,
+            designTokensScript(action.selector, action.maxElements),
+            action,
+            action.timeout,
+          )
+          return [
+            jsonResult(await buildResponse(session, page, action.type, result)),
+          ]
+        }
+
+        if (action.type === 'wait_for') {
+          const result = await evaluateInTarget(
+            page,
+            waitForScript({
+              selector: action.selector,
+              text: action.text,
+              visible: action.visible ?? true,
+              pollInterval: action.pollInterval ?? 100,
+              timeout: action.timeout ?? 15_000,
+              frameSelector: action.frameSelector,
+            }),
+            action,
+            action.timeout ?? 15_000,
+          )
+          return [
+            jsonResult(await buildResponse(session, page, action.type, result)),
+          ]
+        }
+
+        if (action.type === 'upload') {
+          const result = await uploadFiles(
+            page,
+            action.selector,
+            action.paths,
+            action,
+            session.projectRoot,
+          )
+          return [
+            jsonResult(await buildResponse(session, page, action.type, result)),
+          ]
+        }
+
+        if (action.type === 'cookie') {
+          const result = await handleCookieAction(page, action)
+          return [
+            jsonResult(await buildResponse(session, page, action.type, result)),
+          ]
+        }
+
+        if (action.type === 'storage') {
+          const result = await evaluateInTarget(
+            page,
+            storageScript(
+              action.storage,
+              action.operation,
+              action.key,
+              action.value,
+            ),
+            action,
+            action.timeout,
+          )
+          return [
+            jsonResult(await buildResponse(session, page, action.type, result)),
+          ]
+        }
+
+        if (action.type === 'viewport') {
+          await waitForCommand(
+            page,
+            'Emulation.setDeviceMetricsOverride',
+            {
+              width: action.width,
+              height: action.height,
+              deviceScaleFactor: action.deviceScaleFactor ?? 1,
+              mobile: action.isMobile ?? false,
+              screenWidth: action.width,
+              screenHeight: action.height,
+              dontSetVisibleSize: false,
+            },
+            action.timeout ?? 15_000,
+          )
+          if (action.userAgent) {
+            await waitForCommand(
+              page,
+              'Network.setUserAgentOverride',
+              { userAgent: action.userAgent },
+              action.timeout ?? 15_000,
+            )
+          }
+          if (action.hasTouch !== undefined) {
+            await waitForCommand(
+              page,
+              'Emulation.setTouchEmulationEnabled',
+              { enabled: action.hasTouch },
+              action.timeout ?? 15_000,
+            )
+          }
+          return [
+            jsonResult(
+              await buildResponse(session, page, action.type, {
+                width: action.width,
+                height: action.height,
+              }),
+            ),
+          ]
+        }
+
+        if (action.type === 'network') {
+          const offline = action.offline ?? false
+          await waitForCommand(
+            page,
+            'Network.emulateNetworkConditions',
+            {
+              offline,
+              latency: action.latency ?? 0,
+              downloadThroughput: offline
+                ? 0
+                : (action.downloadThroughput ?? -1),
+              uploadThroughput: offline ? 0 : (action.uploadThroughput ?? -1),
+            },
+            action.timeout ?? 15_000,
+          )
+          return [
+            jsonResult(
+              await buildResponse(session, page, action.type, {
+                offline,
+                latency: action.latency ?? 0,
+              }),
+            ),
+          ]
+        }
+
+        if (action.type === 'tab') {
+          const result = await handleTabAction(session, action)
+          const activePage = await getActivePage(session)
+          return [
+            jsonResult(
+              await buildResponse(session, activePage, action.type, result),
+            ),
+          ]
+        }
+
+        if (action.type === 'recording') {
+          const output = await handleRecordingAction(session, page, action)
+          return output
+        }
+
+        if (action.type === 'pdf') {
+          const result = await waitForCommand(
+            page,
+            'Page.printToPDF',
+            {
+              landscape: action.landscape ?? false,
+              printBackground: action.printBackground ?? true,
+              scale: action.scale ?? 1,
+              paperWidth: action.paperWidth,
+              paperHeight: action.paperHeight,
+            },
+            action.timeout ?? 15_000,
+          )
+          const data =
+            isRecord(result) && typeof result.data === 'string'
+              ? result.data
+              : ''
+          return [
+            jsonResult({
+              ...(await buildResponse(session, page, action.type)),
+              ...buildPdfAttachmentMetadata(data),
+            }),
+          ]
+        }
+
+        if (action.type === 'pixel_diff') {
+          const output = await pixelDiff(session, page, action)
+          return output
+        }
+
+        if (action.type === 'diagnose') {
+          const results = []
+          for (const step of action.steps.slice(
+            0,
+            action.maxSteps ?? action.steps.length,
+          )) {
+            const stepOutput = await browserLogs(
+              step.action,
+              owner ?? originalSessionKey,
+              execution,
+            )
+            const json = stepOutput.find((item) => item.type === 'json')
+            results.push({
+              label: step.label,
+              response: json?.value ?? null,
+              expectedLogs: step.expectedLogs,
+              noJsErrors: step.noJsErrors,
+              noNetworkErrors: step.noNetworkErrors,
+              customCondition: step.customCondition,
+            })
+          }
+          const activePage = await getActivePage(session)
+          return [
+            jsonResult(
+              await buildResponse(session, activePage, action.type, {
+                results,
+              }),
+            ),
+          ]
+        }
+
+        const unsupportedAction = action as BrowserAction
+        return [
+          jsonResult({
+            success: false,
+            action: unsupportedAction.type,
+            error: `Unsupported browser action: ${unsupportedAction.type}`,
+            logs: [],
           }),
-        ),
-      ]
-    }
-
-    if (action.type === 'mouse') {
-      const point = action.selector
-        ? await elementPoint(page, action.selector, action)
-        : await pointInTarget(page, requirePoint(action.x, action.y), action)
-      await dispatchMouse(page, action.event, point, {
-        button: action.button ?? 'left',
-        clickCount: action.clickCount ?? 1,
-        timeout: action.timeout,
-      })
-      return [
-        jsonResult(
-          await buildResponse(session, page, action.type, {
-            event: action.event,
-            ...point,
-          }),
-        ),
-      ]
-    }
-
-    if (action.type === 'hover') {
-      const point = await elementPoint(page, action.selector, action)
-      await dispatchMouse(page, 'move', point, {
-        button: 'left',
-        clickCount: 0,
-        timeout: action.timeout,
-      })
-      return [
-        jsonResult(await buildResponse(session, page, action.type, point)),
-      ]
-    }
-
-    if (action.type === 'drag') {
-      const result = await drag(page, action)
-      return [
-        jsonResult(await buildResponse(session, page, action.type, result)),
-      ]
-    }
-
-    if (action.type === 'select') {
-      const result = await evaluateInTarget(
-        page,
-        selectScript(action.selector, {
-          value: action.value,
-          label: action.label,
-          index: action.index,
-          frameSelector: action.frameSelector,
-        }),
-        action,
-        action.timeout,
-      )
-      return [
-        jsonResult(await buildResponse(session, page, action.type, result)),
-      ]
-    }
-
-    if (action.type === 'scroll') {
-      const amount = action.amount ?? 600
-      const axis =
-        action.direction === 'left' || action.direction === 'right'
-          ? 'left'
-          : 'top'
-      const sign =
-        action.direction === 'up' || action.direction === 'left' ? -1 : 1
-      const result = await evaluateInTarget(
-        page,
-        scrollScript({
-          selector: action.selector,
-          frameSelector: action.frameSelector,
-          axis,
-          delta: sign * amount,
-        }),
-        action,
-        action.timeout,
-      )
-      return [
-        jsonResult(await buildResponse(session, page, action.type, result)),
-      ]
-    }
-
-    if (action.type === 'evaluate') {
-      const result = await evaluateInTarget(
-        page,
-        action.script,
-        action,
-        action.timeout,
-      )
-      return [
-        jsonResult(await buildResponse(session, page, action.type, result)),
-      ]
-    }
-
-    if (action.type === 'design_tokens') {
-      const result = await evaluateInTarget(
-        page,
-        designTokensScript(action.selector, action.maxElements),
-        action,
-        action.timeout,
-      )
-      return [
-        jsonResult(await buildResponse(session, page, action.type, result)),
-      ]
-    }
-
-    if (action.type === 'wait_for') {
-      const result = await evaluateInTarget(
-        page,
-        waitForScript({
-          selector: action.selector,
-          text: action.text,
-          visible: action.visible ?? true,
-          pollInterval: action.pollInterval ?? 100,
-          timeout: action.timeout ?? 15_000,
-          frameSelector: action.frameSelector,
-        }),
-        action,
-        action.timeout ?? 15_000,
-      )
-      return [
-        jsonResult(await buildResponse(session, page, action.type, result)),
-      ]
-    }
-
-    if (action.type === 'upload') {
-      const result = await uploadFiles(
-        page,
-        action.selector,
-        action.paths,
-        action,
-        session.projectRoot,
-      )
-      return [
-        jsonResult(await buildResponse(session, page, action.type, result)),
-      ]
-    }
-
-    if (action.type === 'cookie') {
-      const result = await handleCookieAction(page, action)
-      return [
-        jsonResult(await buildResponse(session, page, action.type, result)),
-      ]
-    }
-
-    if (action.type === 'storage') {
-      const result = await evaluateInTarget(
-        page,
-        storageScript(
-          action.storage,
-          action.operation,
-          action.key,
-          action.value,
-        ),
-        action,
-        action.timeout,
-      )
-      return [
-        jsonResult(await buildResponse(session, page, action.type, result)),
-      ]
-    }
-
-    if (action.type === 'viewport') {
-      await waitForCommand(
-        page,
-        'Emulation.setDeviceMetricsOverride',
-        {
-          width: action.width,
-          height: action.height,
-          deviceScaleFactor: action.deviceScaleFactor ?? 1,
-          mobile: action.isMobile ?? false,
-          screenWidth: action.width,
-          screenHeight: action.height,
-          dontSetVisibleSize: false,
-        },
-        action.timeout ?? 15_000,
-      )
-      if (action.userAgent) {
-        await waitForCommand(
-          page,
-          'Network.setUserAgentOverride',
-          { userAgent: action.userAgent },
-          action.timeout ?? 15_000,
-        )
-      }
-      if (action.hasTouch !== undefined) {
-        await waitForCommand(
-          page,
-          'Emulation.setTouchEmulationEnabled',
-          { enabled: action.hasTouch },
-          action.timeout ?? 15_000,
-        )
-      }
-      return [
-        jsonResult(
-          await buildResponse(session, page, action.type, {
-            width: action.width,
-            height: action.height,
-          }),
-        ),
-      ]
-    }
-
-    if (action.type === 'network') {
-      const offline = action.offline ?? false
-      await waitForCommand(
-        page,
-        'Network.emulateNetworkConditions',
-        {
-          offline,
-          latency: action.latency ?? 0,
-          downloadThroughput: offline ? 0 : (action.downloadThroughput ?? -1),
-          uploadThroughput: offline ? 0 : (action.uploadThroughput ?? -1),
-        },
-        action.timeout ?? 15_000,
-      )
-      return [
-        jsonResult(
-          await buildResponse(session, page, action.type, {
-            offline,
-            latency: action.latency ?? 0,
-          }),
-        ),
-      ]
-    }
-
-    if (action.type === 'tab') {
-      const result = await handleTabAction(session, action)
-      const activePage = await getActivePage(session)
-      return [
-        jsonResult(
-          await buildResponse(session, activePage, action.type, result),
-        ),
-      ]
-    }
-
-    if (action.type === 'recording') {
-      const output = await handleRecordingAction(session, page, action)
-      return output
-    }
-
-    if (action.type === 'pdf') {
-      const result = await waitForCommand(
-        page,
-        'Page.printToPDF',
-        {
-          landscape: action.landscape ?? false,
-          printBackground: action.printBackground ?? true,
-          scale: action.scale ?? 1,
-          paperWidth: action.paperWidth,
-          paperHeight: action.paperHeight,
-        },
-        action.timeout ?? 15_000,
-      )
-      const data =
-        isRecord(result) && typeof result.data === 'string' ? result.data : ''
-      return [
-        jsonResult({
-          ...(await buildResponse(session, page, action.type)),
-          ...buildPdfAttachmentMetadata(data),
-        }),
-      ]
-    }
-
-    if (action.type === 'pixel_diff') {
-      const output = await pixelDiff(session, page, action)
-      return output
-    }
-
-    if (action.type === 'diagnose') {
-      const results = []
-      for (const step of action.steps.slice(
-        0,
-        action.maxSteps ?? action.steps.length,
-      )) {
-        const stepOutput = await browserLogs(step.action, sessionKey)
-        const json = stepOutput.find((item) => item.type === 'json')
-        results.push({
-          label: step.label,
-          response: json?.value ?? null,
-          expectedLogs: step.expectedLogs,
-          noJsErrors: step.noJsErrors,
-          noNetworkErrors: step.noNetworkErrors,
-          customCondition: step.customCondition,
-        })
-      }
-      const activePage = await getActivePage(session)
-      return [
-        jsonResult(
-          await buildResponse(session, activePage, action.type, { results }),
-        ),
-      ]
-    }
-
-    const unsupportedAction = action as BrowserAction
-    return [
-      jsonResult({
-        success: false,
-        action: unsupportedAction.type,
-        error: `Unsupported browser action: ${unsupportedAction.type}`,
-        logs: [],
-      }),
-    ]
+        ]
+      },
+    )
   } catch (error) {
     return [
       jsonResult({
         success: false,
         action: action.type,
         error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof Error && 'executionRefusal' in error ? { result: { executionRefusal: error.executionRefusal as { reason: string; cause: string } } } : {}),
         logs: [],
       }),
     ]
@@ -704,13 +846,10 @@ export function chromeSandboxArgs(): string[] {
   // Linux, non-root: probe unprivileged user-namespace availability.
   // apparmor_restrict_unprivileged_userns first: on Ubuntu 24.04 it is the
   // deciding knob and the probes below would otherwise report 'available'.
-  const apparmorPath =
-    '/proc/sys/kernel/apparmor_restrict_unprivileged_userns'
+  const apparmorPath = '/proc/sys/kernel/apparmor_restrict_unprivileged_userns'
   try {
     if (sandboxProbeImpl.existsSync(apparmorPath)) {
-      if (
-        sandboxProbeImpl.readFileSync(apparmorPath, 'utf8').trim() === '1'
-      ) {
+      if (sandboxProbeImpl.readFileSync(apparmorPath, 'utf8').trim() === '1') {
         // AppArmor restricts unprivileged userns: the namespace sandbox
         // cannot work, so treat the host as no-userns.
         return ['--no-sandbox']
@@ -946,6 +1085,7 @@ export function rollbackStaleBrowserSession(
 async function ensureBrowserSession(
   sessionKey: string,
   owner?: BrowserSessionOwner,
+  execution?: BrowserExecutionContext,
 ): Promise<BrowserSession> {
   // Reclaim any user-data dirs whose teardown-time removal was deferred (the
   // dying Chrome child still held them open) before possibly spawning a
@@ -973,7 +1113,7 @@ async function ensureBrowserSession(
   // the whole teardown window and the racing spawn is rolled back instead.
   clearStaleStopMarkerForFreshSpawn(sessionKey)
   return shareInFlightBrowserSpawn(sessionKey, () =>
-    spawnBrowserSession(sessionKey, owner),
+    spawnBrowserSession(sessionKey, owner, execution),
   )
 }
 
@@ -1016,7 +1156,9 @@ export type PipeProbeHooks = {
    * binary than the one that produced it.
    */
   executablePath: () => string
-  spawn: (executablePath: string) => PipeProbeAttempt
+  spawn: (
+    executablePath: string,
+  ) => PipeProbeAttempt | Promise<PipeProbeAttempt>
   probeTimeoutMs: number
   cacheTtlMs: number
   now: () => number
@@ -1079,9 +1221,7 @@ function shareInFlightPipeProbe(
  * instead of silently reopening an unauthenticated DevTools listener.
  */
 function isProbeTimeoutError(error: unknown): boolean {
-  return (
-    error instanceof Error && / timed out after \d+ms$/.test(error.message)
-  )
+  return error instanceof Error && / timed out after \d+ms$/.test(error.message)
 }
 
 /**
@@ -1105,10 +1245,15 @@ function firstAttachableTargetId(result: unknown): string | undefined {
 
 export async function detectPipeSupport(
   overrides?: Partial<PipeProbeHooks>,
+  execution?: BrowserExecutionContext,
 ): Promise<boolean> {
+  if (!execution || typeof execution.resources !== 'function')
+    throw browserAdmissionError({ reason: 'unavailable', cause: 'Captured browser execution context is unavailable' })
   const hooks: PipeProbeHooks = {
-    executablePath: findChromeExecutable,
-    spawn: spawnPipeProbeAttempt,
+    executablePath: execution
+      ? () => execution.executablePath
+      : findChromeExecutable,
+    spawn: (executablePath) => spawnPipeProbeAttempt(executablePath, execution),
     probeTimeoutMs: PIPE_PROBE_TIMEOUT_MS,
     cacheTtlMs: PIPE_PROBE_CACHE_TTL_MS,
     now: Date.now,
@@ -1118,15 +1263,16 @@ export async function detectPipeSupport(
   // resolves a different Chromium binary within the TTL, the first binary's
   // verdict must not drive the second one.
   const executablePath = hooks.executablePath()
-  const cached = pipeProbeCache.get(executablePath)
+  const cacheKey = scopedBrowserKey(executablePath, execution)
+  const cached = pipeProbeCache.get(cacheKey)
   if (cached && hooks.now() - cached.probedAt < hooks.cacheTtlMs) {
     return true
   }
   // Concurrent callers for the same binary share one probe (deduped by
   // executable) instead of each launching a probe Chrome and each absorbing
   // the probe budget.
-  return shareInFlightPipeProbe(executablePath, () =>
-    probePipeSupportOnce(hooks, executablePath),
+  return shareInFlightPipeProbe(cacheKey, () =>
+    probePipeSupportOnce(hooks, executablePath, cacheKey),
   )
 }
 
@@ -1139,11 +1285,14 @@ export async function detectPipeSupport(
 async function probePipeSupportOnce(
   hooks: PipeProbeHooks,
   executablePath: string,
+  cacheKey = executablePath,
 ): Promise<boolean> {
   let attempt: PipeProbeAttempt
   try {
-    attempt = hooks.spawn(executablePath)
-  } catch {
+    attempt = await hooks.spawn(executablePath)
+  } catch (error) {
+    if (error instanceof Error && error.name === 'ExecutionAdmissionError')
+      throw error
     // A synchronous spawn throw (e.g. the pipe fds were missing after spawn,
     // or the browser exited immediately) is demonstrable evidence the pipe
     // path cannot work for this binary: fall back to the port transport for
@@ -1185,7 +1334,7 @@ async function probePipeSupportOnce(
     // A successful CDP round-trip is durable proof this binary supports
     // --remote-debugging-pipe (and flatten-mode attach): cache the positive
     // verdict per executable.
-    pipeProbeCache.set(executablePath, { probedAt: hooks.now() })
+    pipeProbeCache.set(cacheKey, { probedAt: hooks.now() })
     return true
   } catch (error) {
     if (isProbeTimeoutError(error)) {
@@ -1220,11 +1369,129 @@ export function __resetPipeSupportProbeCacheForTest(): void {
   pipeProbeCache.clear()
 }
 
-function spawnPipeProbeAttempt(executablePath: string): PipeProbeAttempt {
+async function launchChrome(
+  executable: string,
+  argv: string[],
+  stdio: ('ignore' | 'pipe')[],
+  context: BrowserExecutionContext | undefined,
+  branchId: 'chrome.probe' | 'chrome.pipe' | 'chrome.port-fallback',
+): Promise<{ child: ChildProcess; resource?: BoundResourcePort }> {
+  if (!context || typeof context.resources !== 'function')
+    throw browserAdmissionError({ reason: 'unavailable', cause: 'Captured browser execution context or resource factory is unavailable' })
+  let action = context.execution
+  if (branchId === 'chrome.probe') {
+    const derived = action.derive({
+      memoKey: 'chrome.probe',
+      limit: { kind: 'finite', durationMs: PIPE_PROBE_TIMEOUT_MS },
+    })
+    if (!derived.ok) throw browserAdmissionError(derived)
+    action = derived.value
+  }
+  const target: TargetDescription = {
+    executable,
+    argv,
+    cwd: context.projectRoot,
+    projectRoot: context.projectRoot,
+    allowedPaths: context.allowedPaths,
+    mode: context.mode,
+    processType: branchId === 'chrome.probe' ? 'SYNC' : 'BACKGROUND',
+    profile: context.profile,
+    family: 'chrome',
+    branchId,
+    adapterOptions: { runtime: 'node', shell: false, stdio: stdio.join(',') },
+  }
+  let resource: BoundResourcePort | undefined
+  let request: ResourceRequestPort | undefined
+  let launchedChild: ChildProcess | undefined
+  if (branchId !== 'chrome.probe') {
+    const registered = context.resources(target)
+    if (!registered.ok) throw browserAdmissionError(registered)
+    resource = registered.value
+    const requested = resource.request(action)
+    if (!requested.ok) throw browserAdmissionError(requested)
+    request = requested.value
+  }
+  try {
+    const prepared = request
+      ? request.prepareLaunch()
+      : action.prepareTarget({ target })
+    if (!prepared.ok) throw browserAdmissionError(prepared)
+    const admitted = await prepared.value.admit()
+    if (!admitted.ok) throw browserAdmissionError(admitted)
+    const child = await new Promise<ChildProcess>((resolve, reject) => {
+      const dispatched = prepared.value.dispatchNow(
+        admitted.value.permit,
+        (input, observer) => {
+          const child = (context.spawn ?? spawn)(input.executable, input.argv, {
+            cwd: input.cwd,
+            env: input.env,
+            signal: input.resourceSignal,
+            stdio,
+          })
+          launchedChild = child
+          child.once('spawn', () => {
+            if (
+              typeof child.pid !== 'number' ||
+              !Number.isInteger(child.pid) ||
+              child.pid <= 0
+            ) {
+              observer.failure({
+                source: 'adapter-observation-error',
+                cause: 'Chrome child has no valid runtime PID',
+              })
+              reject(
+                browserAdmissionError({
+                  reason: 'invalid-context',
+                  cause: 'Chrome child has no valid runtime PID',
+                }),
+              )
+              return
+            }
+            const observed = observer.spawnObserved({
+              source: 'node-spawn-event',
+              pid: child.pid,
+            })
+            if (!observed.ok) reject(browserAdmissionError(observed))
+            else resolve(child)
+          })
+          child.on('error', (error: NodeJS.ErrnoException) => {
+            observer.failure({
+              source: 'node-error-event',
+              errorCode: error.code,
+              cause: error.message,
+            })
+            reject(error)
+          })
+          child.once('close', () =>
+            reject(new Error('Chrome closed before observed start')),
+          )
+          return child
+        },
+      )
+      if (!dispatched.ok) reject(browserAdmissionError(dispatched))
+    })
+    return { child, resource }
+  } catch (error) {
+    // This is a termination request only; lifecycle/death evidence remains B20.
+    try {
+      launchedChild?.kill('SIGTERM')
+    } catch {
+      /* already exited */
+    }
+    throw error
+  } finally {
+    request?.release()
+  }
+}
+
+async function spawnPipeProbeAttempt(
+  executablePath: string,
+  execution?: BrowserExecutionContext,
+): Promise<PipeProbeAttempt> {
   const userDataDir = mkdtempSync(
     path.join(tmpdir(), 'openbuff-browser-probe-'),
   )
-  const child = spawn(
+  const { child } = await launchChrome(
     // The probed binary is exactly the executable the cache key was derived
     // from, so the verdict cannot describe a different binary than the one
     // that was actually probed.
@@ -1235,13 +1502,22 @@ function spawnPipeProbeAttempt(executablePath: string): PipeProbeAttempt {
       '--disable-dev-shm-usage',
       '--no-first-run',
       '--no-default-browser-check',
-      ...chromeSandboxArgs(),
+      ...(execution?.sandboxArgs ?? chromeSandboxArgs()),
       '--remote-debugging-pipe',
       `--user-data-dir=${userDataDir}`,
       'about:blank',
     ],
-    { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] },
-  )
+    ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'],
+    execution,
+    'chrome.probe',
+  ).catch((error) => {
+    try {
+      rmSync(userDataDir, { recursive: true, force: true })
+    } catch {
+      /* retain existing cleanup limits */
+    }
+    throw error
+  })
   const commandWritable = child.stdio[3]
   const responseReadable = child.stdio[4]
   if (!commandWritable || !responseReadable) {
@@ -1261,6 +1537,7 @@ function spawnPipeProbeAttempt(executablePath: string): PipeProbeAttempt {
 }
 
 type BrowserConnection = {
+  resource?: BoundResourcePort
   child: ChildProcess
   userDataDir: string
   writable: Writable
@@ -1388,9 +1665,7 @@ function webSocketFrameText(data: unknown): string {
   if (Array.isArray(data)) {
     return Buffer.concat(
       data.map((part) =>
-        Buffer.isBuffer(part)
-          ? part
-          : Buffer.from(part as ArrayBufferLike),
+        Buffer.isBuffer(part) ? part : Buffer.from(part as ArrayBufferLike),
       ),
     ).toString('utf8')
   }
@@ -1459,17 +1734,19 @@ async function connectWebSocketTransport(url: string): Promise<{
   return createWebSocketPipeBridge(cdpWebSocketAdapter(ws))
 }
 
-function spawnPipeConnection(): BrowserConnection {
+async function spawnPipeConnection(
+  execution?: BrowserExecutionContext,
+): Promise<BrowserConnection> {
   const userDataDir = mkdtempSync(path.join(tmpdir(), 'openbuff-browser-'))
-  const child = spawn(
-    findChromeExecutable(),
+  const { child, resource } = await launchChrome(
+    execution?.executablePath ?? findChromeExecutable(),
     [
       '--headless=new',
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--no-first-run',
       '--no-default-browser-check',
-      ...chromeSandboxArgs(),
+      ...(execution?.sandboxArgs ?? chromeSandboxArgs()),
       // SB-7: drive the DevTools protocol over the stdio pipe file
       // descriptors instead of `--remote-debugging-port`. The old flag opened
       // an UNAUTHENTICATED HTTP+WebSocket listener on 127.0.0.1 that any
@@ -1481,12 +1758,17 @@ function spawnPipeConnection(): BrowserConnection {
       '--window-size=1280,720',
       'about:blank',
     ],
-    {
-      // fd 3 carries parent->Chrome commands, fd 4 carries Chrome->parent
-      // responses and events. fds 0-2 stay ignored.
-      stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'],
-    },
-  )
+    ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'],
+    execution,
+    'chrome.pipe',
+  ).catch((error) => {
+    try {
+      rmSync(userDataDir, { recursive: true, force: true })
+    } catch {
+      /* retain existing cleanup limits */
+    }
+    throw error
+  })
   const commandWritable = child.stdio[3]
   const responseReadable = child.stdio[4]
   if (!commandWritable || !responseReadable) {
@@ -1497,23 +1779,26 @@ function spawnPipeConnection(): BrowserConnection {
   }
   return {
     child,
+    resource,
     userDataDir,
     writable: commandWritable as Writable,
     readable: responseReadable as Readable,
   }
 }
 
-async function spawnPortConnection(): Promise<BrowserConnection> {
+async function spawnPortConnection(
+  execution?: BrowserExecutionContext,
+): Promise<BrowserConnection> {
   const userDataDir = mkdtempSync(path.join(tmpdir(), 'openbuff-browser-'))
-  const child = spawn(
-    findChromeExecutable(),
+  const { child, resource } = await launchChrome(
+    execution?.executablePath ?? findChromeExecutable(),
     [
       '--headless=new',
       '--disable-gpu',
       '--disable-dev-shm-usage',
       '--no-first-run',
       '--no-default-browser-check',
-      ...chromeSandboxArgs(),
+      ...(execution?.sandboxArgs ?? chromeSandboxArgs()),
       // Compatibility fallback for browsers without --remote-debugging-pipe:
       // port 0 makes Chrome pick a free port and print the DevTools WebSocket
       // URL on stderr. Chrome binds the debugging listener to 127.0.0.1
@@ -1525,8 +1810,17 @@ async function spawnPortConnection(): Promise<BrowserConnection> {
       '--window-size=1280,720',
       'about:blank',
     ],
-    { stdio: ['ignore', 'ignore', 'pipe'] },
-  )
+    ['ignore', 'ignore', 'pipe'],
+    execution,
+    'chrome.port-fallback',
+  ).catch((error) => {
+    try {
+      rmSync(userDataDir, { recursive: true, force: true })
+    } catch {
+      /* retain existing cleanup limits */
+    }
+    throw error
+  })
   try {
     const webSocketUrl = await readDevtoolsWebSocketUrl(
       child,
@@ -1534,6 +1828,7 @@ async function spawnPortConnection(): Promise<BrowserConnection> {
     )
     return {
       child,
+      resource,
       userDataDir,
       ...(await connectWebSocketTransport(webSocketUrl)),
     }
@@ -1546,16 +1841,17 @@ async function spawnPortConnection(): Promise<BrowserConnection> {
 async function spawnBrowserSession(
   sessionKey: string,
   owner?: BrowserSessionOwner,
+  execution?: BrowserExecutionContext,
 ): Promise<BrowserSession> {
   // One bounded probe decides the transport for this browser binary; a
   // positive verdict is cached per executable so repeated sessions do not
   // re-launch a probe browser. A demonstrable pipe failure falls back to the
   // port transport for this session, while a probe timeout fails closed (and
   // nothing negative is cached, so the next session re-probes).
-  const usePipe = await detectPipeSupport()
+  const usePipe = await detectPipeSupport(undefined, execution)
   const connection = usePipe
-    ? spawnPipeConnection()
-    : await spawnPortConnection()
+    ? await spawnPipeConnection(execution)
+    : await spawnPortConnection(execution)
   return assembleBrowserSession(sessionKey, owner, connection)
 }
 
@@ -1597,6 +1893,7 @@ async function assembleBrowserSession(
     await transport.send('Target.setDiscoverTargets', { discover: true })
     const targetId = await waitForPageTarget(transport)
     session = {
+      resource: connection.resource,
       ...(owner ? { owner } : {}),
       ...(owner?.projectRoot !== undefined
         ? { projectRoot: owner.projectRoot }
@@ -1717,10 +2014,14 @@ async function attachPage(
 ): Promise<BrowserPage> {
   // Attach in flatten mode: the returned sessionId routes every command and
   // event for this target over the single pipe connection.
-  const attached = await session.transport.send('Target.attachToTarget', {
-    targetId,
-    flatten: true,
-  })
+  const attached = await sendBrowserCommand(
+    session.transport,
+    'Target.attachToTarget',
+    {
+      targetId,
+      flatten: true,
+    },
+  )
   const sessionId =
     isRecord(attached) && typeof attached.sessionId === 'string'
       ? attached.sessionId
@@ -2322,7 +2623,7 @@ function waitForCommand(
 ): Promise<unknown> {
   // The pipe transport owns id allocation, framing, and pending correlation;
   // the page's sessionId routes the command to its attached target.
-  return page.transport.send(method, params, {
+  return sendBrowserCommand(page.transport, method, params, {
     sessionId: page.sessionId,
     timeoutMs,
   })
@@ -2547,9 +2848,7 @@ export async function buildResponse(
   return response
 }
 
-async function waitForPageTarget(
-  transport: CdpPipeTransport,
-): Promise<string> {
+async function waitForPageTarget(transport: CdpPipeTransport): Promise<string> {
   const started = Date.now()
   let lastError: unknown
   while (Date.now() - started < 10_000) {
@@ -2586,7 +2885,7 @@ type BrowserTarget = {
 async function listTargets(
   transport: CdpPipeTransport,
 ): Promise<BrowserTarget[]> {
-  const result = await transport.send('Target.getTargets')
+  const result = await sendBrowserCommand(transport, 'Target.getTargets')
   const rawInfos =
     isRecord(result) && Array.isArray(result.targetInfos)
       ? result.targetInfos
@@ -2606,7 +2905,15 @@ async function listTargets(
 }
 
 function findChromeExecutable(): string {
-  const env = getSdkEnv()
+  return resolveChromeExecutable(getSdkEnv(), process.platform, existsSync)
+}
+
+/** Root supplies captured inputs and the filesystem probe; no ambient defaults. */
+export function resolveChromeExecutable(
+  env: Readonly<Record<string, string | undefined>>,
+  platform: NodeJS.Platform,
+  exists: (candidate: string) => boolean,
+): string {
   const candidates = [
     env.CHROME_PATH,
     env.CHROMIUM_PATH,
@@ -2616,10 +2923,30 @@ function findChromeExecutable(): string {
     '/usr/bin/chromium',
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
     '/Applications/Chromium.app/Contents/MacOS/Chromium',
+    ...(platform === 'win32'
+      ? [
+          env.PROGRAMFILES &&
+            path.join(
+              env.PROGRAMFILES,
+              'Google',
+              'Chrome',
+              'Application',
+              'chrome.exe',
+            ),
+          env.LOCALAPPDATA &&
+            path.join(
+              env.LOCALAPPDATA,
+              'Google',
+              'Chrome',
+              'Application',
+              'chrome.exe',
+            ),
+        ]
+      : []),
   ].filter(Boolean) as string[]
 
   for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate
+    if (exists(candidate)) return candidate
   }
   throw new Error(
     'Chrome or Chromium was not found. Set CHROME_PATH to the browser executable.',
@@ -3135,9 +3462,13 @@ async function handleTabAction(
     return { tabs: await tabsResult(session) }
   }
   if (action.operation === 'create') {
-    const created = await session.transport.send('Target.createTarget', {
-      url: normalizeBrowserUrl(action.url ?? 'about:blank'),
-    })
+    const created = await sendBrowserCommand(
+      session.transport,
+      'Target.createTarget',
+      {
+        url: normalizeBrowserUrl(action.url ?? 'about:blank'),
+      },
+    )
     const createdId =
       isRecord(created) && typeof created.targetId === 'string'
         ? created.targetId
@@ -3855,10 +4186,7 @@ export function parsePngChunks(buffer: Buffer): PngChunk[] {
   return chunks
 }
 
-export function writePngChunk(
-  type: string,
-  ...dataParts: Buffer[]
-): Buffer {
+export function writePngChunk(type: string, ...dataParts: Buffer[]): Buffer {
   const dataLength = dataParts.reduce((sum, part) => sum + part.length, 0)
   // allocUnsafe skips the zero-fill: every byte of the chunk below is
   // overwritten before the buffer is returned (length, type, payload, CRC),

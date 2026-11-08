@@ -179,6 +179,12 @@ export async function runRuntimeSemanticCompaction(
 
     const result = await executeSubagent({
       ...extractSubagentContextParams(params),
+      executionIdentity: undefined,
+      executionHostOperation: parentAgentState.runId ? {
+        actor: { runId: parentAgentState.runId, rootRunId: parentAgentState.ancestorRunIds[0] ?? parentAgentState.runId,
+          agentId: parentAgentState.agentId },
+        purpose: 'semantic-compaction',
+      } : undefined,
 
       ancestorRunIds: parentAgentState.ancestorRunIds,
       userInputId: `${userInputId}-inline-${prunerAgentId}${childAgentState.agentId}`,

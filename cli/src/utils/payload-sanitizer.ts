@@ -211,6 +211,52 @@ export function createPayloadSanitizers() {
     seen: WeakSet<object>,
     depth: number,
   ): unknown => {
+    if (
+      value.kind === 'mcp_tool_result' &&
+      value.schemaVersion === 1 &&
+      Array.isArray(value.content)
+    ) {
+      // This factory is serialized into standalone persistence workers; the
+      // MCP projection must remain self-contained, matching common/mcp/result.
+      const omitBytes = (item: Record<string, unknown>, key: string) => {
+        const bytes = item[key]
+        if (typeof bytes !== 'string') return item
+        const { [key]: _bytes, ...metadata } = item
+        return {
+          ...metadata,
+          openbuffOmission: {
+            reason: 'media_bytes_omitted',
+            encoding: 'base64',
+            length: bytes.length,
+          },
+        }
+      }
+      value = {
+        ...value,
+        content: value.content.map((part: unknown) => {
+          if (!part || typeof part !== 'object' || Array.isArray(part))
+            return part
+          const item = part as Record<string, unknown>
+          if (item.type === 'image' || item.type === 'audio')
+            return omitBytes(item, 'data')
+          if (
+            item.type === 'resource' &&
+            item.resource &&
+            typeof item.resource === 'object' &&
+            !Array.isArray(item.resource)
+          ) {
+            return {
+              ...item,
+              resource: omitBytes(
+                item.resource as Record<string, unknown>,
+                'blob',
+              ),
+            }
+          }
+          return part
+        }),
+      }
+    }
     const type = typeof value.type === 'string' ? value.type : undefined
 
     if (type === 'media' && typeof value.data === 'string') {

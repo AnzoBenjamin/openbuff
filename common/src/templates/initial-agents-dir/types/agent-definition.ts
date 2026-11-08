@@ -147,6 +147,8 @@ export interface AgentDefinition {
 
   /** MCP servers by name. Names cannot contain `/`. */
   mcpServers?: Record<string, MCPConfig>
+  /** Opaque references from a host-created session; these are not trust labels. */
+  mcpServerReferences?: Record<string, string>
 
   /**
    * Tools this agent can use.

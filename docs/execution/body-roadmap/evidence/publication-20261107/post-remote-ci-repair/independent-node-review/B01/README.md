@@ -1,9 +1,0 @@
-# B01 publication typecheck contextual renewal
-
-The latest accepted independent authority is `post-commit-ci-repair/independent-node-review/B01/review.json`. Its 11 implementation contract hashes, original owners, behavior oracle artifacts, dependency/config hashes and 6 scoped commands remain unchanged and were independently checked. No scoped product command was rerun; prior bounded source observations retain their original provenance.
-
-Only the shared root typecheck credit is replaced. The fresh command passed all eleven workspaces with exactly 193 stable/current declared inputs. Its normalized node-specific receipt preserves raw argv/cwd/timing, pinned Bun 1.3.5, replacement environment, log and exact before/after maps. Historical maps remain immutable and receive no current typecheck command credit. Contracts outside that map: []; unchanged scoped behavior receipts cover those contracts.
-
-The publication guard observation records the exact three generated-output producer fallbacks, active-neighbor and missing/directory-producer controls, the complete v3 unbuilt-checkout proof and successful guard receipts. These are contextual observations and do not expand the node implementation scope. Existing exclusions for reviewer-owned B01 tail/store, gate-files fixtures, B30 comparison repairs and all native/provider/installed/OS graduation limits remain unchanged.
-
-`approval.json` is new typed independent authority. `review.json` hash-references it and matches all canonical fields. Exactly 7 commands remain required once each. Behavior oracle artifacts remain attached directly. Only this owned evidence tree was written; no production/tests/ledger, Git staging or historical evidence was changed. The frozen strict validator is exercised in an isolated format harness that grants no actual roadmap acceptance.

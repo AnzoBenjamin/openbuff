@@ -1,4 +1,0 @@
-smoke: version ok: openbuff-native protocol 1 (crate version 0.1.0)
-smoke: unknown-role exit 1 ok
-smoke: not_implemented exit 2 ok
-smoke: all checks passed for /home/ben/Code/CLI/openbuff/rust/target/debug/openbuff-native

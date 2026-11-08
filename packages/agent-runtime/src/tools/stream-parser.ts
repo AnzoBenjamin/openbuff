@@ -272,6 +272,9 @@ export async function processStream(
     readAuthorizationHashesByPath: {
       ...(agentState.readAuthorizationHashesByPath ?? {}),
     },
+    rawReadAuthorizationHashesByPath: {
+      ...(agentState.rawReadAuthorizationHashesByPath ?? {}),
+    },
     confirmedPostEditAnchorsByPath: remintConfirmedPostEditAnchors({
       anchors: agentState.confirmedPostEditAnchorsByPath,
       projectId: fileContext.projectRoot ?? '',
@@ -288,6 +291,11 @@ export async function processStream(
     // write arguments; its authorization becomes usable on the next step.
     modelVisibleReadAuthorizationHashesByPath: Object.fromEntries(
       Object.entries(agentState.readAuthorizationHashesByPath ?? {}).filter(
+        ([path]) => agentState.readAuthorizationsByPath?.[path] === true,
+      ),
+    ),
+    modelVisibleRawReadAuthorizationHashesByPath: Object.fromEntries(
+      Object.entries(agentState.rawReadAuthorizationHashesByPath ?? {}).filter(
         ([path]) => agentState.readAuthorizationsByPath?.[path] === true,
       ),
     ),
@@ -978,6 +986,9 @@ export async function processStream(
     agentState.readAuthorizationHashesByPath = {
       ...(fileProcessingState.readAuthorizationHashesByPath ?? {}),
     }
+    agentState.rawReadAuthorizationHashesByPath = {
+      ...(fileProcessingState.rawReadAuthorizationHashesByPath ?? {}),
+    }
     agentState.confirmedPostEditAnchorsByPath = {
       ...(fileProcessingState.confirmedPostEditAnchorsByPath ?? {}),
     }
@@ -991,6 +1002,7 @@ export async function processStream(
       // reads/index evidence as belonging to the current workspace state.
       agentState.readAuthorizationsByPath = {}
       agentState.readAuthorizationHashesByPath = {}
+      agentState.rawReadAuthorizationHashesByPath = {}
       agentState.confirmedPostEditAnchorsByPath = {}
       agentState.workspaceState = advanceWorkspaceState(
         agentState.workspaceState,

@@ -1,3 +1,4 @@
+import { authenticatedHostFixture } from './authenticated-host-fixture'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -822,6 +823,7 @@ describe('checkJob', () => {
     const projectRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), 'check-job-dirty-'),
     )
+    const host = authenticatedHostFixture(projectRoot)
     try {
       const run = (args: string[]) =>
         spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8' })
@@ -848,7 +850,7 @@ describe('checkJob', () => {
       fs.appendFileSync(job.logFile, 'done\n')
 
       const first = value(
-        await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+        await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER, executionContext: host.context }),
       )
       expect(first.state).toBe('completed')
       expect(first.touchedPaths).toContain('from-bg.txt')
@@ -859,10 +861,24 @@ describe('checkJob', () => {
       // concurrent dirt appears after settle.
       fs.writeFileSync(path.join(projectRoot, 'post-settle.txt'), 'late\n')
       const second = value(
-        await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+        await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER, executionContext: host.context }),
       )
       expect(second.touchedPaths).toBeUndefined()
       expect(second.state).toBe('completed')
+    } finally {
+      host.close()
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('settlement Git observation refuses when captured authority is missing', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'check-job-no-authority-'))
+    try {
+      const job = makeJob({ status: 'completed', exitCode: 0, projectRoot, dirtyBeforePaths: [] })
+      await expect(checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER })).rejects.toThrow(
+        /Captured execution context is unavailable/,
+      )
+      expect(job.settlementTouchedPaths).toBeUndefined()
     } finally {
       fs.rmSync(projectRoot, { recursive: true, force: true })
     }

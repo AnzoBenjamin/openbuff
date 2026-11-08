@@ -7,7 +7,7 @@
  * timed op. The assertion is behavioral, not numeric: the full case list
  * (CASE 1-13, including the X-2 token-count / code-search / X-2a hot-path /
  * stream-parse rows, the wave-2 capture/cache rows, and the wave-3 identity-
- * window and escalation rows) completes without throwing and returns
+ * window and deadline-termination rows) completes without throwing and returns
  * measured rows.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -122,7 +122,7 @@ describe('measure-perf-guards-baseline runner smoke', () => {
     }
     // The backfilled evidence rows for this wave's remaining unmeasured
     // seams: the identity-read window (like-for-like), the retention and
-    // escalation contract rows, and their parity/contract assertions.
+    // deadline-termination contract rows, and their parity/contract assertions.
     for (const expected of ['CASE 12', 'CASE 12b', 'CASE 13']) {
       expect(cases.has(expected)).toBe(true)
     }
@@ -130,6 +130,8 @@ describe('measure-perf-guards-baseline runner smoke', () => {
       expect(row.before.medianMsPerOp).toBeGreaterThan(0)
       expect(row.after.medianMsPerOp).toBeGreaterThan(0)
     }
+    const deadlineRow = rows.find(row => row.case === 'CASE 13')!
+    expect(deadlineRow.ratioBasis).toBe('contract')
     // CASE 13 drives a real SIGTERM-ignoring child whose pre-fix reaping
     // waits for the child's natural exit (~1.5s) and is NOT scaled by
     // iterationsScale, so the smoke run carries several seconds of fixed

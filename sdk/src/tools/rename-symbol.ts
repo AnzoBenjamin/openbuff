@@ -6,6 +6,7 @@ import {
 } from './semantic-edit-apply'
 
 import type { LanguageIntelligenceService } from '../services/language-intelligence'
+import type { LspRequestContext } from '../services/lsp-multiplexer'
 /**
  * P4-T2 (rename_symbol) apply tool: runs the language-server rename through
  * the service (which shifts the 1-based model line to the 0-based LSP
@@ -23,8 +24,9 @@ export async function renameSymbol(
   service: LanguageIntelligenceService,
   params: { path: string; line: number; character: number; new_name: string },
   opts: SemanticEditApplyDeps,
+  executionContext?: LspRequestContext,
 ): Promise<SemanticEditApplyResult<'rename_symbol'>> {
-  const [first] = await service.renameSymbol(params)
+  const [first] = await service.renameSymbol(params, executionContext)
   const applied = await applySemanticEdit(
     first?.value ?? { errorMessage: NO_RESULT_ERROR },
     opts,

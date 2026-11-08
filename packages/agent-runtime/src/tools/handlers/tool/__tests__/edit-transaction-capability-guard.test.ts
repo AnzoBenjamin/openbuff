@@ -10,9 +10,9 @@ import {
   getContentHash,
 } from '@codebuff/common/util/content-hash'
 import {
-  getLineCoordinates,
-  getRangeSlice,
-} from '@codebuff/common/util/line-coordinates'
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 import type { FileProcessingState } from '../write-file'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -25,11 +25,13 @@ const logger: Logger = {
 }
 
 function buildScopedReadCapability(path: string): string {
+  const document = captureTextDocument('const target = 1\n')
   return encodeReadCapabilityToken({
     startLine: 1,
     endLine: 1,
-    hash: getContentHash('const target = 1\n'),
+    hash: getContentHash('const target = 1'),
     scope: { projectId: '/project', path, runId: 'run' },
+    rawBasis: getRawReadBasis(document, 1, 1, 'lines'),
   })
 }
 
@@ -403,15 +405,22 @@ describe('edit_transaction capability-bearing edit guard', () => {
 
 describe('edit_transaction confirmed-post-edit substitution span guard', () => {
   const content = 'line1\nline2\nline3\n'
-  const coordinates = getLineCoordinates(content)
+  const document = captureTextDocument(content)
+  const staleWholeContent = 'old-line1\nold-line2\nold-line3\n'
+  const staleWholeDocument = captureTextDocument(staleWholeContent)
+  const staleSliceDocument = captureTextDocument('line1\nSTALE-SLICE\nline3\n')
   const anchorToken = (path: string): string =>
     encodeReadCapabilityToken({
       startLine: 1,
-      endLine: coordinates.maxCapabilityLine,
-      hash: getContentHash(
-        getRangeSlice(coordinates, 1, coordinates.maxCapabilityLine),
-      ),
+      endLine: document.maxCapabilityLine,
+      hash: document.observationHash,
       scope: { projectId: '/project', path, runId: 'run' },
+      rawBasis: getRawReadBasis(
+        document,
+        1,
+        document.maxCapabilityLine,
+        'whole',
+      ),
     })
   const scopedStaleToken = (path: string): string =>
     encodeReadCapabilityToken({
@@ -419,14 +428,10 @@ describe('edit_transaction confirmed-post-edit substitution span guard', () => {
       endLine: 2,
       hash: getContentHash('STALE-SLICE'),
       scope: { projectId: '/project', path, runId: 'run' },
+      rawBasis: getRawReadBasis(staleSliceDocument, 2, 2, 'lines'),
     })
   const wholeFileStaleToken = (path: string): string =>
-    encodeReadCapabilityToken({
-      startLine: 1,
-      endLine: coordinates.maxCapabilityLine,
-      hash: getContentHash('STALE-WHOLE'),
-      scope: { projectId: '/project', path, runId: 'run' },
-    })
+    scopedWholeFileToken({ projectId: '/project', path, runId: 'run' })
   const scopedWholeFileToken = (scope: {
     projectId: string
     path: string
@@ -434,9 +439,15 @@ describe('edit_transaction confirmed-post-edit substitution span guard', () => {
   }): string =>
     encodeReadCapabilityToken({
       startLine: 1,
-      endLine: coordinates.maxCapabilityLine,
-      hash: getContentHash('STALE-WHOLE'),
+      endLine: staleWholeDocument.maxCapabilityLine,
+      hash: staleWholeDocument.observationHash,
       scope,
+      rawBasis: getRawReadBasis(
+        staleWholeDocument,
+        1,
+        staleWholeDocument.maxCapabilityLine,
+        'whole',
+      ),
     })
 
   const substitutionParams = (params: {
@@ -465,12 +476,18 @@ describe('edit_transaction confirmed-post-edit substitution span guard', () => {
 
   const freshAnchorState = (path: string): FileProcessingState => {
     const state = getFileProcessingValues({ strictReadBeforeEdit: true })
-    ;(state as any).confirmedPostEditAnchorsByPath = {
+    state.confirmedPostEditAnchorsByPath = {
       [path]: {
         startLine: 1,
-        endLine: coordinates.visibleLineCount,
-        contentHash: getContentHash(content),
+        endLine: document.maxCapabilityLine,
+        contentHash: document.observationHash,
         readCapability: anchorToken(path),
+        rawBasis: getRawReadBasis(
+          document,
+          1,
+          document.maxCapabilityLine,
+          'whole',
+        ),
       },
     }
     return state
@@ -567,6 +584,118 @@ describe('edit_transaction confirmed-post-edit substitution span guard', () => {
     )
   })
 
+  it('does not substitute a full-looking lines basis with the whole-file anchor (unit)', () => {
+    const path = 'src/a.ts'
+    const token = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: staleWholeDocument.maxCapabilityLine,
+      hash: staleWholeDocument.observationHash,
+      scope: { projectId: '/project', path, runId: 'run' },
+      rawBasis: getRawReadBasis(
+        staleWholeDocument,
+        1,
+        staleWholeDocument.maxCapabilityLine,
+        'lines',
+      ),
+    })
+    const [out] = substituteConfirmedPostEditCapabilities(
+      [
+        {
+          type: 'replace_range',
+          path,
+          readCapability: token,
+          newContent: 'replacement\n',
+        },
+      ] as any,
+      new Map([[path, content]]),
+      freshAnchorState(path),
+      '/project',
+      'run',
+      logger,
+    )
+    expect((out as { readCapability?: string }).readCapability).toBe(token)
+  })
+
+  it('does not give a legacy v3 whole-looking token fresh raw authority (unit)', () => {
+    const path = 'src/a.ts'
+    const token = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: staleWholeDocument.maxCapabilityLine,
+      hash: staleWholeDocument.observationHash,
+      scope: { projectId: '/project', path, runId: 'run' },
+    })
+    const [out] = substituteConfirmedPostEditCapabilities(
+      [
+        {
+          type: 'replace_range',
+          path,
+          readCapability: token,
+          newContent: 'replacement\n',
+        },
+      ] as any,
+      new Map([[path, content]]),
+      freshAnchorState(path),
+      '/project',
+      'run',
+      logger,
+    )
+    expect(token.startsWith('cap.v3.')).toBe(true)
+    expect((out as { readCapability?: string }).readCapability).toBe(token)
+  })
+
+  it('does not substitute through an anchor with raw-only snapshot drift (unit)', () => {
+    const path = 'src/a.ts'
+    const token = wholeFileStaleToken(path)
+    const snapshot = content.replaceAll('\n', '\r\n')
+    expect(captureTextDocument(snapshot).observationHash).toBe(
+      document.observationHash,
+    )
+    const [out] = substituteConfirmedPostEditCapabilities(
+      [
+        {
+          type: 'replace_range',
+          path,
+          readCapability: token,
+          newContent: 'replacement\n',
+        },
+      ] as any,
+      new Map([[path, snapshot]]),
+      freshAnchorState(path),
+      '/project',
+      'run',
+      logger,
+    )
+    expect((out as { readCapability?: string }).readCapability).toBe(token)
+  })
+
+  it('does not trust an unsigned basis that disagrees with the anchor token (unit)', () => {
+    const path = 'src/a.ts'
+    const token = wholeFileStaleToken(path)
+    const state = freshAnchorState(path)
+    state.confirmedPostEditAnchorsByPath![path]!.rawBasis = getRawReadBasis(
+      document,
+      1,
+      document.maxCapabilityLine,
+      'lines',
+    )
+    const [out] = substituteConfirmedPostEditCapabilities(
+      [
+        {
+          type: 'replace_range',
+          path,
+          readCapability: token,
+          newContent: 'replacement\n',
+        },
+      ] as any,
+      new Map([[path, content]]),
+      state,
+      '/project',
+      'run',
+      logger,
+    )
+    expect((out as { readCapability?: string }).readCapability).toBe(token)
+  })
+
   it('does not substitute a scoped write_file basedOnRead with the whole-file anchor (unit)', () => {
     // write_file authorization semantics are whole-file; a scoped basedOnRead
     // must never be smuggled past the whole-file check via anchor substitution.
@@ -593,7 +722,7 @@ describe('edit_transaction confirmed-post-edit substitution span guard', () => {
 
   it('does not substitute a foreign-scope whole-file capability with the anchor (unit)', () => {
     // Cross-scope anti-replay on the PROVIDED token: a decodable
-    // whole-file-covering cap.v3 minted for a different path, run, or project
+    // authenticated cap.v4 minted for a different path, run, or project
     // proves nothing about this file in this scope. Substituting it for the
     // fresh anchor would grant edit authority for a file the caller never
     // read in this run/path scope, so the token must be kept unchanged.
@@ -661,9 +790,7 @@ describe('edit_transaction preflight failure attribution (ledger-mapped edit ind
   const baseHandlerParams = (params: {
     edits: unknown[]
     fileProcessingState: FileProcessingState
-    requestOptionalFile?: (args: {
-      filePath: string
-    }) => Promise<string | null>
+    requestOptionalFile?: (args: { filePath: string }) => Promise<string | null>
   }) => ({
     previousToolCallFinished: Promise.resolve(),
     toolCall: {

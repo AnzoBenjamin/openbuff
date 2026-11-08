@@ -59,7 +59,7 @@ Runtime agent restrictions keep real security boundaries while removing over-str
 - SSRF host/IP/redirect revalidation on network fetches
 - Denials for `.env`, private keys/credentials, and real `.tfstate` paths
 - Project-path containment for reads/writes/spawned work
-- `cap.v3` HMAC signing with project/path/run scope binding
+- `cap.v4` HMAC signing with project/path/run scope and exact raw basis binding
 - `replace_range` authority chain (authenticated capability, not prose hashes)
 - Plan-only terminal attenuation (descendants stay on the read-only terminal profile) — currently overridden by the global full-access terminal profile, so it is no longer effective in the bundled runtime
 - Privilege-escalation, system-package, and env-dump bans (these apply to the non-full-access policy profiles, still enforced for SDK hosts and the high-impact approval gate, not to bundled agents now on full-access)
@@ -103,14 +103,14 @@ Control-plane records use compare-and-swap revisions, atomic local persistence, 
 `run_file_change_hooks` + the automated code-reviewer are the **validation/reviewer gate** that unlocks finalization and commit. Hooks run user-configured checks and, only when a trusted
 project explicitly sets `autoFileChangeHooks: true`, combine them with bounded
 manifest inference. The opt-in is required because compilers, plugins, build
-scripts, and tests can execute repository-controlled code. Inference prefers explicit project scripts and supports native checks for
+scripts, and tests can execute repository-controlled code. Inference selects fixed validation commands and supports native checks for
 JavaScript/TypeScript, Python, Rust, Go, Java/Kotlin, .NET, C/C++, Ruby, PHP,
 Swift, and Godot. Compiler and linter output is normalized into structured
 diagnostics (`file`, range, severity, code, message, command, source) while the
 original bounded stdout/stderr remains available for recovery.
 
 - Automated security/test/doc auxiliary agents have explicit lifecycle handling. Their done flags are written only after successful completion; crashes and blocking security verdicts persist as blockers. Test/doc writers run automatically only when the user request explicitly includes those deliverables, and mixed-package test targets are routed to package-specific commands.
-- Productive agent steps, subagent duration, file mutations, configured file-change hooks, and terminal commands are all unbounded in wall-clock time by default. The remaining safeguards are user cancellation, cost/token budgets, spawn-depth limits, and context compaction; observational poll bounds (`check_job`, `check_background_agent`) and network/lock timeouts are unchanged. Gate repair and reviewer/specialist no-verdict retries are unlimited by default (finite caps only via `OPENBUFF_MAX_*` env or `createBase2` options); reviewer crashes retry once, and repeated no-verdict outputs keep re-prompting the reviewer instead of parking. Repeated reviewer crashes require the explicit user phrase `bypass reviewer gate` before finalization can continue.
+- Configured file-change hooks default to a 300-second local cap; explicit `timeoutSeconds: -1` removes that local cap. Terminal commands default to no local cap, and a supplied timeout applies to synchronous and background commands from action start, including approval and preflight. Finite parent deadlines still apply. The remaining safeguards include user cancellation, cost/token budgets, spawn-depth limits, and context compaction; observational poll bounds (`check_job`, `check_background_agent`) and network/lock timeouts are unchanged. Gate repair and reviewer/specialist no-verdict retries are unlimited by default (finite caps only via `OPENBUFF_MAX_*` env or `createBase2` options); reviewer crashes retry once, and repeated no-verdict outputs keep re-prompting the reviewer instead of parking. Repeated reviewer crashes require the explicit user phrase `bypass reviewer gate` before finalization can continue.
 - Root-orchestrator mutating/control gate operations such as Git-status observation, file-change hooks, and structural inventory are model-hidden programmatic tools. Their results are injected when needed after edits, so the harness remains active without paying for those schemas on every provider request. The orchestrator must **not** treat basher typechecks or `run_targeted_validation` as gate substitutes — only the runtime-owned hooks→reviewer cycle clears the gate. The read-only `get_change_review_bundle` tool remains model-visible so an orchestrator can refresh a stale reviewer snapshot after compaction. Fresh greetings and simple gratitude prompts take a narrow conversational fast path only when no pending work or reviewer blocker exists.
 
 **Pattern-specific agents** are intentionally **excluded** from `spawnableAgents` because they have a narrow contract that only makes sense within a specific workflow pattern. They are spawned by the pattern flow itself, not by the orchestrator:
@@ -702,6 +702,28 @@ Tools represent the capabilities given to agents to interact with your system.
 - Tool executions are handled securely by the SDK on your local machine (reading/writing files, executing commands, searching codebase).
 - Since Openbuff has no hosted proxy backend, tool execution is extremely low-latency, and all outputs are processed directly by your locally configured models.
 
+### MCP and custom tool schemas
+
+Custom tools accept object inputs. Their original live Zod schema validates
+each call, including async refinements, defaults, and transforms; provider
+schemas describe an advisory input shape. Scalar-root custom schemas fail
+registration because tool calls use an object contract.
+
+The root input name `cb_easp` is reserved for step control. External input
+schemas that declare or constrain that name refuse publication, including
+composed and referenced schemas. This check uses a custom tool's original
+input shape before advisory normalization. Nested `cb_easp` fields, output
+fields, and fields created by a host transform remain ordinary data.
+
+MCP and restored JSON-only tool schemas use nonmutating draft-7 validation.
+Unsupported schemas fail explicitly during registration or discovery. In
+addition to unsupported dialects and executable behavior, Ajv 6 cannot safely
+compile an own `__proto__` entry in `properties`, `patternProperties`, or
+`dependencies`. It also cannot compile a `properties` map containing
+`hasOwnProperty` with more than eight entries and constrained
+`additionalProperties`. These shapes refuse; required-only prototype field
+names remain supported.
+
 ### Tool availability and unavailable-tool errors
 
 Each agent is granted a subset of the global tool registry, not the whole
@@ -1006,24 +1028,30 @@ prompts or teach models overlapping call forms.
 
 Every complete whole-file, range, or symbol-slice result exposes one structured
 `editAnchor` with `startLine`, `endLine`, `contentHash`, and
-`readCapability`. `editAnchor.readCapability` is the copy-ready cap.v3 edit
+`readCapability`. `editAnchor.readCapability` is the copy-ready cap.v4 edit
 authority; the bounds and hash are diagnostic metadata and must not be mixed
 into the same edit call. Structured results expose no duplicate top-level
 `rangeHash` or `readCapability` fields. Partial or truncated file/range items
 expose neither hashes nor edit capabilities; successful slices in a partially
-satisfied symbol request retain their own anchors.
+satisfied symbol request retain their own anchors. Complete EOF/total metadata
+does not make truncated returned content complete or grant whole-file authority.
 
 Model-facing range content omits the transport-only `[RANGE_BLOCK ...]`
-metadata header. Exact undecorated bytes remain available as `sourceContent`,
-while the structured anchor carries freshness metadata without prose parsing.
+metadata header. `sourceContent` carries undecorated observation text, with
+CRLF normalized to LF. The structured anchor signs a separate exact raw basis,
+including original BOM and terminator facts. The host's lossless
+`rawSourceContent` callback channel is removed before model-facing output.
 
 For large files, `read_files` is also the capability-minting block reader: the
 `windows`, `around`, `symbol`, and batch `symbols` selectors below return one
 or more COMPLETE structural blocks so a large file yields a usable edit anchor
 without a guess-shrink-retry loop. Every complete block returns a structured
-`editAnchor` (`startLine`, `endLine`, `contentHash`, cap.v3 `readCapability`)
+`editAnchor` (`startLine`, `endLine`, `contentHash`, cap.v4 `readCapability`)
 that can be copied verbatim to `basedOnRead` / `readCapability` on a follow-up
-edit. Partial or failed blocks mint no capability. The selector modes may be
+edit. Line and structural selectors retain a `lines` raw basis even when their
+bounds cover the visible file; only an authenticated `whole` basis grants
+whole-file authority. Partial, failed or unverified blocks mint no capability.
+The selector modes may be
 combined in one call:
 
 - `windows: [{ path, windowSize?, window? }]` — split the file into complete
@@ -1090,27 +1118,34 @@ read-before-edit enforcement:
   `No matching discriminator` error because it could be either `create` or
   `write_file`. Set `type` explicitly to avoid this.
 - A recent complete whole-file `read_files.paths` call authorizes subsequent
-  exact-match edits to that path and returns an authenticated opaque `cap.v3`
-  `readCapability` bound to the project, normalized path, and current run.
+  exact-match edits to that path and returns an authenticated opaque `cap.v4`
+  `readCapability` bound to the project, normalized path, current run and exact
+  observed raw bytes.
   Truncated reads expose no
   capability. Range and symbol reads remain scoped and require their
   `readCapability` on the follow-up edit.
-- `basedOnRead` prefers a `cap.v3` token copied from a fresh `read_files`
-  range header. The runtime verifies its authentication, project/path/run
-  binding, bounds, and current content hash. Legacy `cap.v2` tokens and
-  explicit `{ startLine, endLine, hash }` objects remain freshness anchors for
-  compatible non-strict flows, but cannot authorize an otherwise unread path.
+- `basedOnRead` prefers a `cap.v4` token copied from a fresh structured
+  `read_files` anchor. The runtime verifies its authentication, project/path/run
+  binding, bounds, normalized hash and exact raw basis. Whole raw drift refuses;
+  scoped reads can relocate only to one unchanged raw slice within the bounded
+  search. Historical `cap.v3` tokens still authenticate for parsing, while
+  legacy `cap.v2` tokens and explicit `{ startLine, endLine, hash }` objects
+  remain compatibility metadata. None supplies fresh raw edit authority.
 - Model-facing `replace_range` transaction edits use
   `{ readCapability, newContent }`, add both `startLine` and `endLine` to
   target a contained sub-range, or pass `occurrence: { match, occurrence? }`
   to target the Nth literal match inside the capability-authorized range.
   `occurrence` is mutually exclusive with `startLine`/`endLine`. The
-  authenticated cap.v3 token remains the
+  authenticated cap.v4 token remains the
   sole freshness authority; legacy `expectedHash` tuples are rejected.
 - A successful edit keeps path-level authorization during the editing flow,
   while exact-match follow-up edits chain from the latest prepared content.
   For large or ambiguous follow-up edits, carry the echoed post-edit
-  `basedOnRead` forward or re-read the target range.
+  `basedOnRead` forward or re-read the target range. Fresh after-state tokens
+  require the canonical committed receipt, exact after-hash and receiving
+  issuer scope. Output normalization verifies their whole raw metadata against
+  confirmed after-content or the coordinator's separately confirmed local
+  anchor before publishing them to the agent's history.
 - Stale or failed edits should be recovered by re-reading the exact
   target range named in the diagnostic and retrying with the new
   `basedOnRead`, not by guessing from memory. A stale failure deliberately

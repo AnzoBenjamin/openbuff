@@ -1,3 +1,5 @@
+import { spawn } from 'node:child_process'
+import { authenticatedHostFixture } from './authenticated-host-fixture'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -10,7 +12,9 @@ import { getBuildTargets } from '../tools/get-build-targets'
 import { inspectEnvironment } from '../tools/inspect-environment'
 
 const roots: string[] = []
+const hosts: ReturnType<typeof authenticatedHostFixture>[] = []
 afterEach(() => {
+  for (const host of hosts.splice(0)) host.close()
   for (const root of roots.splice(0))
     fs.rmSync(root, { recursive: true, force: true })
 })
@@ -25,13 +29,23 @@ describe('harness intelligence read tools', () => {
     )
     fs.writeFileSync(path.join(root, 'app.test.ts'), '')
 
-    expect((await inspectEnvironment(root))[0]).toMatchObject({
+    const launches: Array<{ command: string; argv: readonly string[] }> = []
+    const host = authenticatedHostFixture(root, { spawn: (command, argv = [], options) => {
+      launches.push({ command, argv: [...argv] })
+      return spawn(command, [...argv], options ?? {})
+    } })
+    hosts.push(host)
+    expect((await inspectEnvironment(root, undefined, host.context))[0]).toMatchObject({
       type: 'json',
       value: {
         manifests: ['package.json'],
         tools: { blender: { available: expect.any(Boolean) } },
       },
     })
+    expect(launches.length).toBeGreaterThan(0)
+    for (const launch of launches) {
+      expect(launch.argv).toEqual([path.basename(launch.command) === 'go' ? 'version' : '--version'])
+    }
     // The read tools are async now: they share the async discovery traversal
     // with inspect_environment instead of running their own sync walk.
     const affected = (await getAffectedTests(root, ['app.ts']))[0]

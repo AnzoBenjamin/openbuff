@@ -1,6 +1,0 @@
-{
-  "original": "docs/execution/body-roadmap/evidence/B01/tail-store/fixture.ts",
-  "originalSha256": "a74e117ae30527916468ab808288d5b748a79b0bcbf94ea00de6b7aac304f9d8",
-  "copySha256": "58b56869a4d573e25c1e4cbe348a86d9e1876b53f83525b5d1f418a131ef5d28",
-  "transform": "Only SDK relative import depth changes for independent directory; import.meta.dir routes report into reviewer-owned directory."
-}

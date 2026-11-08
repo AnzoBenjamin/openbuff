@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { getChangeReviewBundle } from '../tools/get-change-review-bundle'
+import { computeWorktreeSnapshotIdentity, getChangeReviewBundle } from '../tools/get-change-review-bundle'
 import { runGitBounded } from '../tools/git-status'
 import { runTargetedValidation } from '../tools/run-targeted-validation'
 import {
@@ -13,6 +13,181 @@ import {
 } from '@codebuff/common/types/workspace-state'
 
 import type { SemgrepRunner } from '../services/semgrep-baseline'
+
+
+import {
+  createControlledExecutionClock,
+  createExecutionProcessRecorder,
+  createTerminalExecutionFixture,
+  executionDeadlineMs,
+} from './fixtures/b19-terminal-execution'
+import { executionRefusal } from '../services/execution-launch'
+import type { AsyncDecision } from '@codebuff/common/types/contracts/execution-context'
+
+const executionHosts: ReturnType<typeof createTerminalExecutionFixture>[] = []
+const capturedChildEnvironment: Record<string, string | undefined> = { PATH: '/usr/bin:/bin' }
+afterEach(() => { for (const host of executionHosts.splice(0)) host.dispose() })
+function capturedExecution(cwd: string, signal?: AbortSignal) {
+  const host = createTerminalExecutionFixture({ projectRoot: cwd, signal, environment: capturedChildEnvironment })
+  executionHosts.push(host)
+  return host.context
+}
+
+function getMediatedBundle(params: Parameters<typeof getChangeReviewBundle>[0]) {
+  return getChangeReviewBundle({ ...params, executionContext: params.executionContext ?? capturedExecution(params.cwd, params.signal) })
+}
+function runMediatedValidation(params: Parameters<typeof runTargetedValidation>[0]) {
+  return runTargetedValidation({
+    ...params,
+    executionContext: params.executionContext ?? capturedExecution(params.cwd, params.signal),
+    capturedConfiguration: params.capturedConfiguration ?? { autoFileChangeHooks: false, fileChangeHooks: [] },
+  })
+}
+
+function runMediatedGitBounded(
+  args: Parameters<typeof runGitBounded>[0], cwd: string, signal: AbortSignal | undefined,
+  options: Parameters<typeof runGitBounded>[3],
+) {
+  return runGitBounded(args, cwd, signal, {
+    ...options, executionContext: options.executionContext ?? capturedExecution(cwd, signal),
+    branchId: options.branchId ?? 'fixture.snapshot.raw',
+  })
+}
+
+describe('B19 targeted validation execution controls', () => {
+  function recorder() {
+    return createExecutionProcessRecorder({ reply: (executable, argv) => {
+      if (executable !== 'git') throw new Error('Unexpected validation fixture executable')
+      if (argv[0] === 'rev-parse' && argv[1] === 'HEAD~1') return { exitCode: 128, stderr: 'initial commit has no parent' }
+      if (argv[0] === 'rev-parse') return { stdout: `${'a'.repeat(40)}\n` }
+      return { stdout: '' }
+    } })
+  }
+
+  function host(options: Parameters<typeof createTerminalExecutionFixture>[0]) {
+    const result = createTerminalExecutionFixture({ projectRoot: '/repo', ...options })
+    executionHosts.push(result)
+    return result
+  }
+
+  async function seedSnapshot(captured: ReturnType<typeof createTerminalExecutionFixture>) {
+    const result = await computeWorktreeSnapshotIdentity({ cwd: '/repo', executionContext: captured.context, phase: 'seed' })
+    if ('errorMessage' in result) throw new Error(result.errorMessage)
+    return result.snapshotId
+  }
+
+  test('before and after snapshot caps are separate and both retain the original action cap', async () => {
+    const manual = createControlledExecutionClock()
+    const processes = recorder()
+    const captured = host({
+      ...manual, spawn: processes.spawn, actionLimit: { kind: 'finite', durationMs: 20_000 },
+      authorize: input => {
+        if (input.facts.branchId === 'bundle.snapshot-head' && input.target.adapterOptions.phase === 'before') manual.advance(9_000)
+        return { ok: true, basis: 'explicit-policy', decisionId: 'validation-cap-control' }
+      },
+    })
+    const snapshotId = await seedSnapshot(captured)
+    const output = await runTargetedValidation({
+      cwd: '/repo', snapshotId, files: ['README.md'], executionContext: captured.context,
+      capturedConfiguration: { fileChangeHooks: [] },
+      runHooks: async () => {
+        manual.advance(2_000)
+        return [{ type: 'json', value: [{ command: 'fixture validation', hookName: 'fixture', exitCode: 0 }] }]
+      },
+    })
+    expect(output[0].value).toMatchObject({ status: 'passed', assurance: 'full' })
+    const heads = captured.policyInputs.filter(input => input.facts.branchId === 'bundle.snapshot-head')
+    const before = heads.find(input => input.target.adapterOptions.phase === 'before')!
+    const after = heads.find(input => input.target.adapterOptions.phase === 'after')!
+    expect(executionDeadlineMs(before.facts.deadlines.resourceLifetime)).toBe(10_100)
+    expect(executionDeadlineMs(after.facts.deadlines.resourceLifetime)).toBe(20_100)
+    expect(before.facts.deadlines.resourceLifetime.limitId).not.toBe(after.facts.deadlines.resourceLifetime.limitId)
+    expect(before.facts.correlation).toEqual(after.facts.correlation)
+    expect(executionDeadlineMs(after.facts.deadlines.resourceLifetime)! - manual.clock.nowMs()).toBe(9_000)
+  })
+
+  test('validation scope, hook config, env and shell are captured before the first snapshot await', async () => {
+    const processes = recorder()
+    let entered!: () => void
+    let allow!: (decision: AsyncDecision) => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<AsyncDecision>(resolve => { allow = resolve })
+    const captured = host({ spawn: processes.spawn, authorize: input => {
+      if (input.facts.branchId === 'bundle.snapshot-head' && input.target.adapterOptions.phase === 'before') {
+        entered()
+        return gate
+      }
+      return { ok: true, basis: 'explicit-policy', decisionId: 'validation-scope-control' }
+    } })
+    const snapshotId = await seedSnapshot(captured)
+    let seen: Parameters<typeof runTargetedValidation>[0] | undefined
+    const files = ['README.md']
+    const artifactKinds = ['documentation']
+    const env = { PROJECT_VALUE: 'before-snapshot' }
+    const capturedConfiguration = { autoFileChangeHooks: false, fileChangeHooks: [{ command: 'printf original' }] }
+    const terminalShell = { executable: '/bin/bash', args: ['-c'] }
+    const input: Parameters<typeof runTargetedValidation>[0] = {
+      cwd: '/repo', snapshotId, files, artifactKinds, env, capturedConfiguration, terminalShell,
+      executionContext: captured.context,
+      runHooks: async hookInput => { seen = { ...hookInput, snapshotId }; return [{ type: 'json', value: [{ command: 'fixture validation', hookName: 'fixture', exitCode: 0 }] }] },
+    }
+    const pending = runTargetedValidation(input)
+    await waiting
+    input.cwd = '/late-root'
+    input.snapshotId = 'late-snapshot'
+    files[0] = 'late.py'
+    artifactKinds[0] = 'late-kind'
+    env.PROJECT_VALUE = 'after-snapshot'
+    capturedConfiguration.fileChangeHooks[0].command = 'printf late'
+    capturedConfiguration.autoFileChangeHooks = true
+    terminalShell.executable = '/missing-shell'
+    terminalShell.args[0] = '--late'
+    allow({ ok: true, basis: 'explicit-policy', decisionId: 'validation-scope-allow' })
+    const output = await pending
+    expect(output[0].value).toMatchObject({ snapshotId, files: ['README.md'], artifactKinds: ['documentation'], status: 'passed' })
+    expect(seen).toMatchObject({
+      cwd: '/repo', files: ['README.md'], env: { PROJECT_VALUE: 'before-snapshot' },
+      capturedConfiguration: { autoFileChangeHooks: false, fileChangeHooks: [{ command: 'printf original' }] },
+      terminalShell: { executable: '/bin/bash', args: ['-c'] },
+    })
+    expect(Object.isFrozen(seen?.capturedConfiguration?.fileChangeHooks[0])).toBe(true)
+    for (const actual of processes.calls) expect(actual.options.cwd).toBe('/repo')
+  })
+
+  test('missing execution context refuses before hooks with no process', async () => {
+    const processes = recorder()
+    let hookCalls = 0
+    const output = await runTargetedValidation({
+      cwd: '/repo', snapshotId: 'unavailable', files: ['README.md'],
+      runHooks: async () => { hookCalls++; return [{ type: 'json', value: [{ command: 'fixture validation', hookName: 'fixture', exitCode: 0 }] }] },
+    })
+    expect(output[0].value).toMatchObject({ status: 'failed', assurance: 'none', executionRefusal: { reason: 'unavailable' } })
+    expect(hookCalls).toBe(0)
+    expect(processes.calls).toHaveLength(0)
+  })
+
+  test.each(['denied', 'deadline-exhausted'] as const)('after snapshot preserves %s refusal and rejects passing hooks', async reason => {
+    const manual = createControlledExecutionClock()
+    const processes = recorder()
+    const captured = host({
+      ...manual, spawn: processes.spawn, actionLimit: { kind: 'finite', durationMs: 200 },
+      authorize: input => input.target.adapterOptions.phase === 'after' && reason === 'denied'
+        ? executionRefusal('denied', 'after snapshot denied')
+        : { ok: true, basis: 'explicit-policy', decisionId: 'validation-refusal-control' },
+    })
+    const snapshotId = await seedSnapshot(captured)
+    const output = await runTargetedValidation({
+      cwd: '/repo', snapshotId, files: ['README.md'], executionContext: captured.context,
+      runHooks: async () => {
+        if (reason === 'deadline-exhausted') manual.advance(200)
+        return [{ type: 'json', value: [{ command: 'fixture validation', hookName: 'fixture', exitCode: 0 }] }]
+      },
+    })
+    expect(output[0].value).toMatchObject({ status: 'failed', assurance: 'none', executionRefusal: { reason } })
+    expect(output[0].value).toHaveProperty('summary', expect.stringContaining('could not be re-attested'))
+    expect(captured.events.filter(event => event.phase === 'dispatched' && event.facts.branchId === 'bundle.snapshot-head')).toHaveLength(2)
+  })
+})
 
 describe('runTargetedValidation', () => {
   const temporaryRoots: string[] = []
@@ -41,7 +216,7 @@ describe('runTargetedValidation', () => {
 
   test('fails closed for a stale snapshot', async () => {
     const cwd = createRepository()
-    const result = await runTargetedValidation({
+    const result = await runMediatedValidation({
       cwd,
       snapshotId: 'stale-snapshot',
       files: ['README.md'],
@@ -55,12 +230,12 @@ describe('runTargetedValidation', () => {
 
   test('returns scoped evidence for the current snapshot', async () => {
     const cwd = createRepository()
-    const bundle = await getChangeReviewBundle({ cwd })
+    const bundle = await getMediatedBundle({ cwd })
     const bundleValue = bundle[0]?.type === 'json' ? bundle[0].value : undefined
     if (!bundleValue || !('snapshotId' in bundleValue)) {
       throw new Error('Expected a change review bundle')
     }
-    const result = await runTargetedValidation({
+    const result = await runMediatedValidation({
       cwd,
       snapshotId: bundleValue.snapshotId,
       files: ['README.md'],
@@ -96,7 +271,7 @@ describe('runTargetedValidation', () => {
         },
       ],
     })
-    const bundle = await getChangeReviewBundle({
+    const bundle = await getMediatedBundle({
       cwd,
       workspaceState: initialWorkspace,
     })
@@ -104,7 +279,7 @@ describe('runTargetedValidation', () => {
     if (!bundleValue || !('snapshotId' in bundleValue)) {
       throw new Error('Expected a change review bundle')
     }
-    const result = await runTargetedValidation({
+    const result = await runMediatedValidation({
       cwd,
       snapshotId: bundleValue.snapshotId,
       files: ['README.md'],
@@ -126,13 +301,13 @@ describe('runTargetedValidation', () => {
 
   test('fails closed when a validation hook returns an execution error', async () => {
     const cwd = createRepository()
-    const bundle = await getChangeReviewBundle({ cwd })
+    const bundle = await getMediatedBundle({ cwd })
     const bundleValue = bundle[0]?.type === 'json' ? bundle[0].value : undefined
     if (!bundleValue || !('snapshotId' in bundleValue)) {
       throw new Error('Expected a change review bundle')
     }
 
-    const result = await runTargetedValidation({
+    const result = await runMediatedValidation({
       cwd,
       snapshotId: bundleValue.snapshotId,
       files: ['README.md'],
@@ -156,14 +331,14 @@ describe('runTargetedValidation', () => {
 
   test('forwards the diagnosticDelta injector to the hook executor', async () => {
     const cwd = createRepository()
-    const bundle = await getChangeReviewBundle({ cwd })
+    const bundle = await getMediatedBundle({ cwd })
     const bundleValue = bundle[0]?.type === 'json' ? bundle[0].value : undefined
     if (!bundleValue || !('snapshotId' in bundleValue)) {
       throw new Error('Expected a change review bundle')
     }
     let forwarded: unknown
     const diagnosticDelta = async () => ({ rejected: false as const })
-    const result = await runTargetedValidation({
+    const result = await runMediatedValidation({
       cwd,
       snapshotId: bundleValue.snapshotId,
       files: ['README.md'],
@@ -185,7 +360,7 @@ describe('runTargetedValidation', () => {
 
   test('fails closed when the diagnostic-delta preflight rejects', async () => {
     const cwd = createRepository()
-    const bundle = await getChangeReviewBundle({ cwd })
+    const bundle = await getMediatedBundle({ cwd })
     const bundleValue = bundle[0]?.type === 'json' ? bundle[0].value : undefined
     if (!bundleValue || !('snapshotId' in bundleValue)) {
       throw new Error('Expected a change review bundle')
@@ -194,7 +369,7 @@ describe('runTargetedValidation', () => {
     // The diagnostic_delta_rejected hook-result arm carries no
     // exitCode/errorMessage/permissionDenied — only the validationStatus — so
     // the failure predicate must match on the status itself.
-    const result = await runTargetedValidation({
+    const result = await runMediatedValidation({
       cwd,
       snapshotId: bundleValue.snapshotId,
       files: ['src/index.ts'],
@@ -262,13 +437,13 @@ describe('runTargetedValidation', () => {
         stderr: '',
       }
     }
-    const bundle = await getChangeReviewBundle({ cwd, securityScanRunner })
+    const bundle = await getMediatedBundle({ cwd, securityScanRunner })
     const bundleValue = bundle[0]?.type === 'json' ? bundle[0].value : undefined
     if (!bundleValue || !('snapshotId' in bundleValue)) {
       throw new Error('Expected a change review bundle')
     }
     const runnerCallsAfterPreBundle = scanCalls
-    const result = await runTargetedValidation({
+    const result = await runMediatedValidation({
       cwd,
       snapshotId: bundleValue.snapshotId,
       files: ['app.py'],
@@ -286,13 +461,13 @@ describe('runTargetedValidation', () => {
 
   test('rejects evidence with the drift summary for a genuine worktree change', async () => {
     const cwd = createRepository()
-    const bundle = await getChangeReviewBundle({ cwd })
+    const bundle = await getMediatedBundle({ cwd })
     const bundleValue = bundle[0]?.type === 'json' ? bundle[0].value : undefined
     if (!bundleValue || !('snapshotId' in bundleValue)) {
       throw new Error('Expected a change review bundle')
     }
 
-    const result = await runTargetedValidation({
+    const result = await runMediatedValidation({
       cwd,
       snapshotId: bundleValue.snapshotId,
       files: ['README.md'],
@@ -331,14 +506,14 @@ describe('runTargetedValidation', () => {
     }
     const cwd = createRepository()
     fs.writeFileSync(path.join(cwd, 'notes.txt'), 'notes\n')
-    const bundle = await getChangeReviewBundle({ cwd })
+    const bundle = await getMediatedBundle({ cwd })
     const bundleValue = bundle[0]?.type === 'json' ? bundle[0].value : undefined
     if (!bundleValue || !('snapshotId' in bundleValue)) {
       throw new Error('Expected a change review bundle')
     }
     const notes = path.join(cwd, 'notes.txt')
     try {
-      const result = await runTargetedValidation({
+      const result = await runMediatedValidation({
         cwd,
         snapshotId: bundleValue.snapshotId,
         files: ['notes.txt'],
@@ -372,13 +547,13 @@ describe('runTargetedValidation', () => {
     const file = path.join(cwd, 'tail.txt')
     const prefix = 'x'.repeat(1024 * 1024 + 128)
     fs.writeFileSync(file, `${prefix}before\n`)
-    const bundle = (await getChangeReviewBundle({ cwd }))[0]
+    const bundle = (await getMediatedBundle({ cwd }))[0]
     if (bundle?.type !== 'json' || !('snapshotId' in bundle.value)) {
       throw new Error('Expected complete before snapshot')
     }
     const beforeSize = fs.statSync(file).size
     let hooksRan = false
-    const result = await runTargetedValidation({
+    const result = await runMediatedValidation({
       cwd,
       snapshotId: bundle.value.snapshotId,
       files: ['tail.txt'],
@@ -430,7 +605,7 @@ describe('runTargetedValidation', () => {
     }
     // Pin the regime: the listing exceeds the production spawn cap, so the
     // file deleted below falls past the retained identity prefix.
-    const capped = await runGitBounded(
+    const capped = await runMediatedGitBounded(
       ['status', '--porcelain', '-uall'],
       cwd,
       undefined,
@@ -439,7 +614,7 @@ describe('runTargetedValidation', () => {
     expect(capped.exitCode).toBe(0)
     expect(capped.stdoutTotalBytes).toBeGreaterThan(4 * 1024 * 1024)
 
-    expect((await getChangeReviewBundle({ cwd }))[0]).toMatchObject({
+    expect((await getMediatedBundle({ cwd }))[0]).toMatchObject({
       type: 'json',
       value: {
         errorMessage:
@@ -447,7 +622,7 @@ describe('runTargetedValidation', () => {
       },
     })
     let hooksRan = false
-    const result = await runTargetedValidation({
+    const result = await runMediatedValidation({
       cwd,
       snapshotId: 'unavailable',
       files: ['README.md'],

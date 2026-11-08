@@ -8,6 +8,7 @@ import {
   resolveProjectPathForFileSystemRead,
   resolveProjectPathForRead,
   type ContainedProjectPath,
+  type HostReadPolicy,
 } from '@codebuff/common/util/project-path-containment'
 
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
@@ -237,8 +238,9 @@ export async function resolveFilePathForFileSystemOperation(
 export function resolveFilePathForReadOperation(
   projectRoot: string,
   input: string,
+  readPolicy?: HostReadPolicy,
 ): ResolvedOperationPath | null {
-  const resolved = resolveProjectPathForRead(projectRoot, input)
+  const resolved = resolveProjectPathForRead(projectRoot, input, readPolicy)
   if (!resolved) return null
   return { ...resolved, operationPath: resolved.realFullPath }
 }

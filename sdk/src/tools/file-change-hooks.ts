@@ -4,10 +4,12 @@ import path from 'path'
 
 import micromatch from 'micromatch'
 
+import { mergeFileChangeHooks } from '../provider-config'
 import {
-  loadProviderConfigSync,
-  mergeFileChangeHooks,
-} from '../provider-config'
+  deriveExecutionContext,
+  executionLimitSeconds,
+  isExecutionRefusalError,
+} from '../services/execution-launch'
 import {
   mapWithConcurrency,
   raceAbort,
@@ -19,22 +21,28 @@ import { runTerminalCommand } from './run-terminal-command'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type { ExecutionAdapterContext, Result } from '@codebuff/common/types/contracts/execution-context'
 import type {
   DiagnosticCapture,
   DiagnosticDeltaPreflightResult,
 } from '../services/diagnostic-delta'
-import { getSystemProcessEnv } from '../env'
 
 export type FileChangeHook = {
   name?: string
   command: string
   /** Optional glob; the hook runs only when a changed file matches it. */
   filePattern?: string
-  /** Optional per-hook wall-clock bound in seconds. Omitted means no timeout. */
+  /** Local limit in seconds: omitted selects 300; -1 is explicitly unbounded. */
   timeoutSeconds?: number
   /** Run the command once per matching changed file instead of project-wide. */
   runPerFile?: boolean
 }
+
+/** SDK-only view of the root's immutable configuration snapshot. */
+export type CapturedHookConfiguration = Readonly<{
+  autoFileChangeHooks?: boolean
+  fileChangeHooks: readonly Readonly<FileChangeHook>[]
+}>
 
 // Hooks default to a bounded 300s wall-clock timeout so a hung typecheck/lint
 // command cannot stall the agent forever. An explicit -1 in a hook's config is
@@ -1485,7 +1493,7 @@ type RunCommand = typeof runTerminalCommand
 export const DIAGNOSTIC_PREFLIGHT_FLAG = 'OPENBUFF_DIAGNOSTIC_PREFLIGHT'
 
 export function isDiagnosticPreflightEnabled(
-  env: Record<string, string | undefined> = getSystemProcessEnv(),
+  env: Readonly<Record<string, string | undefined>> = {},
 ): boolean {
   const raw = env[DIAGNOSTIC_PREFLIGHT_FLAG]
   if (raw === undefined) return false
@@ -1526,6 +1534,7 @@ export type DiagnosticDeltaHook = (params: {
   cwd: string
   env?: Record<string, string | undefined>
   signal?: AbortSignal
+  executionContext?: ExecutionAdapterContext
 }) => Promise<DiagnosticDeltaPreflightResult | undefined>
 
 /**
@@ -1547,15 +1556,67 @@ export async function runFileChangeHooks(params: {
    * Injected so the caller owns the pre/post-edit baseline; omitted by default.
    */
   diagnosticDelta?: DiagnosticDeltaHook
+  executionContext?: ExecutionAdapterContext
+  capturedConfiguration?: CapturedHookConfiguration
+  /** Captured host flag; child environment cannot select diagnostic policy. */
+  diagnosticPreflightEnabled?: boolean
+  terminalShell?: Parameters<typeof runTerminalCommand>[0]['terminalShell']
+  getTerminalLaunchMetadata?: Parameters<typeof runTerminalCommand>[0]['getTerminalLaunchMetadata']
 }): Promise<CodebuffToolOutput<'run_file_change_hooks'>> {
-  const { files, cwd, env } = params
+  params = {
+    ...params,
+    terminalShell: params.terminalShell ? {
+      executable: params.terminalShell.executable, args: [...params.terminalShell.args],
+    } : undefined,
+  }
+  const files = [...params.files]
+  const cwd = params.cwd
+  const env = params.env ? { ...params.env } : undefined
+  const signal = params.executionContext?.signal ?? params.signal
+  // Copy the hook view before the first await. Root retains the frozen source
+  // snapshot; no later ambient load or mutation can change this invocation.
+  const captured = params.capturedConfiguration
+  const configuredHooks = captured?.fileChangeHooks.map((hook) => ({ ...hook }))
+  const explicitHooks = params.hooks?.map((hook) => ({ ...hook }))
+  if (explicitHooks === undefined && captured === undefined) {
+    return [{
+      type: 'json',
+      value: [{
+        validationStatus: 'hooks_unavailable',
+        errorMessage: 'Captured file-change hook configuration is unavailable.',
+        executionRefusal: {
+          ok: false,
+          reason: 'unavailable',
+          cause: 'Captured file-change hook configuration is unavailable.',
+        },
+      }],
+    }] as CodebuffToolOutput<'run_file_change_hooks'>
+  }
+  // Register known local caps before inference or any per-hook preflight.
+  // Retries under this same action keep the original memoized expiry.
+  const configuredContexts = new Map<FileChangeHook, Result<ExecutionAdapterContext>>()
+  for (const [index, hook] of (explicitHooks ?? configuredHooks ?? []).entries()) {
+    const limit = executionLimitSeconds(hook.timeoutSeconds ?? HOOK_DEFAULT_TIMEOUT_SECONDS)
+    configuredContexts.set(hook, limit.ok
+      ? deriveExecutionContext(params.executionContext, `configured-hook:${index}`, limit.value)
+      : limit)
+  }
+  const inferredLimit = executionLimitSeconds(HOOK_DEFAULT_TIMEOUT_SECONDS)
+  const inferredContext = captured?.autoFileChangeHooks === true && explicitHooks === undefined
+    ? inferredLimit.ok ? deriveExecutionContext(params.executionContext, 'inferred-hooks-preflight', inferredLimit.value) : inferredLimit
+    : undefined
+  if (inferredContext && !inferredContext.ok) {
+    return [{ type: 'json', value: [{
+      validationStatus: 'hooks_unavailable', errorMessage: inferredContext.cause,
+      executionRefusal: inferredContext,
+    }] }] as CodebuffToolOutput<'run_file_change_hooks'>
+  }
   const hooks =
-    params.hooks ??
+    explicitHooks ??
     (await (async () => {
-      const config = loadProviderConfigSync().config
-      // Inference uses fixed validation commands selected from manifests; it
-      // never executes repository package scripts unless explicitly configured.
-      if (config.autoFileChangeHooks === false) return config.fileChangeHooks
+      // The captured host opt-in permits validation commands selected from
+      // manifests, including project scripts. Terminal admission still applies.
+      if (captured!.autoFileChangeHooks !== true) return configuredHooks!
       // Inference threads the caller's signal: hook inference is driven by an
       // agent run that can be aborted, and a cancelled run must stop issuing
       // snapshot filesystem probes instead of holding the shared pool's slots.
@@ -1564,10 +1625,10 @@ export async function runFileChangeHooks(params: {
           ? await inferFileChangeHooksFromFileSystem(
               cwd,
               params.fileSystem,
-              params.signal,
+              inferredContext?.ok ? inferredContext.value.signal ?? signal : signal,
             )
-          : await inferFileChangeHooksAsync(cwd, params.signal),
-        config.fileChangeHooks,
+          : await inferFileChangeHooksAsync(cwd, inferredContext?.ok ? inferredContext.value.signal ?? signal : signal),
+        configuredHooks!,
       )
     })())
   const matching = selectMatchingHooks(hooks, files)
@@ -1608,8 +1669,15 @@ export async function runFileChangeHooks(params: {
   // hook runs regardless of others' rejections; results are mapped back into
   // `matching` order so callers see deterministic ordering.
   const settled = await Promise.allSettled(
-    matching.map((hook) => {
+    matching.map((hook, index) => {
       const hookName = hook.name ?? hook.command
+      const configured = configuredContexts.has(hook)
+      const context = configuredContexts.get(hook) ?? deriveExecutionContext(
+        inferredContext?.ok ? inferredContext.value : params.executionContext,
+        `inferred-hook:${index}`,
+        { kind: 'unbounded' },
+      )
+      if (!context.ok) return Promise.resolve({ hookName, errorMessage: context.cause, executionRefusal: context })
       const hookCommand = buildHookCommand(hook, files, cwd)
       if ('errorMessage' in hookCommand) {
         return Promise.resolve({
@@ -1624,7 +1692,12 @@ export async function runFileChangeHooks(params: {
         projectRoot: cwd,
         timeout_seconds: hook.timeoutSeconds ?? HOOK_DEFAULT_TIMEOUT_SECONDS,
         env,
-        signal: params.signal,
+        signal: context.value.signal ?? signal,
+        executionContext: context.value,
+        executionFamily: 'configured-hook',
+        executionBranchId: `hook.${configured ? 'configured' : 'inferred-opt-in'}.${hook.runPerFile ? 'per-file' : 'project'}`,
+        terminalShell: params.terminalShell,
+        getTerminalLaunchMetadata: params.getTerminalLaunchMetadata,
       })
         .then((out) => {
           const first = Array.isArray(out) ? out[0] : undefined
@@ -1657,6 +1730,7 @@ export async function runFileChangeHooks(params: {
           errorMessage: `Hook "${hookName}" failed to run: ${
             err instanceof Error ? err.message : String(err)
           }`,
+          ...(isExecutionRefusalError(err) ? { executionRefusal: err.refusal } : {}),
         }))
     }),
   )
@@ -1668,7 +1742,7 @@ export async function runFileChangeHooks(params: {
   // rethrown instead, matching the contract `mapWithConcurrency` states and
   // honours; the per-hook `errorMessage` mapping below stays for the genuine
   // failures that happen whether or not the run was cancelled.
-  throwIfAborted(params.signal)
+  throwIfAborted(signal)
 
   const results: Array<Record<string, unknown>> = settled.map((s) =>
     s.status === 'fulfilled'
@@ -1692,7 +1766,7 @@ export async function runFileChangeHooks(params: {
   // hook gate, not an independent check. A repository with no matching hooks
   // (or none configured) gets NO preflight result — no
   // diagnostic_delta_passed/rejected entry — even when the flag is on.
-  if (isDiagnosticPreflightEnabled(env) && params.diagnosticDelta) {
+  if (params.diagnosticPreflightEnabled === true && params.diagnosticDelta) {
     let preflight: DiagnosticDeltaPreflightResult | undefined
     try {
       // Keep missing/unsupported languages visible in the capture coverage.
@@ -1700,16 +1774,22 @@ export async function runFileChangeHooks(params: {
         files,
         cwd,
         env,
-        signal: params.signal,
+        signal,
+        executionContext: params.executionContext,
       })
-    } catch {
-      preflight = undefined
+    } catch (error) {
+      preflight = isExecutionRefusalError(error) ? {
+        rejected: false,
+        diagnosticStatus: error.refusal.reason === 'cancelled' ? 'cancelled'
+          : error.refusal.reason === 'unavailable' ? 'unavailable' : 'failed',
+        executionRefusal: error.refusal,
+      } : undefined
     }
     let diagnosticStatus =
       preflight?.diagnosticStatus ??
       (preflight?.rejected
         ? 'new_errors'
-        : params.signal?.aborted
+        : signal?.aborted
           ? 'cancelled'
           : 'unknown')
     if (diagnosticStatus === 'passed') {
@@ -1735,6 +1815,7 @@ export async function runFileChangeHooks(params: {
         basis: 'unknown',
         reason: 'missing_observation',
       },
+      ...(preflight?.executionRefusal ? { executionRefusal: preflight.executionRefusal } : {}),
       ...(preflight?.rejected
         ? { newDiagnostics: preflight.newDiagnostics, fixIts: preflight.fixIts }
         : {}),

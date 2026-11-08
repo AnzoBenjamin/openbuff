@@ -114,18 +114,21 @@ describe('credentials', () => {
       }
     })
 
-    test('returns credentials from environment variable when set', () => {
+    test('returns credentials from the captured environment variable when set', () => {
       const originalToken = process.env[CHATGPT_OAUTH_TOKEN_ENV_VAR]
-      process.env[CHATGPT_OAUTH_TOKEN_ENV_VAR] = 'chatgpt-env-token-123'
+      process.env[CHATGPT_OAUTH_TOKEN_ENV_VAR] = 'ambient-token-must-not-win'
 
       try {
-        const creds = getChatGptOAuthCredentials(testEnv as any)
+        const capturedEnv = {
+          ...testEnv, [CHATGPT_OAUTH_TOKEN_ENV_VAR]: 'chatgpt-env-token-123',
+        }
+        const creds = getChatGptOAuthCredentials(capturedEnv)
         expect(creds).not.toBeNull()
         expect(creds?.accessToken).toBe('chatgpt-env-token-123')
         expect(creds?.refreshToken).toBe('')
         expect(creds?.expiresAt).toBeGreaterThan(Date.now())
       } finally {
-        if (originalToken) {
+        if (originalToken !== undefined) {
           process.env[CHATGPT_OAUTH_TOKEN_ENV_VAR] = originalToken
         } else {
           delete process.env[CHATGPT_OAUTH_TOKEN_ENV_VAR]

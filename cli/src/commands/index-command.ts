@@ -1,3 +1,4 @@
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 import { IndexManager, runScipIngest } from '@codebuff/indexer'
 import type { MetadataIndex } from '@codebuff/indexer'
 import { createConfiguredEmbedder, loadProviderConfigSync } from '@openbuff/sdk'
@@ -64,7 +65,10 @@ type IndexManagerLike = {
   ): Promise<boolean>
 }
 
-type IndexCommandDeps = {
+export type IndexCommandDeps = {
+  executionContext?: ExecutionAdapterContext
+  getExecutionContext?: () => Promise<ExecutionAdapterContext>
+
   getManager: () => {
     enabled: boolean
     semanticEnabled: boolean
@@ -313,6 +317,7 @@ export async function handleIndexCommand(
       result = await runIngest((deps.getRoot ?? getProjectRoot)(), {
         index: snapshot,
         indexers,
+        executionContext: deps.executionContext ?? await deps.getExecutionContext?.(),
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -332,7 +337,7 @@ export async function handleIndexCommand(
     if (
       result.mergedTotal === 0 &&
       result.results.length > 0 &&
-      result.results.every((item) => item.status === 'unavailable')
+      result.results.every((item) => item.status === 'unavailable' && !item.executionRefusal)
     ) {
       lines.push(
         'Hint: install the scip-* indexer binaries (e.g. scip-typescript, scip-python) on PATH to enable precise cross-reference edges.',

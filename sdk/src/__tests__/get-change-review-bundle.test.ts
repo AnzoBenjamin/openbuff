@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
+import * as fsPromises from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
@@ -22,6 +23,41 @@ import {
 import { getChangeReviewBundleParams } from '@codebuff/common/tools/params/tool/get-change-review-bundle'
 
 import type { SemgrepRunner } from '../services/semgrep-baseline'
+
+
+import { createExecutionProcessRecorder, createRealExecutionProcessRecorder, createTerminalExecutionFixture } from './fixtures/b19-terminal-execution'
+
+const executionHosts: ReturnType<typeof createTerminalExecutionFixture>[] = []
+const capturedChildEnvironment: Record<string, string | undefined> = { PATH: '/usr/bin:/bin' }
+afterEach(() => { for (const host of executionHosts.splice(0)) host.dispose() })
+function capturedExecution(cwd: string, signal?: AbortSignal) {
+  const host = createTerminalExecutionFixture({ projectRoot: cwd, signal, environment: capturedChildEnvironment })
+  executionHosts.push(host)
+  return host.context
+}
+
+function getMediatedBundle(params: Parameters<typeof getChangeReviewBundle>[0]) {
+  return getChangeReviewBundle({ ...params, executionContext: params.executionContext ?? capturedExecution(params.cwd, params.signal) })
+}
+function computeMediatedIdentity(params: Parameters<typeof computeWorktreeSnapshotIdentity>[0]) {
+  return computeWorktreeSnapshotIdentity({ ...params, executionContext: params.executionContext ?? capturedExecution(params.cwd, params.signal) })
+}
+function mediatedGitStatus(params: Parameters<typeof gitStatus>[0]) {
+  return gitStatus({ ...params, executionContext: params.executionContext ?? capturedExecution(params.cwd, params.signal) })
+}
+function resolveMediatedWorkspace(params: Parameters<typeof resolveWorkspaceIdentity>[0]) {
+  return resolveWorkspaceIdentity({ ...params, executionContext: params.executionContext ?? capturedExecution(params.cwd, params.signal) })
+}
+
+function runMediatedGitBounded(
+  args: Parameters<typeof runGitBounded>[0], cwd: string, signal: AbortSignal | undefined,
+  options: Parameters<typeof runGitBounded>[3],
+) {
+  return runGitBounded(args, cwd, signal, {
+    ...options, executionContext: options.executionContext ?? capturedExecution(cwd, signal),
+    branchId: options.branchId ?? 'fixture.snapshot.raw',
+  })
+}
 
 describe('getChangeReviewBundle', () => {
   const temporaryRoots: string[] = []
@@ -47,8 +83,8 @@ describe('getChangeReviewBundle', () => {
     expect(git('commit', '-m', 'initial').status).toBe(0)
     fs.writeFileSync(path.join(cwd, 'changed.txt'), 'changed\n')
 
-    const first = await getChangeReviewBundle({ cwd })
-    const second = await getChangeReviewBundle({ cwd })
+    const first = await getMediatedBundle({ cwd })
+    const second = await getMediatedBundle({ cwd })
     const firstValue = first[0]?.type === 'json' ? first[0].value : undefined
     const secondValue = second[0]?.type === 'json' ? second[0].value : undefined
     expect(firstValue).not.toHaveProperty('errorMessage')
@@ -73,7 +109,7 @@ describe('getChangeReviewBundle', () => {
     expect(git('commit', '-m', 'initial').status).toBe(0)
     fs.writeFileSync(path.join(cwd, 'changed.txt'), 'changed\n')
 
-    const result = await getChangeReviewBundle({ cwd })
+    const result = await getMediatedBundle({ cwd })
     const value = result[0]?.type === 'json' ? result[0].value : undefined
     expect(value).not.toHaveProperty('errorMessage')
     const bundle = value as { snapshotIdUsage?: string }
@@ -132,8 +168,8 @@ describe('getChangeReviewBundle', () => {
     fs.writeFileSync(path.join(cwd, 'first.txt'), `${'x'.repeat(4_000)}\n`)
     fs.writeFileSync(path.join(cwd, 'second.txt'), 'changed\n')
 
-    const small = await getChangeReviewBundle({ cwd, max_chars: 500 })
-    const large = await getChangeReviewBundle({ cwd, max_chars: 20_000 })
+    const small = await getMediatedBundle({ cwd, max_chars: 500 })
+    const large = await getMediatedBundle({ cwd, max_chars: 20_000 })
     const smallValue = (small[0]!.type === 'json' ? small[0]!.value : {}) as {
       snapshotId: string
       files: string[]
@@ -146,7 +182,7 @@ describe('getChangeReviewBundle', () => {
 
     const before = smallValue.snapshotId
     fs.writeFileSync(path.join(cwd, 'second.txt'), 'CHANGED\n')
-    const after = await getChangeReviewBundle({ cwd, max_chars: 500 })
+    const after = await getMediatedBundle({ cwd, max_chars: 500 })
     const afterValue = (after[0]!.type === 'json' ? after[0]!.value : {}) as {
       snapshotId: string
     }
@@ -189,11 +225,11 @@ describe('getChangeReviewBundle', () => {
     })
     expect(advancedWorkspace.revision).not.toBe(initialWorkspace.revision)
 
-    const first = await getChangeReviewBundle({
+    const first = await getMediatedBundle({
       cwd,
       workspaceState: initialWorkspace,
     })
-    const second = await getChangeReviewBundle({
+    const second = await getMediatedBundle({
       cwd,
       workspaceState: advancedWorkspace,
     })
@@ -207,7 +243,7 @@ describe('getChangeReviewBundle', () => {
     )
     // A bundle read with no workspace journal at all agrees too: the id is
     // keyed to content, not to the journal's presence or coordinates.
-    const unbound = await getChangeReviewBundle({ cwd })
+    const unbound = await getMediatedBundle({ cwd })
     const unboundValue =
       unbound[0]?.type === 'json' ? unbound[0].value : undefined
     expect(unboundValue).not.toHaveProperty('errorMessage')
@@ -226,7 +262,7 @@ describe('getChangeReviewBundle', () => {
 
     // Real worktree content drift still changes the content-keyed id.
     fs.writeFileSync(path.join(cwd, 'changed.txt'), 'changed again\n')
-    const drifted = await getChangeReviewBundle({
+    const drifted = await getMediatedBundle({
       cwd,
       workspaceState: advancedWorkspace,
     })
@@ -254,7 +290,7 @@ describe('getChangeReviewBundle', () => {
     expect(git('add', '.').status).toBe(0)
     expect(git('commit', '-m', 'initial').status).toBe(0)
     fs.writeFileSync(path.join(cwd, 'first.txt'), 'changed\n')
-    const initial = await getChangeReviewBundle({ cwd, stateDir })
+    const initial = await getMediatedBundle({ cwd, stateDir })
     const value =
       initial[0]!.type === 'json'
         ? (initial[0]!.value as unknown as {
@@ -332,7 +368,7 @@ describe('getChangeReviewBundle', () => {
       files: ['first.txt'],
       status: 'open',
     })
-    const result = await getChangeReviewBundle({ cwd, stateDir })
+    const result = await getMediatedBundle({ cwd, stateDir })
     const reviewed =
       result[0]!.type === 'json'
         ? (result[0]!.value as unknown as {
@@ -363,7 +399,7 @@ describe('getChangeReviewBundle', () => {
     expect(git('add', '.').status).toBe(0)
     expect(git('commit', '-m', 'second').status).toBe(0)
 
-    const result = await getChangeReviewBundle({ cwd })
+    const result = await getMediatedBundle({ cwd })
     const value = result[0]?.type === 'json' ? result[0].value : undefined
     expect(value).not.toHaveProperty('errorMessage')
     const bundle = value as { files: string[]; diff: string }
@@ -416,7 +452,7 @@ describe('getChangeReviewBundle', () => {
     expect(git('commit', '-m', 'initial').status).toBe(0)
     fs.writeFileSync(path.join(cwd, 'source.txt'), 'changed\n')
 
-    const before = await getChangeReviewBundle({ cwd })
+    const before = await getMediatedBundle({ cwd })
     const beforeValue = (
       before[0]!.type === 'json' ? before[0]!.value : {}
     ) as { snapshotId: string; files: string[] }
@@ -429,7 +465,7 @@ describe('getChangeReviewBundle', () => {
     const sessionDir = path.join(cwd, '.agents', 'sessions', 'my-slug')
     fs.mkdirSync(sessionDir, { recursive: true })
     fs.writeFileSync(path.join(sessionDir, 'PLAN.md'), '# plan\n')
-    const afterCreate = await getChangeReviewBundle({ cwd })
+    const afterCreate = await getMediatedBundle({ cwd })
     const afterCreateValue = (
       afterCreate[0]!.type === 'json' ? afterCreate[0]!.value : {}
     ) as { snapshotId: string; files: string[] }
@@ -437,7 +473,7 @@ describe('getChangeReviewBundle', () => {
 
     // Modifying an existing session artifact also must not change the id.
     fs.writeFileSync(path.join(sessionDir, 'PLAN.md'), '# plan updated\n')
-    const afterModify = await getChangeReviewBundle({ cwd })
+    const afterModify = await getMediatedBundle({ cwd })
     const afterModifyValue = (
       afterModify[0]!.type === 'json' ? afterModify[0]!.value : {}
     ) as { snapshotId: string; files: string[] }
@@ -451,7 +487,7 @@ describe('getChangeReviewBundle', () => {
 
     // (b) a real tracked source change still changes the snapshot id.
     fs.writeFileSync(path.join(cwd, 'source.txt'), 'changed again\n')
-    const afterSource = await getChangeReviewBundle({ cwd })
+    const afterSource = await getMediatedBundle({ cwd })
     const afterSourceValue = (
       afterSource[0]!.type === 'json' ? afterSource[0]!.value : {}
     ) as { snapshotId: string }
@@ -472,7 +508,7 @@ describe('getChangeReviewBundle', () => {
     expect(git('add', '.').status).toBe(0)
     expect(git('commit', '-m', 'initial').status).toBe(0)
 
-    const result = await getChangeReviewBundle({ cwd })
+    const result = await getMediatedBundle({ cwd })
     const value = result[0]?.type === 'json' ? result[0].value : undefined
     expect(value).not.toHaveProperty('errorMessage')
     const bundle = value as { files: string[]; diff: string }
@@ -496,6 +532,9 @@ describe('getChangeReviewBundle', () => {
     fs.writeFileSync(path.join(cwd, 'app.py'), 'print("two")\n')
     expect(git('add', '.').status).toBe(0)
     expect(git('commit', '-m', 'second').status).toBe(0)
+    // These are local fixture refs; merge-base requires no remote connection.
+    expect(git('update-ref', 'refs/remotes/origin/main', 'HEAD~1').status).toBe(0)
+    expect(git('symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main').status).toBe(0)
     fs.writeFileSync(path.join(cwd, 'app.py'), 'exec(user_input)\n')
 
     const sarif = JSON.stringify({
@@ -535,10 +574,24 @@ describe('getChangeReviewBundle', () => {
       return { exitCode: 0, stdout: sarif, stderr: '' }
     }
 
-    const result = await getChangeReviewBundle({
+    const processes = createRealExecutionProcessRecorder()
+    const executionHost = createTerminalExecutionFixture({ projectRoot: cwd, spawn: processes.spawn })
+    executionHosts.push(executionHost)
+    const result = await getMediatedBundle({
       cwd,
       securityScanRunner: runner,
+      executionContext: executionHost.context,
     })
+    const baselineInput = executionHost.policyInputs.find(input => input.facts.branchId === 'bundle.security-merge-base')!
+    expect(baselineInput).toBeDefined()
+    expect(baselineInput.target.argv).toEqual(['--no-pager', '--no-optional-locks', '--no-lazy-fetch', '-c', 'core.fsmonitor=false',
+      'merge-base', 'HEAD', 'origin/main'])
+    expect(baselineInput.target.adapterOptions.phase).toBe('security-baseline')
+    const baselineCall = processes.calls.find(call => JSON.stringify(call.argv) === JSON.stringify(baselineInput.target.argv))!
+    expect(baselineCall.spawnObserved).toBe(true)
+    expect(baselineCall.argv).toEqual(baselineInput.target.argv)
+    expect(baselineCall.options.env?.OPENAI_API_KEY).toBeUndefined()
+    expect(baselineCall.options.env?.CUSTOM_PROVIDER_KEY).toBeUndefined()
     const value = result[0]?.type === 'json' ? result[0].value : undefined
     expect(value).not.toHaveProperty('errorMessage')
     const bundle = value as {
@@ -592,7 +645,7 @@ describe('getChangeReviewBundle', () => {
       stdout: '',
       stderr: 'spawn semgrep ENOENT',
     })
-    const result = await getChangeReviewBundle({
+    const result = await getMediatedBundle({
       cwd,
       securityScanRunner: runner,
     })
@@ -631,7 +684,7 @@ describe('getChangeReviewBundle', () => {
     const runner: SemgrepRunner = () => {
       throw new Error('semgrep must not run when nothing is scannable')
     }
-    const result = await getChangeReviewBundle({
+    const result = await getMediatedBundle({
       cwd,
       securityScanRunner: runner,
     })
@@ -666,9 +719,9 @@ describe('getChangeReviewBundle', () => {
     // full file digest can distinguish these equal-length untracked tails.
     const shared = 'a'.repeat(1024 * 1024)
     fs.writeFileSync(path.join(cwd, 'big.txt'), `${shared}tail-one\n`)
-    const first = await getChangeReviewBundle({ cwd })
+    const first = await getMediatedBundle({ cwd })
     fs.writeFileSync(path.join(cwd, 'big.txt'), `${shared}tail-two\n`)
-    const second = await getChangeReviewBundle({ cwd })
+    const second = await getMediatedBundle({ cwd })
     const firstValue = first[0]?.type === 'json' ? first[0].value : undefined
     const secondValue = second[0]?.type === 'json' ? second[0].value : undefined
     expect(firstValue).not.toHaveProperty('errorMessage')
@@ -697,7 +750,7 @@ describe('getChangeReviewBundle', () => {
     fs.writeFileSync(path.join(cwd, 'a-prefix.txt'), `${prefix}\n`)
     const observe = async (tail: string) => {
       fs.writeFileSync(file, `${tail}\n`)
-      const raw = await runGitBounded(
+      const raw = await runMediatedGitBounded(
         ['diff', '--binary', 'HEAD'],
         cwd,
         undefined,
@@ -744,13 +797,13 @@ describe('getChangeReviewBundle', () => {
       'café\nfile.txt',
     ]
     for (const file of files) fs.writeFileSync(path.join(cwd, file), 'one')
-    const first = (await getChangeReviewBundle({ cwd }))[0]
+    const first = (await getMediatedBundle({ cwd }))[0]
     expect(first).toMatchObject({
       type: 'json',
       value: { files: [...files].sort() },
     })
     fs.writeFileSync(path.join(cwd, 'café\nfile.txt'), 'two')
-    const second = (await getChangeReviewBundle({ cwd }))[0]
+    const second = (await getMediatedBundle({ cwd }))[0]
     if (
       first?.type !== 'json' ||
       !('snapshotId' in first.value) ||
@@ -779,7 +832,7 @@ describe('getChangeReviewBundle', () => {
     expect(git('add', '.').status).toBe(0)
     expect(git('commit', '-m', 'initial').status).toBe(0)
     fs.writeFileSync(path.join(cwd, 'seed'), 'changed')
-    const initial = (await getChangeReviewBundle({ cwd, stateDir }))[0]
+    const initial = (await getMediatedBundle({ cwd, stateDir }))[0]
     if (initial?.type !== 'json' || !('snapshotId' in initial.value))
       throw new Error('Expected initial bundle')
     const record = {
@@ -797,7 +850,7 @@ describe('getChangeReviewBundle', () => {
     }
     const store = new LocalHarnessStore(stateDir)
     store.put('findings', record)
-    const healthy = (await getChangeReviewBundle({ cwd, stateDir }))[0]
+    const healthy = (await getMediatedBundle({ cwd, stateDir }))[0]
     expect(healthy).toMatchObject({
       type: 'json',
       value: { findings: [record] },
@@ -810,7 +863,7 @@ describe('getChangeReviewBundle', () => {
       store.listWithDiagnostics(record.repositoryId, 'findings').diagnostics,
     ).toHaveLength(1)
     for (let attempt = 0; attempt < 2; attempt++) {
-      expect((await getChangeReviewBundle({ cwd, stateDir }))[0]).toMatchObject(
+      expect((await getMediatedBundle({ cwd, stateDir }))[0]).toMatchObject(
         {
           type: 'json',
           value: {
@@ -858,7 +911,7 @@ describe('getChangeReviewBundle', () => {
     // Pin the regime: the listing exceeds the production spawn cap
     // (MAX_SNAPSHOT_ID_DIFF_BYTES), so files past the cap are dropped from
     // the retained identity lines.
-    const capped = await runGitBounded(
+    const capped = await runMediatedGitBounded(
       ['status', '--porcelain', '-uall'],
       cwd,
       undefined,
@@ -867,7 +920,7 @@ describe('getChangeReviewBundle', () => {
     expect(capped.exitCode).toBe(0)
     expect(capped.stdoutTotalBytes).toBeGreaterThan(4 * 1024 * 1024)
 
-    const first = await getChangeReviewBundle({ cwd })
+    const first = await getMediatedBundle({ cwd })
     expect(first[0]).toMatchObject({
       type: 'json',
       value: {
@@ -875,12 +928,12 @@ describe('getChangeReviewBundle', () => {
           'Git status exceeds identity membership limit; complete review files are unavailable.',
       },
     })
-    expect(await computeWorktreeSnapshotIdentity({ cwd })).toHaveProperty(
+    expect(await computeMediatedIdentity({ cwd })).toHaveProperty(
       'errorMessage',
     )
     // Same-length tail content changes cannot make an incomplete state usable.
     fs.writeFileSync(path.join(cwd, deepDir, `f-${fileCount - 1}.txt`), 'y\n')
-    expect((await getChangeReviewBundle({ cwd }))[0]).toMatchObject({
+    expect((await getMediatedBundle({ cwd }))[0]).toMatchObject({
       type: 'json',
       value: {
         errorMessage:
@@ -913,8 +966,8 @@ describe('getChangeReviewBundle', () => {
         `content-${i}\n${'x'.repeat(i * 512)}\n`,
       )
     }
-    const first = await getChangeReviewBundle({ cwd })
-    const second = await getChangeReviewBundle({ cwd })
+    const first = await getMediatedBundle({ cwd })
+    const second = await getMediatedBundle({ cwd })
     const firstValue = first[0]?.type === 'json' ? first[0].value : undefined
     const secondValue = second[0]?.type === 'json' ? second[0].value : undefined
     expect(firstValue).not.toHaveProperty('errorMessage')
@@ -970,16 +1023,32 @@ describe('getChangeReviewBundle', () => {
     const size = 128 * 1024 * 1024
     fs.ftruncateSync(fd, size)
     let writes = 0
-    const writer = setInterval(() => {
-      fs.writeSync(fd, Buffer.from([++writes % 256]), 0, 1, size - 1)
-    }, 1)
+    let bytesRead = 0
+    const originalOpen = fsPromises.open
+    const opening = spyOn(fsPromises, 'open').mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args)
+      if (args[0] !== file) return handle
+      const originalRead = handle.read
+      handle.read = (async (...readArgs: unknown[]) => {
+        const result = await Reflect.apply(originalRead, handle, readArgs)
+        bytesRead += result.bytesRead
+        // Mutate only after the initial stat check and the first real read.
+        if (writes === 0 && result.bytesRead > 0) {
+          fs.writeSync(fd, Buffer.from([1]), 0, 1, size - 1)
+          writes++
+        }
+        return result
+      }) as typeof handle.read
+      return handle
+    })
     try {
       await expect(
         hashIdentityFileBytes(createHash('sha256'), cwd, ['moving.bin']),
       ).rejects.toThrow('File changed while hashing identity')
-      expect(writes).toBeGreaterThan(0)
+      expect(bytesRead).toBe(size)
+      expect(writes).toBe(1)
     } finally {
-      clearInterval(writer)
+      opening.mockRestore()
       fs.closeSync(fd)
     }
   })
@@ -1081,11 +1150,11 @@ describe('getChangeReviewBundle', () => {
       ].join('\n'),
     )
     fs.chmodSync(path.join(dir, 'git'), 0o755)
-    const previousPath = process.env.PATH
-    process.env.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`
+    const previousPath = capturedChildEnvironment.PATH
+    capturedChildEnvironment.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`
     try {
       const controller = new AbortController()
-      const resultPromise = runGitBounded(['status'], dir, controller.signal, {
+      const resultPromise = runMediatedGitBounded(['status'], dir, controller.signal, {
         timeoutMs: 30_000,
         maxOutputBytes: 1024,
         sigtermGraceMs: 150,
@@ -1120,7 +1189,7 @@ describe('getChangeReviewBundle', () => {
       }
       expect(gone).toBe(true)
     } finally {
-      process.env.PATH = previousPath
+      capturedChildEnvironment.PATH = previousPath
     }
   })
 
@@ -1150,8 +1219,8 @@ describe('getChangeReviewBundle', () => {
       ].join('\n'),
     )
     fs.chmodSync(path.join(dir, 'git'), 0o755)
-    const previousPath = process.env.PATH
-    process.env.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`
+    const previousPath = capturedChildEnvironment.PATH
+    capturedChildEnvironment.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`
     const unhandled: unknown[] = []
     const onUnhandledRejection = (reason: unknown) => {
       unhandled.push(reason)
@@ -1159,7 +1228,7 @@ describe('getChangeReviewBundle', () => {
     process.on('unhandledRejection', onUnhandledRejection)
     try {
       const controller = new AbortController()
-      const resultPromise = runGitBounded(['status'], dir, controller.signal, {
+      const resultPromise = runMediatedGitBounded(['status'], dir, controller.signal, {
         timeoutMs: 30_000,
         maxOutputBytes: 1024,
         sigtermGraceMs: 150,
@@ -1200,52 +1269,32 @@ describe('getChangeReviewBundle', () => {
       expect(unhandled).toEqual([])
     } finally {
       process.off('unhandledRejection', onUnhandledRejection)
-      process.env.PATH = previousPath
+      capturedChildEnvironment.PATH = previousPath
     }
   })
 
-  test('runGitBounded source pins the close-handler disarm and the escalation dead-child guard', () => {
-    // Source-level by necessity (the gate-helpers-freshness precedent): the
-    // escalation firing on a reaped child is a silent no-op under the repo
-    // runtime — kill-after-reap neither throws nor emits an 'error' event —
-    // so the disarm invariant has no external observable to pin
-    // behaviorally. Pin the live module source instead: (i) the close
-    // handler disarms the armed escalation BEFORE its settle call (the
-    // abort path settles before arming, so only close can disarm a
-    // SIGTERM-honoring child's escalation), and (ii) the escalation callback
-    // guards on the dead child BEFORE kill('SIGKILL') — under Node the
-    // handle signals the raw pid, so a reaped-and-recycled pid must never
-    // receive our SIGKILL.
-    // runGitBounded moved to git-status.ts (reliability:
-    // bundle-rev-parse-head-unbounded); the pinned escalation invariants
-    // travel with the implementation.
-    const source = fs.readFileSync(
-      path.join(import.meta.dir, '..', 'tools', 'git-status.ts'),
-      'utf8',
-    )
-    const closeStart = source.indexOf("child.on('close'")
-    expect(closeStart).toBeGreaterThanOrEqual(0)
-    const closeEnd = source.indexOf('\n    })', closeStart)
-    expect(closeEnd).toBeGreaterThan(closeStart)
-    const closeHandler = source.slice(closeStart, closeEnd)
-    const disarmIndex = closeHandler.indexOf('clearTimeout(escalate)')
-    expect(disarmIndex).toBeGreaterThanOrEqual(0)
-    const closeSettleIndex = closeHandler.indexOf('settle(')
-    expect(closeSettleIndex).toBeGreaterThanOrEqual(0)
-    expect(disarmIndex).toBeLessThan(closeSettleIndex)
-
-    const escalateStart = source.indexOf('escalate = setTimeout(() => {')
-    expect(escalateStart).toBeGreaterThanOrEqual(0)
-    const escalateEnd = source.indexOf('}, escalateDelayMs)', escalateStart)
-    expect(escalateEnd).toBeGreaterThan(escalateStart)
-    const escalationCallback = source.slice(escalateStart, escalateEnd)
-    const guardIndex = escalationCallback.indexOf(
-      'child.exitCode !== null || child.signalCode !== null',
-    )
-    expect(guardIndex).toBeGreaterThanOrEqual(0)
-    const killIndex = escalationCallback.indexOf("kill('SIGKILL')")
-    expect(killIndex).toBeGreaterThanOrEqual(0)
-    expect(guardIndex).toBeLessThan(killIndex)
+  test.each([false, true])('Git cancellation escalation stops only after observed close: %s', async closes => {
+    const processes = createExecutionProcessRecorder({ autoClose: false, closeOnKill: false })
+    const abort = new AbortController()
+    const host = createTerminalExecutionFixture({ projectRoot: '/repo', signal: abort.signal, spawn: processes.spawn })
+    executionHosts.push(host)
+    const pending = runGitBounded(['status'], '/repo', abort.signal, {
+      timeoutMs: 1_000, sigtermGraceMs: 10, maxOutputBytes: 4_096,
+      executionContext: host.context, branchId: 'fixture.git.escalation-close',
+    })
+    for (let turn = 0; processes.calls.length === 0 && turn < 50; turn++) await new Promise(resolve => setImmediate(resolve))
+    expect(processes.calls).toHaveLength(1)
+    const actual = processes.calls[0]
+    abort.abort(new Error('cancelled Git observation'))
+    expect((await pending).executionRefusal).toMatchObject({ reason: 'cancelled' })
+    if (closes) {
+      // Leave fake exitCode/signalCode untouched: the real close event itself
+      // must disarm the lifetime, independently of stale child fields.
+      actual.child.emit('close', 0)
+    }
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(actual.signals).toEqual(closes ? ['SIGTERM'] : ['SIGTERM', 'SIGKILL'])
+    actual.finish()
   })
 
   test('gitStatus with timeoutMs fails closed on a wedged git', async () => {
@@ -1264,11 +1313,11 @@ describe('getChangeReviewBundle', () => {
       ['#!/bin/sh', 'while :; do :; done'].join('\n'),
     )
     fs.chmodSync(path.join(dir, 'git'), 0o755)
-    const previousPath = process.env.PATH
-    process.env.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`
+    const previousPath = capturedChildEnvironment.PATH
+    capturedChildEnvironment.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`
     try {
       const startedAt = Date.now()
-      const parts = await gitStatus({ cwd: dir, timeoutMs: 250 })
+      const parts = await mediatedGitStatus({ cwd: dir, timeoutMs: 250 })
       expect(Date.now() - startedAt).toBeLessThan(2_000)
       const first = parts[0]
       expect(first?.type).toBe('json')
@@ -1277,9 +1326,9 @@ describe('getChangeReviewBundle', () => {
         value && 'errorMessage' in value
           ? value.errorMessage
           : 'expected an errorMessage part',
-      ).toContain('git timed out after 250ms')
+      ).toContain('deadline exhausted')
     } finally {
-      process.env.PATH = previousPath
+      capturedChildEnvironment.PATH = previousPath
     }
   })
 
@@ -1298,20 +1347,20 @@ describe('getChangeReviewBundle', () => {
       ['#!/bin/sh', 'while :; do :; done'].join('\n'),
     )
     fs.chmodSync(path.join(dir, 'git'), 0o755)
-    const previousPath = process.env.PATH
-    process.env.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`
+    const previousPath = capturedChildEnvironment.PATH
+    capturedChildEnvironment.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`
     try {
       const startedAt = Date.now()
       let rejected: Error | undefined
       try {
-        await resolveWorkspaceIdentity({ cwd: dir, timeoutMs: 250 })
+        await resolveMediatedWorkspace({ cwd: dir, timeoutMs: 250 })
       } catch (error) {
         rejected = error instanceof Error ? error : new Error(String(error))
       }
       expect(Date.now() - startedAt).toBeLessThan(2_000)
-      expect(rejected?.message).toContain('git timed out after 250ms')
+      expect(rejected?.message).toContain('deadline exhausted')
     } finally {
-      process.env.PATH = previousPath
+      capturedChildEnvironment.PATH = previousPath
     }
   })
 
@@ -1330,25 +1379,30 @@ describe('getChangeReviewBundle', () => {
       path.join(os.tmpdir(), 'openbuff-review-headfail-'),
     )
     temporaryRoots.push(dir)
-    // Exactly `rev-parse HEAD` dies silently (non-zero exit, no stderr);
-    // every other argv the prelude spawns exits 0 with empty output, so the
-    // status observation and the workspace identity stay healthy and the
-    // head resolution is the only failure.
+    // Exactly guarded `rev-parse HEAD` dies silently (non-zero exit, no stderr);
+    // Identity queries return valid paths, while other observations exit 0.
+    // HEAD resolution is the only failure.
     fs.writeFileSync(
       path.join(dir, 'git'),
       [
         '#!/bin/sh',
-        'if [ "$*" = "rev-parse HEAD" ]; then',
+        'if [ "$*" = "--no-pager --no-optional-locks --no-lazy-fetch -c core.fsmonitor=false rev-parse HEAD" ]; then',
         '  exit 7',
+        'fi',
+        'if [ "$*" = "rev-parse --show-toplevel" ]; then',
+        '  pwd',
+        'fi',
+        'if [ "$*" = "rev-parse --git-common-dir" ]; then',
+        '  printf ".git\\n"',
         'fi',
         'exit 0',
       ].join('\n'),
     )
     fs.chmodSync(path.join(dir, 'git'), 0o755)
-    const previousPath = process.env.PATH
-    process.env.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`
+    const previousPath = capturedChildEnvironment.PATH
+    capturedChildEnvironment.PATH = `${dir}${path.delimiter}${previousPath ?? ''}`
     try {
-      const result = await getChangeReviewBundle({ cwd: dir })
+      const result = await getMediatedBundle({ cwd: dir })
       const value = result[0]?.type === 'json' ? result[0].value : undefined
       expect(
         value && 'errorMessage' in value
@@ -1356,7 +1410,7 @@ describe('getChangeReviewBundle', () => {
           : 'expected an errorMessage part',
       ).toBe('Unable to build change review bundle.')
     } finally {
-      process.env.PATH = previousPath
+      capturedChildEnvironment.PATH = previousPath
     }
   })
 
@@ -1426,7 +1480,7 @@ describe('getChangeReviewBundle', () => {
     const changedLine = 'x'.repeat(150_000)
     fs.writeFileSync(path.join(cwd, 'big.txt'), `${changedLine}\n`)
 
-    const result = await getChangeReviewBundle({ cwd })
+    const result = await getMediatedBundle({ cwd })
     const value = result[0]?.type === 'json' ? result[0].value : undefined
     expect(value).not.toHaveProperty('errorMessage')
     const bundle = value as { diff: string; truncated: boolean }
@@ -1453,7 +1507,7 @@ describe('getChangeReviewBundle', () => {
     expect(git('commit', '-m', 'initial').status).toBe(0)
     fs.writeFileSync(path.join(cwd, 'changed.txt'), `${'y'.repeat(4_000)}\n`)
 
-    const parts = await gitStatus({
+    const parts = await mediatedGitStatus({
       cwd,
       include_diff: true,
       max_chars: 500,
@@ -1474,7 +1528,7 @@ describe('getChangeReviewBundle', () => {
         : undefined,
     ).toBe(true)
 
-    const bundleResult = await getChangeReviewBundle({ cwd, max_chars: 500 })
+    const bundleResult = await getMediatedBundle({ cwd, max_chars: 500 })
     const bundleValue =
       bundleResult[0]?.type === 'json' ? bundleResult[0].value : undefined
     expect(bundleValue).not.toHaveProperty('errorMessage')

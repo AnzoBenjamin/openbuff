@@ -1,5 +1,0 @@
-[openbuff] Loaded provider config from:
-  - /home/ben/Code/CLI/openbuff/docs/execution/body-roadmap/evidence/B08/final-binding/independent-review/fixture/provider.json
-AI SDK Warning System: To turn off warning logging, set the AI_SDK_LOG_WARNINGS global to false.
-AI SDK Warning: The "responseFormat" setting is not supported by this model - JSON response format schema is only supported with structuredOutputs
-B08 offline controls passed: 44; actual configured HTTP/SSE request ledger recorded

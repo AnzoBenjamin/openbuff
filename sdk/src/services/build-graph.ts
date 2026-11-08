@@ -13,7 +13,8 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawnSync } from 'node:child_process'
+import { runToolchainNode, runToolchainSync, ToolchainExecutionError } from './toolchain-execution'
+import type { ToolchainExecutionContext } from './toolchain-execution'
 
 import { resolveProjectPath } from '@codebuff/common/util/project-path-containment'
 
@@ -42,25 +43,11 @@ export type OwningTargetResolution = {
 }
 
 /**
- * Command-runner seam for ecosystem build tools (`cargo metadata`, `go list`).
- * Tests inject a fake; the default spawns the tool with a bounded timeout,
- * mirroring `toolVersion` in harness-intelligence.ts.
- *
- * The default runner is intentionally synchronous (`spawnSync`), like the
- * semgrep-baseline runner seam — do not convert to async. It now sits on the
- * live `get_build_targets` tool path, so the event-loop cost is bounded and
- * amortized by contract:
- * - each spawn is capped (`runnerTimeoutMs` timeout, `runnerMaxBufferBytes`
- *   maxBuffer), so a runaway tool cannot stall the event loop indefinitely;
- * - the per-cwd target index is cached for `buildGraphCacheTtlMs`, so the
- *   ecosystem probes run once per TTL window per cwd, not per tool call;
- * - each ecosystem resolver is isolated (an absent/failing/slow tool
- *   contributes nothing) and resolution is capped at `maxFilesPerCall` files;
- * - the cargo/go probes are gated on a discovered Cargo.toml/go.mod, so repos
- *   that do not use an ecosystem never pay that ecosystem's spawn at all.
- * A mixed sync/async seam would be worse than either; if the blocking cost
- * ever matters in practice, move the whole resolution off the event loop
- * (e.g. a worker) rather than making the seam half-async.
+ * Legacy synchronous seam for ecosystem tools (`cargo metadata`, `go list`).
+ * A production runner requires a host execution context and synchronous
+ * admission. The live tool uses resolveOwningTargetsAsync, which gathers
+ * admitted process outputs before running the same synchronous parsers.
+ * Both paths gate probes on manifests and bound process time/output.
  */
 export type BuildGraphRunner = (
   argv: string[],
@@ -74,24 +61,16 @@ const runnerTimeoutMs = 10_000
 // but finitely so a runaway tool cannot exhaust memory.
 const runnerMaxBufferBytes = 16 * 1024 * 1024
 
-const defaultBuildGraphRunner: BuildGraphRunner = (argv, cwd) => {
-  if (argv.length === 0) {
-    return { exitCode: 1, stdout: '', stderr: 'empty argv' }
-  }
-  const result = spawnSync(argv[0], argv.slice(1), {
-    cwd,
-    encoding: 'utf8',
-    timeout: runnerTimeoutMs,
-    maxBuffer: runnerMaxBufferBytes,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  return {
-    exitCode: typeof result.status === 'number' ? result.status : 1,
-    stdout: result.stdout ?? '',
-    stderr: result.error
-      ? `${result.stderr ?? ''}${result.error.message}`
-      : (result.stderr ?? ''),
-  }
+const defaultBuildGraphRunner: BuildGraphRunner = () => {
+  throw new ToolchainExecutionError({ ok: false, reason: 'unavailable', cause: 'Build graph execution context is unavailable.' })
+}
+
+export type AsyncBuildGraphRunner = (argv: string[], cwd: string) => Promise<ReturnType<BuildGraphRunner>>
+
+function scopedBuildRunner(context: ToolchainExecutionContext): BuildGraphRunner {
+  return (argv, cwd) => runToolchainSync({ context, argv, cwd,
+    branchId: `build.sync-legacy.${argv[0]}`, timeoutMs: runnerTimeoutMs,
+    maxBufferBytes: runnerMaxBufferBytes })
 }
 
 type IndexedTarget = BuildGraphTarget & {
@@ -610,7 +589,7 @@ function buildTargetIndex(
   const discover = () => (discovered ??= discoverBuildGraphFiles(root))
   // The sync ecosystem probes are gated on a discovered manifest: `cargo
   // metadata` requires a Cargo.toml and module-mode `go list` requires a
-  // go.mod, so repos that do not use an ecosystem never pay that spawnSync
+  // go.mod, so repos that do not use an ecosystem never pay that process
   // on the live tool path (perf: build-graph-spawnsync-blocking-new-tool-path).
   const hasManifest = (name: string) =>
     discover().some((file) => file === name || file.endsWith(`/${name}`))
@@ -630,7 +609,8 @@ function buildTargetIndex(
   for (const resolve of resolvers) {
     try {
       targets.push(...resolve())
-    } catch {
+    } catch (error) {
+      if (error instanceof ToolchainExecutionError) throw error
       /* honest skip: this ecosystem contributes nothing */
     }
   }
@@ -698,9 +678,11 @@ export function resolveOwningTargets(params: {
   cwd: string
   files: string[]
   runner?: BuildGraphRunner
+  executionContext?: ToolchainExecutionContext
 }): OwningTargetResolution[] {
   const root = path.resolve(params.cwd)
-  const index = cachedTargetIndex(root, params.runner ?? defaultBuildGraphRunner)
+  const runner = params.runner ?? (params.executionContext ? scopedBuildRunner(params.executionContext) : defaultBuildGraphRunner)
+  const index = params.executionContext ? buildTargetIndex(root, runner) : cachedTargetIndex(root, runner)
   // Truncation honesty (P3 coherence audit): files beyond the per-call cap
   // are silently not considered; callers surface `truncated` when that
   // happens instead of leaving the loss invisible.
@@ -729,4 +711,31 @@ export function resolveOwningTargets(params: {
     const { ecosystem, confidence, ...target } = best
     return { file, ecosystem, targets: [target], confidence }
   })
+}
+
+/** Async production discovery; retain the synchronous parser/ownership oracle. */
+export async function resolveOwningTargetsAsync(params: {
+  cwd: string
+  files: string[]
+  executionContext?: ToolchainExecutionContext
+  runner?: AsyncBuildGraphRunner
+}): Promise<OwningTargetResolution[]> {
+  const root = path.resolve(params.cwd)
+  const discovered = discoverBuildGraphFiles(root)
+  const commands = [
+    { manifest: 'Cargo.toml', argv: ['cargo', 'metadata', '--no-deps', '--format-version', '1'] },
+    { manifest: 'go.mod', argv: ['go', 'list', '-json', './...'] },
+  ].filter(({ manifest }) => discovered.some(file => file === manifest || file.endsWith(`/${manifest}`)))
+  const outputs = new Map<string, ReturnType<BuildGraphRunner>>()
+  await Promise.all(commands.map(async ({ argv }) => {
+    const result = params.runner
+      ? await params.runner(argv, root)
+      : await runToolchainNode({ context: params.executionContext, argv, cwd: root,
+          branchId: `build.async-production.${argv[0]}`, timeoutMs: runnerTimeoutMs,
+          maxBufferBytes: runnerMaxBufferBytes })
+    outputs.set(argv[0], result)
+  }))
+  // Parsing never spawns: every command result was obtained above.
+  return resolveOwningTargets({ cwd: root, files: params.files,
+    runner: argv => outputs.get(argv[0]) ?? { exitCode: 1, stdout: '', stderr: 'No matching manifest' } })
 }

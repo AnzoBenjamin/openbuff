@@ -2,6 +2,7 @@ import z from 'zod/v4'
 
 import { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES } from '@codebuff/common/actions'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
+import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
 import { __resetReadFilesSelectorRepairStatsForTest } from '@codebuff/common/tools/params/tool/read-files'
 import { MAX_TRUNCATION_RECOVERY_BYTES } from '@codebuff/common/tools/params/utils'
 import {
@@ -16,6 +17,8 @@ import {
 } from '@codebuff/common/util/content-hash'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 import { beforeEach, describe, expect, it } from 'bun:test'
+import { getCustomToolDefinition } from '../../../../sdk/src/custom-tool'
+import { handleToolCall } from '../../../../sdk/src/run'
 
 import { mockFileContext } from './test-utils'
 import { processStream } from '../tools/stream-parser'
@@ -1089,7 +1092,9 @@ describe('tool validation error handling', () => {
   })
 
   it('rejects undiscovered MCP tools and inherited custom-tool names', () => {
-    const definitions = Object.create({ inherited_tool: { inputSchema: z.object({}) } })
+    const definitions = Object.create({
+      inherited_tool: { inputSchema: z.object({}) },
+    })
     for (const toolName of ['server__undiscovered', 'inherited_tool']) {
       const result = parseRawCustomToolCall({
         customToolDefs: definitions,
@@ -1097,6 +1102,110 @@ describe('tool validation error handling', () => {
       })
       expect('error' in result && result.error).toContain('not found')
     }
+  })
+
+  it('validates the actual external input root and returns errors for invalid roots', () => {
+    for (const input of [
+      [],
+      [{ name: 'value' }],
+      null,
+      42,
+      true,
+      undefined,
+      { value: Infinity },
+    ]) {
+      const result = parseRawCustomToolCall({
+        customToolDefs: { external: { inputSchema: { type: 'object' } } },
+        rawToolCall: {
+          toolName: 'external',
+          toolCallId: 'invalid-root',
+          input,
+        },
+      })
+      expect('error' in result).toBe(true)
+    }
+    for (const [inputSchema, input] of [
+      [{ type: 'array', items: { type: 'integer' } }, [1, 2]],
+      [{ type: 'null' }, null],
+      [{ type: 'number' }, 42],
+    ] as const) {
+      const result = parseRawCustomToolCall({
+        customToolDefs: { external: { inputSchema } },
+        rawToolCall: { toolName: 'external', toolCallId: 'valid-root', input },
+      })
+      expect('error' in result).toBe(false)
+      expect(result.input).toEqual(input)
+    }
+    const result = parseRawCustomToolCall({
+      customToolDefs: {
+        external: {
+          inputSchema: { type: 'object', additionalProperties: false },
+        },
+      },
+      rawToolCall: {
+        toolName: 'external',
+        toolCallId: 'step-metadata',
+        input: { cb_easp: true },
+      },
+      autoInsertEndStepParam: true,
+    })
+    expect('error' in result).toBe(false)
+    expect(result.input).toEqual({})
+  })
+
+  it('refuses reserved root declarations in legacy descriptors instead of stripping valid data', () => {
+    for (const identity of [
+      undefined,
+      { kind: 'custom' as const, toolName: 'external' },
+    ]) {
+      for (const required of [undefined, ['cb_easp']]) {
+        const result = parseRawCustomToolCall({
+          customToolDefs: {
+            external: {
+              identity,
+              inputSchema: {
+                type: 'object',
+                properties: { cb_easp: { type: 'boolean' } },
+                ...(required ? { required } : {}),
+              },
+            },
+          },
+          rawToolCall: {
+            toolName: 'external',
+            toolCallId: 'reserved-root',
+            input: { cb_easp: true },
+          },
+        })
+        expect('error' in result).toBe(true)
+        if ('error' in result)
+          expect(result.error).toContain('reserved tool input field cb_easp')
+      }
+    }
+    const nested = parseRawCustomToolCall({
+      customToolDefs: {
+        external: {
+          inputSchema: {
+            type: 'object',
+            properties: {
+              payload: {
+                type: 'object',
+                properties: { cb_easp: { type: 'boolean' } },
+                required: ['cb_easp'],
+              },
+            },
+            required: ['payload'],
+            additionalProperties: false,
+          },
+        },
+      },
+      rawToolCall: {
+        toolName: 'external',
+        toolCallId: 'nested-data',
+        input: { cb_easp: false, payload: { cb_easp: true } },
+      },
+    })
+    expect('error' in nested).toBe(false)
+    expect(nested.input).toEqual({ payload: { cb_easp: true } })
   })
 
   it('does not alter duplicate commas inside JSON string values', () => {
@@ -1570,7 +1679,7 @@ describe('tool validation error handling', () => {
     }
   })
 
-  it('should hint that basedOnRead must be a cap.v3 token when str_replace receives a wrong shape (Fix D)', () => {
+  it('should hint that basedOnRead must be an authenticated token when str_replace receives a wrong shape (Fix D)', () => {
     const result = parseRawToolCall({
       rawToolCall: {
         toolName: 'str_replace',
@@ -1582,7 +1691,7 @@ describe('tool validation error handling', () => {
               oldString: 'a',
               newString: 'b',
               allowMultiple: false,
-              // Object forms are rejected; callers must copy the cap.v3 token.
+              // Object forms are rejected; callers must copy the readCapability token.
               basedOnRead: { $text: 'cap.something' },
             },
           ],
@@ -1592,7 +1701,7 @@ describe('tool validation error handling', () => {
 
     expect('error' in result).toBe(true)
     if ('error' in result) {
-      expect(result.error).toContain('authenticated cap.v3 readCapability')
+      expect(result.error).toContain('authenticated readCapability')
       expect(result.error).toContain('Object-form anchors')
       expect(result.error).not.toContain('OR an object')
     }
@@ -5125,7 +5234,7 @@ describe('tool validation error handling', () => {
   })
 })
 
-describe('custom tool project-root escape backstop', () => {
+describe('custom tool declared paths through the host dispatcher', () => {
   let agentRuntimeImpl: AgentRuntimeDeps & AgentRuntimeScopedDeps
 
   beforeEach(() => {
@@ -5173,12 +5282,19 @@ describe('custom tool project-root escape backstop', () => {
           },
           endsAgentStep: false,
           description: 'A custom filesystem tool for escape-backstop tests',
+          pathParameters: [
+            { pointer: '/path', access: 'write' as const },
+            { pointer: '/metadata/requestedPath', access: 'read' as const },
+          ],
         },
       },
     }
   }
 
-  async function runCustomFsTool(input: Record<string, unknown>) {
+  async function runCustomFsTool(
+    input: Record<string, unknown>,
+    declarePaths = true,
+  ) {
     const agentWithCustomTool: AgentTemplate = {
       ...escapeTestAgentTemplate,
       toolNames: [fsToolName, 'end_turn'],
@@ -5197,14 +5313,71 @@ describe('custom tool project-root escape backstop', () => {
     }
 
     const fileContextWithCustomTool = buildFileContextWithFsTool()
+    if (!declarePaths)
+      fileContextWithCustomTool.customToolDefinitions[
+        fsToolName
+      ].pathParameters = []
     const sessionState = getInitialSessionState(fileContextWithCustomTool)
     const responseChunks: (string | PrintModeEvent)[] = []
 
-    // A no-op handler so a legitimate in-project call can proceed to publish
-    // its tool_call/tool_result without needing a real bridge.
-    agentRuntimeImpl.requestToolCall = async () => ({
-      output: jsonToolResult({ ok: true }),
+    const executed: unknown[] = []
+    const hostTool = getCustomToolDefinition({
+      toolName: fsToolName,
+      description: 'Declared filesystem input fixture',
+      inputSchema: z
+        .object({
+          path: z.string(),
+          metadata: z.object({ requestedPath: z.string() }).optional(),
+        })
+        .strict(),
+      pathParameters:
+        fileContextWithCustomTool.customToolDefinitions[fsToolName]
+          .pathParameters,
+      execute: (parsed) => {
+        executed.push(parsed)
+        return jsonToolResult({ ok: true })
+      },
     })
+    const fs = createMockFs({
+      files: { '/test/src/a.ts': 'inside' },
+      directories: { '/test': ['src'], '/test/src': ['a.ts'] },
+    })
+    // Runtime publishes the request; the actual host validates and governs
+    // declared paths after parsing, then returns a truthful terminal result.
+    agentRuntimeImpl.requestToolCall = ({
+      userInputId,
+      toolName,
+      input,
+      signal,
+    }) =>
+      handleToolCall({
+        action: {
+          type: 'tool-call-request',
+          requestId: 'fixture-call',
+          userInputId,
+          toolName,
+          input,
+        },
+        overrides: {},
+        customToolDefinitions: { [fsToolName]: hostTool },
+        cwd: fileContextWithCustomTool.projectRoot,
+        fs,
+        trustedJobOwner: {
+          clientSessionId: 'test-session',
+          rootRunId: 'test-run',
+          parentRunId: 'test-run',
+          parentAgentId: 'test-agent',
+        },
+        harnessStateDir: '/unused',
+        approvalReceiptIds: [],
+        approvalMode: 'balanced',
+        approvalService: {} as Parameters<
+          typeof handleToolCall
+        >[0]['approvalService'],
+        getWorkspaceState: () => undefined,
+        setWorkspaceState: () => {},
+        signal,
+      })
 
     await processStream({
       ...agentRuntimeImpl,
@@ -5233,68 +5406,108 @@ describe('custom tool project-root escape backstop', () => {
       onResponseChunk: (chunk) => responseChunks.push(chunk),
     })
 
-    return responseChunks.filter(
+    const events = responseChunks.filter(
       (chunk): chunk is PrintModeEvent => typeof chunk !== 'string',
     )
+    return { events, executed }
   }
 
-  it('hard-blocks a custom tool whose input contains a ../ escaping path', async () => {
-    const events = await runCustomFsTool({ path: '../escape.txt' })
-
-    const errorEvents = events.filter(
-      (event): event is Extract<PrintModeEvent, { type: 'error' }> =>
-        event.type === 'error',
-    )
-    expect(errorEvents.length).toBe(1)
-    expect(errorEvents[0].message).toContain('outside the project root')
-
-    expect(events.some((event) => event.type === 'tool_call')).toBe(false)
-    expect(events.some((event) => event.type === 'tool_result')).toBe(false)
+  it('refuses a ../ escaping path before the host callback runs', async () => {
+    const { events, executed } = await runCustomFsTool({
+      path: '../escape.txt',
+    })
+    expect(executed).toEqual([])
+    expect(
+      events.filter((event) => event.type === 'tool_result'),
+    ).toMatchObject([
+      {
+        output: [
+          {
+            type: 'json',
+            value: {
+              permissionDenied: true,
+              errorMessage: expect.stringContaining('unsafe path form'),
+            },
+          },
+        ],
+      },
+    ])
+    expect(events.some((event) => event.type === 'tool_call')).toBe(true)
   })
 
-  it('hard-blocks a custom tool whose input contains an absolute path', async () => {
-    const events = await runCustomFsTool({ path: '/etc/passwd' })
-
-    const errorEvents = events.filter(
-      (event): event is Extract<PrintModeEvent, { type: 'error' }> =>
-        event.type === 'error',
-    )
-    expect(errorEvents.length).toBe(1)
-    expect(errorEvents[0].message).toContain('outside the project root')
-
-    expect(events.some((event) => event.type === 'tool_call')).toBe(false)
-    expect(events.some((event) => event.type === 'tool_result')).toBe(false)
+  it('refuses an absolute path before the host callback runs', async () => {
+    const { events, executed } = await runCustomFsTool({ path: '/etc/passwd' })
+    expect(executed).toEqual([])
+    expect(
+      events.filter((event) => event.type === 'tool_result'),
+    ).toMatchObject([
+      {
+        output: [
+          {
+            type: 'json',
+            value: {
+              permissionDenied: true,
+              errorMessage: expect.stringContaining('path_outside_project'),
+            },
+          },
+        ],
+        actionOutcome: {
+          outcome: 'refused',
+          cause: { code: 'permission_denied' },
+          effect: { status: 'unobserved', confirmedPaths: [] },
+        },
+      },
+    ])
   })
 
   it('never echoes secret custom input values in containment errors', async () => {
     const secret = 'super-secret-token-should-never-appear'
-    const events = await runCustomFsTool({
+    const { events, executed } = await runCustomFsTool({
       path: '../escape.txt',
       metadata: { requestedPath: secret },
     })
-    const error = events.find(
-      (event): event is Extract<PrintModeEvent, { type: 'error' }> =>
-        event.type === 'error',
-    )
-
-    expect(error).toBeDefined()
-    expect(error!.message).toContain('outside the project root')
-    expect(error!.message).not.toContain(secret)
-    expect(error!.message).not.toContain('../escape.txt')
+    expect(executed).toEqual([])
+    const result = events.find((event) => event.type === 'tool_result')
+    expect(result?.output).toMatchObject([
+      { type: 'json', value: { permissionDenied: true } },
+    ])
+    const error = JSON.stringify(result?.output)
+    expect(error).not.toContain(secret)
+    expect(error).not.toContain('../escape.txt')
   })
 
-  it('blocks nested custom values that resemble escaping paths', async () => {
-    const events = await runCustomFsTool({
+  it('blocks a nested declared path that escapes the project', async () => {
+    const { events, executed } = await runCustomFsTool({
       path: 'src/a.ts',
       metadata: { requestedPath: '../nested-escape.txt' },
     })
 
-    expect(events.some((event) => event.type === 'error')).toBe(true)
-    expect(events.some((event) => event.type === 'tool_call')).toBe(false)
+    expect(executed).toEqual([])
+    expect(
+      events.filter((event) => event.type === 'tool_result'),
+    ).toMatchObject([
+      { output: [{ type: 'json', value: { permissionDenied: true } }] },
+    ])
+  })
+
+  it('preserves route and separator strings when the host declares no path effects', async () => {
+    const { events, executed } = await runCustomFsTool(
+      {
+        path: '/api/v1',
+        metadata: { requestedPath: '../literal-separator' },
+      },
+      false,
+    )
+    expect(events.some((event) => event.type === 'error')).toBe(false)
+    expect(events.some((event) => event.type === 'tool_call')).toBe(true)
+    expect(events.some((event) => event.type === 'tool_result')).toBe(true)
+    expect(executed).toEqual([
+      { path: '/api/v1', metadata: { requestedPath: '../literal-separator' } },
+    ])
   })
 
   it('does not block a legitimate in-project relative path', async () => {
-    const events = await runCustomFsTool({ path: 'src/a.ts' })
+    const { events, executed } = await runCustomFsTool({ path: 'src/a.ts' })
 
     const outsideRootErrors = events.filter(
       (event) =>
@@ -5304,6 +5517,7 @@ describe('custom tool project-root escape backstop', () => {
     expect(outsideRootErrors.length).toBe(0)
 
     expect(events.some((event) => event.type === 'tool_call')).toBe(true)
+    expect(executed).toEqual([{ path: 'src/a.ts' }])
   })
 })
 

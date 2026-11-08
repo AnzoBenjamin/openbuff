@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os'
 import path from 'path'
 
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 
 import { __getFilesystemSlotsInUseForTest } from '../tools/concurrency'
 import {
@@ -14,6 +14,7 @@ import {
   __resetManifestSnapshotPhaseEventsForTest,
   __resetSnapshotMaxProbesInFlightForTest,
   clearFileChangeHooksCache,
+  DIAGNOSTIC_PREFLIGHT_FLAG,
   inferFileChangeHooks,
   inferFileChangeHooksAsync,
   inferFileChangeHooksFromFileSystem,
@@ -22,11 +23,13 @@ import {
   type FileChangeHook,
 } from '../tools/file-change-hooks'
 import { createNodeFileSystem } from '../tools/node-filesystem'
+import { mergeFileChangeHooks } from '../provider-config'
 import {
-  PROVIDER_CONFIG_ENV_VAR,
-  clearProviderConfigCacheForTest,
-  mergeFileChangeHooks,
-} from '../provider-config'
+  createControlledExecutionClock,
+  createExecutionProcessRecorder,
+  createTerminalExecutionFixture,
+  executionDeadlineMs,
+} from './fixtures/b19-terminal-execution'
 import { runFileChangeHooksParams } from '@codebuff/common/tools/params/tool/run-file-change-hooks'
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
@@ -49,6 +52,21 @@ const MAX_PROJECT_SCAN_ENTRIES = 2_000
 const SYNTHETIC_PACKAGE_COUNT = 1_200
 const SYNTHETIC_ENTRIES_PER_PACKAGE = 2
 
+const executionHosts: ReturnType<typeof createTerminalExecutionFixture>[] = []
+afterEach(() => { for (const host of executionHosts.splice(0)) host.dispose() })
+function runCapturedHooks(params: Parameters<typeof runFileChangeHooks>[0]) {
+  const host = createTerminalExecutionFixture({ projectRoot: params.cwd, signal: params.signal })
+  executionHosts.push(host)
+  return runFileChangeHooks({
+    ...params,
+    executionContext: params.executionContext ?? host.context,
+    // These inference fixtures explicitly opt in; the product has no implicit inference.
+    capturedConfiguration: params.capturedConfiguration ?? { autoFileChangeHooks: true, fileChangeHooks: [] },
+    terminalShell: { executable: '/bin/bash', args: ['-c'] },
+    getTerminalLaunchMetadata: host.getTerminalLaunchMetadata,
+  })
+}
+
 function withTempDir(run: (dir: string) => void): void {
   const dir = mkdtempSync(path.join(tmpdir(), 'openbuff-hooks-'))
   try {
@@ -62,27 +80,10 @@ async function withTempDirAsync(
   run: (dir: string) => Promise<void>,
 ): Promise<void> {
   const dir = mkdtempSync(path.join(tmpdir(), 'openbuff-hooks-'))
-  // Inference only runs when the loaded provider config does not opt out via
-  // `autoFileChangeHooks: false`. Pin an explicit config so these fixtures are
-  // decided by the test, not by whatever config the developer's environment
-  // happens to resolve (which would make the assertions meaningless).
-  const previousConfigPath = process.env[PROVIDER_CONFIG_ENV_VAR]
-  const configPath = path.join(dir, 'provider-config.json')
-  writeFileSync(
-    configPath,
-    JSON.stringify({ autoFileChangeHooks: true, fileChangeHooks: [] }),
-  )
-  process.env[PROVIDER_CONFIG_ENV_VAR] = configPath
-  clearProviderConfigCacheForTest()
+  // Inference is explicitly enabled by the captured fixture view below.
   try {
     await run(dir)
   } finally {
-    if (previousConfigPath === undefined) {
-      delete process.env[PROVIDER_CONFIG_ENV_VAR]
-    } else {
-      process.env[PROVIDER_CONFIG_ENV_VAR] = previousConfigPath
-    }
-    clearProviderConfigCacheForTest()
     rmSync(dir, { recursive: true, force: true })
     // The per-cwd inference cache is module scope, so a temp dir reused by a
     // later test must never inherit this one's snapshot.
@@ -122,6 +123,201 @@ const hooks: FileChangeHook[] = [
   { name: 'test-py', command: 'pytest', filePattern: '**/*.py' },
 ]
 
+describe('B19 captured hook execution', () => {
+  function host(options: Parameters<typeof createTerminalExecutionFixture>[0]) {
+    const result = createTerminalExecutionFixture(options)
+    executionHosts.push(result)
+    return result
+  }
+
+  function blockManifestRead() {
+    const base = createNodeFileSystem()
+    let entered!: () => void
+    let release!: () => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let held = false
+    const readFile = (async (...args: Parameters<CodebuffFileSystem['readFile']>) => {
+      const file = args[0]
+      if (!held && typeof file === 'string' && path.basename(file) === 'package.json') {
+        held = true
+        entered()
+        await gate
+      }
+      return base.readFile(...args)
+    }) as CodebuffFileSystem['readFile']
+    const fileSystem = Object.assign(Object.create(base), { readFile }) as CodebuffFileSystem
+    return { fileSystem, waiting, release }
+  }
+
+  test.each([undefined, false])('inference requires explicit true, rather than %s', async autoFileChangeHooks => {
+    let probes = 0
+    const fileSystem = Object.assign(Object.create(createNodeFileSystem()), {
+      async stat() { probes++; throw new Error('Unexpected inference') },
+    }) as CodebuffFileSystem
+    const captured = host({ projectRoot: '/repo' })
+    const output = await runFileChangeHooks({
+      cwd: '/repo', files: ['src/a.ts'], executionContext: captured.context,
+      capturedConfiguration: { autoFileChangeHooks, fileChangeHooks: [] }, fileSystem,
+    })
+    expect(jsonValue(output)?.[0].validationStatus).toBe('no_hooks_configured')
+    expect(probes).toBe(0)
+    expect(captured.policyInputs).toHaveLength(0)
+  })
+
+  test('missing captured configuration is unavailable and creates no launch', async () => {
+    const captured = host({ projectRoot: '/repo' })
+    const output = await runFileChangeHooks({ cwd: '/repo', files: ['src/a.ts'], executionContext: captured.context })
+    expect(jsonValue(output)?.[0]).toMatchObject({
+      validationStatus: 'hooks_unavailable', executionRefusal: { reason: 'unavailable' },
+    })
+    expect(captured.policyInputs).toHaveLength(0)
+  })
+
+  for (const [configured, perFile] of [[true, false], [true, true], [false, false], [false, true]] as const) {
+    const branchId = `hook.${configured ? 'configured' : 'inferred-opt-in'}.${perFile ? 'per-file' : 'project'}`
+    test(`${branchId} reaches one mediated hook launch`, async () => {
+      await withTempDirAsync(async cwd => {
+        if (!configured) {
+          writeFileSync(path.join(cwd, perFile ? 'composer.json' : 'package.json'), JSON.stringify(
+            perFile ? {} : { devDependencies: { typescript: '^5.0.0' } },
+          ))
+        }
+        const recorder = createExecutionProcessRecorder({ reply: executable => ({ stdout: executable === '/bin/bash' ? 'hook-sentinel' : '' }) })
+        const captured = host({ projectRoot: cwd, spawn: recorder.spawn })
+        const output = await runFileChangeHooks({
+          cwd, files: [perFile && !configured ? 'src/a.php' : 'src/a.ts'],
+          executionContext: captured.context,
+          capturedConfiguration: {
+            autoFileChangeHooks: !configured,
+            fileChangeHooks: configured ? [{ command: 'printf hook', filePattern: '**/*.ts', runPerFile: perFile }] : [],
+          },
+          terminalShell: { executable: '/bin/bash', args: ['-c'] },
+          getTerminalLaunchMetadata: captured.getTerminalLaunchMetadata,
+        })
+        expect(jsonValue(output)).toHaveLength(1)
+        expect(jsonValue(output)?.[0]).toMatchObject({ exitCode: 0, stdout: 'hook-sentinel' })
+        const admittedHooks = captured.policyInputs.filter(input => input.facts.family === 'configured-hook')
+        expect(admittedHooks).toHaveLength(1)
+        expect(admittedHooks[0].facts.branchId).toBe(branchId)
+        const actual = recorder.calls.filter(call => call.executable === '/bin/bash')
+        expect(actual).toHaveLength(1)
+        expect(actual[0].argv).toEqual(admittedHooks[0].target.argv)
+        expect(actual[0].options).toMatchObject({ cwd, shell: false })
+        expect(captured.events.filter(event => event.phase === 'spawn-observed' && event.facts.branchId === branchId)).toHaveLength(1)
+      })
+    })
+  }
+
+  test.each([
+    [undefined, undefined, 300_000],
+    [-1, undefined, null],
+    [10, undefined, 10_000],
+    [-1, 20_000, 20_000],
+    [300, 20_000, 20_000],
+  ] as const)('hook local %s and parent %s preserve the effective cap %s', async (timeoutSeconds, parentMs, expectedMs) => {
+    await withTempDirAsync(async cwd => {
+      const manual = createControlledExecutionClock()
+      const recorder = createExecutionProcessRecorder()
+      const captured = host({
+        ...manual, projectRoot: cwd, spawn: recorder.spawn,
+        actionLimit: parentMs === undefined ? { kind: 'unbounded' } : { kind: 'finite', durationMs: parentMs },
+      })
+      const output = await runFileChangeHooks({
+        cwd, files: ['README.md'], executionContext: captured.context,
+        capturedConfiguration: { autoFileChangeHooks: false, fileChangeHooks: [{ command: 'printf hook', timeoutSeconds }] },
+        terminalShell: { executable: '/bin/bash', args: ['-c'] },
+        getTerminalLaunchMetadata: captured.getTerminalLaunchMetadata,
+      })
+      expect(jsonValue(output)?.[0].exitCode).toBe(0)
+      const admitted = captured.policyInputs.find(input => input.facts.branchId === 'hook.configured.project')!
+      expect(admitted).toBeDefined()
+      const expiry = executionDeadlineMs(admitted.facts.deadlines.resourceLifetime)
+      expect(expiry === null ? null : expiry - manual.clock.nowMs()).toBe(expectedMs)
+    })
+  })
+
+  test('hook configuration, files, env and shell are copied before inference waits', async () => {
+    await withTempDirAsync(async cwd => {
+      writeFileSync(path.join(cwd, 'package.json'), JSON.stringify({ devDependencies: { typescript: '^5.0.0' } }))
+      const blocked = blockManifestRead()
+      const captured = host({ projectRoot: cwd })
+      const configuredHook: FileChangeHook = { command: 'printf original', filePattern: '**/*.ts', timeoutSeconds: 10 }
+      const capturedConfiguration = { autoFileChangeHooks: true, fileChangeHooks: [configuredHook] }
+      const files = ['src/a.ts']
+      const env = { PROJECT_VALUE: 'before-inference' }
+      const terminalShell = { executable: '/bin/bash', args: ['-c'] }
+      const runner = fakeRunner({})
+      const pending = runFileChangeHooks({
+        cwd, files, env, terminalShell, capturedConfiguration,
+        executionContext: captured.context, fileSystem: blocked.fileSystem, runCommand: runner.run,
+      })
+      await blocked.waiting
+      configuredHook.command = 'printf late'
+      configuredHook.filePattern = '**/*.py'
+      configuredHook.timeoutSeconds = -1
+      capturedConfiguration.autoFileChangeHooks = false
+      capturedConfiguration.fileChangeHooks.length = 0
+      files[0] = 'src/late.py'
+      env.PROJECT_VALUE = 'after-inference'
+      terminalShell.executable = '/missing-shell'
+      terminalShell.args[0] = '--late'
+      blocked.release()
+      await pending
+      expect(runner.calls).toContain('printf original')
+      expect(runner.calls).not.toContain('printf late')
+      const actual = runner.paramsList.find(input => input.command === 'printf original')!
+      expect(actual.timeout_seconds).toBe(10)
+      expect(actual.env).toEqual({ PROJECT_VALUE: 'before-inference' })
+      expect(actual.terminalShell).toEqual({ executable: '/bin/bash', args: ['-c'] })
+      expect(actual.executionBranchId).toBe('hook.configured.project')
+    })
+  })
+
+  test('configured local cap starts before inference and cannot refresh on retry', async () => {
+    await withTempDirAsync(async cwd => {
+      writeFileSync(path.join(cwd, 'package.json'), '{}')
+      const manual = createControlledExecutionClock()
+      const blocked = blockManifestRead()
+      const recorder = createExecutionProcessRecorder()
+      const captured = host({ ...manual, projectRoot: cwd, spawn: recorder.spawn })
+      const input: Parameters<typeof runFileChangeHooks>[0] = {
+        cwd, files: ['src/a.ts'], executionContext: captured.context, fileSystem: blocked.fileSystem,
+        capturedConfiguration: { autoFileChangeHooks: true, fileChangeHooks: [{ command: 'printf hook', timeoutSeconds: 10 }] },
+        terminalShell: { executable: '/bin/bash', args: ['-c'] },
+        getTerminalLaunchMetadata: captured.getTerminalLaunchMetadata,
+      }
+      const pending = runFileChangeHooks(input)
+      await blocked.waiting
+      manual.advance(12_000)
+      expect(captured.context.signal?.aborted).toBe(false)
+      blocked.release()
+      expect(jsonValue(await pending)?.[0]).toMatchObject({ executionRefusal: { reason: 'deadline-exhausted' } })
+      expect(jsonValue(await runFileChangeHooks(input))?.[0]).toMatchObject({ executionRefusal: { reason: 'deadline-exhausted' } })
+      expect(recorder.calls).toHaveLength(0)
+    })
+  })
+
+  test.each([false, true])('child env cannot choose the diagnostic host flag %s', async enabled => {
+    await withTempDirAsync(async cwd => {
+      const recorder = createExecutionProcessRecorder()
+      const captured = host({ projectRoot: cwd, spawn: recorder.spawn })
+      let diagnosticCalls = 0
+      const output = await runFileChangeHooks({
+        cwd, files: ['src/a.ts'], executionContext: captured.context,
+        capturedConfiguration: { fileChangeHooks: [{ command: 'printf hook' }] },
+        env: { [DIAGNOSTIC_PREFLIGHT_FLAG]: enabled ? 'false' : 'true' },
+        diagnosticPreflightEnabled: enabled,
+        diagnosticDelta: async () => { diagnosticCalls++; return { rejected: false, diagnosticStatus: 'unknown' } },
+        terminalShell: { executable: '/bin/bash', args: ['-c'] },
+        getTerminalLaunchMetadata: captured.getTerminalLaunchMetadata,
+      })
+      expect(diagnosticCalls).toBe(enabled ? 1 : 0)
+      expect(jsonValue(output)).toHaveLength(enabled ? 2 : 1)
+    })
+  })
+})
+
 describe('selectMatchingHooks', () => {
   test('no filePattern always runs; glob matches a changed file', () => {
     const m = selectMatchingHooks(hooks, ['src/a.ts'])
@@ -149,7 +345,7 @@ function jsonValue(
 describe('runFileChangeHooks', () => {
   test('reports when no hooks are configured without invoking a runner', async () => {
     const { run, calls } = fakeRunner({})
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       hooks: [],
@@ -171,7 +367,7 @@ describe('runFileChangeHooks', () => {
       'tsc --noEmit': { exitCode: 0 },
       'bun test': { exitCode: 1, stderr: '1 test failed' },
     })
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       hooks,
@@ -191,7 +387,7 @@ describe('runFileChangeHooks', () => {
     const { run, calls } = fakeRunner({
       'tsc --noEmit': { exitCode: 0, stdout: 'ok' },
     })
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['README.md'],
       cwd: '/repo',
       hooks,
@@ -212,7 +408,7 @@ describe('runFileChangeHooks', () => {
       },
     ]) as any
 
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['README.md'],
       cwd: '/repo',
       hooks: [{ name: 'typecheck', command: 'tsc --noEmit' }],
@@ -226,7 +422,7 @@ describe('runFileChangeHooks', () => {
 
   test('reports when configured hooks are skipped because none match', async () => {
     const { run, calls } = fakeRunner({})
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['README.md'],
       cwd: '/repo',
       hooks: [{ command: 'tsc', filePattern: '**/*.ts' }],
@@ -263,7 +459,7 @@ describe('runFileChangeHooks', () => {
         },
       ] as CodebuffToolOutput<'run_terminal_command'>
     }) as any
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       hooks,
@@ -283,7 +479,7 @@ describe('runFileChangeHooks', () => {
     const { run, paramsList } = fakeRunner({
       tsc: { exitCode: 0 },
     })
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       hooks: [{ name: 'slow', command: 'tsc', timeoutSeconds: 30 }],
@@ -305,7 +501,7 @@ describe('runFileChangeHooks', () => {
     const { run, paramsList } = fakeRunner({
       tsc: { exitCode: 0 },
     })
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       hooks: [{ name: 'typecheck', command: 'tsc' }],
@@ -327,7 +523,7 @@ describe('runFileChangeHooks', () => {
     const { run, paramsList } = fakeRunner({
       tsc: { exitCode: 0 },
     })
-    await runFileChangeHooks({
+    await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       hooks: [{ name: 'typecheck', command: 'tsc', timeoutSeconds: -1 }],
@@ -352,7 +548,7 @@ describe('runFileChangeHooks', () => {
       throw abortReason
     }) as any
 
-    const outcome = runFileChangeHooks({
+    const outcome = runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       hooks: [{ name: 'typecheck', command: 'tsc --noEmit' }],
@@ -371,7 +567,7 @@ describe('runFileChangeHooks', () => {
       throw new Error('hook blew up')
     }) as any
 
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       hooks: [{ name: 'typecheck', command: 'tsc --noEmit' }],
@@ -388,7 +584,7 @@ describe('runFileChangeHooks', () => {
     const { run, calls } = fakeRunner({
       "php -l 'src/a.php' && php -l 'src/space file.php'": { exitCode: 0 },
     })
-    await runFileChangeHooks({
+    await runCapturedHooks({
       files: ['src/a.php', 'src/space file.php', '../outside.php', 'README.md'],
       cwd: '/repo',
       hooks: [
@@ -407,7 +603,7 @@ describe('runFileChangeHooks', () => {
 
   test('reports a per-file hook whose only matching changed files escape the cwd without running a command', async () => {
     const { run, calls } = fakeRunner({})
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/../outside.php'],
       cwd: '/repo',
       hooks: [
@@ -441,7 +637,7 @@ describe('runFileChangeHooks', () => {
     const { run } = fakeRunner({
       'tsc --noEmit': { exitCode: 0, stdout: longStdout },
     })
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       hooks: [{ name: 'typecheck', command: 'tsc --noEmit' }],
@@ -465,7 +661,7 @@ describe('runFileChangeHooks', () => {
         stderr: '/repo/src/a.ts(2,4): error TS2322: Type mismatch',
       },
     })
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       hooks: [{ name: 'typecheck', command: 'npx --no-install tsc --noEmit' }],
@@ -497,7 +693,7 @@ describe('runFileChangeHooks', () => {
       )
       const { run, calls } = fakeRunner({ "npm run 'lint'": { exitCode: 0 } })
 
-      const out = await runFileChangeHooks({
+      const out = await runCapturedHooks({
         files: ['src/a.ts'],
         cwd: dir,
         runCommand: run,
@@ -802,7 +998,7 @@ describe('inferFileChangeHooksAsync', () => {
       )
       const { run, calls } = fakeRunner({})
 
-      const first = await runFileChangeHooks({
+      const first = await runCapturedHooks({
         files: ['src/a.ts'],
         cwd: dir,
         runCommand: run,
@@ -813,7 +1009,7 @@ describe('inferFileChangeHooksAsync', () => {
       // second invocation serves the cached hooks instead of re-walking the
       // tree, which is exactly the per-Enter cost this cache removes.
       writeFileSync(path.join(dir, 'go.mod'), 'module demo\n')
-      const second = await runFileChangeHooks({
+      const second = await runCapturedHooks({
         files: ['src/a.ts'],
         cwd: dir,
         runCommand: run,
@@ -826,7 +1022,7 @@ describe('inferFileChangeHooksAsync', () => {
       // Go file for selectMatchingHooks to run them — a `.ts` input would
       // correctly match nothing and run no hooks at all.
       clearFileChangeHooksCache()
-      await runFileChangeHooks({
+      await runCapturedHooks({
         files: ['src/a.go'],
         cwd: dir,
         runCommand: run,
@@ -854,13 +1050,13 @@ describe('inferFileChangeHooksAsync', () => {
       const snapshotsBefore = __getManifestSnapshotCountForTest()
       const walksBefore = __getDotnetWalkCountForTest()
 
-      const first = await runFileChangeHooks({
+      const first = await runCapturedHooks({
         files: ['src/a.cs'],
         cwd: dir,
         fileSystem,
         runCommand: run,
       })
-      const second = await runFileChangeHooks({
+      const second = await runCapturedHooks({
         files: ['src/a.cs'],
         cwd: dir,
         fileSystem,
@@ -887,7 +1083,7 @@ describe('inferFileChangeHooksAsync', () => {
       // Clearing costs exactly one more of each phase: the TTL window is the
       // whole saving, never a batch per caller.
       clearFileChangeHooksCache()
-      await runFileChangeHooks({
+      await runCapturedHooks({
         files: ['src/a.cs'],
         cwd: dir,
         fileSystem,
@@ -912,19 +1108,19 @@ describe('inferFileChangeHooksAsync', () => {
       // resolves, so a missing in-flight entry would take one snapshot per
       // caller on the production path.
       await Promise.all([
-        runFileChangeHooks({
+        runCapturedHooks({
           files: ['src/a.ts'],
           cwd: dir,
           fileSystem,
           runCommand: run,
         }),
-        runFileChangeHooks({
+        runCapturedHooks({
           files: ['src/a.ts'],
           cwd: dir,
           fileSystem,
           runCommand: run,
         }),
-        runFileChangeHooks({
+        runCapturedHooks({
           files: ['src/a.ts'],
           cwd: dir,
           fileSystem,
@@ -959,7 +1155,7 @@ describe('inferFileChangeHooksAsync', () => {
       const { run } = fakeRunner({})
       __resetSnapshotMaxProbesInFlightForTest()
 
-      await runFileChangeHooks({
+      await runCapturedHooks({
         files: ['src/a.cs'],
         cwd: dir,
         fileSystem: createNodeFileSystem(),
@@ -1092,7 +1288,7 @@ describe('inferFileChangeHooksAsync', () => {
       )
       const { run } = fakeRunner({})
 
-      await runFileChangeHooks({
+      await runCapturedHooks({
         files: ['src/a.ts'],
         cwd: dir,
         fileSystem: createNodeFileSystem(),
@@ -1111,7 +1307,7 @@ describe('inferFileChangeHooksAsync', () => {
         },
         readdir: async () => [] as string[],
       } as unknown as CodebuffFileSystem
-      const out = await runFileChangeHooks({
+      const out = await runCapturedHooks({
         files: ['src/a.ts'],
         cwd: dir,
         fileSystem: emptyAdapter,
@@ -1566,10 +1762,11 @@ describe('run_file_change_hooks outputSchema covers the diagnostic-delta shapes'
   ]) as any
 
   test('a diagnostic_delta_rejected result parses against the declared outputSchema', async () => {
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: '1' },
+      diagnosticPreflightEnabled: true,
       hooks: [{ name: 'typecheck', command: 'tsc --noEmit' }],
       runCommand: schemaRunner,
       diagnosticDelta: async () => ({
@@ -1615,10 +1812,11 @@ describe('run_file_change_hooks outputSchema covers the diagnostic-delta shapes'
   })
 
   test('a diagnostic_delta_passed result parses against the declared outputSchema', async () => {
-    const out = await runFileChangeHooks({
+    const out = await runCapturedHooks({
       files: ['src/a.ts'],
       cwd: '/repo',
       env: { OPENBUFF_DIAGNOSTIC_PREFLIGHT: 'true' },
+      diagnosticPreflightEnabled: true,
       hooks: [{ name: 'typecheck', command: 'tsc --noEmit' }],
       runCommand: schemaRunner,
       diagnosticDelta: async () =>

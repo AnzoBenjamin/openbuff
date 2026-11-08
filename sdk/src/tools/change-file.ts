@@ -13,8 +13,10 @@ import { fileExists } from '@codebuff/common/util/file'
 import {
   getContentHash,
   getExactContentHash,
+  getObservationContentHash,
   type ReadCapabilityIssuer,
 } from '@codebuff/common/util/content-hash'
+import { captureTextDocument } from '@codebuff/common/util/byte-text'
 import {
   buildFileMutationResultFromReceiptV1,
   fileMutationResultV1Schema,
@@ -165,6 +167,7 @@ export async function changeFile(params: {
       canonicalPath: result.canonicalPath,
       path: result.file,
       content: result.finalContent,
+      confirmedAfterHash: result.afterHash,
       capabilityIssuer,
     })
     return [
@@ -795,11 +798,16 @@ export async function changeFiles(params: {
       const postEditAuthorities = new Map(
         prepared.flatMap((change) => {
           if (change.afterContent === null) return []
+          const committedAction = receipt.actions.find(
+            (action) => action.index === change.index,
+          )
+          if (committedAction?.status !== 'committed') return []
           const postEditAuthority = buildFreshWholeFileMutationAuthority({
             canonicalPath:
               change.destination?.canonicalPath ?? change.source.canonicalPath,
             path: change.destinationPath ?? change.path,
             content: change.afterContent,
+            confirmedAfterHash: committedAction.afterHash,
             capabilityIssuer,
           })
           return postEditAuthority
@@ -996,11 +1004,19 @@ async function readOptionalText(
 ): Promise<string | null> {
   if (!(await fileExists({ filePath, fs }))) return null
   const raw = await fs.readFile(filePath)
-  if (typeof raw === 'string') return raw
+  return decodeTransactionText(raw, filePath)
+}
+
+function decodeTransactionText(
+  raw: string | NodeJS.ArrayBufferView,
+  filePath: string,
+): string {
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(
-      new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength),
-    )
+    return captureTextDocument(
+      typeof raw === 'string'
+        ? raw
+        : new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength),
+    ).rawText
   } catch {
     throw new Error(
       `UNSUPPORTED_BINARY: ${filePath} is not valid UTF-8 text and cannot participate in a text transaction.`,
@@ -1044,7 +1060,7 @@ async function prepareTransactionChange(
       ? undefined
       : (await fs.stat(entry.source.operationPath)).mode
   const freshnessHash =
-    beforeContent === null ? null : getContentHash(beforeContent)
+    beforeContent === null ? null : getObservationContentHash(beforeContent)
   const expectedHash = entry.change.expectedHash
   if (expectedHash !== undefined && expectedHash !== freshnessHash) {
     return {
@@ -1054,6 +1070,21 @@ async function prepareTransactionChange(
         expectedHash === null
           ? `Create rejected for ${entry.source.portablePath}: the file already exists.`
           : `Mutation rejected for ${entry.source.portablePath}: the file changed after it was read.`,
+      ),
+    }
+  }
+  const expectedRawHash =
+    'expectedRawHash' in entry.change ? entry.change.expectedRawHash : undefined
+  const actualRawHash =
+    beforeContent === null ? null : getExactContentHash(beforeContent)
+  if (expectedRawHash !== undefined && expectedRawHash !== actualRawHash) {
+    return {
+      ok: false,
+      error: filesystemError(
+        expectedRawHash === null ? 'already_exists' : 'stale_state',
+        expectedRawHash === null
+          ? `Create rejected for ${entry.source.portablePath}: the file already exists.`
+          : `Mutation rejected for ${entry.source.portablePath}: the exact bytes changed after it was read.`,
       ),
     }
   }
@@ -1134,6 +1165,7 @@ async function prepareTransactionChange(
       error: filesystemError('application_rejected', 'Patch did not apply.'),
     }
   }
+  decodeTransactionText(afterContent, entry.source.operationPath)
   return {
     ok: true,
     change: {
@@ -1578,11 +1610,13 @@ async function applyChange(params: {
         }
         const exists = initialSnapshot.state === 'present'
         observedExists = exists
-        const oldContent = exists ? await fs.readFile(fullPath, 'utf-8') : null
+        const oldContent = exists
+          ? decodeTransactionText(await fs.readFile(fullPath), fullPath)
+          : null
         const beforeHash =
           initialSnapshot.state === 'present' ? initialSnapshot.hash : null
         const freshnessHash =
-          oldContent === null ? null : getContentHash(oldContent)
+          oldContent === null ? null : getObservationContentHash(oldContent)
         if (
           change.expectedHash !== undefined &&
           change.expectedHash !== freshnessHash
@@ -1603,6 +1637,29 @@ async function applyChange(params: {
             ),
           )
         }
+        const actualRawHash =
+          oldContent === null ? null : getExactContentHash(oldContent)
+        if (
+          change.expectedRawHash !== undefined &&
+          (change.expectedRawHash !== actualRawHash ||
+            change.expectedRawHash !== beforeHash)
+        ) {
+          throw new MutationApplicationError(
+            filesystemError(
+              change.expectedRawHash === null
+                ? 'already_exists'
+                : 'stale_state',
+              change.expectedRawHash === null
+                ? `Create rejected for ${relativePath}: the file already exists.`
+                : `Update rejected for ${relativePath}: the exact bytes changed after it was read.`,
+              {
+                retryable: true,
+                requiresFreshRead: true,
+                recovery: 'read_again',
+              },
+            ),
+          )
+        }
         // `expectedHash` above is LF-normalized, so a purely CRLF<->LF
         // external rewrite passes it. A caller that spliced raw bytes read
         // outside this lock also pins the byte-exact content it observed, so
@@ -1610,8 +1667,7 @@ async function applyChange(params: {
         // that read saw.
         if (
           expectedExactHash !== undefined &&
-          expectedExactHash !==
-            (oldContent === null ? null : getExactContentHash(oldContent))
+          expectedExactHash !== actualRawHash
         ) {
           throw new MutationApplicationError(
             filesystemError(
@@ -1660,6 +1716,7 @@ async function applyChange(params: {
             ),
           }
         }
+        decodeTransactionText(newContent, fullPath)
         const commitAuthorization = await authority.authorizeCommit(
           authorization.path,
           exists ? 'overwrite' : 'create',

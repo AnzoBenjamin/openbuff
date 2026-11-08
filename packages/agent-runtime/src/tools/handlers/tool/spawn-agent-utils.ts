@@ -1,4 +1,5 @@
 import { realClock } from '@codebuff/common/deps/real-runtime-deps'
+import { bindMcpSession } from '@codebuff/common/mcp/provenance'
 import {
   MAX_AGENT_STEPS_DEFAULT,
   MAX_SPAWN_DEPTH_DEFAULT,
@@ -179,6 +180,9 @@ export function extractSubagentContextParams(
     // executeSubagent; the flag-off path is unchanged.
     processSupervision: params.processSupervision,
     spawnSupervised: params.spawnSupervised,
+    onExecutionActionStart: params.onExecutionActionStart,
+    executionIdentity: params.executionIdentity,
+    executionHostOperation: params.executionHostOperation,
 
     // AgentRuntimeScopedDeps - Client (WebSocket)
     handleStepsLogChunk: params.handleStepsLogChunk,
@@ -3838,6 +3842,8 @@ function createSupervisedCancellationError(agentType: string): Error {
  *    parent-visible output becomes the failure message.
  */
 async function runSupervisedSubagent(params: {
+  executionIdentity?: SupervisedSpawnRequest['executionIdentity']
+  executionHostOperation?: SupervisedSpawnRequest['executionHostOperation']
   spawnSupervised: SpawnSupervisedFn
   /**
    * cancel-softlock fix: the PARENT's AbortSignal. When supplied, the seam
@@ -3904,7 +3910,24 @@ async function runSupervisedSubagent(params: {
   // `false | undefined` and flag `=== true` as an impossible comparison).
   const isParentAborted = (): boolean => parentSignal?.aborted === true
 
+  let supervisedTemplate = agentTemplate
+  if (Object.keys(agentTemplate.mcpServers ?? {}).length) {
+    const projectRoot = params.fileContext?.projectRoot
+    if (!projectRoot) {
+      throw new Error('Supervised MCP tools require a project root.')
+    }
+    const bound = bindMcpSession({
+      projectRoot,
+      sessionReference: params.fileContext.mcpSessionReference,
+      templates: { [agentTemplate.id]: agentTemplate },
+      templateScope: 'subset',
+    })
+    supervisedTemplate = bound.templates[agentTemplate.id] as AgentTemplate
+    params.fileContext.mcpSessionReference = bound.sessionReference
+  }
   const request: SupervisedSpawnRequest = {
+    ...(params.executionIdentity ? { executionIdentity: params.executionIdentity } : {}),
+    ...(params.executionHostOperation ? { executionHostOperation: params.executionHostOperation } : {}),
     agentType: agentTemplate.id,
     prompt,
     spawnParams,
@@ -3937,7 +3960,10 @@ async function runSupervisedSubagent(params: {
     localAgentTemplates:
       // The JSON request file is a transport boundary: schemas/handleSteps
       // must cross in round-trip-safe form (child re-coerces/materializes).
-      serializeAgentTemplatesForTransport(params.localAgentTemplates),
+      serializeAgentTemplatesForTransport({
+        ...params.localAgentTemplates,
+        [agentTemplate.id]: supervisedTemplate,
+      }),
     userId: params.userId,
     clientSessionId: params.clientSessionId,
     userInputId: params.userInputId,
@@ -4314,6 +4340,8 @@ export async function executeSubagent(
   if (spawnSupervised !== undefined) {
     try {
       result = await runSupervisedSubagent({
+        executionIdentity: withDefaults.executionIdentity,
+        executionHostOperation: withDefaults.executionHostOperation,
         spawnSupervised,
         // cancel-softlock fix: the parent's own signal gates the supervised
         // spawn (abort group-kills the child and the await settles as

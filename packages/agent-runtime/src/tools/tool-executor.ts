@@ -11,6 +11,7 @@ import {
   MAX_TRUNCATION_RECOVERY_BYTES,
   parseJsonBounded,
   parseJsonStringWithRepair,
+  postEditCapabilitiesPartSchema,
   PAYLOAD_TRUNCATED_ERROR_CODE,
   TRANSACTION_EDIT_TYPES,
   tryRecoverTruncatedToolArguments,
@@ -18,6 +19,7 @@ import {
 import {
   buildNativeToolResultErrorOutputV1,
   buildReadFilesResultV1,
+  commitReceiptV1Schema,
   fileMutationResultV1Schema,
   mutationResultExceedsCheapBoundsV1,
   reconcileFileMutationResultV1,
@@ -30,6 +32,12 @@ import {
 import { isAbortError } from '@codebuff/common/util/error'
 import { resolveProjectRootOrEmpty } from '@codebuff/common/util/file'
 import { jsonToolResult } from '@codebuff/common/util/messages'
+import {
+  decodeReadCapabilityToken,
+  readCapabilityMatchesScope,
+} from '@codebuff/common/util/content-hash'
+import { reanchorRawReadCapability } from '@codebuff/common/util/byte-text'
+import { rawReadBasesMatch } from '@codebuff/common/util/raw-read-basis'
 import {
   classifyActionOutput,
   hashActionInput,
@@ -47,7 +55,6 @@ import * as path from 'path'
 import { realpathSync } from 'node:fs'
 
 import { getMCPToolData } from '../mcp'
-import { MCP_TOOL_SEPARATOR } from '../mcp-constants'
 import { evaluatePlaybookGate } from '../memory/playbook-gate'
 import { reportPlaybookGateOutcome } from '../memory/playbook-outcome-reporter'
 import {
@@ -86,7 +93,15 @@ import {
   recordToolEvidenceInTaskMemory,
 } from '../util/task-memory'
 import { realClock } from '@codebuff/common/deps/real-runtime-deps'
-import { ensureZodSchema } from './prompts'
+import {
+  assertExternalToolInputSchema,
+  projectZodSchema,
+  type JsonSchema,
+} from '@codebuff/common/util/json-schema'
+import {
+  ensureZodSchema,
+  getAdvertisedExternalToolDefinitions,
+} from './prompts'
 
 import type { AgentTemplate } from '../templates/types'
 import type { CodebuffToolHandlerFunction } from './handlers/handler-function-type'
@@ -668,6 +683,7 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
   output: CodebuffToolOutput<T>
   canonicalReceipt?: unknown
   capabilityScope?: { projectId: string; runId: string }
+  confirmedPostEditAnchorsByPath?: FileProcessingState['confirmedPostEditAnchorsByPath']
 }):
   | { valid: true; output: CodebuffToolOutput<T>; issues: [] }
   | {
@@ -690,7 +706,7 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
       (lifecycle as Record<string, unknown>).state === 'failed'
     )
   })
-  if (canonicalHandlerFailure) {
+  if (canonicalHandlerFailure && params.output.length === 1) {
     return { valid: true, output: params.output, issues: [] }
   }
   const oversizedMutationResult =
@@ -717,6 +733,106 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
   )
   if (parsed.success) {
     if (getToolMetadata(params.toolName).resultContract === 'mutation_v1') {
+      const supplemental =
+        params.output.length === 2
+          ? postEditCapabilitiesPartSchema.safeParse(params.output[1])
+          : undefined
+      if (supplemental?.success) {
+        const receipt = commitReceiptV1Schema.safeParse(params.canonicalReceipt)
+        const first = params.output[0]
+        const mutation = fileMutationResultV1Schema.safeParse(
+          first?.type === 'json' ? first.value : undefined,
+        )
+        const scope = params.capabilityScope
+        const authorityMatches =
+          receipt.success &&
+          receipt.data.status === 'committed' &&
+          receipt.data.callId === params.toolCallId &&
+          mutation.success &&
+          mutation.data.outcome === 'applied' &&
+          receipt.data.operationId === mutation.data.operationId &&
+          scope !== undefined &&
+          supplemental.data.value.postEditCapabilities.every((capability) => {
+            const decoded = decodeReadCapabilityToken(capability.readCapability)
+            if (
+              typeof decoded === 'string' ||
+              decoded.tokenVersion !== 'v4' ||
+              decoded.rawBasis?.scope !== 'whole'
+            )
+              return false
+            const rawHash = decoded.rawBasis.documentRawHash
+            if (
+              !readCapabilityMatchesScope(decoded, {
+                ...scope,
+                path: capability.path,
+              }) ||
+              receipt.data.finalHashes[capability.path] !== rawHash
+            )
+              return false
+            const receiptActions = receipt.data.actions.filter(
+              (action) =>
+                action.status === 'committed' &&
+                (action.destinationPath ?? action.path) === capability.path &&
+                action.afterHash === rawHash,
+            )
+            for (const receiptAction of receiptActions) {
+              const handlerActions = mutation.data.actions.filter(
+                (action) =>
+                  action.index === receiptAction.index &&
+                  action.actionId === receiptAction.actionId &&
+                  action.action === receiptAction.action &&
+                  action.path === receiptAction.path &&
+                  action.destinationPath === receiptAction.destinationPath &&
+                  action.beforeHash === receiptAction.beforeHash &&
+                  action.afterHash === receiptAction.afterHash,
+              )
+              if (handlerActions.length !== 1) continue
+              const content = handlerActions[0]!.afterContent
+              if (content !== undefined) {
+                if (
+                  reanchorRawReadCapability({ content, capability: decoded }).ok
+                )
+                  return true
+                continue
+              }
+              // A bounded result can omit afterContent. The coordinator has
+              // already verified its exact prepared bytes and minted this
+              // local anchor; handler output cannot supply that trusted state.
+              const anchor =
+                params.confirmedPostEditAnchorsByPath?.[capability.path]
+              if (
+                anchor?.readCapability === capability.readCapability &&
+                anchor.projectId === scope.projectId &&
+                anchor.runId === scope.runId &&
+                anchor.startLine === 1 &&
+                anchor.endLine === decoded.endLine &&
+                decoded.startLine === 1 &&
+                anchor.contentHash === decoded.hash &&
+                rawReadBasesMatch(anchor.rawBasis, decoded.rawBasis)
+              )
+                return true
+            }
+            return false
+          })
+        if (!authorityMatches) {
+          return {
+            valid: false,
+            output: buildNativeToolResultErrorOutputV1({
+              toolName: params.toolName,
+              callId: params.toolCallId,
+              issueCount: 1,
+              message:
+                'Post-edit capabilities lack matching canonical receipt and issuer evidence.',
+            }) as CodebuffToolOutput<T>,
+            issues: [
+              {
+                message:
+                  'post-edit authority did not match the canonical committed after-state',
+              },
+            ],
+          }
+        }
+      }
       const mutationPart = params.output.find(
         (part) =>
           part.type === 'json' &&
@@ -757,9 +873,10 @@ export function normalizeNativeToolOutput<T extends ToolName>(params: {
         if (reconciled.mutation.outcome !== 'unconfirmed') {
           return {
             valid: true,
-            output: jsonToolResult(
-              reconciled.mutation,
-            ) as CodebuffToolOutput<T>,
+            output: [
+              ...jsonToolResult(reconciled.mutation),
+              ...(supplemental?.success ? [supplemental.data] : []),
+            ] as CodebuffToolOutput<T>,
             issues: [],
           }
         }
@@ -1315,7 +1432,7 @@ function coerceInputScalarsBySchema(
   logger?: Logger,
 ): unknown {
   if (
-    !(toolName in toolParams) ||
+    !Object.hasOwn(toolParams, toolName) ||
     input === null ||
     typeof input !== 'object' ||
     Array.isArray(input)
@@ -1813,7 +1930,7 @@ function getFieldSpecificHint(
 
   if (paths.has('basedOnRead') || fieldNames.has('basedOnRead')) {
     return [
-      'Hint: `basedOnRead` must be an authenticated cap.v3 readCapability token string returned by read_files. Object-form anchors and wrapped objects like { "$text": "..." } are not accepted.',
+      'Hint: `basedOnRead` must be an authenticated readCapability token string returned by read_files. Object-form anchors and wrapped objects like { "$text": "..." } are not accepted.',
       'Copy the `editAnchor.readCapability` value verbatim from the matching fresh read_files result.',
     ].join('\n')
   }
@@ -1951,7 +2068,7 @@ function getToolValidationHint(
     if (fieldNames.has('readCapability') || hasRemovedExpectedHash) {
       targetedHints.push(
         [
-          'For replace_range, pass one authenticated cap.v3 readCapability copied from a fresh read_files editAnchor.',
+          'For replace_range, pass one authenticated readCapability copied from a fresh read_files editAnchor.',
           'Omit startLine/endLine to replace the full observed range, or provide both to target a contained sub-range within that capability.',
           'Never pass expectedHash or other separate hash fields.',
         ].join('\n'),
@@ -2442,38 +2559,6 @@ const OWNED_TEMP_WRITE_EXEMPT_TOOLS = new Set([
   'write_file',
 ])
 
-const MAX_CUSTOM_INPUT_SCAN_DEPTH = 6
-const MAX_CUSTOM_INPUT_SCAN_STRINGS = 1000
-
-// Recursively collect string values from an arbitrary custom-tool input, with
-// bounded depth and count so a pathological nested/huge input cannot blow the
-// stack or stall the scan. Only own enumerable values are visited.
-function collectCustomInputStrings(
-  value: unknown,
-  out: string[],
-  depth: number = 0,
-): void {
-  if (
-    depth > MAX_CUSTOM_INPUT_SCAN_DEPTH ||
-    out.length >= MAX_CUSTOM_INPUT_SCAN_STRINGS
-  ) {
-    return
-  }
-  if (typeof value === 'string') {
-    out.push(value)
-    return
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) collectCustomInputStrings(item, out, depth + 1)
-    return
-  }
-  if (value !== null && typeof value === 'object') {
-    for (const child of Object.values(value as Record<string, unknown>)) {
-      collectCustomInputStrings(child, out, depth + 1)
-    }
-  }
-}
-
 export function parseRawToolCall<T extends ToolName = ToolName>(params: {
   rawToolCall: {
     toolName: T
@@ -2701,7 +2786,14 @@ type ToolAttemptParams = {
   runId: string
   signal: AbortSignal
   onResponseChunk: (chunk: string | PrintModeEvent) => void
+  requestToolCall?: import('@codebuff/common/types/contracts/client').RequestToolCallFn
+  onExecutionActionStart?: import('@codebuff/common/types/contracts/client').OnExecutionActionStart
+  ancestorRunIds?: string[]
 }
+
+// Subagents inherit client callbacks. Unwrap our own attempt decorator so a
+// parent attempt cannot overwrite the child's separately registered identity.
+const originalToolRequest = new WeakMap<NonNullable<ToolAttemptParams['requestToolCall']>, NonNullable<ToolAttemptParams['requestToolCall']>>()
 
 /** Keep failed attempts after recovery, including refusals before dispatch. */
 async function trackToolAttempt<P extends ToolAttemptParams>(
@@ -2710,12 +2802,21 @@ async function trackToolAttempt<P extends ToolAttemptParams>(
 ): Promise<void> {
   const toolCallId = params.toolCallId ?? generateCompactId()
   const attemptId = generateCompactId()
-  let basis: ActionOutcome['basis'] = {
-    inputHash: hashActionInput(params.toolName, params.input),
+  const capturedInput = cloneDeep(params.input)
+  const basis: ActionOutcome['basis'] = Object.freeze({
+    inputHash: hashActionInput(params.toolName, capturedInput),
     ...(params.agentState.workspaceState
       ? { workspaceRevision: params.agentState.workspaceState.revision }
       : {}),
-  }
+  })
+  const workspaceSnapshotId = params.agentState.workspaceState?.snapshotId
+  const executionIdentity = Object.freeze({
+    actionId: toolCallId, attemptId, runId: params.runId,
+    rootRunId: params.ancestorRunIds?.[0] ?? params.runId, agentId: params.agentState.agentId,
+    basis,
+    ...(workspaceSnapshotId ? { workspaceSnapshotId } : {}),
+    basisId: hashActionInput('openbuff.execution-b02-basis.v1', { basis, workspaceSnapshotId: workspaceSnapshotId ?? null }),
+  })
   let dispatched = false
   let refusal: string | undefined
   let retained: ActionOutcome | undefined
@@ -2747,19 +2848,23 @@ async function trackToolAttempt<P extends ToolAttemptParams>(
       cause: { code, message: message.slice(0, 4_000) },
       effect: { status: 'unobserved', receiptIds: [], confirmedPaths: [] },
     })
+  const originalRequest = params.requestToolCall && (originalToolRequest.get(params.requestToolCall) ?? params.requestToolCall)
+  const trackedRequest: ToolAttemptParams['requestToolCall'] = originalRequest ? request => originalRequest({
+    ...request, callId: request.callId ?? toolCallId, executionIdentity,
+    executionRequestHash: hashActionInput(request.toolName, request.input),
+  }) : undefined
+  if (trackedRequest && originalRequest) originalToolRequest.set(trackedRequest, originalRequest)
   const tracked = {
     ...params,
     toolCallId,
+    input: capturedInput,
+    executionIdentity,
+    executionHostOperation: undefined,
+    ...(trackedRequest ? { requestToolCall: trackedRequest } : {}),
     onResponseChunk: (chunk: string | PrintModeEvent) => {
       if (typeof chunk !== 'string') {
         if (chunk.type === 'tool_call' && chunk.toolCallId === toolCallId) {
           dispatched = true
-          basis = {
-            inputHash: hashActionInput(params.toolName, chunk.input),
-            ...(params.agentState.workspaceState
-              ? { workspaceRevision: params.agentState.workspaceState.revision }
-              : {}),
-          }
         }
         if (chunk.type === 'error' && !dispatched)
           refusal ??= chunk.userMessage ?? chunk.message
@@ -2775,6 +2880,12 @@ async function trackToolAttempt<P extends ToolAttemptParams>(
     },
   } as P
   try {
+    params.signal.throwIfAborted()
+    // Capture the original B02 attempt before any setup/preflight await. The
+    // parent registers synchronously; supervised peers await its RPC barrier.
+    const started = params.onExecutionActionStart?.({ identity: executionIdentity,
+      toolName: params.toolName, input: cloneDeep(capturedInput), signal: params.signal })
+    if (started) await started
     params.signal.throwIfAborted()
     await execute(tracked)
     params.signal.throwIfAborted()
@@ -2849,7 +2960,7 @@ async function executeNativeToolCall<T extends ToolName>(
   // receiving the documented removed-tool migration guidance. Emitting
   // `buildUnavailableToolMessage` here keeps that guidance the single failure
   // contract for both paths.
-  if (!(toolName in toolParams)) {
+  if (!Object.hasOwn(toolParams, toolName)) {
     logger.debug(
       { toolName, agentId: agentTemplate.id, fromHandleSteps },
       `Blocked unregistered tool ${toolName} before parsing its input`,
@@ -3997,6 +4108,16 @@ async function executeNativeToolCall<T extends ToolName>(
           delete params.fileProcessingState.readAuthorizationHashesByPath?.[
             path
           ]
+          delete params.fileProcessingState.rawReadAuthorizationHashesByPath?.[
+            path
+          ]
+          delete params.fileProcessingState
+            .modelVisibleReadAuthorizationHashesByPath?.[path]
+          delete params.fileProcessingState
+            .modelVisibleRawReadAuthorizationHashesByPath?.[path]
+          delete params.fileProcessingState.confirmedPostEditAnchorsByPath?.[
+            path
+          ]
           params.fileProcessingState.failedEditRequiresReadByPath[path] = true
         }
         validatedOutput = jsonToolResult(
@@ -4014,7 +4135,10 @@ async function executeNativeToolCall<T extends ToolName>(
           projectId: resolveProjectRootOrEmpty(params.fileContext),
           runId: params.runId,
         },
+        confirmedPostEditAnchorsByPath:
+          params.fileProcessingState.confirmedPostEditAnchorsByPath,
       })
+      validatedOutput = normalized.output
       if (!normalized.valid) {
         logger.error(
           {
@@ -4025,7 +4149,6 @@ async function executeNativeToolCall<T extends ToolName>(
           },
           'Native tool output failed schema validation',
         )
-        validatedOutput = normalized.output
       }
     }
     const lifecycleTags = lifecycleTagsForToolResult(toolName)
@@ -4138,7 +4261,7 @@ export function parseRawCustomToolCall(params: {
   /** See `parseRawToolCall`'s `providerReportedTruncation`. */
   providerReportedTruncation?: boolean
 }): CustomToolCall | ToolCallError {
-  const { customToolDefs, rawToolCall, autoInsertEndStepParam = false } = params
+  const { customToolDefs, rawToolCall } = params
   const toolName = rawToolCall.toolName
 
   // MCP server membership alone is not permission to invoke an arbitrary
@@ -4172,36 +4295,74 @@ export function parseRawCustomToolCall(params: {
     )
   }
 
-  const processedParameters: Record<string, any> = {}
-  for (const [param, val] of Object.entries(parsedInput.input ?? {})) {
-    processedParameters[param] = val
-  }
-
-  // Add the required codebuff_end_step parameter with the correct value for this tool if requested
-  if (autoInsertEndStepParam) {
-    processedParameters[endsAgentStepParam] =
-      customToolDefs?.[toolName]?.endsAgentStep
-  }
-
-  const rawSchema = customToolDefs?.[toolName]?.inputSchema
-  if (rawSchema) {
-    const paramsSchema = ensureZodSchema(rawSchema)
-    const result = paramsSchema.safeParse(processedParameters)
-
-    if (!result.success) {
-      const issues = result.error.issues as ValidationIssue[]
+  const value = parsedInput.input
+  const plainObject =
+    value !== null &&
+    typeof value === 'object' &&
+    (Object.getPrototypeOf(value) === Object.prototype ||
+      Object.getPrototypeOf(value) === null)
+  // The step-control field is transport metadata, not part of the tool's
+  // authoritative input contract (including additionalProperties:false).
+  // Preserve the actual root: an array or null must not validate as an object.
+  const processedParameters = plainObject
+    ? Object.fromEntries(
+        Object.entries(value).filter(([key]) => key !== endsAgentStepParam),
+      )
+    : value
+  const definition = customToolDefs[toolName]
+  const rawSchema = definition.inputSchema
+  // A host custom tool's original async Zod schema is enforced by SDK dispatch.
+  // Its provider projection cannot reproduce all Zod semantics (for example
+  // UTF-16 string lengths), so it must not reject inputs before that validator.
+  if (rawSchema !== undefined) {
+    try {
+      const isZod =
+        rawSchema &&
+        typeof (rawSchema as { safeParse?: unknown }).safeParse === 'function'
+      assertExternalToolInputSchema(
+        isZod
+          ? projectZodSchema(rawSchema as z.ZodType, 'input')
+          : (rawSchema as JsonSchema),
+      )
+      const result =
+        definition.identity?.kind === 'custom'
+          ? undefined
+          : ensureZodSchema(rawSchema).safeParse(processedParameters)
+      if (result && !result.success) {
+        const issues = result.error.issues as ValidationIssue[]
+        return {
+          toolName,
+          toolCallId: rawToolCall.toolCallId,
+          input: rawToolCall.input,
+          error: `Invalid parameters for ${toolName}: ${formatValidationIssues({ issues, toolName })}`,
+        }
+      }
+    } catch (error) {
       return {
-        toolName: toolName,
+        toolName,
         toolCallId: rawToolCall.toolCallId,
         input: rawToolCall.input,
-        error: `Invalid parameters for ${toolName}: ${formatValidationIssues({ issues, toolName })}`,
+        error: `Unsupported input schema for ${toolName}: ${String(error)}`,
       }
     }
   }
 
-  const input = JSON.parse(JSON.stringify(parsedInput.input))
-  if (endsAgentStepParam in input) {
-    delete input[endsAgentStepParam]
+  let input: CustomToolCall['input']
+  try {
+    input = JSON.parse(
+      JSON.stringify(processedParameters, (_key, member: unknown) => {
+        if (typeof member === 'number' && !Number.isFinite(member))
+          throw new TypeError('Tool parameters require finite JSON numbers')
+        return member
+      }),
+    )
+  } catch (error) {
+    return {
+      toolName,
+      toolCallId: rawToolCall.toolCallId,
+      input: rawToolCall.input,
+      error: `Invalid JSON parameters for ${toolName}: ${String(error)}`,
+    }
   }
   return {
     toolName: toolName,
@@ -4265,15 +4426,57 @@ async function executeExternalToolCall(
     })
     return abortablePreviousToolCallFinished
   }
-  const toolCall: CustomToolCall | ToolCallError = parseRawCustomToolCall({
-    customToolDefs: await getMCPToolData({
+  const published = getAdvertisedExternalToolDefinitions(params.tools)
+  const advertised =
+    !fromHandleSteps || Object.hasOwn(published ?? {}, toolName)
+      ? published
+      : undefined
+  const externalToolNames = [
+    ...getEffectiveAgentToolNames(agentTemplate),
+    ...(fromHandleSteps ? (agentTemplate.programmaticToolNames ?? []) : []),
+  ]
+  const catalogs: NonNullable<ProjectFileContext['mcpCatalogs']> = {}
+  const definitions =
+    advertised ??
+    (await getMCPToolData({
       ...params,
-      toolNames: getEffectiveAgentToolNames(agentTemplate),
+      executionActor: { runId: params.runId, rootRunId: params.ancestorRunIds[0] ?? params.runId, agentId: agentState.agentId },
+      toolNames: externalToolNames,
       mcpServers: agentTemplate.mcpServers,
-      writeTo: cloneDeep(fileContext?.customToolDefinitions),
-    }),
+      mcpAgentId: agentTemplate.id,
+      mcpServerReferences: agentTemplate.mcpServerReferences,
+      reservedAliases: Object.keys(fileContext.customToolDefinitions ?? {}),
+      writeCatalogTo: catalogs,
+      writeTo: cloneDeep(
+        Object.fromEntries(
+          Object.entries(fileContext.customToolDefinitions ?? {}).filter(
+            ([alias, definition]) =>
+              externalToolNames.includes(alias) ||
+              (definition.identity?.kind === 'custom' &&
+                externalToolNames.includes(definition.identity.toolName)),
+          ),
+        ),
+      ),
+    }))
+  if (!advertised)
+    fileContext.mcpCatalogs = { ...fileContext.mcpCatalogs, ...catalogs }
+  let dispatchAlias = toolName
+  if (fromHandleSteps && !Object.hasOwn(definitions, toolName)) {
+    const matches = Object.entries(definitions).filter(([, definition]) =>
+      definition.identity?.kind === 'custom'
+        ? definition.identity.toolName === toolName
+        : definition.identity?.kind === 'mcp' &&
+          `${definition.identity.serverName}/${definition.identity.toolName}` ===
+            toolName,
+    )
+    if (matches.length > 1)
+      throw new Error(`Ambiguous external tool selector: ${toolName}`)
+    if (matches.length === 1) dispatchAlias = matches[0][0]
+  }
+  const toolCall: CustomToolCall | ToolCallError = parseRawCustomToolCall({
+    customToolDefs: definitions,
     rawToolCall: {
-      toolName,
+      toolName: dispatchAlias,
       toolCallId: toolCallId ?? generateCompactId(),
       input,
       providerOptions: params.providerOptions,
@@ -4281,17 +4484,21 @@ async function executeExternalToolCall(
     autoInsertEndStepParam,
     providerReportedTruncation: params.providerReportedTruncation,
   })
+  const identity = toolCall.toolName
+    ? definitions[toolCall.toolName]?.identity
+    : undefined
 
   // Filter out restricted tools - emit error instead of tool call/result
   // This prevents the CLI from showing tool calls that the agent doesn't have permission to use
   if (
     toolCall.toolName &&
     !getEffectiveAgentToolNames(agentTemplate).includes(toolCall.toolName) &&
-    !fromHandleSteps &&
     !(
-      toolCall.toolName.includes(MCP_TOOL_SEPARATOR) &&
-      toolCall.toolName.split(MCP_TOOL_SEPARATOR)[0] in agentTemplate.mcpServers
-    )
+      identity?.kind === 'custom' &&
+      getEffectiveAgentToolNames(agentTemplate).includes(identity.toolName)
+    ) &&
+    !fromHandleSteps &&
+    identity?.kind !== 'mcp'
   ) {
     const availableTools = getEffectiveAgentToolNames(agentTemplate)
     // Emit an error event instead of tool call/result pair
@@ -4328,43 +4535,21 @@ async function executeExternalToolCall(
 
       `${toolName} error: ${toolCall.error}`,
     )
+    if (fromHandleSteps) {
+      const refusalResult: ToolMessage = {
+        role: 'tool', toolName, toolCallId: toolCall.toolCallId,
+        content: jsonToolResult({ errorMessage: toolCall.error }),
+        sentAt: (params.clock ?? realClock).now(),
+      }
+      toolResults.push(refusalResult)
+      if (!excludeToolFromMessageHistory) toolResultsToAddToMessageHistory.push(refusalResult)
+    }
     return abortablePreviousToolCallFinished
   }
 
-  // Heuristic containment backstop for custom/MCP tools. Their input schemas are
-  // arbitrary and agent-defined, so getFilesystemToolPaths cannot enumerate path
-  // fields the way it does for native tools. As defense-in-depth (SDK handlers
-  // remain the authoritative containment layer), recursively scan string inputs
-  // and hard-block the call when any value LEXICALLY resolves to a path that
-  // escapes the project root (../ traversal or absolute). This is intentionally
-  // lexical-only (no realpath): it stays cheap over arbitrary/large inputs and
-  // avoids per-string filesystem stat storms; symlink-level containment remains
-  // the SDK handler's responsibility. It can false-positive on non-path strings
-  // that happen to resolve outside the root — an explicitly accepted tradeoff.
-  // The scan compares each value against the project root. With no root there is
-  // no boundary to compare against, and `path.resolve('', value)` would resolve
-  // against `process.cwd()` instead — so skip the scan rather than re-anchor it.
-  const customToolProjectRoot = resolveProjectRootOrEmpty(fileContext)
-  const scannedInputStrings: string[] = []
-  if (customToolProjectRoot !== '') {
-    collectCustomInputStrings(toolCall.input, scannedInputStrings)
-  }
-  const hasEscapingInput =
-    customToolProjectRoot !== '' &&
-    scannedInputStrings.some(
-      (value) =>
-        value.length > 0 &&
-        normalizedEscapesProject(
-          normalizeScopedToolPath(value, customToolProjectRoot),
-        ),
-    )
-  if (hasEscapingInput) {
-    onResponseChunk({
-      type: 'error',
-      message: `Tool \`${toolName}\` was blocked because one or more input values resolve to a path outside the project root. Tools may only operate on paths inside the project.`,
-    })
-    return abortablePreviousToolCallFinished
-  }
+  // Filesystem effects are declared by the host tool definition and checked
+  // against the parsed handler input at the SDK boundary. Ordinary routes,
+  // regexes and separator strings carry no filesystem authority.
 
   // Only emit tool_call event after permission check passes
   onResponseChunk({
@@ -4416,21 +4601,22 @@ async function executeExternalToolCall(
     .then(async () => {
       params.signal.throwIfAborted()
 
-      const toolName = toolCall.toolName.includes(MCP_TOOL_SEPARATOR)
-        ? toolCall.toolName
-            .split(MCP_TOOL_SEPARATOR)
-            .slice(1)
-            .join(MCP_TOOL_SEPARATOR)
-        : toolCall.toolName
       const clientToolResult = await requestToolCall({
         userInputId,
-        toolName,
+        toolName: identity?.toolName ?? toolCall.toolName,
         input: toolCall.input,
-        mcpConfig: toolCall.toolName.includes(MCP_TOOL_SEPARATOR)
-          ? agentTemplate.mcpServers[
-              toolCall.toolName.split(MCP_TOOL_SEPARATOR)[0]
-            ]
-          : undefined,
+        mcpConfig:
+          identity?.kind === 'mcp'
+            ? agentTemplate.mcpServers[identity.serverName]
+            : undefined,
+        ...(identity?.kind === 'mcp'
+          ? {
+              mcpReference: identity.reference,
+              mcpAgentId: agentTemplate.id,
+              mcpServerName: identity.serverName,
+              mcpCatalogGeneration: identity.generation,
+            }
+          : {}),
         signal: params.signal,
       })
       return clientToolResult.output satisfies ToolResultOutput[]

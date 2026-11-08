@@ -1,11 +1,23 @@
-import { spawn } from 'child_process'
 import { createHash } from 'node:crypto'
 
 import { SIGTERM_GRACE_MS } from '../services/semgrep-baseline'
+import { prepareHarnessGitReadArgv } from '../services/harness-enforcement'
+import {
+  admitNodeLaunch,
+  deriveExecutionContext,
+  dispatchNodeLaunch,
+  executionLimitMs,
+  executionRefusal,
+  prepareNodeLaunch,
+  refusalForSignal,
+  scheduleNodeDeadline,
+  trustedNodeSpawn,
+} from '../services/execution-launch'
 
 import { resolveFilePathWithinProject } from './path-utils'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
+import type { ExecutionAdapterContext, Refusal } from '@codebuff/common/types/contracts/execution-context'
 
 const DEFAULT_MAX_CHARS = 40_000
 
@@ -40,271 +52,157 @@ class BoundedOutputCollector {
   }
 }
 
-/**
- * Bounded git spawn for the snapshot-identity path
- * (perf: snapshot-identity-diff-capture-unbounded,
- * identity-git-spawns-no-deadline). Moved here from
- * get-change-review-bundle.ts (reliability: bundle-rev-parse-head-unbounded)
- * so gitStatus can thread an opt-in wall-clock deadline without an import
- * cycle. Unlike runGit, this never buffers more than `maxOutputBytes` bytes
- * per stream. Every stdout byte reaches its SHA-256 digest, even after the
- * presentation cap; stdoutComplete distinguishes a complete stream from
- * an interrupted observation. A
- * wall-clock deadline kills a wedged git instead of hanging the caller. The
- * AbortSignal path mirrors the semgrep and diagnostic runners' escalation
- * shape (perf: run-git-bounded-abort-no-sigkill-escalation): a bare SIGTERM
- * is followed by a SIGKILL after the shorter of the shared grace period and
- * the remaining deadline, so a git child that ignores SIGTERM is reaped with
- * its piped stdio instead of leaking past the caller's cancellation.
- */
-export async function runGitBounded(
-  args: string[],
-  cwd: string,
-  signal: AbortSignal | undefined,
-  options: {
-    timeoutMs: number
-    maxOutputBytes: number
-    /**
-     * Grace between the abort-path SIGTERM and the SIGKILL escalation
-     * (perf: run-git-bounded-abort-no-sigkill-escalation). Defaults to the
-     * shared SIGTERM_GRACE_MS the semgrep and diagnostic runners mirror.
-     */
-    sigtermGraceMs?: number
-  },
-): Promise<{
+export type GitExecutionOptions = {
+  executionContext?: ExecutionAdapterContext
+  branchId?: string
+  /** Trusted phase keeps retries memoized without conflating before/after. */
+  phase?: string
+  environmentOverlay?: Readonly<Record<string, string | undefined>>
+  timeoutMs?: number
+  sigtermGraceMs?: number
+}
+
+export type GitBoundedResult = {
   stdout: string
   stderr: string
   exitCode: number
-  /** Total stdout bytes emitted by git, retained or not. */
   stdoutTotalBytes: number
-  /** SHA-256 of every raw stdout byte, including bytes beyond retention. */
   stdoutSha256: string
-  /** True only after a successful child close; errors/abort retain no attestation. */
   stdoutComplete: boolean
   stdoutTruncated: boolean
-}> {
-  if (signal?.aborted) {
-    const reason = signal.reason
-    return {
-      stdout: '',
-      stderr: reason instanceof Error ? reason.message : 'Aborted',
-      exitCode: -1,
-      stdoutTotalBytes: 0,
-      stdoutSha256: createHash('sha256').digest('hex'),
-      stdoutComplete: false,
-      stdoutTruncated: false,
-    }
-  }
-  return await new Promise((resolve) => {
-    let child: ReturnType<typeof spawn>
-    try {
-      child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-    } catch (error) {
-      resolve({
-        stdout: '',
-        stderr: error instanceof Error ? error.message : String(error),
-        exitCode: -1,
-        stdoutTotalBytes: 0,
-        stdoutSha256: createHash('sha256').digest('hex'),
-        stdoutComplete: false,
-        stdoutTruncated: false,
-      })
-      return
-    }
-    const stdoutCollector = new BoundedOutputCollector(options.maxOutputBytes)
-    const stderrCollector = new BoundedOutputCollector(options.maxOutputBytes)
-    let settled = false
-    let removeAbortListener = () => {}
-    let deadline: ReturnType<typeof setTimeout> | undefined
-    let escalate: ReturnType<typeof setTimeout> | undefined
-    const startedAt = Date.now()
-    const graceMs = options.sigtermGraceMs ?? SIGTERM_GRACE_MS
+  executionRefusal?: Refusal
+}
 
-    const settle = (result: { stderrNote?: string; exitCode: number }) => {
+function refusedGit(refusal: Refusal): GitBoundedResult {
+  return {
+    stdout: '', stderr: refusal.cause, exitCode: -1,
+    stdoutTotalBytes: 0,
+    stdoutSha256: createHash('sha256').digest('hex'),
+    stdoutComplete: false, stdoutTruncated: false,
+    executionRefusal: refusal,
+  }
+}
+
+async function executeGit(
+  args: readonly string[],
+  cwd: string,
+  signal: AbortSignal | undefined,
+  options: GitExecutionOptions & { maxOutputBytes: number },
+): Promise<GitBoundedResult> {
+  const argv = prepareHarnessGitReadArgv(args)
+  const captured = {
+    ...options,
+    environmentOverlay: options.environmentOverlay ? { ...options.environmentOverlay } : undefined,
+  }
+  if (signal?.aborted) return refusedGit(refusalForSignal(signal))
+  const limit = executionLimitMs(captured.timeoutMs)
+  if (!limit.ok) return refusedGit(limit)
+  if (!Number.isSafeInteger(captured.maxOutputBytes) || captured.maxOutputBytes < 0) {
+    return refusedGit(executionRefusal('invalid-context', 'Git output bound is invalid'))
+  }
+  const graceMs = captured.sigtermGraceMs ?? SIGTERM_GRACE_MS
+  if (!Number.isSafeInteger(graceMs) || graceMs < 0) {
+    return refusedGit(executionRefusal('invalid-context', 'Git termination grace is invalid'))
+  }
+  const context = deriveExecutionContext(captured.executionContext, `git:${captured.branchId ?? ''}:${captured.phase ?? 'direct'}`, limit.value)
+  if (!context.ok) return refusedGit(context)
+  const launch = prepareNodeLaunch({
+    executionContext: context.value,
+    executable: 'git', argv, cwd,
+    branchId: captured.branchId ?? '',
+    environmentOverlay: captured.environmentOverlay,
+    adapterOptions: {
+      stdio: 'ignore-pipe-pipe', shell: false, detached: false,
+      windowsHide: false, sigtermGraceMs: graceMs,
+      phase: captured.phase ?? 'direct',
+    },
+  })
+  if (!launch.ok) return refusedGit(launch)
+  const admitted = await admitNodeLaunch(launch.value, context.value.signal ?? signal)
+  if (!admitted.ok) return refusedGit(admitted)
+  const spawn = trustedNodeSpawn(context.value)
+  const dispatched = dispatchNodeLaunch(admitted.value, (input) => spawn(
+    input.executable, input.argv, {
+      cwd: input.cwd, env: input.env, signal: input.resourceSignal,
+      stdio: ['ignore', 'pipe', 'pipe'], shell: false,
+      detached: false, windowsHide: false,
+    },
+  ), { sigtermGraceMs: graceMs })
+  if (!dispatched.ok) return refusedGit(dispatched)
+  const node = dispatched.value
+  const child = node.child
+  const resourceSignal = node.input.resourceSignal
+  return await new Promise((resolve) => {
+    const stdoutCollector = new BoundedOutputCollector(captured.maxOutputBytes)
+    const stderrCollector = new BoundedOutputCollector(captured.maxOutputBytes)
+    let settled = false
+    let cancelDeadline: (() => void) | undefined
+    const settle = (result: { exitCode: number; stderrNote?: string; refusal?: Refusal }) => {
       if (settled) return
       settled = true
-      if (deadline !== undefined) clearTimeout(deadline)
-      if (escalate !== undefined) clearTimeout(escalate)
-      removeAbortListener()
-      const stderrNote = result.stderrNote ?? ''
+      cancelDeadline?.()
+      resourceSignal.removeEventListener('abort', onAbort)
+      const observed = node.observation()
+      const refusal = result.refusal ?? node.resourceRefusal() ?? (!observed.ok ? observed : undefined)
+      const exitCode = refusal ? -1 : result.exitCode
       resolve({
         stdout: stdoutCollector.text(),
-        stderr: stderrCollector.text() + stderrNote,
-        exitCode: result.exitCode,
+        stderr: stderrCollector.text() + (refusal?.cause ?? result.stderrNote ?? ''),
+        exitCode,
         stdoutTotalBytes: stdoutCollector.total,
         stdoutSha256: stdoutCollector.digest(),
-        stdoutComplete: result.exitCode === 0 || result.exitCode === 1,
-        stdoutTruncated: stdoutCollector.total > options.maxOutputBytes,
+        stdoutComplete: !refusal && (exitCode === 0 || exitCode === 1),
+        stdoutTruncated: stdoutCollector.total > captured.maxOutputBytes,
+        ...(refusal ? { executionRefusal: refusal } : {}),
       })
     }
-
-    deadline = setTimeout(() => {
-      settle({
-        stderrNote: `git timed out after ${options.timeoutMs}ms`,
-        exitCode: -1,
+    const onAbort = () => {
+      if (settled) return
+      const refusal = refusalForSignal(resourceSignal)
+      settle({ exitCode: -1, refusal })
+    }
+    if (node.input.resourceRemainingMs !== null) {
+      cancelDeadline = scheduleNodeDeadline(node.remainingResourceMs, () => {
+        settle({ exitCode: -1, refusal: node.resourceRefusal() ?? (resourceSignal.aborted
+          ? refusalForSignal(resourceSignal) : executionRefusal('deadline-exhausted', 'Git resource deadline exhausted')) })
       })
-      try {
-        child.kill('SIGKILL')
-      } catch {}
-    }, options.timeoutMs)
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      if (settled) return
-      stdoutCollector.push(chunk)
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      if (settled) return
-      stderrCollector.push(chunk)
-    })
+    }
+    child.stdout?.on('data', (chunk: Buffer) => { if (!settled) stdoutCollector.push(chunk) })
+    child.stderr?.on('data', (chunk: Buffer) => { if (!settled) stderrCollector.push(chunk) })
     child.on('error', (error) => {
-      settle({ stderrNote: error.message, exitCode: -1 })
+      const observed = node.observation()
+      settle({ exitCode: -1, stderrNote: error.message, refusal: !observed.ok ? observed : undefined })
     })
     child.on('close', (code) => {
-      // The abort path settles BEFORE the escalation is armed — settle runs
-      // inside onAbort, ahead of the `escalate` assignment in the same abort
-      // handler — so when this handler runs after an abort, the settle below
-      // hits its `if (settled) return` early-exit and can never clear the
-      // armed timer. A child that exits on the abort-path SIGTERM alone must
-      // not leave the escalation firing kill('SIGKILL') on its reaped pid —
-      // disarm unconditionally here, the same close-driven settle shape the
-      // sibling diagnostic-delta runner's finish() enforces.
-      if (escalate !== undefined) clearTimeout(escalate)
       settle({ exitCode: code ?? -1 })
     })
-
-    if (signal) {
-      const onAbort = () => {
-        if (settled) return
-        const reason = signal.reason
-        settle({
-          stderrNote: reason instanceof Error ? reason.message : 'Aborted',
-          exitCode: -1,
-        })
-        try {
-          child.kill('SIGTERM')
-        } catch {}
-        // SIGTERM → SIGKILL escalation (perf:
-        // run-git-bounded-abort-no-sigkill-escalation): a git child that
-        // ignores SIGTERM must not keep running with live piped stdio after
-        // the caller cancelled. The escalation fires after the shorter of the
-        // shared grace period and the remaining deadline, so the child is
-        // reaped no later than the original wall-clock deadline. Unref'd (a
-        // timer must never hold the process open on its own) and disarmed by
-        // the close handler when the child exits on the SIGTERM alone —
-        // settle has already run by then, so only the close handler can
-        // clear the armed escalation.
-        const remainingMs = Math.max(
-          0,
-          options.timeoutMs - (Date.now() - startedAt),
-        )
-        const escalateDelayMs = Math.min(graceMs, remainingMs)
-        if (escalateDelayMs <= 0) {
-          try {
-            child.kill('SIGKILL')
-          } catch {}
-          return
-        }
-        escalate = setTimeout(() => {
-          // Dead-child guard: under Bun kill-after-reap is a silent no-op, but
-          // under Node the handle signals the raw pid — a reaped-and-recycled
-          // pid must never receive our SIGKILL.
-          if (child.exitCode !== null || child.signalCode !== null) return
-          try {
-            child.kill('SIGKILL')
-          } catch {}
-        }, escalateDelayMs)
-        escalate.unref()
-      }
-      signal.addEventListener('abort', onAbort, { once: true })
-      removeAbortListener = () => {
-        signal.removeEventListener('abort', onAbort)
-      }
-      if (signal.aborted) onAbort()
-    }
+    resourceSignal.addEventListener('abort', onAbort, { once: true })
+    if (resourceSignal.aborted) onAbort()
   })
 }
 
-export function runGit(
-  args: string[],
+/** Complete byte hashing with bounded retained output and captured lifetime. */
+export async function runGitBounded(
+  args: readonly string[],
+  cwd: string,
+  signal: AbortSignal | undefined,
+  options: GitExecutionOptions & { timeoutMs: number; maxOutputBytes: number },
+): Promise<GitBoundedResult> {
+  return executeGit(args, cwd, signal, options)
+}
+
+/** Compatibility result shape; an omitted local limit retains the parent cap. */
+export async function runGit(
+  args: readonly string[],
   cwd: string,
   signal?: AbortSignal,
-): Promise<{
-  stdout: string
-  stderr: string
-  exitCode: number
-}> {
-  if (signal?.aborted) {
-    const reason = signal.reason
-    return Promise.resolve({
-      stdout: '',
-      stderr: reason instanceof Error ? reason.message : 'Aborted',
-      exitCode: -1,
-    })
+  options: GitExecutionOptions = {},
+): Promise<{ stdout: string; stderr: string; exitCode: number; executionRefusal?: Refusal }> {
+  const result = await executeGit(args, cwd, signal, { ...options, maxOutputBytes: Number.MAX_SAFE_INTEGER })
+  return {
+    stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode,
+    ...(result.executionRefusal ? { executionRefusal: result.executionRefusal } : {}),
   }
-
-  return new Promise((resolve) => {
-    let child: ReturnType<typeof spawn>
-    try {
-      child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
-    } catch (error) {
-      resolve({
-        stdout: '',
-        stderr: error instanceof Error ? error.message : String(error),
-        exitCode: -1,
-      })
-      return
-    }
-
-    let stdout = ''
-    let stderr = ''
-    let settled = false
-    let removeAbortListener = () => {}
-
-    const settle = (result: {
-      stdout: string
-      stderr: string
-      exitCode: number
-    }) => {
-      if (settled) return
-      settled = true
-      removeAbortListener()
-      resolve(result)
-    }
-
-    child.stdout?.on('data', (chunk: Buffer) => {
-      if (settled) return
-      stdout += chunk.toString('utf8')
-    })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      if (settled) return
-      stderr += chunk.toString('utf8')
-    })
-    child.on('error', (error) => {
-      settle({ stdout, stderr: stderr + error.message, exitCode: -1 })
-    })
-    child.on('close', (code) => {
-      settle({ stdout, stderr, exitCode: code ?? -1 })
-    })
-
-    if (signal) {
-      const onAbort = () => {
-        if (settled) return
-        const reason = signal.reason
-        settle({
-          stdout,
-          stderr: reason instanceof Error ? reason.message : 'Aborted',
-          exitCode: -1,
-        })
-        try {
-          child.kill('SIGTERM')
-        } catch {}
-      }
-      signal.addEventListener('abort', onAbort, { once: true })
-      removeAbortListener = () => {
-        signal.removeEventListener('abort', onAbort)
-      }
-    }
-  })
 }
 
 export async function gitStatus(params: {
@@ -314,15 +212,18 @@ export async function gitStatus(params: {
   path?: string
   max_chars?: number
   signal?: AbortSignal
+  executionContext?: ExecutionAdapterContext
+  phase?: string
   /**
    * Optional wall-clock deadline for both the status and (when requested)
    * diff spawns (reliability: bundle-rev-parse-head-unbounded): when set,
    * both route through runGitBounded so a wedged git fails closed instead
-   * of hanging the caller. Unset callers keep the historical unbounded
-   * behavior byte-for-byte.
+   * of hanging the caller. An omitted local cap still respects the captured
+   * parent budget and never restores ambient execution authority.
    */
   timeoutMs?: number
 }): Promise<CodebuffToolOutput<'git_status'>> {
+  params = { ...params }
   const maxChars = Math.min(
     200_000,
     Math.max(500, params.max_chars ?? DEFAULT_MAX_CHARS),
@@ -350,15 +251,21 @@ export async function gitStatus(params: {
     params.timeoutMs !== undefined
       ? { timeoutMs: params.timeoutMs, maxOutputBytes: 8 * 1024 * 1024 }
       : undefined
+  const membership = params.path ? 'filtered' : 'all'
+  const statusBranchId = `git-status.${boundedOptions ? 'bounded' : 'legacy'}.status.${membership}`
   const status =
     boundedOptions !== undefined
       ? await runGitBounded(
           statusArgs,
           params.cwd,
           params.signal,
-          boundedOptions,
+          { ...boundedOptions, executionContext: params.executionContext, branchId: statusBranchId, phase: params.phase },
         )
-      : await runGit(statusArgs, params.cwd, params.signal)
+      : await runGit(statusArgs, params.cwd, params.signal, {
+          executionContext: params.executionContext,
+          branchId: statusBranchId,
+          phase: params.phase,
+        })
   if (status.exitCode !== 0) {
     return [
       {
@@ -367,6 +274,7 @@ export async function gitStatus(params: {
           errorMessage:
             status.stderr.trim() ||
             `git status exited with code ${status.exitCode}.`,
+          ...(status.executionRefusal ? { executionRefusal: status.executionRefusal } : {}),
         },
       },
     ]
@@ -421,9 +329,18 @@ export async function gitStatus(params: {
             diffArgs,
             params.cwd,
             params.signal,
-            boundedOptions,
+            {
+              ...boundedOptions,
+              executionContext: params.executionContext,
+              branchId: `git-status.bounded.diff-${params.staged ? 'staged' : 'unstaged'}.${membership}`,
+              phase: params.phase,
+            },
           )
-        : await runGit(diffArgs, params.cwd, params.signal)
+        : await runGit(diffArgs, params.cwd, params.signal, {
+            executionContext: params.executionContext,
+            branchId: `git-status.legacy.diff-${params.staged ? 'staged' : 'unstaged'}.${membership}`,
+            phase: params.phase,
+          })
     if (diffResult.exitCode !== 0 && diffResult.exitCode !== 1) {
       return [
         {
@@ -432,6 +349,7 @@ export async function gitStatus(params: {
             errorMessage:
               diffResult.stderr.trim() ||
               `git diff exited with code ${diffResult.exitCode}.`,
+            ...(diffResult.executionRefusal ? { executionRefusal: diffResult.executionRefusal } : {}),
           },
         },
       ]

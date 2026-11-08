@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 
+import { executionFixture } from './toolchain-execution-fixture'
+import { ToolchainExecutionError } from '../services/toolchain-execution'
+
 import {
   clearSemgrepAvailabilityCache,
   makeSpawnRunner,
@@ -271,30 +274,31 @@ describe('runSemgrepBaseline', () => {
   })
 
   test('runs the scan without blocking the event loop', async () => {
-    let eventLoopTurns = 0
-    let eventLoopRan = false
-    const interval = setInterval(() => {
-      eventLoopTurns += 1
-      if (eventLoopTurns >= 3) {
-        eventLoopRan = true
-        clearInterval(interval)
-      }
-    }, 5)
-    // A deliberately slow scan: while it is in flight the event loop must
-    // stay live (spawn/async runner), which the repeating interval proves.
+    let scanEntered!: () => void
+    const entered = new Promise<void>(resolve => { scanEntered = resolve })
+    let releaseScan!: () => void
+    const release = new Promise<void>(resolve => { releaseScan = resolve })
+    // Keep the scan pending until an actual event-loop turn is observed.
     const runner = availableRunner(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50))
+      scanEntered()
+      await release
       return { exitCode: 0, stdout: EMPTY_SARIF, stderr: '' }
     })
-    const result = await runSemgrepBaseline({
-      cwd: '/tmp/semgrep-test-event-loop',
-      baselineCommit: 'abc1234',
-      files: ['a.py'],
-      runner,
+    const pending = runSemgrepBaseline({
+      cwd: '/tmp/semgrep-test-event-loop', baselineCommit: 'abc1234', files: ['a.py'], runner,
     })
-    clearInterval(interval)
-    expect(result.status).toBe('ok')
-    expect(eventLoopRan).toBe(true)
+    let finished = false
+    void pending.then(() => { finished = true }, () => { finished = true })
+    try {
+      await Promise.race([entered, pending.then(() => { throw new Error('Scan settled before reaching the runner') })])
+      let eventLoopRan = false
+      await new Promise<void>(resolve => setImmediate(() => { eventLoopRan = true; resolve() }))
+      expect(eventLoopRan).toBe(true)
+      expect(finished).toBe(false)
+    } finally {
+      releaseScan()
+    }
+    expect((await pending).status).toBe('ok')
   })
 
   test('skips the scan entirely when the caller captured a before-bundle', async () => {
@@ -578,7 +582,7 @@ describe('runSemgrepBaseline', () => {
     // at the deadline itself (spawnSync-compatible shape: exitCode -1 and a
     // SIGTERM signal), and a short grace timer escalates to SIGKILL so a
     // child that trapped SIGTERM cannot outlive the bound.
-    const runner = makeSpawnRunner('sh', { sigtermGraceMs: 50 })
+    const runner = makeSpawnRunner('sh', { sigtermGraceMs: 50, executionContext: executionFixture({ env: { PATH: '/usr/bin:/bin' }, resourceRemainingMs: 50 }).context })
     const startedAt = Date.now()
     const result = await runner(
       ['-c', 'trap "" TERM; while :; do sleep 1; done'],
@@ -663,19 +667,14 @@ describe('runSemgrepBaseline', () => {
     const controller = new AbortController()
     controller.abort()
     let spawned = 0
-    const spawnSpy = ((command: string) => {
+    const spawnSpy = (() => {
       spawned += 1
       return undefined as never
-    }) as unknown as typeof import('node:child_process').spawn
-    // makeSpawnRunner closes over the module-level `spawn`; the no-spawn
-    // guarantee is asserted through the resolved shape instead.
-    void spawnSpy
-    const runner = makeSpawnRunner('semgrep')
+    }) as import('@codebuff/common/types/spawn').CodebuffSpawn
+    const runner = makeSpawnRunner('semgrep', { executionContext: { ...executionFixture().context, spawn: spawnSpy } })
     const started = Date.now()
-    const result = await runner(['scan'], '/tmp', 60_000, controller.signal)
+    await expect(Promise.resolve(runner(['scan'], '/tmp', 60_000, controller.signal))).rejects.toBeInstanceOf(ToolchainExecutionError)
     expect(Date.now() - started).toBeLessThan(1_000)
-    expect(result.exitCode).toBe(-1)
-    expect(result.stderr).toContain('aborted')
     expect(spawned).toBe(0)
   })
 
@@ -688,7 +687,7 @@ describe('runSemgrepBaseline', () => {
     // 5s, and the run must settle at the deadline itself.
     const pidFile = `/tmp/semgrep-escalate-test-${process.pid}.pid`
     rmSync(pidFile, { force: true })
-    const runner = makeSpawnRunner('sh')
+    const runner = makeSpawnRunner('sh', { executionContext: executionFixture({ env: { PATH: '/usr/bin:/bin' }, resourceRemainingMs: 10_000 }).context })
     const startedAt = Date.now()
     let settledAt = 0
     // The runner seam may settle synchronously or as a promise: normalize

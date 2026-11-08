@@ -43,8 +43,8 @@ export const getSdkEnv = (): SdkEnv => ({
  * Resolve the API key from the environment. Prefers OPENBUFF_API_KEY and
  * falls back to CODEBUFF_API_KEY for backward compatibility.
  */
-export const getOpenbuffApiKeyFromEnv = (): string | undefined => {
-  return process.env.OPENBUFF_API_KEY ?? process.env.CODEBUFF_API_KEY
+export const getOpenbuffApiKeyFromEnv = (environment: Readonly<Record<string, string | undefined>> = process.env): string | undefined => {
+  return environment.OPENBUFF_API_KEY ?? environment.CODEBUFF_API_KEY
 }
 
 /** @deprecated Use getOpenbuffApiKeyFromEnv instead. Kept as a compatibility
@@ -134,16 +134,16 @@ export const scrubChildProcessEnv = (
   return scrubbed
 }
 
-export const getByokOpenrouterApiKeyFromEnv = (): string | undefined => {
-  return process.env[BYOK_OPENROUTER_ENV_VAR]
+export const getByokOpenrouterApiKeyFromEnv = (environment: Readonly<Record<string, string | undefined>> = process.env): string | undefined => {
+  return environment[BYOK_OPENROUTER_ENV_VAR]
 }
 
 /**
  * Get ChatGPT OAuth token from environment variable.
  */
-export const getChatGptOAuthTokenFromEnv = (): string | undefined => {
+export const getChatGptOAuthTokenFromEnv = (environment: Readonly<Record<string, string | undefined>> = process.env): string | undefined => {
   return (
-    process.env[CHATGPT_OAUTH_TOKEN_ENV_VAR] ??
-    process.env[OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR]
+    environment[CHATGPT_OAUTH_TOKEN_ENV_VAR] ??
+    environment[OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR]
   )
 }

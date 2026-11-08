@@ -19,6 +19,14 @@ import {
 import { getErrorObject } from '@codebuff/common/util/error'
 import { cloneDeep } from 'lodash'
 import z from 'zod/v4'
+import { externalToolAlias } from '@codebuff/common/tools/external-tool'
+import { toolNames } from '@codebuff/common/tools/constants'
+import {
+  assertExternalToolInputSchema,
+  projectHostToolInputSchema,
+  projectZodSchema,
+  type JsonSchema,
+} from '@codebuff/common/util/json-schema'
 
 import { getSdkEnv } from './env'
 import { loadLocalAgents } from './agents/load-agents'
@@ -28,6 +36,7 @@ import {
   reconcileTaskMemoryEvidence,
 } from './services/task-memory-store'
 import { loadSkills } from './skills/load-skills'
+import { runGit } from './tools/git-status'
 
 // Re-export for SDK consumers
 export {
@@ -53,6 +62,7 @@ import type {
   SessionState,
 } from '@codebuff/common/types/session-state'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 import type {
   CustomToolDefinitions,
   FileTreeNode,
@@ -182,6 +192,12 @@ function deepFreezeSharedStateNodes(value: unknown): void {
 
 export type InitialSessionStateOptions = {
   cwd?: string
+  /** Captured root for session metadata and skills when workspace cwd is absent. */
+  contextCwd?: string
+  /** Captured home directory. null disables home lookup; undefined retains standalone defaults. */
+  homeDir?: string | null
+  /** Include home skill directories. Defaults to true for standalone callers. */
+  includeGlobalSkills?: boolean
   /** Optional directory path to load skills from. When provided, skills are loaded from this directory instead of the default locations. */
   skillsDir?: string
   projectFiles?: Record<string, string>
@@ -194,6 +210,8 @@ export type InitialSessionStateOptions = {
   maxAgentSteps?: number
   fs?: CodebuffFileSystem
   spawn?: CodebuffSpawn
+  /** Captured host authority for optional startup Git observations. */
+  executionContext?: ExecutionAdapterContext
   logger?: Logger
   /** Set false to skip loading persisted task memory for this session. */
   persistentMemory?: boolean
@@ -227,29 +245,78 @@ function processAgentDefinitions(
  * Processes custom tool definitions into the format expected by SessionState.
  * Converts Zod schemas to JSON Schema format so they can survive JSON serialization.
  */
+function hasObjectInputSchema(schema: JsonSchema): boolean {
+  if (schema === false) return true
+  if (schema === true) return false
+  if (schema.type === 'object') return true
+  if (
+    Array.isArray(schema.type) &&
+    schema.type.length &&
+    schema.type.every((type) => type === 'object')
+  )
+    return true
+  if (
+    Array.isArray(schema.allOf) &&
+    schema.allOf.some((member) => hasObjectInputSchema(member))
+  )
+    return true
+  return ['anyOf', 'oneOf'].some(
+    (key) =>
+      Array.isArray(schema[key]) &&
+      schema[key].length > 0 &&
+      schema[key].every((member: JsonSchema) => hasObjectInputSchema(member)),
+  )
+}
+
 function processCustomToolDefinitions(
   customToolDefinitions: CustomToolDefinition[],
 ): CustomToolDefinitions {
-  return Object.fromEntries(
-    customToolDefinitions.map((toolDefinition) => {
-      // Convert Zod schema to JSON Schema format so it survives JSON serialization
-      // The agent-runtime will wrap this with AI SDK's jsonSchema() helper
-      const jsonSchema = z.toJSONSchema(toolDefinition.inputSchema, {
-        io: 'input',
-      }) as Record<string, unknown>
-      delete jsonSchema['$schema']
-
-      return [
-        toolDefinition.toolName,
-        {
-          inputSchema: jsonSchema,
-          description: toolDefinition.description,
-          endsAgentStep: toolDefinition.endsAgentStep,
-          exampleInputs: toolDefinition.exampleInputs,
-        },
-      ]
-    }),
-  )
+  const definitions: CustomToolDefinitions = Object.create(null)
+  const names = new Set<string>()
+  for (const toolDefinition of customToolDefinitions) {
+    const identity = {
+      kind: 'custom' as const,
+      toolName: toolDefinition.toolName,
+    }
+    const alias = externalToolAlias(identity)
+    if (
+      names.has(toolDefinition.toolName) ||
+      Object.hasOwn(definitions, alias)
+    ) {
+      throw new Error(
+        `Duplicate custom tool identity or alias: ${toolDefinition.toolName}`,
+      )
+    }
+    if (toolNames.includes(alias as (typeof toolNames)[number])) {
+      throw new Error(
+        `Custom tool conflicts with built-in tool: ${toolDefinition.toolName}`,
+      )
+    }
+    names.add(toolDefinition.toolName)
+    // Convert Zod schema to JSON Schema format so it survives JSON serialization
+    // The agent-runtime will wrap this with AI SDK's jsonSchema() helper
+    // Check the original input shape before advisory normalization can omit
+    // declared fields. A transform-created handler member is not an input.
+    assertExternalToolInputSchema(
+      projectZodSchema(toolDefinition.inputSchema, 'input'),
+    )
+    const jsonSchema = projectHostToolInputSchema(toolDefinition.inputSchema)
+    if (!hasObjectInputSchema(jsonSchema))
+      throw new Error(
+        `Unsupported input schema for custom tool ${toolDefinition.toolName}: tool calls require an object-root input schema.`,
+      )
+    definitions[alias] = {
+      inputSchema: jsonSchema,
+      description: toolDefinition.description,
+      endsAgentStep: toolDefinition.endsAgentStep,
+      exampleInputs: toolDefinition.exampleInputs,
+      identity,
+      ...(toolDefinition.pathParameters
+        ? { pathParameters: toolDefinition.pathParameters }
+        : {}),
+    }
+  }
+  return definitions
 }
 
 /**
@@ -483,60 +550,13 @@ function getFileSize(stats: Awaited<ReturnType<CodebuffFileSystem['stat']>>) {
 const GIT_CHANGES_TIMEOUT_MS = 5_000
 
 /**
- * Helper to convert ChildProcess to Promise with stdout/stderr.
- * M3-T1: bounded by `timeoutMs`, which kills the subprocess on expiry and
- * rejects so the already-present `.catch` fallbacks degrade gracefully.
- */
-function childProcessToPromise(
-  proc: ReturnType<CodebuffSpawn>,
-  timeoutMs: number,
-): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    let stdout = ''
-    let stderr = ''
-    let settled = false
-
-    const timeout = globalThis.setTimeout(() => {
-      if (settled) return
-      settled = true
-      proc.kill()
-      reject(new Error(`Command timed out after ${timeoutMs}ms`))
-    }, timeoutMs)
-
-    proc.stdout?.on('data', (data: Buffer) => {
-      stdout += data.toString()
-    })
-
-    proc.stderr?.on('data', (data: Buffer) => {
-      stderr += data.toString()
-    })
-
-    proc.on('close', (code: number | null) => {
-      if (settled) return
-      settled = true
-      globalThis.clearTimeout(timeout)
-      if (code === 0) {
-        resolve({ stdout, stderr })
-      } else {
-        reject(new Error(`Command exited with code ${code}`))
-      }
-    })
-
-    proc.on('error', (error) => {
-      if (settled) return
-      settled = true
-      globalThis.clearTimeout(timeout)
-      reject(error)
-    })
-  })
-}
-
-/**
- * Retrieves git changes for the project using the provided spawn function
+ * Optional project observations use the captured host operation. Missing
+ * authority leaves them unavailable without restoring ambient child inputs.
  */
 async function getGitChanges(params: {
   cwd: string
-  spawn: CodebuffSpawn
+  spawn?: CodebuffSpawn
+  executionContext?: ExecutionAdapterContext
   logger: Logger
 }): Promise<{
   status: string
@@ -545,60 +565,30 @@ async function getGitChanges(params: {
   lastCommitMessages: string
 }> {
   const { cwd, spawn, logger } = params
-
-  const status = childProcessToPromise(
-    spawn('git', ['status'], { cwd }),
-    GIT_CHANGES_TIMEOUT_MS,
-  )
-    .then(({ stdout }) => stdout)
-    .catch((error) => {
-      logger.debug?.({ error }, 'Failed to get git status')
-      return ''
+  const executionContext = params.executionContext && spawn
+    ? Object.freeze({ ...params.executionContext, spawn }) : params.executionContext
+  const read = async (argv: readonly string[], branchId: string, message: string) => {
+    const result = await runGit(argv, cwd, executionContext?.signal, {
+      executionContext, branchId, timeoutMs: GIT_CHANGES_TIMEOUT_MS,
     })
-
-  const diff = childProcessToPromise(
-    spawn('git', ['diff'], { cwd }),
-    GIT_CHANGES_TIMEOUT_MS,
-  )
-    .then(({ stdout }) => stdout)
-    .catch((error) => {
-      logger.debug?.({ error }, 'Failed to get git diff')
+    if (result.exitCode !== 0) {
+      logger.debug?.({ exitCode: result.exitCode, executionRefusal: result.executionRefusal }, message)
       return ''
-    })
-
-  const diffCached = childProcessToPromise(
-    spawn('git', ['diff', '--cached'], { cwd }),
-    GIT_CHANGES_TIMEOUT_MS,
-  )
-    .then(({ stdout }) => stdout)
-    .catch((error) => {
-      logger.debug?.({ error }, 'Failed to get git diff --cached')
-      return ''
-    })
-
-  const lastCommitMessages = childProcessToPromise(
-    spawn('git', ['shortlog', 'HEAD~10..HEAD'], { cwd }),
-    GIT_CHANGES_TIMEOUT_MS,
-  )
-    .then(({ stdout }) =>
-      stdout
-        .trim()
-        .split('\n')
-        .slice(1)
-        .reverse()
-        .map((line) => line.trim())
-        .join('\n'),
-    )
-    .catch((error) => {
-      logger.debug?.({ error }, 'Failed to get lastCommitMessages')
-      return ''
-    })
+    }
+    return result.stdout
+  }
+  const [status, diff, diffCached, shortlog] = await Promise.all([
+    read(['status'], 'session.git.status', 'Failed to get git status'),
+    read(['diff'], 'session.git.diff', 'Failed to get git diff'),
+    read(['diff', '--cached'], 'session.git.diff-cached', 'Failed to get git diff --cached'),
+    read(['shortlog', 'HEAD~10..HEAD'], 'session.git.shortlog', 'Failed to get lastCommitMessages'),
+  ])
 
   return {
-    status: await status,
-    diff: await diff,
-    diffCached: await diffCached,
-    lastCommitMessages: await lastCommitMessages,
+    status,
+    diff,
+    diffCached,
+    lastCommitMessages: shortlog.trim().split('\n').slice(1).reverse().map(line => line.trim()).join('\n'),
   }
 }
 
@@ -629,11 +619,12 @@ async function discoverProjectPaths(params: {
 export async function loadUserKnowledgeFiles(params: {
   fs: CodebuffFileSystem
   logger: Logger
-  /** Optional home directory override for testing */
-  homeDir?: string
+  /** Captured home directory. null disables lookup; undefined uses standalone defaults. */
+  homeDir?: string | null
 }): Promise<Record<string, string>> {
   const { fs, logger } = params
-  const homeDir = params.homeDir ?? os.homedir()
+  if (params.homeDir === null) return {}
+  const homeDir = params.homeDir === undefined ? os.homedir() : params.homeDir
   const userKnowledgeFiles: Record<string, string> = {}
 
   // List home directory to find knowledge files case-insensitively
@@ -761,7 +752,7 @@ async function loadKnowledgeFilesFromPaths(params: {
 export async function initialSessionState(
   params: InitialSessionStateOptions,
 ): Promise<SessionState> {
-  const { cwd, maxAgentSteps, skillsDir } = params
+  const { cwd, maxAgentSteps, skillsDir, homeDir, includeGlobalSkills } = params
   let {
     agentDefinitions,
     customToolDefinitions,
@@ -782,10 +773,6 @@ export async function initialSessionState(
   }
   if (!fs) {
     fs = (require('fs') as typeof fsType).promises
-  }
-  if (!spawn) {
-    const { spawn: nodeSpawn } = require('child_process')
-    spawn = nodeSpawn as CodebuffSpawn
   }
   if (!logger) {
     logger = {
@@ -822,8 +809,9 @@ export async function initialSessionState(
   let processedAgentTemplates: Record<string, any> = {}
   if (agentDefinitions && agentDefinitions.length > 0) {
     processedAgentTemplates = processAgentDefinitions(agentDefinitions)
-  } else {
+  } else if (homeDir !== null) {
     processedAgentTemplates = await loadLocalAgents({
+      ...(homeDir === undefined ? {} : { agentsPath: path.join(homeDir, '.agents') }),
       includeProjectAgents: false,
       verbose: false,
     })
@@ -850,7 +838,7 @@ export async function initialSessionState(
 
   // Gather git changes if cwd is available
   const gitChanges = cwd
-    ? await getGitChanges({ cwd, spawn, logger })
+    ? await getGitChanges({ cwd, spawn, logger, executionContext: params.executionContext })
     : {
         status: '',
         diff: '',
@@ -859,22 +847,25 @@ export async function initialSessionState(
       }
 
   // Load user knowledge files from home directory and merge with any provided ones
-  const homeKnowledgeFiles = await loadUserKnowledgeFiles({ fs, logger })
+  const homeKnowledgeFiles = await loadUserKnowledgeFiles({ fs, logger, homeDir })
   const userKnowledgeFiles = {
     ...homeKnowledgeFiles,
     ...providedUserKnowledgeFiles,
   }
 
-  // Load skills from project and home directories
+  // Metadata and skills share the captured root without admitting workspace IO.
+  const contextCwd = cwd ?? params.contextCwd ?? process.cwd()
   const skills = await loadSkills({
-    cwd: cwd ?? process.cwd(),
+    cwd: contextCwd,
     skillsPath: skillsDir,
+    homeDir,
+    includeGlobalSkills,
     verbose: false,
   })
 
   const initialState = getInitialSessionState({
-    projectRoot: cwd ?? process.cwd(),
-    cwd: cwd ?? process.cwd(),
+    projectRoot: contextCwd,
+    cwd: contextCwd,
     fileTreeSource: projectFiles !== undefined ? 'virtual' : 'live',
     fileTree,
     fileTokenScores,
@@ -887,7 +878,7 @@ export async function initialSessionState(
     gitChanges,
     changesSinceLastChat: {},
     shellConfigFiles: {},
-    systemInfo: getSystemInfo(),
+    systemInfo: getSystemInfo(undefined, { homeDir }),
   })
 
   // Hydrate durable task memory from previous sessions when enabled. Any
@@ -929,6 +920,8 @@ export async function initialSessionState(
 export async function generateInitialRunState({
   cwd,
   skillsDir,
+  homeDir,
+  includeGlobalSkills,
   projectFiles,
   knowledgeFiles,
   userKnowledgeFiles,
@@ -938,10 +931,13 @@ export async function generateInitialRunState({
   fs,
   persistentMemory,
   workspaceMoves,
+  executionContext,
   logger,
 }: {
   cwd: string
   skillsDir?: string
+  homeDir?: string | null
+  includeGlobalSkills?: boolean
   projectFiles?: Record<string, string>
   knowledgeFiles?: Record<string, string>
   userKnowledgeFiles?: Record<string, string>
@@ -953,12 +949,15 @@ export async function generateInitialRunState({
   persistentMemory?: boolean
   /** Known file moves used to rebind persisted evidence paths at hydration. */
   workspaceMoves?: WorkspaceMoveRecord[]
+  executionContext?: ExecutionAdapterContext
   logger?: Logger
 }): Promise<RunState> {
   return {
     sessionState: await initialSessionState({
       cwd,
       skillsDir,
+      homeDir,
+      includeGlobalSkills,
       projectFiles,
       knowledgeFiles,
       userKnowledgeFiles,
@@ -968,6 +967,7 @@ export async function generateInitialRunState({
       fs,
       persistentMemory,
       workspaceMoves,
+      executionContext,
       logger,
     }),
     output: {
@@ -1079,6 +1079,12 @@ export async function applyOverridesToSessionState(
   cwd: string | undefined,
   baseSessionState: SessionState,
   overrides: {
+    /** Current captured metadata root; does not enable workspace discovery. */
+    contextCwd?: string
+    homeDir?: string | null
+    includeGlobalSkills?: boolean
+    skillsDir?: string
+    userKnowledgeFiles?: Record<string, string>
     projectFiles?: Record<string, string>
     projectContextMode?: 'paths' | 'symbols'
     knowledgeFiles?: Record<string, string>
@@ -1099,6 +1105,9 @@ export async function applyOverridesToSessionState(
     ...baseSessionState,
     fileContext: { ...baseSessionState.fileContext },
     mainAgentState: copyAgentStateForResume(baseSessionState.mainAgentState),
+  }
+  if (overrides.contextCwd !== undefined) {
+    sessionState.fileContext.cwd = cwd ?? overrides.contextCwd
   }
 
   // Runtime guard for the targeted-copy contract (dev/test only): freeze the
@@ -1190,6 +1199,46 @@ export async function applyOverridesToSessionState(
   // Apply knowledgeFiles override
   if (overrides.knowledgeFiles !== undefined) {
     sessionState.fileContext.knowledgeFiles = overrides.knowledgeFiles
+  }
+
+  if (overrides.homeDir !== undefined) {
+    // Persisted sessions do not distinguish automatically loaded home files
+    // from caller values at those same keys. Refresh that namespace from the
+    // current policy; callers can explicitly supply an override again.
+    const retained = Object.fromEntries(Object.entries(
+      baseSessionState.fileContext.userKnowledgeFiles ?? {},
+    ).filter(([key]) => !(key.startsWith('~/.') &&
+      KNOWLEDGE_FILE_NAMES_LOWERCASE.includes(key.slice(3).toLowerCase()))))
+    const homeKnowledgeFiles = await loadUserKnowledgeFiles({
+      fs: runtime?.fs ?? (require('fs') as typeof fsType).promises,
+      logger: runtime?.logger ?? { debug() {}, info() {}, warn() {}, error() {} },
+      homeDir: overrides.homeDir,
+    })
+    sessionState.fileContext.userKnowledgeFiles = {
+      ...retained,
+      ...homeKnowledgeFiles,
+      ...overrides.userKnowledgeFiles,
+    }
+    sessionState.fileContext.systemInfo = {
+      ...sessionState.fileContext.systemInfo,
+      homedir: overrides.homeDir ?? '',
+    }
+  } else if (overrides.userKnowledgeFiles !== undefined) {
+    sessionState.fileContext.userKnowledgeFiles = {
+      ...sessionState.fileContext.userKnowledgeFiles,
+      ...overrides.userKnowledgeFiles,
+    }
+  }
+
+  if (overrides.contextCwd !== undefined || overrides.homeDir !== undefined ||
+    overrides.includeGlobalSkills !== undefined || overrides.skillsDir !== undefined) {
+    sessionState.fileContext.skills = await loadSkills({
+      cwd: cwd ?? overrides.contextCwd ?? baseSessionState.fileContext.cwd,
+      homeDir: overrides.homeDir,
+      includeGlobalSkills: overrides.includeGlobalSkills,
+      skillsPath: overrides.skillsDir,
+      verbose: false,
+    })
   }
 
   // Apply agentDefinitions override (merge by id, last-in wins)

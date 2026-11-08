@@ -47,7 +47,7 @@
  *       identity reads vs the shipped bounded read window; CASE 12b is the
  *       map-then-join retention contract row)
  *   diagnostic-runner-timeout-no-sigkill-escalation ... CASE 13 (contract row —
- *       bare SIGTERM vs the shipped SIGTERM→SIGKILL escalation on a
+ *       bare SIGTERM vs the shipped deadline SIGKILL on a
  *       SIGTERM-ignoring child)
  *
  * X-2 additions — absolute "(after only)" rows (pure timing observations: no
@@ -129,6 +129,7 @@ import {
 import { LRUCache } from '../common/src/util/lru-cache'
 import { hashIdentityFileBytes } from '../sdk/src/tools/get-change-review-bundle'
 import { mapWithConcurrency } from '../sdk/src/tools/concurrency'
+import { createDirectHostExecution } from '../sdk/src/host-execution'
 
 /** Fixed measurement baseline: identical constants for before and after rows. */
 const RUNS = 5
@@ -1752,95 +1753,129 @@ async function runCase12(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
- * Contract row for the diagnostic command runner's timeout escalation
+ * Contract row for the diagnostic command runner's deadline termination
  * (RF: diagnostic-runner-timeout-no-sigkill-escalation). The child ignores
  * SIGTERM and exits on its own only after CASE13_CHILD_EXIT_MS. The before
  * shape is the pre-fix timeout block: a bare `child.kill()` (SIGTERM) with
  * no escalation, so a SIGTERM-ignoring child is only reaped at its natural
  * exit — with live pipes on the hot file-change path. The after shape is the
- * SHIPPED createDiagnosticCommandRunner with a short injected grace: the
- * deadline sends SIGTERM and settles the result immediately, and the SIGKILL
- * escalation reaps the child at deadline + grace.
+ * SHIPPED createDiagnosticCommandRunner: an authenticated resource deadline
+ * sends SIGKILL and settles the result immediately. Cancellation grace does
+ * not extend an exhausted resource deadline.
  *
  * The evidenced property is the child's wall-clock reaping, so the
  * assertions (run outside any timed section and able to fail) read the
  * child's own pid and poll until the process is gone: the shipped runner
- * must reap the child near deadline + grace while the pre-fix shape holds it
+ * must reap the child near the deadline while the pre-fix shape holds it
  * to its natural exit. Timing rows repeat both shapes over the same child
  * workload for scale evidence; a production-toolchain reap-latency benchmark
  * would be machine-dependent by nature.
  */
 const CASE13_CHILD_EXIT_MS = 1500
 const CASE13_DEADLINE_MS = 200
-const CASE13_GRACE_MS = 200
 
 async function runCase13(): Promise<void> {
   const dir = mkdtempSync(path.join(tmpdir(), 'perf-case13-'))
-  const childPath = path.join(dir, 'ignore-sigterm.cjs')
+  const childPath = path.join(dir, 'cargo')
   const pidFile = path.join(dir, 'child.pid')
   writeFileSync(
     childPath,
     [
+      '#!' + process.execPath,
+      "process.on('SIGTERM', () => {})",
       "require('node:fs').writeFileSync(" +
         JSON.stringify(pidFile) +
         ', String(process.pid))',
-      "process.on('SIGTERM', () => {})",
       `setTimeout(() => process.exit(0), ${CASE13_CHILD_EXIT_MS})`,
     ].join('\n'),
+    { mode: 0o755 },
   )
   /** Wall-clock ms from spawn start until the child process is reaped. */
   const reapMs = async (shipped: boolean): Promise<number> => {
     rmSync(pidFile, { force: true })
-    const started = performance.now()
-    if (shipped) {
-      const runCommand = createDiagnosticCommandRunner({
-        spawn: spawn as unknown as CodebuffSpawn,
-        sigtermGraceMs: CASE13_GRACE_MS,
-      })
-      // The runner settles its result AT the deadline; the child's reaping is
-      // observed below through its pid, not through the runner's promise.
-      void runCommand({
-        command: `${process.execPath} ${childPath}`,
-        cwd: dir,
-        timeoutSeconds: CASE13_DEADLINE_MS / 1000,
-      }).catch(() => {})
-    } else {
-      // Pre-fix shape: bare kill() at the deadline, no escalation.
-      const child = spawn(process.execPath, [childPath])
-      const timer = setTimeout(() => {
-        try {
-          child.kill()
-        } catch {
-          /* already gone */
-        }
-      }, CASE13_DEADLINE_MS)
-      timer.unref?.()
-      void new Promise<void>((resolve) => child.on('close', resolve)).catch(
-        () => {},
-      )
+    const stop = new AbortController()
+    let launches = 0
+    let terminationSignal: string | null | undefined
+    const fixtureSpawn: CodebuffSpawn = (command, argv, options) => {
+      if (
+        command !== 'cargo' ||
+        JSON.stringify(argv) !== JSON.stringify(['check', '--message-format=json']) ||
+        options?.env?.PATH !== dir || options.cwd !== dir
+      ) throw new Error('CASE 13 received unexpected diagnostic argv, cwd or child PATH')
+      launches++
+      const child = spawn(command, [...argv ?? []], options ?? {})
+      child.once('exit', (_code, signal) => { terminationSignal = signal })
+      return child
     }
-    const giveUpAt = started + CASE13_CHILD_EXIT_MS + 5_000
-    let pid = -1
-    const sleepMs = (ms: number): Promise<void> =>
-      new Promise((resolve) => setTimeout(resolve, ms))
-    while (pid === -1 && performance.now() < giveUpAt) {
-      try {
-        pid = Number.parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
-      } catch {
+    const host = shipped ? createDirectHostExecution({
+      cwd: dir, spawn: fixtureSpawn, signal: stop.signal, inheritEnv: false, env: { PATH: dir }, approvalMode: 'allow-all',
+      hostConfiguration: {
+        environment: { PATH: dir }, platform: process.platform, invocationCwd: dir, projectRoot: dir,
+        home: { kind: 'none' }, globals: { kind: 'disabled' }, selection: { kind: 'none' },
+        trust: { ancestorConfig: false, projectReadableRoots: false },
+      },
+    }) : undefined
+    if (host && !host.ok) throw new Error(`CASE 13 execution setup failed: ${host.cause}`)
+    const started = performance.now()
+    try {
+      if (shipped) {
+        const runCommand = createDiagnosticCommandRunner({
+          spawn: fixtureSpawn,
+        })
+        // The runner settles its result AT the deadline; the child's reaping is
+        // observed below through its pid, not through the runner's promise.
+        const result = await runCommand({
+          command: 'cargo check --message-format=json',
+          cwd: dir,
+          timeoutSeconds: CASE13_DEADLINE_MS / 1000,
+          executionContext: host?.ok ? host.value.executionContext : undefined,
+        })
+        if (launches !== 1 || !result.timedOut || result.executionRefusal?.reason !== 'deadline-exhausted')
+          throw new Error(`CASE 13 diagnostic did not launch and exhaust its deadline: ${JSON.stringify({ launches, result })}`)
+      } else {
+        // Pre-fix shape: bare kill() at the deadline, no escalation.
+        const child = spawn(process.execPath, [childPath])
+        const timer = setTimeout(() => {
+          try {
+            child.kill()
+          } catch {
+            /* already gone */
+          }
+        }, CASE13_DEADLINE_MS)
+        timer.unref?.()
+        void new Promise<void>((resolve) => child.on('close', resolve)).catch(
+          () => {},
+        )
+      }
+      const giveUpAt = started + CASE13_CHILD_EXIT_MS + 5_000
+      let pid = -1
+      const sleepMs = (ms: number): Promise<void> =>
+        new Promise((resolve) => setTimeout(resolve, ms))
+      while (pid === -1 && performance.now() < giveUpAt) {
+        try {
+          pid = Number.parseInt(readFileSync(pidFile, 'utf8').trim(), 10)
+        } catch {
+          await sleepMs(10)
+        }
+      }
+      if (pid === -1) return Number.POSITIVE_INFINITY
+      for (;;) {
+        let gone = false
+        try {
+          process.kill(pid, 0)
+        } catch {
+          gone = true
+        }
+        if (gone && (!shipped || terminationSignal !== undefined)) {
+          if (shipped && terminationSignal !== 'SIGKILL')
+            throw new Error(`CASE 13 deadline child exited without SIGKILL: ${terminationSignal}`)
+          return performance.now() - started
+        }
+        if (performance.now() > giveUpAt) return Number.POSITIVE_INFINITY
         await sleepMs(10)
       }
-    }
-    if (pid === -1) return Number.POSITIVE_INFINITY
-    for (;;) {
-      let gone = false
-      try {
-        process.kill(pid, 0)
-      } catch {
-        gone = true
-      }
-      if (gone) return performance.now() - started
-      if (performance.now() > giveUpAt) return Number.POSITIVE_INFINITY
-      await sleepMs(10)
+    } finally {
+      stop.abort(new Error('CASE 13 observation completed'))
     }
   }
 
@@ -1850,34 +1885,34 @@ async function runCase13(): Promise<void> {
     const shippedReap = await reapMs(true)
     // Variance rationale for the ceiling slack (reviewer finding
     // case13-reap-slack-widened-undocumented): the +2_000ms margin over
-    // deadline+grace is CI-jitter tolerance for this machine-dependent
+    // deadline is CI-jitter tolerance for this machine-dependent
     // reap-latency observation (10ms process.kill(pid, 0) polling plus fork
     // and SIGKILL scheduling variance on loaded runners), NOT the guarded
     // contract. The falsifiable assertion is the ordering check below: an
-    // escalation path that regresses enough to reap between +1s and +2s past
+    // termination path that regresses enough to reap between +1s and +2s past
     // the old bound lands AFTER the child's CASE13_CHILD_EXIT_MS natural
     // exit, so `shippedReap >= bareReap` still rejects it. The widened
     // ceiling only prevents a measurement-side scheduler hiccup from
-    // false-failing a healthy escalation; it does not admit any failure mode
+    // false-failing healthy deadline termination; it does not admit any failure mode
     // the ordering check would have caught.
     if (
       bareReap < CASE13_CHILD_EXIT_MS * 0.8 ||
-      shippedReap > CASE13_DEADLINE_MS + CASE13_GRACE_MS + 2_000 ||
+      shippedReap > CASE13_DEADLINE_MS + 2_000 ||
       shippedReap >= bareReap
     ) {
       throw new Error(
-        `CASE 13 contract failure: SIGTERM-ignoring child reap latency — pre-fix bare-kill shape ${bareReap}ms (expected >= ${Math.round(CASE13_CHILD_EXIT_MS * 0.8)}ms: held to the child's natural exit), shipped escalated shape ${shippedReap}ms (expected <= ${CASE13_DEADLINE_MS + CASE13_GRACE_MS + 2_000}ms: reaped by the SIGKILL escalation)`,
+        `CASE 13 contract failure: SIGTERM-ignoring child reap latency — pre-fix bare-kill shape ${bareReap}ms (expected >= ${Math.round(CASE13_CHILD_EXIT_MS * 0.8)}ms: held to the child's natural exit), shipped deadline shape ${shippedReap}ms (expected <= ${CASE13_DEADLINE_MS + 2_000}ms: reaped by deadline SIGKILL)`,
       )
     }
     const bareMs = await measureAsync(() => reapMs(false), 1, 2)
-    const escalatedMs = await measureAsync(() => reapMs(true), 1, 2)
+    const deadlineMs = await measureAsync(() => reapMs(true), 1, 2)
     report({
       case: 'CASE 13',
       finding: 'diagnostic-runner-timeout-no-sigkill-escalation',
       before: bareMs,
-      after: escalatedMs,
+      after: deadlineMs,
       ratioBasis: 'contract',
-      note: `SIGTERM-ignoring child (${CASE13_CHILD_EXIT_MS}ms natural exit, ${CASE13_DEADLINE_MS}ms deadline, ${CASE13_GRACE_MS}ms grace): before is the pre-fix bare-kill shape (child held to its natural exit), after is the shipped SIGTERM→SIGKILL escalation — the columns bound different failure modes BY DESIGN, so no ratio is printed; the reap-latency contract is asserted above and can fail`,
+      note: `SIGTERM-ignoring child (${CASE13_CHILD_EXIT_MS}ms natural exit, ${CASE13_DEADLINE_MS}ms deadline): before is the pre-fix bare-kill shape (child held to its natural exit), after is the shipped immediate deadline SIGKILL over an authenticated cargo invocation — the columns bound different failure modes BY DESIGN, so no ratio is printed; launch, deadline result, termination signal and reap latency are asserted above and can fail`,
     })
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -2092,7 +2127,7 @@ export async function runPerfGuardsBaseline(
     '     a SIGTERM-ignoring diagnostic child is reaped by the shipped SIGKILL',
   )
   console.log(
-    '     escalation near deadline + grace, while the pre-fix bare-kill shape held',
+    '     at its authenticated deadline, while the pre-fix bare-kill shape held',
   )
   console.log(
     '     it to its natural exit with live pipes. The columns bound different',

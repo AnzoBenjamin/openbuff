@@ -1,8 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
+import path from 'node:path'
 
 import { LocalHarnessStore } from './local-harness-store'
+import { executionBindingTuple } from '@codebuff/common/util/execution-context'
 
 import type { LocalHarnessRecord } from './local-harness-store'
+import type { CapturedExecutable, StoredExecutionAuthorityV2, TargetClassification } from '@codebuff/common/types/contracts/execution-context'
 
 type RecordScope = {
   repositoryId: string
@@ -18,6 +21,7 @@ export type ApprovalRecord = LocalHarnessRecord & {
   target: string
   commandHash: string
   executionContextHash?: string
+  executionAuthority?: StoredExecutionAuthorityV2
   grantedBy: 'user'
   expiresAt?: string
   consumedAt?: string
@@ -50,9 +54,12 @@ export class HarnessApprovalService {
       target: string
       commandHash: string
       executionContextHash?: string
+      executionAuthority?: StoredExecutionAuthorityV2
       expiresAt?: string
     },
   ): ApprovalRecord {
+    if (params.executionAuthority && (!isStoredExecutionAuthorityV2(params.executionAuthority) ||
+      params.executionAuthority.binding.commandHash !== params.commandHash)) throw new Error('Invalid stored execution authority v2.')
     const timestamp = now()
     return this.store.put('approvals', {
       schemaVersion: 1,
@@ -67,6 +74,7 @@ export class HarnessApprovalService {
       ...(params.executionContextHash
         ? { executionContextHash: params.executionContextHash }
         : {}),
+      ...(params.executionAuthority ? { executionAuthority: params.executionAuthority } : {}),
       grantedBy: 'user',
       ...(params.expiresAt ? { expiresAt: params.expiresAt } : {}),
     }) as ApprovalRecord
@@ -81,6 +89,7 @@ export class HarnessApprovalService {
     target: string
     commandHash: string
     executionContextHash?: string
+    executionAuthority?: StoredExecutionAuthorityV2
     snapshotId: string
   }): ApprovalRecord {
     // Race fix: read + consume must be one critical section. The read outside
@@ -116,6 +125,13 @@ export class HarnessApprovalService {
         existing.snapshotId !== params.snapshotId
       ) {
         throw new Error('Approval scope does not match the requested action.')
+      }
+      if (existing.executionAuthority !== undefined || params.executionAuthority !== undefined) {
+        if (!isStoredExecutionAuthorityV2(existing.executionAuthority) || !isStoredExecutionAuthorityV2(params.executionAuthority) ||
+          existing.executionAuthority.keyEpochId !== params.executionAuthority.keyEpochId ||
+          existing.executionAuthority.bindingDigest !== params.executionAuthority.bindingDigest ||
+          JSON.stringify(executionBindingTuple(existing.executionAuthority.binding)) !== JSON.stringify(executionBindingTuple(params.executionAuthority.binding)))
+          throw new Error('Approval execution authority v2 does not match the requested target.')
       }
       return this.store.put(
         'approvals',
@@ -170,6 +186,37 @@ export type ClassifiedHarnessAction = ClassifiedHarnessEffect & {
   parseStatus?: HarnessParseStatus
   parseReason?: string
   executionContextHash?: string
+  executionAuthority?: StoredExecutionAuthorityV2
+}
+
+const bindingFields = ['format', 'keyEpochId', 'commandHash', 'executableArgvDigest', 'effectRosterDigest', 'parseStatus',
+  'hostContextId', 'configurationSnapshotId', 'correlationDigest', 'cwd', 'projectRoot', 'allowedPaths',
+  'profileRequestDigest', 'selectedBackendDigest', 'environmentDigest', 'credentialRosterId', 'destinationId',
+  'delegationDigest', 'requestId', 'resourceId', 'resourceGeneration', 'ownerId', 'leaseId', 'processType', 'mode',
+  'detachTransferId', 'deadlinesDigest', 'adapterOptionsDigest', 'launchId'] as const
+
+export function isStoredExecutionAuthorityV2(input: unknown): input is StoredExecutionAuthorityV2 {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return false
+  const value = input as Record<string, unknown>
+  if (Object.keys(value).length !== 6 || value.version !== 2 || value.bindingFormat !== 'openbuff.execution.v2' ||
+    value.usage !== 'one-target-dispatch' || typeof value.keyEpochId !== 'string' || !value.keyEpochId ||
+    typeof value.bindingDigest !== 'string' || !/^[a-f0-9]{64}$/.test(value.bindingDigest) ||
+    !value.binding || typeof value.binding !== 'object' || Array.isArray(value.binding)) return false
+  const binding = value.binding as Record<string, unknown>
+  if (Object.keys(binding).length !== bindingFields.length || bindingFields.some(name => !(name in binding)) ||
+    binding.format !== 'openbuff.execution.v2' || binding.keyEpochId !== value.keyEpochId ||
+    !['complete', 'unsupported', 'malformed'].includes(String(binding.parseStatus)) ||
+    !['SYNC', 'BACKGROUND'].includes(String(binding.processType)) || !['assistant', 'user'].includes(String(binding.mode)) ||
+    (binding.detachTransferId !== null && (typeof binding.detachTransferId !== 'string' || !binding.detachTransferId)) ||
+    typeof binding.cwd !== 'string' || !path.isAbsolute(binding.cwd) ||
+    typeof binding.projectRoot !== 'string' || !path.isAbsolute(binding.projectRoot) ||
+    !Array.isArray(binding.allowedPaths) || binding.allowedPaths.some(entry => typeof entry !== 'string' || !path.isAbsolute(entry) || entry.includes('\0')))
+    return false
+  if (['commandHash', 'executableArgvDigest', 'effectRosterDigest', 'correlationDigest', 'profileRequestDigest',
+    'selectedBackendDigest', 'environmentDigest', 'delegationDigest', 'deadlinesDigest', 'adapterOptionsDigest']
+    .some(name => typeof binding[name] !== 'string' || !/^[a-f0-9]{64}$/.test(binding[name] as string))) return false
+  return bindingFields.every(name => name === 'allowedPaths' || name === 'detachTransferId' ||
+    (typeof binding[name] === 'string' && binding[name] !== '' && !binding[name].includes('\0')))
 }
 
 export type HarnessApprovalRequest = ClassifiedHarnessAction & {
@@ -1077,6 +1124,248 @@ export function classifyTerminalHarnessAction(
     | undefined => classifySegmentsLikeCommand(rawCommand, 0)
   const result = classify()
   return result ? { ...result, commandHash, rawCommand } : undefined
+}
+
+function exactArgv(args: readonly string[], expected: readonly string[]): boolean {
+  return args.length === expected.length && args.every((arg, i) => arg === expected[i])
+}
+
+type GitReadQueryKind = 'identity' | 'working-tree' | 'query'
+const gitReadGuards = Object.freeze([
+  '--no-pager', '--no-optional-locks', '--no-lazy-fetch', '-c', 'core.fsmonitor=false',
+])
+const gitDiffGuards = Object.freeze(['--no-ext-diff', '--no-textconv', '--submodule=short'])
+
+/** These query shapes come from the Git adapters, not a general Git option parser. */
+function gitReadQueryKind(args: readonly string[]): GitReadQueryKind | undefined {
+  const separator = args.indexOf('--')
+  const query = separator < 0 ? args : args.slice(0, separator)
+  const pathQuery = ['status', 'diff'].includes(query[0] ?? '')
+  if (separator >= 0 && !pathQuery) return undefined
+  if (separator < 0 && [
+    ['rev-parse', '--show-toplevel'], ['rev-parse', '--git-common-dir'], ['rev-parse', '--git-dir'],
+  ].some(expected => exactArgv(query, expected))) return 'identity'
+  const workingTreeQueries = [
+    ['status'], ['status', '--porcelain'], ['status', '--porcelain', '-uall'],
+    ['status', '--short', '--branch'],
+    ['diff'], ['diff', '--no-color'], ['diff', '--binary', 'HEAD'],
+  ]
+  if (workingTreeQueries.some(expected => exactArgv(query, expected))) return 'working-tree'
+  const queries = [
+    ['diff', '--cached'],
+    ['diff', '--staged', '--no-color'], ['diff', '--cached', '--check'],
+    ['diff', '--cached', '-U0'], ['diff', '--cached', '--name-only', '-z'],
+    ['diff', '--no-color', 'HEAD~1', 'HEAD'],
+    ['branch', '--show-current'],
+    ['rev-parse', 'HEAD'], ['rev-parse', 'HEAD~1'],
+    ['rev-parse', '--verify', 'HEAD'], ['rev-parse', '--verify', 'HEAD~1'],
+    ['rev-parse', '--abbrev-ref', 'HEAD'],
+    ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
+    ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
+    ['shortlog', 'HEAD~10..HEAD'],
+  ]
+  if (queries.some(expected => exactArgv(query, expected))) return 'query'
+  // The bundle adapter passes one validated reference, never another option.
+  if (separator < 0 && args.length === 3 && args[0] === 'merge-base' &&
+    args[1] === 'HEAD' && /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/.test(args[2])) return 'query'
+  return undefined
+}
+
+function guardedGitReadQueryKind(args: readonly string[]): GitReadQueryKind | undefined {
+  if (!exactArgv(args.slice(0, gitReadGuards.length), gitReadGuards)) return undefined
+  const query = args.slice(gitReadGuards.length)
+  if (query[0] === 'diff') {
+    if (!exactArgv(query.slice(1, 1 + gitDiffGuards.length), gitDiffGuards)) return undefined
+    return gitReadQueryKind([query[0], ...query.slice(1 + gitDiffGuards.length)])
+  }
+  return gitReadQueryKind(query)
+}
+
+/** Host query adapters call this before capture; user mutations and unknown vectors retain their exact bytes. */
+export function prepareHarnessGitReadArgv(args: readonly string[]): string[] {
+  if (guardedGitReadQueryKind(args)) return [...args]
+  const kind = gitReadQueryKind(args)
+  // Repository bootstrap permits deliberately require these exact identity vectors.
+  if (!kind || kind === 'identity') return [...args]
+  return [...gitReadGuards, args[0], ...(args[0] === 'diff' ? gitDiffGuards : []), ...args.slice(1)]
+}
+
+/** Check a bounded option vocabulary without turning tokens into shell text. */
+function supportedReadOptions(
+  args: readonly string[],
+  switches: readonly string[],
+  values: Readonly<Record<string, 'text' | 'count'>> = {},
+  requirePatternAfterSeparator = false,
+): boolean {
+  const validValue = (value: string, kind: 'text' | 'count') =>
+    kind === 'text' ? value.length > 0 : /^\d+$/.test(value)
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    // A separator consumed as an option value above is never reconsidered here.
+    if (arg === '--') return !requirePatternAfterSeparator || i + 1 < args.length
+    if (!arg.startsWith('-') || arg === '-') continue
+    if (switches.includes(arg)) continue
+    const equals = arg.indexOf('=')
+    const name = equals < 0 ? arg : arg.slice(0, equals)
+    const kind = values[name]
+    if (kind) {
+      const value = equals < 0 ? args[++i] : arg.slice(equals + 1)
+      if (value === undefined || !validValue(value, kind)) return false
+      continue
+    }
+    // Only the explicitly supported count switches have an attached short form.
+    const short = arg.slice(0, 2)
+    if (!arg.startsWith('--') && values[short] === 'count' && validValue(arg.slice(2), 'count')) continue
+    return false
+  }
+  return !requirePatternAfterSeparator
+}
+
+function supportedOrdinaryReadArgv(program: string, args: readonly string[]): boolean {
+  if (program === 'rg') {
+    // Both search adapters disable ambient ripgrep configuration and terminate options.
+    if (args[0] !== '--no-config') return false
+    return supportedReadOptions(args, [
+      '--no-config', '-n', '--line-number', '--json', '-l', '--files-with-matches',
+      '-i', '--ignore-case', '-S', '--smart-case', '-s', '--case-sensitive',
+      '-w', '--word-regexp', '-F', '--fixed-strings', '-U', '--multiline', '--multiline-dotall',
+    ], { '-g': 'text', '--glob': 'text', '-t': 'text', '--type': 'text', '-T': 'text', '--type-not': 'text',
+      '-A': 'count', '--after-context': 'count', '-B': 'count', '--before-context': 'count', '-C': 'count', '--context': 'count' }, true)
+  }
+  if (program === 'grep') return args.length > 0 && supportedReadOptions(args,
+    ['-n', '--line-number', '-i', '--ignore-case', '-E', '--extended-regexp', '-F', '--fixed-strings', '-l', '--files-with-matches'],
+    { '-e': 'text', '--regexp': 'text' })
+  if (program === 'echo') return supportedReadOptions(args, ['-n', '-e', '-E'])
+  if (program === 'true' || program === 'false') return args.length === 0
+  if (program === 'pwd') return args.length === 0 || exactArgv(args, ['-L']) || exactArgv(args, ['-P'])
+  if (program === 'ls') return supportedReadOptions(args, ['-l', '-a', '-la', '-al', '-h', '-lah', '-alh', '-1', '--all'])
+  if (program === 'cat') return supportedReadOptions(args, ['-n', '--number'])
+  if (program === 'head' || program === 'tail') return supportedReadOptions(args, [],
+    { '-n': 'count', '--lines': 'count', '-c': 'count', '--bytes': 'count' })
+  if (program === 'wc') return supportedReadOptions(args, ['-l', '--lines', '-w', '--words', '-c', '--bytes', '-m', '--chars'])
+  if (program === 'find') return args.length > 0 && args.every(arg => arg.length > 0 && !arg.startsWith('-'))
+  return false
+}
+
+/** Analyze exact tokens; only an explicit supported shell payload is parsed as shell bytes. */
+export function classifyHarnessArgv(params: { executable: string; argv: readonly string[] }): ClassifiedHarnessAction | undefined {
+  const identity = JSON.stringify(['openbuff.argv-command.v1', params.executable, params.argv])
+  const commandHash = hashCommand(identity)
+  const unsupported = (reason: string): ClassifiedHarnessAction => ({ ...unsupportedSegment(identity, reason), commandHash,
+    effects: [{ action: 'arbitrary-code', target: identity }] })
+  if (!params.executable || params.executable.includes('\0') || !Array.isArray(params.argv) ||
+    params.argv.some(arg => typeof arg !== 'string' || arg.includes('\0')))
+    return { ...unsupported('Invalid executable or argv'), parseStatus: 'malformed' }
+  const program = params.executable.split(/[\\/]/).at(-1)!.replace(/\.exe$/i, '').toLowerCase()
+  const args = [...params.argv]
+  const effect = (action: ClassifiedHarnessEffect['action'], target = identity, extra: Partial<ClassifiedHarnessEffect> = {}): ClassifiedHarnessAction =>
+    ({ action, target, ...extra, commandHash, parseStatus: 'complete', effects: [{ action, target, ...extra }] })
+  if (args.length === 1 && args[0] === '--version' &&
+    ['node', 'bun', 'deno', 'python', 'python3', 'ruby', 'perl', 'git', 'cargo', 'rustc', 'go', 'dotnet', 'java', 'javac',
+      'swift', 'dart', 'flutter', 'elixir', 'mix', 'php', 'composer', 'semgrep', 'npm', 'pnpm', 'yarn', 'bash', 'zsh', 'sh', 'clang', 'gcc'].includes(program))
+    return undefined
+  if (['bash', 'zsh', 'dash', 'ksh', 'sh'].includes(program)) {
+    const flag = args.findIndex(arg => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg))
+    if (flag !== 0 || !/^-[euxv]*c[euxv]*$/.test(args[0] ?? '') || args[flag + 1] === undefined)
+      return unsupported('Shell startup options or invocation have no supported exact -c payload')
+    const classified = classifyTerminalHarnessAction(args[flag + 1])
+    if (!classified) return undefined
+    const effects = (classified.effects ?? [effectOnly(classified)]).map(entry => ({ ...entry }))
+    return { ...classified, commandHash, rawCommand: undefined, effects }
+  }
+  if (['cmd', 'powershell', 'pwsh', 'eval', 'env', 'sudo', 'doas', 'time', 'timeout', 'nice', 'xargs'].includes(program))
+    return unsupported('Wrapper or interpreter semantics require a separately supported token adapter')
+  if (['node', 'bun', 'deno', 'python', 'python3', 'ruby', 'perl'].includes(program)) {
+    if (args.some(arg => ['-e', '--eval', '-c'].includes(arg) || arg.startsWith('--eval='))) return effect('arbitrary-code')
+    // A script file or stdin can execute arbitrary code; its contents are not shell tokens.
+    if (program !== 'bun' || !['install', 'add', 'remove', 'update', 'publish'].includes(args[0] ?? ''))
+      return unsupported('Interpreter script, module or stdin execution is outside the exact-token analysis tier')
+  }
+  if (program === 'git') {
+    const readKind = guardedGitReadQueryKind(args)
+    if (readKind === 'working-tree') return unsupported('Git working-tree queries can execute configured clean/process filters or submodule helpers even with diff, pager and fsmonitor helpers disabled')
+    if (readKind || gitReadQueryKind(args) === 'identity') return undefined
+    const subcommand = args[0]
+    if (!subcommand || subcommand.startsWith('-')) return unsupported('Git global options or missing subcommand can change command context')
+    if (subcommand === 'push') {
+      const pushArgs = args.slice(1)
+      const positional = pushArgs.filter(arg => !arg.startsWith('-'))
+      const remote = positional[0], refspec = positional[1]
+      const remoteRef = refspec?.includes(':') ? refspec.slice(refspec.lastIndexOf(':') + 1) : refspec
+      const branch = remoteRef && !/^(?:HEAD|@\{-?\d+\})$/i.test(remoteRef) ? remoteRef.replace(/^\+/, '').replace(/^refs\/heads\//, '') : undefined
+      const pushRisks = new Set<HarnessPushRisk>()
+      for (const arg of pushArgs) {
+        if (/^--force(?:$|=|-with-lease|-if-includes)/.test(arg) || /^-[^-]*f/.test(arg) || arg.startsWith('+')) pushRisks.add('force')
+        if (arg === '--delete' || /^-[^-]*d/.test(arg) || arg.startsWith(':')) pushRisks.add('delete')
+        if (arg === '--mirror') pushRisks.add('mirror')
+        if (/^--(?:all|tags|prune)$/.test(arg)) pushRisks.add('all-refs')
+        if (arg.includes(':') && arg !== remote) pushRisks.add('refspec')
+        // Wildcards/refspec expansion is Git semantics. Literal '$' or ';' is never shell syntax here.
+        if (/[*?\[\]]/.test(arg)) pushRisks.add('dynamic-target')
+        if (arg.startsWith('-') && !/^(?:-u|--set-upstream|--force(?:=.*)?|--force-with-lease(?:=.*)?|--force-if-includes|--delete|--mirror|--all|--tags|--prune|-[ufd]+)$/.test(arg)) pushRisks.add('unknown-options')
+      }
+      if (positional.length > 2) pushRisks.add('refspec')
+      const simple = pushArgs.every(arg => arg === '-u' || arg === '--set-upstream' || !arg.startsWith('-'))
+      return effect('push', simple && remote && branch ? `${remote}/${branch}` : identity,
+        { ...(branch ? { branch } : {}), ...(pushRisks.size ? { pushRisks: [...pushRisks] } : {}) })
+    }
+    if (subcommand === 'commit') return effect('commit')
+    if (subcommand === 'tag') return effect('release')
+    if ((subcommand === 'reset' && args.includes('--hard')) || (subcommand === 'clean' && args.some(arg => /^-[^-]*[fd]/.test(arg))) ||
+      (subcommand === 'checkout' && args.includes('--')) ||
+      (subcommand === 'restore' && (!args.includes('--staged') || args.some(arg => ['--worktree', '-W', '--source', '--overlay', '--patch', '-p'].includes(arg)))))
+      return effect('workspace-delete')
+    if (['status', 'diff', 'show', 'log', 'ls-files', 'rev-parse', 'symbolic-ref', 'merge-base', 'for-each-ref', 'ls-tree', 'check-ignore', 'check-attr', 'show-ref', 'rev-list', 'branch', 'remote', 'config', 'shortlog'].includes(subcommand))
+      return unsupported(`Git ${subcommand} requires a supported helper-disabled read-query vector; configuration or operands may execute external commands`)
+    return unsupported('Git subcommand may execute aliases, hooks or mutate state outside the supported token tier')
+  }
+  let operation = args[0]
+  if (['pnpm', 'bun'].includes(program) && operation === '--filter' && args[1] !== undefined) operation = args[2]
+  if (program === 'yarn' && operation === 'workspace' && args[1] !== undefined) operation = args[2]
+  const dependencyCommands: Record<string, readonly string[]> = {
+    npm: ['install', 'add', 'remove', 'update'], pnpm: ['install', 'add', 'remove', 'update'], yarn: ['install', 'add', 'remove', 'update', 'upgrade'], bun: ['install', 'add', 'remove', 'update'],
+    uv: ['add', 'remove', 'sync', 'install', 'update'], poetry: ['add', 'remove', 'sync', 'install', 'update'], pip: ['install', 'uninstall'], pip3: ['install', 'uninstall'],
+    cargo: ['add', 'rm', 'remove', 'fetch', 'update'], bundle: ['add', 'remove', 'install', 'update'], bundler: ['add', 'remove', 'install', 'update'], composer: ['require', 'remove', 'install', 'update'],
+  }
+  if (dependencyCommands[program]?.includes(operation ?? '') ||
+    (program === 'go' && (operation === 'get' || (operation === 'mod' && ['tidy', 'download'].includes(args[1] ?? '')))) ||
+    (program === 'dotnet' && (operation === 'restore' || (['add', 'remove'].includes(operation ?? '') && args[1] === 'package'))) ||
+    (program === 'swift' && operation === 'package' && ['resolve', 'update'].includes(args[1] ?? '')) ||
+    (['dart', 'flutter'].includes(program) && operation === 'pub' && ['add', 'remove', 'get', 'upgrade'].includes(args[1] ?? '')) ||
+    (program === 'mix' && ['deps.get', 'deps.update'].includes(operation ?? '')) ||
+    (['mvn', 'mvnw'].includes(program) && ['dependency:resolve', 'dependency:go-offline'].includes(operation ?? '')) ||
+    (['gradle', 'gradlew'].includes(program) && ['dependencies', 'buildEnvironment'].includes(operation ?? ''))) return effect('dependency-install')
+  if ((['npm', 'pnpm', 'yarn', 'bun', 'cargo'].includes(program) && operation === 'publish') ||
+    (program === 'gh' && operation === 'release' && ['create', 'delete', 'edit', 'upload'].includes(args[1] ?? ''))) return effect('release')
+  if (program === 'gh' && operation === 'pr' && ['create', 'merge', 'close', 'reopen', 'ready', 'review'].includes(args[1] ?? '')) return effect('pull-request')
+  if (['kubectl', 'helm', 'terraform', 'tofu', 'ansible', 'aws', 'gcloud', 'az', 'flyctl', 'vercel', 'heroku'].includes(program) ||
+    (['docker', 'podman'].includes(program) && (['push', 'login', 'run'].includes(operation ?? '') || (operation === 'compose' && args[1] === 'up') || (operation === 'system' && args[1] === 'prune'))) ||
+    (program === 'gh' && ((operation === 'workflow' && args[1] === 'run') || (operation === 'repo' && ['create', 'delete'].includes(args[1] ?? '')) ||
+      (operation === 'api' && args.some((arg, i) => ['-X', '--method'].includes(arg) && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(args[i + 1] ?? '')))))) return effect('deploy')
+  if (['ssh', 'scp', 'sftp', 'ftp', 'telnet', 'nc', 'ncat'].includes(program) ||
+    (['curl', 'wget'].includes(program) && args.some(arg => /^(?:--data(?:-binary)?|--form|--upload-file|--post-data)(?:$|=)/.test(arg) || /^-(?:d|F|T)/.test(arg)))) return effect('external-network')
+  if (['prisma', 'knex', 'flyway'].includes(program) && operation === 'migrate' ||
+    (['sequelize', 'rails'].includes(program) && operation === 'db:migrate') || (program === 'alembic' && operation === 'upgrade') ||
+    (program === 'liquibase' && operation === 'update')) return effect('migration')
+  if (program === 'rm' && args.some(arg => /^-[^-]*r/.test(arg))) return effect('workspace-delete')
+  if (program === 'find' && args.some(arg => ['-delete', '-exec', '-execdir', '-ok', '-okdir'].includes(arg))) return effect('workspace-delete')
+  if (supportedOrdinaryReadArgv(program, args) ||
+    (program === 'go' && exactArgv(args, ['version'])) || (program === 'java' && exactArgv(args, ['-version']))) return undefined
+  if (['echo', 'true', 'false', 'pwd', 'ls', 'rg', 'grep', 'cat', 'head', 'tail', 'wc', 'find'].includes(program))
+    return unsupported(`${program} options or operands are outside the supported read-query vectors`)
+  return unsupported('Unknown executable or programmable command semantics are outside the exact-token tier')
+}
+
+export function classifyCapturedTargetForExecution(captured: CapturedExecutable): TargetClassification {
+  const classified = captured.kind === 'shell' ? classifyTerminalHarnessAction(captured.shellCommandBytes) : classifyHarnessArgv(captured)
+  return {
+    format: 'openbuff.target-classification.v1',
+    classifierVersion: captured.kind === 'shell' ? 'b18-shell-adapter-v1' : 'b18-argv-adapter-v1',
+    invocationKind: captured.kind,
+    effects: classified ? classified.effects ?? [effectOnly(classified)] : [],
+    parseStatus: classified?.parseStatus ?? 'complete',
+    parseReason: classified?.parseStatus && classified.parseStatus !== 'complete' ? classified.parseReason ?? 'Unsupported exact invocation' : null,
+  }
 }
 
 export class ChangeOwnershipService {

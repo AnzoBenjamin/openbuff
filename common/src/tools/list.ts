@@ -35,7 +35,10 @@ import { readFilesParams } from './params/tool/read-files'
 import { readImageParams } from './params/tool/read-image'
 import { readOutlineParams } from './params/tool/read-outline'
 import { readSubtreeParams } from './params/tool/read-subtree'
-import { replaceRangeParams } from './params/tool/replace-range'
+import {
+  preparedRangeMutationSchema,
+  replaceRangeParams,
+} from './params/tool/replace-range'
 import { rewriteSymbolParams } from './params/tool/rewrite-symbol'
 import { renameSymbolParams } from './params/tool/rename-symbol'
 import { renderUIParams } from './params/tool/render-ui'
@@ -280,12 +283,12 @@ export const clientToolCallSchema = z.discriminatedUnion('toolName', [
   }),
   z.object({
     toolName: z.literal('replace_range'),
-    // The client wire payload is provider-shaped: the runtime handler resolves
-    // `occurrence` into absolute `startLine`/`endLine` and forwards only the
-    // provider fields. The derived `capability*` keys produced by
-    // `inputSchema`'s transform are never transmitted; the SDK applicator
-    // re-derives them via its own `inputSchema` parse downstream.
-    input: toolParams.replace_range.providerInputSchema,
+    // Runtime-prepared exact content uses the guarded file variant. Direct
+    // capability-shaped SDK callers retain the provider-shaped range variant.
+    input: z.union([
+      preparedRangeMutationSchema,
+      toolParams.replace_range.providerInputSchema,
+    ]),
   }),
   z.object({
     toolName: z.literal('run_file_change_hooks'),

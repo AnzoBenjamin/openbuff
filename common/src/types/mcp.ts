@@ -36,3 +36,21 @@ export type MCPConfig = z.infer<typeof mcpConfigSchema>
  * which re-exports this type.
  */
 export type MCPConfigOrigin = 'user' | 'project' | 'client'
+
+export type McpCatalogTool = {
+  name: string
+  description?: string
+  inputSchema: unknown
+  [key: string]: unknown
+}
+
+/** Discovery status belongs to a host connection generation, not a tool label. */
+export type McpToolCatalog = {
+  kind: 'mcp_tool_catalog'
+  schemaVersion: 1
+  generation: number | null
+  complete: boolean
+  incompleteReasons: string[]
+  tools: McpCatalogTool[]
+  origin?: MCPConfigOrigin
+}

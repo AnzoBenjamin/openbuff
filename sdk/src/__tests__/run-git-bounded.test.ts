@@ -1,53 +1,56 @@
 /**
  * Unit tests for runGitBounded — the bounded, deadline-carrying git spawn the
- * snapshot-identity path uses
- * (perf: snapshot-identity-diff-capture-unbounded,
- * identity-git-spawns-no-deadline). The child process is mocked so the
- * deadline and retention-cap behavior are deterministic and hermetic.
+ * snapshot-identity path uses. A real host authority controls admission;
+ * injected fake child events are deterministic DI controls.
  */
-import {
-  clearMockedModules,
-  mockModule,
-} from '@codebuff/common/testing/mock-modules'
 import { createMockChildProcess } from '@codebuff/common/testing/mocks'
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 
 import { runGitBounded } from '../tools/get-change-review-bundle'
+import { createTerminalExecutionFixture } from './fixtures/b19-terminal-execution'
 
 import type { MockChildProcess } from '@codebuff/common/testing/mocks'
+import type { ChildProcess } from 'node:child_process'
 
 describe('runGitBounded', () => {
   let mockSpawn: ReturnType<typeof mock>
   let mockProcess: MockChildProcess
+  let respond: ((child: MockChildProcess) => void) | undefined
+  let host: ReturnType<typeof createTerminalExecutionFixture>
 
-  beforeEach(async () => {
+  beforeEach(() => {
     mockProcess = createMockChildProcess()
-    mockSpawn = mock(() => mockProcess)
-    await mockModule('child_process', () => ({
-      spawn: mockSpawn,
-    }))
+    mockProcess.pid = 42_424_001
+    respond = undefined
+    mockSpawn = mock(() => {
+      const child = mockProcess
+      const response = respond
+      setImmediate(() => { child.emit('spawn'); response?.(child) })
+      return child as unknown as ChildProcess
+    })
+    host = createTerminalExecutionFixture({ projectRoot: '/repo', spawn: mockSpawn })
   })
 
   afterEach(() => {
     mock.restore()
-    clearMockedModules()
+    host.dispose()
   })
 
   test('counts every stdout byte while retaining only the cap', async () => {
-    const promise = runGitBounded(
+    const chunk = Buffer.alloc(1024 * 1024, 'a')
+    respond = child => {
+      child.stdout.emit('data', chunk)
+      child.stdout.emit('data', chunk)
+      child.stdout.emit('data', chunk)
+      child.emit('close', 0)
+    }
+    const result = await runGitBounded(
       ['diff', '--binary', 'HEAD'],
       '/repo',
       undefined,
-      { timeoutMs: 1_000, maxOutputBytes: 4_096 },
+      { timeoutMs: 1_000, maxOutputBytes: 4_096, executionContext: host.context, branchId: 'fixture.git.diff' },
     )
-    // The mocked git emits 3 MiB total after the listeners are attached.
-    const chunk = Buffer.alloc(1024 * 1024, 'a')
-    mockProcess.stdout.emit('data', chunk)
-    mockProcess.stdout.emit('data', chunk)
-    mockProcess.stdout.emit('data', chunk)
-    mockProcess.emit('close', 0)
-    const result = await promise
     // Only the first 4 KiB are retained (the unbounded runGit shape would
     // have buffered all 3 MiB into the stdout string), but the untruncated
     // byte total is still reported so the identity hash can mix it in.
@@ -69,14 +72,18 @@ describe('runGitBounded', () => {
     const prefix = Buffer.alloc(4_096, 'a')
     const run = async (tail: string) => {
       mockProcess = createMockChildProcess()
-      mockSpawn.mockImplementation(() => mockProcess)
+      mockProcess.pid = 42_424_001
+      respond = child => {
+        child.stdout.emit('data', prefix)
+        child.stdout.emit('data', Buffer.from(tail))
+        child.emit('close', 0)
+      }
       const pending = runGitBounded(['diff'], '/repo', undefined, {
         timeoutMs: 1_000,
         maxOutputBytes: prefix.length,
+        executionContext: host.context,
+        branchId: 'fixture.git.tail-digest',
       })
-      mockProcess.stdout.emit('data', prefix)
-      mockProcess.stdout.emit('data', Buffer.from(tail))
-      mockProcess.emit('close', 0)
       return await pending
     }
     const first = await run('tail-one')
@@ -93,12 +100,15 @@ describe('runGitBounded', () => {
       ['diff', '--binary', 'HEAD'],
       '/repo',
       undefined,
-      { timeoutMs: 50, maxOutputBytes: 4_096 },
+      { timeoutMs: 50, maxOutputBytes: 4_096, executionContext: host.context, branchId: 'fixture.git.deadline' },
     )
     expect(result.exitCode).toBe(-1)
-    expect(result.stderr).toContain('timed out')
+    expect(result.executionRefusal).toMatchObject({ reason: 'deadline-exhausted' })
     expect(result.stdoutComplete).toBe(false)
     expect(mockProcess.kill).toHaveBeenCalledWith('SIGKILL')
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(mockProcess.kill).toHaveBeenCalledTimes(1)
+    expect(mockProcess.kill).not.toHaveBeenCalledWith('SIGTERM')
   })
 
   test('returns immediately without spawning when the signal is already aborted', async () => {
@@ -107,11 +117,49 @@ describe('runGitBounded', () => {
     const result = await runGitBounded(['status'], '/repo', controller.signal, {
       timeoutMs: 1_000,
       maxOutputBytes: 4_096,
+      executionContext: host.context,
+      branchId: 'fixture.git.cancelled',
     })
     expect(mockSpawn).not.toHaveBeenCalled()
     expect(result.exitCode).toBe(-1)
     expect(result.stderr).toContain('caller cancelled')
     expect(result.stdoutTotalBytes).toBe(0)
     expect(result.stdoutComplete).toBe(false)
+  })
+
+  test('missing execution context never invokes the injected spawn', async () => {
+    const result = await runGitBounded(['status'], '/repo', undefined, {
+      timeoutMs: 1_000, maxOutputBytes: 4_096, branchId: 'fixture.git.missing',
+    })
+    expect(result.executionRefusal).toMatchObject({ reason: 'unavailable' })
+    expect(result.stdoutComplete).toBe(false)
+    expect(mockSpawn).not.toHaveBeenCalled()
+  })
+
+  test('a close without a spawn event and valid PID is incomplete', async () => {
+    mockSpawn.mockImplementation(() => {
+      setImmediate(() => mockProcess.emit('close', 0))
+      return mockProcess as unknown as ChildProcess
+    })
+    const result = await runGitBounded(['diff'], '/repo', undefined, {
+      timeoutMs: 1_000, maxOutputBytes: 4_096, executionContext: host.context, branchId: 'fixture.git.no-start',
+    })
+    expect(result.stdoutComplete).toBe(false)
+    expect(result.executionRefusal).toMatchObject({ reason: 'unavailable' })
+  })
+
+  test('decodes split UTF-8 once while hashing every raw byte', async () => {
+    const bytes = Buffer.from('snowman: ☃, café\n')
+    respond = child => {
+      for (const byte of bytes) child.stdout.emit('data', Buffer.from([byte]))
+      child.emit('close', 0)
+    }
+    const result = await runGitBounded(['diff'], '/repo', undefined, {
+      timeoutMs: 1_000, maxOutputBytes: bytes.length, executionContext: host.context, branchId: 'fixture.git.utf8',
+    })
+    expect(result.stdout).toBe(bytes.toString('utf8'))
+    expect(result.stdoutTotalBytes).toBe(bytes.length)
+    expect(result.stdoutSha256).toBe(createHash('sha256').update(bytes).digest('hex'))
+    expect(result.stdoutComplete).toBe(true)
   })
 })

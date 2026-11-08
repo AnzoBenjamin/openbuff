@@ -24,6 +24,12 @@ import {
   type ReadCapabilityScope,
   type ReplacementReadCapability,
 } from '@codebuff/common/util/content-hash'
+import {
+  captureTextDocument,
+  describeRawReadFailure,
+  reanchorRawReadCapability,
+} from '@codebuff/common/util/byte-text'
+import type { CapturedTextDocument } from '@codebuff/common/util/byte-text'
 
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 
@@ -104,7 +110,11 @@ const FAILED_EDIT_RECOVERY_GUIDANCE = [
  * consumer has to sniff model-facing prose for a sentinel token — a failing
  * oldString copied out of these very files must never be misclassified.
  */
-export type StrReplaceFailureKind = 'anchor_scope_mismatch' | 'capability_scope'
+export type StrReplaceFailureKind =
+  | 'anchor_scope_mismatch'
+  | 'capability_scope'
+  | 'capability_invalid'
+  | 'capability_stale'
 
 // Kinds whose targeted recovery is already complete. Appending the generic
 // guidance to an anchored scope mismatch is wrong: it already proves the
@@ -311,8 +321,22 @@ export async function processStrReplace(params: {
     }
   }
 
+  let initialDocument: CapturedTextDocument
+  try {
+    initialDocument = captureTextDocument(initialContent)
+    for (const replacement of replacements) {
+      captureTextDocument(replacement.oldString, { includesBom: false })
+      captureTextDocument(replacement.newString, { includesBom: false })
+    }
+  } catch {
+    return {
+      tool: 'str_replace',
+      path,
+      error: 'Source and replacements must be valid lossless UTF-8 text.',
+    }
+  }
   // Process each oldString/newString pair
-  let currentContent = initialContent
+  let currentContent = initialDocument.observation
   let messages: string[] = []
   // Atomic edits are all-or-nothing: if any replacement in the batch fails to
   // match, NONE are applied. Large files are always atomic to prevent confusing
@@ -334,13 +358,15 @@ export async function processStrReplace(params: {
   // naked unique-literal edit with a warning message instead of hard-failing.
   // Callers that never want scoping should simply omit the capability.
   const enforceReadCapability = isLargeFile || requireFreshReadCapability
-  const normalizedInitialContent = normalizeLineEndings(initialContent)
-  const normalizedRecoveryContent = recoverySnapshot === undefined
-    ? normalizedInitialContent
-    : normalizeLineEndings(recoverySnapshot)
+  const normalizedInitialContent = initialDocument.observation
+  const normalizedRecoveryContent =
+    recoverySnapshot === undefined
+      ? normalizedInitialContent
+      : captureTextDocument(recoverySnapshot).observation
   const validatedReadRanges = new Map<string, ValidatedReadRange>()
   const readCapabilityWarnings: string[] = []
   const preflightErrors: string[] = []
+  let hasInvalidReadCapability = false
   const capabilityAuthorityErrors: string[] = []
   let noOpSkipCount = 0
   let hadAutoCorrect = false
@@ -360,18 +386,26 @@ export async function processStrReplace(params: {
     if (basedOnRead && typeof basedOnRead === 'object') {
       const validationError = validateReadCapabilityObject(basedOnRead)
       if (validationError) {
+        hasInvalidReadCapability = true
         preflightErrors.push(
           `Invalid basedOnRead for replacement ${i + 1}: ${validationError}`,
         )
       }
-      const authorityError = validateReadCapabilityAuthority({
-        capability: basedOnRead,
-        expectedScope: readCapabilityScope,
-      })
-      if (authorityError) {
-        capabilityAuthorityErrors.push(
-          `Invalid basedOnRead for replacement ${i + 1}: ${authorityError}`,
+      if (basedOnRead.tokenVersion !== 'v4' || !basedOnRead.rawBasis) {
+        hasInvalidReadCapability = true
+        preflightErrors.push(
+          `Invalid basedOnRead for replacement ${i + 1}: the capability has no authenticated raw byte basis. Obtain a fresh cap.v4 read before editing.`,
         )
+      } else {
+        const authorityError = validateReadCapabilityAuthority({
+          capability: basedOnRead,
+          expectedScope: readCapabilityScope,
+        })
+        if (authorityError) {
+          capabilityAuthorityErrors.push(
+            `Invalid basedOnRead for replacement ${i + 1}: ${authorityError}`,
+          )
+        }
       }
     }
 
@@ -397,17 +431,8 @@ export async function processStrReplace(params: {
     }
   }
 
-  // Reject obviously-bogus string anchors (stubs like "dummy", or anything that
-  // does not decode) on EVERY file, large or small. This is the only basedOnRead
-  // check that runs on small files; valid "cap...." tokens decode to objects and
-  // are unaffected, and object-form anchors stay ignored on small files.
-  //
-  // Loop-breaker: when the supplied anchor is bogus but the replacement's
-  // oldString still uniquely identifies a spot in the current file, the anchor
-  // is unnecessary. Auto-strip it and apply as a naked edit instead of
-  // hard-failing. This prevents the failure loop where a model re-reads, then
-  // resubmits the SAME bogus anchor (e.g. basedOnRead: "/placeholder") after
-  // every recovery instruction, burning attempts without ever progressing.
+  // A supplied capability is an explicit authorization boundary. Invalid
+  // tokens cannot become an unscoped edit by stripping the caller's anchor.
   for (let i = 0; i < replacements.length; i++) {
     const bogus = describeBogusReadCapability(
       replacements[i].basedOnRead,
@@ -415,34 +440,9 @@ export async function processStrReplace(params: {
     )
     if (!bogus) continue
 
-    const normalizedOldStr = normalizeLineEndings(
-      replacements[i].oldString ?? '',
-    )
-    const uniquelyMatchable =
-      normalizedOldStr.length > 0 &&
-      normalizedInitialContent.split(normalizedOldStr).length - 1 === 1
-
-    if (uniquelyMatchable && !requireFreshReadCapability) {
-      normalizedReplacements[i].basedOnRead = undefined
-      messages.push(
-        [
-          `Note: an invalid basedOnRead anchor was ignored for ${path} because the oldString was uniquely matchable, so the edit applied as a naked edit.`,
-          'Stop passing placeholder/invalid basedOnRead values. Omit basedOnRead when oldString is unique, or copy the readCapability token from a fresh read_files header.',
-        ].join('\n'),
-      )
-      continue
-    }
-
+    hasInvalidReadCapability = true
     preflightErrors.push(
-      [
-        bogus,
-        requireFreshReadCapability
-          ? 'Strict read-before-edit requires a valid fresh basedOnRead capability, so the invalid anchor could not be auto-stripped even though oldString is uniquely matchable.'
-          : 'The bogus anchor could NOT be auto-stripped because this oldString is not uniquely matchable in the current file.',
-        requireFreshReadCapability
-          ? 'Do NOT resubmit the same basedOnRead literal. Re-read the exact target range with read_files and copy the readCapability token from the fresh header.'
-          : 'Do NOT resubmit the same basedOnRead literal. Either omit basedOnRead entirely and pass a longer, unique oldString, or read the exact target range with read_files and copy the readCapability token from the fresh header.',
-      ].join('\n'),
+      `${bogus}\nRe-read the exact target range and copy its authenticated raw readCapability.`,
     )
   }
 
@@ -451,6 +451,9 @@ export async function processStrReplace(params: {
       tool: 'str_replace' as const,
       path,
       error: addFailedEditRecoveryGuidance(preflightErrors.join('\n\n')),
+      ...(hasInvalidReadCapability && {
+        failureKind: 'capability_invalid' as const,
+      }),
     }
   }
 
@@ -464,7 +467,7 @@ export async function processStrReplace(params: {
       const key = getReadCapabilityKey(basedOnRead)
       if (validatedReadRanges.has(key)) continue
       const validatedRange = validateReadCapability({
-        content: normalizedInitialContent,
+        content: initialContent,
         path,
         basedOnRead,
       })
@@ -571,7 +574,10 @@ export async function processStrReplace(params: {
           'Re-read the exact target range and retry with the fresh readCapability token.',
         ].join('\n')
         messages.push(occurrenceFailure)
-        recordFailure(occurrenceFailure)
+        recordFailure(
+          occurrenceFailure,
+          basedOnRead ? 'capability_stale' : 'capability_scope',
+        )
         continue
       }
       if (basedOnRead && !validatedRangeForIndex) {
@@ -581,7 +587,7 @@ export async function processStrReplace(params: {
           'Re-read the exact target range and retry with its fresh readCapability token.',
         ].join('\n')
         messages.push(occurrenceFailure)
-        recordFailure(occurrenceFailure)
+        recordFailure(occurrenceFailure, 'capability_stale')
         continue
       }
       const searchContent =
@@ -722,34 +728,15 @@ export async function processStrReplace(params: {
       continue
     }
 
-    if (hasStaleBasedOnRead && !requireFreshReadCapability) {
-      // Loop-breaker for small files only (mirrors the bogus-anchor strip
-      // loop above):
-      // when basedOnRead is stale but oldString uniquely identifies a spot,
-      // drop the anchor and continue as a naked unique literal edit. Large
-      // files keep hard-fail so scoped authority is never silently discarded.
-      const uniqueStaleStrip =
-        !isLargeFile &&
-        normalizedOldStr.length > 0 &&
-        normalizedCurrentContent.split(normalizedOldStr).length - 1 === 1
-      if (uniqueStaleStrip) {
-        messages.push(
-          [
-            `Note: a stale basedOnRead anchor was ignored for ${path} because the oldString was uniquely matchable, so the edit applied as a naked edit.`,
-            'Stop reusing stale basedOnRead values. Omit basedOnRead when oldString is unique, or copy the readCapability token from a fresh read_files header.',
-          ].join('\n'),
-        )
-        // Fall through to unscoped unique-literal matching below.
-      } else {
-        const staleScopedFailure = [
-          `Scoped str_replace blocked for ${path}: the supplied basedOnRead range is stale, so the runtime did not fall back to an unscoped whole-file match.`,
-          ...readCapabilityWarnings,
-          'Re-read the exact target range and retry with its fresh readCapability token, or deliberately omit basedOnRead and provide a unique current oldString.',
-        ].join('\n')
-        messages.push(staleScopedFailure)
-        recordFailure(staleScopedFailure)
-        continue
-      }
+    if (hasStaleBasedOnRead) {
+      const staleScopedFailure = [
+        `Scoped str_replace blocked for ${path}: the supplied basedOnRead range is stale, so the runtime did not fall back to an unscoped whole-file match.`,
+        ...readCapabilityWarnings,
+        'Re-read the exact target range and retry with its fresh readCapability token.',
+      ].join('\n')
+      messages.push(staleScopedFailure)
+      recordFailure(staleScopedFailure, 'capability_stale')
+      continue
     }
 
     if (enforceReadCapability && !hasFreshBasedOnRead) {
@@ -779,21 +766,28 @@ export async function processStrReplace(params: {
             .join('\n'),
         )
       } else {
-        const exactCount = normalizedCurrentContent.split(normalizedOldStr).length - 1
-        const diagnostics = exactCount === 0 && !isLargeOldString(normalizedOldStr)
-          ? formatClosestMatchDiagnostics(
-              path,
-              findClosestMatches({ initialContent: normalizedRecoveryContent, oldStr: normalizedOldStr }),
-              normalizedOldStr,
-            )
-          : ''
+        const exactCount =
+          normalizedCurrentContent.split(normalizedOldStr).length - 1
+        const diagnostics =
+          exactCount === 0 && !isLargeOldString(normalizedOldStr)
+            ? formatClosestMatchDiagnostics(
+                path,
+                findClosestMatches({
+                  initialContent: normalizedRecoveryContent,
+                  oldStr: normalizedOldStr,
+                }),
+                normalizedOldStr,
+              )
+            : ''
         const largeFileBlockedMessage = [
           `Large-file edit blocked for ${path}: this file has ${initialContentLineCount.toLocaleString()} lines and ${initialContent.length.toLocaleString()} characters.`,
           exactCount === 0
             ? 'oldString has no exact match in the current candidate.'
             : `oldString was not uniquely identifiable: it has ${exactCount} exact matches in the current candidate, so the deterministic fallback cannot select one safely.`,
           'First read the exact target window with read_files.ranges, then retry with a more specific oldString (or basedOnRead set to the readCapability token from that fresh read header).',
-          diagnostics ? `Closest ranges in the unchanged transaction snapshot:\n${diagnostics}` : '',
+          diagnostics
+            ? `Closest ranges in the unchanged transaction snapshot:\n${diagnostics}`
+            : '',
           readCapabilityWarnings.length > 0
             ? `basedOnRead detail:\n${readCapabilityWarnings.join('\n')}`
             : '',
@@ -855,7 +849,9 @@ export async function processStrReplace(params: {
       normalizedCurrentContent.includes(normalizedOldStr)
     ) {
       const outsideRanges = getOccurrenceLineRanges({
-        initialContent: useAtomicBatch ? normalizedRecoveryContent : normalizedCurrentContent,
+        initialContent: useAtomicBatch
+          ? normalizedRecoveryContent
+          : normalizedCurrentContent,
         oldStr: normalizedOldStr,
         limit: 3,
       })
@@ -879,9 +875,10 @@ export async function processStrReplace(params: {
       newStr: normalizedNewStr,
       allowMultiple,
       logger,
-      ...(useAtomicBatch && normalizedCurrentContent !== normalizedRecoveryContent && {
-        recoveryContent: normalizedRecoveryContent,
-      }),
+      ...(useAtomicBatch &&
+        normalizedCurrentContent !== normalizedRecoveryContent && {
+          recoveryContent: normalizedRecoveryContent,
+        }),
       ...(validatedReadRange && {
         anchoredRange: {
           startLine: validatedReadRange.startLine,
@@ -988,12 +985,16 @@ export async function processStrReplace(params: {
     }
   }
 
-  currentContent = restoreLineEndingsFromOriginal({
-    originalContent: initialContent,
-    normalizedInitialContent,
-    normalizedFinalContent: currentContent,
-    defaultLineEnding,
-  })
+  currentContent =
+    (initialDocument.bomBytes ? '\uFEFF' : '') +
+    restoreLineEndingsFromOriginal({
+      originalContent: initialDocument.bomBytes
+        ? initialContent.slice(1)
+        : initialContent,
+      normalizedInitialContent,
+      normalizedFinalContent: currentContent,
+      defaultLineEnding,
+    })
 
   // If EVERY requested change was an explicit idempotent no-op, report success
   // so edit_transaction can continue applying later independent edits. Only
@@ -1085,7 +1086,7 @@ type ValidatedReadRange = {
 }
 
 function getReadCapabilityKey(basedOnRead: ReplacementReadCapability): string {
-  return `${basedOnRead.startLine}:${basedOnRead.endLine}:${basedOnRead.hash}:${basedOnRead.scopeFingerprint}`
+  return `${basedOnRead.startLine}:${basedOnRead.endLine}:${basedOnRead.hash}:${basedOnRead.scopeFingerprint}:${JSON.stringify(basedOnRead.rawBasis)}`
 }
 
 /**
@@ -1110,6 +1111,9 @@ function validateReadCapabilityAuthority(params: {
   expectedScope?: ReadCapabilityScope
 }): string | null {
   const { capability, expectedScope } = params
+  if (capability.tokenVersion !== 'v4' || !capability.rawBasis) {
+    return 'The read capability has no authenticated raw byte basis. Obtain a fresh cap.v4 read before editing.'
+  }
   if (!expectedScope) {
     return 'The authenticated capability cannot be verified because this edit has no runtime project/path/run scope. Re-read the target through the active runtime.'
   }
@@ -1179,34 +1183,30 @@ function validateReadCapability(params: {
   basedOnRead: ReplacementReadCapability
 }): ValidatedReadRange | string | null {
   const { content, path, basedOnRead } = params
-  const { startLine, endLine, hash } = basedOnRead
+  const { startLine, endLine } = basedOnRead
   const objectValidationError = validateReadCapabilityObject(basedOnRead)
   if (objectValidationError) {
     return `Large-file edit blocked for ${path}: ${objectValidationError}`
   }
 
-  const lines = content.split('\n')
-  if (startLine > lines.length) {
-    return `Large-file edit blocked for ${path}: basedOnRead starts at line ${startLine}, but the file currently has only ${lines.length} lines. Re-read the target range before editing.`
-  }
-
-  const end = Math.min(endLine, lines.length)
-  const currentRange = lines.slice(startLine - 1, end).join('\n')
-  const currentHash = getContentHash(currentRange)
-  if (currentHash !== hash) {
+  const fresh = reanchorRawReadCapability({ content, capability: basedOnRead })
+  if (!fresh.ok) {
     return [
       `Large-file edit blocked for ${path}: the basedOnRead range is stale.`,
-      `Expected ${hash} for lines ${startLine}-${endLine}, but current hash is ${currentHash}.`,
-      `Re-read with read_files ranges: [{ path: "${path}", startLine: ${startLine}, endLine: ${endLine} }] and retry only with the cap.v3 readCapability returned by that successful fresh read.`,
+      describeRawReadFailure(fresh),
+      `Re-read with read_files ranges: [{ path: "${path}", startLine: ${startLine}, endLine: ${endLine} }] and retry only with the cap.v4 readCapability returned by that successful fresh read.`,
       'No replacement capability is minted from a stale-read failure because an error response is not proof that the caller observed the current content.',
       'Tip: when editing the same file multiple times, batch all replacements into a SINGLE str_replace call (each with its own basedOnRead) so earlier edits do not invalidate later ranges.',
     ].join('\n')
   }
 
   return {
-    startLine,
-    endLine: end,
-    content: currentRange,
+    startLine: fresh.startLine,
+    endLine: fresh.endLine,
+    content: captureTextDocument(content)
+      .observation.split('\n')
+      .slice(fresh.startLine - 1, fresh.endLine)
+      .join('\n'),
   }
 }
 
@@ -1559,7 +1559,11 @@ function findClosestMatches(params: {
 
     const candidateLines = fileLines.slice(cand.startLine, cand.endLine + 1)
     const candidateText = candidateLines.join('\n')
-    if (candidateText.length > 8_000 || candidateText.length * oldStr.length > 1_000_000) continue
+    if (
+      candidateText.length > 8_000 ||
+      candidateText.length * oldStr.length > 1_000_000
+    )
+      continue
 
     const dist = levenshteinDistance(candidateText, oldStr)
     const maxLen = Math.max(candidateText.length, oldStr.length)
@@ -1660,10 +1664,15 @@ function formatClosestMatchDiagnostics(
       .join('\n')
   }
 
-  const distinctMatches = usefulMatches.filter((match, index) =>
-    !usefulMatches.slice(0, index).some((earlier) =>
-      match.startLine <= earlier.endLine && match.endLine >= earlier.startLine,
-    ),
+  const distinctMatches = usefulMatches.filter(
+    (match, index) =>
+      !usefulMatches
+        .slice(0, index)
+        .some(
+          (earlier) =>
+            match.startLine <= earlier.endLine &&
+            match.endLine >= earlier.startLine,
+        ),
   )
   const candidateBlock = distinctMatches
     .map((match, index) => {
@@ -2330,7 +2339,10 @@ const tryMatchOldStr = async (params: {
         (allowMultiple
           ? ' Even allowMultiple=true cannot override this tiny-anchor safety guard.'
           : '') +
-        (recoveryContent ? '\nOccurrence locations below refer to the unchanged snapshot.\n' : '') + occurrenceDiagnostics,
+        (recoveryContent
+          ? '\nOccurrence locations below refer to the unchanged snapshot.\n'
+          : '') +
+        occurrenceDiagnostics,
     }
   }
   if (count === 1) {
@@ -2350,7 +2362,9 @@ const tryMatchOldStr = async (params: {
       success: false,
       error:
         `Found ${count} occurrences of ${JSON.stringify(oldStr)} in the ${recoveryContent ? 'temporary candidate' : 'file'}. Please try again with a longer (more specified) old string, set allowMultiple to true to replace all of them, or pass occurrenceIndex (1-indexed) to target exactly one.` +
-        (recoveryContent ? '\nOccurrence locations below refer to the unchanged snapshot.\n' : '') +
+        (recoveryContent
+          ? '\nOccurrence locations below refer to the unchanged snapshot.\n'
+          : '') +
         occurrenceDiagnostics,
     }
   }
@@ -2443,23 +2457,31 @@ const tryMatchOldStr = async (params: {
   }
 
   const diagnosticContent = recoveryContent ?? initialContent
-  const closestMatches = findClosestMatches({ initialContent: diagnosticContent, oldStr })
+  const closestMatches = findClosestMatches({
+    initialContent: diagnosticContent,
+    oldStr,
+  })
   // Candidate lines are relative to initialContent, which is the anchored window
   // slice for scoped edits. Shift them once at render time so reported lines are
   // absolute file lines instead of silently window-relative.
-  const lineOffset = recoveryContent ? 0 : anchoredRange ? anchoredRange.startLine - 1 : 0
+  const lineOffset = recoveryContent
+    ? 0
+    : anchoredRange
+      ? anchoredRange.startLine - 1
+      : 0
   let errorMsg = [
     `The old string ${JSON.stringify(oldStr.length > 2000 ? `${oldStr.slice(0, 2000)}… [${oldStr.length} characters total]` : oldStr)} is not an exact contiguous match of ${
       recoveryContent
         ? 'the temporary candidate content'
         : anchoredRange
-        ? `the anchored range lines ${anchoredRange.startLine}-${anchoredRange.endLine} of the current file`
-        : 'the current file'
+          ? `the anchored range lines ${anchoredRange.startLine}-${anchoredRange.endLine} of the current file`
+          : 'the current file'
     }, so it was not applied.`,
     'It may be incomplete, may omit punctuation from the middle of a line, or may refer to content that changed or was removed.',
   ].join(' ')
   if (recoveryContent) {
-    errorMsg += '\nEarlier replacements were evaluated only in a temporary candidate and were discarded. Recovery ranges below refer to the unchanged file snapshot.'
+    errorMsg +=
+      '\nEarlier replacements were evaluated only in a temporary candidate and were discarded. Recovery ranges below refer to the unchanged file snapshot.'
   }
   const diagnostics = formatClosestMatchDiagnostics(
     path,

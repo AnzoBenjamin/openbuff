@@ -14,6 +14,7 @@ import {
   mock,
   spyOn,
 } from 'bun:test'
+import { z } from 'zod/v4'
 
 import * as runAgentStep from '../run-agent-step'
 import { mockFileContext } from './test-utils'
@@ -46,9 +47,7 @@ const createMockAgent = (id: string): AgentTemplate => ({
   displayName: `Mock ${id}`,
   outputMode: 'last_message' as const,
   inputSchema: {
-    prompt: {
-      safeParse: () => ({ success: true }),
-    } as unknown as AgentTemplate['inputSchema']['prompt'],
+    prompt: z.string(),
   },
   spawnerPrompt: '',
   model: '',

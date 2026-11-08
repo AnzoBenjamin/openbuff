@@ -1,4 +1,5 @@
 import type { ToolContentBlock } from '../types/chat'
+import { isMcpToolResultEnvelope } from '@codebuff/common/mcp/result'
 import {
   getCanonicalMutationResult,
   getStructuredErrorMessages,
@@ -122,6 +123,15 @@ export function outcomeForTool(
     return { label: 'cancelled', tone: 'bad', source: 'lifecycle' }
   if (getStructuredErrorMessages(block.outputRaw).length)
     return producer('failed')
+  if (isMcpToolResultEnvelope(result)) {
+    return block.lifecycle === 'failed'
+      ? { label: 'failed', tone: 'bad', source: 'lifecycle' }
+      : {
+          label: 'captured · outcome unknown',
+          tone: 'neutral',
+          source: 'unknown',
+        }
+  }
   if (
     block.toolName === 'query_index' &&
     result?.status &&

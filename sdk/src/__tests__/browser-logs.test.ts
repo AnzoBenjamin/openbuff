@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { z } from 'zod/v4'
+import { executionFixture } from '../../../common/src/mcp/__tests__/execution-fixture'
 
 import {
   type BrowserAction,
@@ -1148,11 +1149,15 @@ describe('buildResponse log/network window consumption', () => {
 })
 
 describe('detectPipeSupport concurrent probe dedup', () => {
+  const closeExecutions: Array<() => void> = []
   afterEach(() => {
+    for (const close of closeExecutions.splice(0)) close()
     __resetPipeSupportProbeCacheForTest()
   })
 
   function makeProbeOverrides(result: 'supported' | 'refused') {
+    const fixture = executionFixture()
+    closeExecutions.push(fixture.close)
     let spawnCalls = 0
     const probe = {
       child: { kill: () => true },
@@ -1178,6 +1183,7 @@ describe('detectPipeSupport concurrent probe dedup', () => {
       userDataDir: mkdtempSync(path.join(tmpdir(), 'probe-dedup-')),
     }
     return {
+      execution: { ...fixture.context(), resources: fixture.resources, executablePath: '/usr/bin/fake-chrome', sandboxArgs: [] },
       overrides: {
         executablePath: () => '/usr/bin/fake-chrome',
         spawn: () => {
@@ -1193,9 +1199,9 @@ describe('detectPipeSupport concurrent probe dedup', () => {
   }
 
   test('concurrent callers share one probe for the same executable', async () => {
-    const { overrides, spawnCalls } = makeProbeOverrides('supported')
-    const first = detectPipeSupport(overrides)
-    const second = detectPipeSupport(overrides)
+    const { overrides, spawnCalls, execution } = makeProbeOverrides('supported')
+    const first = detectPipeSupport(overrides, execution)
+    const second = detectPipeSupport(overrides, execution)
     await expect(first).resolves.toBe(true)
     await expect(second).resolves.toBe(true)
     // Only one probe Chrome was launched for both concurrent callers, like
@@ -1204,9 +1210,9 @@ describe('detectPipeSupport concurrent probe dedup', () => {
   })
 
   test('concurrent callers share one probe even when it fails', async () => {
-    const { overrides, spawnCalls } = makeProbeOverrides('refused')
-    const first = detectPipeSupport(overrides)
-    const second = detectPipeSupport(overrides)
+    const { overrides, spawnCalls, execution } = makeProbeOverrides('refused')
+    const first = detectPipeSupport(overrides, execution)
+    const second = detectPipeSupport(overrides, execution)
     // A demonstrable failure is not cached, but the in-flight probe is still
     // shared: concurrent callers do not each launch a probe browser.
     await expect(first).resolves.toBe(false)

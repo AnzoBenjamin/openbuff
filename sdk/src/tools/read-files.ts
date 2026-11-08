@@ -16,6 +16,11 @@ import {
   normalizeLineEndings,
 } from '@codebuff/common/util/content-hash'
 import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
+import { parseRawReadBasis } from '@codebuff/common/util/raw-read-basis'
+import {
   isEnvTemplatePath,
   isMandatorySensitiveReadPath,
 } from '@codebuff/common/util/sensitive-paths'
@@ -29,8 +34,16 @@ import {
 import { mapWithConcurrency, throwIfAborted } from './concurrency'
 
 import type { FileLineRange } from '@codebuff/common/types/contracts/client'
-import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
+import type {
+  CodebuffFileSystem,
+  CodebuffTextRangeReadResult,
+} from '@codebuff/common/types/filesystem'
 import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
+import type {
+  CapturedTextDocument,
+  TextCaptureOptions,
+} from '@codebuff/common/util/byte-text'
+import type { RawReadBasisV1 } from '@codebuff/common/util/raw-read-basis'
 
 export type FileFilterResult = {
   status: 'blocked' | 'allow-example' | 'allow'
@@ -87,20 +100,26 @@ type PlannedSelector =
 type FullSnapshot = {
   state: 'full'
   content: string
+  document: CapturedTextDocument
   sizeBytes: number
+  metadataComplete: boolean
+  rawBasis?: RawReadBasisV1
 }
 
 type RangeWindow = {
   content: string
+  document: CapturedTextDocument
   startLine: number
   endLine: number
   totalLines: number
   complete: boolean
+  metadataComplete?: boolean
+  rawBasis?: RawReadBasisV1
 }
 
 type LargeSnapshot = {
   state: 'large'
-  sizeBytes: number
+  sizeBytes?: number
   windows?: Map<number, RangeWindow>
   rangeErrors?: Map<number, FilesystemError>
 }
@@ -118,6 +137,8 @@ export type OptionalFileReadResult =
       path: string
       content: string
       template: boolean
+      metadataComplete?: boolean
+      rawBasis?: RawReadBasisV1
     }
   | {
       status:
@@ -260,15 +281,17 @@ function errorCode(error: unknown): string | undefined {
     : undefined
 }
 
-function toBytes(value: string | NodeJS.ArrayBufferView): Uint8Array {
-  if (typeof value === 'string') return Buffer.from(value)
+function toBytes(value: NodeJS.ArrayBufferView): Uint8Array {
   return new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
 }
 
 function decodeText(
-  bytes: Uint8Array,
-): { ok: true; content: string } | { ok: false; error: FilesystemError } {
-  if (bytes.includes(0)) {
+  input: string | Uint8Array,
+  options: TextCaptureOptions = {},
+):
+  | { ok: true; document: CapturedTextDocument }
+  | { ok: false; error: FilesystemError } {
+  if (typeof input === 'string' ? input.includes('\0') : input.includes(0)) {
     return {
       ok: false,
       error: filesystemError(
@@ -279,8 +302,9 @@ function decodeText(
     }
   }
   if (
-    (bytes[0] === 0xff && bytes[1] === 0xfe) ||
-    (bytes[0] === 0xfe && bytes[1] === 0xff)
+    typeof input !== 'string' &&
+    ((input[0] === 0xff && input[1] === 0xfe) ||
+      (input[0] === 0xfe && input[1] === 0xff))
   ) {
     return {
       ok: false,
@@ -294,7 +318,7 @@ function decodeText(
   try {
     return {
       ok: true,
-      content: new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+      document: captureTextDocument(input, options),
     }
   } catch {
     return {
@@ -308,6 +332,125 @@ function decodeText(
   }
 }
 
+function readerMatchesView(
+  fs: CodebuffFileSystem,
+  reader: NonNullable<
+    CodebuffFileSystem['readTextRange'] | CodebuffFileSystem['readTextFile']
+  >,
+  member: 'readTextRange' | 'readTextFile',
+): boolean {
+  return reader.readFileView !== undefined
+    ? reader.readFileView === fs.readFile
+    : member === 'readTextRange' && Object.hasOwn(fs, member)
+}
+
+function decodeBoundedResult(
+  result: CodebuffTextRangeReadResult,
+  maxBytes: number,
+  paired: boolean,
+): { ok: true; window: RangeWindow } | { ok: false; error: FilesystemError } {
+  const invalid = (): { ok: false; error: FilesystemError } => ({
+    ok: false,
+    error: filesystemError(
+      'io_error',
+      'The filesystem returned an invalid bounded text result.',
+      { retryable: true, recovery: 'read_again' },
+    ),
+  })
+  if (
+    !(result.data instanceof Uint8Array) ||
+    result.data.byteLength > maxBytes ||
+    !Number.isSafeInteger(result.startLine) ||
+    !Number.isSafeInteger(result.endLine) ||
+    !Number.isSafeInteger(result.totalLines) ||
+    result.startLine < 1 ||
+    result.endLine < 0 ||
+    result.totalLines < 0 ||
+    (result.endLine !== 0 && result.endLine < result.startLine)
+  )
+    return invalid()
+  if (result.metadataComplete === false) {
+    return {
+      ok: false,
+      error: filesystemError(
+        'unsupported',
+        'This bounded text view did not observe complete EOF and total metadata.',
+        { retryable: false },
+      ),
+    }
+  }
+  let basis: RawReadBasisV1 | undefined
+  try {
+    if (result.rawBasis !== undefined)
+      basis = parseRawReadBasis(result.rawBasis)
+  } catch {
+    return invalid()
+  }
+  const decoded = decodeText(result.data, {
+    includesBom:
+      basis?.includesBom ?? (result.startLine === 1 ? undefined : false),
+    view: basis?.view ?? 'adapter_bytes',
+    coherence: basis?.coherence ?? 'observed',
+    ...(basis?.generation === undefined
+      ? {}
+      : { generation: basis.generation }),
+  })
+  if (!decoded.ok) return decoded
+  const { document } = decoded
+  if (
+    basis &&
+    (basis.rawHash !== document.rawHash ||
+      basis.endByteExclusive - basis.startByte !== document.byteLength ||
+      (basis.scope === 'whole' && result.startLine !== 1))
+  )
+    return invalid()
+  if (
+    result.endLine > result.totalLines &&
+    (result.endLine !== result.totalLines + 1 ||
+      !basis ||
+      result.metadataComplete !== true ||
+      basis.endByteExclusive !== basis.documentBytes ||
+      result.endLine - result.startLine + 1 !== document.maxCapabilityLine)
+  )
+    return invalid()
+  // Missing pairing/basis/metadata is a legacy display tier, never new edit authority.
+  const verifiedBasis =
+    paired && result.metadataComplete === true ? basis : undefined
+  return {
+    ok: true,
+    window: {
+      content: document.observation,
+      document,
+      startLine: result.startLine,
+      endLine: result.endLine,
+      totalLines: result.totalLines,
+      complete: result.complete,
+      metadataComplete: result.metadataComplete,
+      ...(verifiedBasis ? { rawBasis: verifiedBasis } : {}),
+    },
+  }
+}
+
+function snapshotReadError(error: unknown): FilesystemError {
+  if (errorCode(error) === 'ENOENT') {
+    return filesystemError('not_found', FILE_READ_STATUS.DOES_NOT_EXIST, {
+      retryable: true,
+      recovery: 'discover_path',
+    })
+  }
+  if (errorCode(error) === 'UNSUPPORTED_ENCODING') {
+    return filesystemError(
+      'unsupported_encoding',
+      `${UNSUPPORTED_ENCODING_MARKER} The file is not valid UTF-8 text.`,
+      { retryable: false, recovery: 'use_supported_encoding' },
+    )
+  }
+  return filesystemError('io_error', FILE_READ_STATUS.ERROR, {
+    retryable: true,
+    recovery: 'read_again',
+  })
+}
+
 async function readCanonicalSnapshot(params: {
   operationPath: string
   selectors: PlannedSelector[]
@@ -319,36 +462,28 @@ async function readCanonicalSnapshot(params: {
   let sizeBytes: number
   try {
     sizeBytes = (await fs.stat(operationPath)).size
+    if (!Number.isSafeInteger(sizeBytes) || sizeBytes < 0) {
+      throw new TypeError('Invalid filesystem size metadata')
+    }
   } catch (error) {
-    if (errorCode(error) === 'ENOENT') {
-      return {
-        state: 'error',
-        error: filesystemError('not_found', FILE_READ_STATUS.DOES_NOT_EXIST, {
-          retryable: true,
-          recovery: 'discover_path',
-        }),
-      }
-    }
-    return {
-      state: 'error',
-      error: filesystemError('io_error', FILE_READ_STATUS.ERROR, {
-        retryable: true,
-        recovery: 'read_again',
-      }),
-    }
+    throwIfAborted(signal)
+    return { state: 'error', error: snapshotReadError(error) }
   }
 
-  if (sizeBytes > MAX_FILE_BYTES) {
+  const readRanges = async (observedSize?: number): Promise<LargeSnapshot> => {
     const ranges = selectors.filter(
       (selector): selector is Extract<PlannedSelector, { selector: 'range' }> =>
         selector.selector === 'range',
     )
-    if (ranges.length === 0) return { state: 'large', sizeBytes }
+    if (ranges.length === 0) return { state: 'large', sizeBytes: observedSize }
     const readTextRange = fs.readTextRange
-    if (!readTextRange) {
+    if (
+      !readTextRange ||
+      !readerMatchesView(fs, readTextRange, 'readTextRange')
+    ) {
       return {
         state: 'large',
-        sizeBytes,
+        sizeBytes: observedSize,
         rangeErrors: new Map(
           ranges.map((selector) => [
             selector.requestIndex,
@@ -378,75 +513,94 @@ async function readCanonicalSnapshot(params: {
           startLine,
           endLine,
           MAX_RANGE_READ_BYTES,
+          { signal },
         )
-        if (
-          range.data.byteLength > MAX_RANGE_READ_BYTES ||
-          range.startLine < 1 ||
-          range.endLine < 0 ||
-          range.endLine < range.startLine - 1 ||
-          range.totalLines < range.endLine
-        ) {
-          rangeErrors.set(
-            selector.requestIndex,
-            filesystemError(
-              'io_error',
-              'The filesystem returned an invalid bounded text range result.',
-              { retryable: true, recovery: 'read_again' },
-            ),
-          )
-          continue
-        }
-        const decoded = decodeText(range.data)
+        throwIfAborted(signal)
+        const decoded = decodeBoundedResult(
+          range,
+          MAX_RANGE_READ_BYTES,
+          readTextRange.readFileView === fs.readFile,
+        )
         if (!decoded.ok) {
           rangeErrors.set(selector.requestIndex, decoded.error)
           continue
         }
-        windows.set(selector.requestIndex, {
-          ...range,
-          content: decoded.content,
-        })
+        windows.set(selector.requestIndex, decoded.window)
       } catch (error) {
-        rangeErrors.set(
-          selector.requestIndex,
-          errorCode(error) === 'ENOENT'
-            ? filesystemError('not_found', FILE_READ_STATUS.DOES_NOT_EXIST, {
-                retryable: true,
-                recovery: 'discover_path',
-              })
-            : filesystemError('io_error', FILE_READ_STATUS.ERROR, {
-                retryable: true,
-                recovery: 'read_again',
-              }),
-        )
+        throwIfAborted(signal)
+        rangeErrors.set(selector.requestIndex, snapshotReadError(error))
       }
     }
-    return { state: 'large', sizeBytes, windows, rangeErrors }
+    return { state: 'large', sizeBytes: observedSize, windows, rangeErrors }
   }
+
+  if (sizeBytes > MAX_FILE_BYTES) return readRanges(sizeBytes)
 
   try {
     throwIfAborted(signal)
-    const bytes = toBytes(await fs.readFile(operationPath))
-    if (bytes.byteLength > MAX_FILE_BYTES) {
-      return { state: 'large', sizeBytes: bytes.byteLength }
-    }
-    const decoded = decodeText(bytes)
-    return decoded.ok
-      ? { state: 'full', content: decoded.content, sizeBytes: bytes.byteLength }
-      : { state: 'error', error: decoded.error }
-  } catch (error) {
-    return {
-      state: 'error',
-      error:
-        errorCode(error) === 'ENOENT'
-          ? filesystemError('not_found', FILE_READ_STATUS.DOES_NOT_EXIST, {
-              retryable: true,
-              recovery: 'discover_path',
-            })
-          : filesystemError('io_error', FILE_READ_STATUS.ERROR, {
+    const readTextFile = fs.readTextFile
+    if (readTextFile && readerMatchesView(fs, readTextFile, 'readTextFile')) {
+      const result = await readTextFile.call(
+        fs,
+        operationPath,
+        MAX_FILE_BYTES,
+        { signal },
+      )
+      throwIfAborted(signal)
+      const decoded = decodeBoundedResult(result, MAX_FILE_BYTES, true)
+      if (!decoded.ok) return { state: 'error', error: decoded.error }
+      const { window } = decoded
+      if (!window.complete) return readRanges(window.rawBasis?.documentBytes)
+      if (
+        window.startLine !== 1 ||
+        (window.endLine !== window.document.visibleLineCount &&
+          window.endLine !== window.document.maxCapabilityLine) ||
+        (window.rawBasis && window.rawBasis.scope !== 'whole')
+      ) {
+        return {
+          state: 'error',
+          error: filesystemError(
+            'io_error',
+            'The bounded whole reader did not return complete document coverage.',
+            {
               retryable: true,
               recovery: 'read_again',
-            }),
+            },
+          ),
+        }
+      }
+      return {
+        state: 'full',
+        content: window.content,
+        document: window.document,
+        sizeBytes: window.document.byteLength,
+        metadataComplete: window.metadataComplete === true,
+        ...(window.rawBasis ? { rawBasis: window.rawBasis } : {}),
+      }
     }
+    // Custom unbounded views can still be displayed. They cannot claim the
+    // default descriptor's allocation or raw authority after decorating it.
+    const raw = await fs.readFile(operationPath)
+    throwIfAborted(signal)
+    const actualBytes =
+      typeof raw === 'string' ? Buffer.byteLength(raw) : raw.byteLength
+    if (actualBytes > MAX_FILE_BYTES) return readRanges(actualBytes)
+    const decoded = decodeText(typeof raw === 'string' ? raw : toBytes(raw), {
+      view: typeof raw === 'string' ? 'text_view' : 'adapter_bytes',
+      coherence: 'observed',
+    })
+    return decoded.ok
+      ? {
+          state: 'full',
+          content: decoded.document.observation,
+          document: decoded.document,
+          sizeBytes: actualBytes,
+          metadataComplete: false,
+        }
+      : { state: 'error', error: decoded.error }
+  } catch (error) {
+    throwIfAborted(signal)
+    return { state: 'error', error: snapshotReadError(error) }
   }
 }
 
@@ -619,12 +773,11 @@ function renderWholeFileItem(
       target.displayPath,
       filesystemError(
         'too_large',
-        `${FILE_READ_STATUS.TOO_LARGE} [${(
-          snapshot.sizeBytes /
-          (1024 * 1024)
-        ).toFixed(
-          1,
-        )}MB exceeds 10MB limit. Read an exact bounded range instead.]`,
+        `${FILE_READ_STATUS.TOO_LARGE} [${
+          snapshot.sizeBytes === undefined
+            ? 'The file exceeded the 10MB read limit'
+            : `${(snapshot.sizeBytes / (1024 * 1024)).toFixed(1)}MB exceeds 10MB limit`
+        }. Read an exact bounded range instead.]`,
         { retryable: true, recovery: 'read_smaller_range' },
       ),
     )
@@ -663,19 +816,23 @@ function renderWholeFileItem(
       }
     }
   }
-  const contentHash = !partial ? getContentHash(content) : undefined
+  const contentHash = !partial ? snapshot.document.observationHash : undefined
+  const rawBasis =
+    !partial && snapshot.metadataComplete ? snapshot.rawBasis : undefined
   const capabilityScope = capabilityIssuer
     ? { ...capabilityIssuer, path: target.displayPath }
     : undefined
   const readCapability =
     contentHash &&
+    rawBasis?.scope === 'whole' &&
     capabilityScope &&
     hasAuthoritativeReadCapabilityScope(capabilityScope)
       ? encodeReadCapabilityToken({
           startLine: 1,
-          endLine: normalizeLineEndings(content).split('\n').length,
+          endLine: snapshot.document.maxCapabilityLine,
           hash: contentHash,
           scope: capabilityScope,
+          rawBasis,
         })
       : undefined
   return {
@@ -685,19 +842,44 @@ function renderWholeFileItem(
     status: partial ? 'partial' : 'ok',
     content: renderedContent,
     complete: !partial,
+    metadataComplete: snapshot.metadataComplete,
     template: target.isExampleFile,
     ...(contentHash && readCapability
       ? {
           editAnchor: {
             startLine: 1,
-            endLine: normalizeLineEndings(content).split('\n').length,
+            endLine: snapshot.document.maxCapabilityLine,
             contentHash,
             readCapability,
+            rawBasis,
           },
+          rawSourceContent: snapshot.document.rawText,
         }
       : {}),
     ...(truncation ? { truncation } : {}),
   }
+}
+
+function getWindowRawBasis(
+  window: RangeWindow,
+  startLine: number,
+  endLine: number,
+): RawReadBasisV1 | undefined {
+  const original = window.rawBasis
+  if (!original || window.metadataComplete !== true || !window.complete)
+    return undefined
+  const first = startLine - window.startLine + 1
+  const last = endLine - window.startLine + 1
+  const local = getRawReadBasis(window.document, first, last, 'lines')
+  return parseRawReadBasis({
+    ...original,
+    scope: 'lines',
+    rawHash: local.rawHash,
+    startByte: original.startByte + local.startByte,
+    endByteExclusive: original.startByte + local.endByteExclusive,
+    includesBom: local.includesBom,
+    endTerminator: local.endTerminator,
+  })
 }
 
 function renderRangeItem(
@@ -733,14 +915,29 @@ function renderRangeItem(
     )
   }
 
-  const fullContent = snapshot.state === 'full' ? snapshot.content : undefined
+  const fullDocument = snapshot.state === 'full' ? snapshot.document : undefined
   const window = snapshot.state === 'large' ? largeWindow! : undefined
-  const lines = splitVisibleLines(fullContent ?? window!.content)
-  const totalLines =
-    snapshot.state === 'full' ? lines.length : window!.totalLines
+  const sourceDocument = fullDocument ?? window!.document
+  const lines = sourceDocument.observation.split('\n')
+  const totalLines = fullDocument
+    ? fullDocument.visibleLineCount
+    : window!.totalLines
+  const maximumLine =
+    fullDocument?.maxCapabilityLine ??
+    Math.max(
+      totalLines,
+      window!.rawBasis &&
+        window!.metadataComplete === true &&
+        window!.rawBasis.endByteExclusive === window!.rawBasis.documentBytes
+        ? window!.endLine
+        : totalLines,
+    )
   const desiredStart = Math.max(1, selector.range.startLine ?? 1)
-  const desiredEnd = Math.min(totalLines, selector.range.endLine ?? totalLines)
-  if (desiredStart > totalLines || desiredEnd < desiredStart) {
+  const desiredEnd = Math.min(
+    maximumLine,
+    selector.range.endLine ?? Math.max(1, totalLines),
+  )
+  if (desiredStart > maximumLine || desiredEnd < desiredStart) {
     return errorItem(
       selector,
       target.displayPath,
@@ -753,7 +950,7 @@ function renderRangeItem(
   }
 
   const sourceStart = window?.startLine ?? 1
-  const sourceEnd = window?.endLine ?? totalLines
+  const sourceEnd = window?.endLine ?? fullDocument!.maxCapabilityLine
   const returnedStart = Math.max(desiredStart, sourceStart)
   const returnedEnd = Math.min(desiredEnd, sourceEnd)
   if (returnedEnd < returnedStart) {
@@ -780,16 +977,24 @@ function renderRangeItem(
   )
   const covered = returnedStart === desiredStart && returnedEnd === desiredEnd
   const exceedsRenderLimit = body.length > MAX_RENDER_CHARS
-  const complete = covered && !exceedsRenderLimit
+  const complete = covered && (window?.complete ?? true) && !exceedsRenderLimit
   if (!complete) {
     body = `${body.slice(0, MAX_RENDER_CHARS)}\n\n[FILE_TOO_LARGE: This range exceeded a bounded read or render limit. Request a smaller line range before editing; do not edit from this truncated range.]`
   }
   const rangeHash = complete ? getContentHash(slice) : undefined
+  const rawBasis = complete
+    ? snapshot.state === 'full'
+      ? snapshot.metadataComplete && snapshot.rawBasis
+        ? getRawReadBasis(snapshot.document, desiredStart, desiredEnd, 'lines')
+        : undefined
+      : getWindowRawBasis(window!, desiredStart, desiredEnd)
+    : undefined
   const capabilityScope = capabilityIssuer
     ? { ...capabilityIssuer, path: target.displayPath }
     : undefined
   const readCapability =
     rangeHash &&
+    rawBasis &&
     capabilityScope &&
     hasAuthoritativeReadCapabilityScope(capabilityScope)
       ? encodeReadCapabilityToken({
@@ -797,6 +1002,7 @@ function renderRangeItem(
           endLine: desiredEnd,
           hash: rangeHash,
           scope: capabilityScope,
+          rawBasis,
         })
       : undefined
   // Range header: emitted as a single line so normalizeReadFilesOverrideResult's
@@ -805,7 +1011,9 @@ function renderRangeItem(
   // followed by inline `preferred block edit:` and `scoped str_replace:`
   // guidance that repeats the readCapability for quick copy/paste.
   const header = complete
-    ? `${RANGE_BLOCK_MARKER}lines ${desiredStart}-${desiredEnd} of ${numFmt.format(totalLines)} in ${target.displayPath}; rangeHash=${rangeHash}; readCapability=${readCapability}; preferred block edit: replace_range { readCapability: "${readCapability}", newContent: "..." }; scoped str_replace: basedOnRead="${readCapability}"]\n`
+    ? readCapability
+      ? `${RANGE_BLOCK_MARKER}lines ${desiredStart}-${desiredEnd} of ${numFmt.format(totalLines)} in ${target.displayPath}; rangeHash=${rangeHash}; readCapability=${readCapability}; preferred block edit: replace_range { readCapability: "${readCapability}", newContent: "..." }; scoped str_replace: basedOnRead="${readCapability}"]\n`
+      : `${RANGE_BLOCK_MARKER}lines ${desiredStart}-${desiredEnd} of ${numFmt.format(totalLines)} in ${target.displayPath}; rangeHash=${rangeHash}; readCapability=omitted; This filesystem view supplied no verified bounded raw edit authority. Obtain a fresh supported read before editing.]\n`
     : `${RANGE_BLOCK_MARKER}lines ${returnedStart}-${returnedEnd} of ${numFmt.format(totalLines)} in ${target.displayPath}; rangeHash=omitted; readCapability=omitted; NO edit capability or read authorization was minted by this truncated read — request a smaller, fully-covered range before editing to obtain a fresh basedOnRead capability]\n`
   return {
     selector: 'range',
@@ -818,6 +1026,10 @@ function renderRangeItem(
     endLine: complete ? desiredEnd : returnedEnd,
     totalLines,
     complete,
+    metadataComplete:
+      snapshot.state === 'full'
+        ? snapshot.metadataComplete
+        : window!.metadataComplete,
     ...(rangeHash && readCapability
       ? {
           editAnchor: {
@@ -825,6 +1037,7 @@ function renderRangeItem(
             endLine: desiredEnd,
             contentHash: rangeHash,
             readCapability,
+            rawBasis,
           },
         }
       : {}),
@@ -861,6 +1074,7 @@ export async function getFilesStructured(params: {
     fileFilter,
     signal,
   })
+  throwIfAborted(signal)
   const results = plan.selectors.map((selector) => {
     if (!selector.resolved.ok) {
       return errorItem(
@@ -882,6 +1096,7 @@ export async function getFileForEditResult(params: {
   cwd: string
   fs: CodebuffFileSystem
   fileFilter?: FileFilter
+  signal?: AbortSignal
 }): Promise<OptionalFileReadResult> {
   const plan = await planNativeReads({
     filePaths: [params.filePath],
@@ -889,7 +1104,9 @@ export async function getFileForEditResult(params: {
     cwd: params.cwd,
     fs: params.fs,
     fileFilter: params.fileFilter,
+    signal: params.signal,
   })
+  throwIfAborted(params.signal)
   const selector = plan.selectors[0]!
   if (!selector.resolved.ok) {
     return {
@@ -920,8 +1137,10 @@ export async function getFileForEditResult(params: {
   return {
     status: 'found',
     path: selector.resolved.target.displayPath,
-    content: snapshot.content,
+    content: snapshot.document.rawText,
     template: selector.resolved.target.isExampleFile,
+    metadataComplete: snapshot.metadataComplete,
+    ...(snapshot.rawBasis ? { rawBasis: snapshot.rawBasis } : {}),
   }
 }
 

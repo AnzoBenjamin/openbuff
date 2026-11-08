@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
 import { dirname, relative, resolve, sep, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
+import { HISTORICAL_SOURCE_COPY_PREFIXES } from './lib/historical-source-copies'
 
 export type Finding = {
   path: string
@@ -36,8 +37,7 @@ const SKIP_PATH_PREFIXES = [
   '.agents/sessions/',
   '.kimchi/',
   '.omx/',
-  // Immutable partial copies are evidence, not live repository documentation.
-  'docs/execution/body-roadmap/evidence/B30/independent-review/source-snapshot/',
+  ...HISTORICAL_SOURCE_COPY_PREFIXES,
   'packages/billing/',
   'packages/bigquery/',
   'evals/test-repos/',
@@ -46,6 +46,16 @@ const SKIP_PATH_PREFIXES = [
 // Frozen draft/upstream snapshots retain their original relative links.
 // Keep neighboring reports and the active researcher roadmap in the scan.
 const SKIP_MARKDOWN_FILES = new Set([
+  // This closed execution diagnosis quotes the invalid package-cwd worker path.
+  'docs/execution/body-roadmap/evidence/B05/resume-20261108/architect-review/runtime-ci-diagnosis-1.md',
+  // Superseded design/reviews preserve proposed paths and source-line links.
+  'docs/execution/body-roadmap/evidence/B19/design-20261108/DESIGN.md',
+  'docs/execution/body-roadmap/evidence/B19/design-review-20261108/review-r1.md',
+  'docs/execution/body-roadmap/evidence/B19/design-review-20261108/r2/review.md',
+  // The frozen preflight-11 checkpoint retains links from its original location.
+  'docs/execution/body-roadmap/evidence/B19/implementation/checkpoints/state-before-preflight-11.md',
+  // This closed preflight-11 diagnosis quotes the earlier missing test path.
+  'docs/execution/body-roadmap/evidence/B19/implementation/independent-architecture-20261109/r3-preflight-11-v2/precheck.md',
   'docs/execution/body-roadmap/evidence/RWEB/planning-review/initial-addendum.md',
   'docs/execution/body-roadmap/evidence/RWEB/feasibility/commands-reference.md',
   'docs/execution/body-roadmap/evidence/RWEB/feasibility/session-management-reference.md',

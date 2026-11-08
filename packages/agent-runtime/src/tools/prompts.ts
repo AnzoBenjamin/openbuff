@@ -8,10 +8,15 @@ import { getToolCallString } from '@codebuff/common/tools/utils'
 import { buildArray } from '@codebuff/common/util/array'
 import { formatAvailableSkillsXml } from '@codebuff/common/util/skills'
 import { pluralize } from '@codebuff/common/util/string'
+import {
+  assertExternalToolInputSchema,
+  jsonSchemaToZod,
+  projectZodSchema,
+  type JsonSchema,
+} from '@codebuff/common/util/json-schema'
 import { jsonSchema } from 'ai'
 import { cloneDeep } from 'lodash'
 import z from 'zod/v4'
-import { convertJsonSchemaToZod } from 'zod-from-json-schema'
 
 import type { $ToolParams, ToolName } from '@codebuff/common/tools/constants'
 import type { SkillsMap } from '@codebuff/common/types/skill'
@@ -21,12 +26,25 @@ import type {
 } from '@codebuff/common/util/file'
 import type { JSONSchema7, ToolSet } from 'ai'
 
+// Attach host descriptors to the exact provider tool set without putting
+// origin references or dispatch metadata into the provider's JSON payload.
+const advertisedExternalDefinitions = new WeakMap<
+  ToolSet,
+  CustomToolDefinitions
+>()
+
+export function getAdvertisedExternalToolDefinitions(
+  tools: ToolSet,
+): CustomToolDefinitions | undefined {
+  return advertisedExternalDefinitions.get(tools)
+}
+
 /**
  * Ensures the inputSchema is a Zod schema. If it's a JSON Schema object
  * (from SDK custom tools that were serialized), converts it to Zod.
  */
 export function ensureZodSchema(
-  schema: z.ZodType | Record<string, unknown>,
+  schema: z.ZodType | Record<string, unknown> | boolean,
 ): z.ZodType {
   // Check if it's already a Zod schema by looking for the safeParse method
   if (
@@ -36,12 +54,20 @@ export function ensureZodSchema(
     return schema as z.ZodType
   }
   // JSON Schema object - convert to Zod
-  return convertJsonSchemaToZod(schema as Record<string, unknown>)
+  return jsonSchemaToZod(schema)
+}
+
+function ensureExternalZodSchema(
+  schema: z.ZodType | Record<string, unknown> | boolean,
+): z.ZodType {
+  const validator = ensureZodSchema(schema)
+  assertExternalToolInputSchema(projectZodSchema(validator, 'input'))
+  return validator
 }
 
 function ensureJsonSchemaCompatible(schema: z.ZodType): z.ZodType {
   try {
-    z.toJSONSchema(schema, { io: 'input' })
+    projectZodSchema(schema, 'input')
     return schema
   } catch (error) {
     throw new Error(`Cannot publish tool input schema: ${String(error)}`, {
@@ -52,7 +78,7 @@ function ensureJsonSchemaCompatible(schema: z.ZodType): z.ZodType {
 
 function toJsonSchemaSafe(schema: z.ZodType): Record<string, unknown> {
   try {
-    return z.toJSONSchema(schema, { io: 'input' }) as Record<string, unknown>
+    return projectZodSchema(schema, 'input') as Record<string, unknown>
   } catch (error) {
     throw new Error(`Cannot publish tool input schema: ${String(error)}`, {
       cause: error,
@@ -312,7 +338,7 @@ export const getToolsInstructions = (
   }
   const hasMutationTool = tools.some(
     (toolName) =>
-      toolName in toolParams &&
+      Object.hasOwn(toolParams, toolName) &&
       getToolMetadata(toolName as ToolName).kind === 'mutation',
   )
 
@@ -438,7 +464,7 @@ export const fullToolList = (
       const toolDef = additionalToolDefinitions[toolName]
       return buildToolDescription({
         toolName,
-        schema: ensureZodSchema(toolDef.inputSchema),
+        schema: ensureExternalZodSchema(toolDef.inputSchema),
         description: toolDef.description,
         endsAgentStep: toolDef.endsAgentStep ?? true,
         exampleInputs: toolDef.exampleInputs,
@@ -466,8 +492,8 @@ export const getShortToolInstructions = (
 
   const toolDescriptionsList = [
     ...(
-      toolNames.filter(
-        (name) => (name as keyof typeof toolParams) in toolParams,
+      toolNames.filter((name) =>
+        Object.hasOwn(toolParams, name),
       ) as (keyof typeof toolParams)[]
     ).map((name) => {
       const tool = toolParams[name]
@@ -481,7 +507,7 @@ export const getShortToolInstructions = (
       const { inputSchema, endsAgentStep } = additionalToolDefinitions[name]
       return buildShortToolDescription({
         toolName: name,
-        schema: ensureZodSchema(inputSchema),
+        schema: ensureExternalZodSchema(inputSchema),
         endsAgentStep: endsAgentStep ?? true,
       })
     }),
@@ -524,9 +550,9 @@ export async function getToolSet(params: {
 
   // Generate available skills XML for the skill tool description
   const availableSkillsXml = formatAvailableSkillsXml(skills)
-  const toolSet: ToolSet = {}
+  const toolSet: ToolSet = Object.create(null)
   for (const toolName of toolNames) {
-    if (toolName in toolParams) {
+    if (Object.hasOwn(toolParams, toolName)) {
       const toolDef = toolParams[toolName as ToolName]
       const providerToolDef = {
         ...toolDef,
@@ -559,14 +585,27 @@ export async function getToolSet(params: {
       }
       toolSet[toolName] = compactToolDefinitionForProvider(resolvedToolDef, {
         toolName,
-        preserveDescriptions: shouldPreserveProviderSchemaDescriptions(toolName),
+        preserveDescriptions:
+          shouldPreserveProviderSchemaDescriptions(toolName),
       })
     }
   }
 
   const toolDefinitions = await additionalToolDefinitions()
   for (const [toolName, toolDefinition] of Object.entries(toolDefinitions)) {
-    const clonedDef = cloneDeep({ ...toolDefinition, inputSchema: undefined })
+    if (Object.hasOwn(toolSet, toolName))
+      throw new Error(
+        `External tool alias conflicts with a built-in tool: ${toolName}`,
+      )
+    const {
+      identity: _identity,
+      pathParameters: _paths,
+      ...providerDefinition
+    } = toolDefinition
+    const clonedDef = cloneDeep({
+      ...providerDefinition,
+      inputSchema: undefined,
+    })
     // Custom tool inputSchema may be supplied as JSON Schema or Zod.
     const input = toolDefinition.inputSchema
     const isZod =
@@ -576,6 +615,12 @@ export async function getToolSet(params: {
     // Zod and back can discard constraints, annotations, or references.
     let inputSchema: ReturnType<typeof jsonSchema>
     try {
+      if (!isZod) jsonSchemaToZod(input)
+      assertExternalToolInputSchema(
+        isZod
+          ? projectZodSchema(input as z.ZodType, 'input')
+          : (input as JsonSchema),
+      )
       // Custom/MCP tools own their schema: keep whatever annotations it
       // already carries instead of newly stripping description guidance the
       // tool author wrote deliberately.
@@ -598,6 +643,10 @@ export async function getToolSet(params: {
 
   // Add agent tools (agents as direct tool calls)
   for (const [toolName, toolDefinition] of Object.entries(agentTools)) {
+    if (Object.hasOwn(toolSet, toolName))
+      throw new Error(
+        `Agent tool alias conflicts with another tool: ${toolName}`,
+      )
     // Same per-tool description rule as the built-in branch so every branch
     // of getToolSet compacts consistently.
     toolSet[toolName] = compactToolDefinitionForProvider(toolDefinition, {
@@ -606,5 +655,6 @@ export async function getToolSet(params: {
     })
   }
 
+  advertisedExternalDefinitions.set(toolSet, cloneDeep(toolDefinitions))
   return toolSet
 }

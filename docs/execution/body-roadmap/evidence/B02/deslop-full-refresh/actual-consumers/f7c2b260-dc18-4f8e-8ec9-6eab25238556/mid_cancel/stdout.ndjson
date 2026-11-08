@@ -1,3 +1,0 @@
-{"type":"start","messageHistoryLength":0}
-{"type":"tool_call","toolCallId":"0dd97ac3-1473-4d3b-92ae-c1edbb69a02d","toolName":"fixture_await","input":{},"agentId":"main-agent"}
-{"type":"error","message":"Error executing handleSteps for agent body-runtime-fixture: fixture mid-cancellation","runOutcome":{"termination":"cancelled","cause":{"code":"programmatic_execution_error","message":"Error executing handleSteps for agent body-runtime-fixture: fixture mid-cancellation"}},"taskAcceptance":{"status":"unknown"}}

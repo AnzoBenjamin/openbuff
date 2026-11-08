@@ -188,6 +188,7 @@ export const DynamicAgentDefinitionSchema = z.object({
 
   // Tools and spawnable agents
   mcpServers: z.record(z.string(), mcpConfigSchema).default(() => ({})),
+  mcpServerReferences: z.record(z.string(), z.string()).optional(),
   toolNames: z
     .string()
     .array()

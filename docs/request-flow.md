@@ -222,7 +222,8 @@ strict-mode edit flows, the runtime requires a recent `read_files`
 authorization for each path before an edit is accepted:
 
 - A successful whole-file `read_files.paths` call mints a per-path
-  authorization that allows subsequent exact-match edits to that file. Range
+  authorization only from authenticated complete lossless bytes and a whole
+  raw basis. It remains usable while the exact raw hash matches. Range
   and symbol reads do not grant whole-file authorization; follow-up edits must
   carry their scoped `readCapability`.
 - Every complete read result groups its canonical content hash, exact bounds,
@@ -231,17 +232,16 @@ authorization for each path before an edit is accepted:
   model-visible result. Edit callers copy only `editAnchor.readCapability`;
   truncated results expose no anchor.
 - `basedOnRead` (the read capability returned from a fresh `read_files`
-  range) is an authenticated opaque `cap.v3` token bound to the canonical
+  range) is an authenticated opaque `cap.v4` token bound to the canonical
   project identity, normalized target path, issuing run, line range, and
-  content hash. Cross-path and cross-run replay is rejected before content
-  matching. Legacy `cap.v2` tokens and explicit range-hash objects remain
-  compatible freshness assertions only; they cannot bypass strict
-  read-before-edit for an otherwise unread path.
-- A successful edit keeps the per-path authorization for the rest of the
-  editing flow, while the runtime chains subsequent exact-match edits from the
-  latest prepared content. The authorization is path-level permission, not a
-  freshness proof: large/ambiguous follow-up edits should use the fresh
-  post-edit `basedOnRead` returned by the successful edit or re-read the range.
+  observation hash and original raw basis. Cross-path and cross-run replay is
+  rejected before matching. Historical v3 parsing supplies no fresh raw edit
+  authority; obtain a v4 read before editing. Scoped reads remain scoped even
+  when their slice covers the visible file.
+- A confirmed edit can refresh whole-file authorization from exact after-content
+  covered by a committed receipt. The runtime drops previous prepared queues and
+  verifies exact bytes again for subsequent mutations. An unchanged path in a
+  mixed transaction receives no new authority without its own confirmation.
 - Stale-anchor or anchor-not-found failures should be recovered by
   re-reading the exact target range and retrying with the new
   `basedOnRead`, not by guessing from memory. Failure responses never mint a

@@ -1,4 +1,5 @@
 import { sanitizeMediaForUiState } from './payload-sanitizer'
+import { isMcpToolResultEnvelope } from '@codebuff/common/mcp/result'
 
 import type {
   ContentBlock,
@@ -2225,6 +2226,7 @@ const _hasMediaPayloadImpl = (
 
   if (!Array.isArray(value)) {
     const record = value as Record<string, unknown>
+    if (isMcpToolResultEnvelope(record)) return true
     if (record.type === 'media' && typeof record.data === 'string') {
       return true
     }

@@ -1,63 +1,32 @@
 import z from 'zod/v4'
 
 import { $getNativeToolCallExampleString, jsonToolResultSchema } from '../utils'
+import { executionRefusalSchema } from '../execution-refusal'
 
 import { gitCommitGuidePrompt } from '../../../constants/git-discipline'
 
 import type { $ToolParams } from '../../constants'
 
+const executionMetadata = {
+  executionRefusal: executionRefusalSchema.optional(),
+  dirtyObservationRefusal: executionRefusalSchema.optional(),
+  executionBindingVersion: z.literal(2).optional(),
+  executionBindingDigest: z.string().optional(),
+  approvalReceiptId: z.string().optional(),
+  harnessAction: z.string().optional(),
+  harnessTarget: z.string().optional(),
+  harnessEffects: z.array(z.object({
+    action: z.string(),
+    target: z.string(),
+    branch: z.string().optional(),
+    pushRisks: z.array(z.string()).optional(),
+  })).optional(),
+  harnessParseStatus: z.enum(['complete', 'unsupported', 'malformed']).optional(),
+}
+
 export const terminalCommandOutputSchema = z.union([
   z.object({
-    command: z.string(),
-    startingCwd: z.string().optional(),
-    message: z.string().optional(),
-    stderr: z.string().optional(),
-    stdout: z.string().optional(),
-    exitCode: z.number().optional(),
-    /** Project-relative paths newly dirtied by a SYNC command (post − pre git status). */
-    touchedPaths: z.array(z.string()).optional(),
-    /** Full streamed output persisted to a scratch file when the inline result was truncated; read with read_logs/read_files. */
-    fullLogPath: z.string().optional(),
-    /** Byte length of the persisted full-output artifact. */
-    logBytes: z.number().optional(),
-    logPersisted: z.boolean().optional(),
-    logError: z.string().optional(),
-  }),
-  z.object({
-    command: z.string(),
-    startingCwd: z.string().optional(),
-    status: z.enum(['passed', 'failed', 'unknown']).optional(),
-    message: z.string().optional(),
-    stderr: z.string().optional(),
-    stderrExcerpt: z.string().optional(),
-    stdoutExcerpt: z.string().optional(),
-    stdoutOmittedForLength: z.literal(true),
-    exitCode: z.number().optional(),
-    touchedPaths: z.array(z.string()).optional(),
-    /** Full untruncated output persisted to a scratch file when the inline result was truncated; read with read_logs/read_files. */
-    fullLogPath: z.string().optional(),
-    /** Byte length of the persisted full-output artifact. */
-    logBytes: z.number().optional(),
-    logPersisted: z.boolean().optional(),
-    logError: z.string().optional(),
-  }),
-  z.object({
-    command: z.string(),
-    processId: z.number(),
-    backgroundProcessStatus: z.enum([
-      'running',
-      'completed',
-      'error',
-      'lost',
-      'stopped',
-    ]),
-    detached: z.boolean().optional(),
-    /** Job id to poll/follow with the check_job tool. */
-    jobId: z.string().optional(),
-    /** Temp file the background job streams its combined output to. */
-    logFile: z.string().optional(),
-  }),
-  z.object({
+    ...executionMetadata,
     command: z.string(),
     errorMessage: z.string(),
     timedOut: z.boolean().optional(),
@@ -94,7 +63,61 @@ export const terminalCommandOutputSchema = z.union([
     logBytes: z.number().optional(),
     logPersisted: z.boolean().optional(),
     logError: z.string().optional(),
+  }),  z.object({
+    ...executionMetadata,
+    command: z.string(),
+    startingCwd: z.string().optional(),
+    status: z.enum(['passed', 'failed', 'unknown']).optional(),
+    message: z.string().optional(),
+    stderr: z.string().optional(),
+    stderrExcerpt: z.string().optional(),
+    stdoutExcerpt: z.string().optional(),
+    stdoutOmittedForLength: z.literal(true),
+    exitCode: z.number().optional(),
+    touchedPaths: z.array(z.string()).optional(),
+    /** Full untruncated output persisted to a scratch file when the inline result was truncated; read with read_logs/read_files. */
+    fullLogPath: z.string().optional(),
+    /** Byte length of the persisted full-output artifact. */
+    logBytes: z.number().optional(),
+    logPersisted: z.boolean().optional(),
+    logError: z.string().optional(),
   }),
+  z.object({
+    ...executionMetadata,
+    command: z.string(),
+    processId: z.number(),
+    startingCwd: z.string().optional(),
+    backgroundProcessStatus: z.enum([
+      'running',
+      'completed',
+      'error',
+      'lost',
+      'stopped',
+    ]),
+    detached: z.boolean().optional(),
+    /** Job id to poll/follow with the check_job tool. */
+    jobId: z.string().optional(),
+    /** Temp file the background job streams its combined output to. */
+    logFile: z.string().optional(),
+  }),
+  z.object({
+    ...executionMetadata,
+    command: z.string(),
+    startingCwd: z.string().optional(),
+    message: z.string().optional(),
+    stderr: z.string().optional(),
+    stdout: z.string().optional(),
+    exitCode: z.number().optional(),
+    /** Project-relative paths newly dirtied by a SYNC command (post − pre git status). */
+    touchedPaths: z.array(z.string()).optional(),
+    /** Full streamed output persisted to a scratch file when the inline result was truncated; read with read_logs/read_files. */
+    fullLogPath: z.string().optional(),
+    /** Byte length of the persisted full-output artifact. */
+    logBytes: z.number().optional(),
+    logPersisted: z.boolean().optional(),
+    logError: z.string().optional(),
+  }),
+
 ])
 
 const toolName = 'run_terminal_command'
@@ -117,7 +140,7 @@ const inputSchema = z
       .optional()
       .default(false)
       .describe(
-        `For BACKGROUND commands only: keep the job running if the owning request is cancelled. Defaults to false.`,
+        `For BACKGROUND commands only: transfer the job to the registered session receiver so request cancellation does not stop it. A finite timeout remains in force. Defaults to false.`,
       ),
     cwd: z
       .string()
@@ -130,7 +153,7 @@ const inputSchema = z
       .default(-1)
       .optional()
       .describe(
-        `Wall-clock bound in seconds for SYNC commands. Omit or use -1 for no timeout (the default). Does not apply to BACKGROUND commands.`,
+        `Wall-clock bound in seconds for SYNC and BACKGROUND commands, including startup and approval waits. Omit or use -1 for no local timeout (the default). A finite parent deadline still applies.`,
       ),
     owner: z
       .object({

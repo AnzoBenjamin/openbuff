@@ -59,6 +59,11 @@ import {
 } from '@codebuff/common/constants/chatgpt-oauth'
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
+import type {
+  ExecutionAdapterContext,
+  LaunchObserver,
+  Refusal,
+} from '@codebuff/common/types/contracts/execution-context'
 import { SUPERVISED_CHILD_RUNTIME_ENV_KEYS } from './supervised-child-env-keys'
 import { formatValidationIssues } from '../util/format-validation-issues'
 
@@ -113,6 +118,8 @@ export type { SupervisedSpawnRequest } from '@codebuff/common/types/contracts/ag
 
 /** Request the supervisor hands to the injected spawn seam. */
 export type SettleSpawnRequest = {
+  /** Host-only observation capability; never serialized into the child request. */
+  observer?: LaunchObserver
   cmd: string[]
   /** Exactly the allowlisted keys — never the ambient environment. */
   env: Record<string, string>
@@ -143,7 +150,9 @@ export type SettleChildProcess = {
   killGroup?: (signal?: 'SIGTERM' | 'SIGKILL') => void
 }
 
-export type SettleSpawnSeam = (request: SettleSpawnRequest) => SettleChildProcess
+export type SettleSpawnSeam = (
+  request: SettleSpawnRequest,
+) => SettleChildProcess
 
 export type SettleCrashReason =
   | 'timeout'
@@ -152,6 +161,12 @@ export type SettleCrashReason =
   | 'internal_error'
 
 export type SpawnSettledSubagentParams = {
+  execution?: ExecutionAdapterContext
+  branchId?:
+    | 'supervised.source.initial'
+    | 'supervised.source.retry'
+    | 'supervised.self-exec.initial'
+    | 'supervised.self-exec.retry'
   childModulePath: string
   args?: string[]
   /**
@@ -202,6 +217,8 @@ export type SpawnSettledSubagentParams = {
 // (`@codebuff/common/types/contracts/agent-runtime`); the concrete `receipt`
 // field is the narrowed `AgentReceipt` this module validates.
 export type SettledSubagentResult = {
+  /** A refused dispatch is distinguishable from a runtime spawn failure. */
+  executionRefusal?: Refusal
   /** Process-level settle outcome (transport truth). When a valid envelope
    * arrived, the child's self-declared `receipt.outcome` is preserved on
    * `receipt` untouched for downstream PR-T1 reconciliation. */
@@ -232,6 +249,30 @@ function defaultSpawnSeam(request: SettleSpawnRequest): SettleChildProcess {
     // negative-pid kill.
     detached: true,
   })
+  if (request.observer) {
+    let observationError: string | undefined
+    if (!Number.isInteger(proc.pid) || proc.pid <= 0) {
+      request.observer.failure({
+        source: 'adapter-observation-error',
+        cause: 'Bun child has no valid runtime PID',
+      })
+      observationError = 'Bun child has no valid runtime PID'
+    } else {
+      const observed = request.observer.spawnObserved({
+        source: 'bun-spawn-result',
+        pid: proc.pid,
+      })
+      if (!observed.ok) observationError = observed.cause
+    }
+    if (observationError) {
+      try {
+        if (Number.isSafeInteger(proc.pid) && proc.pid > 0) process.kill(proc.pid, 'SIGTERM')
+      } catch {
+        /* termination request only */
+      }
+      throw new Error(observationError)
+    }
+  }
   return {
     stdout: proc.stdout,
     stderr: proc.stderr,
@@ -310,7 +351,11 @@ export async function spawnSettledSubagent(
   // and the function simply awaits child exit. SETTLE_DEFAULT_TIMEOUT_MS is
   // still exported for callers that choose it, but is no longer silently
   // applied here.
-  const timeoutMs = params.timeoutMs
+  // Mediated execution uses the host's absolute, chunked lifetime timer. Do
+  // not restart a duration after bridge setup/admission or overflow setTimeout.
+  const timeoutMs = params.execution ? undefined : params.timeoutMs
+  let processSignal = params.signal
+  const maximumLifetimeMs = params.execution ? undefined : params.maxLifetimeMs
   // NOTE (determinism guard): durationMs is a performance.now delta — a
   // monotonic interval, never a Date.now-derived absolute timestamp.
   // Injectable via params.now so tests stay deterministic.
@@ -334,11 +379,12 @@ export async function spawnSettledSubagent(
 
   let proc: SettleChildProcess
   try {
-    proc = (params.spawn ?? defaultSpawnSeam)({
+    const spawnRequest: SettleSpawnRequest = {
       // P2-T8d SELF-EXEC: cmdOverride is used verbatim when supplied;
       // absent keeps the default bun-source cmd byte-identical.
       cmd: params.cmdOverride ?? [
         process.execPath,
+        ...(params.execution ? ['--no-env-file'] : []),
         'run',
         params.childModulePath,
         ...(params.args ?? []),
@@ -350,7 +396,60 @@ export async function spawnSettledSubagent(
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
-    })
+    }
+    if (params.execution) {
+      const context = params.execution
+      const prepared = context.execution.prepareTarget({
+        target: {
+          executable: spawnRequest.cmd[0],
+          argv: spawnRequest.cmd.slice(1),
+          cwd: params.cwd ?? context.projectRoot,
+          projectRoot: context.projectRoot,
+          allowedPaths: context.allowedPaths,
+          mode: context.mode,
+          processType: 'SYNC',
+          profile: context.profile,
+          family: 'supervised-child',
+          branchId: params.branchId ?? 'supervised.source.initial',
+          environmentOverlay: spawnRequest.env,
+          adapterOptions: {
+            runtime: 'bun',
+            stdio: 'ignore,pipe,pipe',
+            detached: true,
+          },
+        },
+      })
+      if (!prepared.ok)
+        return crashResult('spawn_failed', null, { executionRefusal: prepared })
+      const admitted = await prepared.value.admit()
+      if (!admitted.ok)
+        return crashResult('spawn_failed', null, { executionRefusal: admitted })
+      const dispatched = prepared.value.dispatchNow(
+        admitted.value.permit,
+        (input, observer) => {
+          processSignal = input.resourceSignal
+          return (params.spawn ?? defaultSpawnSeam)({
+            ...spawnRequest,
+            cmd: [input.executable, ...input.argv],
+            env: { ...input.env },
+            cwd: input.cwd,
+            observer,
+          })
+        },
+      )
+      if (!dispatched.ok) {
+        return crashResult(
+          'spawn_failed',
+          null,
+          dispatched.reason === 'dispatch-failed'
+            ? undefined
+            : { executionRefusal: dispatched },
+        )
+      }
+      proc = dispatched.value.handle
+    } else {
+      proc = (params.spawn ?? defaultSpawnSeam)(spawnRequest)
+    }
   } catch {
     return crashResult('spawn_failed', null)
   }
@@ -402,7 +501,7 @@ export async function spawnSettledSubagent(
     }, SETTLE_KILL_GRACE_MS)
   }
 
-  const idleWindowMs = params.idleTimeoutMs
+  const idleWindowMs = params.execution ? undefined : params.idleTimeoutMs
   const armIdle = () => {
     idleTimer = setTimeout(commitKill, idleWindowMs as number)
   }
@@ -422,10 +521,11 @@ export async function spawnSettledSubagent(
   // ALSO absent (the no-bounds case) NO term timer is armed — the function
   // just awaits child exit, matching the unbounded in-process path.
   if (idleWindowMs !== undefined) armIdle()
-  else if (timeoutMs !== undefined) termTimer = setTimeout(commitKill, timeoutMs)
+  else if (timeoutMs !== undefined)
+    termTimer = setTimeout(commitKill, timeoutMs)
   // Optional absolute lifetime cap (default off): never reset by activity.
-  if (params.maxLifetimeMs !== undefined) {
-    maxTimer = setTimeout(commitKill, params.maxLifetimeMs)
+  if (maximumLifetimeMs !== undefined) {
+    maxTimer = setTimeout(commitKill, maximumLifetimeMs)
   }
   const unsubscribeActivity = params.onActivity?.(markActivity)
 
@@ -442,11 +542,11 @@ export async function spawnSettledSubagent(
   const onParentAbort = (): void => {
     commitKill(false)
   }
-  if (params.signal !== undefined) {
-    if (params.signal.aborted) {
+  if (processSignal !== undefined) {
+    if (processSignal.aborted) {
       onParentAbort()
     } else {
-      params.signal.addEventListener('abort', onParentAbort, { once: true })
+      processSignal.addEventListener('abort', onParentAbort, { once: true })
     }
   }
 
@@ -458,7 +558,7 @@ export async function spawnSettledSubagent(
     unsubscribeActivity?.()
     // cancel-softlock fix: drop the parent-abort listener on EVERY settle
     // path (ok / crashed / internal error) — no listener leak across spawns.
-    params.signal?.removeEventListener('abort', onParentAbort)
+    processSignal?.removeEventListener('abort', onParentAbort)
   }
 
   try {
@@ -495,9 +595,7 @@ export async function spawnSettledSubagent(
     // contract requires newline-terminated JSON lines) — drop it. This is
     // also what keeps a cap-cut tail from being parsed as a complete line.
     if (text.length > 0 && !text.endsWith('\n')) lines.pop()
-    const lastLine = [...lines]
-      .reverse()
-      .find((line) => line.trim().length > 0)
+    const lastLine = [...lines].reverse().find((line) => line.trim().length > 0)
 
     const baseWithStdout = { ...base, stdoutBytes: stdoutCapture.totalBytes }
     if (lastLine === undefined) {
@@ -518,10 +616,7 @@ export async function spawnSettledSubagent(
       }
     }
 
-    let parsed:
-      | { receipt: AgentReceipt }
-      | { error: string }
-      | undefined
+    let parsed: { receipt: AgentReceipt } | { error: string } | undefined
     try {
       const candidate = agentReceiptSchema.safeParse(JSON.parse(lastLine))
       parsed = candidate.success
@@ -543,7 +638,11 @@ export async function spawnSettledSubagent(
     // Validated envelope + stdout cap exceeded → 'truncated' (still above
     // 'ok' in the PR-T1 precedence).
     if (stdoutCapture.totalBytes > SETTLE_STDOUT_CAP_BYTES) {
-      return { outcome: 'truncated', receipt: parsed.receipt, ...baseWithStdout }
+      return {
+        outcome: 'truncated',
+        receipt: parsed.receipt,
+        ...baseWithStdout,
+      }
     }
     return { outcome: 'ok', receipt: parsed.receipt, ...baseWithStdout }
   } catch {

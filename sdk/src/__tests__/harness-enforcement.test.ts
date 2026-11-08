@@ -7,9 +7,12 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import {
   ChangeOwnershipService,
   HarnessApprovalService,
+  classifyCapturedTargetForExecution,
+  classifyHarnessArgv,
   classifyTerminalHarnessAction,
   evaluateHarnessActionPolicy,
   hashCommand,
+  prepareHarnessGitReadArgv,
 } from '../services/harness-enforcement'
 import { LocalHarnessStore } from '../services/local-harness-store'
 
@@ -31,6 +34,155 @@ const scope = {
   runId: 'run-1',
   snapshotId: 'snapshot-1',
 }
+
+describe('bounded exact argv read classification', () => {
+  // Independent expected adapter bytes; do not use the normalizer as the classifier oracle.
+  const queryGuards = ['--no-pager', '--no-optional-locks', '--no-lazy-fetch', '-c', 'core.fsmonitor=false']
+  test.each([
+    ['status'], ['status', '--porcelain'], ['status', '--porcelain', '-uall'],
+    ['status', '--short', '--branch'], ['status', '--short', '--branch', '--', 'file with spaces'],
+    ['diff'], ['diff', '--cached'], ['diff', '--cached', '--check'], ['diff', '--cached', '-U0'],
+    ['diff', '--cached', '--name-only', '-z'], ['diff', '--no-color'], ['diff', '--staged', '--no-color'],
+    ['diff', '--no-color', 'HEAD~1', 'HEAD', '--'],
+    ['diff', '--binary', 'HEAD', '--', '.', ':(exclude).agents/sessions/**'],
+    ['diff', '--no-color', '--', '--ext-diff', 'literal; $(git push)'],
+    ['branch', '--show-current'], ['rev-parse', '--show-toplevel'], ['rev-parse', '--git-common-dir'],
+    ['rev-parse', '--git-dir'], ['rev-parse', 'HEAD'], ['rev-parse', 'HEAD~1'],
+    ['rev-parse', '--verify', 'HEAD'], ['rev-parse', '--verify', 'HEAD~1'],
+    ['rev-parse', '--abbrev-ref', 'HEAD'],
+    ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
+    ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], ['merge-base', 'HEAD', 'origin/main'],
+    ['shortlog', 'HEAD~10..HEAD'],
+  ].map(argv => ({ argv })))('captures guarded Git adapter query semantics: %j', ({ argv }) => {
+    const identity = argv[0] === 'rev-parse' && ['--show-toplevel', '--git-common-dir', '--git-dir'].includes(argv[1])
+    const expected = identity ? argv : [...queryGuards, argv[0],
+      ...(argv[0] === 'diff' ? ['--no-ext-diff', '--no-textconv', '--submodule=short'] : []), ...argv.slice(1)]
+    const before = [...argv]
+    expect(prepareHarnessGitReadArgv(argv)).toEqual(expected)
+    expect(prepareHarnessGitReadArgv(expected)).toEqual(expected)
+    expect(argv).toEqual(before)
+    const workingTree = argv[0] === 'status' || (argv[0] === 'diff' &&
+      !argv.includes('--cached') && !argv.includes('--staged') && !argv.includes('HEAD~1'))
+    const classification = classifyCapturedTargetForExecution({ kind: 'argv', executable: 'git', argv: expected })
+    if (workingTree) {
+      expect(classification).toMatchObject({ parseStatus: 'unsupported', effects: [{ action: 'arbitrary-code' }] })
+      expect(classification.parseReason).toContain('clean/process filters')
+      return
+    }
+    expect(classifyHarnessArgv({ executable: 'git', argv: expected })).toBeUndefined()
+    expect(classification).toMatchObject({
+      invocationKind: 'argv', classifierVersion: 'b18-argv-adapter-v1',
+      effects: [], parseStatus: 'complete', parseReason: null,
+    })
+  })
+
+  test.each([
+    { executable: 'rg', argv: ['--no-config', '-n', '--json', '-g', '*.ts', '-C', '2', '--', 'a  b; $(git push)', 'src'] },
+    { executable: 'rg', argv: ['--no-config', '-l', '--glob=*.ts', '-A2', '--', '--pre', 'file with spaces'] },
+    { executable: 'grep', argv: ['-n', '-E', '--', 'a  b; $(git push)', 'file with spaces'] },
+    { executable: 'grep', argv: ['-e', '--pre', 'file with spaces'] },
+    { executable: 'cat', argv: ['--', '--unknown-option', 'literal; $(git push)'] },
+    { executable: 'head', argv: ['-n', '20', 'file with spaces'] },
+    { executable: 'tail', argv: ['--lines=20', 'file with spaces'] },
+    { executable: 'wc', argv: ['-l', 'file with spaces'] },
+    { executable: 'ls', argv: ['-la', 'file with spaces'] },
+    { executable: 'pwd', argv: [] }, { executable: 'echo', argv: ['literal; $(git push)'] },
+    { executable: 'node', argv: ['--version'] }, { executable: 'git', argv: ['--version'] },
+    { executable: 'go', argv: ['version'] }, { executable: 'java', argv: ['-version'] },
+  ])('keeps supported read tokens complete: %j', captured => {
+    const before = [...captured.argv]
+    expect(classifyHarnessArgv(captured)).toBeUndefined()
+    expect(classifyCapturedTargetForExecution({ kind: 'argv', ...captured })).toMatchObject({
+      effects: [], parseStatus: 'complete', parseReason: null,
+    })
+    expect([...captured.argv]).toEqual(before)
+  })
+
+  test.each([
+    { executable: 'rg', argv: ['--no-config', '--pre', 'node processor.js', '--', 'needle', 'src'] },
+    { executable: 'rg', argv: ['--no-config', '--pre=node processor.js', '--', 'needle', 'src'] },
+    { executable: 'rg', argv: ['--pre', 'node processor.js', '--', 'needle', 'src'] },
+    { executable: 'rg', argv: ['--no-config', '-x', '--', 'needle', 'src'] },
+    { executable: 'rg', argv: ['--no-config', '--unknown=processor', '--', 'needle', 'src'] },
+    { executable: 'rg', argv: ['--no-config', '--glob'] },
+    { executable: 'rg', argv: ['--no-config', '--glob', '--', 'needle'] },
+    { executable: 'rg', argv: ['--no-config', '-C', 'not-a-count', '--', 'needle'] },
+    { executable: 'rg', argv: ['-n', 'needle', 'src'] },
+    { executable: 'git', argv: ['diff', '--ext-diff'] },
+    { executable: 'git', argv: ['diff'] },
+    { executable: 'git', argv: ['diff', '--no-color'] },
+    { executable: 'git', argv: ['diff', '--cached'] },
+    { executable: 'git', argv: ['status', '--short', '--branch'] },
+    { executable: 'git', argv: ['--no-pager', '--no-optional-locks', '-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff', '--no-textconv', '--cached'] },
+    { executable: 'git', argv: [...queryGuards, 'diff', '--no-ext-diff', '--cached'] },
+    { executable: 'git', argv: [...queryGuards, 'diff', '--no-textconv', '--cached'] },
+    { executable: 'git', argv: [...queryGuards, 'diff', '--no-ext-diff', '--no-textconv', '--submodule=diff', '--cached'] },
+    { executable: 'git', argv: [...queryGuards, 'diff', '--no-ext-diff', '--no-textconv', '--submodule=short', '--textconv', '--cached'] },
+    { executable: 'git', argv: [...queryGuards, 'diff', '--no-ext-diff', '--no-textconv', '--submodule=short', '--ext-diff', '--cached'] },
+    { executable: 'git', argv: [...queryGuards, '-c', 'core.fsmonitor=processor', 'status'] },
+    { executable: 'git', argv: [...queryGuards, '--paginate', 'diff', '--no-ext-diff', '--no-textconv', '--cached'] },
+    { executable: 'git', argv: [...queryGuards, 'show', '--no-ext-diff', '--no-textconv', 'HEAD'] },
+    { executable: 'git', argv: ['diff', '--ext-diff', '--', 'src'] },
+    { executable: 'git', argv: ['diff', '--ext-diff=processor'] },
+    { executable: 'git', argv: ['diff', '--textconv'] },
+    { executable: 'git', argv: ['diff', '--textconv=processor', '--', 'src'] },
+    { executable: 'git', argv: ['show', '--textconv', 'HEAD:src/a.ts'] },
+    { executable: 'git', argv: ['log', '--ext-diff', '-p'] },
+    { executable: 'git', argv: ['diff', '--output', '/tmp/not-written'] },
+    { executable: 'git', argv: ['diff', '-O', 'order-file'] },
+    { executable: 'git', argv: ['diff', '--unknown-option', '--', 'src'] },
+    { executable: 'git', argv: ['status', '--unknown=one'] },
+    { executable: 'git', argv: ['rev-parse', '--show-toplevel', 'HEAD'] },
+    { executable: 'git', argv: ['branch', '--show-current', '--unknown'] },
+    { executable: 'git', argv: ['remote', 'get-url', 'origin', '--unknown'] },
+    { executable: 'git', argv: ['config', '--get', 'key', '--unknown'] },
+    { executable: 'grep', argv: ['needle', '--unknown-option', 'src'] },
+    { executable: 'grep', argv: ['-x', 'needle', 'src'] },
+    { executable: 'head', argv: ['-n'] }, { executable: 'tail', argv: ['-f', 'file'] },
+    { executable: 'cat', argv: ['--unknown-option', 'file'] },
+    { executable: 'ls', argv: ['--unknown-option', 'src'] },
+    { executable: 'wc', argv: ['--unknown-option', 'file'] },
+    { executable: 'find', argv: ['.', '-fprintf', '/tmp/not-written', '%p'] },
+    { executable: 'go', argv: ['version', '--unknown'] },
+    { executable: 'java', argv: ['-version', '--unknown'] },
+  ])('retains unsupported or programmable argv under B18: %j', captured => {
+    const classification = classifyCapturedTargetForExecution({ kind: 'argv', ...captured })
+    expect(classification.parseStatus).toBe('unsupported')
+    expect(classification.parseReason).toBeTruthy()
+    expect(classification.effects.map(effect => effect.action)).toEqual(['arbitrary-code'])
+    const action = classifyHarnessArgv(captured)!
+    expect(action.commandHash).toBe(hashCommand(JSON.stringify(['openbuff.argv-command.v1', captured.executable, captured.argv])))
+    expect(evaluateHarnessActionPolicy({ ...action, hasMatchingApproval: false })).toMatchObject({
+      allowed: false, approvalRequired: true,
+    })
+    expect(evaluateHarnessActionPolicy({ ...action, hasMatchingApproval: false, approvalMode: 'allow-all' })).toEqual({
+      allowed: true, approvalRequired: false,
+    })
+    expect(evaluateHarnessActionPolicy({ ...action, hasMatchingApproval: true })).toEqual({
+      allowed: true, approvalRequired: false,
+    })
+  })
+
+  test('literal preprocessor bytes stay a pattern while a separate option is unsupported', () => {
+    const operand = ['--no-config', '-n', '--json', '--', '--pre node processor.js', 'src']
+    const option = ['--no-config', '-n', '--json', '--pre', 'node processor.js', '--', 'needle', 'src']
+    expect(classifyCapturedTargetForExecution({ kind: 'argv', executable: 'rg', argv: operand })).toMatchObject({
+      effects: [], parseStatus: 'complete', parseReason: null,
+    })
+    expect(classifyCapturedTargetForExecution({ kind: 'argv', executable: 'rg', argv: option })).toMatchObject({
+      parseStatus: 'unsupported', effects: [{ action: 'arbitrary-code' }],
+    })
+  })
+
+  test.each([
+    ['commit', '-m', 'user hooks remain enabled'], ['checkout', '-b', 'user-branch'],
+    ['diff', '--ext-diff'], ['-c', 'diff.external=processor', 'diff'], ['--paginate', 'log'],
+    ['diff', '--unknown-option'],
+  ].map(argv => ({ argv })))('does not rewrite mutations or unsupported user query vectors: %j', ({ argv }) => {
+    expect(prepareHarnessGitReadArgv(argv)).toEqual(argv)
+    expect(prepareHarnessGitReadArgv(argv)).not.toBe(argv)
+  })
+})
 
 describe('harness enforcement services', () => {
   test('approvals are exact-scope and single-use', () => {

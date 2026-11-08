@@ -1,2 +1,0 @@
-$ bun run memory-drift-guard.ts
-Memory drift guard passed: 0 findings across 12 checkers.

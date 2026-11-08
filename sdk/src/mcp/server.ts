@@ -72,6 +72,8 @@ const MAX_OUTLINE_SYMBOLS = 500
 /** read_files item rendering is capped by path+content budget, not by count. */
 const MAX_READ_FILES = 16
 const MAX_READ_FILES_TEXT_CHARS = 250_000
+const MCP_RESPONSE_OMISSION_TEXT =
+  '\n[Openbuff omitted remaining text to stay within the MCP response budget.]'
 /** apply_edits: a bounded batch of full-file writes. */
 const MAX_APPLY_EDITS = 32
 const MAX_APPLY_EDIT_CONTENT_CHARS = 1_000_000
@@ -126,7 +128,14 @@ const QUERY_INDEX_INPUT_SCHEMA = {
     ),
     mode: {
       type: 'string',
-      enum: ['search', 'neighbors', 'path', 'explain', 'commands', 'references'],
+      enum: [
+        'search',
+        'neighbors',
+        'path',
+        'explain',
+        'commands',
+        'references',
+      ],
       description:
         'Query mode: free-text search (default) or a graph traversal mode.',
     },
@@ -421,7 +430,10 @@ export type McpQueryIndexOptions = {
 }
 
 /** Minimal structural seam over the real `IndexManager` (tests can stub it). */
-export type McpIndexManager = Pick<IndexManager, 'queryBlended' | 'waitUntilReady'>
+export type McpIndexManager = Pick<
+  IndexManager,
+  'queryBlended' | 'waitUntilReady'
+>
 
 /**
  * Minimal structural seam over the Memory V2 repository's LEXICAL query
@@ -466,7 +478,9 @@ export type McpSessionData = {
  */
 export type McpServerClient = {
   fileSystem?: CodebuffFileSystem
-  fileFilter?: (filePath: string) => { status: 'blocked' | 'allow-example' | 'allow' }
+  fileFilter?: (filePath: string) => {
+    status: 'blocked' | 'allow-example' | 'allow'
+  }
   logger?: Logger
 }
 
@@ -529,14 +543,74 @@ export type RunMcpOptions = CreateMcpServerOptions & {
 type CallToolResult = {
   content: Array<{ type: 'text'; text: string }>
   isError?: boolean
+  structuredContent?: Record<string, unknown>
 }
 
-const textResult = (text: string): CallToolResult => ({
-  content: [{ type: 'text', text }],
+/** Apply the existing response budget and outbound token redaction to JSON. */
+function boundedStructuredResult(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  // Redact string values before serialization: the plain-text ENV=value
+  // redactor can consume JSON punctuation if run on the serialized object.
+  const safeValue = JSON.parse(
+    JSON.stringify(value),
+    (_key, member: unknown) =>
+      typeof member === 'string' ? sanitizeOutbound(member) : member,
+  ) as Record<string, unknown>
+  const text = JSON.stringify(safeValue)
+  if (text.length <= MAX_READ_FILES_TEXT_CHARS) return safeValue
+  return {
+    kind: typeof value.kind === 'string' ? value.kind : 'mcp_result',
+    schemaVersion: 1,
+    openbuffOmission: {
+      reason: 'response_budget',
+      serializedChars: text.length,
+      limit: MAX_READ_FILES_TEXT_CHARS,
+    },
+  }
+}
+
+const textResult = (
+  text: string,
+  structuredContent?: Record<string, unknown>,
+): CallToolResult => ({
+  content: [
+    {
+      type: 'text',
+      text:
+        text.length <= MAX_READ_FILES_TEXT_CHARS
+          ? text
+          : `${text.slice(0, MAX_READ_FILES_TEXT_CHARS - MCP_RESPONSE_OMISSION_TEXT.length)}${MCP_RESPONSE_OMISSION_TEXT}`,
+    },
+  ],
+  ...(structuredContent
+    ? { structuredContent: boundedStructuredResult(structuredContent) }
+    : {}),
 })
 
-const errorResult = (text: string): CallToolResult => ({
-  content: [{ type: 'text', text }],
+/** Existing JSON text remains readable, with the same data available by type. */
+function jsonTextResult(text: string): CallToolResult {
+  const value: unknown = JSON.parse(text, (_key, member: unknown) =>
+    typeof member === 'string' ? sanitizeOutbound(member) : member,
+  )
+  return textResult(
+    JSON.stringify(value, null, 2),
+    isRecord(value) ? value : { results: value },
+  )
+}
+
+const errorResult = (
+  text: string,
+  structuredContent?: Record<string, unknown>,
+): CallToolResult => ({
+  ...textResult(
+    sanitizeOutbound(text),
+    structuredContent ?? {
+      kind: 'mcp_tool_error',
+      schemaVersion: 1,
+      errorMessage: text,
+    },
+  ),
   isError: true,
 })
 
@@ -576,7 +650,10 @@ function optionalString(
     return { ok: false, message: `${name} must be a non-empty string.` }
   }
   if (value.length > maxChars) {
-    return { ok: false, message: `${name} exceeds the ${maxChars}-character limit.` }
+    return {
+      ok: false,
+      message: `${name} exceeds the ${maxChars}-character limit.`,
+    }
   }
   return { ok: true, value }
 }
@@ -592,13 +669,22 @@ function optionalStringList(
     !Array.isArray(value) ||
     value.some((entry) => typeof entry !== 'string' || entry.length === 0)
   ) {
-    return { ok: false, message: `${name} must be an array of non-empty strings.` }
+    return {
+      ok: false,
+      message: `${name} must be an array of non-empty strings.`,
+    }
   }
   if (value.length > maxItems) {
-    return { ok: false, message: `${name} supports at most ${maxItems} entries.` }
+    return {
+      ok: false,
+      message: `${name} supports at most ${maxItems} entries.`,
+    }
   }
   if (value.some((entry) => entry.length > maxChars)) {
-    return { ok: false, message: `${name} entries are capped at ${maxChars} characters.` }
+    return {
+      ok: false,
+      message: `${name} entries are capped at ${maxChars} characters.`,
+    }
   }
   return { ok: true, value: value as string[] }
 }
@@ -630,18 +716,20 @@ const QUERY_INDEX_MODES = new Set([
   'references',
 ])
 
-function validateQueryIndexInput(
-  args: unknown,
-):
+function validateQueryIndexInput(args: unknown):
   | {
       ok: true
       input: { query: string; options: McpQueryIndexOptions; timeoutMs: number }
     }
   | { ok: false; message: string } {
-  if (!isRecord(args)) return { ok: false, message: 'arguments must be an object.' }
+  if (!isRecord(args))
+    return { ok: false, message: 'arguments must be an object.' }
   const query = optionalString(args.query, 'query', MAX_QUERY_CHARS)
   if (!query.ok || query.value === undefined) {
-    return { ok: false, message: query.ok ? 'query is required.' : query.message }
+    return {
+      ok: false,
+      message: query.ok ? 'query is required.' : query.message,
+    }
   }
   const fileTypes = optionalStringList(
     args.fileTypes,
@@ -712,7 +800,7 @@ async function callQueryIndex(
   if (!validated.ok) return invalid(validated.message)
   const index = sessionData.index
   if (!index) {
-    return textResult(
+    return jsonTextResult(
       JSON.stringify(
         {
           kind: 'query_index_result',
@@ -735,7 +823,7 @@ async function callQueryIndex(
   )
   // Project to a bounded payload: the per-file symbol/heading lists are
   // already capped by the indexer; totals/status/message ride along verbatim.
-  return textResult(
+  return jsonTextResult(
     JSON.stringify(
       {
         kind: 'query_index_result',
@@ -773,7 +861,12 @@ async function callCodeSearch(
   if (!pattern.ok || pattern.value === undefined) {
     return invalid(pattern.ok ? 'pattern is required.' : pattern.message)
   }
-  const paths = optionalStringList(args.paths, 'paths', MAX_STRINGS, MAX_PATH_CHARS)
+  const paths = optionalStringList(
+    args.paths,
+    'paths',
+    MAX_STRINGS,
+    MAX_PATH_CHARS,
+  )
   if (!paths.ok) return invalid(paths.message)
   const maxResults = optionalBoundedInt(
     args.maxResults,
@@ -832,7 +925,11 @@ async function callCodeSearch(
         })
       : {}
   if (typeof value.errorMessage === 'string') {
-    return errorResult(value.errorMessage)
+    return errorResult(value.errorMessage, {
+      kind: 'code_search_result',
+      schemaVersion: 1,
+      ...value,
+    })
   }
   // ripgrep uses exit code 1 for no matches and >=2 for actual errors such
   // as an invalid regular expression. Never report the latter as "no match".
@@ -841,6 +938,7 @@ async function callCodeSearch(
       value.stderr?.trim() ||
         value.message ||
         `Search failed with exit code ${value.exitCode}.`,
+      { kind: 'code_search_result', schemaVersion: 1, ...value },
     )
   }
   const stdout = typeof value.stdout === 'string' ? value.stdout : ''
@@ -848,6 +946,7 @@ async function callCodeSearch(
     stdout.trim().length > 0
       ? stdout
       : `No matches for pattern ${JSON.stringify(pattern.value)}.`,
+    { kind: 'code_search_result', schemaVersion: 1, ...value },
   )
 }
 
@@ -890,19 +989,30 @@ async function callReadFiles(
   args: unknown,
 ): Promise<CallToolResult> {
   if (!isRecord(args)) return invalid('arguments must be an object.')
-  const paths = optionalStringList(args.paths, 'paths', MAX_READ_FILES, MAX_PATH_CHARS)
+  const paths = optionalStringList(
+    args.paths,
+    'paths',
+    MAX_READ_FILES,
+    MAX_PATH_CHARS,
+  )
   if (!paths.ok) return invalid(paths.message)
   let ranges:
     | { path: string; startLine?: number; endLine?: number }[]
     | undefined
   if (args.ranges !== undefined) {
     if (!Array.isArray(args.ranges) || args.ranges.length > MAX_STRINGS) {
-      return invalid(`ranges must be an array of at most ${MAX_STRINGS} entries.`)
+      return invalid(
+        `ranges must be an array of at most ${MAX_STRINGS} entries.`,
+      )
     }
     ranges = []
     for (const entry of args.ranges) {
       if (!isRecord(entry)) return invalid('ranges entries must be objects.')
-      const rangePath = optionalString(entry.path, 'ranges[].path', MAX_PATH_CHARS)
+      const rangePath = optionalString(
+        entry.path,
+        'ranges[].path',
+        MAX_PATH_CHARS,
+      )
       if (!rangePath.ok || rangePath.value === undefined) {
         return invalid(
           rangePath.ok ? 'ranges[].path is required.' : rangePath.message,
@@ -933,7 +1043,9 @@ async function callReadFiles(
       }
       ranges.push({
         path: rangePath.value,
-        ...(startLine.value !== undefined ? { startLine: startLine.value } : {}),
+        ...(startLine.value !== undefined
+          ? { startLine: startLine.value }
+          : {}),
         ...(endLine.value !== undefined ? { endLine: endLine.value } : {}),
       })
     }
@@ -957,6 +1069,7 @@ async function callReadFiles(
     },
   })
   const blocks: string[] = []
+  const retainedResults: typeof result.results = []
   let usedChars = 0
   let truncatedCount = 0
   for (const item of result.results) {
@@ -966,6 +1079,7 @@ async function callReadFiles(
       continue
     }
     blocks.push(block)
+    retainedResults.push(item)
     usedChars += block.length
   }
   if (truncatedCount > 0) {
@@ -973,7 +1087,21 @@ async function callReadFiles(
       `[${truncatedCount} result(s) omitted to stay within the ${MAX_READ_FILES_TEXT_CHARS}-character MCP response budget; request them with narrower reads.]`,
     )
   }
-  return textResult(blocks.join('\n\n'))
+  return {
+    ...textResult(blocks.join('\n\n'), {
+      ...result,
+      results: retainedResults,
+      ...(truncatedCount > 0
+        ? {
+            openbuffOmission: {
+              reason: 'response_budget',
+              omittedResults: truncatedCount,
+            },
+          }
+        : {}),
+    }),
+    ...(result.summary.failed > 0 ? { isError: true } : {}),
+  }
 }
 
 async function callFileOutline(
@@ -1027,7 +1155,11 @@ async function callFileOutline(
     )
   }
   const diagnostics: StructureDiagnostic[] = []
-  const symbols = await parseFileStructure(item.content, pathArg.value, diagnostics)
+  const symbols = await parseFileStructure(
+    item.content,
+    pathArg.value,
+    diagnostics,
+  )
   if (symbols === null) {
     return errorResult(
       `No tree-sitter grammar is available for ${pathArg.value}; outline unsupported.`,
@@ -1035,15 +1167,13 @@ async function callFileOutline(
   }
   const depthLimit = maxDepth.value ?? DEFAULT_OUTLINE_DEPTH
   const visible = symbols.filter((symbol) => symbol.depth <= depthLimit)
-  const rendered = visible
-    .slice(0, MAX_OUTLINE_SYMBOLS)
-    .map((symbol) => {
-      const indent = '  '.repeat(symbol.depth)
-      const tags = [symbol.kind, symbol.exported === true ? 'exported' : null]
-        .filter(Boolean)
-        .join(', ')
-      return `${indent}${symbol.name} (${tags}) — lines ${symbol.startLine}-${symbol.endLine}`
-    })
+  const rendered = visible.slice(0, MAX_OUTLINE_SYMBOLS).map((symbol) => {
+    const indent = '  '.repeat(symbol.depth)
+    const tags = [symbol.kind, symbol.exported === true ? 'exported' : null]
+      .filter(Boolean)
+      .join(', ')
+    return `${indent}${symbol.name} (${tags}) — lines ${symbol.startLine}-${symbol.endLine}`
+  })
   const notes: string[] = []
   if (visible.length > MAX_OUTLINE_SYMBOLS) {
     notes.push(
@@ -1060,9 +1190,29 @@ async function callFileOutline(
   }
   const header = `Outline of ${pathArg.value} (${symbols.length} symbol(s), maxDepth=${depthLimit}):`
   return textResult(
-    [header, ...(rendered.length > 0 ? rendered : ['(no top-level symbols)']), ...notes].join(
-      '\n',
-    ),
+    [
+      header,
+      ...(rendered.length > 0 ? rendered : ['(no top-level symbols)']),
+      ...notes,
+    ].join('\n'),
+    {
+      kind: 'file_outline_result',
+      schemaVersion: 1,
+      path: pathArg.value,
+      symbols: visible.slice(0, MAX_OUTLINE_SYMBOLS),
+      diagnostics: diagnostics.slice(0, 8),
+      totalSymbols: symbols.length,
+      ...(visible.length > MAX_OUTLINE_SYMBOLS ||
+      symbols.length > visible.length
+        ? {
+            openbuffOmission: {
+              reason: 'outline_limit',
+              omittedSymbols:
+                symbols.length - Math.min(visible.length, MAX_OUTLINE_SYMBOLS),
+            },
+          }
+        : {}),
+    },
   )
 }
 
@@ -1084,7 +1234,7 @@ function callCodebaseStructure(
     sessionData.projectRoot,
     scope.value,
   )
-  return textResult(JSON.stringify(inventory, null, 2))
+  return jsonTextResult(JSON.stringify(inventory, null, 2))
 }
 
 const MEMORY_ARTIFACT_KINDS: ReadonlySet<string> = new Set([
@@ -1120,20 +1270,32 @@ const projectReasons = (
   reasons: ReadonlyArray<{ code: string; contribution: number }>,
 ) => reasons.map(({ code, contribution }) => ({ code, contribution }))
 
-function validateMemorySearchInput(
-  args: unknown,
-):
+function validateMemorySearchInput(args: unknown):
   | {
       ok: true
-      input: { query: string; limit: number; paths?: string[]; kinds?: string[] }
+      input: {
+        query: string
+        limit: number
+        paths?: string[]
+        kinds?: string[]
+      }
     }
   | { ok: false; message: string } {
-  if (!isRecord(args)) return { ok: false, message: 'arguments must be an object.' }
+  if (!isRecord(args))
+    return { ok: false, message: 'arguments must be an object.' }
   const query = optionalString(args.query, 'query', MAX_QUERY_CHARS)
   if (!query.ok || query.value === undefined) {
-    return { ok: false, message: query.ok ? 'query is required.' : query.message }
+    return {
+      ok: false,
+      message: query.ok ? 'query is required.' : query.message,
+    }
   }
-  const paths = optionalStringList(args.paths, 'paths', MAX_STRINGS, MAX_PATH_CHARS)
+  const paths = optionalStringList(
+    args.paths,
+    'paths',
+    MAX_STRINGS,
+    MAX_PATH_CHARS,
+  )
   if (!paths.ok) return paths
   const kinds = optionalStringList(
     args.kinds,
@@ -1175,7 +1337,7 @@ async function callMemorySearch(
   if (!validated.ok) return invalid(validated.message)
   const memory = sessionData.memory
   if (!memory) {
-    return textResult(
+    return jsonTextResult(
       JSON.stringify(
         {
           kind: 'memory_search_result',
@@ -1218,6 +1380,12 @@ async function callMemorySearch(
   if (outcome.outcome !== 'result') {
     return errorResult(
       `Memory search ${outcome.outcome}: ${outcome.error.message}`,
+      {
+        kind: 'memory_search_result',
+        schemaVersion: 1,
+        outcome: outcome.outcome,
+        error: outcome.error,
+      },
     )
   }
   const result = outcome.result
@@ -1271,7 +1439,7 @@ async function callMemorySearch(
       reasons: projectReasons(item.reasons),
     })),
   ]
-  return textResult(
+  return jsonTextResult(
     JSON.stringify(
       {
         kind: 'memory_search_result',
@@ -1296,7 +1464,9 @@ async function callMemorySearch(
  * echo whichever hash its read produced; anything else is invalid.
  */
 function normalizeSha256Hex(value: string): string | null {
-  const hex = value.startsWith('sha256:') ? value.slice('sha256:'.length) : value
+  const hex = value.startsWith('sha256:')
+    ? value.slice('sha256:'.length)
+    : value
   return /^[0-9a-fA-F]{64}$/.test(hex) ? hex.toLowerCase() : null
 }
 
@@ -1471,7 +1641,14 @@ async function callApplyEdits(
         : {}),
     })
   }
-  return textResult(JSON.stringify(results, null, 2))
+  return {
+    ...textResult(JSON.stringify(results, null, 2), {
+      kind: 'apply_edits_result',
+      schemaVersion: 1,
+      results,
+    }),
+    ...(results.some((result) => !result.applied) ? { isError: true } : {}),
+  }
 }
 
 /**

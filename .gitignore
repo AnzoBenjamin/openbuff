@@ -59,3 +59,11 @@ docs/bot-detection.md
 
 # Captured agent-session logs (transcripts of prior runs, not source)
 openbuffissues.txt
+
+# Expanded roadmap evidence is restored into disposable checkouts.
+/docs/execution/body-roadmap/evidence/
+/docs/execution/body-roadmap/.ledger-promotion.lock
+/docs/execution/body-roadmap/**/__pycache__/
+
+# SDK external-tool fixture scratch; maintained fixtures stay tracked.
+/sdk/src/__tests__/.external-tools-*/

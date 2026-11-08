@@ -110,6 +110,7 @@ import type {
   SettledSubagentResult,
   SupervisedRestartPolicy,
 } from '@codebuff/common/types/contracts/agent-runtime'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 import type {
   SpawnSettledSubagentParams,
   SupervisedChildEnvSeed,
@@ -134,9 +135,7 @@ const cleanupLogger = createBridgeStderrLogger('supervised-spawn')
  * callers typing a policy against this seam never need a second import
  * site.
  */
-export type {
-  SupervisedRestartPolicy,
-} from '@codebuff/common/types/contracts/agent-runtime'
+export type { SupervisedRestartPolicy } from '@codebuff/common/types/contracts/agent-runtime'
 
 /**
  * Per-call options for one supervised-spawn seam invocation
@@ -145,6 +144,8 @@ export type {
  * keep byte-identical behavior.
  */
 export type SpawnSupervisedCallOptions = {
+  /** Registered host capability; it never enters the JSON request envelope. */
+  execution?: ExecutionAdapterContext
   /**
    * cancel-softlock fix: the PARENT's AbortSignal, threaded PER CALL (the
    * seam is built once per runtime impl, before any run signal exists).
@@ -175,7 +176,9 @@ export type SpawnSupervisedFn = (
  */
 export type ParentBridgeHandlersSource =
   | ParentBridgeHandlers
-  | (() => ParentBridgeHandlers | Promise<ParentBridgeHandlers>)
+  | ((
+      request: SupervisedSpawnRequest,
+    ) => ParentBridgeHandlers | Promise<ParentBridgeHandlers>)
 
 /**
  * P2-T8c: additive third-parameter options for
@@ -184,6 +187,10 @@ export type ParentBridgeHandlersSource =
  * byte (one spawn, no sleeps, no restart bookkeeping, no wrapper).
  */
 export interface SupervisedSpawnOptions {
+  /** Root composition resolves the actual action scope before any setup await. */
+  executionForRequest?: (
+    request: SupervisedSpawnRequest,
+  ) => ExecutionAdapterContext
   /**
    * Opt-in restart policy (P2-T8c) — the contract is
    * {@link SupervisedRestartPolicy} in common's dependency-free agent-runtime
@@ -275,10 +282,7 @@ function normalizeRestartPolicy(
   }
   return {
     maxAttempts,
-    backoffMs: clampBackoffScalar(
-      policy.backoffMs,
-      RESTART_DEFAULT_BACKOFF_MS,
-    ),
+    backoffMs: clampBackoffScalar(policy.backoffMs, RESTART_DEFAULT_BACKOFF_MS),
     backoffMultiplier: clampBackoffScalar(
       policy.backoffMultiplier,
       RESTART_DEFAULT_BACKOFF_MULTIPLIER,
@@ -313,7 +317,10 @@ function computeRestartDelayMs(
   attempt: number,
 ): number {
   const rawDelay = policy.backoffMs * policy.backoffMultiplier ** (attempt - 1)
-  if (!Number.isFinite(rawDelay) || rawDelay > MAX_SETTLEABLE_RESTART_DELAY_MS) {
+  if (
+    !Number.isFinite(rawDelay) ||
+    rawDelay > MAX_SETTLEABLE_RESTART_DELAY_MS
+  ) {
     return MAX_SETTLEABLE_RESTART_DELAY_MS
   }
   return Math.max(0, rawDelay)
@@ -324,10 +331,28 @@ function computeRestartDelayMs(
  * `setTimeout` wait (the `await Bun.sleep(delayMs)` equivalent); replaced
  * by the test-only `options._scheduleRestart` in fault-injection tests.
  */
-const defaultRestartSleeper = (delayMs: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, delayMs)
+function waitForRestart(
+  delayMs: number,
+  signal?: AbortSignal,
+  schedule?: (delayMs: number) => Promise<void>,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const finish = () => {
+      if (timer !== undefined) clearTimeout(timer)
+      signal?.removeEventListener('abort', finish)
+      resolve()
+    }
+    if (signal?.aborted) return finish()
+    signal?.addEventListener('abort', finish, { once: true })
+    if (schedule)
+      void schedule(delayMs).then(finish, (error) => {
+        signal?.removeEventListener('abort', finish)
+        reject(error)
+      })
+    else timer = setTimeout(finish, delayMs)
   })
+}
 
 /**
  * P2-T8c: a settled result is RESTARTABLE only when it is a TRANSPORT-level
@@ -340,7 +365,10 @@ const defaultRestartSleeper = (delayMs: number): Promise<void> =>
 function isRestartableCrash(
   result: SettledSubagentResult,
 ): result is SettledSubagentResult & { crashReason: string } {
-  if (result.outcome !== 'crashed') {
+  if (
+    result.outcome !== 'crashed' ||
+    ('executionRefusal' in result && result.executionRefusal)
+  ) {
     return false
   }
   if (result.receipt !== undefined) {
@@ -415,8 +443,7 @@ export function isSupervisedSpawnLaunchable(input: {
   // this is a compiled binary (NOT the plain bun runtime — under plain bun
   // a bunfs path has nothing launchable behind it).
   return (
-    input.execPath !== undefined &&
-    !looksLikeBunRuntimeExecPath(input.execPath)
+    input.execPath !== undefined && !looksLikeBunRuntimeExecPath(input.execPath)
   )
 }
 
@@ -533,14 +560,14 @@ export function buildDefaultSpawnSupervised(
     // the TEST-ONLY `_spawnSettledSubagent` injection comes from the
     // build-time options, the per-call `signal` from this argument.
     callOptions?: SpawnSupervisedCallOptions,
+    retry = false,
   ): Promise<SettledSubagentResult> => {
     // Lazy on purpose: the supervisor module (Bun.spawn, the receipt schema
     // imports it pulls, and the env allowlist builder included) is evaluated
     // only when the flag is actually on — this dynamic import is the
     // module's ONLY runtime load path from here.
-    const { spawnSettledSubagent, buildSupervisedChildEnv } = await import(
-      './process-supervisor'
-    )
+    const { spawnSettledSubagent, buildSupervisedChildEnv } =
+      await import('./process-supervisor')
     // Empty sandbox cwd: the child runtime auto-loads `.env` from its cwd,
     // which would leak repo env keys past the spawn allowlist.
     const sandboxCwd = mkdtempSync(join(tmpdir(), 'openbuff-supervised-cwd-'))
@@ -571,19 +598,17 @@ export function buildDefaultSpawnSupervised(
         // thunk form the table itself is built only here, on the flag-on
         // spawn path, so the composition root needs no static
         // parent-bridge-server import at all.
-        const { startParentBridgeServer } = await import(
-          './parent-bridge-server'
-        )
+        const { startParentBridgeServer } =
+          await import('./parent-bridge-server')
         const table =
-          typeof handlers === 'function' ? await handlers() : handlers
+          typeof handlers === 'function' ? await handlers(request) : handlers
         // A table built by buildSupervisedBridgeHandlers carries the
         // per-table marker nonce; stamp it into the request envelope so the
         // child sanitizer emits nonce-stamped markers. A RAW handler table
         // (no bridgeNonce) leaves the request without one: markers cross the
         // bridge as data, exactly like agent-authored values.
-        const tableNonce = (
-          table as Partial<SupervisedBridgeHandlerTable>
-        ).bridgeNonce
+        const tableNonce = (table as Partial<SupervisedBridgeHandlerTable>)
+          .bridgeNonce
         if (typeof tableNonce === 'string' && tableNonce.length > 0) {
           bridgeNonce = tableNonce
         }
@@ -651,6 +676,17 @@ export function buildDefaultSpawnSupervised(
       // predicate here would invert the mode and hand the override to
       // plain-bun source-mode spawns, which the runtime rejects.
       const selfExec = isSupervisedSpawnSelfExecMode()
+      // Parent-RPC children do not need provider secrets. The common authority
+      // also scrubs all captured configured credential names before dispatch.
+      const childSeed: SupervisedChildEnvSeed =
+        handlers && callOptions?.execution
+          ? {
+              nodeEnv: seed.nodeEnv,
+              passthroughEnv: seed.passthroughEnv,
+              path: seed.path,
+              home: seed.home,
+            }
+          : seed
       return await spawnSettled({
         childModulePath: resolveSupervisedChildEntryPath(),
         ...(selfExec
@@ -662,8 +698,15 @@ export function buildDefaultSpawnSupervised(
               ],
             }
           : { args: [requestPath] }),
-        env: buildSupervisedChildEnv(seed),
+        env: buildSupervisedChildEnv(childSeed),
         cwd: sandboxCwd,
+        ...(callOptions?.execution
+          ? {
+              execution: callOptions.execution,
+              branchId:
+                `supervised.${selfExec ? 'self-exec' : 'source'}.${retry ? 'retry' : 'initial'}` as const,
+            }
+          : {}),
         // ONLY an explicit request.timeoutMs arms bounds. When present, the
         // deadline is wired BOTH as the idle-aware window (reset on bridge
         // request activity and stdout/stderr chunks) AND as an ABSOLUTE,
@@ -735,15 +778,44 @@ export function buildDefaultSpawnSupervised(
   // single-attempt closure IS the seam: one spawn, no sleeps, no loop, no
   // wrapper overhead — byte-identical to the pre-P2-T8c behavior.
   const policy = normalizeRestartPolicy(options?.restart)
+  const bindExecution = (
+    request: SupervisedSpawnRequest,
+    callOptions?: SpawnSupervisedCallOptions,
+  ): SpawnSupervisedCallOptions | undefined => {
+    const context =
+      callOptions?.execution ?? options?.executionForRequest?.(request)
+    if (!context) return callOptions
+    const derived = context.execution.derive({
+      memoKey: 'supervised.action',
+      limit:
+        request.timeoutMs === undefined
+          ? { kind: 'unbounded' }
+          : { kind: 'finite', durationMs: request.timeoutMs },
+    })
+    if (!derived.ok)
+      throw Object.assign(new Error(derived.cause), {
+        name: 'ExecutionAdmissionError',
+        executionRefusal: derived,
+      })
+    return {
+      ...callOptions,
+      execution: {
+        ...context,
+        execution: derived.value,
+        signal: derived.value.signal ?? context.signal,
+      },
+    }
+  }
   if (!policy) {
-    return runSettledAttempt
+    return (request, callOptions) =>
+      runSettledAttempt(request, bindExecution(request, callOptions))
   }
 
   // Test-injectable backoff sleep (see SupervisedSpawnOptions._scheduleRestart).
   const scheduleRestart =
     typeof options?._scheduleRestart === 'function'
       ? options._scheduleRestart
-      : defaultRestartSleeper
+      : undefined
 
   // P2-T8c bounded RESTART loop. attemptNumber counts RESTARTS, 1-based:
   // maxAttempts 0 never reaches this loop (inert policies normalize away),
@@ -761,6 +833,7 @@ export function buildDefaultSpawnSupervised(
   // parameter reused the build-time `options` name and shadowed it inside
   // this loop; it is now `callOptions` so the two scopes read distinctly.
   return async (request, callOptions) => {
+    callOptions = bindExecution(request, callOptions)
     let result = await runSettledAttempt(request, callOptions)
     let attemptNumber = 0
     while (
@@ -769,15 +842,26 @@ export function buildDefaultSpawnSupervised(
       // cancel-softlock fix: a parent-abort kill settles as a RESTARTABLE
       // transport crash (signal death ⇒ nonzero_exit with no receipt), so
       // the loop must never respawn the child the parent just cancelled.
-      callOptions?.signal?.aborted !== true
+      callOptions?.signal?.aborted !== true &&
+      callOptions?.execution?.signal?.aborted !== true
     ) {
       attemptNumber += 1
-      await scheduleRestart(computeRestartDelayMs(policy, attemptNumber))
+      const signals = [
+        callOptions?.signal,
+        callOptions?.execution?.signal,
+      ].filter((signal): signal is AbortSignal => signal !== undefined)
+      const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0]
+      await waitForRestart(
+        computeRestartDelayMs(policy, attemptNumber),
+        signal,
+        scheduleRestart,
+      )
+      if (signal?.aborted) break
       policy.onRestart?.({
         attempt: attemptNumber,
         crashReason: result.crashReason,
       })
-      result = await runSettledAttempt(request, callOptions)
+      result = await runSettledAttempt(request, callOptions, true)
     }
     return result
   }

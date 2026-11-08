@@ -1,4 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+} from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -34,7 +40,8 @@ async function connectPair(server: McpServer): Promise<{
   client: Client
   close: () => Promise<void>
 }> {
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair()
   const client = new Client({ name: 'mcp-test-client', version: '0.0.1' })
   await Promise.all([
     client.connect(clientTransport),
@@ -61,7 +68,10 @@ function makeIndexManagerStub(script?: {
       state.waitCalls.push(timeoutMs ?? -1)
       return true
     },
-    queryBlended: async (query: string, options: Record<string, unknown> = {}) => {
+    queryBlended: async (
+      query: string,
+      options: Record<string, unknown> = {},
+    ) => {
       state.queryCalls.push({ query, options })
       if (script?.throwOnQuery) {
         throw new Error('boom: index query exploded')
@@ -122,6 +132,125 @@ function makeMemoryRepositoryStub(script?: {
 }
 
 describe('createMcpServer', () => {
+  test('structured MCP results match bounded local projections and preserve read failures', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-structured-'))
+    writeFileSync(join(projectRoot, 'hello.ts'), 'export const hi = 1\n')
+    const { client, close } = await connectPair(
+      createMcpServer({ client: {}, sessionData: { projectRoot } }),
+    )
+    try {
+      const disabled = await client.callTool({
+        name: 'query_index',
+        arguments: { query: 'hello' },
+      })
+      const disabledText = disabled.content as { type: string; text: string }[]
+      expect(disabled.structuredContent).toEqual(
+        JSON.parse(disabledText[0]!.text),
+      )
+      const read = await client.callTool({
+        name: 'read_files',
+        arguments: { paths: ['hello.ts', 'missing.ts'] },
+      })
+      expect(read.isError).toBe(true)
+      expect(read.structuredContent).toMatchObject({
+        kind: 'read_files_result',
+        summary: { failed: 1 },
+      })
+      expect(JSON.stringify(read.structuredContent)).toContain(
+        'export const hi = 1',
+      )
+      expect(JSON.stringify(read.structuredContent)).toContain('missing.ts')
+      expect(JSON.stringify(read)).not.toContain('cap.v3.')
+      expect(JSON.stringify(read)).not.toContain('cap.v4.')
+      expect(JSON.stringify(read.structuredContent)).toContain(
+        '[REDACTED_CAPABILITY]',
+      )
+      const invalid = await client.callTool({
+        name: 'query_index',
+        arguments: { query: 42 },
+      })
+      expect(invalid.isError).toBe(true)
+      expect(invalid.structuredContent).toMatchObject({
+        kind: 'mcp_tool_error',
+        schemaVersion: 1,
+      })
+    } finally {
+      await close()
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('oversized structured MCP output reports its omission rather than exceeding the response budget', async () => {
+    const { stub } = makeIndexManagerStub({
+      results: [
+        {
+          path: 'large.ts',
+          score: 1,
+          matchedOn: ['symbol'],
+          symbols: ['x'.repeat(300_000)],
+        },
+      ],
+    })
+    const { client, close } = await connectPair(
+      createMcpServer({
+        client: {},
+        sessionData: { projectRoot: '/nonexistent-project', index: stub },
+      }),
+    )
+    try {
+      const result = await client.callTool({
+        name: 'query_index',
+        arguments: { query: 'large' },
+      })
+      expect(result.structuredContent).toMatchObject({
+        kind: 'query_index_result',
+        openbuffOmission: { reason: 'response_budget', limit: 250_000 },
+      })
+      expect(JSON.stringify(result.structuredContent).length).toBeLessThan(
+        250_000,
+      )
+      expect((result.content as { text: string }[])[0]!.text).toContain(
+        'MCP response budget',
+      )
+    } finally {
+      await close()
+    }
+  })
+
+  test('structured result redaction preserves valid JSON for embedded credential assignments', async () => {
+    const { stub } = makeIndexManagerStub({
+      results: [
+        {
+          path: 'redaction.ts',
+          score: 1,
+          matchedOn: ['symbol'],
+          symbols: ['OPENAI_API_KEY=fixture-secret'],
+        },
+      ],
+    })
+    const { client, close } = await connectPair(
+      createMcpServer({
+        client: {},
+        sessionData: { projectRoot: '/nonexistent-project', index: stub },
+      }),
+    )
+    try {
+      const result = await client.callTool({
+        name: 'query_index',
+        arguments: { query: 'redaction' },
+      })
+      expect(result.isError).toBeUndefined()
+      expect(JSON.stringify(result)).not.toContain('fixture-secret')
+      expect(result.structuredContent).toEqual(
+        JSON.parse((result.content as { text: string }[])[0]!.text),
+      )
+      expect(JSON.stringify(result.structuredContent)).toContain(
+        '[REDACTED_SECRET]',
+      )
+    } finally {
+      await close()
+    }
+  })
   test('code_search distinguishes invalid patterns from no matches over MCP', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-search-errors-'))
     writeFileSync(join(projectRoot, 'example.ts'), 'const greeting = 1\n')
@@ -133,6 +262,10 @@ describe('createMcpServer', () => {
         arguments: { pattern: '[' },
       })
       expect(invalidPattern.isError).toBe(true)
+      expect(invalidPattern.structuredContent).toMatchObject({
+        kind: 'code_search_result',
+        schemaVersion: 1,
+      })
       expect(JSON.stringify(invalidPattern.content)).not.toContain('No matches')
       const noMatch = await client.callTool({
         name: 'code_search',
@@ -369,12 +502,13 @@ describe('createMcpServer', () => {
         const content = result.content as { type: string; text: string }[]
         expect(content[0]?.type).toBe('text')
         expect(content[0]!.text).toContain('export const hi = 1')
-        // Complete cap-guarded reads mint a cap.v3 read capability, but the
+        // Complete cap-guarded reads mint a cap.v4 read capability, but the
         // token itself is REDACTED over MCP (SEC-1): the output reports the
         // minted capability without ever carrying the live token.
         expect(content[0]!.text).toContain('[READ_CAPABILITY')
         expect(content[0]!.text).toContain('[REDACTED_CAPABILITY]')
         expect(content[0]!.text).not.toContain('cap.v3.')
+        expect(content[0]!.text).not.toContain('cap.v4.')
 
         // Outside-project escapes fail closed (error content, never a crash).
         const escape = await client.callTool({
@@ -389,7 +523,10 @@ describe('createMcpServer', () => {
           name: 'read_files',
           arguments: { paths: ['nope.ts'] },
         })
-        const missingContent = missing.content as { type: string; text: string }[]
+        const missingContent = missing.content as {
+          type: string
+          text: string
+        }[]
         expect(missingContent[0]!.text).toContain('not_found')
       } finally {
         await close()
@@ -492,7 +629,9 @@ describe('createMcpServer', () => {
         try {
           await client.callTool({
             name: 'apply_edits',
-            arguments: { edits: [{ path: 'x.ts', content: 'export const x = 1\n' }] },
+            arguments: {
+              edits: [{ path: 'x.ts', content: 'export const x = 1\n' }],
+            },
           })
         } catch (error) {
           caught = error
@@ -518,7 +657,9 @@ describe('createMcpServer', () => {
       const { client, close } = await connectPair(server)
       try {
         const { tools } = await client.listTools()
-        const applyEdits = tools.find((tool: Tool) => tool.name === 'apply_edits')
+        const applyEdits = tools.find(
+          (tool: Tool) => tool.name === 'apply_edits',
+        )
         expect(applyEdits).toBeDefined()
         expect(applyEdits?.annotations?.readOnlyHint).toBe(false)
         expect(applyEdits?.annotations?.destructiveHint).toBe(true)
@@ -574,7 +715,9 @@ describe('createMcpServer', () => {
           caught = error
         }
         expect(caught).toBeInstanceOf(McpError)
-        expect((caught as McpError).message).toContain('expectedHash is required')
+        expect((caught as McpError).message).toContain(
+          'expectedHash is required',
+        )
         expect(readFileSync(join(projectRoot, 'tracked.ts'), 'utf8')).toBe(
           'export const a = 1\n',
         )
@@ -675,7 +818,9 @@ describe('createMcpServer', () => {
                 {
                   path: 'never-existed.ts',
                   content: 'export const nope = 1\n',
-                  expectedHash: createHash('sha256').update('ghost').digest('hex'),
+                  expectedHash: createHash('sha256')
+                    .update('ghost')
+                    .digest('hex'),
                 },
               ],
             },
