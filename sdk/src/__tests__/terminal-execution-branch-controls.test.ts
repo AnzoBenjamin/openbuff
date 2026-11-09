@@ -23,18 +23,27 @@ import type { LaunchEvent, PolicyInput, Refusal } from '@codebuff/common/types/c
 import type { AgentDefinition, ToolCall } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
 import type { RunState } from '../run-state'
 
-const evidenceRoot = path.resolve(import.meta.dir, '../../../docs/execution/body-roadmap/evidence/B19/implementation/branch-controls-r3/terminal')
-const plan = JSON.parse(fs.readFileSync(path.join(evidenceRoot, 'prepared-cases.json'), 'utf8')) as {
+const fixtureRoot = path.join(import.meta.dir, 'fixtures')
+const roster = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'terminal-branch-cases-r3.json'), 'utf8')) as {
   states: BranchControlStateR3[]
   caseCount: number
   cases: TerminalBranchCaseR3[]
   companionCases: {
-    replacementEnvironmentHappy: TerminalBranchCaseR3[]
     unboundedParentHookHappy: TerminalBranchCaseR3[]
     successfulTransferredSurvivor: TerminalBranchCaseR3[]
   }
 }
-const applicability = JSON.parse(fs.readFileSync(path.join(evidenceRoot, 'producer-applicability.json'), 'utf8')) as {
+const plan = {
+  ...roster,
+  companionCases: {
+    ...roster.companionCases,
+    replacementEnvironmentHappy: roster.cases.map(testCase => ({
+      ...testCase,
+      id: `${testCase.id}:replacement-env`,
+    })),
+  },
+}
+const applicability = JSON.parse(fs.readFileSync(path.join(fixtureRoot, 'terminal-producer-applicability-r3.json'), 'utf8')) as {
   edgeCount: number
   edges: Array<{ branchId: string; producerId: string; applicability: string; sourceRefs: string[]; explanation: string; executed: boolean }>
 }

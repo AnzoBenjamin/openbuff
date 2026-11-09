@@ -32,7 +32,9 @@ const actualSettle = supervisor.spawnSettledSubagent
 const base = path.resolve(import.meta.dir, '../../../../docs/execution/body-roadmap/evidence/B19/implementation/branch-controls-r3/sdk-supervision/runs')
 
 function captureDirectory() {
-  const selected = path.resolve(process.env.B19_SDK_SUPERVISION_EVIDENCE_DIR ?? base)
+  const directory = process.env.B19_SDK_SUPERVISION_EVIDENCE_DIR
+  if (!directory) return undefined
+  const selected = path.resolve(directory)
   if (selected !== base && !selected.startsWith(base + path.sep)) throw new Error('SDK supervision capture escaped its owned runs directory')
   mkdirSync(base, { recursive: true })
   let ancestor = selected
@@ -67,8 +69,9 @@ export async function runSupervisionSdkControl(branch: SupervisionBranch, contro
   assert(branch === 'retry' || !['exhausted-before-retry', 'retry-budget-exhausted'].includes(control))
   assert(!supervised.isSupervisedSpawnSelfExecMode(), 'Source controls must run from source')
   const id = randomUUID(), root = mkdtempSync(path.join(tmpdir(), 'b19-sdk-supervision-'))
-  const artifactDir = path.join(captureDirectory(), id)
-  mkdirSync(artifactDir, { recursive: true })
+  const directory = captureDirectory()
+  const artifactDir = directory ? path.join(directory, id) : undefined
+  if (artifactDir) mkdirSync(artifactDir, { recursive: true })
   const configFile = path.join(root, 'openbuff.json')
   writeFileSync(configFile, JSON.stringify({ autoFileChangeHooks: false, defaultModel: 'fixture/fixture-model', providers: {
     fixture: { type: 'openai-compatible', baseURL: 'https://fixture.invalid/v1', models: ['fixture-model'], apiKeyEnv: 'CUSTOM_PROVIDER_KEY' },
@@ -251,8 +254,10 @@ export async function runSupervisionSdkControl(branch: SupervisionBranch, contro
     limitations: ['Source final Bun process/result/PID is synthetic', 'Clock and target authorization decision are injected into the actual host factory',
       'All factory/resolver/runtime wrappers call through; restart count/backoff and bridge remain production',
       'No provider task, complete child strategy, MCP, OS containment, or B29 equivalence claim'] }
-  writeFileSync(path.join(artifactDir, 'case.json'), JSON.stringify(evidence, (_key, value) => value instanceof Error
-    ? { ...value, name: value.name, message: value.message, stack: value.stack } : value, 2) + '\n', { flag: 'wx' })
+  if (artifactDir) {
+    writeFileSync(path.join(artifactDir, 'case.json'), JSON.stringify(evidence, (_key, value) => value instanceof Error
+      ? { ...value, name: value.name, message: value.message, stack: value.stack } : value, 2) + '\n', { flag: 'wx' })
+  }
   rmSync(root, { recursive: true, force: true })
   return { ...evidence, artifactDir }
 }

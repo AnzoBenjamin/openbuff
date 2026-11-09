@@ -1,9 +1,7 @@
 import * as mainPromptModule from '@codebuff/agent-runtime/main-prompt'
 import * as mcpClientModule from '@codebuff/common/mcp/client'
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { getStubProjectFileContext } from '@codebuff/common/util/file'
-import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import { execFileSync } from 'node:child_process'
 import nodeFs from 'node:fs'
 import os from 'node:os'
@@ -13,6 +11,7 @@ import z from 'zod/v4'
 import { OpenbuffClient } from '../client'
 import { getCustomToolDefinition } from '../custom-tool'
 import * as databaseModule from '../impl/database'
+import { beginSdkCallback, createSdkCallbackFixture, sdkCallbackOptions } from './sdk-callback-fixture'
 
 import type { OpenbuffClientOptions } from '../run'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
@@ -21,9 +20,12 @@ import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
 
 describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
   const harnessStateDirs: string[] = []
+  let fixture: ReturnType<typeof createSdkCallbackFixture>
+  beforeEach(() => { fixture = createSdkCallbackFixture('events') })
 
   afterEach(() => {
     mock.restore()
+    fixture.close()
     for (const stateDir of harnessStateDirs.splice(0)) {
       nodeFs.rmSync(stateDir, { recursive: true, force: true })
     }
@@ -47,11 +49,12 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
 
         createPlanResult = (
-          await requestToolCall({
+          await callback.request({
             userInputId: promptId,
             toolName: 'create_plan',
             input: {
@@ -95,8 +98,8 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     )
     harnessStateDirs.push(harnessStateDir)
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
-      cwd: '/repo',
+      ...fixture.options,
+      cwd: fixture.cwd,
       fsSource: fs,
       harnessStateDir,
       onFilesystemMutation: (event) => {
@@ -130,7 +133,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
       ],
     })
     expect(
-      await fs.readFile('/repo/.agents/sessions/test-session/PLAN.md', 'utf-8'),
+      await fs.readFile(fixture.file('.agents/sessions/test-session/PLAN.md'), 'utf-8'),
     ).toBe('# Plan\n\n- Write the plan artifact\n')
     expect(mutationEvents).toEqual([
       expect.objectContaining({
@@ -169,11 +172,12 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     let terminalResult: ToolResultOutput[] | undefined
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
 
         terminalResult = (
-          await requestToolCall({
+          await callback.request({
             userInputId: promptId,
             toolName: 'run_terminal_command',
             input: {
@@ -210,8 +214,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
       Parameters<NonNullable<OpenbuffClientOptions['requestApproval']>>[0]
     > = []
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
-      cwd: projectRoot,
+      ...sdkCallbackOptions(projectRoot, { fsSource: undefined }),
       harnessStateDir: nodeFs.mkdtempSync(
         path.join(os.tmpdir(), 'openbuff-approval-state-'),
       ),
@@ -229,10 +232,11 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     })
 
     expect(result.output.type).toBe('lastMessage')
-    expect(approvalRequests).toEqual([
+    expect(approvalRequests.filter(request => request.action === 'commit')).toEqual([
       expect.objectContaining({
         action: 'commit',
-        risk: 'routine',
+        risk: 'high',
+        executionAuthority: expect.objectContaining({ version: 2, usage: 'one-target-dispatch' }),
       }),
     ])
     expect(
@@ -264,11 +268,12 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
 
         globResult = (
-          await requestToolCall({
+          await callback.request({
             userInputId: promptId,
             toolName: 'glob',
             input: {},
@@ -298,7 +303,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
       overrideTools: {
         glob: async () => {
           overrideCalled = true
@@ -344,11 +349,12 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
 
         readDocsResult = (
-          await requestToolCall({
+          await callback.request({
             userInputId: promptId,
             toolName: 'read_docs',
             input: {
@@ -381,7 +387,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
       overrideTools: {
         read_docs: async () => [
           {
@@ -423,10 +429,11 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     let overrideResult: ToolResultOutput[] | undefined
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
         overrideResult = (
-          await requestToolCall({
+          await callback.request({
             userInputId: promptId,
             toolName: 'write_file',
             input: { type: 'file', path: 'fake.txt', content: 'fake' },
@@ -449,7 +456,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
 
     let changedCalls = 0
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
       onFilesChanged: () => changedCalls++,
       overrideTools: {
         write_file: async () => [
@@ -512,11 +519,12 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
 
         readDocsResult = (
-          await requestToolCall({
+          await callback.request({
             userInputId: promptId,
             toolName: 'read_docs',
             input: {
@@ -549,7 +557,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -569,7 +577,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     ])
   })
 
-  it('passes the run abort signal to custom tool execution context', async () => {
+  it.each(['completed', 'cancelled'] as const)('passes run cancellation to custom tool execution context: %s', async mode => {
     spyOn(databaseModule, 'getUserInfoFromApiKey').mockResolvedValue({
       id: 'user-123',
       email: 'test@example.com',
@@ -591,16 +599,24 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
       description: 'Observes the run abort signal',
       execute: async (_input, context) => {
         observedSignal = context?.signal
+        expect(observedSignal).toBeDefined()
+        expect(observedSignal!.aborted).toBe(false)
+        if (mode === 'cancelled') {
+          controller.abort(new Error('cancel active custom tool'))
+          expect(observedSignal!.aborted).toBe(true)
+          expect(observedSignal!.reason.message).toBe('cancel active custom tool')
+        }
         return [{ type: 'json', value: { ok: true } }]
       },
     })
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
 
-        await requestToolCall({
+        await callback.request({
           userInputId: promptId,
           toolName: 'observe_signal',
           input: {},
@@ -629,7 +645,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
       customToolDefinitions: [customTool],
     })
 
@@ -639,8 +655,9 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
       signal: controller.signal,
     })
 
-    expect(result.output.type).toBe('lastMessage')
-    expect(observedSignal).toBe(controller.signal)
+    expect(result.output.type).toBe(mode === 'cancelled' ? 'error' : 'lastMessage')
+    expect(observedSignal).toBeDefined()
+    expect(observedSignal!.aborted).toBe(true)
   })
 
   it('repairs malformed string input at direct SDK tool dispatch', async () => {
@@ -670,10 +687,11 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
-        const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sendAction, promptId } = params
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
 
-        await requestToolCall({
+        await callback.request({
           userInputId: promptId,
           toolName: 'inspect_input',
           input: '{"query":"garden",,"note":"a,,b"}' as any,
@@ -695,7 +713,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
       customToolDefinitions: [customTool],
     })
     await client.run({ agent: 'base2', prompt: 'use custom tool' })
@@ -703,7 +721,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     expect(observedInput).toEqual({ query: 'garden', note: 'a,,b' })
   })
 
-  it('passes the run abort signal to MCP tool execution options', async () => {
+  it.each(['completed', 'cancelled'] as const)('passes run cancellation to MCP tool execution options: %s', async mode => {
     spyOn(databaseModule, 'getUserInfoFromApiKey').mockResolvedValue({
       id: 'user-123',
       email: 'test@example.com',
@@ -726,23 +744,36 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     }
     let observedSignal: AbortSignal | undefined
 
-    spyOn(mcpClientModule, 'getMCPClient').mockResolvedValue('mcp-client-id')
-    spyOn(mcpClientModule, 'callMCPTool').mockImplementation(
-      async (...args: Parameters<typeof mcpClientModule.callMCPTool>) => {
-        observedSignal = args[3]?.signal
+    mcpClientModule.markMCPConfigOrigin(mcpConfig, 'project')
+    spyOn(mcpClientModule, 'getMediatedMCPClient').mockImplementation(async (_captured, options) => ({
+      id: 'mcp-client-id',
+      generation: 1,
+      listToolCatalog: async () => ({ kind: 'mcp_tool_catalog', schemaVersion: 1, generation: 1,
+        complete: true, incompleteReasons: [], tools: [] }),
+      callTool: async (_params, _schema, callOptions) => {
+        observedSignal = callOptions?.signal
+        expect(observedSignal).toBeDefined()
+        expect(observedSignal!.aborted).toBe(false)
+        expect(options.signal?.aborted).toBe(false)
+        if (mode === 'cancelled') {
+          controller.abort(new Error('cancel active MCP tool'))
+          expect(observedSignal!.aborted).toBe(true)
+          expect(options.signal?.aborted).toBe(true)
+          expect(observedSignal!.reason.message).toBe('cancel active MCP tool')
+        }
         return [{ type: 'json', value: { ok: true } }]
       },
-    )
+      release() {},
+    }))
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
         const { requestToolCall, sendAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
 
         await requestToolCall({
-          userInputId: promptId,
-          toolName: 'mcp_tool',
-          input: { value: 'hello' },
+          ...await callback.prepare({ toolName: 'mcp_tool', input: { value: 'hello' } }),
           mcpConfig,
         })
 
@@ -769,7 +800,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -778,8 +809,9 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
       signal: controller.signal,
     })
 
-    expect(result.output.type).toBe('lastMessage')
-    expect(observedSignal).toBe(controller.signal)
+    expect(result.output.type).toBe(mode === 'cancelled' ? 'error' : 'lastMessage')
+    expect(observedSignal).toBeDefined()
+    expect(observedSignal!.aborted).toBe(true)
   })
 
   it('streams subagent start/finish once and forwards subagent chunks to handleStreamChunk', async () => {
@@ -799,7 +831,8 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
         const { sendAction, action: promptAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
 
         await sendAction({
           action: {
@@ -876,7 +909,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     const callbackOrder: string[] = []
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({
@@ -942,7 +975,8 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
         const { sendAction, action: promptAction, promptId } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
 
         // A reasoning chunk WITHOUT ancestorRunIds: must still reach
         // handleStreamChunk as reasoning_chunk (missing ids fall back to []).
@@ -1012,7 +1046,7 @@ describe('OpenbuffClient handleEvent / handleStreamChunk', () => {
     const streamChunks: StreamChunk[] = []
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
     })
 
     const result = await client.run({

@@ -4,6 +4,8 @@
 - Use `spyOn()` only for globals / legacy seams.
 - Avoid `mock.module()` for functions; use `@codebuff/common/testing/mock-modules.ts` helpers for constants only.
 
+SDK terminal branch-control tests read their input tables from `sdk/src/__tests__/fixtures/`. Execution branch fixtures keep captures in memory during normal tests. Set `B19_TOOLCHAIN_BRANCH_EVIDENCE_DIR`, `B19_SDK_SUPERVISION_EVIDENCE_DIR`, or `B19_TERMINAL_BRANCH_R3_EVIDENCE_DIR` to an owned roadmap capture directory to retain receipts.
+
 ## Running per-package scripts with bun
 
 `bun --cwd <pkg> run <script>` does NOT execute the script — it silently prints

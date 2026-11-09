@@ -679,6 +679,17 @@ function createLagHistogram(): LagHistogram | null {
   }
 }
 
+function snapshotLagHistogram(histogram: LagHistogram | null) {
+  if (!histogram) return null
+  // Bun 1.3.5 reuses the histogram across monitorEventLoopDelay calls.
+  // Copy the completed window before creating the next configuration's monitor.
+  return {
+    count: histogram.count,
+    meanMs: histogram.mean / 1e6,
+    p99Ms: histogram.percentile(99) / 1e6,
+  }
+}
+
 const THROUGHPUT_FILES = 40
 
 function makeParseThroughputFixture(): { root: string; paths: string[] } {
@@ -836,6 +847,7 @@ describe('yield-gate throughput and event-loop-lag evidence', () => {
     histOn?.enable()
     const onRuns = [await measure(), await measure(), await measure()]
     histOn?.disable()
+    const lagOn = snapshotLagHistogram(histOn)
     const onYields =
       codeMapYield.getYieldStatsForTests().macrotaskYields - yieldsBefore
 
@@ -845,6 +857,7 @@ describe('yield-gate throughput and event-loop-lag evidence', () => {
     histOff?.enable()
     const offRuns = [await measure(), await measure(), await measure()]
     histOff?.disable()
+    const lagOff = snapshotLagHistogram(histOff)
 
     const gateOnMs = Math.min(...onRuns.map((run) => run.ms))
     const gateOffMs = Math.min(...offRuns.map((run) => run.ms))
@@ -899,14 +912,11 @@ describe('yield-gate throughput and event-loop-lag evidence', () => {
     // gate-off baseline (the macrotask yields let the loop breathe instead
     // of adding lag), and gate-on p99 stays within the 8ms slice plus
     // generous macrotask scheduling slack.
-    if (histOn && histOff && histOn.count > 0 && histOff.count > 0) {
-      const onMeanMs = histOn.mean / 1e6
-      const offMeanMs = histOff.mean / 1e6
-      const onP99Ms = histOn.percentile(99) / 1e6
-      expect(onMeanMs).toBeLessThanOrEqual(
-        offMeanMs + RECORDED_YIELD_GATE_BASELINE.maxLagMeanOnMinusOffMs,
+    if (lagOn && lagOff && lagOn.count > 0 && lagOff.count > 0) {
+      expect(lagOn.meanMs).toBeLessThanOrEqual(
+        lagOff.meanMs + RECORDED_YIELD_GATE_BASELINE.maxLagMeanOnMinusOffMs,
       )
-      expect(onP99Ms).toBeLessThanOrEqual(
+      expect(lagOn.p99Ms).toBeLessThanOrEqual(
         RECORDED_YIELD_GATE_BASELINE.maxLagP99OnMs,
       )
     }
@@ -963,6 +973,7 @@ describe('yield-gate throughput and event-loop-lag evidence', () => {
     histOn?.enable()
     const onRuns = [await measure(), await measure(), await measure()]
     histOn?.disable()
+    const lagOn = snapshotLagHistogram(histOn)
 
     // Gate OFF: both intervals forced far above any single run's duration.
     codeMapYield.setYieldIntervalForTests(Number.MAX_SAFE_INTEGER)
@@ -971,6 +982,7 @@ describe('yield-gate throughput and event-loop-lag evidence', () => {
     histOff?.enable()
     const offRuns = [await measure(), await measure(), await measure()]
     histOff?.disable()
+    const lagOff = snapshotLagHistogram(histOff)
 
     const gateOnMs = Math.min(...onRuns.map((run) => run.ms))
     const gateOffMs = Math.min(...offRuns.map((run) => run.ms))
@@ -1011,14 +1023,11 @@ describe('yield-gate throughput and event-loop-lag evidence', () => {
     // Event-loop lag evidence, mirroring the parse test: gate-on mean lag
     // bounded versus the gate-off baseline, gate-on p99 within the 8ms slice
     // plus macrotask scheduling slack.
-    if (histOn && histOff && histOn.count > 0 && histOff.count > 0) {
-      const onMeanMs = histOn.mean / 1e6
-      const offMeanMs = histOff.mean / 1e6
-      const onP99Ms = histOn.percentile(99) / 1e6
-      expect(onMeanMs).toBeLessThanOrEqual(
-        offMeanMs + RECORDED_INDEXER_YIELD_GATE_BASELINE.maxLagMeanOnMinusOffMs,
+    if (lagOn && lagOff && lagOn.count > 0 && lagOff.count > 0) {
+      expect(lagOn.meanMs).toBeLessThanOrEqual(
+        lagOff.meanMs + RECORDED_INDEXER_YIELD_GATE_BASELINE.maxLagMeanOnMinusOffMs,
       )
-      expect(onP99Ms).toBeLessThanOrEqual(
+      expect(lagOn.p99Ms).toBeLessThanOrEqual(
         RECORDED_INDEXER_YIELD_GATE_BASELINE.maxLagP99OnMs,
       )
     }

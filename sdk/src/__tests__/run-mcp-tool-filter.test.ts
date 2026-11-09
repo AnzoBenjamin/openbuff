@@ -1,11 +1,10 @@
 import * as mainPromptModule from '@codebuff/agent-runtime/main-prompt'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { getStubProjectFileContext } from '@codebuff/common/util/file'
-import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
 
 import { OpenbuffClient } from '../client'
 import * as mcpClientModule from '@codebuff/common/mcp/client'
 import * as databaseModule from '../impl/database'
+import { beginSdkCallback, createSdkCallbackFixture } from './sdk-callback-fixture'
 
 import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
 import type { MCPConfig } from '@codebuff/common/types/mcp'
@@ -30,8 +29,13 @@ const TEST_AGENT: AgentDefinition = {
 }
 
 describe('MCP tool filtering', () => {
+  let fixture: ReturnType<typeof createSdkCallbackFixture>
+  beforeEach(() => {
+    fixture = createSdkCallbackFixture('mcp-filter')
+  })
   afterEach(() => {
     mock.restore()
+    fixture.close()
   })
 
   it('returns only allowlisted MCP tools when an agent restricts toolNames', async () => {
@@ -48,8 +52,8 @@ describe('MCP tool filtering', () => {
     spyOn(databaseModule, 'finishAgentRun').mockResolvedValue(undefined)
     spyOn(databaseModule, 'addAgentStep').mockResolvedValue('step-1')
 
-    spyOn(mcpClientModule, 'getMCPClient').mockResolvedValue('mcp-client-id')
-    spyOn(mcpClientModule, 'listMCPToolCatalog').mockResolvedValue({
+    mcpClientModule.markMCPConfigOrigin(browserMcpConfig, 'project')
+    const catalog = {
       kind: 'mcp_tool_catalog',
       schemaVersion: 1,
       generation: 1,
@@ -72,17 +76,40 @@ describe('MCP tool filtering', () => {
           inputSchema: { type: 'object', properties: {} },
         },
       ],
-    } satisfies Awaited<ReturnType<typeof mcpClientModule.listMCPToolCatalog>>)
+    } satisfies Awaited<ReturnType<typeof mcpClientModule.listMCPToolCatalog>>
+    const listToolCatalog = mock(async () => catalog)
+    const getClient = spyOn(mcpClientModule, 'getMediatedMCPClient').mockResolvedValue({
+      id: 'mcp-client-id',
+      generation: 1,
+      listToolCatalog,
+      callTool: async () => [],
+      release() {},
+    })
 
     let filteredTools: Array<{ name: string }> = []
 
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
         const { sendAction, promptId, requestMcpToolData } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const callback = await beginSdkCallback(params)
+        const sessionState = callback.sessionState
+        const template = sessionState.fileContext.agentTemplates?.[TEST_AGENT.id]
+        const mcpConfig = template?.mcpServers?.browser
+        const mcpReference = template?.mcpServerReferences?.browser
+        if (!mcpConfig || !mcpReference)
+          throw new Error('MCP fixture requires the run-owned server binding')
 
         const catalog = await requestMcpToolData({
-          mcpConfig: browserMcpConfig,
+          mcpConfig,
+          mcpReference,
+          mcpAgentId: TEST_AGENT.id,
+          mcpServerName: 'browser',
+          executionActor: {
+            rootRunId: callback.runId,
+            runId: callback.runId,
+            agentId: callback.agentId,
+          },
+          signal: params.signal,
           toolNames: TEST_AGENT.toolNames!.filter((toolName) =>
             toolName.startsWith('browser/'),
           ).map((toolName) => toolName.slice('browser/'.length)),
@@ -112,7 +139,7 @@ describe('MCP tool filtering', () => {
     )
 
     const client = new OpenbuffClient({
-      apiKey: 'test-key',
+      ...fixture.options,
       agentDefinitions: [TEST_AGENT],
     })
 
@@ -121,7 +148,9 @@ describe('MCP tool filtering', () => {
       prompt: 'List MCP tools',
     })
 
-    expect(result.output.type).toBe('lastMessage')
+    expect(result.output).toMatchObject({ type: 'lastMessage' })
+    expect(getClient).toHaveBeenCalledTimes(1)
+    expect(listToolCatalog).toHaveBeenCalledTimes(1)
     expect(filteredTools.map((tool: { name: string }) => tool.name)).toEqual([
       'browser_navigate',
       'browser_snapshot',

@@ -216,8 +216,8 @@ describe('B19 stored execution authority v2', () => {
     fs.writeFileSync(requestPath, JSON.stringify(fixture.request))
     const scriptPath = path.join(root, 'consume.ts')
     fs.writeFileSync(scriptPath, `import fs from 'node:fs';
-import { HarnessApprovalService } from ${JSON.stringify(path.resolve('sdk/src/services/harness-enforcement.ts'))};
-import { LocalHarnessStore } from ${JSON.stringify(path.resolve('sdk/src/services/local-harness-store.ts'))};
+import { HarnessApprovalService } from ${JSON.stringify(path.resolve(import.meta.dir, '../services/harness-enforcement.ts'))};
+import { LocalHarnessStore } from ${JSON.stringify(path.resolve(import.meta.dir, '../services/local-harness-store.ts'))};
 const [root, id] = process.argv.slice(2);
 fs.writeFileSync(root + '/ready-' + id, 'ready');
 const until = Date.now() + 5000;

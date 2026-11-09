@@ -103,7 +103,7 @@ describe('B19 sdk.supervision actual OpenbuffClient.run producer', () => {
         } catch (error) { assertionError = error; throw error }
         finally {
           const f = capturedFixture
-          if (f) {
+          if (f?.artifactDir) {
             const casePath = path.join(f.artifactDir, 'case.json')
             writeFileSync(path.join(f.artifactDir, 'assertion-result.json'), JSON.stringify({
               schemaVersion: 1, targetBranch: f.targetBranch, control, casePath,

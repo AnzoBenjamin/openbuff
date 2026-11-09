@@ -23,8 +23,8 @@ export function hasLaunchFacts(event: LaunchEvent): event is Extract<LaunchEvent
 }
 
 const ownedEvidenceBase = path.resolve(import.meta.dir, '../../../../docs/execution/body-roadmap/evidence/B19/implementation/branch-controls-r3/toolchain/runs')
-const evidenceBase = process.env.B19_TOOLCHAIN_BRANCH_EVIDENCE_DIR ? path.resolve(process.env.B19_TOOLCHAIN_BRANCH_EVIDENCE_DIR) : ownedEvidenceBase
-if (evidenceBase !== ownedEvidenceBase && !evidenceBase.startsWith(ownedEvidenceBase + path.sep)) throw new Error('Toolchain capture directory is outside the owned runs')
+const evidenceBase = process.env.B19_TOOLCHAIN_BRANCH_EVIDENCE_DIR ? path.resolve(process.env.B19_TOOLCHAIN_BRANCH_EVIDENCE_DIR) : undefined
+if (evidenceBase && evidenceBase !== ownedEvidenceBase && !evidenceBase.startsWith(ownedEvidenceBase + path.sep)) throw new Error('Toolchain capture directory is outside the owned runs')
 const processSpawn = childProcess.spawn
 const processSpawnSync = childProcess.spawnSync
 
@@ -53,8 +53,8 @@ export function createToolchainBranchFixture(options: {
   const clock: Clock = { domainId: `toolchain-branch:${id}`, nowMs: () => now }
   const boundary = unwrap(captureRootDeadline({ clock, limit: { kind: 'finite', durationMs: 60_000 } }))
   const root = mkdtempSync(path.join(tmpdir(), 'openbuff-b19-toolchain-branch-'))
-  const out = path.join(evidenceBase, id)
-  mkdirSync(out, { recursive: true })
+  const out = evidenceBase ? path.join(evidenceBase, id) : undefined
+  if (out) mkdirSync(out, { recursive: true })
   const trace = path.join(root, 'child-events.jsonl')
   const binaryRoot = path.join(root, 'bin')
   mkdirSync(binaryRoot)
@@ -217,6 +217,7 @@ export function createToolchainBranchFixture(options: {
   }
   function recordResult<T>(result: T): T { lastResult = result; return result }
   function persist(result: unknown, error?: unknown) {
+    if (!out) return
     const value = { schemaVersion: 1, card: 'B19', producerId: options.producerId, branchId: options.branchId, state: options.state, variant: options.variant ?? 'default',
       status: error === undefined ? 'assertions-passed' : 'assertions-failed', error: error === undefined ? null : String(error),
       evidenceKind: options.evidenceKind ?? 'real-sdk-host-authority-and-actual-node-boundaries', clock: { domainId: clock.domainId, nowMs: now },

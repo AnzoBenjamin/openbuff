@@ -259,7 +259,7 @@ describe('Node process observations and lifetime', () => {
     const recorded = path.join(process.env.B19_TERMINAL_EVIDENCE_DIR ?? h.home, `node-env-${randomUUID()}.json`)
     const launch = executionValue(prepareNodeLaunch({
       ...target(h.context),
-      argv: [path.join(process.cwd(), 'sdk/src/__tests__/fixtures/b19-node-env-recorder.cjs'), recorded],
+      argv: [path.join(import.meta.dir, 'fixtures/b19-node-env-recorder.cjs'), recorded],
     }))
     const admitted = executionValue(await admitNodeLaunch(launch, h.context.signal))
     const node = executionValue(dispatchNodeLaunch(admitted, input => trustedNodeSpawn(h.context)(

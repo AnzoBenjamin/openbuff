@@ -834,6 +834,7 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
   let approvalResolver: HostExecutionOptions['resolveApprovalContext']
   let basisResolver: HostExecutionOptions['isCurrentBasis']
   let activeSession: SessionState | undefined
+  let cancellationReady = false
   const completion = new AbortController()
   let disposeMcp: (() => Promise<void>) | undefined
   const services = createHostExecutionServices({
@@ -858,14 +859,33 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
     skillsDir: options.skillsDir === undefined ? undefined : path.resolve(snapshot.inputs.invocationCwd, options.skillsDir),
     env: options.env ? { ...options.env } : undefined, signal: hostServices.rootSignal }
   try {
-    return await raceAgainstAbort(runOnce(capturedOptions, {
+    const execution = runOnce(capturedOptions, {
       snapshot, hostServices, setSpawn: value => { spawn = value },
       profileExplicitlySelected: options.executionProfile !== undefined,
       setApprovalResolver: value => { approvalResolver = value },
       setBasisResolver: value => { basisResolver = value },
       onSessionReady: value => { activeSession = value },
+      onCancellationReady: () => { cancellationReady = true },
       onMcpReady: value => { disposeMcp = value },
-    }), hostServices.rootSignal)
+    })
+    return await raceAgainstAbort(execution, hostServices.rootSignal).catch(async (error) => {
+      if (!hostServices.rootSignal.aborted || !cancellationReady) throw error
+      // Startup dependencies remain abortable. Once the runtime owns
+      // cancellation, wait for its tools, callbacks and cleanup to settle so
+      // the public result retains their final history and action outcomes.
+      const state = await execution
+      const exhausted = isExecutionDeadlineSignal(hostServices.rootSignal)
+      const message = exhausted
+        ? `Run timed out after ${options.runTimeoutMs}ms`
+        : createAbortError(hostServices.rootSignal).message
+      return projectRunOutcomes({ ...state, output: { type: 'error', message } }, {
+        runOutcome: {
+          termination: exhausted ? 'deadline_exhausted' : 'cancelled',
+          cause: { code: exhausted ? 'run_deadline_exhausted' : 'run_cancelled', message },
+        },
+        taskAcceptance: { status: 'unknown' },
+      })
+    })
   } catch (error) {
     const exhausted = isExecutionDeadlineSignal(hostServices.rootSignal)
     const message = exhausted ? `Run timed out after ${options.runTimeoutMs}ms` : error instanceof Error ? error.message : String(error)
@@ -891,6 +911,7 @@ type RunHostBootstrap = {
   setApprovalResolver(resolver: NonNullable<HostExecutionOptions['resolveApprovalContext']>): void
   setBasisResolver(resolver: NonNullable<HostExecutionOptions['isCurrentBasis']>): void
   onSessionReady(state: SessionState): void
+  onCancellationReady(): void
   onMcpReady(dispose: () => Promise<void>): void
 }
 
@@ -1608,6 +1629,8 @@ async function runOnce({
     )
   }
 
+  host.onCancellationReady()
+
   // Race memory preparation against the run signal: an abort (user cancel or
   // run timeout) rejects here and the run proceeds through its normal
   // degraded/cancelled paths instead of hanging or crashing. prepareTurn
@@ -2253,11 +2276,32 @@ async function runOnce({
   })
 
   // Send input
-  const userInfo = await agentRuntimeImpl.getUserInfoFromApiKey({
+  const userInfo = await raceAgainstAbort(agentRuntimeImpl.getUserInfoFromApiKey({
     ...agentRuntimeImpl,
     apiKey,
     fields: ['id'],
+  }), runSignal).catch((error) => {
+    if (!runSignal.aborted) throw error
+    return null
   })
+  if (runSignal.aborted) {
+    resolveTerminal(getCancelledRunState(createAbortError(runSignal).message))
+    const terminalState = await terminalPromise
+    await callbackQueue
+    callbacksEnabled = false
+    unsubscribeJobEvents()
+    if (terminalState.sessionState && memoryV2Coordinator) {
+      await raceAgainstAbort(
+        memoryV2Coordinator.finishTurn({
+          agentState: terminalState.sessionState.mainAgentState,
+          output: terminalState.output,
+          signal: runSignal,
+        }),
+        runSignal,
+      ).catch(() => {})
+    }
+    return terminalState
+  }
   if (!userInfo) {
         const terminalState = getCancelledRunState(
       'Invalid API key or user not found',
@@ -2281,25 +2325,6 @@ async function runOnce({
   }
 
   const userId = userInfo.id
-
-  if (runSignal.aborted) {
-    resolveTerminal(getCancelledRunState(createAbortError(runSignal).message))
-    const terminalState = await terminalPromise
-    await callbackQueue
-    callbacksEnabled = false
-    unsubscribeJobEvents()
-        if (terminalState.sessionState && memoryV2Coordinator) {
-      await raceAgainstAbort(
-        memoryV2Coordinator.finishTurn({
-          agentState: terminalState.sessionState.mainAgentState,
-          output: terminalState.output,
-          signal: runSignal,
-        }),
-        runSignal,
-      ).catch(() => {})
-    }
-    return terminalState
-  }
 
   let settledRuntimeState: RunState | undefined
   const promptExecution = callMainPrompt({

@@ -341,6 +341,12 @@ describe('R2 timer consumer captures', () => {
         expect(await pending).toMatchObject({ exitCode: 0, stdout: '[]', outputTruncated: false })
         expect((await pending).executionRefusal).toBeUndefined()
       } else {
+        // Expire the captured host clock so settlement and physical termination
+        // share its deadline, independent of the two native backstop wakeups.
+        manual.advance(durationMs - 1)
+        expect(settled).toBe(false)
+        expect(actual.signals).toEqual([])
+        manual.advance(1)
         expect(await pending).toMatchObject({ timedOut: true, executionRefusal: { reason: 'deadline-exhausted' } })
         expect(actual.signals).toEqual(['SIGKILL'])
         actual.finish(undefined, 'SIGKILL')
