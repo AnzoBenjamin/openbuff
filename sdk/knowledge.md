@@ -4,6 +4,8 @@
 
 - SDK reads preserve exact UTF-8 BOM and terminator bytes separately from normalized observation text. Bounded Node readers retain a result buffer plus one fixed chunk, and localized edits verify the captured raw basis before committing. ACP/MCP outbound text redacts both legacy `cap.v3` and current `cap.v4` tokens.
 - SDK results, ACP events and journals retain separate run, task and action outcomes. Mutation dispatch and review bundles use observed forward receipts; compensation failure preserves uncertainty without certifying foreign or unapplied bytes.
+- `sdk/src/run.ts` keeps startup dependencies abortable. Once runtime cancellation is ready, it waits for tool, callback and runtime cleanup before returning final history and action outcomes. User lookup is raced against cancellation too.
+- Terminal branch-control input tables live in `sdk/src/__tests__/fixtures/`. Normal execution fixtures retain captures in memory; receipt files require the explicit evidence-directory variables documented in the [testing guide](../docs/testing.md).
 - The cooperative mutation broker refuses ambiguous stale ownership and retains recovery-needed records. Native crash reclamation and descendant cleanup remain pending. Terminal approvals bind the captured command, environment, path and one-shot identity.
 - Provider configuration preserves the selected route and shared retry/error metadata. Evaluator workers use an explicitly declared environment-isolation tier, with recorded failures and artifact coverage retained separately from task acceptance.
 - See the [body checkpoint](../docs/execution/body-roadmap/STATE.md) for source/build verification and the pending agent-browser researcher prerequisites.

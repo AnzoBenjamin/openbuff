@@ -7,6 +7,7 @@
 - `cli/src/utils/tool-result-normalizer.ts` interprets MCP envelopes through their protocol `isError` flag. Fields inside `structuredContent` remain payload data; a captured envelope without producer success evidence displays `captured · outcome unknown` in `cli/src/utils/output-outcome.ts`.
 - MCP image/audio bytes and embedded resource blobs are omitted by `cli/src/utils/payload-sanitizer.ts` with explicit `openbuffOmission` metadata. Text and structured results survive persistence. Keep this projection self-contained because the sanitizer factory is serialized into persistence workers.
 - `cli/src/commands/index-command.ts` passes an injected execution context or asynchronous context getter into SCIP ingestion. Execution refusals remain distinct from unavailable binaries and suppress misleading installation hints.
+- Yield-gate benchmarks in `cli/src/utils/__tests__/opentui-syntax-style.test.ts` copy completed event-loop statistics before starting the next configuration because Bun 1.3.5 reuses its histogram. The 8ms default, three-pass measurement windows and recorded performance ceilings remain pinned.
 - The [body execution checkpoint](../docs/execution/body-roadmap/STATE.md) records original accepted milestones, current source validation and pending execution-context/researcher/browser work. Source changes require affected acceptance renewal; current source checks do not establish installed CLI coverage.
 
 ## Retained-output readers and recovery
