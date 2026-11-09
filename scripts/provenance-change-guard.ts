@@ -20,6 +20,15 @@ import type { ProvenanceRecord } from './dependency-provenance-guard'
 const ZERO_SHA = /^0{40}$|^0{64}$/
 const COMMIT_SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 
+// These two commits landed under the earlier initial-record addition policy,
+// before this history guard required dedicated commits. Their full Git object
+// identities are fixed; only the mixed-path finding is waived. Record identity
+// and release validation still run over their original bytes below.
+const LEGACY_MIXED_PROVENANCE_COMMITS: ReadonlySet<string> = new Set([
+  '3448c3d014c09f28923e16fa09d9d1b07e20d9f4', // Initial registry record.
+  '49e79403e8aaa91406db53498edade08cf7027f4', // Tiktoken 1.0.22 addition.
+])
+
 type Finding = { commit: string; message: string }
 type Range = { base: string | null; head: string; mode: string }
 export type ProvenanceChangeEvent = {
@@ -33,7 +42,7 @@ export type ProvenanceChangeEvent = {
 }
 
 function git(root: string, args: string[]): string {
-  const result = spawnSync('git', args, {
+  const result = spawnSync('git', ['--no-replace-objects', ...args], {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
@@ -213,6 +222,24 @@ function validateAddedRelease(
   return findings
 }
 
+export function checkProvenanceCommitPaths(
+  sha: string,
+  changedPaths: readonly (readonly string[])[],
+  inheritedMerge: boolean,
+): { findings: string[]; legacyMixedCommit?: true } {
+  const mixed = changedPaths.some((paths) =>
+    paths.some((path) => path !== PROVENANCE_RECORD_PATH),
+  )
+  if (!mixed || inheritedMerge) return { findings: [] }
+  if (LEGACY_MIXED_PROVENANCE_COMMITS.has(sha))
+    return { findings: [], legacyMixedCommit: true }
+  return {
+    findings: [
+      'Provenance introductions/updates require a dedicated record-only commit; source or other files changed in the same commit.',
+    ],
+  }
+}
+
 export function checkProvenanceChanges(
   root: string,
   event: ProvenanceChangeEvent,
@@ -238,6 +265,7 @@ export function checkProvenanceChanges(
     parents: string[]
     added: string[]
     inheritedMerge: boolean
+    legacyMixedCommit?: true
   }> = []
   let lock: Map<string, string> | undefined
   const addFindings = (sha: string, messages: string[]) =>
@@ -286,16 +314,12 @@ export function checkProvenanceChanges(
       parents.length > 1 &&
       added.length === 0 &&
       before.some((parent) => parent?.verifiedAt === after?.verifiedAt)
-    if (
-      !inheritedMerge &&
-      changedPaths.some((paths) =>
-        paths.some((path) => path !== PROVENANCE_RECORD_PATH),
-      )
-    ) {
-      addFindings(sha, [
-        'Provenance introductions/updates require a dedicated record-only commit; source or other files changed in the same commit.',
-      ])
-    }
+    const pathsResult = checkProvenanceCommitPaths(
+      sha,
+      changedPaths,
+      inheritedMerge,
+    )
+    addFindings(sha, pathsResult.findings)
     if (added.length) {
       lock ??= parseLockIntegrities(
         git(root, ['show', `${range.head}:bun.lock`]),
@@ -306,7 +330,13 @@ export function checkProvenanceChanges(
           validateAddedRelease(spec, after!.packages[spec], lock),
         )
     }
-    checkedCommits.push({ commit: sha, parents, added, inheritedMerge })
+    checkedCommits.push({
+      commit: sha,
+      parents,
+      added,
+      inheritedMerge,
+      ...(pathsResult.legacyMixedCommit ? { legacyMixedCommit: true } : {}),
+    })
   }
   return { ...range, checkedCommits, findings }
 }

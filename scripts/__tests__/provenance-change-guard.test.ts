@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import {
+  checkProvenanceCommitPaths,
   checkProvenanceChanges,
   selectProvenanceRange,
 } from '../provenance-change-guard'
@@ -104,6 +105,54 @@ function withRepo(
     rmSync(root, { recursive: true, force: true })
   }
 }
+
+test('only exact pre-policy commits receive the visible mixed-path exception', () => {
+  const legacyCommits = [
+    '3448c3d014c09f28923e16fa09d9d1b07e20d9f4',
+    '49e79403e8aaa91406db53498edade08cf7027f4',
+  ]
+  const mixedPaths = [[PROVENANCE_RECORD_PATH, 'source.ts']]
+  for (const sha of legacyCommits) {
+    expect(checkProvenanceCommitPaths(sha, mixedPaths, false)).toEqual({
+      findings: [],
+      legacyMixedCommit: true,
+    })
+    for (const unpinned of [
+      sha.slice(0, -1),
+      `${sha.slice(0, -1)}0`,
+      sha.toUpperCase(),
+      '1'.repeat(64),
+    ]) {
+      const result = checkProvenanceCommitPaths(unpinned, mixedPaths, false)
+      expect(result.findings).toHaveLength(1)
+      expect(result.findings[0]).toContain('dedicated record-only commit')
+      expect(result.legacyMixedCommit).toBeUndefined()
+    }
+    // A record-only commit or an inherited merge does not apply the exception.
+    expect(
+      checkProvenanceCommitPaths(sha, [[PROVENANCE_RECORD_PATH]], false),
+    ).toEqual({ findings: [] })
+    expect(checkProvenanceCommitPaths(sha, mixedPaths, true)).toEqual({
+      findings: [],
+    })
+  }
+})
+
+test('Git replacement refs cannot give new content a pinned legacy identity', () =>
+  withRepo((root, base) => {
+    record(root, addition())
+    write(root, 'source.ts', 'export const value = 2\n')
+    const mixed = commit(root, 'new mixed introduction')
+    const legacy = '3448c3d014c09f28923e16fa09d9d1b07e20d9f4'
+    git(root, 'update-ref', `refs/replace/${legacy}`, mixed)
+    expect(() =>
+      checkProvenanceChanges(root, {
+        eventName: 'push',
+        before: base,
+        head: legacy,
+      }),
+    ).toThrow('git rev-parse failed')
+  }))
 
 test('the exact reviewed Ajv addition passes in its own commit across the whole push/PR range', () => {
   const current = JSON.parse(
