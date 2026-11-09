@@ -27,6 +27,8 @@ Required evidence and ignored build/dependency context are preserved in the [ver
 
 Publication also repairs the outdated CASE13 benchmark fixture: it now launches an authenticated, owned cargo executable with an explicit child PATH and verifies deadline termination. The independent bare-kill control remains. Its focused seven tests and the post-cleanup scripts suite's 386 tests pass. Publication verification is recorded in [verification.json](archive/verification.json); this fixture repair does not renew the earlier candidate hashes.
 
+The file-explorer SDK integration fixtures now use isolated temporary workspaces with an injected filesystem instead of nonexistent placeholder directories. All four focused tests pass, along with the full agents suite (1,359 passed, five skipped), common suite (1,816 passed) and agents typecheck. These checks cover the publication repairs and do not accept B19.
+
 Restore into a disposable source checkout when inspecting receipts or running the unchanged ledger validator:
 
 ```sh
