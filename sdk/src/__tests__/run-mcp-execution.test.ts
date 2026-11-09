@@ -29,6 +29,12 @@ afterEach(async () => {
 })
 function value<T>(result: Result<T>): T { if (!result.ok) throw new Error(`${result.reason}: ${result.cause}`); return result.value }
 
+const resolvedNodeExecutable = Bun.which('node')
+if (!resolvedNodeExecutable) throw new Error('The real run MCP execution fixture requires Node on PATH')
+// Bind the narrowed value so the string (not string | null) flows into the
+// config factory below; the guard's narrowing does not cross the closure.
+const nodeExecutable: string = resolvedNodeExecutable
+
 // A real Node JSON-RPC stdio peer through the Node adapter. Execute outside the
 // sandbox: recorded probes isolate the sandbox's child-pipe failure. Env and
 // requests are recorded on disk independently of the protocol output.
@@ -90,7 +96,7 @@ function fixture(existingRoot?: string, environment: Record<string, string | und
   const mcp = createRunMcpExecution({ snapshot: captured.snapshot, authority: host.execution, rootLifetime: host.rootLifetime, spawn: launch })
   const scope = (id = 'one') => value(host.registerRun({ clientSessionId: 'session', rootRunId: `run-${id}`, parentRunId: `run-${id}`, parentAgentId: `agent-${id}` }))
   const config = (origin: MCPConfigOrigin = 'project', env: Record<string, string> = {}): MCPConfig => {
-    const result: MCPConfig = { type: 'stdio', command: '/usr/bin/node', args: [path.join(root, 'server.cjs'), root], env }
+    const result: MCPConfig = { type: 'stdio', command: nodeExecutable, args: [path.join(root, 'server.cjs'), root], env }
     markMCPConfigOrigin(result, origin)
     return result
   }

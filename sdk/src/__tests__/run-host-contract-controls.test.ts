@@ -98,6 +98,8 @@ afterEach(async () => {
 })
 
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
+const nodeExecutable = Bun.which('node')
+if (!nodeExecutable) throw new Error('The real SDK contract controls fixture requires Node on PATH')
 const fullAccess = { policy: 'full-access', preferredBackend: 'portable-ts', required: ['exact-env'], allowBackendFallback: false } as const
 function fixture(configuration: Record<string, unknown> = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-b19-sdk-controls-')); roots.push(directory)
@@ -173,7 +175,7 @@ const strategy: AgentDefinition = {
 describe('B19 actual SDK host contract controls', () => {
   test('strategy.sdk: trusted strategy chooses a real read/edit/command sequence and retains effects and B02 identities', async () => {
     const f = fixture(), observed = path.join(f.root, 'command.json')
-    const result = await f.run(strategy, `exec /usr/bin/node ${quote(f.peer)} ${quote(observed)} strategy ${quote(path.join(f.root, 'input.txt'))}`)
+    const result = await f.run(strategy, `exec ${quote(nodeExecutable)} ${quote(f.peer)} ${quote(observed)} strategy ${quote(path.join(f.root, 'input.txt'))}`)
     console.log('B19_SDK_STRATEGY', JSON.stringify({ output: result.output, actions: result.actionOutcomes, execution: f.events, launches: f.launches,
       editDispatches, diagnostics: f.diagnostics }))
     completed(result)
@@ -198,7 +200,7 @@ describe('B19 actual SDK host contract controls', () => {
 
   test('strategy.sdk: a second run with required unavailable execution starts no command target', async () => {
     const f = fixture(), observed = path.join(f.root, 'must-not-exist.json')
-    const result = await f.run(strategy, `exec /usr/bin/node ${quote(f.peer)} ${quote(observed)} unavailable`, {
+    const result = await f.run(strategy, `exec ${quote(nodeExecutable)} ${quote(f.peer)} ${quote(observed)} unavailable`, {
       executionProfile: { ...fullAccess, preferredBackend: 'native-exec' },
     })
     console.log('B19_SDK_REQUIRED_UNAVAILABLE', JSON.stringify({ output: result.output, execution: f.events, launches: f.launches }))
@@ -233,7 +235,7 @@ describe('B19 actual SDK host contract controls', () => {
           modelCapabilities: { recommended: { quality: { coding: [{ language: 'typescript', taskType: 'bug-fix', agentRole: 'editor', score: 99, sampleSize: 20 }] } } } },
         'opencode-go': { type: 'openai-compatible', baseURL: 'https://opencode.ai/zen/go/v1', apiKeyEnv: 'OPENCODE_GO_API_KEY', models: ['stale-model-list'] },
         oauth: { type: 'chatgpt-oauth', models: ['gpt-5.4'] },
-      }, fileChangeHooks: [{ name: 'captured-hook', command: `exec /usr/bin/node ${quote(f.peer)} ${quote(hookFile)} captured-hook` }],
+      }, fileChangeHooks: [{ name: 'captured-hook', command: `exec ${quote(nodeExecutable)} ${quote(f.peer)} ${quote(hookFile)} captured-hook` }],
     }
     fs.writeFileSync(f.configFile, JSON.stringify(selectedConfiguration))
     f.environment.OPENBUFF_PROCESS_SUPERVISION = '1'

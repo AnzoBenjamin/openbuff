@@ -1162,9 +1162,13 @@ describe('getChangeReviewBundle', () => {
       // Wait until the shim is live, then cancel.
       const pidDeadline = Date.now() + 5_000
       let pid = -1
-      while (pid === -1 && Date.now() < pidDeadline) {
+      // The shim truncates-then-writes the pid file, so a read can land in the
+      // empty window: keep polling until a positive integer pid appears.
+      while (!(pid > 0) && Date.now() < pidDeadline) {
         try {
-          pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10)
+          const parsed = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10)
+          if (Number.isInteger(parsed) && parsed > 0) pid = parsed
+          else await new Promise((resolve) => setTimeout(resolve, 10))
         } catch {
           await new Promise((resolve) => setTimeout(resolve, 10))
         }
@@ -1236,9 +1240,13 @@ describe('getChangeReviewBundle', () => {
       // Wait until the shim is live, then cancel.
       const pidDeadline = Date.now() + 5_000
       let pid = -1
-      while (pid === -1 && Date.now() < pidDeadline) {
+      // The shim truncates-then-writes the pid file, so a read can land in the
+      // empty window: keep polling until a positive integer pid appears.
+      while (!(pid > 0) && Date.now() < pidDeadline) {
         try {
-          pid = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10)
+          const parsed = Number.parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10)
+          if (Number.isInteger(parsed) && parsed > 0) pid = parsed
+          else await new Promise((resolve) => setTimeout(resolve, 10))
         } catch {
           await new Promise((resolve) => setTimeout(resolve, 10))
         }

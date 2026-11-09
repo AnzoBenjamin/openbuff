@@ -50,6 +50,10 @@ afterEach(async () => {
   expect(networkAttempts).toBe(0)
 })
 
+const nodeExecutable = Bun.which('node')
+if (!nodeExecutable) throw new Error('The real run host execution fixture requires Node on PATH')
+const shellArg = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+
 const program: AgentDefinition = {
   id: 'b19-programmatic-host', displayName: 'Local execution fixture', model: 'fixture-model',
   toolNames: ['run_terminal_command', 'run_file_change_hooks', 'set_output'], outputMode: 'structured_output',
@@ -250,7 +254,7 @@ describe('B19 actual programmatic run host wiring', () => {
     const f = fixture(), recorder = path.join(f.root, 'recorder.cjs'), observed = path.join(f.root, 'observed.json')
     fs.writeFileSync(recorder, 'require("node:fs").writeFileSync(process.argv[2],JSON.stringify(process.env))')
     const env = { PROJECT_VALUE: 'child-public', DELETE_ME: undefined, OPENAI_API_KEY: 'child-reinsert', CUSTOM_PROVIDER_KEY: 'child-reinsert-custom' }
-    const result = await f.run([f.terminal(`/usr/bin/node '${recorder}' '${observed}'`)], { inheritEnv, env })
+    const result = await f.run([f.terminal(`${shellArg(nodeExecutable)} ${shellArg(recorder)} ${shellArg(observed)}`)], { inheritEnv, env })
     expect(result.output.type).toBe('structuredOutput')
     const recorded = JSON.parse(fs.readFileSync(observed, 'utf8'))
     expect(recorded.PROJECT_VALUE).toBe('child-public')
@@ -271,7 +275,7 @@ describe('B19 actual programmatic run host wiring', () => {
     let release!: (launch: CodebuffSpawn) => void
     const ready = new Promise<CodebuffSpawn>(resolve => { release = resolve })
     const env = { PROJECT_VALUE: 'first-child' }
-    const pending = f.run([f.terminal(`/usr/bin/node '${recorder}' '${observed}'`)], { spawnSource: ready, env })
+    const pending = f.run([f.terminal(`${shellArg(nodeExecutable)} ${shellArg(recorder)} ${shellArg(observed)}`)], { spawnSource: ready, env })
     f.environment.PROJECT_VALUE = 'late-host'
     f.environment.OPENAI_API_KEY = 'late-host-secret'
     env.PROJECT_VALUE = 'late-child'
@@ -296,7 +300,7 @@ describe('B19 actual programmatic run host wiring', () => {
       f.environment.OPENAI_API_KEY = 'during-config-secret'
       return f.configReadFs.readFile(file)
     } }
-    const result = await f.run([f.terminal(`/usr/bin/node '${recorder}' '${observed}'`)], { env, executionProfile: callerProfile, configReadFs: reader })
+    const result = await f.run([f.terminal(`${shellArg(nodeExecutable)} ${shellArg(recorder)} ${shellArg(observed)}`)], { env, executionProfile: callerProfile, configReadFs: reader })
     expect(result.output.type).toBe('structuredOutput')
     expect(JSON.parse(fs.readFileSync(observed, 'utf8')).PROJECT_VALUE).toBe('before-config-read')
     expect(terminalStarts(f.events)[0].facts.profile.selected?.backend).toBe('portable-ts')
@@ -306,7 +310,7 @@ describe('B19 actual programmatic run host wiring', () => {
   test('detached real child survives sender cancellation but stops at the transferred finite cap', async () => {
     const f = fixture(), stop = new AbortController(), recorder = path.join(f.root, 'background.cjs'), observed = path.join(f.root, 'ticks')
     fs.writeFileSync(recorder, 'const fs=require("node:fs");const p=process.argv[2];fs.appendFileSync(p,"start\\n");setInterval(()=>fs.appendFileSync(p,"tick\\n"),30)')
-    const command = `exec /usr/bin/node '${recorder}' '${observed}'`
+    const command = `exec ${shellArg(nodeExecutable)} ${shellArg(recorder)} ${shellArg(observed)}`
     const result = await f.run([f.terminal(command, { process_type: 'BACKGROUND', detach: true, timeout_seconds: 1.5 })], {}, stop.signal)
     expect(result.output.type).toBe('structuredOutput')
     const launchIndex = f.launches.findIndex(launch => launch.argv.some(arg => arg.includes(recorder)))

@@ -306,6 +306,8 @@ function syntheticMcpChild() {
 }
 
 function mcpConnection(f: BranchFixture, realPeer: boolean) {
+  const nodeExecutable = Bun.which('node')
+  if (!nodeExecutable) throw new Error('The real external branch MCP fixture requires Node on PATH')
   const exits: Promise<unknown>[] = []
   const spawn: CodebuffSpawn = realPeer ? (command, argv, options) => {
     const child = f.record(command, argv, options)
@@ -313,7 +315,7 @@ function mcpConnection(f: BranchFixture, realPeer: boolean) {
     return child
   } : (command, argv, options) => { f.recordSynthetic(command, argv, options); return syntheticMcpChild() }
   const mcp = createRunMcpExecution({ snapshot: f.snapshot, authority: f.host.execution, rootLifetime: f.host.rootLifetime, spawn })
-  const config = { type: 'stdio' as const, command: '/usr/bin/node', args: [path.join(import.meta.dir, 'external-branch-mcp-server.cjs')],
+  const config = { type: 'stdio' as const, command: nodeExecutable, args: [path.join(import.meta.dir, 'external-branch-mcp-server.cjs')],
     env: { EXTERNAL_RECORD_FILE: path.join(f.root, 'peer.json'), PROJECT_VALUE: '$PROJECT_VALUE' } }
   markMCPConfigOrigin(config, 'project')
   const captured = mcp.capture(config)

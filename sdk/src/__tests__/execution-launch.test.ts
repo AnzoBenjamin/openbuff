@@ -30,6 +30,10 @@ function fixture(options: Parameters<typeof createTerminalExecutionFixture>[0] =
 }
 afterEach(() => { for (const current of fixtures.splice(0)) current.dispose() })
 
+const locatedNode = Bun.which('node')
+if (!locatedNode) throw new Error('The real execution launch fixture requires Node on PATH')
+const nodeExecutable: string = locatedNode
+
 function controlledClock() {
   let now = 100
   let nextId = 0
@@ -68,7 +72,7 @@ function fakeChild(pid: number | undefined = 42_424_001) {
 function target(executionContext?: ExecutionAdapterContext) {
   return {
     executionContext,
-    executable: '/usr/bin/node', argv: ['--version'], cwd: process.cwd(),
+    executable: nodeExecutable, argv: ['--version'], cwd: process.cwd(),
     branchId: 'terminal.sync',
     adapterOptions: { stdio: 'pipe', detached: false, shell: false },
   }
