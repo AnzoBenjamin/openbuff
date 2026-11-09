@@ -398,16 +398,26 @@ describe('WorkspaceMutationBroker', () => {
     const { workspace, stateDir } = await makeWorkspace(
       'broker-reclaim-barrier',
     )
-    const brokers = await Promise.all(
-      [0, 1].map(() =>
-        WorkspaceMutationBroker.create({
+    // Create the two brokers sequentially. Concurrent creations contend for
+    // the same workspace lock with a 30ms lockTimeoutMs: under full-suite
+    // runner load the winning create can hold the lock through initialize()
+    // (durable owner write + fsync + recovery scan) for longer than that, and
+    // the loser then fails closed with a recovery-required error before this
+    // test's stale-observation fixture is even installed (observed as a CI
+    // flake at the create() call, not in the behavior under test). The race
+    // this test exercises is the competing conditionalCommit barrier below,
+    // which is deterministic once both brokers exist.
+    const brokers: WorkspaceMutationBroker[] = []
+    for (const i of [0, 1]) {
+      brokers.push(
+        await WorkspaceMutationBroker.create({
           cwd: workspace,
           stateDir,
           lockTimeoutMs: 30,
           lockPollMs: 2,
         }),
-      ),
-    )
+      )
+    }
     const target = path.join(workspace, 'file.txt')
     await writeFile(target, 'before')
     const lockPath = `${brokers[0]!.brokerDir}.lock`
