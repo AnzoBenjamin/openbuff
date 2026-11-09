@@ -28,6 +28,7 @@ import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 import type { CodebuffToolCall } from '@codebuff/common/tools/list'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { PrintModeEvent } from '@codebuff/common/types/print-mode'
+import type { ActionOutcome } from '@codebuff/common/types/run-outcome'
 import type { AgentState } from '@codebuff/common/types/session-state'
 
 /**
@@ -102,6 +103,33 @@ function appliedMutationResult(path: string, id: string) {
     },
     errors: [],
     freshCapabilities: [],
+  }
+}
+
+/**
+ * Runtime-recorded ActionOutcome shaped like the ones trackToolAttempt appends
+ * to agentState.actionOutcomes at tool-result time for a committed
+ * edit_transaction — durable evidence that survives the group-kill which
+ * discards the child's messageHistory (and its mutation attestations).
+ */
+function confirmedEditActionOutcome(params?: {
+  confirmedPaths?: string[]
+  receiptIds?: string[]
+  status?: 'confirmed' | 'partial' | 'unobserved'
+}): ActionOutcome {
+  const {
+    status = 'confirmed',
+    receiptIds = ['receipt-1'],
+    confirmedPaths = ['src/fixed.ts'],
+  } = params ?? {}
+  return {
+    actionId: 'call-1',
+    attemptId: 'att-1',
+    runId: 'child-run-1',
+    toolName: 'edit_transaction',
+    basis: { inputHash: 'sha256:x', workspaceRevision: 3 },
+    outcome: 'succeeded',
+    effect: { status, receiptIds, confirmedPaths },
   }
 }
 
@@ -1090,6 +1118,231 @@ describe('spawn_agent_inline onResponseChunk parentAgentId nesting', () => {
     expect(receipt.findingsAddressed).toEqual([
       'SR-MUTATION-ATTESTATION-OVERCLAIM-FINDING-ATTESTATION',
     ])
+  })
+
+  // ── Cancelled-child action-outcome rescue ──────────────────────────────────
+  //
+  // trackToolAttempt records durable ActionOutcomes on
+  // agentState.actionOutcomes at tool-result time, so a committed edit's
+  // evidence survives the parent abort that group-kills the child before its
+  // messageHistory (and the attestation-bearing edit_transaction tool
+  // messages inside it) can reach the parent.
+
+  it('credits claimed changed files backed by runtime action outcomes when the child message history lost its mutation attestations', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'repair-editor',
+      agentId: 'repair-cancelled-outcome-backed',
+      output: {
+        type: 'structuredOutput',
+        value: {
+          status: 'completed',
+          changedFiles: ['src/fixed.ts'],
+        },
+      },
+      agentState: {
+        messageHistory: [],
+        runOutcome: {
+          termination: 'cancelled',
+          cause: {
+            code: 'parent_aborted',
+            message: 'Parent aborted mid-settle; child group-killed.',
+          },
+        },
+        actionOutcomes: [
+          confirmedEditActionOutcome({
+            confirmedPaths: ['src/fixed.ts'],
+            receiptIds: ['receipt-1'],
+          }),
+        ],
+      } as any,
+    })
+
+    expect(receipt.status).toBe('cancelled')
+    // The outcome-backed entry carries the path plus the outcome's first
+    // receiptId; beforeHash/afterHash need the lost messageHistory attestations.
+    expect(receipt.changedFiles).toEqual([
+      { path: 'src/fixed.ts', mutationReceiptId: 'receipt-1' },
+    ])
+    expect(
+      receipt.errors.some((error) =>
+        error.message.includes(
+          'Child output claimed changed files without mutation receipts',
+        ),
+      ),
+    ).toBe(false)
+  })
+
+  it('still overclaims when neither message history nor action outcomes back the claimed paths', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'repair-editor',
+      agentId: 'repair-outcome-less-overclaim',
+      output: {
+        type: 'structuredOutput',
+        value: {
+          status: 'completed',
+          changedFiles: ['src/fixed.ts'],
+        },
+      },
+      agentState: {
+        messageHistory: [],
+        actionOutcomes: [],
+      } as any,
+    })
+
+    // Fail-closed preserved: no messageHistory receipts and no runtime-recorded
+    // confirmed action outcomes means the claim still reads as an overclaim.
+    expect(receipt.changedFiles).toEqual([])
+    expect(receipt.errors.map((error) => error.message)).toContain(
+      'Child output claimed changed files without mutation receipts: src/fixed.ts.',
+    )
+  })
+
+  it('does not credit unobserved action outcomes', () => {
+    // An outcome whose effect was never observed must contribute nothing: the
+    // rescue trusts only runtime-recorded confirmed/partial effects, so the
+    // fail-closed overclaim is preserved for genuinely unbacked claims.
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'repair-editor',
+      agentId: 'repair-unobserved-outcome',
+      output: {
+        type: 'structuredOutput',
+        value: {
+          status: 'completed',
+          changedFiles: ['src/fixed.ts'],
+        },
+      },
+      agentState: {
+        messageHistory: [],
+        actionOutcomes: [
+          confirmedEditActionOutcome({
+            status: 'unobserved',
+            confirmedPaths: [],
+            receiptIds: [],
+          }),
+        ],
+      } as any,
+    })
+
+    expect(receipt.changedFiles).toEqual([])
+    expect(receipt.errors.map((error) => error.message)).toContain(
+      'Child output claimed changed files without mutation receipts: src/fixed.ts.',
+    )
+  })
+
+  it('messageHistory attestations win per path over action outcomes', () => {
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'repair-editor',
+      agentId: 'repair-history-outcome-precedence',
+      output: {
+        type: 'structuredOutput',
+        value: {
+          status: 'completed',
+          changedFiles: ['src/fixed.ts'],
+        },
+      },
+      agentState: {
+        messageHistory: [
+          {
+            role: 'tool',
+            toolName: 'edit_transaction',
+            toolCallId: 'call-genuine',
+            content: [
+              {
+                type: 'json',
+                value: appliedMutationResult('src/fixed.ts', 'genuine'),
+              },
+            ],
+          },
+        ],
+        actionOutcomes: [
+          confirmedEditActionOutcome({
+            confirmedPaths: ['src/fixed.ts'],
+            receiptIds: ['receipt-outcome'],
+          }),
+        ],
+      } as any,
+    })
+
+    // The richer messageHistory entry keeps its hashes and its own receipt id;
+    // the action-outcome credit neither duplicates the path nor overwrites the
+    // attestation's receipt id.
+    expect(receipt.changedFiles).toEqual([
+      {
+        path: 'src/fixed.ts',
+        beforeHash: 'before-genuine',
+        afterHash: 'after-genuine',
+        mutationReceiptId: 'receipt-genuine',
+      },
+    ])
+    expect(
+      receipt.errors.some((error) =>
+        error.message.includes('without mutation receipts'),
+      ),
+    ).toBe(false)
+  })
+
+  it('credits findings whose files are backed only by runtime action outcomes', () => {
+    // The partial-overclaim finding credit intersects handoff finding files
+    // with the merged actualChangedPaths, so a finding fixed by a cancelled
+    // child keeps its credit even though no messageHistory attestation arrived.
+    const receipt = buildRuntimeAgentReceipt({
+      agentType: 'repair-editor',
+      agentId: 'repair-outcome-finding-credit',
+      handoff: {
+        schemaVersion: 1,
+        taskId: 'repair-task-outcome-credit',
+        role: 'repair-editor',
+        objective: 'Fix the reviewed finding.',
+        requirements: [],
+        acceptanceCriteria: [],
+        context: [],
+        invariants: [],
+        nonGoals: [],
+        risks: [],
+        unknowns: [],
+        findings: [
+          {
+            id: 'SR-ACTION-OUTCOME-FINDING-CREDIT',
+            text: 'Fix the real file.',
+            files: ['src/fixed.ts'],
+          },
+        ],
+        permissions: {
+          readablePaths: ['src/fixed.ts'],
+          writablePaths: ['src/fixed.ts'],
+          allowedTools: ['edit_transaction'],
+        },
+        artifacts: [],
+        successCriteria: [],
+        constraints: [],
+      } as any,
+      output: {
+        type: 'structuredOutput',
+        value: {
+          status: 'completed',
+          changedFiles: ['src/fixed.ts'],
+          findingsAddressed: ['SR-ACTION-OUTCOME-FINDING-CREDIT'],
+        },
+      },
+      agentState: {
+        messageHistory: [],
+        actionOutcomes: [
+          confirmedEditActionOutcome({
+            confirmedPaths: ['src/fixed.ts'],
+            receiptIds: ['receipt-1'],
+          }),
+        ],
+      } as any,
+    })
+
+    expect(receipt.findingsAddressed).toEqual([
+      'SR-ACTION-OUTCOME-FINDING-CREDIT',
+    ])
+    expect(
+      receipt.errors.some((error) =>
+        error.message.includes('without mutation receipts'),
+      ),
+    ).toBe(false)
   })
 
   it('requires and preserves a structural receipt for general audit agents', () => {

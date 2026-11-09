@@ -2158,6 +2158,50 @@ function extractMutationAttestations(value: unknown): Array<{
   return [...byPath.values()]
 }
 
+/**
+ * Runtime-recorded changed-file credit for children whose messageHistory never
+ * reached the parent. `trackToolAttempt` appends durable ActionOutcomes to
+ * agentState.actionOutcomes at tool-result time, and a committed mutation's
+ * outcome carries effect.confirmedPaths plus effect.receiptIds derived from
+ * the same schema-validated authority receipts the messageHistory
+ * attestations use — so a cancelled (or context-evicted) editor that already
+ * committed edits still attests them after the attestation-bearing
+ * edit_transaction tool messages were lost in transit.
+ *
+ * Fail-closed preserved: only effect.status 'confirmed' or 'partial'
+ * contributes — 'unobserved' (and any unknown value) yields nothing — and
+ * this is runtime-recorded evidence, never model self-report (forged receipts
+ * embedded in child OUTPUT never reach agentState.actionOutcomes). Returns
+ * path -> that outcome's first receiptId (undefined when none was recorded);
+ * the first outcome recording a path wins.
+ */
+function extractActionOutcomeConfirmedPaths(
+  actionOutcomes: unknown,
+): Map<string, string | undefined> {
+  const confirmedPaths = new Map<string, string | undefined>()
+  if (!Array.isArray(actionOutcomes)) return confirmedPaths
+  for (const outcome of actionOutcomes) {
+    if (!outcome || typeof outcome !== 'object') continue
+    const record = outcome as Record<string, unknown>
+    if (record.effect === null || typeof record.effect !== 'object') continue
+    const effect = record.effect as Record<string, unknown>
+    if (effect.status !== 'confirmed' && effect.status !== 'partial') continue
+    if (!Array.isArray(effect.confirmedPaths)) continue
+    const receiptId = Array.isArray(effect.receiptIds)
+      ? (effect.receiptIds.find(
+          (id): id is string => typeof id === 'string' && id.trim().length > 0,
+        )?.trim() ?? undefined)
+      : undefined
+    for (const candidate of effect.confirmedPaths) {
+      if (typeof candidate !== 'string') continue
+      const path = candidate.trim()
+      if (!path || confirmedPaths.has(path)) continue
+      confirmedPaths.set(path, receiptId)
+    }
+  }
+  return confirmedPaths
+}
+
 function findReceiptStatus(
   output: unknown,
 ): AgentReceipt['status'] | undefined {
@@ -2489,9 +2533,23 @@ function buildRuntimeAgentReceiptOrThrow(params: {
     params.output,
     'changedFiles',
   )
-  const actualChangedPaths = new Set(
-    mutationAttestations.map((entry) => entry.path),
+  // Cancelled-child rescue: trackToolAttempt records durable ActionOutcomes on
+  // agentState.actionOutcomes at tool-result time — BEFORE cancellation can
+  // lose the attestation-bearing edit_transaction tool messages. Merge those
+  // runtime-recorded confirmed/partial effect paths into the attestation-backed
+  // set ahead of the overclaim computation so an editor that genuinely
+  // committed edits, then settled cancelled with its claimed changedFiles in
+  // the harvested output, is not misreported as an overclaim. messageHistory
+  // attestations still win per path in `changedFiles` below and remain the
+  // only authority for hasMutationProgress / latestMutation /
+  // mutationsComplete. Children with no actionOutcomes are unaffected.
+  const actionOutcomeConfirmedPaths = extractActionOutcomeConfirmedPaths(
+    params.agentState?.actionOutcomes,
   )
+  const actualChangedPaths = new Set([
+    ...mutationAttestations.map((entry) => entry.path),
+    ...actionOutcomeConfirmedPaths.keys(),
+  ])
   const overclaimedPaths = claimedChangedFiles.filter(
     (path) => !actualChangedPaths.has(path),
   )
@@ -2553,7 +2611,7 @@ function buildRuntimeAgentReceiptOrThrow(params: {
         ]
       : []),
   ]
-  const changedFiles = mutationAttestations.map(
+  const historyAttestedChangedFiles = mutationAttestations.map(
     ({ path, beforeHash, afterHash, mutationReceiptId }) => ({
       path,
       ...(beforeHash ? { beforeHash } : {}),
@@ -2561,6 +2619,22 @@ function buildRuntimeAgentReceiptOrThrow(params: {
       ...(mutationReceiptId ? { mutationReceiptId } : {}),
     }),
   )
+  // Append lean entries for outcome-backed paths with no messageHistory
+  // attestation: beforeHash/afterHash exist only on those attestations, so an
+  // outcome-backed entry carries just the path plus the outcome's first
+  // receiptId. No path is emitted twice (messageHistory wins per path).
+  const historyAttestedPaths = new Set(
+    historyAttestedChangedFiles.map((entry) => entry.path),
+  )
+  const changedFiles = [
+    ...historyAttestedChangedFiles,
+    ...[...actionOutcomeConfirmedPaths.entries()]
+      .filter(([path]) => !historyAttestedPaths.has(path))
+      .map(([path, mutationReceiptId]) => ({
+        path,
+        ...(mutationReceiptId ? { mutationReceiptId } : {}),
+      })),
+  ]
   const latestMutation = mutationAttestations
     .filter((entry) => entry.workspaceRevision !== undefined)
     .sort(
