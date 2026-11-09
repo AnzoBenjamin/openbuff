@@ -1,10 +1,13 @@
 # CLI Package Knowledge
 
-## Polyglot first-wave outcomes and mutation evidence
+## Polyglot execution context and result evidence
 
 - `cli/src/utils/output-outcome.ts` projects typed run and task outcomes into completion summaries. Headless runs return failure/cancellation consistently with SDK and journal results; verified recovery can complete a task while preserving earlier failed actions.
 - Tool normalization and edit rendering keep attempted, partial, uncertain and confirmed forward effects distinct. A rollback failure alone does not make an edit applied. `cli/src/utils/turn-snapshots.ts` serializes capture per repository and binds recovery points to the actual producer turn.
-- The [body execution checkpoint](../docs/execution/body-roadmap/STATE.md) records the accepted milestones, rebuilt CLI and pending researcher/browser implementation.
+- `cli/src/utils/tool-result-normalizer.ts` interprets MCP envelopes through their protocol `isError` flag. Fields inside `structuredContent` remain payload data; a captured envelope without producer success evidence displays `captured · outcome unknown` in `cli/src/utils/output-outcome.ts`.
+- MCP image/audio bytes and embedded resource blobs are omitted by `cli/src/utils/payload-sanitizer.ts` with explicit `openbuffOmission` metadata. Text and structured results survive persistence. Keep this projection self-contained because the sanitizer factory is serialized into persistence workers.
+- `cli/src/commands/index-command.ts` passes an injected execution context or asynchronous context getter into SCIP ingestion. Execution refusals remain distinct from unavailable binaries and suppress misleading installation hints.
+- The [body execution checkpoint](../docs/execution/body-roadmap/STATE.md) records original accepted milestones, current source validation and pending execution-context/researcher/browser work. Source changes require affected acceptance renewal; current source checks do not establish installed CLI coverage.
 
 ## Retained-output readers and recovery
 
