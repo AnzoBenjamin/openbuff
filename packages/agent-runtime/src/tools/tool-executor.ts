@@ -47,7 +47,10 @@ import type { JSONObject } from '@codebuff/common/types/json'
 import {
   isExternalReadPath,
   isOwnedTempPath,
+  resolveProjectPath,
+  resolveProjectPathForRead,
 } from '@codebuff/common/util/project-path-containment'
+import { hasFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { cloneDeep } from 'lodash'
 import z from 'zod/v4'
@@ -3149,7 +3152,11 @@ async function executeNativeToolCall<T extends ToolName>(
       // the project, so these are always hard-blocked — except for the exempt
       // owned-temp / allowlisted-external cases above.
       const escapesProject =
-        !containmentExempt &&
+        hasFilesystemSandbox()
+          ? (filesystemAccess.access === 'read'
+            ? resolveProjectPathForRead(scopeProjectRoot, rawPath)
+            : resolveProjectPath(scopeProjectRoot, rawPath)) === null
+          : !containmentExempt &&
         (normalizedEscapesProject(normalized) ||
           normalizedEscapesProject(canonical))
       // An in-project path is a scope mismatch when it stays inside the project

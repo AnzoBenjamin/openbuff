@@ -2,6 +2,7 @@ import path from 'path'
 import { existsSync, rmSync } from 'node:fs'
 
 import { callMainPrompt } from '@codebuff/agent-runtime/main-prompt'
+import { withFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
 import {
   buildUserMessageContent,
   withSystemTags,
@@ -859,7 +860,7 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
     skillsDir: options.skillsDir === undefined ? undefined : path.resolve(snapshot.inputs.invocationCwd, options.skillsDir),
     env: options.env ? { ...options.env } : undefined, signal: hostServices.rootSignal }
   try {
-    const execution = runOnce(capturedOptions, {
+    const execution = withFilesystemSandbox(snapshot.sandboxPolicy, () => runOnce(capturedOptions, {
       snapshot, hostServices, setSpawn: value => { spawn = value },
       profileExplicitlySelected: options.executionProfile !== undefined,
       setApprovalResolver: value => { approvalResolver = value },
@@ -867,7 +868,7 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
       onSessionReady: value => { activeSession = value },
       onCancellationReady: () => { cancellationReady = true },
       onMcpReady: value => { disposeMcp = value },
-    })
+    }), { projectRoot: snapshot.inputs.projectRoot, readPolicyToken: hostServices.readPolicy })
     return await raceAgainstAbort(execution, hostServices.rootSignal).catch(async (error) => {
       if (!hostServices.rootSignal.aborted || !cancellationReady) throw error
       // Startup dependencies remain abortable. Once the runtime owns
@@ -1036,6 +1037,7 @@ async function runOnce({
         cwd,
         stateDir: resolvedHarnessStateDir,
         executionContext: hostServices.bootstrap,
+        sandboxPolicy: snapshot.sandboxPolicy,
       })
       fs = createNodeFileSystem({ mutationBroker })
     } catch (error) {
@@ -1410,7 +1412,7 @@ async function runOnce({
     const terminal = toolName === 'run_terminal_command'
     const hooks = toolName === 'run_file_change_hooks' || toolName === 'run_targeted_validation'
     const processProfile = hostServices.bootstrap.profile
-    const profile: ProfileRequest = (terminal || hooks) && !host.profileExplicitlySelected
+    const profile: ProfileRequest = (terminal || hooks) && !host.profileExplicitlySelected && snapshot.sandboxPolicy.mode === 'unrestricted'
       ? Object.freeze({ ...processProfile, policy: 'full-access' }) : processProfile
     const limit = executionLimitMs(terminal && typeof input.timeout_seconds === 'number'
       ? input.timeout_seconds === -1 ? -1 : input.timeout_seconds * 1000 : undefined)

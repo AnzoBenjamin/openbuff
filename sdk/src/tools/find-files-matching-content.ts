@@ -4,6 +4,8 @@ import * as path from 'path'
 
 import { getBundledRgPath } from '../native/ripgrep'
 import { isReadPathBlocked } from './read-policy'
+import { hasFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
+import { resolveProjectPathForRead } from '@codebuff/common/util/project-path-containment'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -72,6 +74,9 @@ export function findFilesMatchingContent({
     let isResolved = false
 
     const projectRoot = path.resolve(projectPath)
+    if (hasFilesystemSandbox() && !resolveProjectPathForRead(projectRoot, cwd ?? '.')) {
+      return resolve([{ type: 'json', value: { errorMessage: 'Search path is outside the configured sandbox.' } }])
+    }
     const requestedCwd = cwd ?? '.'
     const resolvedCwd = path.isAbsolute(requestedCwd)
       ? path.resolve(requestedCwd)

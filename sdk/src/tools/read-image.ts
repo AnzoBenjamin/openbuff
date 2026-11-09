@@ -129,7 +129,7 @@ export async function readImages(params: {
       relativePath,
       ...getScopedReadPolicyAliases(resolvedPath.scope, fullPath),
     ]
-    if (policyAliases.some((alias) => isReadPathBlocked(alias, fileFilter))) {
+    if (policyAliases.some((alias) => isReadPathBlocked(alias, fileFilter, fs.hostReadPolicy))) {
       return {
         kind: 'error',
         entry: {

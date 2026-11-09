@@ -105,6 +105,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { getFilesystemSandbox, getSandboxProjectRoot, getSandboxReadPolicyToken, hasFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
+import { getHostReadRoots, type HostReadPolicy } from '@codebuff/common/util/project-path-containment'
 
 import type {
   SettledSubagentResult,
@@ -637,7 +639,13 @@ export function buildDefaultSpawnSupervised(
       // request), so respawning with the same request could never fix it.
       let serializedRequest: string
       try {
-        serializedRequest = JSON.stringify(wireRequest)
+        const projectRoot = getSandboxProjectRoot()
+        const token = getSandboxReadPolicyToken() as HostReadPolicy | undefined
+        serializedRequest = JSON.stringify(hasFilesystemSandbox() && projectRoot ? {
+          ...wireRequest,
+          filesystemSandbox: { policy: getFilesystemSandbox(), projectRoot,
+            readableRoots: token ? getHostReadRoots(token) : [] },
+        } : wireRequest)
       } catch (error) {
         return {
           outcome: 'crashed',

@@ -15,8 +15,14 @@ import { buildSupervisedBridgeHandlers } from '../parent-bridge-server'
 import { buildDefaultSpawnSupervised } from '../supervised-spawn'
 
 import { describe, expect, it } from 'bun:test'
+import { withFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
+import { createHostReadPolicy } from '@codebuff/common/util/project-path-containment'
+import { buildReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
-import type { SettledSubagentResult, SupervisedSpawnRequest } from '@codebuff/common/types/contracts/agent-runtime'
+import type {
+  SettledSubagentResult,
+  SupervisedSpawnRequest,
+} from '@codebuff/common/types/contracts/agent-runtime'
 import type { SupervisedBridgeHandlerDeps } from '../parent-bridge-server'
 
 const E2E_TIMEOUT_MS = 20_000
@@ -108,6 +114,79 @@ function makeBridgeRequest(
 }
 
 describe('supervised bridge e2e (P2-T8b, real child, linux-only)', () => {
+  for (const mode of ['unrestricted', 'project'] as const) {
+    it.skipIf(process.platform !== 'linux')(
+      `a real child inherits ${mode} filesystem access`,
+      async () => {
+        const reads: string[][] = []
+        const deps = buildMinimalBridgeDeps()
+        deps.requestFiles = async ({ filePaths }) => {
+          reads.push(filePaths)
+          return buildReadFilesResultV1([
+            {
+              selector: 'file',
+              requestIndex: 0,
+              path: filePaths[0],
+              status: 'error',
+              error: {
+                code: 'not_found',
+                message: 'Fixture path is synthetic.',
+                retryable: false,
+              },
+            },
+          ])
+        }
+        deps.promptAiSdkStream = async function* () {
+          yield {
+            type: 'tool-call',
+            toolCallId: 'external-read',
+            toolName: 'read_files',
+            input: { paths: ['/virtual/config/service.log'] },
+          }
+          yield {
+            type: 'tool-call',
+            toolCallId: 'finish',
+            toolName: 'end_turn',
+            input: {},
+          }
+          return { aborted: false, value: 'ok' }
+        }
+        const seam = buildDefaultSpawnSupervised(
+          {},
+          buildSupervisedBridgeHandlers(deps),
+        )
+        const policy = { mode, allowPaths: [] }
+        const projectRoot = '/virtual/project'
+        const readPolicy = createHostReadPolicy(
+          projectRoot,
+          [],
+          undefined,
+          policy,
+        )
+        const template = {
+          ...buildMinimalTemplate('test-bridge-echo'),
+          toolNames: ['read_files', 'end_turn'],
+        }
+        const result = await withFilesystemSandbox(
+          policy,
+          () =>
+            settleBounded(
+              seam,
+              makeBridgeRequest({
+                fileContext: { projectRoot, fileTree: [], fileTokenScores: {} },
+                localAgentTemplates: { 'test-bridge-echo': template },
+              }),
+            ),
+          { projectRoot, readPolicyToken: readPolicy },
+        )
+        expect(result.outcome).toBe('ok')
+        expect(reads).toEqual(
+          mode === 'unrestricted' ? [['/virtual/config/service.log']] : [],
+        )
+      },
+      E2E_TIMEOUT_MS + 5_000,
+    )
+  }
   it.skipIf(process.platform !== 'linux')(
     'a real bun child completes the REAL agent loop over the bridge (outcome ok, receipt completed)',
     async () => {
@@ -160,7 +239,8 @@ describe('supervised bridge e2e (P2-T8b, real child, linux-only)', () => {
       expect(receipt?.outcome).toBe('crashed')
       const serialized = JSON.stringify(receipt)
       const namesTheGap =
-        serialized.includes('promptAiSdk') || serialized.includes('not supplied')
+        serialized.includes('promptAiSdk') ||
+        serialized.includes('not supplied')
       expect(namesTheGap).toBe(true)
     },
   )

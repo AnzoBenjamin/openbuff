@@ -152,6 +152,12 @@ export interface JournalReader {
  * to a temp file the child entrypoint reads from argv.
  */
 export type SupervisedSpawnRequest = {
+  /** Host-captured filesystem policy; survives the separate child process. */
+  filesystemSandbox?: {
+    policy: import('../../util/filesystem-sandbox').FilesystemSandboxPolicy
+    projectRoot: string
+    readableRoots: readonly string[]
+  }
   /** Original parent B02 attempt, captured before supervised setup starts. */
   executionIdentity?: ToolExecutionIdentity
   executionHostOperation?: ExecutionHostOperationOrigin

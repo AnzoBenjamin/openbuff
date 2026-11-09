@@ -621,7 +621,7 @@ export interface EvaluateAuditCoverageParams {
 export interface GlobParams {
   /** Glob pattern to match files against (e.g., *.js, src/glob/*.ts, glob/test/glob/*.go). */
   pattern: string
-  /** Optional working directory or file path, relative to project root. If a directory, the glob pattern is matched against paths relative to this cwd, while returned files remain project-relative. If a file path, the pattern is matched against that file only (full path or basename). If not provided, searches from project root. */
+  /** Optional working directory or file path, absolute or relative to project root; access follows the configured sandbox policy. If a directory, the glob pattern is matched against paths relative to this cwd, while returned files are project-relative inside the project and absolute outside it. If a file path, the pattern is matched against that file only (full path or basename). If not provided, searches from project root. */
   cwd?: string
 }
 
@@ -639,7 +639,7 @@ export interface KillJobParams {
  * List files and directories in the specified path. Returns separate arrays of file names and directory names.
  */
 export interface ListDirectoryParams {
-  /** Directory path to list, relative to the project root. */
+  /** Directory path to list, absolute or relative to the project root; access follows the configured sandbox policy. */
   path: string
   /** Continue a listing using the previous nextOffset. Defaults to 0. */
   offset?: number
@@ -738,7 +738,7 @@ export interface ReadFilesParams {
   paths?: string[]
   /** 1-indexed inclusive line ranges. Sole `paths` entry infers missing path. */
   ranges?: {
-    /** Project-relative file path. */
+    /** File path, absolute or relative to the project root; access follows the configured sandbox policy. */
     path: string
     /** 1-indexed inclusive start line. Defaults to 1. */
     startLine?: number
@@ -747,7 +747,7 @@ export interface ReadFilesParams {
   }[]
   /** Contiguous line windows; each complete window mints a scoped cap.v4 editAnchor. */
   windows?: {
-    /** File path to read in contiguous line windows, relative to the project root. */
+    /** File path to read in contiguous line windows, absolute or relative to the project root; access follows the configured sandbox policy. */
     path: string
     /** Lines per window. Defaults to 400, capped at 5000. */
     windowSize?: number
@@ -756,7 +756,7 @@ export interface ReadFilesParams {
   }[]
   /** Literal-anchored context blocks with a scoped cap.v4 editAnchor per block. */
   around?: {
-    /** File path to read a content-anchored block from, relative to the project root. */
+    /** File path to read a content-anchored block from, absolute or relative to the project root; access follows the configured sandbox policy. */
     path: string
     /** Exact literal string to anchor on. Robust to line-number drift. */
     match: string
@@ -767,7 +767,7 @@ export interface ReadFilesParams {
   }[]
   /** Nth top-level symbol by name (rewrite_symbol occurrence semantics); prefer batch `symbols` when possible. */
   symbol?: {
-    /** File path to extract a symbol slice from, relative to the project root. */
+    /** File path to extract a symbol slice from, absolute or relative to the project root; access follows the configured sandbox policy. */
     path: string
     /** Top-level symbol name (function, class, interface, method) to pull, as shown by read_outline. */
     name: string
@@ -776,7 +776,7 @@ export interface ReadFilesParams {
   }[]
   /** Named symbol slices with editAnchors; prefer over full reads when names are known. */
   symbols?: {
-    /** Project-relative file path. */
+    /** File path, absolute or relative to the project root; access follows the configured sandbox policy. */
     path: string
     /** Symbol names to slice. */
     names: string[]
@@ -821,7 +821,7 @@ export interface ReadLogsParams {
  * Generate an outline of imports, exports, classes, methods, and function signatures in a source file without reading the entire implementation.
  */
 export interface ReadOutlineParams {
-  /** File path to generate the AST-like outline for, relative to the project root. */
+  /** File path to generate the AST-like outline for, absolute or relative to the project root; access follows the configured sandbox policy. */
   path: string
 }
 
@@ -829,7 +829,7 @@ export interface ReadOutlineParams {
  * Read one or more directory subtrees (as a blob including subdirectories, file names, and parsed variables within each source file) or return parsed variable names for files. If no paths are provided, returns the entire project tree.
  */
 export interface ReadSubtreeParams {
-  /** List of paths to directories or files. Relative to the project root. If omitted, the entire project tree is used. */
+  /** List of paths to directories or files. Absolute or relative to the project root; access follows the configured sandbox policy. If omitted, the entire project tree is used. */
   paths?: string[]
   /** Maximum token budget for the subtree blob; the tree will be truncated to fit within this budget by first dropping file variables and then removing the most-nested files and directories. */
   maxTokens?: number
@@ -1283,7 +1283,7 @@ export interface WorkspaceSymbolParams {
  * Create or overwrite a file with the given content.
  */
 export interface WriteFileParams {
-  /** Path to the file relative to the **project root** */
+  /** Path to the file absolute or relative to the **project root**; access follows the configured sandbox policy */
   path: string
   /** What the change is intended to do in only one sentence. */
   instructions: string

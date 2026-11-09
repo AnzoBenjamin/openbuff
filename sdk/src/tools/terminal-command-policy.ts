@@ -1,7 +1,9 @@
 import {
   getOwnedTempRoots,
   isOwnedTempPath,
+  resolveProjectPath,
 } from '@codebuff/common/util/project-path-containment'
+import { hasFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
 import { isMandatorySensitiveReadPath } from '@codebuff/common/util/sensitive-paths'
 
 import path from 'node:path'
@@ -1297,7 +1299,7 @@ function findEscapingTraversalPath(
   if (cwd !== undefined) {
     const resolvedCwd = path.resolve(cwd)
     const relativeCwd = path.relative(root, resolvedCwd)
-    if (relativeCwd.startsWith('..') || path.isAbsolute(relativeCwd)) {
+    if (hasFilesystemSandbox() ? !resolveProjectPath(root, resolvedCwd) : relativeCwd.startsWith('..') || path.isAbsolute(relativeCwd)) {
       cwdOutsideProject = true
     } else {
       resolveBase = resolvedCwd
@@ -1312,7 +1314,7 @@ function findEscapingTraversalPath(
       ? path.resolve(token)
       : path.resolve(resolveBase, token)
     const relative = path.relative(root, resolved)
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    if (hasFilesystemSandbox() ? !resolveProjectPath(root, resolved) : relative.startsWith('..') || path.isAbsolute(relative)) {
       return rawToken
     }
   }
@@ -2067,7 +2069,7 @@ function findOutsideAbsolutePath(
       continue
     }
     const relative = path.relative(root, resolved)
-    if (relative.startsWith('..') || path.isAbsolute(relative)) return token
+    if (hasFilesystemSandbox() ? !resolveProjectPath(root, resolved) : relative.startsWith('..') || path.isAbsolute(relative)) return token
   }
   return undefined
 }
@@ -2100,7 +2102,7 @@ function findWorkspaceSegmentOutsidePath(
     if (isOwnedTempScope(token)) continue
     const resolvedPath = path.resolve(token)
     const relative = path.relative(root, resolvedPath)
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    if (hasFilesystemSandbox() ? !resolveProjectPath(root, resolvedPath) : relative.startsWith('..') || path.isAbsolute(relative)) {
       return token
     }
   }

@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { withFilesystemSandbox, type FilesystemSandboxPolicy } from '@codebuff/common/util/filesystem-sandbox'
+import { resolveProjectPath } from '@codebuff/common/util/project-path-containment'
 
 import { captureWorkspaceBootstrapExecution, resolveBootstrapWorkspaceIdentity } from './workspace-bootstrap'
 import type { WorkspaceIdentitySource } from './workspace-bootstrap'
@@ -82,6 +84,7 @@ export type WorkspaceMutationMoveResult = CodebuffConditionalMoveResult & {
 export type WorkspaceMutationBrokerOptions = {
   cwd: string
   stateDir: string
+  sandboxPolicy?: FilesystemSandboxPolicy
   executionContext?: ExecutionAdapterContext
   lockTimeoutMs?: number
   /** @deprecated Stale locks are never automatically reclaimed. */
@@ -176,6 +179,7 @@ export class WorkspaceMutationBroker {
   private readonly lockPath: string
   private readonly lockTimeoutMs: number
   private readonly lockPollMs: number
+  private readonly sandboxPolicy?: FilesystemSandboxPolicy
 
   private constructor(params: {
     workspaceRoot: string
@@ -185,6 +189,7 @@ export class WorkspaceMutationBroker {
     identitySource: WorkspaceIdentitySource
     lockTimeoutMs: number
     lockPollMs: number
+    sandboxPolicy?: FilesystemSandboxPolicy
   }) {
     this.workspaceRoot = params.workspaceRoot
     this.repositoryId = params.repositoryId
@@ -202,6 +207,8 @@ export class WorkspaceMutationBroker {
     this.lockPath = `${this.brokerDir}.lock`
     this.lockTimeoutMs = params.lockTimeoutMs
     this.lockPollMs = params.lockPollMs
+    this.sandboxPolicy = params.sandboxPolicy && Object.freeze({ ...params.sandboxPolicy,
+      allowPaths: Object.freeze([...params.sandboxPolicy.allowPaths]) })
   }
 
   static async create(
@@ -233,6 +240,7 @@ export class WorkspaceMutationBroker {
       identitySource: identity.identitySource,
       lockTimeoutMs: options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
       lockPollMs: options.lockPollMs ?? DEFAULT_LOCK_POLL_MS,
+      sandboxPolicy: options.sandboxPolicy,
     })
     await broker.initialize()
     return broker
@@ -902,7 +910,7 @@ export class WorkspaceMutationBroker {
     const raw = pathLikeToString(value)
     const absolutePath = path.resolve(this.workspaceRoot, raw)
     if (
-      !isWithin(this.workspaceRoot, absolutePath) ||
+      !this.isAllowedPath(absolutePath) ||
       absolutePath === this.workspaceRoot
     ) {
       throw new Error(
@@ -911,7 +919,7 @@ export class WorkspaceMutationBroker {
     }
     const parent = path.dirname(absolutePath)
     const canonicalParent = await fs.realpath(parent)
-    if (!isWithin(this.workspaceRoot, canonicalParent)) {
+    if (!this.isAllowedPath(canonicalParent)) {
       throw new Error(
         `Workspace mutation parent escapes the broker root: ${raw}`,
       )
@@ -932,7 +940,7 @@ export class WorkspaceMutationBroker {
   private absoluteFromRelative(relativePath: string): string {
     const absolute = path.resolve(this.workspaceRoot, relativePath)
     if (
-      !isWithin(this.workspaceRoot, absolute) ||
+      !this.isAllowedPath(absolute) ||
       absolute === this.workspaceRoot
     ) {
       throw new WorkspaceMutationBrokerRecoveryError(
@@ -940,6 +948,12 @@ export class WorkspaceMutationBroker {
       )
     }
     return absolute
+  }
+
+  private isAllowedPath(absolutePath: string): boolean {
+    return this.sandboxPolicy
+      ? withFilesystemSandbox(this.sandboxPolicy, () => resolveProjectPath(this.workspaceRoot, absolutePath) !== null)
+      : isWithin(this.workspaceRoot, absolutePath)
   }
 
   private stagingRelativePath(target: string, suffix: string): string {

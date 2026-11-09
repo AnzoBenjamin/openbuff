@@ -12,7 +12,7 @@ const inputSchema = z
       .string()
       .min(1, 'Path cannot be empty')
       .describe(
-        'File path to generate the AST-like outline for, relative to the project root.',
+        'File path to generate the AST-like outline for, absolute or relative to the project root; access follows the configured sandbox policy.',
       ),
   })
   .describe(

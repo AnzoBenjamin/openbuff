@@ -1,4 +1,6 @@
 import { AbortError } from '@codebuff/common/util/error'
+import { hasFilesystemSandbox, getSandboxProjectRoot } from '@codebuff/common/util/filesystem-sandbox'
+import path from 'node:path'
 import {
   decodeReadCapabilityToken,
   getExactContentHash,
@@ -259,6 +261,17 @@ export function normalizeToolPath(filePath: string): string {
   }
 
   const withForwardSlashes = filePath.replace(/\\/g, '/')
+
+  // Captured runs authorize paths at the filesystem boundary, after resolving
+  // absolute paths, parent segments, and symlinks against their project root.
+  if (hasFilesystemSandbox()) {
+    const root = getSandboxProjectRoot()
+    if (!root) return withForwardSlashes
+    const absolute = path.resolve(root, withForwardSlashes)
+    const relative = path.relative(root, absolute)
+    return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+      ? absolute.replace(/\\/g, '/') : relative.replace(/\\/g, '/')
+  }
 
   // Runtime tool paths must be project-relative. Reject POSIX absolute paths,
   // UNC/device paths (which begin with `//` after slash normalization), and

@@ -1,5 +1,11 @@
 # Common Package Knowledge
 
+## Filesystem sandbox policies
+
+- `common/src/util/filesystem-sandbox.ts` captures immutable run policies with `AsyncLocalStorage` and filesystem policy tokens. Agent runs select unrestricted access by default; standalone path-containment utilities retain their restricted contract.
+- `common/src/util/project-path-containment.ts` applies project containment, additional writable roots, and sensitive-path checks when project mode is selected. External mutable paths use the `host` scope; `readableRoots` remain read-only exceptions.
+- Tool path descriptions and their generated mirrors reflect configured sandbox access. Supervised prompt transport unwraps AI SDK JSON Schema envelopes and preserves complete schema members across the bridge.
+
 ## Polyglot outcome and mutation contracts
 
 - `byte-text.ts` separates exact UTF-8 bytes from BOM-free, LF-normalized observation text. Fresh `cap.v4` read authority binds both identities; complete scoped reads retain their raw slice scope. Partial or unverifiable reads provide no edit authority.

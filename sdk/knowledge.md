@@ -1,5 +1,11 @@
 # SDK Package Knowledge
 
+## Filesystem sandbox configuration
+
+- Agent runs default to unrestricted filesystem and terminal path access. `sandbox.mode: "project"` opts into tool-level containment; absolute `sandbox.allowPaths` entries grant additional writable directories through the captured configuration trust gate. This policy does not provide OS process or network isolation.
+- `sdk/src/host-config.ts` captures an immutable policy per run. `sdk/src/run.ts` binds it to asynchronous execution and filesystem adapters, and the mutation broker uses the same policy for external edits. Supervised children inherit the captured policy independently of concurrent runs.
+- `sdk/src/__tests__/filesystem-sandbox.test.ts` exercises external reads, writes, searches, terminal working directories, configured restrictions, and concurrent policy isolation.
+
 ## Polyglot first-wave contracts
 
 - SDK reads preserve exact UTF-8 BOM and terminator bytes separately from normalized observation text. Bounded Node readers retain a result buffer plus one fixed chunk, and localized edits verify the captured raw basis before committing. ACP/MCP outbound text redacts both legacy `cap.v3` and current `cap.v4` tokens.

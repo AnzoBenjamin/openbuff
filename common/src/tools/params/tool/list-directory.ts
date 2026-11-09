@@ -21,7 +21,7 @@ const inputSchema = z
       .refine((value) => !value.includes('\0'), {
         message: 'Path cannot contain NUL bytes',
       })
-      .describe('Directory path to list, relative to the project root.'),
+      .describe('Directory path to list, absolute or relative to the project root; access follows the configured sandbox policy.'),
     offset: z
       .number()
       .int()

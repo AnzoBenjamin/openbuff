@@ -149,6 +149,28 @@ describe('strict host configuration capture', () => {
     expect(capture({ ...explicit(), trust: { ancestorConfig: false, projectReadableRoots: true } }, project.port).readableRoots).toEqual(['/project/opt-in'])
   })
 
+  test('sandbox policy defaults unrestricted and gates allowPaths on declaring-fragment trust', () => {
+    // Default posture: no `sandbox` block -> fully unrestricted mode and no
+    // allowPaths; the policy is frozen like every other snapshot field.
+    const unrestricted = capture(inputs(), memoryFs().port)
+    expect(unrestricted.sandboxPolicy).toEqual({ mode: 'unrestricted', allowPaths: [] })
+    expect(Object.isFrozen(unrestricted.sandboxPolicy)).toBe(true)
+    expect(Object.isFrozen(unrestricted.sandboxPolicy.allowPaths)).toBe(true)
+
+    // A config-dir-declared allowPath passes the same origin gate
+    // readableRoots uses, but unlike readableRoots the configDir itself is
+    // NOT auto-included in allowPaths.
+    const global = memoryFs({ '/virtual/global/openbuff.json': { sandbox: { mode: 'project', allowPaths: ['/safe/scratch'] } } })
+    const configuration = inputs({ globals: { kind: 'directory', path: '/virtual/global' }, selection: { kind: 'discover' } })
+    expect(capture(configuration, global.port).sandboxPolicy).toEqual({ mode: 'project', allowPaths: ['/safe/scratch'] })
+
+    // Project-declared allowPaths fail closed without the explicit opt-in,
+    // reusing the same trust input readableRoots gates on.
+    const project = memoryFs({ '/virtual/project/openbuff.json': { sandbox: { mode: 'project', allowPaths: ['/project/scratch'] } } })
+    expect(capture(explicit(), project.port).sandboxPolicy).toEqual({ mode: 'project', allowPaths: [] })
+    expect(capture({ ...explicit(), trust: { ancestorConfig: false, projectReadableRoots: true } }, project.port).sandboxPolicy).toEqual({ mode: 'project', allowPaths: ['/project/scratch'] })
+  })
+
   for (const operation of ['readFile', 'stat', 'realpath'] as const) test(`capture rejects changing ${operation} observations`, () => {
     const reader = memoryFs({ '/virtual/project/openbuff.json': { defaultModel: 'before' } })
     reader.setHook((op, target, count) => {

@@ -3,6 +3,7 @@ import os from 'os'
 import path from 'path'
 
 import { isMandatorySensitiveReadPath } from './sensitive-paths'
+import { bindFilesystemSandbox, getFilesystemSandbox, getSandboxReadPolicyToken, type FilesystemSandboxPolicy } from './filesystem-sandbox'
 
 import type { CodebuffFileSystem } from '../types/filesystem'
 
@@ -36,7 +37,8 @@ export type ContainedProjectPath = {
    * it no longer implies an openbuff-owned segment name (see
    * `OWNED_TEMP_SEGMENT_PATTERNS`, which is documentation only).
    */
-  scope: 'project' | 'owned-temp' | 'external-read'
+  // 'host' is a mutable external path granted by the captured sandbox policy.
+  scope: 'project' | 'owned-temp' | 'external-read' | 'host'
 }
 
 /**
@@ -628,6 +630,7 @@ export function createHostReadPolicy(
   projectRoot: string,
   roots: readonly string[],
   captureRealpath: (root: string) => string = realpathOrLexical,
+  sandbox?: FilesystemSandboxPolicy,
 ): HostReadPolicy {
   if (!path.isAbsolute(projectRoot) || projectRoot.includes('\0') ||
     !Array.isArray(roots) || roots.some(root => typeof root !== 'string' || !path.isAbsolute(root) || root.includes('\0')))
@@ -643,6 +646,7 @@ export function createHostReadPolicy(
   hostReadPolicies.set(policy, Object.freeze({ projectRoot: path.resolve(projectRoot),
     realProjectRoot: canonical(path.resolve(projectRoot)), roots: capturedRoots,
     realRoots: Object.freeze(capturedRoots.map(canonical)) }))
+  if (sandbox) bindFilesystemSandbox(policy, sandbox)
   return policy
 }
 
@@ -1105,16 +1109,41 @@ async function externalReadContainedPathForFileSystem(
  * (`packages/agent-runtime`) both call this helper instead of
  * re-implementing the same logic.
  */
+function sandboxHostPath(
+  projectRoot: string,
+  fullPath: string,
+  realFullPath: string,
+  realProjectRoot: string = realpathOrLexical(projectRoot),
+): ContainedProjectPath {
+  const lexicalInProject = !escapesRoot(projectRoot, fullPath)
+  const inProject = lexicalInProject && !escapesRoot(realProjectRoot, realFullPath)
+  return { fullPath, realFullPath, relativePath: lexicalInProject ? path.relative(projectRoot, fullPath) : fullPath,
+    scope: inProject ? 'project' : 'host' }
+}
+
+/** Captured runs follow their sandbox policy; standalone calls are contained. */
 export function resolveProjectPath(
   projectRoot: string,
   input: string,
+  policyToken?: HostReadPolicy,
 ): ContainedProjectPath | null {
-  if (!input) return null
+  if (!input || input.includes('\0')) return null
 
   const resolvedRoot = path.resolve(projectRoot)
   const fullPath = path.isAbsolute(input)
     ? path.resolve(input)
     : path.resolve(resolvedRoot, input)
+  const sandbox = getFilesystemSandbox(policyToken)
+  if (sandbox.mode === 'unrestricted') {
+    return sandboxHostPath(resolvedRoot, fullPath, realpathOrLexical(fullPath))
+  }
+  for (const root of sandbox.allowPaths) {
+    const realFullPath = realpathOrLexical(fullPath)
+    if (!escapesRoot(path.resolve(root), fullPath) && !escapesRoot(realpathOrLexical(root), realFullPath) &&
+      !isMandatorySensitiveReadPath(fullPath) && !isMandatorySensitiveReadPath(realFullPath)) {
+      return sandboxHostPath(resolvedRoot, fullPath, realFullPath)
+    }
+  }
   const ownedTempFallback = (): ContainedProjectPath | null =>
     hasTraversalSegment(input) ? null : ownedTempContainedPath(fullPath)
 
@@ -1155,13 +1184,28 @@ export async function resolveProjectPathForFileSystem(
   projectRoot: string,
   input: string,
   fileSystem: CodebuffFileSystem,
+  policyToken: HostReadPolicy | undefined = fileSystem.hostReadPolicy,
 ): Promise<ContainedProjectPath | null> {
-  if (!input) return null
+  if (!input || input.includes('\0')) return null
 
   const resolvedRoot = path.resolve(projectRoot)
   const fullPath = path.isAbsolute(input)
     ? path.resolve(input)
     : path.resolve(resolvedRoot, input)
+  const sandbox = getFilesystemSandbox(policyToken)
+  if (sandbox.mode === 'unrestricted') {
+    return sandboxHostPath(resolvedRoot, fullPath, await realpathOrLexicalForFileSystem(fullPath, fileSystem),
+      await realpathOrLexicalForFileSystem(resolvedRoot, fileSystem))
+  }
+  for (const root of sandbox.allowPaths) {
+    const realFullPath = await realpathOrLexicalForFileSystem(fullPath, fileSystem)
+    if (!escapesRoot(path.resolve(root), fullPath) &&
+      !escapesRoot(await realpathOrLexicalForFileSystem(root, fileSystem), realFullPath) &&
+      !isMandatorySensitiveReadPath(fullPath) && !isMandatorySensitiveReadPath(realFullPath)) {
+      return sandboxHostPath(resolvedRoot, fullPath, realFullPath,
+        await realpathOrLexicalForFileSystem(resolvedRoot, fileSystem))
+    }
+  }
   const ownedTempFallback = (): Promise<ContainedProjectPath | null> =>
     hasTraversalSegment(input)
       ? Promise.resolve(null)
@@ -1192,32 +1236,19 @@ export async function resolveProjectPathForFileSystem(
 }
 
 /**
- * READ-ONLY containment resolver: `resolveProjectPath` first, then the
- * configured external read allowlist as a fallback.
- *
- * `resolveProjectPath` and `resolveProjectPathForFileSystem` are DELIBERATELY
- * LEFT UNCHANGED. They are the resolvers the write path uses
- * (`sdk/src/tools/change-file.ts`, `sdk/src/tools/replace-range.ts`,
- * `sdk/src/tools/filesystem-authority.ts`), so keeping the external-read
- * widening in separate, differently-named read-only entry points means a write
- * cannot reach an allowlisted root even by mistake — a write handler would have
- * to be edited to call this function instead. Any future caller of this
- * resolver MUST be a read-only operation.
- *
- * All existing project and owned-temp behavior is identical by construction:
- * a non-null delegate result is returned unchanged, and the external-read
- * branch is only consulted when the delegate returns `null`. That branch
- * refuses a raw `..` first, exactly like the owned-temp fallback, so
- * `isExternalReadPath` and this resolver agree on every input.
+ * Read resolver follows the captured sandbox policy. In project mode, the
+ * read-only readableRoots boundary is an additional fallback; it never grants
+ * mutation authority. Standalone calls retain the contained default.
  */
 export function resolveProjectPathForRead(
   projectRoot: string,
   input: string,
   readPolicy?: HostReadPolicy,
 ): ContainedProjectPath | null {
+  readPolicy ??= getSandboxReadPolicyToken() as HostReadPolicy | undefined
   if (!matchesHostReadPolicy(projectRoot, readPolicy)) return null
   if (readPolicy !== undefined && realpathOrLexical(path.resolve(projectRoot)) !== hostReadPolicies.get(readPolicy)!.realProjectRoot) return null
-  const contained = resolveProjectPath(projectRoot, input)
+  const contained = resolveProjectPath(projectRoot, input, readPolicy)
   if (contained !== null) return contained
   if (!input || hasTraversalSegment(input)) return null
   // Anchored on the project root exactly like the owned-temp fallback, so a
@@ -1243,6 +1274,7 @@ export async function resolveProjectPathForFileSystemRead(
     projectRoot,
     input,
     fileSystem,
+    readPolicy,
   )
   if (contained !== null) return contained
   if (!input || hasTraversalSegment(input)) return null

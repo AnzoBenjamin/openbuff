@@ -18,6 +18,12 @@ openbuff          # primary binary
 
 Openbuff is always local/BYOK — there is no cloud-mode toggle.
 
+Agents have unrestricted filesystem access by default, including config
+directories and temporary files. Set `"sandbox": { "mode": "project" }` in
+`openbuff.json` to opt into tool-level containment. See
+[Filesystem sandbox](./configuration.md#filesystem-sandbox) for additional
+allowed paths and policy details.
+
 ## Quickstart
 
 1. Install and launch the CLI:

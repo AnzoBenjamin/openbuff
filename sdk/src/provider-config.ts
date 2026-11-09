@@ -531,6 +531,20 @@ export const providerConfigFileSchema = z
      */
     readableRoots: z.array(z.string().min(1)).default([]),
     /**
+     * Optional opt-in sandbox policy. An absent block (the default) means
+     * fully unrestricted filesystem and terminal access; see the schema
+     * `.describe` for the full contract.
+     */
+    sandbox: z
+      .object({
+        mode: z.enum(['unrestricted', 'project']).optional(),
+        allowPaths: z.array(z.string().min(1)).default([]),
+      })
+      .describe(
+        'Opt-in sandbox policy. When ABSENT (the default) the run has unrestricted filesystem and terminal access. mode: "project" enables tool-level containment to the project root, OS temp roots, and allowPaths, with sensitive-file filtering. This is an application policy, not OS process isolation. allowPaths entries must be absolute paths or they are dropped at the trust gate.',
+      )
+      .optional(),
+    /**
      * Optional fixed agent-step cap. Unset or -1 means unlimited productive
      * steps; the configured cap and budget enforcement are what bound runaway
      * runs.
@@ -622,6 +636,11 @@ export const providerConfigFileSchema = z
       ...(config.approvalMode !== undefined && {
         approvalMode: config.approvalMode,
       }),
+      // OPTIONAL in the parsed output on purpose: `sandbox` stays ABSENT
+      // unless the fragment explicitly declares it, so the per-fragment
+      // merge can distinguish an override that omits the block (inherits
+      // the base block wholesale) from one that sets it (override wins).
+      ...(config.sandbox !== undefined && { sandbox: config.sandbox }),
       // Always present thanks to `.default([])`, so downstream code (the
       // run-start registry wiring) never has to handle `undefined`.
       readableRoots: config.readableRoots,
@@ -687,6 +706,17 @@ export type LoadedProviderConfig = {
    * CLOSED when an effective root has no recorded source here.
    */
   readableRootsSources?: Record<string, string>
+  /**
+   * Trust-gate provenance for `sandbox.allowPaths`, mirroring
+   * `readableRootsSources` above: `path.resolve(<sandbox.allowPaths entry>)`
+   * -> the absolute path of the config FILE that declared it. Only ABSOLUTE
+   * entries are recorded.
+   *
+   * Deliberately kept OUTSIDE the parsed `config` object (and OPTIONAL) for
+   * the same fixture-stability reason as `readableRootsSources`; consumers
+   * must fail CLOSED when an allow path has no recorded source here.
+   */
+  sandboxAllowPathsSources?: Record<string, string>
   diagnostics?: Array<{
     filePath: string
     message: string
@@ -936,6 +966,7 @@ function readProviderConfigFile(
     let config = emptyProviderConfig()
     const sourceFilePaths: string[] = []
     const readableRootsSources: Record<string, string> = {}
+    const sandboxAllowPathsSources: Record<string, string> = {}
     let sourceFiles: NonNullable<LoadedProviderConfig['sourceFiles']> = {
       providers: {},
       routes: {
@@ -959,6 +990,10 @@ function readProviderConfigFile(
         readableRootsSources,
         loadedFragment.readableRootsSources ?? {},
       )
+      Object.assign(
+        sandboxAllowPathsSources,
+        loadedFragment.sandboxAllowPathsSources ?? {},
+      )
     }
 
     const parseResult = providerConfigFileSchema.safeParse(rawConfig)
@@ -974,6 +1009,14 @@ function readProviderConfigFile(
     for (const entry of parseResult.data.readableRoots) {
       readableRootsSources[reader ? entry : path.resolve(entry)] = resolvedConfigPath
     }
+    // Parallel provenance for `sandbox.allowPaths`: only ABSOLUTE entries are
+    // recorded — a relative entry in a possibly-global config is ambiguous,
+    // so it is dropped rather than anchored to a guessed directory, and the
+    // trust gate fails closed on any entry with no recorded source.
+    for (const entry of parseResult.data.sandbox?.allowPaths ?? []) {
+      if (!path.isAbsolute(entry)) continue
+      sandboxAllowPathsSources[reader ? entry : path.resolve(entry)] = resolvedConfigPath
+    }
 
     const currentSourceFiles = getSourceFilesFromRawConfig(
       rawConfig,
@@ -988,6 +1031,7 @@ function readProviderConfigFile(
       ),
       sourceFiles,
       readableRootsSources,
+      sandboxAllowPathsSources,
     }
     state.cache.set(resolvedConfigPath, result)
     return result
@@ -1083,6 +1127,10 @@ function mergeProviderConfigs(
     readableRoots: override.readableRoots?.length
       ? override.readableRoots
       : (base.readableRoots ?? []),
+    // `sandbox` is absent from a fragment that omits it (the schema keeps it
+    // optional in the parsed output), so an override without a block inherits
+    // the base block wholesale; a present override replaces it wholesale.
+    sandbox: override.sandbox ?? base.sandbox,
     failoverModels: override.failoverModels ?? base.failoverModels,
     maxAgentSteps: override.maxAgentSteps ?? base.maxAgentSteps,
     maxMissingOutputRetries:
@@ -1099,6 +1147,7 @@ export function loadProviderConfigForHost(params: {
   let config = emptyProviderConfig()
   const sourceFilePaths: string[] = []
   const readableRootsSources: Record<string, string> = {}
+  const sandboxAllowPathsSources: Record<string, string> = {}
   let sourceFiles: NonNullable<LoadedProviderConfig['sourceFiles']> = { providers: {}, routes: { modes: {}, agents: {} } }
   const diagnostics: NonNullable<LoadedProviderConfig['diagnostics']> = []
   const state = { stack: new Set<string>(), cache: new Map<string, ProviderConfigLoadResult>() }
@@ -1124,8 +1173,9 @@ export function loadProviderConfigForHost(params: {
     sourceFilePaths.push(...parsed.sourceFilePaths)
     sourceFiles = mergeSourceFiles(sourceFiles, parsed.sourceFiles ?? {})
     Object.assign(readableRootsSources, parsed.readableRootsSources ?? {})
+    Object.assign(sandboxAllowPathsSources, parsed.sandboxAllowPathsSources ?? {})
   }
-  return { config, sourceFilePaths: [...new Set(sourceFilePaths)], sourceFiles, readableRootsSources, diagnostics }
+  return { config, sourceFilePaths: [...new Set(sourceFilePaths)], sourceFiles, readableRootsSources, sandboxAllowPathsSources, diagnostics }
 }
 
 function getOpenbuffConfigDirs(): string[] {
@@ -1495,6 +1545,7 @@ export function loadProviderConfigSync(
   let config = emptyProviderConfig()
   const sourceFilePaths: string[] = []
   const readableRootsSources: Record<string, string> = {}
+  const sandboxAllowPathsSources: Record<string, string> = {}
   const diagnostics: NonNullable<LoadedProviderConfig['diagnostics']> = []
   let sourceFiles: NonNullable<LoadedProviderConfig['sourceFiles']> = {
     providers: {},
@@ -1557,6 +1608,10 @@ export function loadProviderConfigSync(
         readableRootsSources,
         parsedConfig.readableRootsSources ?? {},
       )
+      Object.assign(
+        sandboxAllowPathsSources,
+        parsedConfig.sandboxAllowPathsSources ?? {},
+      )
     } catch (error) {
       if (explicitConfigPath) {
         throw error
@@ -1584,6 +1639,7 @@ export function loadProviderConfigSync(
     sourceFilePaths,
     sourceFiles,
     readableRootsSources,
+    sandboxAllowPathsSources,
     diagnostics,
   }
   providerConfigCache = { key: cacheKey, config: result }

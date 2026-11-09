@@ -48,7 +48,7 @@ import type { ReadCapabilityIssuer } from '@codebuff/common/util/content-hash'
 import {
   coerceJsonSchemaMember,
   ensureAgentTemplateZodSchemas,
-  isLiveZodSchema as isLiveZodSchemaValue,
+  isAiSdkJsonSchemaEnvelope,
 } from '@codebuff/common/templates/agent-validation'
 
 import {
@@ -525,10 +525,10 @@ function rehydrateParams(
   return walk(params, 0)
 }
 
-/** Live zod schema members stashed from the RAW wire params before
+/** Schema members stashed from the RAW wire params before
  * rehydrateParams' plain-object walk (see rehydratePromptParamsForBridge
  * for why the stash exists). */
-type LivePromptSchemaStash = {
+type PromptSchemaStash = {
   toolSchemas: Map<string, { inputSchema?: unknown; outputSchema?: unknown }>
   templateSchemas: Map<
     string,
@@ -536,12 +536,12 @@ type LivePromptSchemaStash = {
   >
 }
 
-/** Stashes every LIVE zod schema member from the raw wire params:
+/** Stashes every schema member from the raw wire params:
  * tools[name].inputSchema / .outputSchema and each localAgentTemplates
  * value's inputSchema.prompt / .params / outputSchema. Non-object entries
  * are skipped defensively, never thrown on. */
-function stashLivePromptSchemaMembers(params: unknown): LivePromptSchemaStash {
-  const stash: LivePromptSchemaStash = {
+function stashPromptSchemaMembers(params: unknown): PromptSchemaStash {
+  const stash: PromptSchemaStash = {
     toolSchemas: new Map(),
     templateSchemas: new Map(),
   }
@@ -553,10 +553,10 @@ function stashLivePromptSchemaMembers(params: unknown): LivePromptSchemaStash {
       if (!tool || typeof tool !== 'object' || Array.isArray(tool)) continue
       const toolRecord = tool as Record<string, unknown>
       const entry: { inputSchema?: unknown; outputSchema?: unknown } = {}
-      if (isLiveZodSchemaValue(toolRecord.inputSchema)) {
+      if (toolRecord.inputSchema !== undefined) {
         entry.inputSchema = toolRecord.inputSchema
       }
-      if (isLiveZodSchemaValue(toolRecord.outputSchema)) {
+      if (toolRecord.outputSchema !== undefined) {
         entry.outputSchema = toolRecord.outputSchema
       }
       if (entry.inputSchema !== undefined || entry.outputSchema !== undefined) {
@@ -588,13 +588,13 @@ function stashLivePromptSchemaMembers(params: unknown): LivePromptSchemaStash {
         params?: unknown
         outputSchema?: unknown
       } = {}
-      if (isLiveZodSchemaValue(inputSchema?.prompt)) {
+      if (inputSchema?.prompt !== undefined) {
         entry.prompt = inputSchema?.prompt
       }
-      if (isLiveZodSchemaValue(inputSchema?.params)) {
+      if (inputSchema?.params !== undefined) {
         entry.params = inputSchema?.params
       }
-      if (isLiveZodSchemaValue(templateRecord.outputSchema)) {
+      if (templateRecord.outputSchema !== undefined) {
         entry.outputSchema = templateRecord.outputSchema
       }
       if (
@@ -609,12 +609,11 @@ function stashLivePromptSchemaMembers(params: unknown): LivePromptSchemaStash {
   return stash
 }
 
-/** Splices the stashed live members back into the rehydrated params so
- * their identity survives the walk (coerceJsonSchemaMember's by-reference
- * contract — never double-convert a live schema). */
-function spliceLivePromptSchemaMembers(
+/** Preserve live identity and complete JSON schemas. Schema validation below
+ * rejects invalid members; the generic marker walk must not truncate them. */
+function splicePromptSchemaMembers(
   rehydrated: Record<string, unknown>,
-  stash: LivePromptSchemaStash,
+  stash: PromptSchemaStash,
 ): void {
   if (stash.toolSchemas.size === 0 && stash.templateSchemas.size === 0) {
     return
@@ -666,6 +665,15 @@ function spliceLivePromptSchemaMembers(
 
 /** Restore a transported schema exactly; unsupported members refuse the prompt. */
 function coerceBridgeSchemaMember(value: unknown): unknown {
+  // Version tolerance: a child that did not unwrap its AI-SDK `jsonSchema()`
+  // envelopes at the sanitize boundary still sends the inner schema verbatim
+  // inside the envelope. Unwrap to the plain JSON Schema the coercion expects
+  // instead of failing on the envelope's literal `jsonSchema` key — Ajv's
+  // strict keywords reject it as `unknown keyword: jsonSchema`, which
+  // otherwise crashes every supervised spawn's first prompt.
+  if (isAiSdkJsonSchemaEnvelope(value)) {
+    return coerceJsonSchemaMember(structuredClone(value.jsonSchema))
+  }
   return coerceJsonSchemaMember(value)
 }
 
@@ -730,24 +738,23 @@ function coerceBridgePromptSchemaMembers(
  * schemas refuse the prompt before any provider call. Already-live members
  * pass through by reference.
  *
- * Live members are stashed from the RAW wire params BEFORE rehydrateParams'
- * plain-object walk and spliced back in afterwards: the walk rebuilds every
- * object entry-by-entry, which would destroy a live schema's identity (and
- * with it the by-reference contract).
+ * Schema members bypass the generic marker walk: it destroys live identity
+ * and truncates valid nested JSON schemas at its depth limit. JSON Schema
+ * literals also must not be interpreted as bridge markers.
  */
 function rehydratePromptParamsForBridge(
   params: unknown,
   logger: Logger,
   bridgeNonce: string,
 ): Record<string, unknown> {
-  const stash = stashLivePromptSchemaMembers(params)
+  const stash = stashPromptSchemaMembers(params)
   const rehydrated = {
     ...(rehydrateParams(params, logger, bridgeNonce) as Record<
       string,
       unknown
     >),
   }
-  spliceLivePromptSchemaMembers(rehydrated, stash)
+  splicePromptSchemaMembers(rehydrated, stash)
   coerceBridgePromptSchemaMembers(rehydrated)
   return rehydrated
 }

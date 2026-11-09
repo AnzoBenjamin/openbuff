@@ -4,6 +4,17 @@ Openbuff is a local-first, BYOK coding-agent SDK. Filesystem tools run against
 the host-provided `CodebuffFileSystem`; provider credentials and model routing
 remain under the host's control.
 
+Agent runs have unrestricted filesystem access by default. To opt into
+tool-level containment, configure `openbuff.json`:
+
+```json
+{ "sandbox": { "mode": "project" } }
+```
+
+See [sandbox configuration](../docs/configuration.md#filesystem-sandbox) for
+additional allowed paths. The portable backend applies tool path checks; it
+does not provide OS process or network isolation.
+
 ## Recommended filesystem setup
 
 New runs default to structured `read_files` v1 results. Use

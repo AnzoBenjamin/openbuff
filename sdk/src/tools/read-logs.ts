@@ -1,5 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import { getFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
 
 import { FILE_READ_STATUS } from '@codebuff/common/old-constants'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
@@ -176,7 +177,7 @@ export async function readLogs(
     ...getScopedReadPolicyAliases(resolved.scope, resolved.operationPath),
   ]
   if (
-    policyAliases.some((alias) => isReadPathBlocked(alias, params.fileFilter))
+    policyAliases.some((alias) => isReadPathBlocked(alias, params.fileFilter, params.readPolicy))
   ) {
     return [
       {
@@ -200,7 +201,7 @@ export async function readLogs(
   const jobFileMatch = path
     .basename(resolved.operationPath)
     .match(BACKGROUND_JOB_FILE_PATTERN)
-  if (jobFileMatch) {
+  if (jobFileMatch && getFilesystemSandbox(params.readPolicy).mode === 'project') {
     const jobId = jobFileMatch[1]
     const job = getBackgroundJob(jobId)
     if (job && !jobRegistry.assertOwned(job.jobId, params.owner).ok) {

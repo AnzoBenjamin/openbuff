@@ -17,7 +17,7 @@ const inputSchema = z
     path: z
       .string()
       .min(1, 'Path cannot be empty')
-      .describe(`Path to the file relative to the **project root**`),
+      .describe(`Path to the file absolute or relative to the **project root**; access follows the configured sandbox policy`),
     instructions: z
       .string()
       .describe('What the change is intended to do in only one sentence.'),

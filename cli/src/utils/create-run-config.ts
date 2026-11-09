@@ -233,8 +233,9 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     // Best-effort; age-based index integrity sweeps remain available.
   }
 
-  const approvalMode =
-    loadProviderConfigSync().config.approvalMode ?? 'balanced'
+  const loadedConfig = loadProviderConfigSync().config
+  const approvalMode = loadedConfig.approvalMode ?? 'balanced'
+  const sandboxMode = loadedConfig.sandbox?.mode ?? 'unrestricted'
 
   return {
     logger,
@@ -322,7 +323,7 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
       }
     },
     fileFilter: ((filePath: string) => {
-      if (isSensitiveFile(filePath)) return { status: 'blocked' }
+      if (sandboxMode === 'project' && isSensitiveFile(filePath)) return { status: 'blocked' }
       if (isEnvTemplateFile(filePath)) return { status: 'allow-example' }
       return { status: 'allow' }
     }) satisfies FileFilter,

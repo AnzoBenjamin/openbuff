@@ -36,6 +36,16 @@ export type HostConfigSnapshot = Readonly<{
   sourceBytesIdentity: string
   credentialNames: readonly string[]
   readableRoots: readonly string[]
+  /**
+   * Opt-in sandbox policy distilled from the loaded `sandbox` block: mode
+   * 'unrestricted' (the default — block ABSENT) is fully unrestricted
+   * filesystem and terminal access; 'project' re-enables containment.
+   * allowPaths is the trust-gated subset of `sandbox.allowPaths` (absolute
+   * entries whose declaring file passed the same origin gate readableRoots
+   * uses, reusing inputs.trust.projectReadableRoots; the configDir itself is
+   * NOT auto-included — that concession is readableRoots-specific).
+   */
+  sandboxPolicy: Readonly<{ mode: 'unrestricted' | 'project'; allowPaths: readonly string[] }>
   readPolicy: HostReadPolicy
   configDir?: string
 }>
@@ -199,7 +209,19 @@ export function loadHostConfigSnapshot(p: { inputs: HostConfigurationInputs; fs:
       const origin = loaded.readableRootsSources?.[root]
       return origin !== undefined && (inputs.trust.projectReadableRoots || (realConfigDir !== undefined && inside(realConfigDir, origin)))
     })])]
-    const readPolicy = createHostReadPolicy(inputs.projectRoot, readableRoots, trustedRoot)
+    // Opt-in sandbox policy: an absent `sandbox` block is the new default,
+    // fully unrestricted filesystem and terminal access, so mode falls back
+    // to 'unrestricted'. allowPaths reuse the readableRoots trust rule
+    // verbatim (absolute entry + recorded origin + project opt-in or
+    // config-dir origin) but WITHOUT auto-including the configDir — no
+    // provenance record means the entry is dropped (fail closed).
+    const gatedSandboxAllowPaths = (loaded.config.sandbox?.allowPaths ?? []).filter(root => {
+      if (!path.isAbsolute(root)) return false
+      const origin = loaded.sandboxAllowPathsSources?.[root]
+      return origin !== undefined && (inputs.trust.projectReadableRoots || (realConfigDir !== undefined && inside(realConfigDir, origin)))
+    })
+    const sandboxPolicy = Object.freeze({ mode: loaded.config.sandbox?.mode ?? 'unrestricted', allowPaths: Object.freeze(gatedSandboxAllowPaths) })
+    const readPolicy = createHostReadPolicy(inputs.projectRoot, readableRoots, trustedRoot, sandboxPolicy)
     for (const observation of observations.values()) if (observation.check() !== observation.identity)
       throw new Error('Configuration changed during capture')
     const immutableLoaded = freezeCopy(loaded)
@@ -208,7 +230,7 @@ export function loadHostConfigSnapshot(p: { inputs: HostConfigurationInputs; fs:
         inputs.invocationCwd, inputs.projectRoot, inputs.home, inputs.globals, inputs.selection, inputs.trust,
         [...observations.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, record]) => [name, record.identity])]),
       credentialNames: extractConfiguredCredentialNames(immutableLoaded), readableRoots: Object.freeze(readableRoots),
-      readPolicy })
+      sandboxPolicy, readPolicy })
     snapshots.add(snapshot)
     return { status: 'complete', snapshot }
   } catch (error) {

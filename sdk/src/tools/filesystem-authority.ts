@@ -14,7 +14,7 @@ import type {
   CodebuffFileContent,
   CodebuffFileSystem,
 } from '@codebuff/common/types/filesystem'
-import { isMandatorySensitiveReadPath } from '@codebuff/common/util/sensitive-paths'
+import { getFilesystemSandbox, isSandboxSensitivePath } from '@codebuff/common/util/filesystem-sandbox'
 
 import {
   isSafeProjectRelativePath,
@@ -216,7 +216,7 @@ export type AuthorizedFilesystemPath = Readonly<{
   portablePath: string
   operationPath: string
   redactPath: boolean
-  scope: 'project' | 'owned-temp'
+  scope: 'project' | 'owned-temp' | 'host'
 }>
 
 export type PathAuthorizationResult =
@@ -306,7 +306,7 @@ export class FilesystemAuthority {
     operation: FilesystemOperationKind,
     phase: FilesystemPolicyPhase = 'resolve',
   ): Promise<PathAuthorizationResult> {
-    if (!isSafeProjectRelativePath(input)) {
+    if (!isSafeProjectRelativePath(input, this.fileSystem.hostReadPolicy)) {
       return { allowed: false, code: 'path_outside_project' }
     }
     const followFinalSymlink = operation !== 'create' && operation !== 'delete'
@@ -349,7 +349,7 @@ export class FilesystemAuthority {
     source: AuthorizedFilesystemPath,
     destination: AuthorizedFilesystemPath,
   ): { allowed: true } | { allowed: false; code: string } {
-    if (source.scope !== destination.scope) {
+    if (getFilesystemSandbox(this.fileSystem.hostReadPolicy).mode === 'project' && source.scope !== destination.scope) {
       return { allowed: false, code: 'move_crosses_scope_boundary' }
     }
     return { allowed: true }
@@ -1035,7 +1035,7 @@ export function getDefaultFilesystemAuthority(
         context.portablePath,
         canonicalRelative.split(path.sep).join('/'),
       ].flatMap((alias) => [alias, alias.toLowerCase()])
-      if (aliases.some(isMandatorySensitiveReadPath)) {
+      if (aliases.some(alias => isSandboxSensitivePath(alias, fs.hostReadPolicy))) {
         return { allowed: false, code: 'sensitive_path', redactPath: true }
       }
       if (

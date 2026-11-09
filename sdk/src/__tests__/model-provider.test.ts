@@ -3303,6 +3303,127 @@ describe('readableRoots provenance (ER-1)', () => {
   })
 })
 
+describe('sandbox block (opt-in policy)', () => {
+  const tempDirs: string[] = []
+
+  const makeTempDir = (prefix: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+    tempDirs.push(dir)
+    return dir
+  }
+
+  beforeEach(() => {
+    resetEnv()
+    delete process.env[PROVIDER_CONFIG_ENV_VAR]
+    clearProviderConfigCacheForTest()
+  })
+
+  afterEach(() => {
+    process.chdir(originalCwd)
+    resetEnv()
+    clearProviderConfigCacheForTest()
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('parsing an empty config leaves sandbox undefined (absent-vs-present contract)', () => {
+    // The per-fragment merge distinguishes a fragment that omits the block
+    // (inherits the base block wholesale) from one that sets it (override
+    // wins), so the parsed output must stay ABSENT, never defaulted.
+    expect(providerConfigFileSchema.parse({}).sandbox).toBeUndefined()
+  })
+
+  test('parsing a sandbox block passes it through and defaults allowPaths to []', () => {
+    // allowPaths defaults INSIDE the block; the block itself stays optional.
+    expect(
+      providerConfigFileSchema.parse({ sandbox: { mode: 'project' } })
+        .sandbox,
+    ).toEqual({ mode: 'project', allowPaths: [] })
+
+    expect(
+      providerConfigFileSchema.parse({
+        sandbox: { mode: 'unrestricted', allowPaths: ['/opt/scratch'] },
+      }).sandbox,
+    ).toEqual({ mode: 'unrestricted', allowPaths: ['/opt/scratch'] })
+  })
+
+  test('records allowPaths provenance for absolute entries only', () => {
+    // Mirrors the ER-1 readableRoots provenance tests: a config-dir file
+    // declares the block so the trust gate can attribute each allow path.
+    const configDir = makeTempDir('openbuff-config-dir-')
+    process.env.OPENBUFF_CONFIG_DIR = configDir
+    const configFile = path.join(configDir, 'openbuff.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        sandbox: {
+          mode: 'project',
+          allowPaths: ['/opt/global-scratch', 'relative/scratch'],
+        },
+      }),
+    )
+    process.chdir(makeTempDir('openbuff-project-'))
+
+    const loaded = loadProviderConfigSync()
+
+    expect(loaded.config.sandbox).toEqual({
+      mode: 'project',
+      allowPaths: ['/opt/global-scratch', 'relative/scratch'],
+    })
+    // Absolute entry -> attributed to the exact declaring file.
+    expect(
+      loaded.sandboxAllowPathsSources?.[path.resolve('/opt/global-scratch')],
+    ).toBe(configFile)
+    // Relative entry -> no provenance record, so the trust gate drops it
+    // (fail closed) rather than anchoring it to a guessed directory.
+    expect(
+      loaded.sandboxAllowPathsSources?.[path.resolve('relative/scratch')],
+    ).toBeUndefined()
+  })
+
+  test('an override fragment with a sandbox block replaces the base; without one it inherits', () => {
+    const tempDir = makeTempDir('openbuff-provider-')
+    const basePath = path.join(tempDir, 'base.json')
+    fs.writeFileSync(
+      basePath,
+      JSON.stringify({
+        sandbox: { mode: 'project', allowPaths: ['/opt/base-scratch'] },
+      }),
+    )
+
+    // The root config's own block is the override; the include is the base.
+    const overridingRoot = path.join(tempDir, 'overriding.json')
+    fs.writeFileSync(
+      overridingRoot,
+      JSON.stringify({
+        include: ['base.json'],
+        sandbox: {
+          mode: 'unrestricted',
+          allowPaths: ['/opt/override-scratch'],
+        },
+      }),
+    )
+    process.env[PROVIDER_CONFIG_ENV_VAR] = overridingRoot
+    expect(loadProviderConfigSync().config.sandbox).toEqual({
+      mode: 'unrestricted',
+      allowPaths: ['/opt/override-scratch'],
+    })
+
+    // A root that omits the block inherits the fragment's block wholesale.
+    const inheritingRoot = path.join(tempDir, 'inheriting.json')
+    fs.writeFileSync(
+      inheritingRoot,
+      JSON.stringify({ include: ['base.json'] }),
+    )
+    process.env[PROVIDER_CONFIG_ENV_VAR] = inheritingRoot
+    expect(loadProviderConfigSync().config.sandbox).toEqual({
+      mode: 'project',
+      allowPaths: ['/opt/base-scratch'],
+    })
+  })
+})
+
 describe('selectTrustedReadableRoots (ER-1 trust gate)', () => {
   // `readableRoots` is the only config key that grants filesystem authority, so
   // this gate decides whether a cloned repository can allowlist credential

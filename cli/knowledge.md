@@ -1,5 +1,10 @@
 # CLI Package Knowledge
 
+## Filesystem sandbox configuration
+
+- CLI agent runs default to unrestricted filesystem access. `cli/src/utils/create-run-config.ts` applies sensitive-file filtering only when the captured sandbox policy selects project mode.
+- Set `sandbox.mode` to `project` in `openbuff.json` to enable tool-level containment. The generated starter tool types describe absolute and project-relative paths; regenerate all mirrors after changing public tool schemas.
+
 ## Polyglot execution context and result evidence
 
 - `cli/src/utils/output-outcome.ts` projects typed run and task outcomes into completion summaries. Headless runs return failure/cancellation consistently with SDK and journal results; verified recovery can complete a task while preserving earlier failed actions.

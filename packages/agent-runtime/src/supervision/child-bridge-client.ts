@@ -39,6 +39,12 @@ import type {
 } from '@codebuff/common/tools/results/filesystem'
 import type { RequestFilesFn } from '@codebuff/common/types/contracts/client'
 import { authenticateReadFilesItem } from '../util/authenticated-read-source'
+import {
+  isAiSdkJsonSchemaEnvelope,
+  isLiveZodSchema,
+  serializeSchemaMemberForTransport,
+} from '@codebuff/common/templates/agent-validation'
+import { projectHostToolInputSchema } from '@codebuff/common/util/json-schema'
 
 import type { ConsumeCreditsWithFallbackFn } from '@codebuff/common/types/contracts/billing'
 import type { FetchAgentFromDatabaseFn } from '@codebuff/common/types/contracts/database'
@@ -469,6 +475,18 @@ const SANITIZE_MAX_DEPTH = 12
  *  - when `bridgeNonce` is undefined (raw handler tables, which never
  *    rehydrated), the LEGACY content-only marker shapes are emitted — they
  *    cross the bridge as data, exactly as before;
+ *  - live zod schema members → serialized to plain JSON Schema for the
+ *    wire (the io projection follows the member name); AI-SDK
+ *    `jsonSchema()` envelopes → unwrapped to the inner plain JSON Schema —
+ *    the parent's strict schema coercion refuses both envelope keys and
+ *    degraded zod husks, so neither may cross as walked plain data. A
+ *    live member whose EXACT semantics JSON Schema cannot represent
+ *    (Zod counts string length in UTF-16 code units, JSON Schema counts
+ *    Unicode code points) degrades to the ADVISORY projection the
+ *    in-process path already advertises for host-validated tools — the
+ *    wire copy is the provider-facing advertisement, never the
+ *    validation authority; a schema z.toJSONSchema cannot project at
+ *    all still fails closed;
  *  - functions → dropped (optional callback hooks are invoked with `?.`);
  *  - depth-bounded so runaway structures cannot balloon a message past the
  *    16 MiB cap unnoticed (the cap itself is the backstop).
@@ -485,7 +503,23 @@ export function sanitizeBridgeParams(
     bridgeNonce === undefined
       ? BRIDGE_LOGGER_MARKER
       : createBridgeWireMarker('logger', bridgeNonce)
-  const walk = (value: unknown, depth: number): unknown => {
+  const walk = (value: unknown, depth: number, path: string[] = []): unknown => {
+    const key = path.at(-1)
+    const isPromptSchema =
+      (path.length === 3 && path[0] === 'tools' &&
+        (key === 'inputSchema' || key === 'outputSchema')) ||
+      (path[0] === 'localAgentTemplates' &&
+        ((path.length === 3 && key === 'outputSchema') ||
+          (path.length === 4 && path[2] === 'inputSchema' &&
+            (key === 'prompt' || key === 'params'))))
+    // JSON-only members (including schemas forwarded by a parent) must not
+    // enter the generic depth-limited marker walk. Preserve all constraints
+    // and leave schema literals as data; the receiver validates the schema.
+    if (isPromptSchema && !isLiveZodSchema(value)) {
+      return structuredClone(
+        isAiSdkJsonSchemaEnvelope(value) ? value.jsonSchema : value,
+      )
+    }
     if (value === null || typeof value !== 'object') {
       // Functions (and primitives) pass through; JSON.stringify drops functions.
       return value
@@ -506,12 +540,53 @@ export function sanitizeBridgeParams(
     }
     if (isBridgeMarkerShaped(value)) return value
     if (isLoggerLike(value)) return loggerMarker()
+    // Schema members (tools[name].inputSchema/.outputSchema, template
+    // inputSchema.prompt/.params/.outputSchema) must cross as ROUND-TRIP-SAFE
+    // plain JSON Schema: the parent rehydrates them into live validators and
+    // its strict coercion refuses anything else — a plain-object walk of the
+    // AI-SDK `jsonSchema()` envelope fails parent-side with `unknown keyword:
+    // jsonSchema`, and a walked live zod schema degrades to a husk the parent
+    // refuses with `Cannot restore degraded Zod schema`. Detection is
+    // shape-based rather than position-based: only a schema carries these
+    // shapes, wherever it sits in the params. Exact transport first; an
+    // unrepresentable-but-projectable schema degrades to the ADVISORY
+    // fallback below (advertisement parity with the in-process path), and
+    // a schema that cannot project at all PROPAGATES the serialization
+    // error (the bridged call rejects) — never silently widens.
+    if (isLiveZodSchema(value)) {
+      const io =
+        // The io projection follows the member name: output projections
+        // differ from input projections for coercing/transforming schemas.
+        key === 'outputSchema' ? 'output' : 'input'
+      try {
+        return serializeSchemaMemberForTransport(value, io)
+      } catch {
+        // ADVISORY FALLBACK (in-process parity). The exact transport
+        // refuses members whose semantics JSON Schema cannot represent —
+        // Zod counts string length in UTF-16 code units, JSON Schema
+        // counts Unicode code points — and propagating that refusal here
+        // crashed every supervised child at its FIRST prompt (the wire
+        // copy rides in every prompt request; the reviewer gate itself
+        // died this way). The prompt-params wire copy of a tool/template
+        // schema is the provider-facing ADVERTISEMENT, never the
+        // validation authority: tool calls execute against each side's
+        // own live schemas, exactly like the in-process path, where
+        // projectHostToolInputSchema already advertises host-validated
+        // tools with this same advisory projection. Degrade to it instead
+        // of failing the spawn; a schema z.toJSONSchema cannot project
+        // at all still throws (fail closed).
+        return projectHostToolInputSchema(value)
+      }
+    }
+    if (isAiSdkJsonSchemaEnvelope(value)) {
+      return structuredClone(value.jsonSchema)
+    }
     if (Array.isArray(value)) {
-      return value.map((item) => walk(item, depth + 1))
+      return value.map((item, index) => walk(item, depth + 1, [...path, String(index)]))
     }
     const out: Record<string, unknown> = {}
     for (const [key, item] of Object.entries(value)) {
-      out[key] = walk(item, depth + 1)
+      out[key] = walk(item, depth + 1, [...path, key])
     }
     return out
   }

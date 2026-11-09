@@ -102,7 +102,9 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
     const snapshot = options.snapshot
     const provider = createProviderHostContext(snapshot, options.credentials)
     const clock = options.clock ?? executionClock
-    const selectedProfile = options.profile ?? defaultExecutionProfile
+    const selectedProfile = options.profile ?? (snapshot.sandboxPolicy.mode === 'unrestricted'
+      ? { ...defaultExecutionProfile, policy: 'full-access' as const }
+      : defaultExecutionProfile)
     const profile = Object.freeze({ ...selectedProfile, required: Object.freeze([...selectedProfile.required]) })
     const events: LaunchEvent[] = []
     const metadata = new Map<string, CapturedTerminalLaunchMetadata>()
@@ -117,8 +119,10 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
         (target.argv[1] === '--show-toplevel' || target.argv[1] === '--git-common-dir')
       if (input.facts.correlation.purpose !== 'repository-bootstrap' || target.executable !== 'git' || !identityQuery ||
         ![snapshot.inputs.invocationCwd, snapshot.inputs.projectRoot].includes(target.cwd) ||
-        target.projectRoot !== snapshot.inputs.projectRoot || target.allowedPaths.length !== 1 ||
-        target.allowedPaths[0] !== snapshot.inputs.projectRoot || target.processType !== 'SYNC' ||
+        target.projectRoot !== snapshot.inputs.projectRoot ||
+        target.allowedPaths.length !== 1 + snapshot.sandboxPolicy.allowPaths.length ||
+        target.allowedPaths.some((root, index) => root !== [snapshot.inputs.projectRoot, ...snapshot.sandboxPolicy.allowPaths][index]) ||
+        target.processType !== 'SYNC' ||
         target.shellCommandBytes !== undefined || target.adapterOptions.shell !== false ||
         target.environmentOverlay !== undefined || target.delegation !== undefined)
         return { ok: false, reason: 'denied', cause: 'Repository bootstrap permits only captured Git identity queries' }
@@ -220,7 +224,7 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
       const bound = execution.bindAction({ owner, budget, request: request.value })
       if (!bound.ok) return bound
       return ok(Object.freeze({ execution: bound.value, projectRoot: snapshot.inputs.projectRoot,
-        allowedPaths: Object.freeze([snapshot.inputs.projectRoot]), profile: requestedProfile, mode, signal: bound.value.signal,
+        allowedPaths: Object.freeze([snapshot.inputs.projectRoot, ...snapshot.sandboxPolicy.allowPaths]), profile: requestedProfile, mode, signal: bound.value.signal,
         spawn: options.spawn, cacheScope }))
     }
 

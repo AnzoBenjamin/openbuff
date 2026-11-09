@@ -26,7 +26,7 @@ export const readFilesWindowSelectorSchema = z.object({
     .string()
     .min(1)
     .describe(
-      'File path to read in contiguous line windows, relative to the project root.',
+      'File path to read in contiguous line windows, absolute or relative to the project root; access follows the configured sandbox policy.',
     ),
   windowSize: z
     .number()
@@ -52,7 +52,7 @@ export const readFilesAroundSelectorSchema = z.object({
     .string()
     .min(1)
     .describe(
-      'File path to read a content-anchored block from, relative to the project root.',
+      'File path to read a content-anchored block from, absolute or relative to the project root; access follows the configured sandbox policy.',
     ),
   match: z
     .string()
@@ -82,7 +82,7 @@ export const readFilesSymbolSelectorSchema = z.object({
     .string()
     .min(1)
     .describe(
-      'File path to extract a symbol slice from, relative to the project root.',
+      'File path to extract a symbol slice from, absolute or relative to the project root; access follows the configured sandbox policy.',
     ),
   name: z
     .string()
@@ -378,7 +378,7 @@ const inputSchema = z
               .string()
               .min(1, 'Paths cannot be empty')
               .describe(
-                'File path relative to the project root (absolute paths fail).',
+                'File path, absolute or relative to the project root; access follows the configured sandbox policy.',
               ),
           ),
         )
@@ -390,7 +390,7 @@ const inputSchema = z
       ranges: z
         .array(
           z.object({
-            path: z.string().min(1).describe('Project-relative file path.'),
+            path: z.string().min(1).describe('File path, absolute or relative to the project root; access follows the configured sandbox policy.'),
             startLine: z
               .number()
               .int()
@@ -432,7 +432,7 @@ const inputSchema = z
       symbols: z
         .array(
           z.object({
-            path: z.string().min(1).describe('Project-relative file path.'),
+            path: z.string().min(1).describe('File path, absolute or relative to the project root; access follows the configured sandbox policy.'),
             names: z
               .preprocess(coerceToArray, z.array(z.string().min(1)))
               .describe('Symbol names to slice.'),

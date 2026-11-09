@@ -6,6 +6,8 @@ import { formatCodeSearchOutput } from '../../../common/src/util/format-code-sea
 import { getBundledRgPath } from '../native/ripgrep'
 import { parseSafeRipgrepFlags } from './find-files-matching-content'
 import { isReadPathBlocked } from './read-policy'
+import { hasFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
+import { resolveProjectPathForRead } from '@codebuff/common/util/project-path-containment'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 import type { FileFilter } from './read-files'
@@ -101,6 +103,9 @@ export function codeSearch({
     let isResolved = false
 
     const projectRoot = path.resolve(projectPath)
+    if (hasFilesystemSandbox() && [cwd ?? '.', ...paths ?? []].some(input => !resolveProjectPathForRead(projectRoot, input))) {
+      return resolve([{ type: 'json', value: { errorMessage: 'Search path is outside the configured sandbox.' } }])
+    }
     let searchCwd = projectRoot
     const explicitSearchPaths: string[] = []
     let cwdWasFile = false

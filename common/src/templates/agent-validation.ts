@@ -484,6 +484,48 @@ export function ensureAgentTemplateZodSchemas(
   }
 }
 
+/**
+ * Detects the AI SDK's `jsonSchema()` wrapper: `{_type: 'jsonSchema',
+ * jsonSchema: <schema>, validate?: <fn>}`. `validate` is undefined in the
+ * default wrapper and none of the marker members survives a JSON round trip
+ * except `jsonSchema` — so over a JSON transport the envelope collapses to
+ * `{jsonSchema: <schema>}`, whose literal `jsonSchema` key Ajv's strict
+ * keywords reject as `unknown keyword: jsonSchema` (crashing every
+ * supervised spawn whose tool set crosses the bridge). Detection requires
+ * every own enumerable key to be one of the three envelope members (and
+ * `_type`, when present, to be exactly `'jsonSchema'`) so ordinary data that
+ * merely carries a property named `jsonSchema` is never mistaken for an
+ * envelope.
+ */
+export function isAiSdkJsonSchemaEnvelope(
+  value: unknown,
+): value is {
+  _type?: unknown
+  jsonSchema: Record<string, unknown>
+  validate?: unknown
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  // The LIVE wrapper carries `_type` (and `validate`) as own keys whose
+  // values are `undefined` — only the JSON wire form collapses them away.
+  // Accept the live shape too so detection fires BEFORE the walk (a plain
+  // walk of the live envelope would leave `_type`/`validate` holes and
+  // deliver the inner schema nested under a literal `jsonSchema` key).
+  if (
+    '_type' in record &&
+    record._type !== 'jsonSchema' &&
+    record._type !== undefined
+  )
+    return false
+  const inner = record.jsonSchema
+  if (!inner || typeof inner !== 'object' || Array.isArray(inner)) return false
+  for (const key of Object.keys(record)) {
+    if (key !== '_type' && key !== 'jsonSchema' && key !== 'validate')
+      return false
+  }
+  return true
+}
+
 export function isLiveZodSchema(value: unknown): value is z.ZodType {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return false

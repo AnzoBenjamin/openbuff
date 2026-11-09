@@ -1,4 +1,4 @@
-import { isPathInsideProject } from '@codebuff/common/util/project-path-containment'
+import { resolveProjectPathForRead } from '@codebuff/common/util/project-path-containment'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 
 import {
@@ -48,7 +48,7 @@ export const handleReadOutline = (async (params: {
   // error. Both are treated as "cannot prove this path is inside the project",
   // which fails closed to the same stable message the containment refusal uses.
   const projectRoot = fileContext?.projectRoot
-  if (!projectRoot || !isPathInsideProject(projectRoot, path)) {
+  if (!projectRoot || !resolveProjectPathForRead(projectRoot, path)) {
     return {
       output: jsonToolResult({
         path,

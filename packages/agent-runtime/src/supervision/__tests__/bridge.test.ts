@@ -40,6 +40,7 @@ import {
   buildBridgedChildDeps,
   connectChildBridge,
   toBridgeJsonSchema,
+  sanitizeBridgeParams,
   type ChildBridgeClient,
 } from '../child-bridge-client'
 import { missingChildCallbackDeps } from '../child-entry'
@@ -51,7 +52,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as net from 'node:net'
 import type { SupervisedSpawnRequest } from '@codebuff/common/types/contracts/agent-runtime'
+import { jsonSchema } from 'ai'
 import z from 'zod/v4'
+import { toolParams } from '@codebuff/common/tools/list'
+import { projectZodSchema } from '@codebuff/common/util/json-schema'
 
 const CALL_BUDGET_MS = 2_000
 
@@ -2265,6 +2269,198 @@ describe('bridged prompt schema fidelity', () => {
           expect(calls).toBe(0)
         }
       }
+    }
+  })
+
+  describe('deep prompt schema transport', () => {
+    it.each(['read_files', 'read_docs'] as const)(
+      'preserves the complete %s output schema through every prompt handler',
+      async (name) => {
+        const schema = projectZodSchema(toolParams[name].outputSchema, 'output')
+        for (const method of [
+          'promptAiSdk', 'promptAiSdkStream', 'promptAiSdkStreamStart',
+        ] as const) {
+          let captured: unknown
+          const handlers = buildSupervisedBridgeHandlers(
+            makeStreamCaptureDeps(params => { captured = params }),
+          )
+          await withTimeout(
+            (handlers[method] as (p: unknown) => Promise<unknown>)({
+              tools: { [name]: { outputSchema: schema } },
+            }),
+            CALL_BUDGET_MS,
+            `${method} ${name} deep output schema`,
+          )
+          const restored = (captured as {
+            tools: Record<string, { outputSchema: z.ZodType }>
+          }).tools[name].outputSchema
+          expect(projectZodSchema(restored, 'output')).toEqual(schema)
+          expect(restored.safeParse([{ type: 'json', value: {} }]).success).toBe(false)
+        }
+      },
+    )
+
+    it('preserves JSON-only schema members across repeated child transfers', () => {
+      const schema = projectZodSchema(toolParams.read_docs.outputSchema, 'output')
+      const params = {
+        tools: { read_docs: { inputSchema: schema, outputSchema: schema } },
+        localAgentTemplates: {
+          child: {
+            id: 'child',
+            inputSchema: { prompt: schema, params: schema },
+            outputSchema: schema,
+          },
+        },
+      }
+      const first = JSON.parse(JSON.stringify(sanitizeBridgeParams(params)))
+      expect(first).toEqual(params)
+      expect(JSON.parse(JSON.stringify(sanitizeBridgeParams(first)))).toEqual(params)
+    })
+  })
+
+  it('prompt handlers unwrap an AI-SDK jsonSchema() envelope tool input schema (tolerating children that did not unwrap at the sanitize boundary)', async () => {
+    let captured: unknown
+    const handlers = buildSupervisedBridgeHandlers(
+      makeStreamCaptureDeps((params) => {
+        captured = params
+      }),
+    )
+    // The real getToolSet envelope over JSON collapses to exactly
+    // {jsonSchema: <schema>}; use the live wrapper so the wire shape matches
+    // production traffic byte for byte.
+    const wireEnvelope = JSON.parse(
+      JSON.stringify(
+        jsonSchema({
+          type: 'object',
+          properties: { q: { type: 'string', minLength: 2 } },
+          required: ['q'],
+        }),
+      ),
+    )
+    const result = await withTimeout(
+      (handlers.promptAiSdk as (p: unknown) => Promise<unknown>)({
+        tools: { end_turn: { inputSchema: wireEnvelope } },
+      }),
+      CALL_BUDGET_MS,
+      'envelope unwrap coercion handler',
+    )
+    expect(result).toMatchObject({ aborted: false, value: 'done' })
+    const inputSchema = (
+      captured as {
+        tools: Record<string, { inputSchema?: unknown }>
+      }
+    ).tools.end_turn.inputSchema as ZodLike
+    expect(typeof inputSchema.safeParse).toBe('function')
+    expect(inputSchema.safeParse({ q: 'ok' }).success).toBe(true)
+    expect(inputSchema.safeParse({ q: '' }).success).toBe(false)
+  })
+
+  it('child sanitizer carries tool schemas as plain JSON Schema across the real socket: AI-SDK envelopes unwrap, live zod output schemas serialize', async () => {
+    let captured: unknown
+    const bridge = await startBridge(
+      buildSupervisedBridgeHandlers(
+        makeStreamCaptureDeps((params) => {
+          captured = params
+        }),
+      ),
+    )
+    try {
+      const deps = buildBridgedChildDeps(bridge.client)
+      const result = await withTimeout(
+        deps.promptAiSdk({
+          tools: {
+            end_turn: {
+              // The real ToolSet inputSchema member: an AI-SDK envelope.
+              inputSchema: jsonSchema({
+                type: 'object',
+                properties: { q: { type: 'string' } },
+                required: ['q'],
+              }),
+              // The real ToolSet outputSchema member: a LIVE zod schema
+              // (spread from the tool params definition). An unserialized
+              // walk would degrade it to a husk the parent refuses with
+              // `Cannot restore degraded Zod schema`.
+              outputSchema: z.object({ message: z.string() }),
+            },
+          },
+        } as never),
+        CALL_BUDGET_MS,
+        'child tool-schema serialization round-trip',
+      )
+      expect(result).toMatchObject({ aborted: false, value: 'done' })
+      const tool = (
+        captured as {
+          tools: Record<
+            string,
+            { inputSchema?: unknown; outputSchema?: unknown }
+          >
+        }
+      ).tools.end_turn
+      const inputSchema = tool.inputSchema as ZodLike
+      const outputSchema = tool.outputSchema as ZodLike
+      expect(typeof inputSchema.safeParse).toBe('function')
+      expect(typeof outputSchema.safeParse).toBe('function')
+      expect(inputSchema.safeParse({ q: 'ok' }).success).toBe(true)
+      expect(inputSchema.safeParse({}).success).toBe(false)
+      expect(outputSchema.safeParse({ message: 'hi' }).success).toBe(true)
+      expect(outputSchema.safeParse({}).success).toBe(false)
+    } finally {
+      await bridge.teardown()
+    }
+  })
+
+  it('child sanitizer degrades untransportable live tool schemas to the advisory projection instead of failing the spawn (Zod UTF-16 length semantics)', async () => {
+    // The finding: the exact transport refuses live zod string length
+    // constraints (Zod counts UTF-16 code units, JSON Schema counts code
+    // points), which crashed every supervised child at its first prompt —
+    // the reviewer gate included. The wire copy of a prompt tool schema is
+    // the provider-facing advertisement; validation stays authoritative
+    // against each side's own live schemas (the in-process parity behind
+    // projectHostToolInputSchema), so the spawn must proceed and the
+    // parent must receive a usable validator.
+    let captured: unknown
+    const bridge = await startBridge(
+      buildSupervisedBridgeHandlers(
+        makeStreamCaptureDeps((params) => {
+          captured = params
+        }),
+      ),
+    )
+    try {
+      const deps = buildBridgedChildDeps(bridge.client)
+      const result = await withTimeout(
+        deps.promptAiSdk({
+          tools: {
+            end_turn: {
+              // Length constraints make the EXACT transport refuse the
+              // member; the advisory projection still advertises the shape.
+              inputSchema: z.object({ q: z.string().min(2).max(10) }),
+              outputSchema: z.object({ message: z.string().min(1) }),
+            },
+          },
+        } as never),
+        CALL_BUDGET_MS,
+        'advisory fallback round-trip',
+      )
+      expect(result).toMatchObject({ aborted: false, value: 'done' })
+      const tool = (
+        captured as {
+          tools: Record<
+            string,
+            { inputSchema?: unknown; outputSchema?: unknown }
+          >
+        }
+      ).tools.end_turn
+      const inputSchema = tool.inputSchema as ZodLike
+      const outputSchema = tool.outputSchema as ZodLike
+      expect(typeof inputSchema.safeParse).toBe('function')
+      expect(typeof outputSchema.safeParse).toBe('function')
+      expect(inputSchema.safeParse({ q: 'ok' }).success).toBe(true)
+      expect(inputSchema.safeParse({}).success).toBe(false)
+      expect(outputSchema.safeParse({ message: 'hi' }).success).toBe(true)
+      expect(outputSchema.safeParse({}).success).toBe(false)
+    } finally {
+      await bridge.teardown()
     }
   })
 

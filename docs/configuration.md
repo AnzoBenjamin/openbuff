@@ -516,6 +516,48 @@ Example:
 
 Merged result (in order): `[prettier (project version), typecheck-sdk]`.
 
+## Filesystem sandbox
+
+Agent runs have unrestricted filesystem access by default. File tools accept
+absolute paths and paths relative to the current project, including `../`.
+Agents can read config directories and logs, search other directories, use
+external terminal working directories, and edit temporary files.
+
+To opt into containment, add this to `openbuff.json`:
+
+```json
+{
+  "sandbox": {
+    "mode": "project"
+  }
+}
+```
+
+Project mode restricts file tools and terminal path checks to the project and
+OS temporary directories. It also restores sensitive-file filtering and
+protections for temporary job logs, capture evidence, and executable files.
+This is a tool-level policy; the portable terminal backend does not isolate
+subprocesses at the OS level or restrict their network access.
+
+For additional writable directories, use absolute `sandbox.allowPaths`:
+
+```json
+{
+  "sandbox": {
+    "mode": "project",
+    "allowPaths": ["/opt/my-workspace", "/var/log/my-service"]
+  }
+}
+```
+
+Declare these paths in your user-global config. Project/ancestor fragments
+can grant additional paths when `OPENBUFF_TRUST_PROJECT_READABLE_ROOTS=1`;
+otherwise their entries are ignored. Existing `readableRoots` remain read-only
+exceptions in project mode. An omitted sandbox block inherits any earlier
+config block; `"sandbox": { "mode": "unrestricted" }` explicitly disables it.
+Each run captures its policy, including its subagents, independently of other
+concurrent runs. Changes apply on the next run.
+
 ## Harness approval mode
 
 `approvalMode` controls when terminal effects pause for confirmation:
@@ -532,9 +574,8 @@ Merged result (in order): `[prettier (project version), typecheck-sdk]`.
   migrations, uploads/remote shells, and arbitrary code evaluation ask once.
 - `strict` asks for every classified package, Git, remote, or destructive
   effect.
-- `allow-all` suppresses approval prompts but does not disable project-root
-  containment, mandatory secret filtering, global/system install blocks,
-  owned-path staging, or force/delete-push protection.
+- `allow-all` suppresses approval prompts. Filesystem access is controlled
+  separately by `sandbox`; it defaults to unrestricted.
 
 ## File-change hooks (verification gate)
 

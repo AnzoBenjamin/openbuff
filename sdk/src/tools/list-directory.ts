@@ -80,7 +80,7 @@ export async function listDirectory(params: {
         return ![
           relativeEntryPath,
           ...getScopedReadPolicyAliases(resolved.scope, entry.name),
-        ].some((alias) => isReadPathBlocked(alias, fileFilter))
+        ].some((alias) => isReadPathBlocked(alias, fileFilter, fs.hostReadPolicy))
       },
     })
     const hasMore = entries.length > limit

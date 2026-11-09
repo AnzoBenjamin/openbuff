@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { isSandboxSensitivePath } from '@codebuff/common/util/filesystem-sandbox'
 
 import { FILE_READ_STATUS } from '@codebuff/common/old-constants'
 import {
@@ -185,7 +186,7 @@ async function authorizeReadTarget(params: {
   fileFilter?: FileFilter
 }): Promise<ResolvedReadTarget> {
   const { requestedPath, cwd, canonicalRoot, fs, fileFilter } = params
-  if (!isSafeProjectRelativePath(requestedPath)) {
+  if (!isSafeProjectRelativePath(requestedPath, fs.hostReadPolicy)) {
     return {
       ok: false,
       displayPath: requestedPath,
@@ -235,7 +236,7 @@ async function authorizeReadTarget(params: {
   )) {
     if (!aliases.includes(alias)) aliases.push(alias)
   }
-  if (aliases.some(isMandatorySensitiveReadPath)) {
+  if (aliases.some(alias => isSandboxSensitivePath(alias, fs.hostReadPolicy))) {
     return {
       ok: false,
       displayPath: resolved.relativePath,

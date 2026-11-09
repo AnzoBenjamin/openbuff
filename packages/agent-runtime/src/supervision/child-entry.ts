@@ -138,6 +138,8 @@ import type { AgentState } from '@codebuff/common/types/session-state'
 import { taskMemoryV1Schema } from '@codebuff/common/types/task-memory'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { readFileSync } from 'node:fs'
+import { withFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
+import { createHostReadPolicy } from '@codebuff/common/util/project-path-containment'
 
 import { createBridgeStderrLogger } from './bridge-protocol'
 import type { SessionEvidenceLog } from '../memory/session-evidence-log'
@@ -813,7 +815,15 @@ export async function abortAndAwaitChildLoop<T>(
   if (timeout !== undefined) clearTimeout(timeout)
 }
 
-export async function runSupervisedChildEntry(
+export function runSupervisedChildEntry(request: SupervisedSpawnRequest): Promise<AgentReceipt> {
+  const sandbox = request.filesystemSandbox
+  if (!sandbox) return runChildWithDeps(request)
+  const readPolicy = createHostReadPolicy(sandbox.projectRoot, sandbox.readableRoots, undefined, sandbox.policy)
+  return withFilesystemSandbox(sandbox.policy, () => runChildWithDeps(request),
+    { projectRoot: sandbox.projectRoot, readPolicyToken: readPolicy })
+}
+
+async function runChildWithDeps(
   request: SupervisedSpawnRequest,
 ): Promise<AgentReceipt> {
   const agentId = request.child?.agentId ?? generateCompactId()
