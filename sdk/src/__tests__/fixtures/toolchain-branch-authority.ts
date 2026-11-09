@@ -58,7 +58,9 @@ export function createToolchainBranchFixture(options: {
   const trace = path.join(root, 'child-events.jsonl')
   const binaryRoot = path.join(root, 'bin')
   mkdirSync(binaryRoot)
-  const binarySource = '#!/usr/bin/node\n' + readFileSync(path.join(import.meta.dir, 'toolchain-branch-peer.cjs'), 'utf8')
+  const nodeExecutable = Bun.which('node')
+  if (!nodeExecutable) throw new Error('The real toolchain fixture requires Node on PATH')
+  const binarySource = `#!${nodeExecutable}\n` + readFileSync(path.join(import.meta.dir, 'toolchain-branch-peer.cjs'), 'utf8')
   for (const command of ['git', 'bun', 'node', 'python3', 'rustc', 'go', 'k6', 'cargo', 'uv', 'poetry', 'mvn', 'gradle', 'dotnet', 'blender', 'semgrep',
     'scip-typescript', 'scip-python', 'scip-rust', 'scip-java', 'scip-go', 'scip-clang', 'scip-dotnet', 'scip-ruby']) {
     const executable = path.join(binaryRoot, command)

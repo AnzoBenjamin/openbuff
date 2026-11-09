@@ -225,6 +225,15 @@ function assertPublication(
       expectedRawHash: getExactContentHash(before),
     },
     signal: run.params.signal,
+    executionIdentity: expect.objectContaining({
+      rootRunId: scope.runId,
+      runId: scope.runId,
+      agentId: run.params.agentState.agentId,
+      actionId: callId,
+      attemptId: expect.any(String),
+      basisId: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+    }),
+    executionRequestHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
   })
   const results = run.chunks.filter(
     (chunk): chunk is Extract<PrintModeEvent, { type: 'tool_result' }> =>

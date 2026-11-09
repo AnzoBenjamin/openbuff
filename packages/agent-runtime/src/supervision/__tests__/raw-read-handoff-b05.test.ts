@@ -535,10 +535,7 @@ describe('B05 parent-authenticated raw reads and child-local v4 handoff', () => 
     )
     const server = startParentBridgeServer(table, join(dir, 'rpc.sock'))
     await server.ready
-    const base = resolve(
-      import.meta.dir,
-      '../../../../../docs/execution/body-roadmap/evidence/B05/bridge-development',
-    )
+    const base = join(import.meta.dir, 'fixtures')
     const parentTokens = makeItems().map(
       (item) => item.editAnchor!.readCapability,
     )
@@ -546,8 +543,8 @@ describe('B05 parent-authenticated raw reads and child-local v4 handoff', () => 
       process.execPath,
       '--no-env-file',
       '--preload',
-      join(base, 'child-network-guard.ts'),
-      join(base, 'child-read-worker.ts'),
+      join(base, 'b05-child-network-guard.ts'),
+      join(base, 'b05-child-read-worker.ts'),
       join(dir, 'rpc.sock'),
       bridgeNonce,
       issuer.projectId,

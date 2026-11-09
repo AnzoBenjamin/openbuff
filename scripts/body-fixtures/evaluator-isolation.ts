@@ -4,6 +4,7 @@ import path from 'node:path'
 import { createIsolatedEvaluationClient } from '../../evals/buffbench/isolated-sdk-client'
 import { runAgentOnCommit } from '../../evals/buffbench/agent-runner'
 import { runTerminalCommand } from '../../sdk/src/tools/run-terminal-command'
+import { createDirectHostExecution } from '../../sdk/src/host-execution'
 import { runTask } from '../../evals/buffbench/run-buffbench'
 import { analyzeAllTasks } from '../../evals/buffbench/meta-analyzer'
 import { withEvaluationEnvironment } from '../../evals/buffbench/evaluation-environment'
@@ -340,6 +341,19 @@ export async function runEvaluatorIsolationFixture(root: string) {
     }
     if (!rejectedCallback)
       throw new Error('Nonserializable host callback was accepted')
+    const trustedStop = new AbortController()
+    const trustedHost = createDirectHostExecution({
+      cwd: workspace, projectRoot: workspace, signal: trustedStop.signal,
+      limit: { kind: 'finite', durationMs: 10_000 },
+      hostConfiguration: {
+        environment: { ...process.env }, platform: process.platform,
+        invocationCwd: workspace, projectRoot: workspace,
+        home: { kind: 'none' }, globals: { kind: 'disabled' }, selection: { kind: 'none' },
+        trust: { ancestorConfig: false, projectReadableRoots: false },
+      },
+    })
+    if (!trustedHost.ok) throw new Error(`Trusted SDK host unavailable: ${trustedHost.cause}`)
+    const { executionContext, hostServices } = trustedHost.value
     const trusted = await runTerminalCommand({
       command: 'printf \'sentinel=%s\n\' "$B30_CONTROLLER_SENTINEL"',
       process_type: 'SYNC',
@@ -348,7 +362,10 @@ export async function runEvaluatorIsolationFixture(root: string) {
       cwd: workspace,
       projectRoot: workspace,
       timeout_seconds: 10,
-    })
+      executionContext,
+      terminalShell: hostServices.terminalShell,
+      getTerminalLaunchMetadata: hostServices.getTerminalLaunchMetadata,
+    }).finally(() => trustedStop.abort(new Error('Trusted SDK fixture settled')))
     if ((trusted[0] as any)?.value?.stdout !== 'sentinel=controller-only\n')
       throw new Error('Trusted SDK environment compatibility changed')
     const report = {

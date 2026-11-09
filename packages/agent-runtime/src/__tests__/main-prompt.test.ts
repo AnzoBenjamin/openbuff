@@ -343,6 +343,18 @@ describe('mainPrompt', () => {
         content: 'Hello, world!',
       }),
       signal: expect.any(AbortSignal),
+      // The tool-call identity is stamped with the run id the host mints for
+      // the session (the shared fixture's startAgentRun returns 'test-run-id'),
+      // which is not a member of mainPromptBaseParams.
+      executionIdentity: expect.objectContaining({
+        rootRunId: 'test-run-id',
+        runId: 'test-run-id',
+        agentId: sessionState.mainAgentState.agentId,
+        actionId: expect.any(String),
+        attemptId: expect.any(String),
+        basisId: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      }),
+      executionRequestHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
     })
   })
 

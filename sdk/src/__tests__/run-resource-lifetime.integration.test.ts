@@ -20,7 +20,7 @@ import type { RunState } from '../run-state'
 type PeerEvent = { event: string; at: number; pid?: number; method?: string; signal?: string; code?: number | null }
 type OwnedChild = { child: ChildProcess; peer: boolean; closed: boolean; close: Promise<void> }
 type LifetimeFixture = {
-  name: string; root: string; peerFile: string; peerLog: string
+  name: string; root: string; peerFile: string; peerLog: string; nodeExecutable: string
   record: (event: Omit<PeerEvent, 'at'>) => void
   stop: AbortController; children: OwnedChild[]; execution: LaunchEvent[]
   peerEvents: () => PeerEvent[]; parentEvents: () => PeerEvent[]
@@ -64,6 +64,7 @@ const program: AgentDefinition = {
 }
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
+const shellArg = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 async function waitUntil(predicate: () => boolean, graceMs: number): Promise<boolean> {
   const until = performance.now() + graceMs
   while (!predicate() && performance.now() < until) await delay(10)
@@ -73,6 +74,8 @@ function readEvents(file: string): PeerEvent[] {
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : []
 }
 function fixture(name: string): LifetimeFixture {
+  const nodeExecutable = Bun.which('node')
+  if (!nodeExecutable) throw new Error('The real resource lifetime fixture requires Node on PATH')
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-resource-lifetime-'))
   const peerFile = path.join(root, 'peer.cjs'), peerLog = path.join(root, 'peer.jsonl'), parentLog = path.join(root, 'parent.jsonl')
   fs.copyFileSync(path.join(import.meta.dir, 'fixtures/b19-resource-peer.cjs'), peerFile)
@@ -107,7 +110,7 @@ function fixture(name: string): LifetimeFixture {
     recordExecution: event => { execution.push(event) },
   }
   const client = new OpenbuffClient(options)
-  const result = { name, root, peerFile, peerLog, record, stop, children, execution,
+  const result = { name, root, peerFile, peerLog, nodeExecutable, record, stop, children, execution,
     peerEvents: () => readEvents(peerLog), parentEvents: () => readEvents(parentLog),
     run: (calls: unknown[], extra: OpenbuffClientOptions = {}) => client.run({ agent: program, prompt: JSON.stringify(calls), ...extra, signal: stop.signal }),
   }
@@ -118,7 +121,7 @@ function fixture(name: string): LifetimeFixture {
 describe('B19 actual SDK run resource lifetime', () => {
   test('normal completion closes its real reusable MCP child', async () => {
     const f = fixture('normal-mcp')
-    const config: MCPConfig = { type: 'stdio', command: '/usr/bin/node', args: [f.peerFile, 'mcp', f.peerLog], env: {} }
+    const config: MCPConfig = { type: 'stdio', command: f.nodeExecutable, args: [f.peerFile, 'mcp', f.peerLog], env: {} }
     markMCPConfigOrigin(config, 'project')
     const result = await f.run([{ toolName: 'peer__record', input: {} }, { toolName: 'peer__record', input: {} }], { mcpServers: { peer: config } })
     f.record({ event: 'run-returned' })
@@ -157,7 +160,7 @@ describe('B19 actual SDK run resource lifetime', () => {
   test('normal completion preserves a transferred detached child until its finite cap', async () => {
     const f = fixture('normal-detached')
     const result = await f.run([{ toolName: 'run_terminal_command', input: {
-      command: `exec /usr/bin/node '${f.peerFile}' background '${f.peerLog}'`, process_type: 'BACKGROUND', detach: true, timeout_seconds: 1.5,
+      command: `exec ${shellArg(f.nodeExecutable)} ${shellArg(f.peerFile)} background ${shellArg(f.peerLog)}`, process_type: 'BACKGROUND', detach: true, timeout_seconds: 1.5,
     } }])
     f.record({ event: 'run-returned' })
     expect(result.output.type).toBe('structuredOutput')

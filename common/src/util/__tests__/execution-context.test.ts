@@ -589,10 +589,13 @@ describe('authenticated execution authority', () => {
   })
 
   test('actual Node child receives exact replacement env and supplies actual spawn observation', async () => {
+    const nodeExecutable = Bun.which('node')
+    if (!nodeExecutable) throw new Error('The real process fixture requires Node on PATH')
     const owned = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-b19-child-env-'))
     const recorder = path.join(owned, 'observed-env.json')
     const h = harness({ inheritEnv: false, childOverrides: { PROJECT_VALUE: 'allowed-real', OPENAI_API_KEY: 'sentinel' } })
     const launch = value(h.action({ kind: 'finite', durationMs: 5_000 }).execution.prepareTarget({ target: h.target({
+      executable: nodeExecutable,
       cwd: owned,
       argv: ['-e', 'require("node:fs").writeFileSync(process.argv[1],JSON.stringify({value:process.env.PROJECT_VALUE,credential:process.env.OPENAI_API_KEY??null,home:process.env.HOME??null}))', recorder],
     }) }))
