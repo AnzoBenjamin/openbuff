@@ -393,8 +393,13 @@ export function extractPinnedContextBlocks(messages: Message[]): string[] {
       )) {
         const tag = match[1]
         if (!newestByTag.has(tag)) newestByTag.set(tag, match[0])
+        // Both newest values are now known. Older transcript bodies cannot
+        // change them and can be megabytes long on a continued turn.
+        if (newestByTag.size === 2) break
       }
+      if (newestByTag.size === 2) break
     }
+    if (newestByTag.size === 2) break
   }
   return ['pinned_active_work_state', 'knowledge_memory'].flatMap((tag) => {
     const block = newestByTag.get(tag)

@@ -10,6 +10,8 @@ import {
   type Stats,
 } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises'
+import { checkSQLiteIntegrity } from './sqlite-integrity-check'
 
 import {
   MemoryAppendRequestSchema,
@@ -557,7 +559,10 @@ export class BunSQLiteMemoryRepository
       }
       const preparedPath = prepareDatabasePath(options)
       const timeout = boundedBusyTimeout(options.busyTimeoutMs)
-      preflightExistingDatabase(preparedPath)
+      await preflightExistingDatabase(preparedPath)
+      // The integrity scan yields to a worker. Recheck the admitted file
+      // identity before any writable open after that asynchronous boundary.
+      if (preparedPath.existingIdentity) verifyOpenedDatabasePath(preparedPath)
       database = new Database(preparedPath.databasePath, {
         create: true,
         strict: true,
@@ -1904,10 +1909,15 @@ export class BunSQLiteMemoryRepository
     try {
       this.requireBoundProject(parsed.data.projectId)
       const scan = scanQueryRows(this.database, parsed.data.projectId)
-      const events = scan.rows
-        .reverse()
-        .filter((row) => CANONICAL_EVENT_TYPES.has(row.event_type))
-        .map(envelopeFromRow)
+      const events: MemoryEventEnvelope[] = []
+      const rows = scan.rows.reverse()
+      for (let index = 0; index < rows.length; index++) {
+        if (index % 128 === 0) await yieldToEventLoop()
+        const row = rows[index]!
+        if (CANONICAL_EVENT_TYPES.has(row.event_type)) {
+          events.push(envelopeFromRow(row))
+        }
+      }
       return {
         outcome: 'result',
         result: await buildLexicalResult(
@@ -2858,7 +2868,7 @@ function secureDatabaseFiles(prepared: PreparedDatabasePath): void {
   }
 }
 
-function preflightExistingDatabase(prepared: PreparedDatabasePath): void {
+async function preflightExistingDatabase(prepared: PreparedDatabasePath): Promise<void> {
   if (!prepared.existingIdentity) return
   for (const path of databasePaths(prepared.databasePath)) {
     const entry = lstatExisting(path)
@@ -2875,11 +2885,6 @@ function preflightExistingDatabase(prepared: PreparedDatabasePath): void {
       'PRAGMA user_version',
       'user_version',
     )
-    if (
-      readPragmaString(database, 'PRAGMA quick_check(1)', 'quick_check') !==
-      'ok'
-    )
-      throw corruptStoreError()
     if (version > SCHEMA_VERSION) {
       throw new MemoryV2StorageError({
         kind: 'incompatible',
@@ -2890,6 +2895,11 @@ function preflightExistingDatabase(prepared: PreparedDatabasePath): void {
     if (version >= 1 && version <= SCHEMA_VERSION)
       validateSchemaShape(database, version)
     else if (version !== 0) throw incompatibleSchemaError()
+    // Keep the corruption gate before every writable open, but run its full
+    // database scan off the TUI thread. Worker failure also refuses the open.
+    if (!(await checkSQLiteIntegrity(prepared.databasePath))) {
+      throw corruptStoreError()
+    }
   } finally {
     database?.close()
   }
@@ -4736,7 +4746,9 @@ async function buildLexicalResult(
   // historicalContext can resolve the tail of a supersession chain.
   const supersededBy = new Map<string, string>()
 
+  let foldedEvents = 0
   for (const event of events) {
+    if (foldedEvents++ % 128 === 0) await yieldToEventLoop()
     if (event.eventType === 'task.created') {
       tasks.set(event.payload.taskId, {
         taskId: event.payload.taskId,

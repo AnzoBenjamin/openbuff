@@ -885,22 +885,9 @@ export const runAgentStep = async (
       model,
       duration: Date.now() - startTime,
       contextTokenCount: agentState.contextTokenCount,
-      // Limit debug-log message history to the most recent 50 messages to
-      // avoid MB-sized log lines on long sessions. Reverse so the most recent
-      // message appears first. M1-T5: secrets are redacted from logged prompt
-      // bytes (system prompt embeds shell config contents; transcripts can
-      // carry secret file contents read during the run).
-      agentMessages: agentState.messageHistory
-        .slice(-50)
-        .reverse()
-        .map(redactMessageForLog),
-      system: redactSecretValues(system),
-      // M1-T5: prompt is a string or undefined here (the params type pins it);
-      // array-shaped message content above is redacted per text part.
-      prompt:
-        typeof prompt === 'string' ? redactSecretValues(prompt) : undefined,
-      params: spawnParams,
-      agentContext,
+      messageCount: agentState.messageHistory.length,
+      systemChars: system.length,
+      promptChars: prompt?.length ?? 0,
       systemTokens,
       agentTemplate: {
         id: agentTemplate.id,
@@ -911,7 +898,6 @@ export const runAgentStep = async (
         spawnableAgents: agentTemplate.spawnableAgents,
         mcpServerNames: Object.keys(agentTemplate.mcpServers ?? {}),
       },
-      tools: params.tools,
     },
     `Start agent ${agentType} step ${iterationNum} (${userInputId}${prompt ? ` - Prompt: ${prompt.slice(0, 20)}` : ''})`,
   )
@@ -1420,17 +1406,13 @@ export const runAgentStep = async (
       iteration: iterationNum,
       agentId: agentState.agentId,
       model,
-      prompt,
+      promptChars: prompt?.length ?? 0,
       shouldEndTurn,
       duration: Date.now() - startTime,
-      fullResponse,
-      finalMessageHistoryWithToolResults: agentState.messageHistory
-        .concat()
-        .reverse(),
-      toolCalls,
-      toolResults,
-      agentContext,
-      fullResponseChunks,
+      fullResponseChars: fullResponse.length,
+      messageCount: agentState.messageHistory.length,
+      toolCallCount: toolCalls.length,
+      toolResultCount: toolResults.length,
       stepCreditsUsed,
       stepCacheInputTokens,
       stepCacheTotalInputTokens,

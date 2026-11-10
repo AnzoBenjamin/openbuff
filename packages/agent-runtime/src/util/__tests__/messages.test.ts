@@ -63,6 +63,19 @@ function isToolCallPart(part: unknown): part is ToolCallPart {
 }
 
 describe('extractPinnedContextBlocks', () => {
+  it('stops visiting older history once both newest pinned blocks are found', () => {
+    const older = userMessage('irrelevant large transcript')
+    Object.defineProperty(older, 'content', { get() { throw new Error('old history visited') } })
+    expect(extractPinnedContextBlocks([
+      older,
+      userMessage('<knowledge_memory>current</knowledge_memory>'),
+      userMessage('<pinned_active_work_state>current task</pinned_active_work_state>'),
+    ])).toEqual([
+      '<pinned_active_work_state>current task</pinned_active_work_state>',
+      '<knowledge_memory>current</knowledge_memory>',
+    ])
+  })
+
   it('returns only the newest authoritative block of each kind', () => {
     const messages: Message[] = [
       userMessage(

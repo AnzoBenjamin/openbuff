@@ -1719,7 +1719,7 @@ export async function* promptAiSdkStream(
               logger.error(
                 {
                   chunk: { ...chunkValue, error: undefined },
-                  error: getErrorObject(chunkValue.error),
+                  error: getErrorObject(chunkValue.error, { includeRequestBody: false }),
                   model: params.model,
                 },
                 'Error in AI SDK stream',
@@ -2065,7 +2065,7 @@ export async function* promptAiSdkStream(
           retryBudget.waitMs += delayMs
           logger.warn(
             {
-              error: getErrorObject(error),
+              error: getErrorObject(error, { includeRequestBody: false }),
               attempt: attempt + 1,
               maxRetries:
                 getRouteAttemptLimit(policy, retryBudget, attemptModel) - 1,

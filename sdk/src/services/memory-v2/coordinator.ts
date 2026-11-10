@@ -759,7 +759,7 @@ export class MemoryV2Coordinator {
         return true
       }
       this.logger?.warn(
-        { outcome: outcome.outcome, code: outcome.error.code, attempt },
+        { outcome: outcome.outcome, code: outcome.error.code, message: outcome.error.message, attempt },
         'Memory V2 append was not committed',
       )
       const conflict = outcome.error.code === 'conflict' && outcome.error.retryable
@@ -2144,7 +2144,10 @@ export class MemoryV2Coordinator {
       queryEvent,
       createMemoryEventDraft({
         ...common,
-        sourceIndex: 1,
+        // Index 1 identifies created -> active at turn startup. A terminal
+        // transition needs its own identity so the append-only store can
+        // accept both events and replay this decision idempotently.
+        sourceIndex: 2,
         eventType: 'task.transitioned',
         payload: {
           payloadSchemaVersion: 1,

@@ -1,9 +1,8 @@
 /**
  * Log-safe size digest for the SDK run config. The config carries per-run
- * transcript state (the previous run state, agent definitions, and streaming
- * closures), so log call sites emit per-top-level-field byte lengths instead
- * of serializing the config — transcript-bearing bodies are only ever
- * measured, never logged.
+ * transcript state, so measure scalar bytes and shallow collection counts.
+ * Measuring JSON byte lengths would serialize the entire prior session on
+ * every send, blocking the TUI even though the body never reaches the log.
  */
 
 export type RunConfigSizeDigest = Record<string, number>
@@ -18,35 +17,38 @@ const measureValue = (value: unknown): number | undefined => {
   if (typeof value === 'number' || typeof value === 'boolean') {
     return String(value).length
   }
-  try {
-    const serialized = JSON.stringify(value)
-    return serialized === undefined
-      ? undefined
-      : Buffer.byteLength(serialized, 'utf8')
-  } catch {
-    // A circular or otherwise unserializable body is deliberately worth
-    // zero log bytes: printing it would defeat the purpose of a size digest.
-    return undefined
-  }
+  return undefined
 }
 
 /**
- * Per-top-level-field byte-length digest of a run config: each key maps to
- * the serialized byte length of its value (UTF-8 byteLength for strings,
- * JSON byte length for structured values). Functions, symbols, and absent
- * values are skipped. Never includes any field's body content.
+ * Scalars retain byte lengths; structured fields use Items/Fields suffixes
+ * for shallow counts. Never traverses or serializes transcript bodies.
  */
 export function describeRunConfigForLog(
   runConfig: unknown,
 ): RunConfigSizeDigest {
-  if (runConfig === null || typeof runConfig !== 'object' ||
-      Array.isArray(runConfig)) {
+  if (
+    runConfig === null ||
+    typeof runConfig !== 'object' ||
+    Array.isArray(runConfig)
+  ) {
     return {}
   }
   const digest: RunConfigSizeDigest = {}
   for (const [key, value] of Object.entries(runConfig)) {
-    if (value === undefined || typeof value === 'function' ||
-        typeof value === 'symbol') {
+    if (
+      value === undefined ||
+      typeof value === 'function' ||
+      typeof value === 'symbol'
+    ) {
+      continue
+    }
+    if (Array.isArray(value)) {
+      digest[`${key}Items`] = value.length
+      continue
+    }
+    if (value !== null && typeof value === 'object') {
+      digest[`${key}Fields`] = Object.keys(value).length
       continue
     }
     const bytes = measureValue(value)

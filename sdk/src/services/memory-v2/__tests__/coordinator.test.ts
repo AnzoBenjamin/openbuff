@@ -1081,6 +1081,12 @@ describe('MemoryV2Coordinator lifecycle', () => {
 
   test.each([
     {
+      name: 'completed',
+      output: { type: 'structuredOutput' as const, value: {} },
+      signal: undefined,
+      expected: 'completed' as const,
+    },
+    {
       name: 'failed',
       output: { type: 'error' as const, message: 'run failed' },
       signal: undefined,
@@ -1110,6 +1116,8 @@ describe('MemoryV2Coordinator lifecycle', () => {
       await coordinator.finishTurn({ agentState: state, output, signal })
 
       expect(state.memoryV2!.turn.status).toBe(expected)
+      const events = allEvents(repository)
+      expect(new Set(events.map((event) => event.eventId)).size).toBe(events.length)
       expect(allEvents(repository).at(-1)).toMatchObject({
         eventType: 'session.ended',
         payload: { status: expected },
