@@ -1,5 +1,10 @@
 # tmux Knowledge for CLI Testing
 
+## OpenTUI 0.8 verification
+
+- Use Bun 1.4.4 and OpenTUI 0.8.3 for current CLI captures. The launch screen has a compact wordmark and project path; tool results use grouped readable fields with Inspect for captured data.
+- Start a fresh pane for each launch scenario. Native component fixtures must draw/flush a frame before reading text or geometry; light-theme Markdown checks also assert captured foreground colors. Current light/dark previews and live launch scope are recorded in [the UI refinement](../docs/design/cli-overhaul/REFINEMENT.md).
+
 ## Long-run Checkpoint Verification
 
 - When exercising a long agent run, distinguish a resumable `Agent step limit reached` checkpoint from a crash. The checkpoint should remain visible in the final capture and must not be rendered as `No response from agent`.

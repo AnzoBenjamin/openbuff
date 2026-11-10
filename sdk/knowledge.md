@@ -1,5 +1,11 @@
 # SDK Package Knowledge
 
+## Routine execution and CI controls
+
+- Balanced approval permits routine Git reads and project scripts. Client-origin MCP startup retains separate process approval even when the interpreter is a known routine executable; trusted project/user startup registration and exact action binding stay authoritative.
+- Containment and sensitive-read fixtures select `sandbox.mode: "project"` explicitly. A host-profile control must choose a profile distinct from the captured default, and direct terminal fixtures inherit that captured profile.
+- Full SDK CI discovery includes every non-integration `.test.ts` and `.test.tsx` file under `bun test --isolate`. Local server/IPC scenarios require a host that permits those operations. The current repaired schedule passes 5,429 tests across 175 files.
+
 ## Filesystem sandbox configuration
 
 - Agent runs default to unrestricted filesystem and terminal path access. `sandbox.mode: "project"` opts into tool-level containment; absolute `sandbox.allowPaths` entries grant additional writable directories through the captured configuration trust gate. This policy does not provide OS process or network isolation.

@@ -1,5 +1,10 @@
 # Common Package Knowledge
 
+## Current supervised schema transport
+
+- `serializeSchemaMemberForTransport` first attempts exact live-Zod projection, then a reifiable advisory projection, and finally `true` for a live schema that cannot be represented. These transported members advertise provider input/output shape; execution continues against authoritative live validators.
+- Degraded Zod internals and invalid JSON Schema still fail transport. Tests cover exact, advisory and permissive advertisements separately from execution validation.
+
 ## Filesystem sandbox policies
 
 - `common/src/util/filesystem-sandbox.ts` captures immutable run policies with `AsyncLocalStorage` and filesystem policy tokens. Agent runs select unrestricted access by default; standalone path-containment utilities retain their restricted contract.

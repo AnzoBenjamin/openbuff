@@ -219,6 +219,62 @@ test('dedicated timestamp-only updates are allowed', () =>
     ).toEqual([])
   }))
 
+test('a superseded release remains verified against its introduction lock', () =>
+  withRepo((root, base) => {
+    record(root, addition())
+    commit(root, 'record the currently locked release')
+    const upgraded: ProvenanceEntry = {
+      ...ajv,
+      integrity: `sha512-${Buffer.alloc(64, 5).toString('base64')}`,
+      tarball: canonicalTarball('ajv', '6.12.7'),
+    }
+    record(root, {
+      ...addition(),
+      packages: { ...addition().packages, 'ajv@6.12.7': upgraded },
+    })
+    commit(root, 'record the upgrade before changing dependencies')
+    write(
+      root,
+      'bun.lock',
+      lock({ ...baseline().packages, 'ajv@6.12.7': upgraded }),
+    )
+    const head = commit(root, 'upgrade the dependency and its lock')
+    const result = checkProvenanceChanges(root, {
+      eventName: 'pull_request',
+      base,
+      head,
+    })
+    expect(result.findings).toEqual([])
+    expect(result.checkedCommits.flatMap((item) => item.added)).toEqual([
+      'ajv@6.12.6',
+      'ajv@6.12.7',
+    ])
+  }))
+
+test('a retired release with an unverified introduction still fails', () =>
+  withRepo((root, base) => {
+    record(root, {
+      ...baseline(),
+      packages: {
+        ...baseline().packages,
+        'ajv@6.12.6': { ...ajv, integrity: extra.integrity },
+      },
+    })
+    const introduced = commit(root, 'record an incorrect release checksum')
+    write(root, 'bun.lock', lock(baseline().packages))
+    const head = commit(root, 'remove the release from the final lock')
+    const result = checkProvenanceChanges(root, {
+      eventName: 'push',
+      before: base,
+      head,
+    })
+    expect(result.findings).toContainEqual({
+      commit: introduced,
+      message:
+        'ajv@6.12.6: integrity does not reconcile with the introduction lockfile.',
+    })
+  }))
+
 test('old release identity rewrites and deletions fail even when restored before the range head', () => {
   for (const mutate of [
     (value: ProvenanceRecord) => {

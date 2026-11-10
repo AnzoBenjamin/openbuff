@@ -172,6 +172,7 @@ function validateAddedRelease(
   spec: string,
   value: unknown,
   lock: Map<string, string>,
+  lockSource = 'head lockfile',
 ): string[] {
   const separator = spec.lastIndexOf('@')
   const name = spec.slice(0, separator)
@@ -217,7 +218,7 @@ function validateAddedRelease(
     findings.push(`${spec}: integrity must be canonical SHA-512 SRI.`)
   if (lock.get(spec) !== integrity)
     findings.push(
-      `${spec}: integrity does not reconcile with the head lockfile.`,
+      `${spec}: integrity does not reconcile with the ${lockSource}.`,
     )
   return findings
 }
@@ -324,10 +325,21 @@ export function checkProvenanceChanges(
       lock ??= parseLockIntegrities(
         git(root, ['show', `${range.head}:bun.lock`]),
       )
+      // An append-only record retains releases superseded within this PR.
+      // Prefer the final lock; a retired release must still reconcile with
+      // the immutable lock at its introduction, never merely be skipped.
+      const introductionLock = added.some((spec) => !lock!.has(spec))
+        ? parseLockIntegrities(git(root, ['show', `${sha}:bun.lock`]))
+        : undefined
       for (const spec of added)
         addFindings(
           sha,
-          validateAddedRelease(spec, after!.packages[spec], lock),
+          validateAddedRelease(
+            spec,
+            after!.packages[spec],
+            lock.has(spec) ? lock : introductionLock!,
+            lock.has(spec) ? 'head lockfile' : 'introduction lockfile',
+          ),
         )
     }
     checkedCommits.push({
