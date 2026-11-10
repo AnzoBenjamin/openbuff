@@ -21,6 +21,8 @@ export type EmbedFn = ((texts: string[]) => Promise<number[][]>) & {
    * example provider id, endpoint, and provider model), but never API keys.
    */
   cacheKey?: string
+  /** Host preference for slow local providers; cloud batches default to 64. */
+  maxBatchSize?: number
 }
 
 export interface FileVector {
@@ -124,6 +126,7 @@ export async function buildFileVectors(
     vector: number[]
   }> = [],
   diagnostics?: BuildFileVectorsDiagnostics,
+  checkpoint?: (vectors: readonly FileVector[]) => Promise<void>,
 ): Promise<FileVector[]> {
   // The exact embedding input is the durable identity. Path is part of that
   // input, so renames correctly invalidate vectors instead of reusing a vector
@@ -189,6 +192,7 @@ export async function buildFileVectors(
       diagnostics.skippedPaths.push(...skippedInBatch)
       diagnostics.skippedCount += skippedInBatch.length
     }
+    await checkpoint?.(vectors)
   }
   return vectors
 }

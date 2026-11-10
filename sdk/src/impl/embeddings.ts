@@ -19,6 +19,7 @@ import { getSystemProcessEnv } from '../env'
 /** Batch embedder shape shared with the indexer's semantic engine. */
 export type EmbedFn = ((texts: string[]) => Promise<number[][]>) & {
   cacheKey?: string
+  maxBatchSize?: number
 }
 
 export function createConfiguredEmbedder(
@@ -38,9 +39,15 @@ export function createConfiguredEmbedder(
 
   const { providerId, provider, providerModel, apiKey } = resolved
   const baseURL = provider.baseURL.replace(/\/$/, '')
+  const hostname = new URL(baseURL).hostname
+  const local =
+    hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
 
   const model = new OpenAICompatibleEmbeddingModel(providerModel, {
     provider: providerId,
+    // CPU-backed local endpoints can exceed the HTTP timeout on large
+    // batches. Keep their requests small and serial; cloud defaults stay fast.
+    ...(local ? { maxEmbeddingsPerCall: 8, supportsParallelCalls: false } : {}),
     url: ({ path }: { path: string }) => `${baseURL}${path}`,
     headers: () => (apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
   })
@@ -53,5 +60,6 @@ export function createConfiguredEmbedder(
   // Deliberately excludes credentials. These fields fully identify the
   // resolved endpoint/model whose vector space determines cache compatibility.
   embed.cacheKey = JSON.stringify({ providerId, baseURL, providerModel })
+  if (local) embed.maxBatchSize = 8
   return embed
 }

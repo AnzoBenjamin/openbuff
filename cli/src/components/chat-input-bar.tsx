@@ -281,7 +281,7 @@ export const ChatInputBar = ({
         title={askUserTitle}
         titleAlignment="left"
         style={{
-          width: Math.min(88, Math.max(1, separatorWidth - 2)),
+          width: '100%',
           flexGrow: 0,
           flexShrink: 0,
           paddingLeft: 1,

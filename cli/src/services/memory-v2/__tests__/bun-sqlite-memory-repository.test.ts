@@ -29,6 +29,7 @@ import {
   MemoryVerifyOutcomeSchema,
   MemoryVerifyRequestSchema,
   ProjectIdSchema,
+  ObservationIdSchema,
   TaskIdSchema,
   type MemoryAppendRequest,
   type MemoryEventDraft,
@@ -835,6 +836,33 @@ describe('BunSQLiteMemoryRepository', () => {
     })
     if (closedAppend.status === 'error')
       expect(closedAppend.error.message).not.toContain(repository.databasePath)
+  })
+
+  test('status integrity scans let the terminal event loop run', async () => {
+    const result = await BunSQLiteMemoryRepository.open({
+      repositoryRoot: temporaryRepository(),
+    })
+    if (result.status !== 'ok') throw new Error(result.error.message)
+    const repository = result.repository
+    let timerRan = false
+    const timer = setTimeout(() => {
+      timerRan = true
+    }, 0)
+    try {
+      const [health, kernel] = await Promise.all([
+        repository.health({
+          schemaVersion: 2,
+          projectId: ProjectIdSchema.parse('project-1'),
+        }),
+        repository.kernelHealth(),
+      ])
+      expect(health.status).toBe('healthy')
+      expect(kernel.status).toBe('healthy')
+      expect(timerRan).toBe(true)
+    } finally {
+      clearTimeout(timer)
+      await repository.close()
+    }
   })
 
   test('classifies a generic local filesystem failure as bounded nonretryable I/O', async () => {
@@ -2214,6 +2242,88 @@ describe('BunSQLiteMemoryRepository', () => {
     }
   })
 
+  test('normal queries omit forgotten evidence before byte admission and retain tombstones', async () => {
+    const repository = await open(temporaryRepository())
+    // A large old capture can no longer suppress all useful current memory.
+    // Use the low-level append port so the payload exceeds query admission.
+    await repository.appendEvents([
+      event('forgotten-large', {
+        eventType: 'observation.recorded',
+        payload: {
+          payloadSchemaVersion: 1,
+          observation: {
+            ...observationFixture('obs-forgotten-large'),
+            detail: '😀'.repeat(2_100_000),
+          },
+        },
+        metadata: {
+          projectId: 'project-1',
+          schemaVersion: 2,
+          eventSchemaVersion: 1,
+          sessionId: 'session-1',
+        },
+      }),
+    ])
+    await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [
+          canonicalDraft('claim.forgotten', 'forgotten-tombstone', {
+            payloadSchemaVersion: 1,
+            observationIds: ['obs-forgotten-large'],
+            reason: 'retention-policy',
+            requestedBy: 'test',
+            evidenceDisposition: 'retain-artifacts',
+          }),
+          canonicalDraft('observation.recorded', 'current-observation', {
+            payloadSchemaVersion: 1,
+            observation: observationFixture('obs-current'),
+          }),
+          canonicalDraft('evidence.verified', 'current-verified', {
+            payloadSchemaVersion: 1,
+            observationId: 'obs-current',
+            selector: evidenceFixture().selector,
+            verifier: 'test',
+            verifiedAt: '2025-01-02T03:05:05.000Z',
+            observedDigest: evidenceFixture().contentDigest,
+          }),
+        ],
+      }),
+    )
+    const request = MemoryRetrievalRequestSchema.parse({
+      schemaVersion: 2,
+      queryId: 'query:forgotten-budget',
+      projectId: 'project-1',
+      sessionId: 'session-2',
+      query: 'Discovery',
+      selectors: [],
+      artifactKinds: [],
+      includeHistorical: false,
+      maxResultsPerCategory: 10,
+    })
+    const normal = await repository.query(request)
+    expect(normal.outcome).toBe('result')
+    if (normal.outcome !== 'result') throw new Error('Query failed')
+    expect(normal.result.degradation.state).toBe('none')
+    expect(normal.result.verifiedKnowledge).toHaveLength(1)
+    expect(normal.result.verifiedKnowledge[0]?.observation.observationId).toBe(
+      ObservationIdSchema.parse('obs-current'),
+    )
+    const historical = await repository.query({
+      ...request,
+      includeHistorical: true,
+    })
+    expect(historical.outcome).toBe('result')
+    if (historical.outcome !== 'result') throw new Error('Query failed')
+    if (historical.result.degradation.state !== 'degraded') throw new Error('Historical admission should remain bounded')
+    expect(
+      historical.result.degradation.reasons.some(
+        (reason) => reason.code === 'resource-budget',
+      ),
+    ).toBe(true)
+  })
+
   test('uses UTF-8 byte admission and does not parse an excluded oversized newest row', async () => {
     const repository = await open(temporaryRepository())
     expect(
@@ -2686,14 +2796,18 @@ describe('BunSQLiteMemoryRepository', () => {
               completedAt: '2025-01-02T03:04:08.000Z',
             },
           ),
-          canonicalDraft('projection.rebuild.failed', 'current-rebuild-failed', {
-            payloadSchemaVersion: 1,
-            rebuildId: 'rebuild-2',
-            projectionNames: ['tasks'],
-            error: 'deterministic rebuild failure',
-            retryable: true,
-            failedAt: '2025-01-02T03:04:09.000Z',
-          }),
+          canonicalDraft(
+            'projection.rebuild.failed',
+            'current-rebuild-failed',
+            {
+              payloadSchemaVersion: 1,
+              rebuildId: 'rebuild-2',
+              projectionNames: ['tasks'],
+              error: 'deterministic rebuild failure',
+              retryable: true,
+              failedAt: '2025-01-02T03:04:09.000Z',
+            },
+          ),
         ],
       }),
     )
@@ -2958,10 +3072,14 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
   test('selectGCandidates returns stale and old events, excludes archived, and respects maxEvents', async () => {
     const repository = await open(temporaryRepository())
     const now = new Date().toISOString()
-    const oldObservation = canonicalDraft('observation.recorded', 'event:gc-old-1', {
-      payloadSchemaVersion: 1,
-      observation: observationFixture('gc-old-1', []),
-    })
+    const oldObservation = canonicalDraft(
+      'observation.recorded',
+      'event:gc-old-1',
+      {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('gc-old-1', []),
+      },
+    )
     const staleForgotten = MemoryEventDraftSchema.parse({
       schemaVersion: 2,
       eventSchemaVersion: 1,
@@ -3144,7 +3262,9 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
     for (const eventId of eventIds) expect(remainingIds).not.toContain(eventId)
     expect(remainingIds).toContain('event:gc-compact-archive')
     expect(
-      listed.events.find(({ eventId }) => eventId === 'event:gc-compact-archive')?.eventType,
+      listed.events.find(
+        ({ eventId }) => eventId === 'event:gc-compact-archive',
+      )?.eventType,
     ).toBe('claim.archived')
     const snapshot = await repository.getProjectionSnapshot()
     expect(snapshot.status).toBe('ok')
@@ -3163,7 +3283,9 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
     }
     const readable = await repository.listEvents()
     expect(readable.status).toBe('ok')
-    expect(await repository.getStoreStats({ projectId: 'project-1' })).toMatchObject({
+    expect(
+      await repository.getStoreStats({ projectId: 'project-1' }),
+    ).toMatchObject({
       eventCount: 1,
     })
   })
@@ -3202,7 +3324,11 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
     )
     const goodHash = `sha256:${createHash('sha256').update(JSON.stringify(archiveLines)).digest('hex')}`
     const archivedAt = new Date().toISOString()
-    const buildClaim = (archiveHash: string, archivedEventIds: string[], eventId: string) =>
+    const buildClaim = (
+      archiveHash: string,
+      archivedEventIds: string[],
+      eventId: string,
+    ) =>
       MemoryEventDraftSchema.parse({
         schemaVersion: 2,
         eventSchemaVersion: 1,
@@ -3221,11 +3347,20 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
         },
       })
     const badHash = `sha256:${'b'.repeat(64)}`
-    const badClaim = buildClaim(badHash, ['event:gc-reject-1', 'event:gc-reject-2'], 'event:gc-reject-bad')
+    const badClaim = buildClaim(
+      badHash,
+      ['event:gc-reject-1', 'event:gc-reject-2'],
+      'event:gc-reject-bad',
+    )
     const badFailure = await repository
       .privilegedCompact({
         projectId: ProjectIdSchema.parse('project-1'),
-        eventIds: ['event:gc-reject-1', 'event:gc-reject-2'] as unknown as Parameters<BunSQLiteMemoryRepository['privilegedCompact']>[0]['eventIds'],
+        eventIds: [
+          'event:gc-reject-1',
+          'event:gc-reject-2',
+        ] as unknown as Parameters<
+          BunSQLiteMemoryRepository['privilegedCompact']
+        >[0]['eventIds'],
         archiveClaimDraft: badClaim,
         archiveLines,
         archivePath: '.openbuff/memory/archive/gc-reject.jsonl',
@@ -3236,9 +3371,15 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
     expect(badFailure?.failure?.kind).toBe('invalid')
     expect(await countEvents()).toEqual(beforeIds)
     const unknownIds = ['event:gc-missing-1']
-    const unknownLines = unknownIds.map((eventId) => JSON.stringify({ eventId }))
+    const unknownLines = unknownIds.map((eventId) =>
+      JSON.stringify({ eventId }),
+    )
     const unknownHash = `sha256:${createHash('sha256').update(JSON.stringify(unknownLines)).digest('hex')}`
-    const unknownClaim = buildClaim(unknownHash, unknownIds, 'event:gc-reject-unknown')
+    const unknownClaim = buildClaim(
+      unknownHash,
+      unknownIds,
+      'event:gc-reject-unknown',
+    )
     const unknownFailure = await repository
       .privilegedCompact({
         projectId: ProjectIdSchema.parse('project-1'),
@@ -3819,11 +3960,10 @@ describe('BunSQLiteMemoryRepository usefulness-scored retrieval ordering', () =>
             schemaVersion: 2,
             projectId: 'project-1',
             events: buildObservations().map((observation, index) =>
-              canonicalDraft(
-                'observation.recorded',
-                `fold-control-${index}`,
-                { payloadSchemaVersion: 1, observation },
-              ),
+              canonicalDraft('observation.recorded', `fold-control-${index}`, {
+                payloadSchemaVersion: 1,
+                observation,
+              }),
             ),
           }),
         )
@@ -3852,11 +3992,10 @@ describe('BunSQLiteMemoryRepository usefulness-scored retrieval ordering', () =>
             projectId: 'project-1',
             events: [
               ...buildObservations().map((observation, index) =>
-                canonicalDraft(
-                  'observation.recorded',
-                  `fold-used-${index}`,
-                  { payloadSchemaVersion: 1, observation },
-                ),
+                canonicalDraft('observation.recorded', `fold-used-${index}`, {
+                  payloadSchemaVersion: 1,
+                  observation,
+                }),
               ),
               canonicalDraft('observation.reused', 'fold-used-event', {
                 payloadSchemaVersion: 1,
@@ -3882,9 +4021,12 @@ describe('BunSQLiteMemoryRepository usefulness-scored retrieval ordering', () =>
       ),
     ).toEqual(['fold-first', 'fold-second'])
     const scoredEntry = used.result.reusableDiscovery[0]
-    expect(scoredEntry?.reasons.some(({ code, detail }) =>
-      code === 'reusability' && detail === 'P4 usage correlation score.',
-    )).toBe(true)
+    expect(
+      scoredEntry?.reasons.some(
+        ({ code, detail }) =>
+          code === 'reusability' && detail === 'P4 usage correlation score.',
+      ),
+    ).toBe(true)
     expect(scoredEntry?.score).toBeLessThanOrEqual(1)
   })
 })
@@ -4043,16 +4185,24 @@ describe('P9 invariant enforcement (store)', () => {
 
   test('P9: projection replay is deterministic across rebuilds for new event types', async () => {
     const repository = await open(temporaryRepository())
-    const observation = canonicalDraft('observation.recorded', 'event:p9-replay-obs', {
-      payloadSchemaVersion: 1,
-      observation: observationFixture('p9-replay-target', []),
-    })
-    const reused = canonicalDraft('observation.reused', 'event:p9-replay-reused', {
-      payloadSchemaVersion: 1,
-      turnId: 'input:p9-replay',
-      used: [{ observationId: 'p9-replay-target', mechanism: 'gate-skip' }],
-      ignored: [],
-    })
+    const observation = canonicalDraft(
+      'observation.recorded',
+      'event:p9-replay-obs',
+      {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('p9-replay-target', []),
+      },
+    )
+    const reused = canonicalDraft(
+      'observation.reused',
+      'event:p9-replay-reused',
+      {
+        payloadSchemaVersion: 1,
+        turnId: 'input:p9-replay',
+        used: [{ observationId: 'p9-replay-target', mechanism: 'gate-skip' }],
+        ignored: [],
+      },
+    )
     const archived = MemoryEventDraftSchema.parse({
       schemaVersion: 2,
       eventSchemaVersion: 1,
@@ -4438,15 +4588,23 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
               // create a contradiction topic (no overmatch).
               canonicalDraft('observation.recorded', 'hex-key-a-event', {
                 payloadSchemaVersion: 1,
-                observation: observationWithMetadata('hex-key-a', 'src/hex-a.ts', {
-                  claimId: hexUnderOtherKey,
-                }),
+                observation: observationWithMetadata(
+                  'hex-key-a',
+                  'src/hex-a.ts',
+                  {
+                    claimId: hexUnderOtherKey,
+                  },
+                ),
               }),
               canonicalDraft('observation.recorded', 'hex-key-b-event', {
                 payloadSchemaVersion: 1,
-                observation: observationWithMetadata('hex-key-b', 'src/hex-b.ts', {
-                  claimId: hexUnderOtherKey,
-                }),
+                observation: observationWithMetadata(
+                  'hex-key-b',
+                  'src/hex-b.ts',
+                  {
+                    claimId: hexUnderOtherKey,
+                  },
+                ),
               }),
               // Shared non-hex stableChunkIds under the canonical key must
               // group (no undermatch).
@@ -4576,10 +4734,14 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
             schemaVersion: 2,
             projectId: 'project-1',
             events: buildObservations().map((observation, index) =>
-              canonicalDraft('observation.recorded', `reinforce-control-${index}`, {
-                payloadSchemaVersion: 1,
-                observation,
-              }),
+              canonicalDraft(
+                'observation.recorded',
+                `reinforce-control-${index}`,
+                {
+                  payloadSchemaVersion: 1,
+                  observation,
+                },
+              ),
             ),
           }),
         )
@@ -4606,10 +4768,14 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
             projectId: 'project-1',
             events: [
               ...buildObservations().map((observation, index) =>
-                canonicalDraft('observation.recorded', `reinforce-used-${index}`, {
-                  payloadSchemaVersion: 1,
-                  observation,
-                }),
+                canonicalDraft(
+                  'observation.recorded',
+                  `reinforce-used-${index}`,
+                  {
+                    payloadSchemaVersion: 1,
+                    observation,
+                  },
+                ),
               ),
               canonicalDraft('claim.reinforced', 'reinforce-event', {
                 payloadSchemaVersion: 1,
@@ -5056,7 +5222,9 @@ describe('context archive persistence', () => {
     })
     expect(result).toEqual({ persisted: 2, skipped: 0 })
 
-    const loaded = await repository.loadContextArchiveSnapshots({ runId: 'run-1' })
+    const loaded = await repository.loadContextArchiveSnapshots({
+      runId: 'run-1',
+    })
     expect(loaded.snapshots.map((s) => s.archivedAt)).toEqual([
       NOW - 2 * HOUR,
       NOW - 3 * HOUR,
@@ -5064,7 +5232,9 @@ describe('context archive persistence', () => {
     const [evicted, compacted] = loaded.snapshots
     expect(evicted!.action).toBe('tool_result_eviction')
     expect(evicted!.steps).toEqual([9, 11])
-    expect(evicted!.reason).toBe('deterministic tool-result eviction (stale recency)')
+    expect(evicted!.reason).toBe(
+      'deterministic tool-result eviction (stale recency)',
+    )
     expect(evicted!.stepBase).toBeUndefined()
     expect(compacted!.stepBase).toBe(4)
     expect(compacted!.action).toBe('semantic_compaction')
@@ -5075,9 +5245,7 @@ describe('context archive persistence', () => {
       runId: 'run-1',
       limit: 1,
     })
-    expect(limited.snapshots.map((s) => s.archivedAt)).toEqual([
-      NOW - 2 * HOUR,
-    ])
+    expect(limited.snapshots.map((s) => s.archivedAt)).toEqual([NOW - 2 * HOUR])
 
     // Without runId the load spans runs.
     await repository.persistContextArchiveSnapshots({
@@ -5125,7 +5293,9 @@ describe('context archive persistence', () => {
       }),
     ).toEqual({ persisted: 2, skipped: 0 })
     expect(messageCount()).toBe(4)
-    const loaded = await repository.loadContextArchiveSnapshots({ runId: 'run-1' })
+    const loaded = await repository.loadContextArchiveSnapshots({
+      runId: 'run-1',
+    })
     expect(loaded.snapshots).toHaveLength(2)
 
     // A partial re-persist replaces the whole run: the dropped snapshot is
@@ -5150,8 +5320,14 @@ describe('context archive persistence', () => {
         archiveSnapshotFixture({
           archivedAt: 5000,
           messages: [
-            { role: 'user', content: [{ type: 'text', text: 'go' }] } as Message,
-            toolResultMessage('call-1', 'archive-search-fact-xyz trailing context'),
+            {
+              role: 'user',
+              content: [{ type: 'text', text: 'go' }],
+            } as Message,
+            toolResultMessage(
+              'call-1',
+              'archive-search-fact-xyz trailing context',
+            ),
           ],
         }),
       ],
@@ -5181,7 +5357,9 @@ describe('context archive persistence', () => {
     // Case-insensitive.
     expect(
       (
-        await repository.searchContextArchive({ query: 'ARCHIVE-SEARCH-FACT-XYZ' })
+        await repository.searchContextArchive({
+          query: 'ARCHIVE-SEARCH-FACT-XYZ',
+        })
       ).matches,
     ).toHaveLength(1)
     // A query with no FTS-expressible term is empty, not an error.
@@ -5200,7 +5378,10 @@ describe('context archive persistence', () => {
         archiveSnapshotFixture({
           archivedAt: 7000,
           messages: [
-            { role: 'user', content: [{ type: 'text', text: 'go' }] } as Message,
+            {
+              role: 'user',
+              content: [{ type: 'text', text: 'go' }],
+            } as Message,
             toolResultMessage('call-like', 'like-scan-fact-abc'),
           ],
         }),
@@ -5301,7 +5482,9 @@ describe('context archive persistence', () => {
         snapshots: [archiveSnapshotFixture()],
       }),
     ).toEqual({ persisted: 0, skipped: 1 })
-    expect(await repository.searchContextArchive({ query: 'anything' })).toEqual({
+    expect(
+      await repository.searchContextArchive({ query: 'anything' }),
+    ).toEqual({
       matches: [],
       snapshotsSearched: 0,
     })

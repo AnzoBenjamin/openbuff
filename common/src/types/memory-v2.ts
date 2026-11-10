@@ -1463,7 +1463,11 @@ export const MemoryReuseReceiptV1Schema = z
           decision: z.enum(['skip', 'narrow', 'full']),
           served: z.number().int().nonnegative(),
           gaps: z.number().int().nonnegative(),
-          coveredStableChunkIds: z.array(z.string().min(1).max(128)).max(32).optional(),
+          reason: z.string().max(64).optional(),
+          coveredStableChunkIds: z
+            .array(z.string().min(1).max(128))
+            .max(32)
+            .optional(),
         }),
       )
       .max(32)

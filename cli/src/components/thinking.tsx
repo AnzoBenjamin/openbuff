@@ -103,6 +103,9 @@ export const Thinking = memo(
             {durationLabel ? (
               <span fg={theme.muted}>{durationLabel}</span>
             ) : null}
+            {!isThinkingComplete ? (
+              <span fg={theme.muted}> · receiving reasoning</span>
+            ) : null}
           </text>
           {showPreview && (
             <box

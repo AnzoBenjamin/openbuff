@@ -3,11 +3,19 @@ import React from 'react'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import stringWidth from 'string-width'
 import { OutputReaderScreen } from '../output-reader-screen'
+import type { MultilineInputHandle } from '../multiline-input'
 import { AgentBranchItem } from '../blocks/agent-branch-item'
 import { MultipleChoiceForm } from '../ask-user'
 import { AgentModeToggle } from '../agent-mode-toggle'
+import { ChatInputBar } from '../chat-input-bar'
+import { CommandPaletteScreen } from '../command-palette-screen'
+import { AskUserBridge } from '@codebuff/common/utils/ask-user-bridge'
 import { createJsonDocument } from '../../utils/output-document'
-import { initializeThemeStore } from '../../hooks/use-theme'
+import {
+  initializeThemeStore,
+  useTheme,
+  useThemeStore,
+} from '../../hooks/use-theme'
 import { useChatStore } from '../../state/chat-store'
 import { useOutputReaderStore } from '../../state/output-reader-store'
 
@@ -18,6 +26,7 @@ mkdirSync(frames, { recursive: true })
 afterEach(() => {
   useChatStore.getState().reset()
   useOutputReaderStore.getState().close()
+  useThemeStore.getState().setThemeName('dark')
 })
 async function mount(
   node: React.ReactNode,
@@ -164,7 +173,7 @@ nativeTest(
             <text>Conversation remains visible</text>
           </box>
           <box
-            width={Math.min(88, width)}
+            width={width}
             border
             flexGrow={0}
             flexShrink={0}
@@ -255,6 +264,198 @@ nativeTest(
       expect(rows[header + 5]).toContain('─')
     } finally {
       await React.act(async () => setup.renderer.destroy())
+    }
+  },
+)
+
+function ApprovalBar({ width, height }: { width: number; height: number }) {
+  const theme = useTheme()
+  const inputRef = React.useRef<MultilineInputHandle | null>(null)
+  return (
+    <ChatInputBar
+      inputValue="retained composer draft"
+      cursorPosition={4}
+      setInputValue={useChatStore.getState().setInputValue}
+      inputFocused={true}
+      inputRef={inputRef}
+      inputPlaceholder="Enter a coding task"
+      lastEditDueToNav={false}
+      agentMode="DEFAULT"
+      toggleAgentMode={() => {}}
+      setAgentMode={() => {}}
+      hasSlashSuggestions={false}
+      hasMentionSuggestions={false}
+      hasSuggestionMenu={false}
+      slashSuggestionItems={[]}
+      agentSuggestionItems={[]}
+      fileSuggestionItems={[]}
+      slashSelectedIndex={0}
+      agentSelectedIndex={0}
+      theme={theme}
+      terminalHeight={height}
+      separatorWidth={width}
+      shouldCenterInputVertically={false}
+      inputBoxTitle={undefined}
+      isCompactHeight={height < 20}
+      isNarrowWidth={width < 80}
+      inputWidth={width - 6}
+      feedbackMode={false}
+      handleExitFeedback={() => {}}
+      publishMode={false}
+      handleExitPublish={() => {}}
+      handlePublish={async () => {}}
+      handleSubmit={async () => {}}
+      onPaste={() => {}}
+      onInterruptStream={() => {}}
+    />
+  )
+}
+
+nativeTest(
+  'help and commands use available width with readable light and dark themes',
+  async () => {
+    for (const name of ['dark', 'light'] as const) {
+      useThemeStore.getState().setThemeName(name)
+      const theme = useThemeStore.getState().theme
+      for (const [width, height] of [
+        [60, 18],
+        [100, 24],
+        [160, 32],
+      ]) {
+        useChatStore.getState().setInputMode('help')
+        const help = await mount(
+          <box
+            width={width}
+            height={height}
+            backgroundColor={theme.background}
+            flexDirection="column"
+          >
+            <box flexGrow={1}>
+              <text fg={theme.foreground}>Conversation remains visible</text>
+            </box>
+            <ApprovalBar width={width} height={height} />
+          </box>,
+          width,
+          height,
+        )
+        try {
+          const frame = capture(help, `help-${name}-${width}x${height}`)
+          expect(frame).toContain('Keyboard help')
+          expect(frame).toContain('Conversation remains visible')
+          const dismiss = frame
+            .split('\n')
+            .find((row) => row.includes('Dismiss'))!
+          expect(dismiss.indexOf('Dismiss')).toBeGreaterThan(width - 16)
+        } finally {
+          await React.act(async () => help.renderer.destroy())
+        }
+        useChatStore.getState().setInputMode('default')
+        const description =
+          'Inspect captured evidence and commands '.repeat(2) +
+          'wide-command-tail'
+        const palette = await mount(
+          <CommandPaletteScreen
+            slashCommands={[{ id: 'memory', label: 'memory', description }]}
+            fileTree={[]}
+            onClose={() => {}}
+            onExecuteCommand={() => {}}
+            onSelectFile={() => {}}
+          />,
+          width,
+          height,
+        )
+        try {
+          const frame = capture(palette, `commands-${name}-${width}x${height}`)
+          expect(frame).toContain('memory')
+          if (width === 160) {
+            const row = frame
+              .split('\n')
+              .find((row) => row.includes('wide-command-tail'))!
+            expect(row).toBeDefined()
+            expect(row.indexOf('wide-command-tail')).toBeGreaterThan(80)
+          }
+        } finally {
+          await React.act(async () => palette.renderer.destroy())
+        }
+      }
+    }
+  },
+)
+
+nativeTest(
+  'actual approval panel spans terminal width and uses that width for labels',
+  async () => {
+    for (const [width, height] of [
+      [60, 18],
+      [100, 24],
+      [160, 32],
+    ]) {
+      const controller = new AbortController()
+      const response = AskUserBridge.request(
+        'approval-width-fixture',
+        [
+          {
+            question:
+              'Allow terminal command?\nbun run scripts/verify-runtime-memory-v2-lifecycle.ts --report approved-command-tail',
+            multiSelect: false,
+            options: [
+              {
+                label:
+                  'Allow once — ' +
+                  'reviewed target '.repeat(5) +
+                  'approval label end',
+                description:
+                  'Apply the reviewed command once, using the available panel width for its complete description.',
+              },
+              { label: 'Deny', description: 'Keep the command from running.' },
+            ],
+          },
+        ],
+        controller.signal,
+      )
+      const setup = await mount(
+        <box width={width} height={height} flexDirection="column">
+          <box flexGrow={1}>
+            <text>Conversation remains visible</text>
+          </box>
+          <box width="100%" flexShrink={0}>
+            <ApprovalBar width={width} height={height} />
+          </box>
+        </box>,
+        width,
+        height,
+      )
+      try {
+        const frame = capture(setup, `approval-full-width-${width}x${height}`)
+        const rows = frame.split('\n')
+        const border = rows.find((row) => row.includes('Your input needed'))!
+        expect(border.indexOf('╭')).toBe(0)
+        expect(border.lastIndexOf('╮')).toBe(width - 1)
+        expect(frame).toContain('Conversation remains visible')
+        expect(frame).toContain('Submit')
+        expect(frame).toContain('Inspect (I)')
+        if (width === 160) {
+          expect(frame).toContain('approval label end')
+          expect(
+            rows.find((row) => row.includes('bun run scripts/verify-runtime')),
+          ).toContain('approved-command-tail')
+        }
+        if (height >= 24) {
+          const actions = rows.findIndex((row) =>
+            row.includes('Skip questions'),
+          )
+          const question = rows.findIndex((row) =>
+            row.includes('Allow terminal command?'),
+          )
+          expect(question - actions).toBeGreaterThanOrEqual(2)
+        }
+      } finally {
+        await React.act(async () => {
+          controller.abort()
+          await response
+          setup.renderer.destroy()
+        })
+      }
     }
   },
 )

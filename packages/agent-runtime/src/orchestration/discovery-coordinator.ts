@@ -582,6 +582,30 @@ export type MemoryCoverEvaluation = {
   reason?: string
 }
 
+function memoryReuseReceipt(agentState: {
+  memoryReuse?: MemoryReuseReceiptV1
+}): MemoryReuseReceiptV1 {
+  return (agentState.memoryReuse ??= {
+    schemaVersion: 1,
+    turnId: '',
+    skip: 0,
+    narrow: 0,
+    full: 0,
+    recordsServed: 0,
+    gapsRemaining: 0,
+    recordedDecisions: 0,
+    conceptExpanded: 0,
+    byTool: [],
+  })
+}
+
+/** Count accepted new decisions without inventing a discovery/read outcome. */
+export function recordMemoryDecision(agentState: {
+  memoryReuse?: MemoryReuseReceiptV1
+}): void {
+  memoryReuseReceipt(agentState).recordedDecisions += 1
+}
+
 /**
  * Best-effort memory-first cover check. Never throws: any unexpected input
  * falls through to `{ decision: 'full' }` so callers proceed with a full read.
@@ -648,14 +672,6 @@ export function evaluateMemoryCover(params: {
         continue
       }
     }
-    if (fresh.length === 0) {
-      return {
-        decision: 'full',
-        coveringExcerpts: [],
-        remainingGaps: [],
-        reason: 'missing-cover',
-      }
-    }
     const normalizeList = (list: unknown, cap: number): string[] => {
       if (!Array.isArray(list)) return []
       const out: string[] = []
@@ -716,6 +732,14 @@ export function evaluateMemoryCover(params: {
         coveringExcerpts: [],
         remainingGaps: [],
         reason: 'no-scope',
+      }
+    }
+    if (fresh.length === 0) {
+      return {
+        decision: 'full',
+        coveringExcerpts: [],
+        remainingGaps: targets.slice(0, 128),
+        reason: 'missing-cover',
       }
     }
     const coveredPaths = new Set(fresh.map((entry) => entry.path))
@@ -786,24 +810,12 @@ export function recordMemoryReuse(
     served: number
     gaps: number
     recordedDecisions?: number
+    reason?: string
     coveredStableChunkIds?: string[]
   },
 ): void {
   try {
-    const receipt =
-      agentState.memoryReuse ??
-      (agentState.memoryReuse = {
-        schemaVersion: 1,
-        turnId: '',
-        skip: 0,
-        narrow: 0,
-        full: 0,
-        recordsServed: 0,
-        gapsRemaining: 0,
-        recordedDecisions: 0,
-        conceptExpanded: 0,
-        byTool: [],
-      })
+    const receipt = memoryReuseReceipt(agentState)
     if (entry.decision === 'skip') receipt.skip += 1
     else if (entry.decision === 'narrow') receipt.narrow += 1
     else receipt.full += 1
@@ -811,7 +823,10 @@ export function recordMemoryReuse(
       receipt.recordsServed += Math.max(0, Math.trunc(entry.served))
     }
     receipt.gapsRemaining += Math.max(0, Math.trunc(entry.gaps))
-    receipt.recordedDecisions += Math.max(0, Math.trunc(entry.recordedDecisions ?? 0))
+    receipt.recordedDecisions += Math.max(
+      0,
+      Math.trunc(entry.recordedDecisions ?? 0),
+    )
     if (receipt.byTool && receipt.byTool.length < 32) {
       const chunks = Array.isArray(entry.coveredStableChunkIds)
         ? [
@@ -833,6 +848,7 @@ export function recordMemoryReuse(
         decision: entry.decision,
         served: Math.max(0, Math.trunc(entry.served)),
         gaps: Math.max(0, Math.trunc(entry.gaps)),
+        ...(entry.reason ? { reason: entry.reason.slice(0, 64) } : {}),
         ...(chunks && chunks.length > 0
           ? { coveredStableChunkIds: chunks }
           : {}),
@@ -865,7 +881,11 @@ export function tryClaimDiscoveryShard(params: {
 } {
   try {
     const claimed = claimDiscoveryShard(params)
-    return { state: claimed.state, shardKey: claimed.shardKey, duplicate: false }
+    return {
+      state: claimed.state,
+      shardKey: claimed.shardKey,
+      duplicate: false,
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     if (!message.includes('Duplicate discovery shard')) throw error
@@ -899,7 +919,11 @@ export function completeDiscoveryShard(params: {
     revision: params.existing.revision + 1,
     shards: params.existing.shards.map((shard) =>
       shard.key === params.shardKey
-        ? { ...shard, status: params.status, completedAt: params.now ?? realClock.now() }
+        ? {
+            ...shard,
+            status: params.status,
+            completedAt: params.now ?? realClock.now(),
+          }
         : shard,
     ),
   })

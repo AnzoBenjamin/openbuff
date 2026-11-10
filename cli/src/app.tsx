@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRenderer } from '@opentui/react'
 import { useShallow } from 'zustand/react/shallow'
 
 import { Chat } from './chat'
@@ -71,6 +72,10 @@ export const App = ({
     if (!showProjectPicker) intent.consumeContinuation()
   }, [intent, showProjectPicker])
   const theme = useTheme()
+  const renderer = useRenderer()
+  useEffect(() => {
+    renderer.setBackgroundColor(theme.background)
+  }, [renderer, theme.background])
 
   const inputRef = useRef<MultilineInputHandle | null>(null)
   const {

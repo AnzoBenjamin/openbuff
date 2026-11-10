@@ -228,6 +228,7 @@ export const SelectableList = forwardRef<
                 {item.icon && (
                   <text
                     style={{
+                      flexShrink: 0,
                       fg: isHighlighted ? theme.foreground : theme.muted,
                     }}
                   >
@@ -243,6 +244,7 @@ export const SelectableList = forwardRef<
                     return (
                       <text
                         style={{
+                          flexShrink: 0,
                           fg:
                             item.accent && !isHighlighted
                               ? theme.primary
@@ -280,6 +282,7 @@ export const SelectableList = forwardRef<
                   return (
                     <text
                       style={{
+                        flexShrink: 0,
                         fg:
                           item.accent && !isHighlighted
                             ? theme.primary
@@ -299,7 +302,9 @@ export const SelectableList = forwardRef<
                   )
                 })()}
                 {item.secondary && !item.hideSecondary && (
-                  <text style={{ fg: theme.muted }}>{item.secondary}</text>
+                  <text style={{ fg: theme.muted, flexShrink: 1, minWidth: 0 }}>
+                    {item.secondary}
+                  </text>
                 )}
               </Button>
               {actionLabel && onAction && (

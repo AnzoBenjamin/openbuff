@@ -82,7 +82,7 @@ Tradeoff: the reader introduces one deliberate transition for large content in e
 
 - Target: WCAG-inspired readability and keyboard criteria adapted to terminals; do not claim blanket WCAG compliance for a TUI.
 - Keyboard: visible focus and one event owner. Composer bindings retain existing semantics; reader navigation is scoped. Escape closes reader find before the reader; this must not accidentally cancel a run.
-- Contrast: target 4.5:1 for normal text and 3:1 for meaningful boundaries on controlled surfaces. Validate light/dark, terminal-default backgrounds and actual rendered output; transparent backgrounds prevent a universal contrast guarantee.
+- Contrast: target 4.5:1 for normal text and 3:1 for meaningful boundaries on controlled surfaces. Built-in themes paint their own terminal background (`#151815` dark, `#fafbf7` light) and repaint it when switching themes. Validate main background, surfaces and actual rendered output.
 - Screen readers: establish an actual terminal/screen-reader baseline; provide a linear plain-text reading/export route. Do not assume browser ARIA applies to OpenTUI.
 - Reduced motion/sensory: static progress option, no color-only state and no rapid repeated flashing. All meaningful actions available without hover.
 
@@ -98,7 +98,7 @@ Tradeoff: the reader introduces one deliberate transition for large content in e
 
 ## Interaction states
 
-- Loading: action, state and elapsed time; distinguish loading from empty/unavailable. Lifecycle and transient notices are independent, so retry/copy feedback cannot hide Stop/timing. Streaming stays readable without rearranging earlier sections.
+- Loading: action, state and elapsed time; distinguish loading from empty/unavailable. Use static “Waiting for provider” and “Receiving response” labels, retaining specific tool phases, elapsed time and Stop. Live reasoning labels its receiving state. Lifecycle and transient notices are independent, so retry/copy feedback cannot hide Stop/timing. Streaming stays readable without rearranging earlier sections.
 - Empty: distinguish no matches, successful empty output and output not captured.
 - Error: visible failure/partial summary and relevant excerpt, with access to retained evidence. Offer a next action only when it exists.
 - Success: brief confirmed outcome, with validation counts only when authoritative. Unknown result fields never imply success; committed changes after cancellation remain committed with cancellation noted.
@@ -107,7 +107,9 @@ Tradeoff: the reader introduces one deliberate transition for large content in e
 - Paused following: stable “Reading earlier · new updates · Latest” affordance; count meaningful updates, not tokens.
 - Async flows: bind request/result to project, selected run and draft revision; discard stale responses without losing current work.
 - Search: show actual shown/matched counts, explain presentation caps and retain a visible partial-source notice alongside results. Batched query/navigation/Enter uses the latest selection; repeated Enter activates once, and inventory refresh preserves selection identity or requires deliberate reselection.
-- Decisions: content-sized panels capped at 88 columns, windowed choices with reserved description/custom-input space, and separate action controls. Preserve command line breaks. Full command/question inspection, typed answer identity and validation remain available; Back/Close, Skip and Stop have explicit effects.
+- Decisions: panels spanning the available composer width with content-sized height, windowed choices with reserved description/custom-input space, and separate action controls. Use the full content width for questions, labels and descriptions; add space around controls when height permits. Preserve command line breaks. Full command/question inspection, typed answer identity and validation remain available; Back/Close, Skip and Stop have explicit effects.
+- Commands/help: stretch to the available terminal width while keeping height bounded. Preserve command labels before allocating space to descriptions; help dismissal stays at the right edge. Help retains the conversation and composer.
+- Memory telemetry: count reused evidence and newly accepted decisions, with explicit reasons for full discovery. Zero reuse is valid for unscoped searches or absent fresh evidence; presentation must never invent saved reads or imply a scan failure is an empty memory store.
 - Queue: FIFO next prompt, attachment identity and enqueue-time mode visible; failed send stays distinguishable from pause, with retained work.
 - Queue recovery: per-item mode edits preserve prompt/attachments; clear confirmation fixes its scope to previewed IDs and offers full inspection. Undo restores the last removed item/batch paused, with its original order, mode and attachments. Recovery remains available until the next removal or session exit; clearing queued work leaves the current run running.
 - Destructive actions: preview affected scope, preserve preview options exactly for apply, and expose recovery/confirmation according to actual capabilities.

@@ -19,7 +19,11 @@ describe('readability on the built-in controlled surfaces', () => {
   for (const name of ['dark', 'light'] as const) {
     const theme = chatThemes[name]
     test(`${name} content, actions and status text retain readable contrast`, () => {
-      for (const background of [theme.surface, theme.surfaceHover]) {
+      for (const background of [
+        theme.background,
+        theme.surface,
+        theme.surfaceHover,
+      ]) {
         for (const role of [
           'foreground',
           'muted',

@@ -19,9 +19,19 @@ const originalEnv = { ...process.env }
 test('reasoning replay defaults for IFM and can be configured for other endpoints', () => {
   function resolve(baseURL: string, reasoningReplay?: 'required' | 'none') {
     const config = providerConfigFileSchema.parse({
-      providers: { example: { baseURL, models: ['model'], ...(reasoningReplay && { compatibility: { reasoningReplay } }) } },
+      providers: {
+        example: {
+          baseURL,
+          models: ['model'],
+          ...(reasoningReplay && { compatibility: { reasoningReplay } }),
+        },
+      },
     })
-    return resolveConfiguredProviderModel({ model: 'example/model', loadedConfig: { config, sourceFilePaths: [] }, env: {} })?.compatibility.reasoningReplay
+    return resolveConfiguredProviderModel({
+      model: 'example/model',
+      loadedConfig: { config, sourceFilePaths: [] },
+      env: {},
+    })?.compatibility.reasoningReplay
   }
   expect(resolve('https://api.ifm.ai/v1')).toBe('required')
   expect(resolve('https://api.ifm.ai/v1', 'none')).toBe('none')
@@ -108,10 +118,7 @@ describe('provider-config fragment reactivity', () => {
       'openbuff.d',
       'late.json',
     )
-    fs.writeFileSync(
-      latePath,
-      JSON.stringify({ defaultModel: 'local/late' }),
-    )
+    fs.writeFileSync(latePath, JSON.stringify({ defaultModel: 'local/late' }))
 
     const second = loadProviderConfigSync()
     expect(second.config.defaultModel).toBe('local/late')
@@ -135,6 +142,36 @@ describe('provider-config fragment reactivity', () => {
     const second = loadProviderConfigSync()
     expect(second.config.defaultModel).toBeUndefined()
     expect(second.sourceFilePaths).not.toContain(removablePath)
+  })
+
+  test('keeps semantic indexing from its fragment when later files omit indexing', () => {
+    const { configPath, fragmentDir } = setupFragmentConfig()
+    fs.writeFileSync(
+      path.join(fragmentDir, 'indexing.json'),
+      JSON.stringify({
+        indexing: { semantic: { enabled: true, model: 'local/embedding' } },
+      }),
+    )
+    fs.writeFileSync(
+      path.join(fragmentDir, 'later.json'),
+      JSON.stringify({ defaultModel: 'local/chat' }),
+    )
+    const loaded = loadProviderConfigSync()
+    expect(loaded.config.indexing.semantic).toMatchObject({
+      enabled: true,
+      model: 'local/embedding',
+    })
+    expect(loaded.sourceFiles?.indexing).toBe(
+      path.join(fragmentDir, 'indexing.json'),
+    )
+    // A deliberate declaration in the parent still wins.
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ indexing: { semantic: { enabled: false } } }),
+    )
+    expect(loadProviderConfigSync().config.indexing.semantic.enabled).toBe(
+      false,
+    )
   })
 })
 
@@ -420,9 +457,9 @@ describe('provider config atomic write crash safety', () => {
         )
 
         // The surviving backup was reported so the user can recover it.
-        expect(
-          logged.some((line) => line.includes('preserving backup')),
-        ).toBe(true)
+        expect(logged.some((line) => line.includes('preserving backup'))).toBe(
+          true,
+        )
       } finally {
         console.error = originalConsoleError
         restoreRename()

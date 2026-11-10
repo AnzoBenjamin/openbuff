@@ -771,12 +771,26 @@ export class IndexManager {
         fingerprint,
         cacheDir,
       )
+      let checkpointCount = 0
       this.fileVectors = await buildFileVectors(
         Object.values(index.files),
         this.embed,
-        64,
+        this.embed.maxBatchSize ?? 64,
         [...this.fileVectors, ...persisted],
         diagnostics,
+        async (vectors) => {
+          // Preserve the first batch, then amortize writes over 64 new vectors.
+          // A slow or interrupted local build can resume from durable progress.
+          if (checkpointCount > 0 && vectors.length - checkpointCount < 64)
+            return
+          await saveSemanticVectors(
+            this.projectRoot,
+            fingerprint,
+            [...vectors],
+            cacheDir,
+          )
+          checkpointCount = vectors.length
+        },
       )
       this.semanticSkippedCount = diagnostics.skippedCount
       await saveSemanticVectors(
@@ -819,6 +833,10 @@ export class IndexManager {
         'semantic',
         err,
         getIndexDir(this.projectRoot, cacheDir),
+      )
+      this.semanticSkippedCount = Math.max(
+        0,
+        Object.keys(index.files).length - this.fileVectors.length,
       )
     }
   }

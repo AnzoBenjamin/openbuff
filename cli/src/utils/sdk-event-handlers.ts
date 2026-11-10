@@ -2178,11 +2178,39 @@ const handleMemoryReuse = (
   event: PrintModeMemoryReuse,
 ) => {
   const r = event.receipt
-  const line = `memory: ${r.skip} skip / ${r.narrow} narrow / ${r.full} full · saved ${r.recordsServed} reads · gaps ${r.gapsRemaining} · recorded ${r.recordedDecisions} decisions${r.conceptExpanded ? ` · concept +${r.conceptExpanded}` : ''}`
+  const line = `memory: ${r.skip} skip / ${r.narrow} narrow / ${r.full} full · reused ${r.recordsServed} evidence · gaps ${r.gapsRemaining} · recorded ${r.recordedDecisions} decisions${r.conceptExpanded ? ` · concept +${r.conceptExpanded}` : ''}`
+  const explanations = [
+    ...new Set(
+      (r.byTool ?? [])
+        .filter((entry) => entry.decision === 'full')
+        .map((entry) => {
+          switch (entry.reason) {
+            case 'missing-cover':
+              return 'no fresh verified evidence covers the requested paths'
+            case 'no-scope':
+              return 'open-ended searches need fresh discovery'
+            case 'no-cover':
+              return 'requested paths are outside verified coverage'
+            case 'stale-index-snapshot':
+              return 'the index snapshot changed'
+            case 'error':
+              return 'coverage could not be checked'
+            default:
+              return undefined
+          }
+        })
+        .filter((reason) => reason !== undefined),
+    ),
+  ]
   const block: ContentBlock = {
     type: 'memory',
     state: 'reuse',
-    lines: [line],
+    lines: [
+      line,
+      ...(explanations.length
+        ? [`Full discovery: ${explanations.join('; ')}.`]
+        : []),
+    ],
   }
   state.message.updater.updateAiMessageBlocks((blocks) => [...blocks, block])
 }

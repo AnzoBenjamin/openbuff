@@ -40,7 +40,7 @@ export const QuestionOption: React.FC<QuestionOptionProps> = memo(
     const description =
       typeof option === 'object' ? option.description : undefined
 
-    const labelWidth = Math.max(1, Math.min(80, terminalWidth - 8) - indent)
+    const labelWidth = Math.max(1, terminalWidth - 8 - indent)
     const descriptionLines = description
       ? wrapTextPreservingNewlines(
           description.replace(/\s+/g, ' '),

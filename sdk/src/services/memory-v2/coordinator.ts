@@ -3,6 +3,8 @@ import { createHash } from 'node:crypto'
 import { deriveClaimId } from '@codebuff/common/util/claim-identity'
 import { STABLE_CHUNK_ID_RE } from '@codebuff/common/util/contradiction-detector'
 import { classifyMemoryArtifactPath } from '@codebuff/common/util/memory-artifact-policy'
+import { decodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
+import { rawReadBasesMatch } from '@codebuff/common/util/raw-read-basis'
 
 import {
   MemoryAppendOutcomeSchema,
@@ -34,6 +36,7 @@ import type {
 import {
   fileMutationResultV1Schema,
   getConfirmedAppliedActionsV1,
+  readFilesResultV1Schema,
 } from '@codebuff/common/tools/results/filesystem'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
@@ -123,14 +126,25 @@ const DIMENSION_MAP: Readonly<Record<string, 'tests' | 'validation'>> = {
   get_change_review_bundle: 'validation',
 }
 
-function inferCoverageDimension(toolName: string): 'tests' | 'validation' | undefined {
+function inferCoverageDimension(
+  toolName: string,
+): 'tests' | 'validation' | undefined {
   return DIMENSION_MAP[toolName]
 }
 
-export type ObservationKindHint = 'decision' | 'fact' | 'discovery' | 'outcome' | 'constraint'
+export type ObservationKindHint =
+  | 'decision'
+  | 'fact'
+  | 'discovery'
+  | 'outcome'
+  | 'constraint'
 
 const DECISION_TOOL_NAMES: ReadonlySet<string> = new Set(['create_plan'])
-const REASONING_TOOL_NAMES: ReadonlySet<string> = new Set(['architect', 'thinker', 'think_deeply'])
+const REASONING_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'architect',
+  'thinker',
+  'think_deeply',
+])
 const DECISION_STRUCTURAL_KEYS: ReadonlyArray<string> = [
   'decision',
   'conclusion',
@@ -162,7 +176,9 @@ function hasNonEmptyField(value: unknown): boolean {
   return false
 }
 
-function valuesContainDecisionSignal(values: Record<string, unknown>[]): boolean {
+function valuesContainDecisionSignal(
+  values: Record<string, unknown>[],
+): boolean {
   for (const value of values.slice(0, 16)) {
     for (const key of DECISION_STRUCTURAL_KEYS) {
       const candidate = value[key]
@@ -173,7 +189,13 @@ function valuesContainDecisionSignal(values: Record<string, unknown>[]): boolean
         return true
       }
     }
-    for (const key of ['summary', 'detail', 'content', 'text', 'reasoning'] as const) {
+    for (const key of [
+      'summary',
+      'detail',
+      'content',
+      'text',
+      'reasoning',
+    ] as const) {
       const candidate = value[key]
       if (
         typeof candidate === 'string' &&
@@ -185,7 +207,9 @@ function valuesContainDecisionSignal(values: Record<string, unknown>[]): boolean
   return false
 }
 
-function valuesContainConstraintSignal(values: Record<string, unknown>[]): boolean {
+function valuesContainConstraintSignal(
+  values: Record<string, unknown>[],
+): boolean {
   for (const value of values.slice(0, 16)) {
     for (const key of CONSTRAINT_STRUCTURAL_KEYS) {
       const candidate = value[key]
@@ -196,7 +220,13 @@ function valuesContainConstraintSignal(values: Record<string, unknown>[]): boole
         return true
       }
     }
-    for (const key of ['summary', 'detail', 'content', 'text', 'reasoning'] as const) {
+    for (const key of [
+      'summary',
+      'detail',
+      'content',
+      'text',
+      'reasoning',
+    ] as const) {
       const candidate = value[key]
       if (
         typeof candidate === 'string' &&
@@ -274,7 +304,10 @@ function normalizeProjectPath(candidate: unknown): string | undefined {
   return decision.allowed ? decision.normalizedPath : undefined
 }
 
-function collectPaths(input: unknown, values: Record<string, unknown>[]): string[] {
+function collectPaths(
+  input: unknown,
+  values: Record<string, unknown>[],
+): string[] {
   const paths = new Set<string>()
   const add = (candidate: unknown) => {
     const normalized = normalizeProjectPath(candidate)
@@ -441,10 +474,19 @@ function normalizeChunkHint(candidate: unknown): CollectedChunk | undefined {
   // itself stays schema-strict; the stable id is preserved in provenance
   // metadata at capture time (see chunkEvidence below).
   const stableChunkId = normalizeStableChunkId(candidate.stableChunkId)
-  return { selector, ...(stableChunkId ? { stableChunkId } : {}), ...(observedDigest ? { observedDigest } : {}), signature, ...(linesText ? { linesText } : {}) }
+  return {
+    selector,
+    ...(stableChunkId ? { stableChunkId } : {}),
+    ...(observedDigest ? { observedDigest } : {}),
+    signature,
+    ...(linesText ? { linesText } : {}),
+  }
 }
 
-function collectChunkHints(input: unknown, values: Record<string, unknown>[]): CollectedChunk[] {
+function collectChunkHints(
+  input: unknown,
+  values: Record<string, unknown>[],
+): CollectedChunk[] {
   const collected: CollectedChunk[] = []
   const seen = new Set<string>()
   const push = (candidate: unknown) => {
@@ -465,7 +507,14 @@ function collectChunkHints(input: unknown, values: Record<string, unknown>[]): C
     push(candidate)
     pushArray(candidate.chunks)
     // Results/matches/entries may nest chunk hits one level deep.
-    for (const key of ['results', 'matches', 'entries', 'files', 'hits', 'symbols'] as const) {
+    for (const key of [
+      'results',
+      'matches',
+      'entries',
+      'files',
+      'hits',
+      'symbols',
+    ] as const) {
       const nested = candidate[key]
       if (!Array.isArray(nested)) continue
       for (const item of nested.slice(0, MAX_CHUNKS)) {
@@ -625,7 +674,9 @@ export function computeMemoryParity(params: {
   }
 }
 
-function countSummary(values: Record<string, unknown>[]): Record<string, number> {
+function countSummary(
+  values: Record<string, unknown>[],
+): Record<string, number> {
   const summary: Record<string, number> = {}
   const keys = [
     'results',
@@ -759,7 +810,12 @@ export class MemoryV2Coordinator {
         return true
       }
       this.logger?.warn(
-        { outcome: outcome.outcome, code: outcome.error.code, message: outcome.error.message, attempt },
+        {
+          outcome: outcome.outcome,
+          code: outcome.error.code,
+          message: outcome.error.message,
+          attempt,
+        },
         'Memory V2 append was not committed',
       )
       const conflict = outcome.error.code === 'conflict' && outcome.error.retryable
@@ -794,7 +850,11 @@ export class MemoryV2Coordinator {
           return { kind: 'failed' }
         }
         const outcome = parsed.data
-        if (outcome.events.some((event) => event.projectId !== this.config.projectId)) {
+        if (
+          outcome.events.some(
+            (event) => event.projectId !== this.config.projectId,
+          )
+        ) {
           return { kind: 'failed' }
         }
         if (outcome.rawTailEventId) tail = outcome.rawTailEventId
@@ -888,8 +948,9 @@ export class MemoryV2Coordinator {
     }
 
     try {
-      const { requested, invalidAuthority } =
-        getEffectiveMemoryAuthority(this.config)
+      const { requested, invalidAuthority } = getEffectiveMemoryAuthority(
+        this.config,
+      )
       stagedState.memoryV2Context = undefined
       // Playbooks are staged and cleared on the same terms as the injected V2
       // context: a fresh turn starts with no inherited rules until the
@@ -941,14 +1002,18 @@ export class MemoryV2Coordinator {
     }
   }
 
-  private async prepareConfiguredTurn(params: {
-    agentState: AgentState
-    trustedUserInputId: string
-    query: string
-    workspaceState?: WorkspaceStateV1
-    resumeInterruptedTurn?: boolean
-    signal?: AbortSignal
-  }, authority: Exclude<MemoryAuthorityMode, 'json-v1'>, operation: PreparationOperation): Promise<void> {
+  private async prepareConfiguredTurn(
+    params: {
+      agentState: AgentState
+      trustedUserInputId: string
+      query: string
+      workspaceState?: WorkspaceStateV1
+      resumeInterruptedTurn?: boolean
+      signal?: AbortSignal
+    },
+    authority: Exclude<MemoryAuthorityMode, 'json-v1'>,
+    operation: PreparationOperation,
+  ): Promise<void> {
     const repository = this.config.repository
     if (!repository) {
       this.applyDegradedState(params.agentState, 'backend-unavailable')
@@ -1156,7 +1221,11 @@ export class MemoryV2Coordinator {
         }),
       )
     }
-    const lifecycleCommitted = await this.append(drafts, runtimeState, operation)
+    const lifecycleCommitted = await this.append(
+      drafts,
+      runtimeState,
+      operation,
+    )
     if (!this.isCurrent(operation)) return
     if (!lifecycleCommitted) {
       this.applyDegradedState(params.agentState, 'lifecycle-append-failed')
@@ -1170,7 +1239,9 @@ export class MemoryV2Coordinator {
       projectId: this.config.projectId,
       sessionId,
       query,
-      taskId,
+      // taskId is a retrieval scope, not correlation metadata. A fresh turn
+      // has no observations yet; restricting to it hides all prior knowledge.
+      // Lifecycle events and MemoryTurnContextV2 retain the active task ID.
       ...(params.workspaceState
         ? {
             workspaceRevision: params.workspaceState.revision,
@@ -1217,7 +1288,10 @@ export class MemoryV2Coordinator {
         result.projectId !== this.config.projectId ||
         result.queryId !== queryId
       ) {
-        this.logger?.warn({}, 'Memory V2 query result failed correlation checks')
+        this.logger?.warn(
+          {},
+          'Memory V2 query result failed correlation checks',
+        )
         operation.queryTerminal = {
           outcome: 'failed',
           error: 'Memory repository query result failed correlation checks',
@@ -1248,10 +1322,12 @@ export class MemoryV2Coordinator {
             ? { state: 'none' }
             : {
                 state: 'degraded',
-                reasons: result.degradation.reasons.map(({ code, retryable }) => ({
-                  code,
-                  retryable,
-                })),
+                reasons: result.degradation.reasons.map(
+                  ({ code, retryable }) => ({
+                    code,
+                    retryable,
+                  }),
+                ),
               },
       }
       // Shared decision S4: a retrieval that degraded because the backend,
@@ -1290,9 +1366,8 @@ export class MemoryV2Coordinator {
       if (playbookRepository?.ensureSeedPlaybooks && playbookRepository.listPlaybooks) {
         try {
           await playbookRepository.ensureSeedPlaybooks(this.config.projectId)
-          params.agentState.playbookContext = await playbookRepository.listPlaybooks(
-            this.config.projectId,
-          )
+          params.agentState.playbookContext =
+            await playbookRepository.listPlaybooks(this.config.projectId)
         } catch (error) {
           this.logger?.warn(
             { error },
@@ -1435,7 +1510,60 @@ export class MemoryV2Coordinator {
       if (actions.length === 0) return
     }
 
-    const paths = collectPaths(params.input, values)
+    // Only native, schema-valid complete reads or confirmed mutations can
+    // establish a file digest. Rendered content and discovery counts cannot.
+    const fileDigests = new Map<string, string>()
+    for (const action of actions) {
+      if (!isRecord(action) || typeof action.afterHash !== 'string') continue
+      const path =
+        action.action === 'move' ? action.destinationPath : action.path
+      if (typeof path === 'string' && VERIFY_DIGEST_RE.test(action.afterHash)) {
+        fileDigests.set(path, action.afterHash)
+      }
+    }
+    if (params.toolName === 'read_files') {
+      for (const value of values) {
+        const result = readFilesResultV1Schema.safeParse(value)
+        if (!result.success) continue
+        for (const item of result.data.results.slice(0, MAX_PATHS)) {
+          if (
+            item.selector !== 'file' ||
+            item.status !== 'ok' ||
+            !item.complete ||
+            item.metadataComplete !== true ||
+            item.template ||
+            item.truncation ||
+            !item.editAnchor
+          )
+            continue
+          const decoded = decodeReadCapabilityToken(
+            item.editAnchor.readCapability,
+          )
+          const path = normalizeProjectPath(item.path)
+          if (
+            !path ||
+            typeof decoded === 'string' ||
+            decoded.tokenVersion !== 'v4' ||
+            decoded.rawBasis?.scope !== 'whole' ||
+            decoded.startLine !== 1 ||
+            decoded.startLine !== item.editAnchor.startLine ||
+            decoded.endLine !== item.editAnchor.endLine ||
+            decoded.hash !== item.editAnchor.contentHash ||
+            !rawReadBasesMatch(decoded.rawBasis, item.editAnchor.rawBasis)
+          )
+            continue
+          // rawSourceContent is intentionally stripped from the model result;
+          // the authenticated whole-byte basis retains the actual file hash.
+          fileDigests.set(path, decoded.rawBasis.rawHash)
+        }
+      }
+    }
+    const paths = [
+      ...new Set([
+        ...fileDigests.keys(),
+        ...collectPaths(params.input, values),
+      ]),
+    ].slice(0, MAX_PATHS)
     const chunkHints = collectChunkHints(params.input, values)
     const counts = countSummary(values)
     const hasPositiveCount = Object.values(counts).some((count) => count > 0)
@@ -1543,8 +1671,12 @@ export class MemoryV2Coordinator {
     }
     const fileEvidence = paths.slice(0, 32).map((path) => {
       const decision = classifyMemoryArtifactPath(path)
-      const excerpt = `${toolNameBounded} ${captureKind} ${path} counts=${countsJson.slice(0, 512)}`.slice(0, 1024)
-      const contentDigest = `sha256:${createHash('sha256').update(`${path}\n${countsJson}`).digest('hex')}`
+      const excerpt =
+        `${toolNameBounded} ${captureKind} ${path} counts=${countsJson.slice(0, 512)}`.slice(
+          0,
+          1024,
+        )
+      const contentDigest = fileDigests.get(path)
       return {
         artifact: {
           artifactId: path,
@@ -1566,13 +1698,17 @@ export class MemoryV2Coordinator {
           metadata: {},
         },
         capturedAt: observedAt,
-        contentDigest,
+        ...(contentDigest ? { contentDigest } : {}),
         excerpt,
       }
     })
     const chunkEvidence = chunkHints.slice(0, MAX_CHUNKS).map((hint) => {
       const decision = classifyMemoryArtifactPath(hint.selector.path)
-      const excerpt = `${toolNameBounded} ${captureKind} ${hint.selector.qualifiedName} ${hint.selector.path}:${hint.selector.startLine}-${hint.selector.endLine}${hint.signature ? ` ${hint.signature}` : ''}${hint.linesText ? ` ${hint.linesText}` : ''}`.slice(0, 1024)
+      const excerpt =
+        `${toolNameBounded} ${captureKind} ${hint.selector.qualifiedName} ${hint.selector.path}:${hint.selector.startLine}-${hint.selector.endLine}${hint.signature ? ` ${hint.signature}` : ''}${hint.linesText ? ` ${hint.linesText}` : ''}`.slice(
+          0,
+          1024,
+        )
       const contentDigest =
         hint.observedDigest ??
         `sha256:${createHash('sha256').update(`${hint.selector.path}\n${hint.selector.chunkId}\n${hint.selector.startLine}-${hint.selector.endLine}\n${countsJson}`).digest('hex')}`
@@ -1620,11 +1756,21 @@ export class MemoryV2Coordinator {
           observationId,
           taskId: runtimeState.activeTask.taskId,
           kind: observationKindHint,
-          summary: `${toolNameBounded} ${captureKind} ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(0, 1024),
+          summary:
+            `${toolNameBounded} ${captureKind} ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(
+              0,
+              1024,
+            ),
           detail: `Captured ${paths.length} path(s), counts ${countsJson.slice(0, 2000)}, digest ${outputDigest.slice(0, 64)}`,
           confidence: 0.5,
           evidence,
-          selectors: [...paths.map((projectPath) => ({ kind: 'file' as const, path: projectPath })), ...chunkHints.slice(0, MAX_CHUNKS).map((hint) => hint.selector)].slice(0, 32),
+          selectors: [
+            ...paths.map((projectPath) => ({
+              kind: 'file' as const,
+              path: projectPath,
+            })),
+            ...chunkHints.slice(0, MAX_CHUNKS).map((hint) => hint.selector),
+          ].slice(0, 32),
           provenance: {
             origin: 'tool',
             recordedBy: 'sdk-memory-v2',
@@ -1706,8 +1852,14 @@ export class MemoryV2Coordinator {
           ),
         ]
           .sort((left, right) => {
-            const leftPoints = Array.from(left, (character) => character.codePointAt(0)!)
-            const rightPoints = Array.from(right, (character) => character.codePointAt(0)!)
+            const leftPoints = Array.from(
+              left,
+              (character) => character.codePointAt(0)!,
+            )
+            const rightPoints = Array.from(
+              right,
+              (character) => character.codePointAt(0)!,
+            )
             const length = Math.min(leftPoints.length, rightPoints.length)
             for (let index = 0; index < length; index++) {
               const difference = leftPoints[index]! - rightPoints[index]!
@@ -1796,7 +1948,11 @@ export class MemoryV2Coordinator {
           (value) => value.passed === true || value.success === true,
         )
         const state: 'covered' | 'partial' =
-          dimension === 'tests' ? (hasSuccessMarker ? 'covered' : 'partial') : 'partial'
+          dimension === 'tests'
+            ? hasSuccessMarker
+              ? 'covered'
+              : 'partial'
+            : 'partial'
         const coverageDraft = createMemoryEventDraft({
           projectId: this.config.projectId,
           sessionId: runtimeState.sessionId,
@@ -1809,8 +1965,17 @@ export class MemoryV2Coordinator {
             taskId: runtimeState.activeTask.taskId,
             dimension,
             state,
-            selectors: [...paths.slice(0, 10).map((path) => ({ kind: 'file' as const, path })), ...chunkHints.slice(0, MAX_CHUNKS).map((hint) => hint.selector)].slice(0, 10),
-            notes: `${params.toolName.slice(0, 128)} ${dimension} ${state}: ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(0, 1024),
+            selectors: [
+              ...paths
+                .slice(0, 10)
+                .map((path) => ({ kind: 'file' as const, path })),
+              ...chunkHints.slice(0, MAX_CHUNKS).map((hint) => hint.selector),
+            ].slice(0, 10),
+            notes:
+              `${params.toolName.slice(0, 128)} ${dimension} ${state}: ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(
+                0,
+                1024,
+              ),
             ...(params.workspaceState
               ? {
                   workspaceRevision: params.workspaceState.revision,
@@ -1826,28 +1991,44 @@ export class MemoryV2Coordinator {
     }
 
     // Phase P2 (+P-C): verification promotion hook (additive, bounded, best-effort).
-    // File mutation verifies preserved; chunk verifies enqueue for any capture
-    // kind when chunk hints carry a valid observed digest. Never throws.
+    // Complete native reads and confirmed mutations use the same actual digest
+    // in the evidence and verification. Other discovery remains unverified.
     {
-      const fileVerifyEntries: Array<{ observationId: string; selector: MemorySelector; observedDigest: string }> =
-        captureKind === 'mutation'
-          ? actions.slice(0, MAX_VERIFY_PER_CAPTURE).flatMap((action) => {
-              if (!isRecord(action)) return []
-              const actionPath = typeof action.path === 'string' ? normalizeProjectPath(action.path) : undefined
-              const afterHash = action.afterHash
-              if (!actionPath || typeof afterHash !== 'string' || !VERIFY_DIGEST_RE.test(afterHash)) return []
-              return [{ observationId, selector: { kind: 'file' as const, path: actionPath }, observedDigest: afterHash }]
-            })
-          : []
-      const chunkVerifyEntries: Array<{ observationId: string; selector: MemorySelector; observedDigest: string }> = chunkHints
+      const fileVerifyEntries: Array<{
+        observationId: string
+        selector: MemorySelector
+        observedDigest: string
+      }> = [...fileDigests]
         .slice(0, MAX_VERIFY_PER_CAPTURE)
-        .flatMap((hint) => {
-          if (!hint.observedDigest || !VERIFY_DIGEST_RE.test(hint.observedDigest)) return []
-          return [{ observationId, selector: hint.selector as MemorySelector, observedDigest: hint.observedDigest }]
-        })
-      const verifyEntries = [...fileVerifyEntries, ...chunkVerifyEntries].slice(0, MAX_VERIFY_PER_CAPTURE)
+        .map(([path, observedDigest]) => ({
+          observationId,
+          selector: { kind: 'file' as const, path },
+          observedDigest,
+        }))
+      const chunkVerifyEntries: Array<{
+        observationId: string
+        selector: MemorySelector
+        observedDigest: string
+      }> = chunkHints.slice(0, MAX_VERIFY_PER_CAPTURE).flatMap((hint) => {
+        if (!hint.observedDigest || !VERIFY_DIGEST_RE.test(hint.observedDigest))
+          return []
+        return [
+          {
+            observationId,
+            selector: hint.selector as MemorySelector,
+            observedDigest: hint.observedDigest,
+          },
+        ]
+      })
+      const verifyEntries = [...fileVerifyEntries, ...chunkVerifyEntries].slice(
+        0,
+        MAX_VERIFY_PER_CAPTURE,
+      )
       if (verifyEntries.length > 0) {
-        this.lastCapturedVerifies = [...verifyEntries, ...this.lastCapturedVerifies].slice(0, MAX_VERIFY_STORED)
+        this.lastCapturedVerifies = [
+          ...verifyEntries,
+          ...this.lastCapturedVerifies,
+        ].slice(0, MAX_VERIFY_STORED)
         const repository = this.config.repository
         if (repository) {
           for (const entry of verifyEntries) {
@@ -1910,16 +2091,28 @@ export class MemoryV2Coordinator {
           dimension: 'validation' as const,
           state: state as 'covered' | 'partial',
           selectors: features
-            .filter((f: unknown): f is { feature: string } =>
-              typeof f === 'object' && f !== null && typeof (f as Record<string, unknown>).feature === 'string'
+            .filter(
+              (f: unknown): f is { feature: string } =>
+                typeof f === 'object' &&
+                f !== null &&
+                typeof (f as Record<string, unknown>).feature === 'string',
             )
             .slice(0, 64)
-            .map((f: { feature: string }) => ({ kind: 'file' as const, path: f.feature.slice(0, 512) })),
-          notes: `Audit coverage evaluation: ${value.status}. Features evaluated: ${features.length}.`.slice(0, 4_096),
-          ...(params.workspaceState ? {
-            workspaceRevision: params.workspaceState.revision,
-            workspaceSnapshotId: params.workspaceState.snapshotId,
-          } : {}),
+            .map((f: { feature: string }) => ({
+              kind: 'file' as const,
+              path: f.feature.slice(0, 512),
+            })),
+          notes:
+            `Audit coverage evaluation: ${value.status}. Features evaluated: ${features.length}.`.slice(
+              0,
+              4_096,
+            ),
+          ...(params.workspaceState
+            ? {
+                workspaceRevision: params.workspaceState.revision,
+                workspaceSnapshotId: params.workspaceState.snapshotId,
+              }
+            : {}),
         },
       })
       drafts.push(draft)

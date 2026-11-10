@@ -3,11 +3,15 @@ import { jsonToolResult } from '@codebuff/common/util/messages'
 import { TASK_MEMORY_LIST_CAPS } from '@codebuff/common/types/task-memory'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
-import type { CodebuffToolCall, CodebuffToolOutput } from '@codebuff/common/tools/list'
+import type {
+  CodebuffToolCall,
+  CodebuffToolOutput,
+} from '@codebuff/common/tools/list'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import { hasDecisionRationale } from '@codebuff/common/util/decision-rationale'
 import { realClock } from '@codebuff/common/deps/real-runtime-deps'
+import { recordMemoryDecision } from '../../../orchestration/discovery-coordinator'
 import type { Clock } from '@codebuff/common/types/contracts/agent-runtime'
 
 type ToolName = 'record_decision'
@@ -46,16 +50,27 @@ export const handleRecordDecision = (async (params: {
       return errorOutput('record_decision: text must be non-empty.')
     }
     if (rawText.length > 1024) {
-      return errorOutput('record_decision: text must be at most 1024 characters.')
+      return errorOutput(
+        'record_decision: text must be at most 1024 characters.',
+      )
     }
-    if ((kind === 'decision' || kind === 'constraint') && !hasDecisionRationale(rawText)) {
-      return errorOutput('record_decision: a decision/constraint must state a rationale (>=24 chars and include reasoning such as: because, since, so that, in order to, to avoid, rather than, instead of, chosen over, due to, rejected).')
+    if (
+      (kind === 'decision' || kind === 'constraint') &&
+      !hasDecisionRationale(rawText)
+    ) {
+      return errorOutput(
+        'record_decision: a decision/constraint must state a rationale (>=24 chars and include reasoning such as: because, since, so that, in order to, to avoid, rather than, instead of, chosen over, due to, rejected).',
+      )
     }
     if (rawSelectors.length < 1 || rawSelectors.length > 32) {
-      return errorOutput('record_decision: evidenceSelectors must contain 1..32 entries.')
+      return errorOutput(
+        'record_decision: evidenceSelectors must contain 1..32 entries.',
+      )
     }
     if (excerpt !== undefined && excerpt.length > 1024) {
-      return errorOutput('record_decision: excerpt must be at most 1024 characters.')
+      return errorOutput(
+        'record_decision: excerpt must be at most 1024 characters.',
+      )
     }
     let supersedes: string[] | undefined
     if (input.supersedes !== undefined) {
@@ -83,15 +98,23 @@ export const handleRecordDecision = (async (params: {
     const normalizedPaths: string[] = []
     for (const selector of rawSelectors) {
       if (typeof selector !== 'string') {
-        return errorOutput('record_decision: every evidenceSelector must be a project-relative path string.')
+        return errorOutput(
+          'record_decision: every evidenceSelector must be a project-relative path string.',
+        )
       }
       const trimmed = selector.trim()
       if (trimmed.length === 0 || trimmed.length > 1024) {
-        return errorOutput('record_decision: evidence path must be 1..1024 characters.')
+        return errorOutput(
+          'record_decision: evidence path must be 1..1024 characters.',
+        )
       }
       const decision = classifyMemoryArtifactPath(trimmed)
       if (!decision.allowed || !decision.normalizedPath) {
-        return errorOutput('record_decision: rejected evidence path: ' + (decision.reason ?? 'not allowed') + '.')
+        return errorOutput(
+          'record_decision: rejected evidence path: ' +
+            (decision.reason ?? 'not allowed') +
+            '.',
+        )
       }
       normalizedPaths.push(decision.normalizedPath)
     }
@@ -149,7 +172,10 @@ export const handleRecordDecision = (async (params: {
         let dedupSequence = 0
         for (const item of memory.evidence) {
           if (!item.id.startsWith(dedupIdPrefix)) continue
-          const suffix = Number.parseInt(item.id.slice(dedupIdPrefix.length), 10)
+          const suffix = Number.parseInt(
+            item.id.slice(dedupIdPrefix.length),
+            10,
+          )
           if (Number.isInteger(suffix) && suffix >= dedupSequence) {
             dedupSequence = suffix + 1
           }
@@ -215,7 +241,10 @@ export const handleRecordDecision = (async (params: {
       }
     }
     const evidenceId = (idPrefix + String(idSequence)).slice(0, 160)
-    const lines = ['[' + kind + '] ' + rawText, 'Evidence: ' + normalizedPaths.join(', ')]
+    const lines = [
+      '[' + kind + '] ' + rawText,
+      'Evidence: ' + normalizedPaths.join(', '),
+    ]
     if (excerpt !== undefined) {
       lines.push('Excerpt: ' + excerpt)
     }
@@ -237,8 +266,12 @@ export const handleRecordDecision = (async (params: {
     while (memory.evidence.length > TASK_MEMORY_LIST_CAPS.evidence) {
       memory.evidence.shift()
     }
+    if (kind === 'decision') recordMemoryDecision(agentState)
     if (logger) {
-      logger.debug({ kind, evidenceCount: normalizedPaths.length }, 'Recorded decision')
+      logger.debug(
+        { kind, evidenceCount: normalizedPaths.length },
+        'Recorded decision',
+      )
     }
     return {
       output: jsonToolResult({
@@ -253,7 +286,10 @@ export const handleRecordDecision = (async (params: {
     }
   } catch (error) {
     if (logger) {
-      logger.debug({ error: error instanceof Error ? error.message : String(error) }, 'record_decision failed best-effort')
+      logger.debug(
+        { error: error instanceof Error ? error.message : String(error) },
+        'record_decision failed best-effort',
+      )
     }
     return errorOutput('record_decision: failed to record decision.')
   }

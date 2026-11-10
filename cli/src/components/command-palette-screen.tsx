@@ -31,8 +31,6 @@ import type { FileTreeNode } from '@codebuff/common/util/file'
 
 const LAYOUT = {
   CONTENT_PADDING: 1,
-  MAX_CONTENT_WIDTH: 100,
-  PREFERRED_CONTENT_WIDTH: 80,
   INPUT_HEIGHT: 1,
   MAX_LIST_HEIGHT: 20,
   /** Cap on files shown when the query is empty (commands are always all shown). */
@@ -426,11 +424,7 @@ export const CommandPaletteScreen: React.FC<CommandPaletteScreenProps> = ({
     [onClose, selectIndex, currentFocus, currentEntries],
   )
 
-  const contentMaxWidth = Math.min(
-    Math.max(1, terminalWidth),
-    LAYOUT.MAX_CONTENT_WIDTH,
-  )
-  const contentWidth = Math.min(LAYOUT.PREFERRED_CONTENT_WIDTH, contentMaxWidth)
+  const contentWidth = Math.max(1, terminalWidth)
   const innerWidth = Math.max(1, contentWidth - LAYOUT.CONTENT_PADDING * 2)
   const selectedEntry = filteredEntries[clampedFocusedIndex]
   const insertionSelected =

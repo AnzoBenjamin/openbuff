@@ -58,8 +58,12 @@ export const handleGlob = (async (params: {
 }): Promise<{
   output: CodebuffToolOutput<ToolName>
 }> => {
-  const { previousToolCallFinished, toolCall, requestClientToolCall, agentState } =
-    params
+  const {
+    previousToolCallFinished,
+    toolCall,
+    requestClientToolCall,
+    agentState,
+  } = params
 
   await previousToolCallFinished
   const input = toolCall.input as {
@@ -108,12 +112,15 @@ export const handleGlob = (async (params: {
       recordMemoryReuse(agentState, {
         tool: 'glob',
         decision: reuseSkip ? 'skip' : 'full',
+        reason: cover.reason,
         served: reuseSkip ? cover.coveringExcerpts.length : 0,
         gaps: cover.remainingGaps.length,
         coveredStableChunkIds: reuseSkip
           ? cover.coveringExcerpts
               .map((entry) => entry.chunkId)
-              .filter((id): id is string => typeof id === 'string' && id.length > 0)
+              .filter(
+                (id): id is string => typeof id === 'string' && id.length > 0,
+              )
           : undefined,
       })
       if (cover.decision === 'skip' && cover.coveringExcerpts.length > 0) {

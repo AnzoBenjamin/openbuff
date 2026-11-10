@@ -41,7 +41,7 @@ export const QuestionHeader: React.FC<QuestionHeaderProps> = memo(
     const truncatedAnswer = clipEvidenceLine(answerDisplay, availableWidth)
     const questionWidth = Math.max(
       1,
-      Math.min(80, terminalWidth - 8) - questionPrefix.length - 2,
+      terminalWidth - 8 - questionPrefix.length - 2,
     )
     const questionLines = wrapTextPreservingNewlines(
       questionText,

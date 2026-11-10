@@ -43,6 +43,38 @@ afterAll(() => {
 })
 
 describe('IndexManager semantic integration', () => {
+  test('an interrupted build preserves completed batches and resumes the remainder', async () => {
+    const root = makeProject()
+    for (let i = 0; i < 68; i++)
+      writeFileSync(
+        join(root, 'src', `extra-${i}.ts`),
+        `export const value${i} = ${i}\n`,
+      )
+    let calls = 0
+    const interrupted: EmbedFn = async (texts) => {
+      if (++calls > 1) throw new Error('embedding endpoint interrupted')
+      return fakeEmbed(texts)
+    }
+    const config = { semantic: { enabled: true, model: 'resume-test' } }
+    const first = IndexManager.getInstance(root, config, interrupted)
+    await first.waitUntilReady(10_000)
+    expect(first.isSemanticReady()).toBe(true)
+    expect(first.getStatus().semanticSkippedFiles).toBe(6)
+    let resumedCount = 0
+    const resumed = IndexManager.getInstance(
+      root,
+      { ...config, weights: { semanticBlend: 0.75 } },
+      async (texts) => {
+        resumedCount += texts.length
+        return fakeEmbed(texts)
+      },
+    )
+    await resumed.waitUntilReady(10_000)
+    expect(resumed.isSemanticReady()).toBe(true)
+    expect(resumedCount).toBe(6)
+    expect(resumed.getStatus().semanticSkippedFiles).toBeUndefined()
+  })
+
   test('reuses persisted vectors across manager instances and fingerprints by model', async () => {
     const root = makeProject()
     let firstEmbeddedTexts = 0

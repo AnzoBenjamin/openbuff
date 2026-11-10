@@ -7,14 +7,19 @@ The current UI keeps more of Openbuff’s green identity while making captured o
 - Repeated inspect links use quiet inset styling with hover/focus emphasis.
 - Agent instructions and Markdown result summaries use the native renderer. Task prose appears immediately while highlighting initializes.
 - Mode popups paint above composer boundaries with a clear row between their borders.
-- Decision panels fit their contents and are capped at 88 columns. Windowed choices reserve room for focused descriptions and custom input. Command line breaks, explicit truncation and full inspection remain available. Actions have spacing, and Submit uses one row.
+- Decision panels span the available composer width with content-sized height. Question and option text use the full content width; secondary actions and footer controls have additional separation on roomy terminals. Windowed choices reserve room for focused descriptions and custom input. Command line breaks, explicit truncation and full inspection remain available. Actions have spacing, and Submit uses one row.
 - Opening a reader detail resets horizontal offset and wrapping; returning restores the parent. Batched arrow keys retain the latest choice index.
+- Help and command panels use the available terminal width. Command labels stay intact before descriptions shrink. Light and dark themes paint controlled main backgrounds, including theme switches. Waiting and streaming status uses clear static phase text alongside elapsed time and Stop; reasoning labels its receiving state.
+- Memory telemetry reports evidence actually reused and newly accepted decisions, with explanations when discovery must run in full. Complete native reads and confirmed mutations retain actual file digests, and retrieval crosses task boundaries without weakening freshness checks.
 
 ## Validation
 
 - CLI: 4,610 passed, 160 skipped, zero failures.
 - Native UI: 165 passed, zero skipped or failed across 39 suites.
 - Final compact-dialog adjustment: 27 focused checks passed, including validation ownership, retained answers and keyboard navigation.
+- Full-width approval correction: 22 focused checks passed, including the actual approval component at 60×18, 100×24 and 160×32.
+- Follow-up help, command and theme fixtures passed at 60×18, 100×24 and 160×32 in both themes. Full CLI schedule: 4,613 passed, 162 skipped, zero failures; native UI: 167 passed across 39 suites, zero skipped or failed. The installed binary's live 100×24 help panel spans the terminal with Dismiss at the right edge.
+- On the live memory database, two synchronous health scans produced a 9,938 ms main-thread pause. The shared worker scan kept the measured maximum pause at 11 ms. Cache warming affects total-duration comparison; the event-loop measurement establishes responsiveness.
 - CLI typecheck and compiled OpenTUI/tree-sitter smoke checks passed.
 - Installed `openbuff --smoke-opentui` passed. A separate tmux CLI session verified complete Plan-menu borders at 100×24 and a clean resize to the compact 60×18 composer. The temporary session was closed.
 - No provider request was needed for UI verification. Earlier memory/listener and responsiveness fixes remain included.
@@ -23,6 +28,6 @@ Native fixture frames and color spans: `/tmp/openbuff-ui-polish-frames/`. The PN
 
 ![Captured output reader](polish-previews/reader.png)
 
-![Compact decision panel](polish-previews/choices.png)
+![Full-width approval panel](polish-previews/choices.png)
 
 ![Agent task presentation](polish-previews/agent.png)

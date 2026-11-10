@@ -158,12 +158,18 @@ class RepositoryStub implements MemoryRepositoryV2 {
     if (this.claimDedupFailure === 'reject') {
       return {
         status: 'error',
-        error: { kind: 'unavailable', message: 'dedup offline', retryable: true },
+        error: {
+          kind: 'unavailable',
+          message: 'dedup offline',
+          retryable: true,
+        },
       }
     }
     const requested = params.claimIds
     const entries = requested
-      ? this.claimDedupEntries.filter((entry) => requested.includes(entry.claimId))
+      ? this.claimDedupEntries.filter((entry) =>
+          requested.includes(entry.claimId),
+        )
       : this.claimDedupEntries
     return { status: 'ok', entries }
   }
@@ -559,8 +565,8 @@ describe('MemoryV2Coordinator lifecycle', () => {
     expect(repository.queryRequests).toHaveLength(queriesBeforeResume + 1)
     expect(repository.queryRequests.at(-1)).toMatchObject({
       queryId: first.turn.queryId,
-      taskId: first.activeTask.taskId,
     })
+    expect(repository.queryRequests.at(-1)?.taskId).toBeUndefined()
   })
 
   test('passes reconciled workspace state and injects only successful inject-mode results', async () => {
@@ -587,6 +593,7 @@ describe('MemoryV2Coordinator lifecycle', () => {
       workspaceRevision: 9,
       workspaceSnapshotId: 'snapshot:9',
     })
+    expect(repository.queryRequests.at(-1)?.taskId).toBeUndefined()
     expect(state.memoryV2Context).toMatchObject({
       schemaVersion: 2,
       userInputId: 'input:inject',
@@ -1117,7 +1124,9 @@ describe('MemoryV2Coordinator lifecycle', () => {
 
       expect(state.memoryV2!.turn.status).toBe(expected)
       const events = allEvents(repository)
-      expect(new Set(events.map((event) => event.eventId)).size).toBe(events.length)
+      expect(new Set(events.map((event) => event.eventId)).size).toBe(
+        events.length,
+      )
       expect(allEvents(repository).at(-1)).toMatchObject({
         eventType: 'session.ended',
         payload: { status: expected },
@@ -1158,7 +1167,10 @@ describe('MemoryV2Coordinator lifecycle', () => {
       expect(observationEvent.payload.observation.evidence[0]).toMatchObject({
         selector: { kind: 'file', path: 'src/good.ts' },
       })
-      expect(observationEvent.payload.observation.evidence[0]?.contentDigest).toMatch(/^sha256:/)
+      // Discovery metadata has no authenticated file-content digest.
+      expect(
+        observationEvent.payload.observation.evidence[0]?.contentDigest,
+      ).toBeUndefined()
       expect(
         observationEvent.payload.observation.provenance?.metadata.outputDigest,
       ).toMatch(/^sha256:[a-f0-9]{64}$/)
@@ -1621,7 +1633,9 @@ describe('MemoryV2Coordinator lifecycle', () => {
       )
       expect(chunkEvidence.length).toBeGreaterThan(0)
       for (const item of chunkEvidence) {
-        expect(item.excerpt === undefined || item.excerpt.length <= 1024).toBe(true)
+        expect(item.excerpt === undefined || item.excerpt.length <= 1024).toBe(
+          true,
+        )
         expect(item.contentDigest).toMatch(/^sha256:/)
       }
       expect(event.payload.observation.confidence).toBe(0.5)
@@ -1699,9 +1713,7 @@ describe('MemoryV2Coordinator lifecycle', () => {
     if (event.eventType === 'observation.recorded') {
       const selectors = event.payload.observation.selectors ?? []
       expect(selectors).toContainEqual({ kind: 'file', path: 'src/good.ts' })
-      expect(
-        selectors.filter((s) => s.kind === 'chunk'),
-      ).toHaveLength(2)
+      expect(selectors.filter((s) => s.kind === 'chunk')).toHaveLength(2)
       expect(selectors).toContainEqual({
         kind: 'chunk',
         path: 'src/good.ts',
@@ -1727,7 +1739,10 @@ describe('MemoryV2Coordinator lifecycle', () => {
         (e) => e.selector.kind === 'chunk',
       )
       expect(chunkEvidence?.contentDigest).toBe(validDigest)
-      expect(chunkEvidence?.excerpt === undefined || chunkEvidence?.excerpt.length <= 1024).toBe(true)
+      expect(
+        chunkEvidence?.excerpt === undefined ||
+          chunkEvidence?.excerpt.length <= 1024,
+      ).toBe(true)
     }
     expect(verifyRequests).toHaveLength(1)
     expect(verifyRequests[0]).toMatchObject({
@@ -1884,20 +1899,44 @@ describe('MemoryV2Coordinator lifecycle', () => {
       eventId: futureTailId,
     })
     expect(attempts[1]!.events).toEqual(attempts[0]!.events)
-    expect(state.memoryV2!.lastEventId).toBe(attempts[1]!.events.at(-1)!.eventId)
+    expect(state.memoryV2!.lastEventId).toBe(
+      attempts[1]!.events.at(-1)!.eventId,
+    )
   })
 
   test('classifies decision tools deterministically', () => {
-    expect(classifyObservationKind('create_plan', [{ plan: 'x' }])).toBe('decision')
-    expect(classifyObservationKind('architect', [{ conclusion: 'We decided ok' }])).toBe('decision')
-    expect(classifyObservationKind('thinker', [{ summary: 'plain notes' }])).toBe('fact')
-    expect(classifyObservationKind('think_deeply', [{ text: 'the service must not delete data' }])).toBe('constraint')
-    expect(classifyObservationKind('think_deeply', [{ summary: 'plain notes' }])).toBe('fact')
-    expect(classifyObservationKind('architect', [{ constraint: 'must use sqlite' }])).toBe('constraint')
-    expect(classifyObservationKind('get_change_review_bundle', [{ status: 'ok' }])).toBe('discovery')
-    expect(classifyObservationKind('run_targeted_validation', [{ passed: true }])).toBe('discovery')
-    expect(classifyObservationKind('write_file', [{ ok: true }])).toBe('outcome')
-    expect(classifyObservationKind('code_search', [{ ok: true }])).toBe('discovery')
+    expect(classifyObservationKind('create_plan', [{ plan: 'x' }])).toBe(
+      'decision',
+    )
+    expect(
+      classifyObservationKind('architect', [{ conclusion: 'We decided ok' }]),
+    ).toBe('decision')
+    expect(
+      classifyObservationKind('thinker', [{ summary: 'plain notes' }]),
+    ).toBe('fact')
+    expect(
+      classifyObservationKind('think_deeply', [
+        { text: 'the service must not delete data' },
+      ]),
+    ).toBe('constraint')
+    expect(
+      classifyObservationKind('think_deeply', [{ summary: 'plain notes' }]),
+    ).toBe('fact')
+    expect(
+      classifyObservationKind('architect', [{ constraint: 'must use sqlite' }]),
+    ).toBe('constraint')
+    expect(
+      classifyObservationKind('get_change_review_bundle', [{ status: 'ok' }]),
+    ).toBe('discovery')
+    expect(
+      classifyObservationKind('run_targeted_validation', [{ passed: true }]),
+    ).toBe('discovery')
+    expect(classifyObservationKind('write_file', [{ ok: true }])).toBe(
+      'outcome',
+    )
+    expect(classifyObservationKind('code_search', [{ ok: true }])).toBe(
+      'discovery',
+    )
   })
 
   test('records decision-classified tool output as kind=decision', async () => {
@@ -1919,7 +1958,9 @@ describe('MemoryV2Coordinator lifecycle', () => {
       callId: 'call:plan-decision',
       userInputId: 'input:decision-capture',
       input: {},
-      output: [{ type: 'json', value: { plan: 'migrate to sqlite', status: 'ok' } }],
+      output: [
+        { type: 'json', value: { plan: 'migrate to sqlite', status: 'ok' } },
+      ],
       native: true,
     })
     expect(allEvents(repository).length).toBe(before + 1)
@@ -2092,7 +2133,9 @@ describe('MemoryV2Coordinator lifecycle', () => {
       expect(String(event.payload.observationId)).toBe('observation:existing-1')
     }
     expect(
-      newEvents.some((candidate) => candidate.eventType === 'observation.recorded'),
+      newEvents.some(
+        (candidate) => candidate.eventType === 'observation.recorded',
+      ),
     ).toBe(false)
   })
 
@@ -2214,7 +2257,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
         text: 'Use Postgres because durability',
         kind: 'decision',
         evidenceSelectors: ['docs/architecture.md'],
-        supersedes: ['observation:old-b', 'observation:old-a', 'observation:old-b'],
+        supersedes: [
+          'observation:old-b',
+          'observation:old-a',
+          'observation:old-b',
+        ],
       },
       output: [
         {
@@ -2225,7 +2272,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
             evidenceCount: 1,
             text: 'Use Postgres because durability',
             evidenceSelectors: ['docs/architecture.md'],
-            supersedes: ['observation:old-b', 'observation:old-a', 'observation:old-b'],
+            supersedes: [
+              'observation:old-b',
+              'observation:old-a',
+              'observation:old-b',
+            ],
           },
         },
       ],
@@ -2237,18 +2288,28 @@ describe('MemoryV2Coordinator lifecycle', () => {
     if (recorded.eventType !== 'observation.recorded') return
     const capturedObservationId = recorded.payload.observation.observationId
     const superseded = newEvents.filter(
-      (candidate): candidate is Extract<MemoryEventDraft, { eventType: 'claim.superseded' }> =>
-        candidate.eventType === 'claim.superseded',
+      (
+        candidate,
+      ): candidate is Extract<
+        MemoryEventDraft,
+        { eventType: 'claim.superseded' }
+      > => candidate.eventType === 'claim.superseded',
     )
     expect(
       superseded.map((draft) => String(draft.payload.observationId)),
     ).toEqual(['observation:old-a', 'observation:old-b'])
     for (const draft of superseded) {
-      expect(draft.payload.supersededByObservationId).toBe(capturedObservationId)
+      expect(draft.payload.supersededByObservationId).toBe(
+        capturedObservationId,
+      )
     }
     const reused = newEvents.filter(
-      (candidate): candidate is Extract<MemoryEventDraft, { eventType: 'observation.reused' }> =>
-        candidate.eventType === 'observation.reused',
+      (
+        candidate,
+      ): candidate is Extract<
+        MemoryEventDraft,
+        { eventType: 'observation.reused' }
+      > => candidate.eventType === 'observation.reused',
     )
     expect(reused).toHaveLength(1)
     expect(reused[0]!.payload.used).toEqual([
@@ -2277,15 +2338,31 @@ describe('MemoryV2Coordinator lifecycle', () => {
         // Both targets exist on the ACTIVE task but their stored claim
         // lifecycle is retracted, so only the status check can exclude them.
         repository.observationStatusEntries = [
-          { observationId: 'observation:old-a', taskId: activeTaskId, status: 'retracted' },
-          { observationId: 'observation:old-b', taskId: activeTaskId, status: 'retracted' },
+          {
+            observationId: 'observation:old-a',
+            taskId: activeTaskId,
+            status: 'retracted',
+          },
+          {
+            observationId: 'observation:old-b',
+            taskId: activeTaskId,
+            status: 'retracted',
+          },
         ]
       } else if (mode === 'foreign-task') {
         // Both targets are active but belong to another task, so only the
         // taskId check can exclude them.
         repository.observationStatusEntries = [
-          { observationId: 'observation:old-a', taskId: 'task:foreign', status: 'active' },
-          { observationId: 'observation:old-b', taskId: 'task:foreign', status: 'active' },
+          {
+            observationId: 'observation:old-a',
+            taskId: 'task:foreign',
+            status: 'active',
+          },
+          {
+            observationId: 'observation:old-b',
+            taskId: 'task:foreign',
+            status: 'active',
+          },
         ]
       } else {
         repository.observationStatusFailure = 'reject'
@@ -2353,7 +2430,9 @@ describe('MemoryV2Coordinator lifecycle', () => {
       callId: 'call:constraint',
       userInputId: 'input:constraint-capture',
       input: {},
-      output: [{ type: 'json', value: { text: 'the service must not delete data' } }],
+      output: [
+        { type: 'json', value: { text: 'the service must not delete data' } },
+      ],
       native: true,
     })
     expect(allEvents(repository).length).toBe(before + 1)

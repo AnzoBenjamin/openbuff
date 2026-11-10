@@ -60,8 +60,6 @@ const StatusActionButton = ({
   )
 }
 
-const SHIMMER_INTERVAL_MS = 160
-
 /**
  * The CLI's honest sandbox posture, rendered as a low-priority chip. Static:
  * built from the same default the ACP capability map advertises, so the chip
@@ -224,28 +222,16 @@ export const StatusBar = ({
 
       case 'waiting':
         return (
-          <ShimmerText
-            text={
-              width.is('xs')
-                ? '…'
-                : statusIndicatorState.phaseLabel || 'thinking...'
-            }
-            interval={SHIMMER_INTERVAL_MS}
-            primaryColor={theme.primary}
-          />
+          <span fg={theme.primary}>
+            {statusIndicatorState.phaseLabel || 'Waiting for provider'}
+          </span>
         )
 
       case 'streaming':
         return (
-          <ShimmerText
-            text={
-              width.is('xs')
-                ? '…'
-                : statusIndicatorState.phaseLabel || 'working...'
-            }
-            interval={SHIMMER_INTERVAL_MS}
-            primaryColor={theme.primary}
-          />
+          <span fg={theme.primary}>
+            {statusIndicatorState.phaseLabel || 'Receiving response'}
+          </span>
         )
 
       case 'paused':

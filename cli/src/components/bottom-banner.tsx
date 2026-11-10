@@ -90,6 +90,10 @@ export const BottomBanner: React.FC<BottomBannerProps> = ({
       style={{
         marginLeft: width.is('sm') ? 0 : 1,
         marginRight: width.is('sm') ? 0 : 1,
+        alignSelf: 'stretch',
+        flexGrow: 0,
+        flexShrink: 0,
+        minWidth: 0,
         borderStyle: 'single',
         borderColor: borderColor,
         flexDirection: hasCloseButton ? 'row' : 'column',

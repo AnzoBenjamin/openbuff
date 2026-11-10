@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -13,6 +13,13 @@ import {
 } from '../../../../../common/src/types/memory-v2'
 
 import { BunSQLiteMemoryRepository } from '../bun-sqlite-memory-repository'
+import { MemoryV2Coordinator } from '../../../../../sdk/src/services/memory-v2/coordinator'
+import { getInitialAgentState } from '@codebuff/common/types/session-state'
+import { ProjectIdSchema } from '@codebuff/common/types/memory-v2'
+import { getExactContentHash } from '@codebuff/common/util/content-hash'
+import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
+import { getFilesStructured } from '../../../../../sdk/src/tools/read-files'
+import { createNodeFileSystem } from '../../../../../sdk/src/tools/node-filesystem'
 
 const repositories: BunSQLiteMemoryRepository[] = []
 
@@ -44,10 +51,7 @@ const FRESH_DIGEST =
 const STALE_DIGEST =
   'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 
-function evidenceFixture(
-  path = 'src/example.ts',
-  digest = FRESH_DIGEST,
-) {
+function evidenceFixture(path = 'src/example.ts', digest = FRESH_DIGEST) {
   return {
     artifact: {
       artifactId: `artifact-${path}`,
@@ -103,9 +107,7 @@ async function open(root: string): Promise<BunSQLiteMemoryRepository> {
   return result.repository
 }
 
-async function close(
-  repository: BunSQLiteMemoryRepository,
-): Promise<void> {
+async function close(repository: BunSQLiteMemoryRepository): Promise<void> {
   const index = repositories.indexOf(repository)
   if (index >= 0) repositories.splice(index, 1)
   await repository.close()
@@ -116,6 +118,127 @@ afterEach(async () => {
 })
 
 describe('two-session cold-start (P4)', () => {
+  test('native complete reads and confirmed mutations retain actual digests across tasks', async () => {
+    const root = temporaryRepository()
+    mkdirSync(join(root, 'src'))
+    const raw = '\uFEFFexport const memoryValue = 1\r\n'
+    writeFileSync(join(root, 'src/example.ts'), raw)
+    const repository = await open(root)
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator({
+      repository,
+      projectId: ProjectIdSchema.parse('project-1'),
+      capture: 'safe',
+      authority: 'sqlite-v2-opt-in',
+    })
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:read',
+      query: 'example',
+    })
+    const read = await getFilesStructured({
+      cwd: root,
+      filePaths: ['src/example.ts'],
+      fs: createNodeFileSystem(),
+      capabilityIssuer: { projectId: root, runId: 'read-run' },
+    })
+    // The production tool strips raw bytes from the model-facing output.
+    const item = read.results[0]
+    expect(item?.selector).toBe('file')
+    if (item?.selector !== 'file' || item.status === 'error')
+      throw new Error('Read failed')
+    delete item.rawSourceContent
+    const capture = (callId: string, value: typeof read, native = true) =>
+      coordinator.recordToolObservation({
+        toolName: 'read_files',
+        callId,
+        userInputId: 'input:read',
+        input: { files: ['src/example.ts'] },
+        output: [{ type: 'json', value }],
+        native,
+      })
+    await capture('call:read', read)
+    const query = (id: string) =>
+      repository.query(
+        MemoryRetrievalRequestSchema.parse({
+          schemaVersion: 2,
+          queryId: id,
+          projectId: 'project-1',
+          sessionId: 'other-session',
+          query: 'src/example.ts',
+          selectors: [{ kind: 'file', path: 'src/example.ts' }],
+          artifactKinds: [],
+          includeHistorical: false,
+          maxResultsPerCategory: 10,
+        }),
+      )
+    const verified = await query('query:read')
+    expect(verified.outcome).toBe('result')
+    if (verified.outcome !== 'result') throw new Error('Query failed')
+    expect(verified.result.verifiedKnowledge).toHaveLength(1)
+    expect(
+      verified.result.verifiedKnowledge[0]?.verifiedEvidence[0]?.contentDigest,
+    ).toBe(getExactContentHash(raw))
+    expect(verified.result.rereadRequired).toHaveLength(0)
+
+    await capture('call:untrusted', read, false)
+    await capture('call:bad-signature', {
+      ...read,
+      results: [
+        {
+          ...item,
+          editAnchor: {
+            ...item.editAnchor!,
+            readCapability: 'cap.v4.invalid.signature',
+          },
+        },
+      ],
+    })
+    await capture('call:partial', {
+      ...read,
+      status: 'partial',
+      summary: { ...read.summary, ok: 0, partial: 1 },
+      results: [
+        {
+          ...item,
+          status: 'partial',
+          complete: false,
+          editAnchor: undefined,
+        },
+      ],
+    })
+    const afterUnsafe = await query('query:unsafe')
+    if (afterUnsafe.outcome !== 'result') throw new Error('Query failed')
+    expect(afterUnsafe.result.verifiedKnowledge).toHaveLength(1)
+    expect(afterUnsafe.result.rereadRequired.length).toBeGreaterThan(0)
+
+    const edited = 'export const memoryValue = 2\n'
+    await coordinator.recordToolObservation({
+      toolName: 'write_file',
+      callId: 'call:mutation',
+      userInputId: 'input:read',
+      input: { path: 'src/example.ts' },
+      native: true,
+      output: [
+        {
+          type: 'json',
+          value: committedMutationFixture([
+            { path: 'src/example.ts', content: edited },
+          ]),
+        },
+      ],
+    })
+    const afterMutation = await query('query:mutation')
+    if (afterMutation.outcome !== 'result') throw new Error('Query failed')
+    expect(
+      afterMutation.result.verifiedKnowledge.some((entry) =>
+        entry.verifiedEvidence.some(
+          (evidence) => evidence.contentDigest === getExactContentHash(edited),
+        ),
+      ),
+    ).toBe(true)
+  })
+
   test('cold-reopened session reuses fresh verified knowledge without re-exploration', async () => {
     const root = temporaryRepository()
     const session1 = await open(root)
@@ -162,8 +285,28 @@ describe('two-session cold-start (P4)', () => {
     if (queried.outcome !== 'result') return
     expect(queried.result.verifiedKnowledge.length).toBe(1)
     expect(queried.result.rereadRequired.length).toBe(0)
+    expect(queried.result.verifiedKnowledge[0]?.observation.observationId).toBe(
+      ObservationIdSchema.parse('obs-cold-start'),
+    )
+    // Exercise the actual SDK turn wiring too: a fresh task must retrieve
+    // knowledge recorded by a different task in an earlier session.
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator({
+      repository: session2,
+      projectId: ProjectIdSchema.parse('project-1'),
+      capture: 'off',
+      authority: 'sqlite-v2-opt-in',
+    })
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:cold-fresh',
+      query: 'Discovery obs-cold-start',
+    })
+    expect(state.memoryV2?.activeTask.taskId).not.toBe('task-1')
+    expect(state.memoryV2Context?.result.verifiedKnowledge).toHaveLength(1)
     expect(
-      queried.result.verifiedKnowledge[0]?.observation.observationId,
+      state.memoryV2Context?.result.verifiedKnowledge[0]?.observation
+        .observationId,
     ).toBe(ObservationIdSchema.parse('obs-cold-start'))
   })
 

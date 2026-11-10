@@ -414,6 +414,12 @@ describe('discovery coordinator', () => {
 
   test('evaluateMemoryCover goes full without cover', () => {
     expect(
+      evaluateMemoryCover({
+        pathPrefixes: ['src/auth'],
+        query: 'auth',
+      }).remainingGaps,
+    ).toEqual(['src/auth'])
+    expect(
       evaluateMemoryCover({ pathPrefixes: ['src/auth'], query: 'auth' })
         .decision,
     ).toBe('full')
@@ -687,9 +693,21 @@ describe('recordMemoryReuse', () => {
 
   test('is deterministic across independent states for the same ordered sequence', () => {
     const entries: Parameters<typeof recordMemoryReuse>[1][] = [
-      { tool: 'code_search', decision: 'skip', served: 5, gaps: 1, recordedDecisions: 2 },
+      {
+        tool: 'code_search',
+        decision: 'skip',
+        served: 5,
+        gaps: 1,
+        recordedDecisions: 2,
+      },
       { tool: 'glob', decision: 'narrow', served: 3, gaps: 2 },
-      { tool: 'query_index', decision: 'full', served: 9, gaps: 4, recordedDecisions: 1 },
+      {
+        tool: 'query_index',
+        decision: 'full',
+        served: 9,
+        gaps: 4,
+        recordedDecisions: 1,
+      },
     ]
 
     const stateA: Parameters<typeof recordMemoryReuse>[0] = {}

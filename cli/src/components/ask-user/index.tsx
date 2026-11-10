@@ -48,7 +48,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
   onStop,
 }) => {
   const theme = useTheme()
-  const { terminalHeight } = useTerminalDimensions()
+  const { terminalWidth, terminalHeight } = useTerminalDimensions()
   const inspecting = useOutputReaderStore((state) => state.request !== null)
   const [isValidating, setIsValidating] = useState(false)
   const mountedRef = useRef(true)
@@ -630,14 +630,14 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
         flexShrink: 0,
       }}
     >
-      {/* Close button in top-right */}
+      {/* Keep secondary actions separate from the question on roomy terminals. */}
       <box
         style={{
           flexDirection: 'row',
-          justifyContent: 'flex-start',
+          justifyContent: terminalWidth >= 80 ? 'flex-end' : 'flex-start',
           gap: 2,
           flexWrap: 'wrap',
-          marginBottom: 0,
+          marginBottom: terminalHeight >= 24 ? 1 : 0,
           width: '100%',
         }}
       >
@@ -734,9 +734,10 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
       <box
         style={{
           flexDirection: 'row',
-          justifyContent: 'flex-start',
+          justifyContent: terminalWidth >= 80 ? 'space-between' : 'flex-start',
           alignItems: 'center',
           width: '100%',
+          marginTop: terminalHeight >= 24 ? 1 : 0,
           gap: 1,
         }}
       >

@@ -111,6 +111,7 @@ export const handleListDirectory = (async (params: {
       recordMemoryReuse(agentState, {
         tool: 'list_directory',
         decision: reuseSkip ? 'skip' : 'full',
+        reason: cover.reason,
         served: reuseSkip ? cover.coveringExcerpts.length : 0,
         gaps: cover.remainingGaps.length,
         coveredStableChunkIds: reuseSkip

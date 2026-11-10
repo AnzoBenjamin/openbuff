@@ -12,6 +12,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises'
 import { checkSQLiteIntegrity } from './sqlite-integrity-check'
+import { queryAdmissionSQL, scanSQLiteQuery } from './sqlite-query-scan'
 
 import {
   MemoryAppendRequestSchema,
@@ -536,6 +537,7 @@ export class BunSQLiteMemoryRepository
 {
   readonly databasePath: string
   private closed = false
+  private integrityCheck: Promise<boolean> | undefined
 
   private constructor(
     private readonly database: Database,
@@ -543,6 +545,28 @@ export class BunSQLiteMemoryRepository
     private readonly recallExpander?: BunSQLiteMemoryRepositoryOptions['recallExpander'],
   ) {
     this.databasePath = databasePath
+  }
+
+  private async checkIntegrity(): Promise<boolean> {
+    if (this.databasePath === ':memory:') {
+      return (
+        readPragmaString(
+          this.database,
+          'PRAGMA quick_check(1)',
+          'quick_check',
+        ) === 'ok'
+      )
+    }
+    // Both health APIs can be called together. Share their in-flight scan;
+    // never scan a large database on the terminal's event loop.
+    const pending = (this.integrityCheck ??= checkSQLiteIntegrity(
+      this.databasePath,
+    ))
+    try {
+      return await pending
+    } finally {
+      if (this.integrityCheck === pending) this.integrityCheck = undefined
+    }
   }
 
   static async open(
@@ -1362,10 +1386,9 @@ export class BunSQLiteMemoryRepository
 
       // Idempotent full-replace per run: drop the run's previous rows first.
       if (insertFts) {
-        this.database.run(
-          'DELETE FROM context_archive_fts WHERE run_id = ?',
-          [runId],
-        )
+        this.database.run('DELETE FROM context_archive_fts WHERE run_id = ?', [
+          runId,
+        ])
       }
       this.database.run(
         'DELETE FROM context_archive_messages WHERE run_id = ?',
@@ -1444,10 +1467,12 @@ export class BunSQLiteMemoryRepository
    * failing the whole read. Never throws; a failed read returns
    * { snapshots: [] }.
    */
-  async loadContextArchiveSnapshots(request: {
-    runId?: string
-    limit?: number
-  } = {}): Promise<{ snapshots: ContextArchiveSnapshot[] }> {
+  async loadContextArchiveSnapshots(
+    request: {
+      runId?: string
+      limit?: number
+    } = {},
+  ): Promise<{ snapshots: ContextArchiveSnapshot[] }> {
     if (this.requireOpen() !== null) return { snapshots: [] }
     const runId =
       typeof request?.runId === 'string' && request.runId.length > 0
@@ -1843,10 +1868,7 @@ export class BunSQLiteMemoryRepository
     const unavailable = this.requireOpen()
     if (unavailable) throw new MemoryV2StorageError(unavailable.error)
     for (const seed of SEED_PLAYBOOKS) {
-      const triggerSignature = computeTriggerSignature(
-        seed.trigger,
-        seed.scope,
-      )
+      const triggerSignature = computeTriggerSignature(seed.trigger, seed.scope)
       try {
         const existing = this.database
           .query(
@@ -1908,11 +1930,21 @@ export class BunSQLiteMemoryRepository
 
     try {
       this.requireBoundProject(parsed.data.projectId)
-      const scan = scanQueryRows(this.database, parsed.data.projectId)
+      const scan = this.databasePath === ':memory:'
+        ? scanQueryRows(this.database, parsed.data.projectId, parsed.data.includeHistorical)
+        : await scanSQLiteQuery<EventRow>({
+            databasePath: this.databasePath,
+            projectId: parsed.data.projectId,
+            includeHistorical: parsed.data.includeHistorical,
+            maxEvents: MAX_QUERY_EVENTS,
+            maxBytes: MAX_QUERY_PAYLOAD_BYTES,
+          })
+      const closed = this.requireOpen()
+      if (closed) return operationFailureOutcome(closed.error)
       const events: MemoryEventEnvelope[] = []
       const rows = scan.rows.reverse()
       for (let index = 0; index < rows.length; index++) {
-        if (index % 128 === 0) await yieldToEventLoop()
+        if (index % 32 === 0) await yieldToEventLoop()
         const row = rows[index]!
         if (CANONICAL_EVENT_TYPES.has(row.event_type)) {
           events.push(envelopeFromRow(row))
@@ -2085,11 +2117,7 @@ export class BunSQLiteMemoryRepository
         'PRAGMA user_version',
         'user_version',
       )
-      const check = readPragmaString(
-        this.database,
-        'PRAGMA quick_check(1)',
-        'quick_check',
-      )
+      const check = (await this.checkIntegrity()) ? 'ok' : 'failed'
       const journalMode = readPragmaString(
         this.database,
         'PRAGMA journal_mode',
@@ -2177,6 +2205,8 @@ export class BunSQLiteMemoryRepository
       const events: MemoryEventEnvelope[] = []
       let skippedUnknownCount = 0
       for (const row of rows) {
+        if ((events.length + skippedUnknownCount) % 128 === 0)
+          await yieldToEventLoop()
         if (!CANONICAL_EVENT_TYPES.has(row.event_type)) {
           skippedUnknownCount += 1
           continue
@@ -2233,11 +2263,7 @@ export class BunSQLiteMemoryRepository
           schemaVersion,
         )
       }
-      const check = readPragmaString(
-        this.database,
-        'PRAGMA quick_check(1)',
-        'quick_check',
-      )
+      const check = (await this.checkIntegrity()) ? 'ok' : 'failed'
       if (check !== 'ok') {
         return unavailableHealth(
           {
@@ -2288,8 +2314,16 @@ export class BunSQLiteMemoryRepository
           )
           .get(request.projectId) as { count: number }
       ).count
-      const pageCount = readPragmaNumber(this.database, 'PRAGMA page_count', 'page_count')
-      const pageSize = readPragmaNumber(this.database, 'PRAGMA page_size', 'page_size')
+      const pageCount = readPragmaNumber(
+        this.database,
+        'PRAGMA page_count',
+        'page_count',
+      )
+      const pageSize = readPragmaNumber(
+        this.database,
+        'PRAGMA page_size',
+        'page_size',
+      )
       return { eventCount: count, bytes: pageCount * pageSize }
     } catch (error) {
       if (error instanceof MemoryV2StorageError) throw error
@@ -2405,14 +2439,20 @@ export class BunSQLiteMemoryRepository
         : new MemoryV2StorageError(classifyStorageError(error))
     }
     const fail = (message: string): never => {
-      throw new MemoryV2StorageError({ kind: 'invalid', message, retryable: false })
+      throw new MemoryV2StorageError({
+        kind: 'invalid',
+        message,
+        retryable: false,
+      })
     }
     if (
       !Array.isArray(input.eventIds) ||
       input.eventIds.length < 1 ||
       input.eventIds.length > COMPACTION_APPLY_MAX
     ) {
-      fail('The privileged compaction event list must contain 1 to 100 event IDs.')
+      fail(
+        'The privileged compaction event list must contain 1 to 100 event IDs.',
+      )
     }
     for (const id of input.eventIds) {
       if (!MemoryEventIdSchema.safeParse(id).success)
@@ -2441,7 +2481,9 @@ export class BunSQLiteMemoryRepository
     }
     if (
       claim.payload.archivedEventIds.length !== input.eventIds.length ||
-      claim.payload.archivedEventIds.some((id, index) => id !== input.eventIds[index])
+      claim.payload.archivedEventIds.some(
+        (id, index) => id !== input.eventIds[index],
+      )
     ) {
       fail('The privileged compaction archive claim events do not match.')
     }
@@ -2449,11 +2491,15 @@ export class BunSQLiteMemoryRepository
       claim.payload.archiveHash !== input.archiveHash ||
       claim.payload.archivePath !== input.archivePath
     ) {
-      fail('The privileged compaction archive claim hash or path does not match.')
+      fail(
+        'The privileged compaction archive claim hash or path does not match.',
+      )
     }
     const expectedHash = `sha256:${createHash('sha256').update(stableJson(input.archiveLines)).digest('hex')}`
     if (expectedHash !== input.archiveHash) {
-      fail('The privileged compaction archive hash does not match the archive lines.')
+      fail(
+        'The privileged compaction archive hash does not match the archive lines.',
+      )
     }
     const before = await this.getStoreStats({ projectId: input.projectId })
     const placeholders = input.eventIds.map(() => '?').join(',')
@@ -2468,7 +2514,9 @@ export class BunSQLiteMemoryRepository
         )
         .all(...input.eventIds, input.projectId) as Array<{ event_id: string }>
       if (existing.length !== input.eventIds.length) {
-        fail('The privileged compaction events were not found for this project.')
+        fail(
+          'The privileged compaction events were not found for this project.',
+        )
       }
       // P6 fail-closed closure verification BEFORE the delete trigger is
       // dropped: every observation referenced by a batch event must have its
@@ -2494,7 +2542,9 @@ export class BunSQLiteMemoryRepository
         try {
           payload = JSON.parse(row.payload_json) as unknown
         } catch {
-          fail('The privileged compaction batch contains a malformed event payload.')
+          fail(
+            'The privileged compaction batch contains a malformed event payload.',
+          )
         }
         batchEnvelopes.push({
           eventType: row.event_type,
@@ -2506,13 +2556,21 @@ export class BunSQLiteMemoryRepository
       }
       const referencedObservationIds = new Set<string>()
       const batchAnchoredObservationIds = new Set<string>()
-      const batchEventIdSet = new Set(batchEnvelopes.map((envelope) => envelope.eventId))
+      const batchEventIdSet = new Set(
+        batchEnvelopes.map((envelope) => envelope.eventId),
+      )
       for (const envelope of batchEnvelopes) {
-        for (const id of observationIdsReferencedBy(envelope.eventType, envelope.payload)) {
+        for (const id of observationIdsReferencedBy(
+          envelope.eventType,
+          envelope.payload,
+        )) {
           referencedObservationIds.add(id)
         }
         if (envelope.eventType === 'observation.recorded') {
-          for (const id of observationIdsReferencedBy(envelope.eventType, envelope.payload)) {
+          for (const id of observationIdsReferencedBy(
+            envelope.eventType,
+            envelope.payload,
+          )) {
             batchAnchoredObservationIds.add(id)
           }
         }
@@ -2557,7 +2615,9 @@ export class BunSQLiteMemoryRepository
           continue
         }
         const references = observationIdsReferencedBy(row.event_type, payload)
-        const conflict = references.find((id) => referencedObservationIds.has(id))
+        const conflict = references.find((id) =>
+          referencedObservationIds.has(id),
+        )
         if (conflict !== undefined) {
           fail(
             `Privileged compaction closure violated: shared event ${row.event_id} outside the batch references archived observation ${conflict}.`,
@@ -2629,7 +2689,9 @@ export class BunSQLiteMemoryRepository
     }
     const after = await this.getStoreStats({ projectId: input.projectId })
     return {
-      archivedEventIds: [...input.eventIds] as PrivilegedCompactionResult['archivedEventIds'],
+      archivedEventIds: [
+        ...input.eventIds,
+      ] as PrivilegedCompactionResult['archivedEventIds'],
       beforeCount: before.eventCount,
       afterCount: after.eventCount,
       beforeBytes: before.bytes,
@@ -2868,7 +2930,9 @@ function secureDatabaseFiles(prepared: PreparedDatabasePath): void {
   }
 }
 
-async function preflightExistingDatabase(prepared: PreparedDatabasePath): Promise<void> {
+async function preflightExistingDatabase(
+  prepared: PreparedDatabasePath,
+): Promise<void> {
   if (!prepared.existingIdentity) return
   for (const path of databasePaths(prepared.databasePath)) {
     const entry = lstatExisting(path)
@@ -4318,9 +4382,11 @@ function upsertUsage(
       `SELECT used_count, ignored_count, last_sequence
          FROM memory_usage WHERE observation_id = ?1`,
     )
-    .get(id) as
-    | { used_count: number; ignored_count: number; last_sequence: number }
-    | null
+    .get(id) as {
+    used_count: number
+    ignored_count: number
+    last_sequence: number
+  } | null
   if (prior && sequence <= prior.last_sequence) return
   const usedCount = (prior?.used_count ?? 0) + (column === 'used_count' ? 1 : 0)
   const ignoredCount =
@@ -4339,14 +4405,7 @@ function upsertUsage(
          last_turn_id = excluded.last_turn_id,
          last_sequence = excluded.last_sequence`,
     )
-    .run(
-      id,
-      usedCount,
-      ignoredCount,
-      projectionId(mechanism),
-      turnId,
-      sequence,
-    )
+    .run(id, usedCount, ignoredCount, projectionId(mechanism), turnId, sequence)
 }
 
 /**
@@ -4409,9 +4468,7 @@ function setProjectionCursor(database: Database, sequence: number): void {
 
 function readClaimDedupBackfillCursor(database: Database): number {
   const row = database
-    .query(
-      'SELECT value FROM memory_projection_metadata WHERE key = ?1',
-    )
+    .query('SELECT value FROM memory_projection_metadata WHERE key = ?1')
     .get(CLAIM_DEDUP_BACKFILL_KEY) as { value: string } | null
   const parsed = row ? Number(row.value) : 0
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0
@@ -4630,18 +4687,22 @@ function selectorKey(selector: MemorySelector): string {
   return base
 }
 
-function scanQueryRows(database: Database, projectId: string): QueryScanResult {
+function scanQueryRows(
+  database: Database,
+  projectId: string,
+  includeHistorical: boolean,
+): QueryScanResult {
   const admission = database
     .query(
-      `SELECT sequence,
-            length(CAST(payload_json AS BLOB)) AS payload_bytes,
-            length(CAST(metadata_json AS BLOB)) AS metadata_bytes
-       FROM memory_events
-      WHERE json_extract(metadata_json, '$.projectId') = ?1
-      ORDER BY sequence DESC
-      LIMIT ?2`,
+      queryAdmissionSQL,
     )
-    .all(projectId, MAX_QUERY_EVENTS + 1) as QueryAdmissionRow[]
+    // Tombstones stay in the replay. Only earlier evidence dominated by a
+    // canonical forget is omitted, and historical queries retain every event.
+    .all(
+      projectId,
+      MAX_QUERY_EVENTS + 1,
+      includeHistorical ? 1 : 0,
+    ) as QueryAdmissionRow[]
   const sequences: number[] = []
   let bytes = 0
   let payloadBudgetReached = false
@@ -4748,7 +4809,7 @@ async function buildLexicalResult(
 
   let foldedEvents = 0
   for (const event of events) {
-    if (foldedEvents++ % 128 === 0) await yieldToEventLoop()
+    if (foldedEvents++ % 32 === 0) await yieldToEventLoop()
     if (event.eventType === 'task.created') {
       tasks.set(event.payload.taskId, {
         taskId: event.payload.taskId,

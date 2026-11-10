@@ -62,8 +62,12 @@ export const handleCodeSearch = (async (params: {
 }): Promise<{
   output: CodebuffToolOutput<'code_search'>
 }> => {
-  const { previousToolCallFinished, toolCall, requestClientToolCall, agentState } =
-    params
+  const {
+    previousToolCallFinished,
+    toolCall,
+    requestClientToolCall,
+    agentState,
+  } = params
 
   await previousToolCallFinished
   const input = toolCall.input as {
@@ -120,6 +124,7 @@ export const handleCodeSearch = (async (params: {
       recordMemoryReuse(agentState, {
         tool: 'code_search',
         decision: cover.decision,
+        reason: cover.reason,
         served:
           cover.decision === 'skip' || cover.decision === 'narrow'
             ? cover.coveringExcerpts.length
@@ -127,7 +132,9 @@ export const handleCodeSearch = (async (params: {
         gaps: cover.remainingGaps.length,
         coveredStableChunkIds: cover.coveringExcerpts
           .map((entry) => entry.chunkId)
-          .filter((id): id is string => typeof id === 'string' && id.length > 0),
+          .filter(
+            (id): id is string => typeof id === 'string' && id.length > 0,
+          ),
       })
       if (cover.decision === 'skip' && cover.coveringExcerpts.length > 0) {
         const output = buildSkipOutput(cover.coveringExcerpts)
