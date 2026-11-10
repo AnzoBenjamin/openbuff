@@ -1,3 +1,4 @@
+import { InlineResults } from './inline-results'
 import React from 'react'
 
 import { SimpleToolCallItem } from './tool-call-item'
@@ -192,7 +193,7 @@ function makeLanguageIntelligenceComponent(
               : readyButEmpty
                 ? `${target} — no results`
                 : `${target} — ${resultCount} ${toolName === 'workspace_symbol' ? 'symbol' : 'location'}${resultCount === 1 ? '' : 's'}`
-      const captureNotice = `${status === 'cancelled' || status === 'failed' ? `${status} · ` : ''}${resultCount > 30 ? `showing 30 of ${resultCount} captured rows · Inspect for all rows` : ''}${hoverText.length > 600 ? ` · showing 600 of ${hoverText.length} captured type characters (${hoverText.length - 600} hidden) · Inspect for full retained type` : ''}`
+      const captureNotice = `${status === 'cancelled' || status === 'failed' ? `${status} · ` : ''}${hoverText.length > 600 ? ` · showing 600 of ${hoverText.length} captured type characters (${hoverText.length - 600} hidden) · Inspect for full retained type` : ''}`
 
       const Content = () => {
         const theme = useTheme()
@@ -251,37 +252,47 @@ function makeLanguageIntelligenceComponent(
                   <span fg={theme.muted}>no results</span>
                 </text>
               ) : null}
-              {locations.slice(0, 30).map((location, index) => (
-                <text key={`loc-${index}`} style={{ wrapMode: 'word' }}>
-                  <span fg={theme.directory}>
-                    {wrapTextPreservingNewlines(
-                      formatLocation(location, basePath),
-                      colWidth,
-                    )}
-                  </span>
-                </text>
-              ))}
-              {symbols.slice(0, 30).map((symbol, index) => {
-                const name =
-                  typeof symbol.name === 'string' ? symbol.name : '(symbol)'
-                const container =
-                  typeof symbol.containerName === 'string'
-                    ? ` · ${symbol.containerName}`
-                    : ''
-                const loc = symbol.location
-                  ? ` · ${formatLocation(symbol.location, basePath)}`
-                  : ''
-                return (
-                  <text key={`sym-${index}`} style={{ wrapMode: 'word' }}>
-                    <span fg={theme.foreground}>
+              <InlineResults
+                items={locations}
+                previewCount={30}
+                noun="location"
+                renderItem={(location, index) => (
+                  <text key={`loc-${index}`} style={{ wrapMode: 'word' }}>
+                    <span fg={theme.directory}>
                       {wrapTextPreservingNewlines(
-                        `${name}${container}${loc}`,
+                        formatLocation(location, basePath),
                         colWidth,
                       )}
                     </span>
                   </text>
-                )
-              })}
+                )}
+              />
+              <InlineResults
+                items={symbols}
+                previewCount={30}
+                noun="symbol"
+                renderItem={(symbol, index) => {
+                  const name =
+                    typeof symbol.name === 'string' ? symbol.name : '(symbol)'
+                  const container =
+                    typeof symbol.containerName === 'string'
+                      ? ` · ${symbol.containerName}`
+                      : ''
+                  const loc = symbol.location
+                    ? ` · ${formatLocation(symbol.location, basePath)}`
+                    : ''
+                  return (
+                    <text key={`sym-${index}`} style={{ wrapMode: 'word' }}>
+                      <span fg={theme.foreground}>
+                        {wrapTextPreservingNewlines(
+                          `${name}${container}${loc}`,
+                          colWidth,
+                        )}
+                      </span>
+                    </text>
+                  )
+                }}
+              />
             </box>
           </box>
         )

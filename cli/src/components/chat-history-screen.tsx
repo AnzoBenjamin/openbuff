@@ -446,6 +446,7 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
         </box>
 
         <text
+          id="saved-history-status"
           fg={loadState === 'unavailable' ? theme.error : theme.muted}
           wrapMode="none"
         >
@@ -469,25 +470,23 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
             overflow: 'hidden',
           }}
         >
-          <SelectableList
-            items={filteredItems}
-            focusedIndex={focusedIndex}
-            onSelect={handleChatSelect}
-            actionLabel="[×]"
-            onAction={handleChatDelete}
-            onFocusChange={handleFocusChange}
-            emptyMessage={
-              loadState === 'loading'
-                ? 'Loading saved sessions…'
-                : loadState === 'unavailable'
-                  ? 'Saved sessions unavailable · Ctrl+R retry'
-                  : chats.length === 0
-                    ? 'No saved sessions yet'
-                    : searchQuery
-                      ? 'No matching sessions'
-                      : 'No saved sessions found'
-            }
-          />
+          {filteredItems.length === 0 && loadState !== 'loaded' ? null : (
+            <SelectableList
+              items={filteredItems}
+              focusedIndex={focusedIndex}
+              onSelect={handleChatSelect}
+              actionLabel="[×]"
+              onAction={handleChatDelete}
+              onFocusChange={handleFocusChange}
+              emptyMessage={
+                chats.length === 0
+                  ? 'No saved sessions yet'
+                  : searchQuery
+                    ? 'No matching sessions'
+                    : 'No saved sessions found'
+              }
+            />
+          )}
         </box>
       </box>
 

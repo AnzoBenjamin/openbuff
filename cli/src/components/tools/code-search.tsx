@@ -16,7 +16,7 @@ import {
 
 import type { ToolRenderConfig } from './types'
 
-const MAX_TOTAL_MATCHES = 250
+const MAX_TOTAL_MATCHES = 50
 
 /**
  * Parse formatted code search output into per-file match groups. Understands
@@ -129,14 +129,6 @@ export const CodeSearchComponent = defineToolComponent({
     })
     const { glyph, color } = statusGlyph(status, theme)
     const groups = error ? null : allGroups
-    const capturedRows =
-      groups?.reduce((count, group) => count + group.matches.length, 0) ?? 0
-    let remainingRows = MAX_TOTAL_MATCHES
-    const previewGroups = groups?.flatMap((group) => {
-      const shown = Math.min(group.matches.length, remainingRows)
-      remainingRows -= shown
-      return shown ? [{ ...group, matches: group.matches.slice(0, shown) }] : []
-    })
     const limitNotices = rawOutput
       .split('\n')
       .filter(
@@ -144,10 +136,6 @@ export const CodeSearchComponent = defineToolComponent({
           /limit|stopped early|truncat/i.test(line) &&
           !/^(?:Line\s+)?\d+:/.test(line.trim()),
       )
-    const previewNotice =
-      capturedRows > MAX_TOTAL_MATCHES
-        ? `showing ${MAX_TOTAL_MATCHES} of ${capturedRows} captured rows · Inspect for all retained rows`
-        : undefined
 
     // Build single-line summary; the glyph replaces the old `· status` words.
     let summaryText = `Search "${pattern}"`
@@ -183,13 +171,16 @@ export const CodeSearchComponent = defineToolComponent({
       summaryText += ` · ${status}`
     if (limitNotices.length) {
       const kinds = [
-        limitNotices.some(line => /global|total/i.test(line)) ? 'global limit' : '',
-        limitNotices.some(line => /per[ -]file/i.test(line)) ? 'per-file limit' : '',
-        limitNotices.some(line => /byte/i.test(line)) ? 'byte limit' : '',
+        limitNotices.some((line) => /global|total/i.test(line))
+          ? 'global limit'
+          : '',
+        limitNotices.some((line) => /per[ -]file/i.test(line))
+          ? 'per-file limit'
+          : '',
+        limitNotices.some((line) => /byte/i.test(line)) ? 'byte limit' : '',
       ].filter(Boolean)
       summaryText += ` · partial search (${kinds.join(', ') || 'source limit'}); more may exist`
     }
-    if (previewNotice) summaryText += ` · ${previewNotice}`
 
     const outputLines = rawOutput
       .split('\n')
@@ -216,12 +207,8 @@ export const CodeSearchComponent = defineToolComponent({
             </text>
           ) : groups && groups.length > 0 ? (
             <box style={{ flexDirection: 'column', width: '100%' }}>
-              <SearchGroups
-                groups={previewGroups ?? []}
-                pattern={pattern}
-                cwd={cwd}
-              />
-              {[message, ...limitNotices, previewNotice]
+              <SearchGroups groups={groups} pattern={pattern} cwd={cwd} />
+              {[message, ...limitNotices]
                 .filter(Boolean)
                 .map((notice, index) => (
                   <text key={index} fg={theme.warning}>

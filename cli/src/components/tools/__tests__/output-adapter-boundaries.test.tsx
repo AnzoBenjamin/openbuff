@@ -126,7 +126,7 @@ test('files-only, bare stdout, capture cap and memory provenance summaries remai
   })
   rows.input = { pattern: 'x' }
   const result = CodeSearchComponent.render(rows, chatThemes.dark, options)
-  expect(result.collapsedPreview).toContain('showing 250 of 251 captured rows')
+  expect(markup(result.content)).toContain('Show more · 201 files hidden')
   expect(result.collapsedPreview).toContain('251 files')
   expect(markup(result.content)).toContain('Global limit')
   const memory = block('code_search', {
@@ -180,9 +180,9 @@ test('index previews disclose hidden captured details and folded stale partial s
   expect(rendered.collapsedPreview).toContain('stale evidence')
   expect(rendered.collapsedPreview).toContain('partial coverage')
   const content = markup(rendered.content)
-  expect(content).toContain('1 of 2 captured snippets')
-  expect(content).toContain('1 of 2 captured related files')
-  expect(content).toContain('Showing 5 of 7 captured diagnostics')
+  expect(content).toContain('Show more · 1 snippet hidden')
+  expect(content).toContain('Show more · 1 related file hidden')
+  expect(content).toContain('Show more · 2 diagnostics hidden')
 })
 
 test('subtree scan errors and published omitted payloads retain partial and cached scope', () => {

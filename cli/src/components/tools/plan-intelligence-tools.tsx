@@ -7,7 +7,7 @@ import {
   ErrorRow,
   formatCount,
   isRecord,
-  OverflowNote,
+  InlineResults,
   previewWithGlyph,
   readNumber,
   readRecordArray,
@@ -140,18 +140,20 @@ export const UpdatePlanStatusComponent = defineToolComponent({
                 valueColor={theme.success}
               />
             ) : null}
-            {unmatched.slice(0, MAX_ROWS).map((task, index) => (
-              <DetailRow
-                key={`${task}-${index}`}
-                value={`no match: ${task}`}
-                width={width}
-                valueColor={theme.warning}
-              />
-            ))}
-            <OverflowNote
-              hiddenCount={Math.max(0, unmatched.length - MAX_ROWS)}
+            <InlineResults
+              items={unmatched}
+              previewCount={MAX_ROWS}
               noun="task"
+              renderItem={(task, index) => (
+                <DetailRow
+                  key={`${task}-${index}`}
+                  value={`no match: ${task}`}
+                  width={width}
+                  valueColor={theme.warning}
+                />
+              )}
             />
+
             {message && !error ? (
               <DetailRow
                 value={message}
@@ -239,17 +241,18 @@ export const WriteAuditFindingsComponent = defineToolComponent({
           />
           <ResultBody>
             {error ? <ErrorRow message={error} width={width} /> : null}
-            {paths.slice(0, MAX_ROWS).map((path, index) => (
-              <DetailRow
-                key={`${path}-${index}`}
-                value={path}
-                width={width}
-                valueColor={theme.muted}
-              />
-            ))}
-            <OverflowNote
-              hiddenCount={Math.max(0, paths.length - MAX_ROWS)}
+            <InlineResults
+              items={paths}
+              previewCount={MAX_ROWS}
               noun="file"
+              renderItem={(path, index) => (
+                <DetailRow
+                  key={`${path}-${index}`}
+                  value={path}
+                  width={width}
+                  valueColor={theme.muted}
+                />
+              )}
             />
           </ResultBody>
         </ResultShell>
@@ -335,10 +338,9 @@ export const ReadOutlineComponent = defineToolComponent({
     const summary = error
       ? 'Outline failed'
       : `Outline · ${outlineFailure ? 'unavailable' : !record ? (toolBlock.lifecycle ?? 'output unavailable') : formatCount(symbolCount, 'symbol')} · ${readString(record?.path) ?? readString((toolBlock.input as Record<string, unknown>)?.path) ?? 'source unknown'}${outline.includes('[heuristic outline:') ? ' · heuristic source' : ''}${outline.includes('[Outline truncated') ? ' · capture truncated; more may exist' : ''}`
-    const shown = outline
+    const outlineLines = outline
       .split('\n')
       .filter((line) => line.trim().length > 0)
-      .slice(0, MAX_ROWS)
 
     return {
       collapsedPreview: previewWithGlyph(summary, statuses.glyph),
@@ -352,17 +354,18 @@ export const ReadOutlineComponent = defineToolComponent({
           />
           <ResultBody>
             {error ? <ErrorRow message={error} width={width} /> : null}
-            {shown.map((line, index) => (
-              <DetailRow
-                key={`${line}-${index}`}
-                value={line}
-                width={width}
-                valueColor={theme.muted}
-              />
-            ))}
-            <OverflowNote
-              hiddenCount={Math.max(0, symbolCount - shown.length)}
-              noun="symbol"
+            <InlineResults
+              items={outlineLines}
+              previewCount={MAX_ROWS}
+              noun="line"
+              renderItem={(line, index) => (
+                <DetailRow
+                  key={`${line}-${index}`}
+                  value={line}
+                  width={width}
+                  valueColor={theme.muted}
+                />
+              )}
             />
           </ResultBody>
         </ResultShell>
@@ -385,7 +388,6 @@ export const WebSearchComponent = defineToolComponent({
     const summary = error
       ? 'Web search failed'
       : `Web search · ${record ? 'captured result' : (toolBlock.lifecycle ?? 'output unavailable')}`
-    const shown = links.slice(0, MAX_ROWS)
 
     return {
       collapsedPreview: previewWithGlyph(summary, statuses.glyph),
@@ -420,22 +422,23 @@ export const WebSearchComponent = defineToolComponent({
                 width={width}
               />
             ) : null}
-            {shown.map((link, index) => {
-              const href = readString(link.href) ?? ''
-              const text = readString(link.text) ?? href
-              return (
-                <DetailRow
-                  key={`${href}-${index}`}
-                  label={text}
-                  value={href}
-                  width={width}
-                  valueColor={theme.muted}
-                />
-              )
-            })}
-            <OverflowNote
-              hiddenCount={Math.max(0, links.length - shown.length)}
+            <InlineResults
+              items={links}
+              previewCount={MAX_ROWS}
               noun="link"
+              renderItem={(link, index) => {
+                const href = readString(link.href) ?? ''
+                const text = readString(link.text) ?? href
+                return (
+                  <DetailRow
+                    key={`${href}-${index}`}
+                    label={text}
+                    value={href}
+                    width={width}
+                    valueColor={theme.muted}
+                  />
+                )
+              }}
             />
           </ResultBody>
         </ResultShell>
@@ -458,7 +461,6 @@ export const InspectCodebaseStructureComponent = defineToolComponent({
     const summary = error
       ? 'Structure inspection failed'
       : `Structure · ${formatCount(readNumber(record?.subsystems) ?? readNumber(record?.subsystemCount) ?? subsystems.length, 'subsystem')}`
-    const shown = subsystems.slice(0, MAX_ROWS)
 
     return {
       collapsedPreview: previewWithGlyph(summary, statuses.glyph),
@@ -472,25 +474,26 @@ export const InspectCodebaseStructureComponent = defineToolComponent({
           />
           <ResultBody>
             {error ? <ErrorRow message={error} width={width} /> : null}
-            {shown.map((subsystem, index) => {
-              const name =
-                readString(subsystem.name) ??
-                readString(subsystem.id) ??
-                'subsystem'
-              const files = readStringArray(subsystem.files)
-              return (
-                <DetailRow
-                  key={`${name}-${index}`}
-                  label={name}
-                  value={formatCount(files.length, 'file')}
-                  width={width}
-                  valueColor={theme.muted}
-                />
-              )
-            })}
-            <OverflowNote
-              hiddenCount={Math.max(0, subsystems.length - shown.length)}
+            <InlineResults
+              items={subsystems}
+              previewCount={MAX_ROWS}
               noun="subsystem"
+              renderItem={(subsystem, index) => {
+                const name =
+                  readString(subsystem.name) ??
+                  readString(subsystem.id) ??
+                  'subsystem'
+                const files = readStringArray(subsystem.files)
+                return (
+                  <DetailRow
+                    key={`${name}-${index}`}
+                    label={name}
+                    value={formatCount(files.length, 'file')}
+                    width={width}
+                    valueColor={theme.muted}
+                  />
+                )
+              }}
             />
           </ResultBody>
         </ResultShell>
@@ -582,7 +585,6 @@ export const EvaluateAuditCoverageComponent = defineToolComponent({
     const summary = error
       ? 'Coverage check failed'
       : `Coverage · ${formatCount(shards.length, 'shard')} · ${record?.complete === false || record?.coverageComplete === false || record?.status === 'partial' ? 'incomplete' : (readString(record?.status) ?? 'completeness unknown')}`
-    const shown = shards.slice(0, MAX_ROWS)
 
     return {
       collapsedPreview: previewWithGlyph(summary, statuses.glyph),
@@ -596,23 +598,24 @@ export const EvaluateAuditCoverageComponent = defineToolComponent({
           />
           <ResultBody>
             {error ? <ErrorRow message={error} width={width} /> : null}
-            {shown.map((shard, index) => {
-              const id =
-                readString(shard.shard_id) ?? readString(shard.id) ?? 'shard'
-              const files = readStringArray(shard.files)
-              return (
-                <DetailRow
-                  key={`${id}-${index}`}
-                  label={id}
-                  value={formatCount(files.length, 'file')}
-                  width={width}
-                  valueColor={theme.muted}
-                />
-              )
-            })}
-            <OverflowNote
-              hiddenCount={Math.max(0, shards.length - shown.length)}
+            <InlineResults
+              items={shards}
+              previewCount={MAX_ROWS}
               noun="shard"
+              renderItem={(shard, index) => {
+                const id =
+                  readString(shard.shard_id) ?? readString(shard.id) ?? 'shard'
+                const files = readStringArray(shard.files)
+                return (
+                  <DetailRow
+                    key={`${id}-${index}`}
+                    label={id}
+                    value={formatCount(files.length, 'file')}
+                    width={width}
+                    valueColor={theme.muted}
+                  />
+                )
+              }}
             />
           </ResultBody>
         </ResultShell>
@@ -636,7 +639,6 @@ export const RunTargetedValidationComponent = defineToolComponent({
     const failures = results.filter(
       (result) => typeof result.errorMessage === 'string',
     )
-    const shown = failures.slice(0, MAX_ROWS)
 
     return {
       collapsedPreview: previewWithGlyph(
@@ -672,19 +674,20 @@ export const RunTargetedValidationComponent = defineToolComponent({
                 valueColor={theme.muted}
               />
             ) : null}
-            {shown.map((failure, index) => {
-              const message = readString(failure.errorMessage) ?? 'failed'
-              return (
-                <ErrorRow
-                  key={`${message}-${index}`}
-                  message={message}
-                  width={width}
-                />
-              )
-            })}
-            <OverflowNote
-              hiddenCount={Math.max(0, failures.length - shown.length)}
+            <InlineResults
+              items={failures}
+              previewCount={MAX_ROWS}
               noun="failure"
+              renderItem={(failure, index) => {
+                const message = readString(failure.errorMessage) ?? 'failed'
+                return (
+                  <ErrorRow
+                    key={`${message}-${index}`}
+                    message={message}
+                    width={width}
+                  />
+                )
+              }}
             />
           </ResultBody>
         </ResultShell>

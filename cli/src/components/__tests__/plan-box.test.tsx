@@ -246,7 +246,7 @@ describe('PlanBox', () => {
     expect(markup).toContain('Session: .agents/sessions/demo')
     expect(markup).toContain('SPEC.md: .agents/sessions/demo/SPEC.md')
     expect(markup).toContain('/mode:execute_plan Build it!')
-    expect(markup).toContain('Showing 2 of 5 artifacts')
+    expect(markup).toContain('Show more · 3 artifacts hidden')
     capturedButtons
       .find((button) => button.text.includes('Inspect plan artifacts'))
       ?.onClick?.()
@@ -308,7 +308,7 @@ describe('PlanBox', () => {
 
     // The preview preserves direct activation; the reader retains further commands.
     expect(markup).toContain('/review-design .agents/sessions/demo')
-    expect(markup).toContain('1 of 2 commands')
+    expect(markup).toContain('Show more · 1 command hidden')
 
     // The mocked Button captures every rendered button, including the build-mode
     // actions, so select the command buttons by their text.
@@ -362,7 +362,7 @@ describe('PlanBox', () => {
     expect(markup).toContain('Session: .agents/sessions/demo')
     expect(markup).toContain('PLAN.md: .agents/sessions/demo/PLAN.md')
     // Custom artifact label: path renders as static text
-    expect(markup).toContain('2 of 3 artifacts')
+    expect(markup).toContain('Show more · 1 artifact hidden')
     // Both known and custom commands render in the output
     expect(markup).toContain('/mode:execute_plan Go!')
     capturedButtons

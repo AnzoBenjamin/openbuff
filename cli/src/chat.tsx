@@ -21,6 +21,7 @@ import { useOutputReaderStore } from './state/output-reader-store'
 import { PromptHistorySearchScreen } from './components/prompt-history-search-screen'
 import { ModelRoutePicker } from './components/model-route-picker'
 import { PlanSessionPickerScreen } from './components/plan-session-picker-screen'
+import { PermissionsScreen } from './components/permissions-screen'
 import {
   ProviderPickerScreen,
   type ProviderPickerSelection,
@@ -57,6 +58,7 @@ import { getProjectRoot } from './project-files'
 import { useChatHistoryStore } from './state/chat-history-store'
 import { useChatStore } from './state/chat-store'
 import { useReviewStore } from './state/review-store'
+import { usePermissionsStore } from './state/permissions-store'
 import { useFeedbackStore } from './state/feedback-store'
 import { useMessageBlockStore } from './state/message-block-store'
 import { usePublishStore } from './state/publish-store'
@@ -198,13 +200,14 @@ export const Chat = ({
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
   const modeMenuOpenRef = useRef(false)
   const readerRequest = useOutputReaderStore((state) => state.request)
+  const permissionsOpen = usePermissionsStore((state) => state.isOpen)
   const transcriptHeaderRef = useRef<BoxRenderable | null>(null)
   const [transcriptTarget, setTranscriptTarget] = useState<{ messageId: string; token: number } | null>(null)
   const [unreadUpdates, setUnreadUpdates] = useState(0)
   const observedUpdates = useRef<Set<string> | null>(null)
   const wasReading = useRef(false)
   useLayoutEffect(() => {
-    if (readerRequest || queueScreenOpen || attachmentManagerOpen) {
+    if (readerRequest || queueScreenOpen || attachmentManagerOpen || permissionsOpen) {
       useChatStore.getState().setInputFocused(false)
       wasReading.current = true
     } else if (wasReading.current) {
@@ -212,7 +215,8 @@ export const Chat = ({
       useChatStore.getState().setInputFocused(true)
       inputRef.current?.focus()
     }
-  }, [readerRequest, queueScreenOpen, attachmentManagerOpen, inputRef])
+  }, [readerRequest, queueScreenOpen, attachmentManagerOpen, permissionsOpen, inputRef])
+  useEffect(() => () => usePermissionsStore.getState().close(), [])
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
   const editOriginDraft = useRef<{
     input: InputValue
@@ -350,11 +354,11 @@ export const Chat = ({
   } = useChatUI({
     messages,
     isUserCollapsing,
-    readingPaused: readerRequest !== null || queueScreenOpen || attachmentManagerOpen,
+    readingPaused: readerRequest !== null || queueScreenOpen || attachmentManagerOpen || permissionsOpen,
   })
   const conversationControls = useConversationControls({
     scrollRef,
-    enabled: () => !modeMenuOpenRef.current && !attachmentManagerOpenRef.current && useOutputReaderStore.getState().request === null && !queueScreenOpen && !commandPaletteOpen && !promptHistoryOpen && !modelRoutePickerOpen && !providerPickerOpen && !askUserState && !reviewMode,
+    enabled: () => !modeMenuOpenRef.current && !attachmentManagerOpenRef.current && !usePermissionsStore.getState().isOpen && useOutputReaderStore.getState().request === null && !queueScreenOpen && !commandPaletteOpen && !promptHistoryOpen && !modelRoutePickerOpen && !providerPickerOpen && !askUserState && !reviewMode,
     onEnter: () => { setInputFocused(false); pauseFollowing() },
     onLeave: () => { setInputFocused(true); inputRef.current?.focus() },
     onCommands: () => setCommandPaletteOpen(true),
@@ -1263,15 +1267,15 @@ export const Chat = ({
 
   // Focus the composer only while its conversation scope is visible.
   useEffect(() => {
-    if (readerRequest || queueScreenOpen || attachmentManagerOpen || commandPaletteOpen || promptHistoryOpen ||
+    if (permissionsOpen || readerRequest || queueScreenOpen || attachmentManagerOpen || commandPaletteOpen || promptHistoryOpen ||
       modelRoutePickerOpen || providerPickerOpen || askUserState || reviewMode || planSessionPickerCommand || modeMenuOpen ||
       conversationControls.activeRef.current) return
     inputRef.current?.focus()
-  }, [feedbackMode, askUserState, readerRequest, queueScreenOpen, attachmentManagerOpen, commandPaletteOpen,
+  }, [feedbackMode, askUserState, permissionsOpen, readerRequest, queueScreenOpen, attachmentManagerOpen, commandPaletteOpen,
     promptHistoryOpen, modelRoutePickerOpen, providerPickerOpen, reviewMode, planSessionPickerCommand, modeMenuOpen, inputRef])
 
   const handleSubmit = useCallback(async (latest?: InputValue) => {
-    if (modeMenuOpenRef.current || attachmentManagerOpenRef.current || conversationControls.activeRef.current || useOutputReaderStore.getState().request !== null) return
+    if (modeMenuOpenRef.current || attachmentManagerOpenRef.current || conversationControls.activeRef.current || usePermissionsStore.getState().isOpen || useOutputReaderStore.getState().request !== null) return
     // Update terminal title with truncated user input
     if (inputValue.trim()) {
       setTerminalTitle(inputValue)
@@ -1642,9 +1646,10 @@ export const Chat = ({
   useChatKeyboard({
     state: chatKeyboardState,
     handlers: chatKeyboardHandlers,
-    isDisabled: () => modeMenuOpenRef.current || attachmentManagerOpenRef.current || conversationControls.activeRef.current || inputRef.current?.hasFocus?.() === false || useOutputReaderStore.getState().request !== null,
+    isDisabled: () => modeMenuOpenRef.current || attachmentManagerOpenRef.current || conversationControls.activeRef.current || usePermissionsStore.getState().isOpen || inputRef.current?.hasFocus?.() === false || useOutputReaderStore.getState().request !== null,
     disabled:
       modeMenuOpen ||
+      permissionsOpen ||
       attachmentManagerOpen ||
       conversationControls.active ||
       readerRequest !== null ||
@@ -1658,9 +1663,9 @@ export const Chat = ({
       planSessionPickerCommand !== null,
   })
   useLayoutEffect(() => {
-    if ((readerRequest || queueScreenOpen || attachmentManagerOpen || commandPaletteOpen || promptHistoryOpen || modelRoutePickerOpen || providerPickerOpen || askUserState || reviewMode || planSessionPickerCommand) && conversationControls.activeRef.current)
+    if ((permissionsOpen || readerRequest || queueScreenOpen || attachmentManagerOpen || commandPaletteOpen || promptHistoryOpen || modelRoutePickerOpen || providerPickerOpen || askUserState || reviewMode || planSessionPickerCommand) && conversationControls.activeRef.current)
       conversationControls.leave(false)
-  }, [readerRequest, queueScreenOpen, attachmentManagerOpen, commandPaletteOpen, promptHistoryOpen, modelRoutePickerOpen, providerPickerOpen, askUserState, reviewMode, planSessionPickerCommand, conversationControls.leave])
+  }, [permissionsOpen, readerRequest, queueScreenOpen, attachmentManagerOpen, commandPaletteOpen, promptHistoryOpen, modelRoutePickerOpen, providerPickerOpen, askUserState, reviewMode, planSessionPickerCommand, conversationControls.leave])
 
   // Sync message block context to zustand store for child components
   const setMessageBlockContext = useMessageBlockStore(
@@ -1920,6 +1925,19 @@ export const Chat = ({
       handleCommandResult,
     ],
   )
+
+  if (permissionsOpen) {
+    return (
+      <PermissionsScreen
+        onClose={() => usePermissionsStore.getState().close()}
+        onApplied={(message) => {
+          setMessages((previous) => [...previous, getSystemMessage(message)])
+          usePermissionsStore.getState().close()
+          setTimeout(() => scrollToLatest(), 0)
+        }}
+      />
+    )
+  }
 
   // Model route picker is a full-screen overlay — skip rendering chat UI
   // to avoid keyboard event conflicts.

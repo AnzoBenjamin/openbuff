@@ -57,6 +57,7 @@ describe('secondary command contracts', () => {
     )
     expect(input).toBe('')
     expect(messages[1]?.content).toContain('running local operation')
+    expect(messages[1]?.isComplete).toBe(false)
     const operationId = messages[1]!.id
     input = 'new draft while rebuilding'
     resolve('Index ready')
@@ -65,6 +66,45 @@ describe('secondary command contracts', () => {
     expect(messages).toHaveLength(2)
     expect(messages[1]?.id).toBe(operationId)
     expect(messages[1]?.content).toBe('Index ready')
+    expect(messages[1]?.isComplete).toBe(true)
+  })
+  test('failed local operations finalize their own row while preserving later messages', async () => {
+    let messages: ChatMessage[] = []
+    let reject!: (error: Error) => void
+    const operation = new Promise<string>((_resolve, fail) => {
+      reject = fail
+    })
+    const params = {
+      saveToHistory: () => {},
+      setInputValue: () => {},
+      setMessages: (update: (prior: ChatMessage[]) => ChatMessage[]) => {
+        messages = update(messages)
+      },
+    } as unknown as RouterParams
+    const pending = runLocalCommandOperation(
+      params,
+      '/index rebuild',
+      'Index',
+      () => operation,
+    )
+    const operationId = messages[1]!.id
+    const later: ChatMessage = {
+      id: 'later',
+      variant: 'user',
+      timestamp: '',
+      content: 'A later prompt',
+    }
+    messages.push(later)
+    reject(new Error('Index storage unavailable'))
+    await pending
+
+    expect(messages).toHaveLength(3)
+    expect(messages[1]?.id).toBe(operationId)
+    expect(messages[1]?.isComplete).toBe(true)
+    expect(messages[1]?.content).toContain(
+      'Index failed: Index storage unavailable',
+    )
+    expect(messages[2]).toBe(later)
   })
   test('overflowing numeric args fail before startup and timer boundary is accepted', () => {
     const parse = (args: string[]) =>

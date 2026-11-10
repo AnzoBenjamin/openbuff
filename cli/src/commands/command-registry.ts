@@ -44,6 +44,7 @@ import {
 import { runBashCommand } from './router'
 import { useThemeStore } from '../hooks/use-theme'
 import { useChatStore } from '../state/chat-store'
+import { usePermissionsStore } from '../state/permissions-store'
 import { getProjectRoot } from '../project-files'
 import {
   getAgentRegistryDiagnostics,
@@ -506,7 +507,10 @@ const ALL_COMMANDS: CommandDefinition[] = [
     name: 'permissions',
     aliases: ['approvals'],
     handler: (params, args) => {
-      appendLocalMessage(params, handlePermissionsCommand(args))
+      if (args.trim())
+        appendLocalMessage(params, handlePermissionsCommand(args))
+      else usePermissionsStore.getState().open()
+      params.saveToHistory(params.inputValue.trim())
       clearInput(params)
     },
   }),

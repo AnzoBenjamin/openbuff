@@ -18,9 +18,12 @@ export async function runLocalCommandOperation(
       cursorPosition: 0,
       lastEditDueToNav: false,
     })
-  const pending = getSystemMessage(
-    `${label}: running local operation. Your new draft is preserved while this completes.`,
-  )
+  const pending = {
+    ...getSystemMessage(
+      `${label}: running local operation. Your new draft is preserved while this completes.`,
+    ),
+    isComplete: false,
+  }
   params.setMessages((messages) => [
     ...messages,
     getUserMessage(input),

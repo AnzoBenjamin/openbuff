@@ -211,9 +211,16 @@ renderTest(
       />,
     )
     try {
-      expect(setup.captureCharFrame()).toContain('2 of 20 artifacts')
+      const preview = setup.captureCharFrame()
+      expect(preview).toContain('Show more · 18 artifacts hidden')
+      expect(preview).toContain('Show more · 19 commands hidden')
+      expect(preview).not.toContain('Artifact 3:')
+      expect(preview).not.toContain('/open-captured-2 ')
       await clickLabel(setup, 'Inspect plan artifacts and commands')
       const document = useOutputReaderStore.getState().request?.document
+      expect(document).toBeDefined()
+      expect(document?.text).toContain(metadata.customArtifacts[19]!.path)
+      expect(document?.text).toContain(metadata.customArtifactCommands[19]!)
       expect(
         document?.find('file-20.md', { line: 0, character: 0 }, 1),
       ).not.toBeNull()

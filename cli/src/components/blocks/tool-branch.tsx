@@ -24,6 +24,7 @@ import { InspectAction } from '../inspect-action'
 import { documentForTool } from '../../utils/output-catalog'
 import { createJsonDocument } from '../../utils/output-document'
 import { useOutputReaderStore } from '../../state/output-reader-store'
+import { InlineResultScope } from '../tools/inline-results'
 
 import type { ContentBlock } from '../../types/chat'
 import {
@@ -33,6 +34,7 @@ import {
 
 interface ToolBranchProps {
   toolBlock: Extract<ContentBlock, { type: 'tool' }>
+  messageId?: string
   keyPrefix: string
   availableWidth: number
   onToggleCollapsed: (id: string) => void
@@ -42,6 +44,7 @@ interface ToolBranchProps {
 export const ToolBranch = memo(
   ({
     toolBlock,
+    messageId,
     keyPrefix,
     availableWidth,
     onToggleCollapsed,
@@ -245,7 +248,14 @@ export const ToolBranch = memo(
       >
         <ToolCallItem
           name={toolRenderConfig?.displayName ?? headerName}
-          content={toolRenderConfig?.content ?? renderableDisplayContent}
+          content={
+            <InlineResultScope
+              messageId={messageId ?? keyPrefix}
+              scope={`tool:${toolBlock.toolCallId}`}
+            >
+              {toolRenderConfig?.content ?? renderableDisplayContent}
+            </InlineResultScope>
+          }
           isCollapsed={isCollapsed}
           isStreaming={isStreaming}
           streamingPreview={streamingPreview}

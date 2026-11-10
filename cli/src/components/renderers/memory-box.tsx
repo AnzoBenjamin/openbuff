@@ -9,6 +9,7 @@ import { pluralizeEntries } from '../../utils/format-helpers'
 import { useOutputReaderStore } from '../../state/output-reader-store'
 import { capturedDiagnosticDocument } from '../../utils/captured-diagnostic-document'
 import { clipEvidenceLine } from '../../utils/bounded-evidence'
+import { InlineResults } from '../tools/inline-results'
 
 import type { MemoryContentBlock } from '../../types/chat'
 
@@ -40,15 +41,13 @@ export const MemoryBox = memo(
     const [goalExpanded, setGoalExpanded] = useState(false)
     const [staleExpanded, setStaleExpanded] = useState(false)
     const inspect = () =>
-      useOutputReaderStore
-        .getState()
-        .open({
-          document: capturedDiagnosticDocument(
-            'memory-status',
-            'Captured memory status',
-            block,
-          ),
-        })
+      useOutputReaderStore.getState().open({
+        document: capturedDiagnosticDocument(
+          'memory-status',
+          'Captured memory status',
+          block,
+        ),
+      })
     const inspectAction = (
       <Button onClick={inspect}>
         <text fg={theme.secondary}>Inspect captured memory</text>
@@ -63,17 +62,20 @@ export const MemoryBox = memo(
           gap={1}
           paddingBottom={1}
         >
-          {block.lines.slice(0, 8).map((line, index) => (
-            <text
-              key={`${index}-${line}`}
-              style={{ wrapMode: 'word', fg: theme.foreground }}
-            >
-              {clipEvidenceLine(line, 120)}
-            </text>
-          ))}
-          <text
-            fg={theme.muted}
-          >{`Showing ${Math.min(8, block.lines.length)} of ${block.lines.length} captured report lines.`}</text>
+          <InlineResults
+            scope="report"
+            items={block.lines}
+            previewCount={8}
+            noun="report line"
+            renderItem={(line, index) => (
+              <text
+                key={`${index}-${line}`}
+                style={{ wrapMode: 'word', fg: theme.foreground }}
+              >
+                {clipEvidenceLine(line, 120)}
+              </text>
+            )}
+          />
           {inspectAction}
           {block.insertCommands?.map(({ label, command }) => (
             <Button
@@ -249,22 +251,25 @@ export const MemoryBox = memo(
                 <text style={{ fg: theme.secondary, wrapMode: 'word' }}>
                   {staleHeader}
                 </text>
-                {block.stalePaths.slice(0, 5).map((p, idx) => (
-                  <text
-                    key={`${p}-${idx}`}
-                    style={{ wrapMode: 'word', fg: theme.foreground }}
-                  >
-                    {p}
-                  </text>
-                ))}
+                <InlineResults
+                  scope="stale-paths"
+                  items={block.stalePaths}
+                  previewCount={5}
+                  noun="path"
+                  renderItem={(p, idx) => (
+                    <text
+                      key={`${p}-${idx}`}
+                      style={{ wrapMode: 'word', fg: theme.foreground }}
+                    >
+                      {p}
+                    </text>
+                  )}
+                />
                 {block.totalStaleCount > block.stalePaths.length ? (
                   <text
                     style={{ fg: theme.muted, wrapMode: 'word' }}
                   >{`Only ${block.stalePaths.length} path names were captured of ${block.totalStaleCount} stale entries; other path names are unavailable in this report.`}</text>
                 ) : null}
-                <text
-                  fg={theme.muted}
-                >{`Showing ${Math.min(5, block.stalePaths.length)} of ${block.stalePaths.length} captured path names; Inspect captured memory reads retained names.`}</text>
                 <CollapseButton onClick={() => setStaleExpanded(false)} />
               </box>
             ) : (

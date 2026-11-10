@@ -6,6 +6,8 @@ import { wrapTextPreservingNewlines } from '../../utils/text-layout'
 
 import type { ChatTheme } from '../../types/theme-system'
 
+export { InlineResults } from './inline-results'
+
 /**
  * Shared building blocks for the human-facing tool renderers.
  *

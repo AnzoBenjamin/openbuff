@@ -13,6 +13,7 @@ import {
   type BlockProcessorHandlers,
 } from '../../utils/block-processor'
 import { ErrorBoundary } from '../error-boundary'
+import { InlineResultScope } from '../tools/inline-results'
 import { useOutputReaderStore } from '../../state/output-reader-store'
 import {
   createJsonDocument,
@@ -284,6 +285,10 @@ export const BlocksRenderer = memo(
       [], // Empty deps - handlers read from propsRef.current
     )
 
-    return <>{processBlocks(sourceBlocks, handlers)}</>
+    return (
+      <InlineResultScope messageId={messageId} scope="message">
+        {processBlocks(sourceBlocks, handlers)}
+      </InlineResultScope>
+    )
   },
 )

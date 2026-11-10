@@ -12,6 +12,7 @@ import { HarnessBox } from './harness-box'
 import { sliceTextCells } from '../../utils/text-boundaries'
 import { createJsonDocument } from '../../utils/output-document'
 import { useOutputReaderStore } from '../../state/output-reader-store'
+import { InlineResults } from '../tools/inline-results'
 
 import type { PlanArtifactMetadata } from '../../types/chat'
 
@@ -96,52 +97,61 @@ export const PlanBox = memo(
         {hasMetadata && (
           <box style={{ flexDirection: 'column', gap: 0 }}>
             <text style={{ fg: theme.secondary }}>Artifacts</text>
-            {artifactRows.slice(0, 2).map((row, index) => (
-              <text
-                key={`${row}-${index}`}
-                style={{ wrapMode: 'word', fg: theme.secondary }}
-              >
-                {sliceTextCells(row, 0, Math.max(10, availableWidth - 6))}
-              </text>
-            ))}
-            {commandRows.slice(0, 1).map((command, index) => (
-              <Button
-                key={`${command}-${index}`}
-                style={{
-                  flexDirection: 'row',
-                  height: 1,
-                  flexShrink: 0,
-                  paddingLeft: 1,
-                  paddingRight: 1,
-                }}
-                onClick={() => onInsertCommand(command)}
-                onMouseOver={() => setHoveredIndex(index)}
-                onMouseOut={() =>
-                  setHoveredIndex((current) =>
-                    current === index ? null : current,
-                  )
-                }
-              >
+            <InlineResults
+              scope="artifacts"
+              items={artifactRows}
+              previewCount={2}
+              noun="artifact"
+              renderItem={(row, index) => (
                 <text
-                  wrapMode="none"
-                  style={{
-                    fg:
-                      hoveredIndex === index
-                        ? theme.foreground
-                        : theme.secondary,
-                  }}
+                  key={`${row}-${index}`}
+                  style={{ wrapMode: 'word', fg: theme.secondary }}
                 >
-                  {sliceTextCells(
-                    command,
-                    0,
-                    Math.max(10, availableWidth - 10),
-                  )}
+                  {sliceTextCells(row, 0, Math.max(10, availableWidth - 6))}
                 </text>
-              </Button>
-            ))}
-            <text
-              fg={theme.muted}
-            >{`Showing ${Math.min(2, artifactRows.length)} of ${artifactRows.length} artifacts · ${Math.min(1, commandRows.length)} of ${commandRows.length} commands`}</text>
+              )}
+            />
+            <InlineResults
+              scope="commands"
+              items={commandRows}
+              previewCount={1}
+              noun="command"
+              renderItem={(command, index) => (
+                <Button
+                  key={`${command}-${index}`}
+                  style={{
+                    flexDirection: 'row',
+                    height: 1,
+                    flexShrink: 0,
+                    paddingLeft: 1,
+                    paddingRight: 1,
+                  }}
+                  onClick={() => onInsertCommand(command)}
+                  onMouseOver={() => setHoveredIndex(index)}
+                  onMouseOut={() =>
+                    setHoveredIndex((current) =>
+                      current === index ? null : current,
+                    )
+                  }
+                >
+                  <text
+                    wrapMode="none"
+                    style={{
+                      fg:
+                        hoveredIndex === index
+                          ? theme.foreground
+                          : theme.secondary,
+                    }}
+                  >
+                    {sliceTextCells(
+                      command,
+                      0,
+                      Math.max(10, availableWidth - 10),
+                    )}
+                  </text>
+                </Button>
+              )}
+            />
             <Button
               onClick={() =>
                 useOutputReaderStore.getState().open({

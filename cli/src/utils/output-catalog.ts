@@ -18,6 +18,7 @@ import { outcomeForTool, classifyOutputOutcome } from './output-outcome'
 import { acceptedReceiptVerdict, submittedReceiptValue } from './review-outcome'
 import { capturedArtifacts, recoverCapturedArtifact } from './output-artifact'
 import { parseTerminalResult } from '../components/tools/run-terminal-command'
+import { createCommandDiagnosticDocument } from './captured-diagnostic-document'
 
 export interface OutputEntry {
   id: string
@@ -850,11 +851,17 @@ export function collectOutputEntries(
                     kind: 'markdown',
                     notice: 'Captured plan report · no current artifact read',
                   })
-                const document = createJsonDocument(id, title, block)
+                const document =
+                  createCommandDiagnosticDocument(id, title, block) ??
+                  createJsonDocument(id, title, block)
                 if (block.type === 'doctor') {
-                  if (Array.isArray(block.diagnostics)) {
-                    document.diagnostics = block.diagnostics
-                    document.notice = `${document.notice} · ${block.diagnostics.length} captured diagnostics · ${block.providerStatus}`
+                  const diagnostics = Object.getOwnPropertyDescriptor(
+                    block,
+                    'diagnostics',
+                  )?.value
+                  if (Array.isArray(diagnostics)) {
+                    document.diagnostics = diagnostics
+                    document.notice = `${document.notice} · ${diagnostics.length} captured diagnostics`
                   } else
                     document.notice = `${document.notice} · Diagnostic list unavailable in captured data`
                 }

@@ -152,6 +152,9 @@ nativeTest(
       const frame = capture(setup, 'agent-80x24')
       expect(frame).toContain('Task')
       expect(frame).toContain('Investigate the CLI')
+      expect(frame).toContain('Check memory usage and resize listeners.')
+      expect(frame).toContain('Read the latest logs')
+      expect(frame).toContain('Verify cleanup')
       expect(frame).not.toContain('## Investigate')
       expect(frame).not.toContain('**memory usage**')
     } finally {

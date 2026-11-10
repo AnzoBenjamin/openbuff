@@ -6,6 +6,7 @@ import {
   getToolOutputRecords,
 } from '../../utils/tool-result-normalizer'
 import { defineToolComponent } from './types'
+import { InlineResults } from './inline-results'
 
 const MAX_EVENTS = 4
 /**
@@ -50,15 +51,11 @@ export const CheckBackgroundAgentComponent = defineToolComponent({
       typeof record?.dropped === 'number' && record.dropped > 0
         ? `${record.dropped} events dropped`
         : '',
-      Array.isArray(record?.events) && record.events.length > MAX_EVENTS
-        ? `showing ${MAX_EVENTS} of ${record.events.length} captured events · Inspect for all events`
-        : '',
     ].filter(Boolean)
     const summary = `Agent${jobId ? ` ${jobId}` : ''} · ${state}${notices.length ? ` · ${notices.join(' · ')}` : ''}`
 
     const eventsRaw = record?.events
     const events: unknown[] = Array.isArray(eventsRaw) ? eventsRaw : []
-    const tail = events.slice(-MAX_EVENTS)
 
     const result = record?.result
     let resultText: string | undefined
@@ -76,11 +73,17 @@ export const CheckBackgroundAgentComponent = defineToolComponent({
         <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
           <text fg={error ? theme.error : theme.foreground}>{summary}</text>
           {error ? <text fg={theme.error}>{error}</text> : null}
-          {tail.map((event, index) => (
-            <text key={index} fg={theme.muted}>
-              {describeJobEvent(event)}
-            </text>
-          ))}
+          <InlineResults
+            items={events}
+            previewCount={MAX_EVENTS}
+            noun="event"
+            fromEnd
+            renderItem={(event, index) => (
+              <text key={index} fg={theme.muted}>
+                {describeJobEvent(event)}
+              </text>
+            )}
+          />
           {resultText ? (
             <text fg={theme.muted}>{`result: ${resultText}`}</text>
           ) : null}

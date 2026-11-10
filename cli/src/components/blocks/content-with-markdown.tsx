@@ -1,4 +1,5 @@
-import { memo } from 'react'
+import { CodeRenderable } from '@opentui/core'
+import { memo, useEffect, useRef, useState } from 'react'
 import { useRenderer } from '@opentui/react'
 
 import { logger } from '../../utils/logger'
@@ -10,12 +11,13 @@ import { createMarkdownSyntaxStyle } from '../../utils/opentui-syntax-style'
 import { wrapTextPreservingNewlines } from '../../utils/text-layout'
 import { getSharedTreeSitterClient } from '../../utils/tree-sitter-client'
 
-import type { ReactNode } from 'react'
+import type { MarkdownRenderable, Renderable } from '@opentui/core'
+import type { ReactNode, Ref } from 'react'
 
 interface ContentWithMarkdownProps {
   content: string
   isStreaming: boolean
-  /** Native streaming mode supplies readable prose before async highlighting finishes. */
+  /** Supply immediate prose on mount while still finalizing completed content. */
   eagerProse?: boolean
   codeBlockWidth: number
   palette: MarkdownPalette
@@ -37,6 +39,7 @@ const renderNativeMarkdown = (
   isStreaming: boolean,
   palette: MarkdownPalette,
   owner: ReturnType<typeof useRenderer>['nativeScene'],
+  ref: Ref<MarkdownRenderable>,
 ): ReactNode => {
   try {
     // Styles belong to this renderer's native scene. The shared factory caches
@@ -49,6 +52,7 @@ const renderNativeMarkdown = (
     // visible, matching the removed legacy renderer's output style.
     return (
       <markdown
+        ref={ref}
         width="100%"
         content={content}
         fg={palette?.codeTextFg}
@@ -95,7 +99,8 @@ export const ContentWithMarkdown = memo(
     return (
       <NativeMarkdown
         content={content}
-        isStreaming={isStreaming || eagerProse}
+        isStreaming={isStreaming}
+        eagerProse={eagerProse}
         palette={palette}
       />
     )
@@ -106,13 +111,48 @@ export const ContentWithMarkdown = memo(
 function NativeMarkdown({
   content,
   isStreaming,
+  eagerProse,
   palette,
-}: Pick<ContentWithMarkdownProps, 'content' | 'isStreaming' | 'palette'>) {
+}: Pick<
+  ContentWithMarkdownProps,
+  'content' | 'isStreaming' | 'eagerProse' | 'palette'
+>) {
   const renderer = useRenderer()
+  const markdown = useRef<MarkdownRenderable | null>(null)
+  // Seed readable prose for the first paint, then finalize completed content
+  // after native highlighting has retained that prose. Finalizing before the
+  // first highlighting pass hides the preview until the worker responds.
+  const [initialPreview, setInitialPreview] = useState(eagerProse ?? false)
+  useEffect(() => {
+    if (!initialPreview || isStreaming) return
+    let cancelled = false
+    let awaitingHighlight = false
+    const afterPaint = () => {
+      if (awaitingHighlight) return
+      awaitingHighlight = true
+      const highlights: Promise<void>[] = []
+      const collect = (node: Renderable) => {
+        if (node instanceof CodeRenderable)
+          highlights.push(node.highlightingDone)
+        for (const child of node.getChildren()) collect(child)
+      }
+      if (markdown.current) collect(markdown.current)
+      void Promise.all(highlights).then(() => {
+        renderer.removePostProcessFn(afterPaint)
+        if (!cancelled) setInitialPreview(false)
+      })
+    }
+    renderer.addPostProcessFn(afterPaint)
+    return () => {
+      cancelled = true
+      renderer.removePostProcessFn(afterPaint)
+    }
+  }, [renderer, initialPreview, isStreaming, content])
   return renderNativeMarkdown(
     content,
-    isStreaming,
+    isStreaming || initialPreview,
     palette,
     renderer.nativeScene,
+    markdown,
   )
 }

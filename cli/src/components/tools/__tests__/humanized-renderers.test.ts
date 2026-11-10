@@ -101,7 +101,11 @@ describe('DetailRow rendering', () => {
       React.createElement(DetailRow, { label: 'Path', ...rowOptions }),
     )
     const withoutDeprecatedProp = renderToStaticMarkup(
-      React.createElement(DetailRow, { label: 'Path', value: 'row value', width: 20 }),
+      React.createElement(DetailRow, {
+        label: 'Path',
+        value: 'row value',
+        width: 20,
+      }),
     )
 
     expect(withDeprecatedProp).toBe(withoutDeprecatedProp)
@@ -111,13 +115,17 @@ describe('DetailRow rendering', () => {
 
 describe('humanized renderers replace raw-JSON fallbacks', () => {
   test('recall_context renders archived matches, not the envelope', () => {
-    const markup = render('recall_context', {}, {
-      matches: [
-        { step: 12, toolName: 'read_files', snippet: 'an eviction note' },
-        { step: 40, toolName: 'code_search', snippet: 'a budget note' },
-      ],
-      consolidations: 2,
-    })
+    const markup = render(
+      'recall_context',
+      {},
+      {
+        matches: [
+          { step: 12, toolName: 'read_files', snippet: 'an eviction note' },
+          { step: 40, toolName: 'code_search', snippet: 'a budget note' },
+        ],
+        consolidations: 2,
+      },
+    )
 
     expect(markup).toContain('Recall')
     expect(markup).toContain('2 matches')
@@ -132,10 +140,14 @@ describe('humanized renderers replace raw-JSON fallbacks', () => {
   })
 
   test('recall_context reports an empty archive in prose', () => {
-    const markup = render('recall_context', {}, {
-      matches: [],
-      message: 'No archived transcript text matched.',
-    })
+    const markup = render(
+      'recall_context',
+      {},
+      {
+        matches: [],
+        message: 'No archived transcript text matched.',
+      },
+    )
 
     expect(markup).toContain('0 matches')
     expect(markup).toContain('No archived transcript text matched.')
@@ -205,13 +217,17 @@ describe('humanized renderers replace raw-JSON fallbacks', () => {
   })
 
   test('inspect_workspace renders branch and dirty counts, not JSON keys', () => {
-    const markup = render('inspect_workspace', {}, {
-      branch: 'feature/audit',
-      defaultBranch: 'main',
-      headCommit: 'abc1234567890def',
-      canonicalRoot: '/home/ben/Code/CLI/openbuff',
-      status: ' M cli/src/index.ts\n?? sdk/src/run.ts',
-    })
+    const markup = render(
+      'inspect_workspace',
+      {},
+      {
+        branch: 'feature/audit',
+        defaultBranch: 'main',
+        headCommit: 'abc1234567890def',
+        canonicalRoot: '/home/ben/Code/CLI/openbuff',
+        status: ' M cli/src/index.ts\n?? sdk/src/run.ts',
+      },
+    )
 
     expect(markup).toContain('Workspace')
     expect(markup).toContain('feature/audit')
@@ -222,12 +238,16 @@ describe('humanized renderers replace raw-JSON fallbacks', () => {
   })
 
   test('get_change_review_bundle counts changed files and findings', () => {
-    const markup = render('get_change_review_bundle', { max_chars: 50000 }, {
-      snapshotId: 'abc123',
-      files: ['cli/src/a.ts', 'cli/src/b.ts'],
-      findings: [{ id: 'f1' }],
-      validation: [{ id: 'v1' }, { id: 'v2' }],
-    })
+    const markup = render(
+      'get_change_review_bundle',
+      { max_chars: 50000 },
+      {
+        snapshotId: 'abc123',
+        files: ['cli/src/a.ts', 'cli/src/b.ts'],
+        findings: [{ id: 'f1' }],
+        validation: [{ id: 'v1' }, { id: 'v2' }],
+      },
+    )
 
     expect(markup).toContain('Change bundle')
     expect(markup).toContain('2 files changed')
@@ -237,16 +257,20 @@ describe('humanized renderers replace raw-JSON fallbacks', () => {
   })
 
   test('get_affected_tests maps a changed file to its test candidates', () => {
-    const markup = render('get_affected_tests', {
-      files: ['cli/src/index.ts'],
-    }, {
-      impact: [
-        {
-          source: 'cli/src/index.ts',
-          candidates: [{ path: 'cli/src/__tests__/index.test.ts' }],
-        },
-      ],
-    })
+    const markup = render(
+      'get_affected_tests',
+      {
+        files: ['cli/src/index.ts'],
+      },
+      {
+        impact: [
+          {
+            source: 'cli/src/index.ts',
+            candidates: [{ path: 'cli/src/__tests__/index.test.ts' }],
+          },
+        ],
+      },
+    )
 
     expect(markup).toContain('Affected tests')
     expect(markup).toContain('cli/src/index.ts')
@@ -255,13 +279,21 @@ describe('humanized renderers replace raw-JSON fallbacks', () => {
   })
 
   test('get_build_targets lists package roots and their commands', () => {
-    const markup = render('get_build_targets', {
-      files: ['cli/src/index.ts'],
-    }, {
-      targets: [
-        { packageRoot: 'cli', manager: 'bun', commands: ['typecheck', 'test'] },
-      ],
-    })
+    const markup = render(
+      'get_build_targets',
+      {
+        files: ['cli/src/index.ts'],
+      },
+      {
+        targets: [
+          {
+            packageRoot: 'cli',
+            manager: 'bun',
+            commands: ['typecheck', 'test'],
+          },
+        ],
+      },
+    )
 
     expect(markup).toContain('Build targets')
     expect(markup).toContain('1 package')
@@ -340,25 +372,33 @@ describe('humanized renderers replace raw-JSON fallbacks', () => {
       { length: 14 },
       (_unused, index) => `  function helper${index}()`,
     ).join('\n')
-    const markup = render('read_outline', { path: 'sdk/src/run.ts' }, {
-      outline,
-    })
+    const markup = render(
+      'read_outline',
+      { path: 'sdk/src/run.ts' },
+      {
+        outline,
+      },
+    )
 
     expect(markup).toContain('Outline')
     expect(markup).toContain('14 symbols')
     expect(markup).toContain('function helper0()')
-    expect(markup).toContain('omitted from this view')
+    expect(markup).toContain('Show more · 4 lines hidden')
   })
 
   test('run_targeted_validation renders status and bounded failures', () => {
-    const markup = render('run_targeted_validation', {
-      files: ['cli/src/index.ts'],
-    }, {
-      status: 'failed',
-      summary: 'Validation failed for 1 file.',
-      files: ['cli/src/index.ts'],
-      results: [{ errorMessage: 'typecheck exited non-zero' }],
-    })
+    const markup = render(
+      'run_targeted_validation',
+      {
+        files: ['cli/src/index.ts'],
+      },
+      {
+        status: 'failed',
+        summary: 'Validation failed for 1 file.',
+        files: ['cli/src/index.ts'],
+        results: [{ errorMessage: 'typecheck exited non-zero' }],
+      },
+    )
 
     expect(markup).toContain('Validation')
     expect(markup).toContain('failed')

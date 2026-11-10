@@ -8,6 +8,7 @@ import { capturedArtifacts } from '../../utils/output-artifact'
 import { useOutputReaderStore } from '../../state/output-reader-store'
 import { Button } from '../button'
 import { StructuredResult } from './structured-result'
+import { InlineResults } from './inline-results'
 import {
   cleanPreviewText,
   summarizeStructuredPreview,
@@ -532,24 +533,21 @@ export const SetOutputComponent = defineToolComponent({
           </span>
         </text>,
       )
-      core.findings.slice(0, 12).forEach((title, index) => {
-        lines.push(
-          <text key={`finding-${index}`} style={{ wrapMode: 'word' }}>
-            <span fg={liveTheme.muted}>
-              {wrapTextPreservingNewlines(`  ${title}`, width)}
-            </span>
-          </text>,
-        )
-      })
-      if (core.findings.length > 12) {
-        lines.push(
-          <text key="findings-more" style={{ wrapMode: 'word' }}>
-            <span fg={liveTheme.muted}>
-              {`  … ${core.findings.length - 12} more`}
-            </span>
-          </text>,
-        )
-      }
+      lines.push(
+        <InlineResults
+          key="findings"
+          items={core.findings}
+          previewCount={12}
+          noun="finding"
+          renderItem={(title, index) => (
+            <text key={`finding-${index}`} style={{ wrapMode: 'word' }}>
+              <span fg={liveTheme.muted}>
+                {wrapTextPreservingNewlines(`  ${title}`, width)}
+              </span>
+            </text>
+          )}
+        />,
+      )
     }
     if (core.advisories.length > 0) {
       lines.push(
@@ -557,23 +555,22 @@ export const SetOutputComponent = defineToolComponent({
           <span fg={liveTheme.muted}>Advisories:</span>
         </text>,
       )
-      core.advisories.slice(0, 12).forEach((advisory, index) => {
-        lines.push(
-          <text key={`advisory-${index}`} style={{ wrapMode: 'word' }}>
-            <span fg={liveTheme.foreground}>
-              {wrapTextPreservingNewlines(`  ${advisory}`, width)}
-            </span>
-          </text>,
-        )
-      })
-      if (core.advisories.length > 12)
-        lines.push(
-          <text key="advisories-more">
-            <span
-              fg={liveTheme.muted}
-            >{`  … ${core.advisories.length - 12} more`}</span>
-          </text>,
-        )
+      lines.push(
+        <InlineResults
+          key="advisories"
+          items={core.advisories}
+          previewCount={12}
+          noun="advisory"
+          pluralNoun="advisories"
+          renderItem={(advisory, index) => (
+            <text key={`advisory-${index}`} style={{ wrapMode: 'word' }}>
+              <span fg={liveTheme.foreground}>
+                {wrapTextPreservingNewlines(`  ${advisory}`, width)}
+              </span>
+            </text>
+          )}
+        />,
+      )
     }
     let fieldGroup = ''
     for (const [index, field] of core.fields.entries()) {

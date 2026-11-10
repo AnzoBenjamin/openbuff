@@ -8,7 +8,7 @@ import {
   ErrorRow,
   formatCount,
   isRecord,
-  OverflowNote,
+  InlineResults,
   previewWithGlyph,
   readNumber,
   readRecordArray,
@@ -176,8 +176,6 @@ export const GetChangeReviewBundleComponent = defineToolComponent({
     const summary = error
       ? 'Change bundle failed'
       : `Change bundle · ${formatCount(files.length, 'file')} changed`
-    const shown = files.slice(0, MAX_ENTRIES)
-    const hidden = files.length - shown.length
     const findings = readRecordArray(record?.findings)
     const validation = readRecordArray(record?.validation)
 
@@ -201,10 +199,19 @@ export const GetChangeReviewBundleComponent = defineToolComponent({
               width={width}
               valueColor={theme.muted}
             />
-            {shown.map((file, index) => (
-              <DetailRow key={`${file}-${index}`} value={file} width={width} />
-            ))}
-            <OverflowNote hiddenCount={hidden} noun="file" />
+            <InlineResults
+              items={files}
+              previewCount={MAX_ENTRIES}
+              noun="file"
+              renderItem={(file, index) => (
+                <DetailRow
+                  key={`${file}-${index}`}
+                  value={file}
+                  width={width}
+                />
+              )}
+            />
+
             {findings.length > 0 ? (
               <DetailRow
                 label="Reviewer findings"
@@ -321,10 +328,6 @@ export const InspectEnvironmentComponent = defineToolComponent({
           return `${name} ${available ? 'yes' : 'no'}${version ? ` ${version}` : ''}`
         })
       : []
-    const shownTools = toolEntries.slice(0, MAX_TOOLS)
-    const hiddenTools = toolEntries.length - shownTools.length
-    const shownWorkspaces = workspaces.slice(0, MAX_ENTRIES)
-    const hiddenWorkspaces = workspaces.length - shownWorkspaces.length
 
     return {
       collapsedPreview: previewWithGlyph(summary, statuses.glyph),
@@ -354,25 +357,34 @@ export const InspectEnvironmentComponent = defineToolComponent({
                 valueColor={theme.muted}
               />
             ) : null}
-            {shownWorkspaces.map((workspace, index) => (
-              <DetailRow
-                key={`${readString(workspace.root) ?? ''}-${index}`}
-                label={readString(workspace.root) ?? 'workspace'}
-                value={`${readString(workspace.ecosystem) ?? 'unknown'} / ${readString(workspace.manager) ?? 'unknown'}`}
-                width={width}
-                valueColor={theme.muted}
-              />
-            ))}
-            <OverflowNote hiddenCount={hiddenWorkspaces} noun="workspace" />
-            {shownTools.map((entry, index) => (
-              <DetailRow
-                key={`tool-${index}`}
-                value={entry}
-                width={width}
-                valueColor={theme.muted}
-              />
-            ))}
-            <OverflowNote hiddenCount={hiddenTools} noun="toolchain" />
+            <InlineResults
+              items={workspaces}
+              previewCount={MAX_ENTRIES}
+              noun="workspace"
+              renderItem={(workspace, index) => (
+                <DetailRow
+                  key={`${readString(workspace.root) ?? ''}-${index}`}
+                  label={readString(workspace.root) ?? 'workspace'}
+                  value={`${readString(workspace.ecosystem) ?? 'unknown'} / ${readString(workspace.manager) ?? 'unknown'}`}
+                  width={width}
+                  valueColor={theme.muted}
+                />
+              )}
+            />
+
+            <InlineResults
+              items={toolEntries}
+              previewCount={MAX_TOOLS}
+              noun="toolchain"
+              renderItem={(entry, index) => (
+                <DetailRow
+                  key={`tool-${index}`}
+                  value={entry}
+                  width={width}
+                  valueColor={theme.muted}
+                />
+              )}
+            />
           </ResultBody>
         </ResultShell>
       ),
@@ -396,8 +408,6 @@ export const GetAffectedTestsComponent = defineToolComponent({
       ? 'Affected-test analysis failed'
       : `Affected tests · ${formatCount(impact.length || targets.length, 'changed file')} mapped · recommendations; tests not run${impact.some((entry) => typeof entry.graphNote === 'string') ? ' · graph tier unavailable' : ''}`
     const captured = impact.length ? impact : targets
-    const shown = captured.slice(0, MAX_ENTRIES)
-    const hidden = captured.length - shown.length
     const candidateTotal = captured.reduce(
       (total, entry) =>
         total + (Array.isArray(entry.candidates) ? entry.candidates.length : 0),
@@ -423,12 +433,14 @@ export const GetAffectedTestsComponent = defineToolComponent({
                 valueColor={theme.muted}
               />
             ) : null}
-            {shown.map((entry, index) => {
-              const source = readString(entry.source) ?? 'changed file'
-              const candidates = Array.isArray(entry.candidates)
-                ? entry.candidates
-                    .slice(0, MAX_ENTRIES)
-                    .flatMap((candidate) =>
+            <InlineResults
+              items={captured}
+              previewCount={MAX_ENTRIES}
+              noun="source file"
+              renderItem={(entry, index) => {
+                const source = readString(entry.source) ?? 'changed file'
+                const candidates = Array.isArray(entry.candidates)
+                  ? entry.candidates.flatMap((candidate) =>
                       typeof candidate === 'string'
                         ? [candidate]
                         : candidate &&
@@ -439,41 +451,41 @@ export const GetAffectedTestsComponent = defineToolComponent({
                             ]
                           : [],
                     )
-                : []
-              return (
-                <box
-                  key={`${source}-${index}`}
-                  style={{ flexDirection: 'column', gap: 0, width: '100%' }}
-                >
-                  <text style={{ wrapMode: 'word' }}>
-                    <span fg={theme.foreground}>{source}</span>
-                  </text>
-                  {candidates.map((candidate, candidateIndex) => (
-                    <DetailRow
-                      key={`${candidate}-${candidateIndex}`}
-                      value={candidate}
-                      width={width}
-                      valueColor={theme.muted}
+                  : []
+                return (
+                  <box
+                    key={`${source}-${index}`}
+                    style={{ flexDirection: 'column', gap: 0, width: '100%' }}
+                  >
+                    <text style={{ wrapMode: 'word' }}>
+                      <span fg={theme.foreground}>{source}</span>
+                    </text>
+                    <InlineResults
+                      items={candidates}
+                      scope={`candidates:${source}`}
+                      previewCount={MAX_ENTRIES}
+                      noun="candidate"
+                      renderItem={(candidate, candidateIndex) => (
+                        <DetailRow
+                          key={`${candidate}-${candidateIndex}`}
+                          value={candidate}
+                          width={width}
+                          valueColor={theme.muted}
+                        />
+                      )}
                     />
-                  ))}
-                  {typeof entry.graphNote === 'string' ? (
-                    <DetailRow
-                      value={entry.graphNote}
-                      width={width}
-                      valueColor={theme.warning}
-                    />
-                  ) : null}
-                  {Array.isArray(entry.candidates) &&
-                  entry.candidates.length > candidates.length ? (
-                    <OverflowNote
-                      hiddenCount={entry.candidates.length - candidates.length}
-                      noun="candidate · Inspect for retained details"
-                    />
-                  ) : null}
-                </box>
-              )
-            })}
-            <OverflowNote hiddenCount={hidden} noun="source file" />
+                    {typeof entry.graphNote === 'string' ? (
+                      <DetailRow
+                        value={entry.graphNote}
+                        width={width}
+                        valueColor={theme.warning}
+                      />
+                    ) : null}
+                  </box>
+                )
+              }}
+            />
+
             {candidateTotal > 0 ? (
               <DetailRow
                 label="Candidates"
@@ -503,8 +515,6 @@ export const GetBuildTargetsComponent = defineToolComponent({
     const summary = error
       ? 'Build-target analysis failed'
       : `Build targets · ${formatCount(targets.length, 'package')}`
-    const shown = targets.slice(0, MAX_ENTRIES)
-    const hidden = targets.length - shown.length
 
     return {
       collapsedPreview: previewWithGlyph(summary, statuses.glyph),
@@ -518,32 +528,37 @@ export const GetBuildTargetsComponent = defineToolComponent({
           />
           <ResultBody>
             {error ? <ErrorRow message={error} width={width} /> : null}
-            {shown.map((target, index) => {
-              const root = readString(target.packageRoot) ?? 'unknown package'
-              const commands = readStringArray(target.commands)
-              return (
-                <box
-                  key={`${root}-${index}`}
-                  style={{ flexDirection: 'column', gap: 0, width: '100%' }}
-                >
-                  <text style={{ wrapMode: 'word' }}>
-                    <span fg={theme.foreground}>{root}</span>
-                    <span
-                      fg={theme.muted}
-                    >{` · ${readString(target.manager) ?? 'unknown'}`}</span>
-                  </text>
-                  {commands.map((command, commandIndex) => (
-                    <DetailRow
-                      key={`${command}-${commandIndex}`}
-                      value={command}
-                      width={width}
-                      valueColor={theme.muted}
-                    />
-                  ))}
-                </box>
-              )
-            })}
-            <OverflowNote hiddenCount={hidden} noun="package" />
+            <InlineResults
+              items={targets}
+              previewCount={MAX_ENTRIES}
+              noun="package"
+              renderItem={(target, index) => {
+                const root = readString(target.packageRoot) ?? 'unknown package'
+                const commands = readStringArray(target.commands)
+                return (
+                  <box
+                    key={`${root}-${index}`}
+                    style={{ flexDirection: 'column', gap: 0, width: '100%' }}
+                  >
+                    <text style={{ wrapMode: 'word' }}>
+                      <span fg={theme.foreground}>{root}</span>
+                      <span
+                        fg={theme.muted}
+                      >{` · ${readString(target.manager) ?? 'unknown'}`}</span>
+                    </text>
+                    {commands.map((command, commandIndex) => (
+                      <DetailRow
+                        key={`${command}-${commandIndex}`}
+                        value={command}
+                        width={width}
+                        valueColor={theme.muted}
+                      />
+                    ))}
+                  </box>
+                )
+              }}
+            />
+
             {record?.truncated === true ? (
               <DetailRow
                 value="The target list was truncated by the analyzer."

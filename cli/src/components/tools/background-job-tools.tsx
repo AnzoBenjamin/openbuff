@@ -3,6 +3,7 @@ import {
   getToolOutputRecords,
 } from '../../utils/tool-result-normalizer'
 import { defineToolComponent } from './types'
+import { InlineResults } from './inline-results'
 import type { ToolName } from '@openbuff/sdk'
 
 export function describeJobEvent(event: unknown): string {
@@ -79,9 +80,6 @@ function makeBackgroundJobComponent(
         typeof record?.dropped === 'number' && record.dropped > 0
           ? `${record.dropped} events dropped`
           : '',
-        events.length > 4
-          ? `showing 4 of ${events.length} captured events · Inspect for all events`
-          : '',
       ].filter(Boolean)
       const summary = `${action}${jobId ? ` ${jobId}` : ''} · ${status}${record?.exitCode !== undefined ? ` · exit ${String(record.exitCode)}` : ''}${notices.length ? ` · ${notices.join(' · ')}` : ''}`
       return {
@@ -89,11 +87,17 @@ function makeBackgroundJobComponent(
         content: (
           <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
             <text fg={error ? theme.error : theme.foreground}>{summary}</text>
-            {events.slice(-4).map((event, index) => (
-              <text key={index} fg={theme.muted}>
-                {describeJobEvent(event)}
-              </text>
-            ))}
+            <InlineResults
+              items={events}
+              previewCount={4}
+              noun="event"
+              fromEnd
+              renderItem={(event, index) => (
+                <text key={index} fg={theme.muted}>
+                  {describeJobEvent(event)}
+                </text>
+              )}
+            />
             {body ? (
               <text fg={theme.muted}>
                 {body.slice(0, 2000)}

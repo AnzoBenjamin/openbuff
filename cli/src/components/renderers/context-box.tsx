@@ -6,6 +6,7 @@ import { Button } from '../button'
 import { capturedDiagnosticDocument } from '../../utils/captured-diagnostic-document'
 import { useOutputReaderStore } from '../../state/output-reader-store'
 import { clipEvidenceLine } from '../../utils/bounded-evidence'
+import { InlineResults } from '../tools/inline-results'
 
 import type { ContextContentBlock } from '../../types/chat'
 
@@ -53,15 +54,13 @@ export const ContextBox = memo(({ block }: ContextBoxProps) => {
       {(ledgerLines.length > 0 || gateLines.length > 0) && (
         <Button
           onClick={() =>
-            useOutputReaderStore
-              .getState()
-              .open({
-                document: capturedDiagnosticDocument(
-                  'context-status',
-                  'Captured context budget',
-                  block,
-                ),
-              })
+            useOutputReaderStore.getState().open({
+              document: capturedDiagnosticDocument(
+                'context-status',
+                'Captured context budget',
+                block,
+              ),
+            })
           }
         >
           <text fg={theme.secondary}>Inspect captured context</text>
@@ -72,24 +71,27 @@ export const ContextBox = memo(({ block }: ContextBoxProps) => {
           <text style={{ wrapMode: 'word', fg: theme.secondary }}>
             Budget ledger
           </text>
-          {ledgerLines.slice(0, 8).map((line, idx) => (
-            <text
-              key={`ledger-${idx}`}
-              style={{
-                wrapMode: 'word',
-                fg: isStalenessNote(line)
-                  ? theme.warning
-                  : isSummaryLedgerRow(line)
-                    ? theme.foreground
-                    : theme.muted,
-              }}
-            >
-              {line.length > 0 ? clipEvidenceLine(line, 120) : ' '}
-            </text>
-          ))}
-          <text
-            fg={theme.muted}
-          >{`Showing ${Math.min(8, ledgerLines.length)} of ${ledgerLines.length} captured ledger rows.`}</text>
+          <InlineResults
+            scope="ledger"
+            items={ledgerLines}
+            previewCount={8}
+            noun="ledger row"
+            renderItem={(line, idx) => (
+              <text
+                key={`ledger-${idx}`}
+                style={{
+                  wrapMode: 'word',
+                  fg: isStalenessNote(line)
+                    ? theme.warning
+                    : isSummaryLedgerRow(line)
+                      ? theme.foreground
+                      : theme.muted,
+                }}
+              >
+                {line.length > 0 ? clipEvidenceLine(line, 120) : ' '}
+              </text>
+            )}
+          />
         </box>
       ) : null}
       {gateLines.length > 0 ? (
@@ -97,25 +99,28 @@ export const ContextBox = memo(({ block }: ContextBoxProps) => {
           <text style={{ wrapMode: 'word', fg: theme.secondary }}>
             Gate budgets
           </text>
-          {gateLines.slice(0, 8).map((line, idx) => {
-            const isTitle =
-              line.startsWith('Gate repair budgets') ||
-              line.startsWith('Gate budgets')
-            return (
-              <text
-                key={`gate-${idx}`}
-                style={{
-                  wrapMode: 'word',
-                  fg: isTitle ? theme.secondary : theme.foreground,
-                }}
-              >
-                {line.length > 0 ? clipEvidenceLine(line, 120) : ' '}
-              </text>
-            )
-          })}
-          <text
-            fg={theme.muted}
-          >{`Showing ${Math.min(8, gateLines.length)} of ${gateLines.length} captured gate rows.`}</text>
+          <InlineResults
+            scope="gates"
+            items={gateLines}
+            previewCount={8}
+            noun="gate row"
+            renderItem={(line, idx) => {
+              const isTitle =
+                line.startsWith('Gate repair budgets') ||
+                line.startsWith('Gate budgets')
+              return (
+                <text
+                  key={`gate-${idx}`}
+                  style={{
+                    wrapMode: 'word',
+                    fg: isTitle ? theme.secondary : theme.foreground,
+                  }}
+                >
+                  {line.length > 0 ? clipEvidenceLine(line, 120) : ' '}
+                </text>
+              )
+            }}
+          />
         </box>
       ) : null}
     </HarnessBox>

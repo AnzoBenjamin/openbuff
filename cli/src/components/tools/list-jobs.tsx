@@ -4,6 +4,7 @@ import {
   getToolOutputRecords,
 } from '../../utils/tool-result-normalizer'
 import { defineToolComponent } from './types'
+import { InlineResults } from './inline-results'
 
 const MAX_JOBS = 6
 
@@ -45,9 +46,7 @@ export const ListJobsComponent = defineToolComponent({
       }
     }
 
-    const summary = `Jobs · ${jobs.length} captured${jobs.length > MAX_JOBS ? ` · showing ${MAX_JOBS} · Inspect for all rows` : ''}${typeof record?.truncatedCount === 'number' && record.truncatedCount > 0 ? ` · ${record.truncatedCount} producer entries omitted` : ''}${note ? ` · ${note}` : ''}`
-    const shown = jobs.slice(0, MAX_JOBS)
-    const moreCount = jobs.length - shown.length
+    const summary = `Jobs · ${jobs.length} captured${typeof record?.truncatedCount === 'number' && record.truncatedCount > 0 ? ` · ${record.truncatedCount} producer entries omitted` : ''}${note ? ` · ${note}` : ''}`
     const truncatedCount =
       typeof record?.truncatedCount === 'number'
         ? record.truncatedCount
@@ -58,37 +57,39 @@ export const ListJobsComponent = defineToolComponent({
       content: (
         <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
           <text fg={theme.foreground}>{summary}</text>
-          {shown.map((job, index) => {
-            const entry = job as Record<string, unknown>
-            const jobId = typeof entry?.jobId === 'string' ? entry.jobId : '?'
-            const status =
-              typeof entry?.status === 'string' ? entry.status : '?'
-            const parts = [`${jobId} · ${status}`]
-            if (typeof entry?.command === 'string')
-              parts.push(entry.command.slice(0, 160))
-            else if (typeof entry?.kind === 'string') parts.push(entry.kind)
-            if (typeof entry?.error === 'string')
-              parts.push(entry.error.slice(0, 160))
-            if (typeof entry?.progress === 'string')
-              parts.push(entry.progress.slice(0, 160))
-            if (
-              typeof entry?.pending === 'string' &&
-              entry.pending !== 'none'
-            ) {
-              parts.push(`pending ${entry.pending}`)
-            }
-            if (entry?.exitCode !== undefined && entry.exitCode !== null) {
-              parts.push(`exit ${String(entry.exitCode)}`)
-            }
-            return (
-              <text key={index} fg={theme.muted}>
-                {parts.join(' · ')}
-              </text>
-            )
-          })}
-          {moreCount > 0 ? (
-            <text fg={theme.muted}>{`…${moreCount} more`}</text>
-          ) : null}
+          <InlineResults
+            items={jobs}
+            previewCount={MAX_JOBS}
+            noun="job"
+            renderItem={(job, index) => {
+              const entry = job as Record<string, unknown>
+              const jobId = typeof entry?.jobId === 'string' ? entry.jobId : '?'
+              const status =
+                typeof entry?.status === 'string' ? entry.status : '?'
+              const parts = [`${jobId} · ${status}`]
+              if (typeof entry?.command === 'string')
+                parts.push(entry.command.slice(0, 160))
+              else if (typeof entry?.kind === 'string') parts.push(entry.kind)
+              if (typeof entry?.error === 'string')
+                parts.push(entry.error.slice(0, 160))
+              if (typeof entry?.progress === 'string')
+                parts.push(entry.progress.slice(0, 160))
+              if (
+                typeof entry?.pending === 'string' &&
+                entry.pending !== 'none'
+              ) {
+                parts.push(`pending ${entry.pending}`)
+              }
+              if (entry?.exitCode !== undefined && entry.exitCode !== null) {
+                parts.push(`exit ${String(entry.exitCode)}`)
+              }
+              return (
+                <text key={index} fg={theme.muted}>
+                  {parts.join(' · ')}
+                </text>
+              )
+            }}
+          />
           {truncatedCount ? (
             <text fg={theme.muted}>{`${truncatedCount} truncated`}</text>
           ) : null}

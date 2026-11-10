@@ -1,3 +1,4 @@
+import { InlineResults } from './inline-results'
 import React from 'react'
 import { TextAttributes } from '@opentui/core'
 
@@ -150,112 +151,181 @@ export const QueryIndexComponent = defineToolComponent({
                 width: '100%',
               }}
             >
-              {results.map((result, index) => {
-                // Human-facing detail: WHY this ranked (what it matched on).
-                // Raw score floats and content hashes are agent-facing
-                // telemetry — the rank order already communicates score.
-                const details = [
-                  formatMatchedOn(result)
-                    ? `matched: ${formatMatchedOn(result)}`
-                    : '',
-                ].filter(Boolean)
-                const snippet = formatSnippets(result)
-                const related = formatRelated(result)
-
-                const pathDisplay = wrapTextPreservingNewlines(
-                  String(result.path),
-                  pathColWidth,
-                )
-                const detailsDisplay =
-                  details.length > 0
-                    ? wrapTextPreservingNewlines(
-                        details.join(' · '),
-                        detailColWidth,
+              <InlineResults
+                items={results}
+                previewCount={10}
+                noun="result"
+                renderItem={(result, index) => {
+                  // Human-facing detail: WHY this ranked (what it matched on).
+                  // Raw score floats and content hashes are agent-facing
+                  // telemetry — the rank order already communicates score.
+                  const details = [
+                    formatMatchedOn(result)
+                      ? `matched: ${formatMatchedOn(result)}`
+                      : '',
+                  ].filter(Boolean)
+                  const snippet = formatSnippets(result)
+                  const snippets = Array.isArray(result.matchedSnippets)
+                    ? result.matchedSnippets.filter(
+                        (item): item is string => typeof item === 'string',
                       )
-                    : ''
-                const queryTerms = String(query)
-                  .split(/\s+/)
-                  .filter((word) => word.length > 1)
-                  .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
-                const emphasisPattern =
-                  queryTerms.length > 0 ? queryTerms.join('|') : ''
-                const snippetSegments = emphasisPattern
-                  ? splitPatternSegments(
-                      wrapTextPreservingNewlines(snippet ?? '', detailColWidth),
-                      emphasisPattern,
-                    )
-                  : []
-                const relatedDisplay = related
-                  ? wrapTextPreservingNewlines(related, detailColWidth)
-                  : ''
-                const explanation =
-                  typeof result.explanation === 'string' &&
-                  result.explanation.length > 0
-                    ? wrapTextPreservingNewlines(
-                        truncate(result.explanation, 160),
-                        detailColWidth,
+                    : []
+                  const relatedFiles = Array.isArray(result.relatedFiles)
+                    ? result.relatedFiles.filter(
+                        (item) =>
+                          isRecord(item) && typeof item.path === 'string',
                       )
-                    : ''
+                    : []
 
-                return (
-                  <box
-                    key={`${String(result.path)}-${index}`}
-                    style={{ flexDirection: 'column', gap: 0, width: '100%' }}
-                  >
-                    <text style={{ wrapMode: 'word' }}>
-                      <span fg={theme.muted}>{`${index + 1}. `}</span>
-                      <span fg={theme.directory}>{pathDisplay}</span>
-                    </text>
-                    {snippet ? (
-                      <text
-                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
-                      >
-                        {snippetSegments.length > 0
-                          ? snippetSegments.map((segment, segIndex) =>
-                              segment.match ? (
-                                <span
-                                  key={segIndex}
-                                  fg={theme.primary}
-                                  attributes={TextAttributes.BOLD}
-                                >
-                                  {segment.text}
-                                </span>
-                              ) : (
-                                <span key={segIndex} fg={theme.foreground}>
-                                  {segment.text}
-                                </span>
-                              ),
+                  const pathDisplay = wrapTextPreservingNewlines(
+                    String(result.path),
+                    pathColWidth,
+                  )
+                  const detailsDisplay =
+                    details.length > 0
+                      ? wrapTextPreservingNewlines(
+                          details.join(' · '),
+                          detailColWidth,
+                        )
+                      : ''
+                  const queryTerms = String(query)
+                    .split(/\s+/)
+                    .filter((word) => word.length > 1)
+                    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                  const emphasisPattern =
+                    queryTerms.length > 0 ? queryTerms.join('|') : ''
+                  const snippetSegments = emphasisPattern
+                    ? splitPatternSegments(
+                        wrapTextPreservingNewlines(
+                          snippet ?? '',
+                          detailColWidth,
+                        ),
+                        emphasisPattern,
+                      )
+                    : []
+                  const explanation =
+                    typeof result.explanation === 'string' &&
+                    result.explanation.length > 0
+                      ? wrapTextPreservingNewlines(
+                          truncate(result.explanation, 160),
+                          detailColWidth,
+                        )
+                      : ''
+
+                  return (
+                    <box
+                      key={`${String(result.path)}-${index}`}
+                      style={{ flexDirection: 'column', gap: 0, width: '100%' }}
+                    >
+                      <text style={{ wrapMode: 'word' }}>
+                        <span fg={theme.muted}>{`${index + 1}. `}</span>
+                        <span fg={theme.directory}>{pathDisplay}</span>
+                      </text>
+                      {snippet ? (
+                        <InlineResults
+                          items={snippets}
+                          previewCount={1}
+                          noun="snippet"
+                          scope={`snippets:${index}`}
+                          renderItem={(_entry, snippetIndex) =>
+                            snippetIndex === 0 ? (
+                              <text
+                                style={{
+                                  wrapMode: 'word',
+                                  marginLeft: DETAIL_INDENT,
+                                }}
+                              >
+                                {snippetSegments.length > 0
+                                  ? snippetSegments.map((segment, segIndex) =>
+                                      segment.match ? (
+                                        <span
+                                          key={segIndex}
+                                          fg={theme.primary}
+                                          attributes={TextAttributes.BOLD}
+                                        >
+                                          {segment.text}
+                                        </span>
+                                      ) : (
+                                        <span
+                                          key={segIndex}
+                                          fg={theme.foreground}
+                                        >
+                                          {segment.text}
+                                        </span>
+                                      ),
+                                    )
+                                  : null}
+                                {snippetSegments.length === 0
+                                  ? wrapTextPreservingNewlines(
+                                      snippet,
+                                      detailColWidth,
+                                    )
+                                  : null}
+                              </text>
+                            ) : (
+                              <text
+                                fg={theme.foreground}
+                                style={{
+                                  wrapMode: 'word',
+                                  marginLeft: DETAIL_INDENT,
+                                }}
+                              >
+                                {wrapTextPreservingNewlines(
+                                  formatSnippets(result, snippetIndex),
+                                  detailColWidth,
+                                )}
+                              </text>
                             )
-                          : null}
-                        {snippetSegments.length === 0
-                          ? wrapTextPreservingNewlines(snippet, detailColWidth)
-                          : null}
-                      </text>
-                    ) : null}
-                    {detailsDisplay ? (
-                      <text
-                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
-                      >
-                        <span fg={theme.muted}>{detailsDisplay}</span>
-                      </text>
-                    ) : null}
-                    {relatedDisplay ? (
-                      <text
-                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
-                      >
-                        <span fg={theme.muted}>{relatedDisplay}</span>
-                      </text>
-                    ) : null}
-                    {explanation ? (
-                      <text
-                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
-                      >
-                        <span fg={theme.muted}>{explanation}</span>
-                      </text>
-                    ) : null}
-                  </box>
-                )
-              })}
+                          }
+                        />
+                      ) : null}
+                      {detailsDisplay ? (
+                        <text
+                          style={{
+                            wrapMode: 'word',
+                            marginLeft: DETAIL_INDENT,
+                          }}
+                        >
+                          <span fg={theme.muted}>{detailsDisplay}</span>
+                        </text>
+                      ) : null}
+                      {relatedFiles.length > 0 ? (
+                        <InlineResults
+                          items={relatedFiles}
+                          previewCount={1}
+                          noun="related file"
+                          scope={`related-files:${index}`}
+                          renderItem={(_entry, relatedIndex) => (
+                            <text
+                              style={{
+                                wrapMode: 'word',
+                                marginLeft: DETAIL_INDENT,
+                              }}
+                            >
+                              <span fg={theme.muted}>
+                                {wrapTextPreservingNewlines(
+                                  formatRelated(result, relatedIndex),
+                                  detailColWidth,
+                                )}
+                              </span>
+                            </text>
+                          )}
+                        />
+                      ) : null}
+                      {explanation ? (
+                        <text
+                          style={{
+                            wrapMode: 'word',
+                            marginLeft: DETAIL_INDENT,
+                          }}
+                        >
+                          <span fg={theme.muted}>{explanation}</span>
+                        </text>
+                      ) : null}
+                    </box>
+                  )
+                }}
+              />
             </box>
           ) : null}
           {/* Footer: index telemetry, demoted below the results so the ranked
@@ -325,24 +395,24 @@ export const QueryIndexComponent = defineToolComponent({
               </span>
             </text>
           ) : null}
-          {diagnostics.slice(0, 5).map((diagnostic, index) => (
-            <text
-              key={`diagnostic-${index}`}
-              style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}
-            >
-              <span fg={theme.warning}>
-                {wrapTextPreservingNewlines(
-                  `Diagnostic: ${diagnostic.filePath ?? 'unknown file'} (${diagnostic.stage ?? 'parse'}): ${diagnostic.message ?? 'unknown parser error'}`,
-                  detailColWidth,
-                )}
-              </span>
-            </text>
-          ))}
-          {diagnostics.length > 5 ? (
-            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
-              {`Showing 5 of ${diagnostics.length} captured diagnostics · Inspect for all`}
-            </text>
-          ) : null}
+          <InlineResults
+            items={diagnostics}
+            previewCount={5}
+            noun="diagnostic"
+            renderItem={(diagnostic, index) => (
+              <text
+                key={`diagnostic-${index}`}
+                style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}
+              >
+                <span fg={theme.warning}>
+                  {wrapTextPreservingNewlines(
+                    `Diagnostic: ${diagnostic.filePath ?? 'unknown file'} (${diagnostic.stage ?? 'parse'}): ${diagnostic.message ?? 'unknown parser error'}`,
+                    detailColWidth,
+                  )}
+                </span>
+              </text>
+            )}
+          />
         </box>
       )
     }
@@ -556,30 +626,32 @@ function formatMatchedOn(result: QueryIndexResult): string {
     : ''
 }
 
-function formatSnippets(result: QueryIndexResult): string {
+function formatSnippets(result: QueryIndexResult, index = 0): string {
   if (
     !Array.isArray(result.matchedSnippets) ||
     result.matchedSnippets.length === 0
   ) {
     return ''
   }
-  const first = result.matchedSnippets.find((item) => typeof item === 'string')
+  const first = result.matchedSnippets.filter(
+    (item) => typeof item === 'string',
+  )[index]
   if (typeof first !== 'string') return ''
   const snippet = truncate(first, 80)
   const shown = /^snippet\s*:/i.test(snippet) ? snippet : `snippet: ${snippet}`
-  const count = result.matchedSnippets.filter(item => typeof item === 'string').length
-  return `${shown}${count > 1 ? ` · 1 of ${count} captured snippets; Inspect for all` : ''}`
+  return shown
 }
 
-function formatRelated(result: QueryIndexResult): string {
+function formatRelated(result: QueryIndexResult, index = 0): string {
   if (!Array.isArray(result.relatedFiles) || result.relatedFiles.length === 0) {
     return ''
   }
-  const first = result.relatedFiles.find(isRecord)
+  const first = result.relatedFiles.filter(
+    (item) => isRecord(item) && typeof item.path === 'string',
+  )[index]
   if (!first || typeof first.path !== 'string') return ''
   const reason = typeof first.reason === 'string' ? `: ${first.reason}` : ''
-  const count = result.relatedFiles.filter(item => isRecord(item) && typeof item.path === 'string').length
-  return `${truncate(`related to ${first.path}${reason}`, 120)}${count > 1 ? ` · 1 of ${count} captured related files; Inspect for all` : ''}`
+  return truncate(`related to ${first.path}${reason}`, 120)
 }
 
 function truncate(text: string, maxLength: number): string {

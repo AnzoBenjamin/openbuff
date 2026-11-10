@@ -30,6 +30,7 @@ import { UpdateBox } from '../renderers/update-box'
 import { Button } from '../button'
 import { useOutputReaderStore } from '../../state/output-reader-store'
 import { createJsonDocument } from '../../utils/output-document'
+import { InlineResultScope } from '../tools/inline-results'
 
 import type { ContentBlock, TextContentBlock } from '../../types/chat'
 
@@ -51,7 +52,7 @@ interface SingleBlockProps {
   contentToCopy?: string
 }
 
-export const SingleBlock = memo(
+const SingleBlockContent = memo(
   ({
     block,
     idx,
@@ -226,7 +227,7 @@ export const SingleBlock = memo(
       case 'doctor': {
         return (
           <box key={`${messageId}-doctor-${idx}`} style={{ width: '100%' }}>
-            <DoctorBox block={block} />
+            <DoctorBox block={block} onInsertCommand={onInsertCommand} />
           </box>
         )
       }
@@ -359,3 +360,9 @@ export const SingleBlock = memo(
     }
   },
 )
+
+export const SingleBlock = memo((props: SingleBlockProps) => (
+  <InlineResultScope messageId={props.messageId} scope={`command:${props.idx}`}>
+    <SingleBlockContent {...props} />
+  </InlineResultScope>
+))

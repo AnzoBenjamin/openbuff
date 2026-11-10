@@ -6,7 +6,7 @@ import {
   DetailRow,
   ErrorRow,
   formatCount,
-  OverflowNote,
+  InlineResults,
   previewWithGlyph,
   readNumber,
   readRecordArray,
@@ -68,8 +68,6 @@ export const RecallContextComponent = defineToolComponent({
     const summary = error
       ? `Recall failed · ${error}`
       : `Recall · ${formatCount(matches.length, 'match', 'matches')} · archived evidence${record?.truncated === true ? ' · capture truncated' : ''}`
-    const shown = matches.slice(0, MAX_MATCHES)
-    const hiddenCount = matches.length - shown.length
 
     return {
       collapsedPreview: previewWithGlyph(summary, statuses.glyph),
@@ -90,27 +88,32 @@ export const RecallContextComponent = defineToolComponent({
                 valueColor={theme.muted}
               />
             ) : null}
-            {shown.map((entry, index) => {
-              const step =
-                typeof entry.step === 'number' ? entry.step : undefined
-              const name =
-                typeof entry.toolName === 'string' && entry.toolName.trim()
-                  ? entry.toolName
-                  : typeof entry.action === 'string'
-                    ? `Consolidation · ${entry.action}`
-                    : 'unknown tool'
-              const snippet = trimSnippet(entry.snippet ?? entry.summary)
-              return (
-                <DetailRow
-                  key={`${name}-${index}`}
-                  label={`${step === undefined ? name : `step ${step} · ${name}`}${typeof entry.toolCallId === 'string' ? ` · call ${entry.toolCallId}` : ''}${typeof entry.archivePath === 'string' ? ` · ${entry.archivePath}` : ''}${typeof entry.consolidatedAt === 'number' ? ` · captured ${entry.consolidatedAt}` : ''}`}
-                  value={snippet || '(no snippet recorded)'}
-                  width={width}
-                  valueColor={theme.muted}
-                />
-              )
-            })}
-            <OverflowNote hiddenCount={hiddenCount} noun="match" />
+            <InlineResults
+              items={matches}
+              previewCount={MAX_MATCHES}
+              noun="match"
+              renderItem={(entry, index) => {
+                const step =
+                  typeof entry.step === 'number' ? entry.step : undefined
+                const name =
+                  typeof entry.toolName === 'string' && entry.toolName.trim()
+                    ? entry.toolName
+                    : typeof entry.action === 'string'
+                      ? `Consolidation · ${entry.action}`
+                      : 'unknown tool'
+                const snippet = trimSnippet(entry.snippet ?? entry.summary)
+                return (
+                  <DetailRow
+                    key={`${name}-${index}`}
+                    label={`${step === undefined ? name : `step ${step} · ${name}`}${typeof entry.toolCallId === 'string' ? ` · call ${entry.toolCallId}` : ''}${typeof entry.archivePath === 'string' ? ` · ${entry.archivePath}` : ''}${typeof entry.consolidatedAt === 'number' ? ` · captured ${entry.consolidatedAt}` : ''}`}
+                    value={snippet || '(no snippet recorded)'}
+                    width={width}
+                    valueColor={theme.muted}
+                  />
+                )
+              }}
+            />
+
             {consolidations !== undefined && consolidations > 0 ? (
               <DetailRow
                 value={formatCount(consolidations, 'consolidation')}

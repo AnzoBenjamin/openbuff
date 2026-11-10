@@ -1,8 +1,9 @@
 import { TextAttributes } from '@opentui/core'
-import React, { useState } from 'react'
+import React from 'react'
 
 import { Button } from '../button'
 import { useTheme } from '../../hooks/use-theme'
+import { InlineResults } from './inline-results'
 
 import type { ChatTheme } from '../../types/theme-system'
 
@@ -135,29 +136,23 @@ export function CollapsibleGroup({
   previewCount?: number
 }) {
   const theme = useTheme()
-  const [expanded, setExpanded] = useState(false)
-  const visibleCount = expanded
-    ? entries.length
-    : Math.min(previewCount ?? PREVIEW_ENTRIES, entries.length)
-  const hiddenCount = entries.length - visibleCount
-
   return (
-    <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
-      <Button onClick={() => setExpanded((value) => !value)}>
-        <text style={{ wrapMode: 'word' }}>
-          <span fg={theme.foreground} attributes={TextAttributes.BOLD}>
-            {expanded ? '▾ ' : '▸ '}
-          </span>
-          <span fg={theme.directory}>{`${label} (${badge ?? count})`}</span>
-        </text>
-      </Button>
-      {entries.slice(0, visibleCount)}
-      {hiddenCount > 0 ? (
-        <text style={{ wrapMode: 'none' }}>
-          <span fg={theme.muted}>{`    … ${hiddenCount} more`}</span>
-        </text>
-      ) : null}
-    </box>
+    <InlineResults
+      items={entries}
+      previewCount={previewCount ?? PREVIEW_ENTRIES}
+      scope={`group:${label}`}
+      renderItem={(entry) => entry}
+      renderHeader={(expanded, toggle) => (
+        <Button onClick={toggle}>
+          <text style={{ wrapMode: 'word' }}>
+            <span fg={theme.foreground} attributes={TextAttributes.BOLD}>
+              {expanded ? '▾ ' : '▸ '}
+            </span>
+            <span fg={theme.directory}>{`${label} (${badge ?? count})`}</span>
+          </text>
+        </Button>
+      )}
+    />
   )
 }
 
@@ -182,26 +177,32 @@ export function SearchGroups({
 
   return (
     <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
-      {groups.map((group) => (
-        <CollapsibleGroup
-          key={group.file}
-          label={shortenPath(group.file, cwd)}
-          count={group.matches.length}
-          entries={group.matches.map((match, index) => (
-            <box
-              key={`${match.line}-${index}`}
-              style={{ flexDirection: 'row', gap: 0, width: '100%' }}
-            >
-              <text style={{ wrapMode: 'none' }}>
-                <span fg={theme.muted}>
-                  {`  ${String(match.line).padStart(lineWidth)} | `}
-                </span>
-              </text>
-              <HighlightedContent content={match.content} pattern={pattern} />
-            </box>
-          ))}
-        />
-      ))}
+      <InlineResults
+        items={groups}
+        previewCount={50}
+        noun="file"
+        scope="search-files"
+        renderItem={(group) => (
+          <CollapsibleGroup
+            key={group.file}
+            label={shortenPath(group.file, cwd)}
+            count={group.matches.length}
+            entries={group.matches.map((match, index) => (
+              <box
+                key={`${match.line}-${index}`}
+                style={{ flexDirection: 'row', gap: 0, width: '100%' }}
+              >
+                <text style={{ wrapMode: 'none' }}>
+                  <span fg={theme.muted}>
+                    {`  ${String(match.line).padStart(lineWidth)} | `}
+                  </span>
+                </text>
+                <HighlightedContent content={match.content} pattern={pattern} />
+              </box>
+            ))}
+          />
+        )}
+      />
     </box>
   )
 }
@@ -221,22 +222,29 @@ export function FileGroups({
 
   return (
     <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
-      {groups.map((group) => (
-        <CollapsibleGroup
-          key={group.dir || '.'}
-          label={group.dir ? shortenPath(group.dir, cwd) : '.'}
-          count={group.files.length}
-          entries={group.files.map((file, index) => {
-            const basename = file.slice(file.lastIndexOf('/') + 1)
-            return (
-              <text key={`${file}-${index}`} style={{ wrapMode: 'none' }}>
-                <span fg={theme.muted}>{'    '}</span>
-                <span fg={theme.foreground}>{basename}</span>
-              </text>
-            )
-          })}
-        />
-      ))}
+      <InlineResults
+        items={groups}
+        previewCount={50}
+        noun="directory"
+        pluralNoun="directories"
+        scope="file-directories"
+        renderItem={(group) => (
+          <CollapsibleGroup
+            key={group.dir || '.'}
+            label={group.dir ? shortenPath(group.dir, cwd) : '.'}
+            count={group.files.length}
+            entries={group.files.map((file, index) => {
+              const basename = file.slice(file.lastIndexOf('/') + 1)
+              return (
+                <text key={`${file}-${index}`} style={{ wrapMode: 'none' }}>
+                  <span fg={theme.muted}>{'    '}</span>
+                  <span fg={theme.foreground}>{basename}</span>
+                </text>
+              )
+            })}
+          />
+        )}
+      />
     </box>
   )
 }

@@ -8,6 +8,7 @@ import { Button } from '../button'
 import { capturedDiagnosticDocument } from '../../utils/captured-diagnostic-document'
 import { useOutputReaderStore } from '../../state/output-reader-store'
 import { clipEvidenceLine } from '../../utils/bounded-evidence'
+import { InlineResults } from '../tools/inline-results'
 
 import type { IndexStatusContentBlock } from '../../types/chat'
 
@@ -61,33 +62,31 @@ export const IndexStatusBox = memo(({ block }: IndexStatusBoxProps) => {
         <box style={{ flexDirection: 'column', gap: 0 }}>
           <text
             style={{ wrapMode: 'word', fg: theme.secondary }}
-          >{`Parser diagnostics · showing ${Math.min(5, diagnosticRows.length)} of ${diagnosticRows.length} captured details`}</text>
+          >{`Parser diagnostics · ${diagnosticRows.length <= 5 ? `showing ${diagnosticRows.length} of ${diagnosticRows.length}` : diagnosticRows.length} captured details`}</text>
           {hasProducerSummary && <text fg={theme.muted}>{diagnostics[0]}</text>}
-          {(() => {
-            const seen = new Map<string, number>()
-            return diagnosticRows.slice(0, 5).map((line) => {
-              const h = hashString(line)
-              const n = seen.get(h) ?? 0
-              seen.set(h, n + 1)
-              const key = n === 0 ? `diag-${h}` : `diag-${h}-${n}`
-              return (
-                <text key={key} style={{ wrapMode: 'word', fg: theme.muted }}>
-                  {clipEvidenceLine(line, 120)}
-                </text>
-              )
-            })
-          })()}
+          <InlineResults
+            scope="diagnostics"
+            items={diagnosticRows}
+            previewCount={5}
+            noun="diagnostic"
+            renderItem={(line, index) => (
+              <text
+                key={`diag-${hashString(line)}-${index}`}
+                style={{ wrapMode: 'word', fg: theme.muted }}
+              >
+                {clipEvidenceLine(line, 120)}
+              </text>
+            )}
+          />
           <Button
             onClick={() =>
-              useOutputReaderStore
-                .getState()
-                .open({
-                  document: capturedDiagnosticDocument(
-                    'index-status',
-                    'Captured index diagnostics',
-                    block,
-                  ),
-                })
+              useOutputReaderStore.getState().open({
+                document: capturedDiagnosticDocument(
+                  'index-status',
+                  'Captured index diagnostics',
+                  block,
+                ),
+              })
             }
           >
             <text fg={theme.secondary}>Inspect captured diagnostics</text>

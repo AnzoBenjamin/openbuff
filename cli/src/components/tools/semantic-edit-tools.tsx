@@ -9,7 +9,7 @@ import {
   ErrorRow,
   formatCount,
   isRecord,
-  OverflowNote,
+  InlineResults,
   previewWithGlyph,
   readNumber,
   readRecordArray,
@@ -140,8 +140,6 @@ function SemanticEditBody({
   const theme = useTheme()
   const width = rowWidth(options?.availableWidth)
   const appliedCount = result.files.filter((file) => file.applied).length
-  const shown = result.files.slice(0, MAX_FILE_ROWS)
-  const hiddenCount = result.files.length - shown.length
 
   return (
     <ResultBody>
@@ -156,20 +154,25 @@ function SemanticEditBody({
           valueColor={theme.warning}
         />
       ) : null}
-      {shown.map((file, index) => {
-        const status = file.applied ? 'applied' : 'not applied'
-        const color = file.applied ? theme.success : theme.error
-        const suffix = file.applied
-          ? ''
-          : ` - ${truncateText(file.errorMessage ?? 'the action did not apply', width)}`
-        return (
-          <text key={`${file.path}-${index}`} style={{ wrapMode: 'word' }}>
-            <span fg={theme.muted}>{`${index + 1}. `}</span>
-            <span fg={color}>{status}</span>
-            <span fg={theme.foreground}>{` ${file.path}${suffix}`}</span>
-          </text>
-        )
-      })}
+      <InlineResults
+        items={result.files}
+        previewCount={MAX_FILE_ROWS}
+        noun="file"
+        renderItem={(file, index) => {
+          const status = file.applied ? 'applied' : 'not applied'
+          const color = file.applied ? theme.success : theme.error
+          const suffix = file.applied
+            ? ''
+            : ` - ${truncateText(file.errorMessage ?? 'the action did not apply', width)}`
+          return (
+            <text key={`${file.path}-${index}`} style={{ wrapMode: 'word' }}>
+              <span fg={theme.muted}>{`${index + 1}. `}</span>
+              <span fg={color}>{status}</span>
+              <span fg={theme.foreground}>{` ${file.path}${suffix}`}</span>
+            </text>
+          )
+        }}
+      />
       {result.files.length > 1 ? (
         <DetailRow
           label="Applied"
@@ -178,7 +181,6 @@ function SemanticEditBody({
           valueColor={theme.muted}
         />
       ) : null}
-      <OverflowNote hiddenCount={hiddenCount} noun="file" />
     </ResultBody>
   )
 }
