@@ -2,6 +2,7 @@ import { TextAttributes } from '@opentui/core'
 import React, { memo, type ReactNode } from 'react'
 
 import { Button } from './button'
+import { InspectAction } from './inspect-action'
 import { useTerminalDimensions } from '../hooks/use-terminal-dimensions'
 import { useTheme } from '../hooks/use-theme'
 import { getLastNVisualLines } from '../utils/text-layout'
@@ -156,9 +157,7 @@ export const Thinking = memo(
               </text>
             ) : null}
             {onInspect ? (
-              <Button onClick={onInspect} style={{ flexShrink: 0 }}>
-                <text fg={theme.link}>Inspect reasoning</text>
-              </Button>
+              <InspectAction label="Inspect reasoning" onClick={onInspect} />
             ) : null}
           </box>
         ) : null}

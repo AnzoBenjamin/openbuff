@@ -39,7 +39,10 @@ export const OptionsList: React.FC<OptionsListProps> = memo(
   }) => {
     const theme = useTheme()
     const { terminalHeight } = useTerminalDimensions()
-    const rowCount = Math.max(1, terminalHeight - (answer?.isCustom ? 13 : 11))
+    const rowCount = Math.max(
+      1,
+      Math.min(6, terminalHeight - (answer?.isCustom ? 20 : 16)),
+    )
     const focused = focusedOptionIndex ?? answer?.selectedIndex ?? 0
     const start = Math.max(
       0,
@@ -129,7 +132,8 @@ export const OptionsList: React.FC<OptionsListProps> = memo(
             width: '100%',
             flexDirection: 'column',
             gap: 0,
-            backgroundColor: isCustomFocused ? theme.surface : undefined,
+            backgroundColor: isCustomFocused ? theme.surfaceHover : undefined,
+            flexShrink: 0,
             paddingTop: 0,
             paddingBottom: 0,
             paddingLeft: optionIndent,

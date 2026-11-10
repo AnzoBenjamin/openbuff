@@ -20,7 +20,6 @@ import {
 import { useTheme } from '../../hooks/use-theme'
 import { useChatStore } from '../../state/chat-store'
 import { isPlainEnterKey } from '../../utils/terminal-enter-detection'
-import { BORDER_CHARS } from '../../utils/ui-constants'
 import { Button } from '../button'
 import {
   formatStructuredAnswer,
@@ -112,10 +111,16 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
   answersRef.current = answers
 
   // Track focused option within expanded question
-  const [focusedOptionIndex, setFocusedOptionIndex] = useState<number | null>(
-    questions.length > 0 ? 0 : null,
-  )
+  const [focusedOptionIndex, setFocusedOptionIndexState] = useState<
+    number | null
+  >(questions.length > 0 ? 0 : null)
 
+  // Terminal input can batch several arrows before React commits a render.
+  const focusedOptionRef = useRef(focusedOptionIndex)
+  const setFocusedOptionIndex = useCallback((value: number | null) => {
+    focusedOptionRef.current = value
+    setFocusedOptionIndexState(value)
+  }, [])
   // Track which question has keyboard focus
   const [focusedQuestionIndex, setFocusedQuestionIndex] = useState<number>(0)
 
@@ -485,7 +490,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
         const optionCount = currentQuestion.options.length + 1
         const lastOptionIndex = optionCount - 1
         const currentOptionIndex = Math.min(
-          Math.max(focusedOptionIndex ?? 0, 0),
+          Math.max(focusedOptionRef.current ?? 0, 0),
           lastOptionIndex,
         )
 
@@ -616,12 +621,22 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
   }, [terminalFocused])
 
   return (
-    <box style={{ flexDirection: 'column', padding: 0, width: '100%' }}>
+    <box
+      style={{
+        flexDirection: 'column',
+        padding: 0,
+        width: '100%',
+        flexGrow: 0,
+        flexShrink: 0,
+      }}
+    >
       {/* Close button in top-right */}
       <box
         style={{
           flexDirection: 'row',
-          justifyContent: 'flex-end',
+          justifyContent: 'flex-start',
+          gap: 2,
+          flexWrap: 'wrap',
           marginBottom: 0,
           width: '100%',
         }}
@@ -645,10 +660,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
       </box>
 
       {/* All questions in accordion style */}
-      <scrollbox
-        scrollX={false}
-        style={{ maxHeight: Math.max(3, terminalHeight - 8) }}
-      >
+      <box flexDirection="column" flexGrow={0} flexShrink={0}>
         {questions
           .slice(focusedQuestionIndex, focusedQuestionIndex + 1)
           .map((question, visibleIndex) => {
@@ -708,7 +720,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
               />
             )
           })}
-      </scrollbox>
+      </box>
       {validationError && <text fg={theme.error}>{validationError}</text>}
 
       {/* Skip confirmation (shard-cli-tui finding: ask-user Esc data-loss): */}
@@ -739,14 +751,12 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
               setSubmitHovered(false)
             }}
             style={{
-              borderStyle: 'single',
-              borderColor:
+              backgroundColor:
                 submitFocused || (submitHovered && terminalFocused)
-                  ? theme.primary
-                  : theme.muted,
-              customBorderChars: BORDER_CHARS,
-              paddingLeft: 2,
-              paddingRight: 2,
+                  ? theme.surfaceHover
+                  : undefined,
+              paddingLeft: 1,
+              paddingRight: 1,
             }}
           >
             <text
@@ -761,7 +771,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
                     : undefined,
               }}
             >
-              {isValidating ? 'Checking answers…' : 'Submit'}
+              {isValidating ? 'Checking answers…' : '[ Submit ]'}
             </text>
           </Button>
         </box>
@@ -787,7 +797,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
                 marginRight: idx === KEYBOARD_HINTS.length - 1 ? 0 : 1,
               }}
             >
-              {hint}
+              {`${idx > 0 ? ' · ' : ''}${hint}`}
             </text>
           ))}
         </box>

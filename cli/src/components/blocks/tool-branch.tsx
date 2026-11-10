@@ -20,6 +20,7 @@ import { sliceTextCells } from '../../utils/text-boundaries'
 import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
 import { ToolCallItem } from '../tools/tool-call-item'
 import { Button } from '../button'
+import { InspectAction } from '../inspect-action'
 import { documentForTool } from '../../utils/output-catalog'
 import { createJsonDocument } from '../../utils/output-document'
 import { useOutputReaderStore } from '../../state/output-reader-store'
@@ -258,15 +259,14 @@ export const ToolBranch = memo(
         {!isCollapsed &&
           (toolBlock.outputRaw !== undefined ||
             toolBlock.output !== undefined) && (
-            <Button
+            <InspectAction
+              label="Inspect captured output"
               onClick={() =>
                 useOutputReaderStore
                   .getState()
                   .open({ document: documentForTool(toolBlock) })
               }
-            >
-              <text fg={theme.primary}>Inspect captured output</text>
-            </Button>
+            />
           )}
       </box>
     )

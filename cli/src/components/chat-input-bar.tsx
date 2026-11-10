@@ -281,7 +281,12 @@ export const ChatInputBar = ({
         title={askUserTitle}
         titleAlignment="left"
         style={{
-          width: '100%',
+          width: Math.min(88, Math.max(1, separatorWidth - 2)),
+          flexGrow: 0,
+          flexShrink: 0,
+          paddingLeft: 1,
+          paddingRight: 1,
+          flexDirection: 'column',
           borderStyle: 'single',
           borderColor: theme.primary,
           customBorderChars: BORDER_CHARS,
@@ -404,6 +409,8 @@ export const ChatInputBar = ({
         titleAlignment="left"
         style={{
           width: '100%',
+          overflow: 'visible',
+          zIndex: 25,
           borderStyle: 'single',
           borderColor,
           customBorderChars: BORDER_CHARS,

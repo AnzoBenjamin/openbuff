@@ -272,7 +272,9 @@ export const AgentModeToggle = ({
     >
       <text
         wrapMode="none"
-        fg={isCollapsedHovered ? theme.primary : theme.muted}
+        fg={
+          isCollapsedHovered || mode !== 'DEFAULT' ? theme.primary : theme.muted
+        }
         attributes={isCollapsedHovered ? TextAttributes.BOLD : 0}
       >
         {`${label} ▾`}
@@ -286,19 +288,21 @@ export const AgentModeToggle = ({
       height={3}
       flexShrink={0}
       justifyContent="center"
+      overflow="visible"
+      zIndex={30}
     >
       {collapsed}
       {hoverToggle.isOpen && (
         <box
           position="absolute"
           right={0}
-          bottom={3}
+          bottom={5}
           zIndex={20}
           width={
             Math.max(...AGENT_MODES.map((value) => stringWidth(value))) + 6
           }
           border
-          borderColor={theme.border}
+          borderColor={theme.primary}
           backgroundColor={theme.surface}
           flexDirection="column"
           paddingLeft={1}

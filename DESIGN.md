@@ -6,9 +6,10 @@
 - Last refreshed: 2026-11-10.
 - Primary product surfaces: Openbuff terminal CLI (React/OpenTUI), launch/setup/questions/sessions and command/install/update output, with embedded OAuth callback and SDK dashboard supporting surfaces.
 - User brief: a clean, understandable interface that makes large or complicated content readable and lets people navigate expanded output comfortably.
-- Current refinement: a compact wordmark/project header, quiet graphite/sage surfaces, neutral prose headings, restrained composer borders and caret, text-based mode selection, and grouped structured results. Prefer readable field labels and outcomes over JSON syntax and protocol metadata; keep Inspect available for captured evidence. Short tool summaries share a single row when their complete text fits. Saved sessions and review choices use the same left-aligned hierarchy. [OpenTUI 0.8 refinement](docs/design/cli-overhaul/REFINEMENT.md).
+- Current refinement: a compact wordmark/project header, quiet graphite surfaces, bright green primary headings and task boundaries, restrained composer borders and caret, text-based mode selection, and grouped structured results. Prefer readable field labels and outcomes over JSON syntax and protocol metadata; keep Inspect available for captured evidence. Short tool summaries share a single row when their complete text fits. Saved sessions and review choices use the same left-aligned hierarchy. [OpenTUI 0.8 refinement](docs/design/cli-overhaul/REFINEMENT.md).
 - Evidence reviewed: [acceptance and source/test coverage](docs/design/cli-overhaul/ACCEPTANCE.json), [research](docs/design/cli-overhaul/RESEARCH.md), [implementation plan](docs/design/cli-overhaul/PLAN.md), [wireframes](docs/design/cli-overhaul/WIREFRAMES.md), existing [provider setup guidance](docs/openbuff-provider-model-setup-ux.md), CLI source and tests cited in those documents.
 - Audit snapshot evidence: 160 primary sources / 44,072 lines across 19 groups; local hash/full-read coverage check, selected passing regression suites, offline OpenTUI fixture frames and injected probes. Limits: no live whole-CLI/browser/emulator/accessibility baseline or usability study; source coverage is distinct from visual validation.
+- Current polish evidence: [green identity, readable inspection, compact decisions and validation](docs/design/cli-overhaul/UI-POLISH.md).
 - Latest refinement evidence: [OpenTUI 0.8 checks and previews](docs/design/cli-overhaul/REFINEMENT.md): passing broad CLI/native schedules, final MCP display regressions, typechecks and compiled/native validation, plus light/dark fixtures at 100 and 60 columns.
 - Earlier overhaul evidence: [validation snapshot](docs/design/cli-overhaul/README.md): 4,419 passing CLI tests, 148 passing isolated native checks, 1,530 fixture frames and 14 compiled CLI PTY phases. All 200 item IDs have review records; executed acceptance differs from source support. [Reference-machine performance](docs/design/cli-overhaul/PERFORMANCE.json). Historical generated evidence and duplicate implementation notes were removed before committing.
 
@@ -16,7 +17,7 @@
 
 - Personality: precise, calm, capable, approachable.
 - Trust signals: clear action outcomes, accurate status, accessible evidence, truthful counts and explicit content availability.
-- Retain the existing green accent as a starting point; reserve emphasis for selection, meaningful actions and state.
+- Retain the recognizable lime-green identity: the dark primary is `#a4e879`, between historical `#9EFC62` and the upgrade’s `#b0d98a`. Use green for primary headings, task boundaries, active mode and keyboard keys; keep ordinary prose neutral.
 - Avoid decorative animation, repeated boxes around every item, unexplained abbreviations and walls of implementation metadata.
 
 ## Product goals
@@ -71,7 +72,7 @@ Tradeoff: the reader introduces one deliberate transition for large content in e
 ## Components
 
 - Reuse: Button, SelectableList, searchable-list hooks, MultilineInput, native Markdown, DiffViewer, existing tool registry, windowed transcript and centralized scroll management.
-- Change: consistent tool/agent summary rows, bounded previews, discoverable inspect actions, compact status with session-details destination and responsive picker layouts.
+- Change: quiet inset inspect links with hover/focus emphasis; native Markdown task instructions; readable indented reader fields with an explicit Raw view, exact scalar copy and Enter for full values; segmented keyboard help with a complete command guide; compact status and responsive pickers. Mode popups sit one clear row above the composer boundary and paint above it.
 - New: OutputReader, document adapters, reader outline/find/position controls, content-availability labels, explicit focus scopes, Activity/Session details destinations and shared list/detail flow patterns.
 - Repair before style expansion: grapheme/cell-aware editing and truncation, draft revisions, command dispatch, producer-result adapters, typed question values, viewport selection, native media fallback and clipboard feedback.
 - States: queued, running, succeeded, failed, cancelled, partial, empty and unavailable. Derive states from authoritative lifecycle/result fields.
@@ -106,7 +107,7 @@ Tradeoff: the reader introduces one deliberate transition for large content in e
 - Paused following: stable “Reading earlier · new updates · Latest” affordance; count meaningful updates, not tokens.
 - Async flows: bind request/result to project, selected run and draft revision; discard stale responses without losing current work.
 - Search: show actual shown/matched counts, explain presentation caps and retain a visible partial-source notice alongside results. Batched query/navigation/Enter uses the latest selection; repeated Enter activates once, and inventory refresh preserves selection identity or requires deliberate reselection.
-- Decisions: bounded full question/command inspection, typed answer identity and validation; Back/Close, Skip and Stop have explicit effects.
+- Decisions: content-sized panels capped at 88 columns, windowed choices with reserved description/custom-input space, and separate action controls. Preserve command line breaks. Full command/question inspection, typed answer identity and validation remain available; Back/Close, Skip and Stop have explicit effects.
 - Queue: FIFO next prompt, attachment identity and enqueue-time mode visible; failed send stays distinguishable from pause, with retained work.
 - Queue recovery: per-item mode edits preserve prompt/attachments; clear confirmation fixes its scope to previewed IDs and offers full inspection. Undo restores the last removed item/batch paused, with its original order, mode and attachments. Recovery remains available until the next removal or session exit; clearing queued work leaves the current run running.
 - Destructive actions: preview affected scope, preserve preview options exactly for apply, and expose recovery/confirmation according to actual capabilities.
@@ -139,7 +140,7 @@ Tradeoff: the reader introduces one deliberate transition for large content in e
 ## Open questions
 
 - [ ] Confirm reader-first versus an optional persistent side pane through prototype tasks; reader-first is the proposed default.
-- [ ] Confirm default preview density with developers using 80×24 and wide terminals.
+- [ ] Confirm default preview density with developers using 80×24 and wide terminals. The latest feedback favors quieter repeated inspect links and compact decision panels. The user’s trailing “Also” may introduce an additional issue.
 - [ ] Establish supported screen-reader/emulator combinations and validate plain-text reading.
 - [ ] Keep complete-output claims qualified by each adapter's retained source and limits; final family-level checks do not establish every original audit clause.
 - [ ] Tune reader outline width and performance budgets with developer feedback; the current reference-machine reader measurements are recorded in PERFORMANCE.json.

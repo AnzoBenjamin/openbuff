@@ -8,7 +8,7 @@ import React, { memo } from 'react'
 
 import { useTerminalLayout } from '../../../hooks/use-terminal-layout'
 import { useTheme } from '../../../hooks/use-theme'
-import { sliceTextCells } from '../../../utils/text-boundaries'
+import { wrapTextPreservingNewlines } from '../../../utils/text-layout'
 import { clipEvidenceLine } from '../../../utils/bounded-evidence'
 import { Button } from '../../button'
 
@@ -39,11 +39,22 @@ export const QuestionHeader: React.FC<QuestionHeaderProps> = memo(
     // Calculate available width for the answer text and truncate with ellipsis at end
     const availableWidth = Math.max(1, terminalWidth - ANSWER_LINE_OVERHEAD)
     const truncatedAnswer = clipEvidenceLine(answerDisplay, availableWidth)
-    const questionPreview = sliceTextCells(
-      questionText.replace(/\s+/g, ' '),
-      0,
-      Math.max(1, terminalWidth - questionPrefix.length - 10),
+    const questionWidth = Math.max(
+      1,
+      Math.min(80, terminalWidth - 8) - questionPrefix.length - 2,
     )
+    const questionLines = wrapTextPreservingNewlines(
+      questionText,
+      questionWidth,
+    ).split('\n')
+    const questionPreview = questionLines
+      .slice(0, 3)
+      .map((line, index) =>
+        index === 2 && questionLines.length > 3
+          ? clipEvidenceLine(`${line} …`, questionWidth)
+          : line,
+      )
+      .join('\n')
 
     return (
       <Button
@@ -51,6 +62,7 @@ export const QuestionHeader: React.FC<QuestionHeaderProps> = memo(
         style={{
           flexDirection: 'column',
           width: '100%',
+          flexShrink: 0,
         }}
       >
         <text wrapMode="none">

@@ -1,6 +1,8 @@
 import React from 'react'
 import { classifyOutputOutcome } from '../../utils/output-outcome'
 import { TextAttributes } from '@opentui/core'
+import { ContentWithMarkdown } from '../blocks/content-with-markdown'
+import { createMarkdownPalette } from '../../utils/theme-system'
 
 import { useTheme } from '../../hooks/use-theme'
 import { defineToolComponent } from './types'
@@ -53,7 +55,9 @@ export function summarizeSpawnResult(result: unknown): ChildSummary {
       : 'agent'
 
   const childValue =
-    record.value && typeof record.value === 'object' && !Array.isArray(record.value)
+    record.value &&
+    typeof record.value === 'object' &&
+    !Array.isArray(record.value)
       ? (record.value as Record<string, unknown>)
       : undefined
   if (childValue?.background === true) {
@@ -131,7 +135,12 @@ export function summarizeSpawnResult(result: unknown): ChildSummary {
 function extractOutcomeKind(
   outcome: string | undefined,
 ): ChildSummary['color'] {
-  const colors = { good: 'success', warn: 'warning', bad: 'error', neutral: 'muted' } as const
+  const colors = {
+    good: 'success',
+    warn: 'warning',
+    bad: 'error',
+    neutral: 'muted',
+  } as const
   return colors[classifyOutputOutcome(outcome)]
 }
 
@@ -150,13 +159,17 @@ export const SpawnAgentsComponent = defineToolComponent({
       | undefined
     const agents = Array.isArray(input?.agents) ? input!.agents : []
 
-    const results = getToolOutputValues(toolBlock.outputRaw)
-      .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    const results = getToolOutputValues(toolBlock.outputRaw).flatMap((value) =>
+      Array.isArray(value) ? value : [value],
+    )
     const backgroundCount = results.filter((result) => {
       if (!result || typeof result !== 'object') return false
       const value = (result as Record<string, unknown>).value
-      return value && typeof value === 'object' &&
+      return (
+        value &&
+        typeof value === 'object' &&
         (value as Record<string, unknown>).background === true
+      )
     }).length
     const count = agents.length
     const header =
@@ -185,21 +198,52 @@ export const SpawnAgentsComponent = defineToolComponent({
           ? `${summary.name} — ${wrapTextPreservingNewlines(summary.detail, width - 4).split('\n')[0] ?? ''}`
           : summary.name
         lines.push(
-          <text key={`child-${index}`} style={{ wrapMode: 'word' }}>
-            <span fg={theme[summary.color]}>{summary.glyph}</span>
-            <span fg={theme.foreground}> {label}</span>
-          </text>,
+          summary.detail &&
+            /(?:^#{1,6}\s|\*[^*\n]+\*|`[^`]+`|^[*+-]\s|^\d+\.\s|\[[^\]]+\]\()/m.test(
+              summary.detail,
+            ) ? (
+            <box key={`child-${index}`} flexDirection="column" width="100%">
+              <text>
+                <span fg={theme[summary.color]}>{summary.glyph}</span>
+                <span fg={theme.foreground} attributes={TextAttributes.BOLD}>
+                  {' '}
+                  {summary.name}
+                </span>
+              </text>
+              <box
+                paddingLeft={2}
+                maxHeight={3}
+                overflow="hidden"
+                flexDirection="column"
+              >
+                <ContentWithMarkdown
+                  content={summary.detail.slice(0, 2000)}
+                  isStreaming={false}
+                  eagerProse
+                  codeBlockWidth={width - 2}
+                  palette={createMarkdownPalette(theme)}
+                />
+              </box>
+            </box>
+          ) : (
+            <text key={`child-${index}`} style={{ wrapMode: 'word' }}>
+              <span fg={theme[summary.color]}>{summary.glyph}</span>
+              <span fg={theme.foreground}> {label}</span>
+            </text>
+          ),
         )
         // Runtime reports retain the original requested-entry order. Keep
         // holes in that order and bind reasons to this child, including when
         // the same type was requested more than once.
         const result = results[index]
-        const reasons = result && typeof result === 'object'
-          ? (result as Record<string, unknown>).schedulingReasons
-          : undefined
+        const reasons =
+          result && typeof result === 'object'
+            ? (result as Record<string, unknown>).schedulingReasons
+            : undefined
         if (Array.isArray(reasons)) {
           const schedulingReasons = reasons.filter(
-            (reason): reason is string => typeof reason === 'string' && reason.trim().length > 0,
+            (reason): reason is string =>
+              typeof reason === 'string' && reason.trim().length > 0,
           )
           if (schedulingReasons.length > 0) {
             const requested = agents[index]?.agent_type
@@ -207,7 +251,10 @@ export const SpawnAgentsComponent = defineToolComponent({
             lines.push(
               <text key={`scheduling-${index}`} style={{ wrapMode: 'word' }}>
                 <span fg={theme.muted}>
-                  {wrapTextPreservingNewlines(`${identity}: ${schedulingReasons.join(' · ')}`, width)}
+                  {wrapTextPreservingNewlines(
+                    `${identity}: ${schedulingReasons.join(' · ')}`,
+                    width,
+                  )}
                 </span>
               </text>,
             )
@@ -215,23 +262,39 @@ export const SpawnAgentsComponent = defineToolComponent({
         }
       })
     } else {
-      const body =
-        agents
-          .map((a) => a?.agent_type)
-          .filter((t): t is string => typeof t === 'string')
-          .map(shortAgentName)
-          .join(', ') || 'agents'
-      lines.push(
-        <text key="agent-list" style={{ wrapMode: 'word' }}>
-          <span fg={theme.muted}>{body}</span>
-        </text>,
-      )
+      const names = agents
+        .map((agent) => agent?.agent_type)
+        .filter((name): name is string => typeof name === 'string')
+        .map(shortAgentName)
+      for (const [index, name] of names.slice(0, 6).entries()) {
+        lines.push(
+          <text key={`agent-${index}`} wrapMode="word">
+            <span fg={theme.primary}>• </span>
+            <span fg={theme.foreground}>{name}</span>
+          </text>,
+        )
+      }
+      if (names.length > 6)
+        lines.push(
+          <text key="remaining" fg={theme.muted}>
+            {names.length - 6} more agents · expand their branches to follow
+          </text>,
+        )
+      if (!names.length)
+        lines.push(
+          <text key="agent-list" fg={theme.muted}>
+            Waiting for agent details
+          </text>,
+        )
     }
 
     const content = (
       <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
         <text style={{ wrapMode: 'word' }}>
-          <span fg={theme.foreground} attributes={TextAttributes.BOLD}>
+          <span
+            fg={toolBlock.lifecycle === 'failed' ? theme.error : theme.primary}
+            attributes={TextAttributes.BOLD}
+          >
             {header}
           </span>
         </text>

@@ -104,7 +104,7 @@ export function getLogoAccentColor(
   const isTruecolor = supportsTruecolor(env)
   // Match the restrained green used for focus and primary actions.
   if (themeName === 'dark') {
-    return isTruecolor ? '#b0d98a' : 'lime'
+    return isTruecolor ? '#a4e879' : 'lime'
   }
   return isTruecolor ? '#396a30' : 'green'
 }
@@ -855,12 +855,12 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
   dark: {
     name: 'dark',
     // Core semantic colors
-    primary: '#b0d98a',
+    primary: '#a4e879',
     secondary: '#a1a69e',
-    success: '#9cca8d',
+    success: '#85d69b',
     error: '#ef9696',
     warning: '#e6be7e',
-    info: '#b9c8b2',
+    info: '#a4e879',
     link: '#a7c6ef',
     directory: '#a1a69e',
 
@@ -874,7 +874,7 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
 
     // Context-specific
     aiLine: '#71796d',
-    userLine: '#b0d98a',
+    userLine: '#a4e879',
 
     // Agent backgrounds
     agentToggleHeaderBg: '#20231f',
@@ -888,7 +888,7 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
     modeFastBg: '#20231f',
     modeFastText: '#e6e8e4',
     modePlanBg: '#20231f',
-    modePlanText: '#e6e8e4',
+    modePlanText: '#a4e879',
 
     // Image card
     imageCardBorder: '#71796d',
@@ -897,7 +897,7 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
     markdown: {
       codeBackground: '#20231f',
       codeHeaderFg: '#b9c8b2',
-      inlineCodeFg: '#d8e3cf',
+      inlineCodeFg: '#e9c28a',
       codeTextFg: '#e6e8e4',
       listBulletFg: '#a1a69e',
       blockquoteBorderFg: '#71796d',
@@ -969,8 +969,8 @@ export const chatThemes = {
 
 export const createMarkdownPalette = (theme: ChatTheme): MarkdownPalette => {
   const headingDefaults: Record<MarkdownHeadingLevel, string> = {
-    1: theme.foreground,
-    2: theme.foreground,
+    1: theme.primary,
+    2: theme.primary,
     3: theme.foreground,
     4: theme.foreground,
     5: theme.foreground,

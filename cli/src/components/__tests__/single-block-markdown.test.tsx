@@ -221,7 +221,7 @@ describe('SingleBlock text blocks render markdown at box level', () => {
   )
 
   renderTest(
-    'light-theme heading, prose and list text paint with the palette foreground',
+    'light-theme primary heading uses green while prose and list text use the body foreground',
     async () => {
       const { testRender } = await import('@opentui/react/test-utils')
       const theme = chatThemes.light
@@ -251,8 +251,12 @@ describe('SingleBlock text blocks render markdown at box level', () => {
         ]
         await waitForText(setup, texts)
         const lines = setup.captureSpans().lines
-        const expected = RGBA.fromHex(palette.codeTextFg)
         for (const text of texts) {
+          const expected = RGBA.fromHex(
+            text === 'Readable heading'
+              ? palette.headingFg[2]
+              : palette.codeTextFg,
+          )
           const line = lines.find((line) =>
             line.spans
               .map((span) => span.text)

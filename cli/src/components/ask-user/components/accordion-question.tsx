@@ -98,7 +98,7 @@ export const AccordionQuestion: React.FC<AccordionQuestionProps> = ({
   )
 
   return (
-    <box style={{ flexDirection: 'column', marginBottom: 1, width: '100%' }}>
+    <box style={{ flexDirection: 'column', marginBottom: 0, width: '100%' }}>
       {/* Question header - always visible */}
       <QuestionHeader
         questionText={question.question}

@@ -3,6 +3,9 @@ import { TextAttributes } from '@opentui/core'
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { MultilineInput } from './multiline-input'
 import { Button } from './button'
+import { ReaderLine } from './reader-line'
+import { ShortcutLine } from './shortcut-line'
+import { readableOutput } from '../utils/readable-output'
 import { useTheme } from '../hooks/use-theme'
 import { useTerminalDimensions } from '../hooks/use-terminal-dimensions'
 import { copyTextToClipboard } from '../utils/clipboard'
@@ -24,12 +27,20 @@ import type { ChatMessage } from '../types/chat'
 import type { InputValue } from '../types/store'
 import { useOutputReaderStore } from '../state/output-reader-store'
 import { exportOutputDocument } from '../utils/output-export'
-import { createJsonDocument } from '../utils/output-document'
+import {
+  createJsonDocument,
+  createTextDocument,
+} from '../utils/output-document'
 
 type ReaderMode = 'browse' | 'read' | 'find' | 'goto' | 'outline'
 function sourceStartLine(document?: OutputDocument | null): number | undefined {
   const start = document?.provenance?.startLine
-  return start !== undefined && Number.isSafeInteger(start) && start >= 1 && Number.isSafeInteger(start + (document?.lineCount ?? 1) - 1) ? start : undefined
+  return start !== undefined &&
+    Number.isSafeInteger(start) &&
+    start >= 1 &&
+    Number.isSafeInteger(start + (document?.lineCount ?? 1) - 1)
+    ? start
+    : undefined
 }
 function displayLine(document: OutputDocument, line: number): number {
   return line + (sourceStartLine(document) ?? 1)
@@ -102,6 +113,7 @@ export function OutputReaderScreen({
   )
   const [horizontal, setHorizontal] = useState(restoredView?.horizontal ?? 0)
   const [query, setQuery] = useState(restoredView?.query ?? '')
+  const [rawView, setRawView] = useState(false)
   const [notice, setNotice] = useState('')
   const [exportPath, setExportPath] = useState<string | null>(null)
   const [following, setFollowing] = useState(false)
@@ -134,10 +146,17 @@ export function OutputReaderScreen({
   const entry = catalog.find((item) => item.id === selectedId)
   const originEntry =
     entry ?? catalog.find((item) => item.id === detailParents[0]?.id)
-  const document =
+  const capturedDocument =
     (selectedId ? openedDocuments.get(selectedId) : undefined) ??
     entry?.read() ??
     (initialDocument?.id === selectedId ? initialDocument : null)
+  const document = useMemo(
+    () =>
+      capturedDocument && !rawView
+        ? readableOutput(capturedDocument)
+        : capturedDocument,
+    [capturedDocument?.revision, rawView],
+  )
   const bodyHeight = Math.max(1, terminalHeight - 6)
   const firstLine = sourceStartLine(document)
   const lastLine = (firstLine ?? 1) + (document?.lineCount ?? 1) - 1
@@ -156,7 +175,10 @@ export function OutputReaderScreen({
     document?.kind === 'markdown'
       ? Math.min(100, availableBodyWidth)
       : availableBodyWidth
-  const wrap = wrapOverride ?? document?.kind === 'markdown'
+  const wrap =
+    wrapOverride ??
+    (document?.kind === 'markdown' ||
+      (!rawView && (document?.kind === 'text' || document?.kind === 'json')))
   useEffect(() => {
     if (!document) return
     setLocation((previous) => {
@@ -343,7 +365,7 @@ export function OutputReaderScreen({
         ...previous,
         {
           id: selectedId,
-          document,
+          document: capturedDocument ?? document,
           location,
           horizontal,
           wrap: wrapOverride,
@@ -362,11 +384,15 @@ export function OutputReaderScreen({
       })
       setSelectedId(detail.id)
       setLocation({ line: 0, character: 0 })
+      setHorizontal(0)
+      setWrapOverride(null)
+      setQuery('')
       setMode('read')
       setNotice('')
     },
     [
       document,
+      capturedDocument,
       selectedId,
       detailParents.length,
       location,
@@ -655,12 +681,22 @@ export function OutputReaderScreen({
       setMode('goto')
       setInput('')
       setCursor(0)
+    } else if (key.sequence === '?' || key.name === '?') {
+      openDetailDocument(
+        createTextDocument({
+          id: `${document?.id}:keys`,
+          title: 'Reader keyboard commands',
+          text: 'MOVE\n↑ ↓ / J K     Previous / next visual row\nPgUp PgDn    Previous / next page\nHome End     First / last page\n← →          Move across columns\n\nFIND & OPEN\n/ or Ctrl+F  Find exact captured text\nN / Shift+N  Next / previous match\nG            Go to line; row <number> opens a row\nEnter        Open the selected complete value\nO            Open outline\nB            Browse captured outputs\nEsc          Back; close find before leaving reader\n\nVIEW & COPY\nW            Toggle wrapping\nV            Toggle readable fields / raw paths\nC            Copy selected exact line or value\nS            Copy section\nE            Export captured document\nX            Copy exported path\nF            Follow live log output\nD            Source and availability details\nL            Load saved artifact, when available\nT            Return to source message, when available',
+        }),
+      )
     } else if (key.name === 'd' && document) {
       openDetailDocument(
         createJsonDocument(
           `${document.id}:source-details`,
           'Output source and availability',
           {
+            captureId: capturedDocument?.id,
+            capturedTitle: capturedDocument?.title,
             availability: document.availability,
             notice: document.notice,
             provenance: document.provenance,
@@ -687,7 +723,11 @@ export function OutputReaderScreen({
     } else if (key.name === 'n') jumpMatch(key.shift ? -1 : 1)
     else if (key.name === 'f' && document?.kind === 'log')
       setFollowing((value) => !value)
-    else if (key.name === 'w') {
+    else if (key.name === 'v') {
+      setRawView((value) => !value)
+      setLocation((value) => ({ line: value.line, character: 0 }))
+      setHorizontal(0)
+    } else if (key.name === 'w') {
       setWrapOverride(!wrap)
       setHorizontal(0)
     } else if (key.name === 's' && document?.copySection && landmarks.length) {
@@ -750,12 +790,20 @@ export function OutputReaderScreen({
         flexDirection: 'column',
         width: '100%',
         height: '100%',
-        backgroundColor: theme.surface,
+        backgroundColor: theme.background,
         paddingLeft: 1,
         paddingRight: 1,
       }}
     >
-      <box style={{ height: 1, flexDirection: 'row', flexShrink: 0, gap: 2 }}>
+      <box
+        style={{
+          height: 1,
+          flexDirection: 'row',
+          flexShrink: 0,
+          gap: 2,
+          backgroundColor: theme.surface,
+        }}
+      >
         <Button onClick={closeScope}>
           <text fg={theme.primary}>Back (Esc)</text>
         </Button>
@@ -897,10 +945,20 @@ export function OutputReaderScreen({
                   style={{ height: 1 }}
                 >
                   <span fg={theme.muted}>
-                    {`${document ? displayLine(document, row.location.line) : row.location.line + 1}`.padStart(lineNumberWidth - 2)}
+                    {(index > 0 &&
+                    visibleRows[index - 1].location.line === row.location.line
+                      ? ''
+                      : `${document ? displayLine(document, row.location.line) : row.location.line + 1}`
+                    ).padStart(lineNumberWidth - 2)}
                     {index === 0 ? '› ' : '  '}
                   </span>
-                  <span fg={theme.foreground}>{row.text}</span>
+                  <ReaderLine
+                    text={row.text}
+                    kind={document?.kind}
+                    heading={document?.landmarks.some(
+                      (item) => item.line === row.location.line,
+                    )}
+                  />
                 </text>
               ))}
           {mode === 'browse' && list.length === 0 && (
@@ -956,48 +1014,42 @@ export function OutputReaderScreen({
           </box>
         )}
       </box>
-      <text fg={theme.muted} style={{ height: 1 }}>
-        {sliceTextCells(
+      <ShortcutLine
+        width={terminalWidth - 2}
+        text={
           notice ||
-            (searching
-              ? 'Searching…'
-              : mode === 'browse'
-                ? '↑↓ select · Enter inspect · Esc returns to conversation'
-                : '↑↓ PgUp/PgDn · ←→ columns · W wrap · F follow'),
-          0,
-          terminalWidth - 2,
-        )}
-      </text>
-      <text fg={theme.muted} style={{ height: 1 }}>
-        {sliceTextCells(
+          (searching
+            ? 'Searching…'
+            : mode === 'browse'
+              ? '↑↓ Select · Enter Inspect · Esc Conversation'
+              : '↑↓ Scroll · PgUp/PgDn Page · ←→ Columns')
+        }
+      />
+      <ShortcutLine
+        width={terminalWidth - 2}
+        text={
           mode === 'browse'
             ? 'Search loaded content · at most 200 matching outputs'
-            : '/ Find · O outline · C copy · E export · B browse',
-          0,
-          terminalWidth - 2,
-        )}
-      </text>
-      <text fg={theme.muted} style={{ height: 1 }}>
-        {sliceTextCells(
-          [
-            !inputOwnsKeys
-              ? `D details · ${document?.detail ? 'G line/row' : 'G line'} · N next`
-              : '',
-            document?.detail ? 'Enter row details' : '',
-            document?.copySection && landmarks.length ? 'S copy section' : '',
-            entry?.recover
-              ? recovering
-                ? 'Loading artifact…'
-                : 'L load artifact'
-              : '',
-            originEntry?.messageId && onReturnToMessage ? 'T conversation' : '',
-          ]
-            .filter(Boolean)
-            .join(' · '),
-          0,
-          terminalWidth - 2,
-        )}
-      </text>
+            : '/ Find · C Copy · E Export · B Browse · ? Keys'
+        }
+      />
+      <ShortcutLine
+        width={terminalWidth - 2}
+        text={[
+          !inputOwnsKeys
+            ? `G Line · W Wrap · V ${rawView ? 'Readable' : 'Raw'}`
+            : '',
+          document?.detail ? 'Enter Open value' : 'O Outline',
+          entry?.recover
+            ? recovering
+              ? 'Loading artifact…'
+              : 'L Load artifact'
+            : '',
+          originEntry?.messageId && onReturnToMessage ? 'T Conversation' : '',
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+      />
     </box>
   )
 }

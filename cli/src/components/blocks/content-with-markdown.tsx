@@ -15,6 +15,8 @@ import type { ReactNode } from 'react'
 interface ContentWithMarkdownProps {
   content: string
   isStreaming: boolean
+  /** Native streaming mode supplies readable prose before async highlighting finishes. */
+  eagerProse?: boolean
   codeBlockWidth: number
   palette: MarkdownPalette
 }
@@ -78,6 +80,7 @@ export const ContentWithMarkdown = memo(
   ({
     content,
     isStreaming,
+    eagerProse = false,
     codeBlockWidth,
     palette,
   }: ContentWithMarkdownProps) => {
@@ -92,7 +95,7 @@ export const ContentWithMarkdown = memo(
     return (
       <NativeMarkdown
         content={content}
-        isStreaming={isStreaming}
+        isStreaming={isStreaming || eagerProse}
         palette={palette}
       />
     )

@@ -7,7 +7,8 @@ import React, { memo } from 'react'
 
 import { useTheme } from '../../../hooks/use-theme'
 import { useTerminalDimensions } from '../../../hooks/use-terminal-dimensions'
-import { sliceTextCells } from '../../../utils/text-boundaries'
+import { clipEvidenceLine } from '../../../utils/bounded-evidence'
+import { wrapTextPreservingNewlines } from '../../../utils/text-layout'
 import { Button } from '../../button'
 import { SYMBOLS } from '../constants'
 
@@ -39,6 +40,21 @@ export const QuestionOption: React.FC<QuestionOptionProps> = memo(
     const description =
       typeof option === 'object' ? option.description : undefined
 
+    const labelWidth = Math.max(1, Math.min(80, terminalWidth - 8) - indent)
+    const descriptionLines = description
+      ? wrapTextPreservingNewlines(
+          description.replace(/\s+/g, ' '),
+          Math.max(1, labelWidth - 2),
+        ).split('\n')
+      : []
+    const descriptionPreview = descriptionLines
+      .slice(0, 2)
+      .map((line, index) =>
+        index === 1 && descriptionLines.length > 2
+          ? clipEvidenceLine(`${line} …`, Math.max(1, labelWidth - 2))
+          : line,
+      )
+      .join('\n')
     const selectedFg = theme.name === 'dark' ? '#ffffff' : '#000000'
     const symbol = isMultiSelect
       ? isSelected
@@ -47,11 +63,7 @@ export const QuestionOption: React.FC<QuestionOptionProps> = memo(
       : isSelected
         ? SYMBOLS.SELECTED
         : SYMBOLS.UNSELECTED
-    const fg = isFocused
-      ? theme.foreground
-      : isSelected
-        ? selectedFg
-        : theme.muted
+    const fg = isFocused ? theme.primary : isSelected ? selectedFg : theme.muted
     const attributes = isFocused || isSelected ? TextAttributes.BOLD : undefined
 
     return (
@@ -62,7 +74,8 @@ export const QuestionOption: React.FC<QuestionOptionProps> = memo(
           flexDirection: 'column',
           gap: 0,
           width: '100%',
-          backgroundColor: isFocused ? theme.surface : undefined,
+          backgroundColor: isFocused ? theme.surfaceHover : undefined,
+          flexShrink: 0,
           marginBottom: 0,
           paddingTop: 0,
           paddingBottom: 0,
@@ -70,10 +83,9 @@ export const QuestionOption: React.FC<QuestionOptionProps> = memo(
         }}
       >
         <text wrapMode="none" style={{ fg, attributes }}>
-          {sliceTextCells(
+          {clipEvidenceLine(
             `${symbol} ${label.replace(/\s+/g, ' ')}`,
-            0,
-            Math.max(1, terminalWidth - indent - 8),
+            labelWidth,
           )}
         </text>
         {/* Show description on focus */}
@@ -85,11 +97,7 @@ export const QuestionOption: React.FC<QuestionOptionProps> = memo(
               marginLeft: 2,
             }}
           >
-            {sliceTextCells(
-              description.replace(/\s+/g, ' '),
-              0,
-              Math.max(1, terminalWidth - indent - 10),
-            )}
+            {descriptionPreview}
           </text>
         )}
       </Button>
