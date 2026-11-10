@@ -1,6 +1,6 @@
 {
   "source": "https://registry.npmjs.org",
-  "verifiedAt": "2026-11-07T01:18:19.662Z",
+  "verifiedAt": "2026-11-10T06:52:09.144Z",
   "packages": {
     "@ai-sdk/anthropic@2.0.50": {
       "integrity": "sha512-21PaHfoLmouOXXNINTsZJsMw+wE5oLR2He/1kq/sKokTVKyq7ObGT1LDk6ahwxaz/GoaNaGankMh+EgVcdv2Cw==",
@@ -654,6 +654,30 @@
       "integrity": "sha512-j3fVLgvTo527anyYyJOGTYJbG+vnnQYvE0m5mmkc1TK+nxAppkCLMIL0aZ4dblVCNoGShhm+kzE4ZUykBoMg4g==",
       "license": "MIT",
       "tarball": "https://registry.npmjs.org/ajv/-/ajv-6.12.6.tgz",
+      "deprecated": false
+    },
+    "@opentui/core@0.8.3": {
+      "integrity": "sha512-6Ng2jyiZZhGUTNbF8wXmjztihdGdx7uZq8O5bBgG/2XaCANw/BJgSxYb/nVFtorzShE9JcjszRhzh8XNxQ3yuA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@opentui/core/-/core-0.8.3.tgz",
+      "deprecated": false
+    },
+    "@opentui/react@0.8.3": {
+      "integrity": "sha512-Tb+qHsxhmOu28XFRMPUjI1zHa69TNZEez0bqOIi4CKU8HLzp36xbuZBexmMhcNGbSircmlFF5ckvLBFrz1mUPA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@opentui/react/-/react-0.8.3.tgz",
+      "deprecated": false
+    },
+    "@types/bun@1.4.4": {
+      "integrity": "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/bun/-/bun-1.4.4.tgz",
+      "deprecated": false
+    },
+    "bun-types@1.4.4": {
+      "integrity": "sha512-yjrJh5oGX7mMPKGd19YXyIjmEuj4G4zNC30bs7PM9Az7NQ3ndF3j6hbeRdvJTRQEhJ/FYQwW0a2moweEi2hMxQ==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/bun-types/-/bun-types-1.4.4.tgz",
       "deprecated": false
     }
   }
