@@ -1,5 +1,18 @@
 # CLI Package Knowledge
 
+## Listener ownership and turn responsiveness
+
+- `cli/src/hooks/use-terminal-dimensions.ts` shares one native `resize` subscription per renderer through a WeakMap-backed external store. Consumers subscribe through `useSyncExternalStore`; the final consumer removes the native listener. Do not attach one renderer listener for each message block or raise the listener limit to conceal accumulation.
+- Memory V2 writable opens still require a successful read-only integrity preflight. `cli/src/services/memory-v2/sqlite-integrity-check.ts` runs SQLite `quick_check(1)` in a worker with a 30-second deadline and cleanup. The repository revalidates admitted file identity after this asynchronous boundary, before writable open. Envelope conversion and lexical event folding yield every 128 records to keep the TUI responsive.
+- `cli/src/utils/run-config-digest.ts` measures scalar bytes and shallow item/field counts instead of serializing prior transcripts. Runtime step logs use counts, provider error diagnostics can omit request bodies, and pinned context extraction stops once both newest blocks are found.
+
+## Current inspection and decision presentation
+
+- `cli/src/utils/readable-output.ts` creates a display projection of captured field paths. Logical lines, exact scalar copy, original export text and lazy row details remain attached to the capture. `V` restores raw paths; `Enter` opens complete values; `?` opens the reader's keyboard guide. Opening a detail resets its horizontal offset and wrapping, and Back restores the original parent document and position.
+- Agent task instructions and Markdown summaries use native OpenTUI rendering. `ContentWithMarkdown`'s `eagerProse` option supplies readable prose while asynchronous highlighting initializes. Repeated inspect actions use quiet inset styling with hover/focus emphasis.
+- Decision panels fit content and are capped at 88 columns. Choices are windowed with space reserved for focused descriptions and custom answers. Commands retain line breaks, clipped content is marked, and full inspection remains available. Submit takes one row, and batched arrows use the latest choice index. Mode menus paint above composer borders with a clear separating row.
+- Built-in dark primary green is `#a4e879`; primary headings, task boundaries, active modes and reader key hints use green while ordinary prose remains neutral. [Design contract](../DESIGN.md) and [polish validation and previews](../docs/design/cli-overhaul/UI-POLISH.md) describe the current presentation.
+
 ## Filesystem sandbox configuration
 
 - CLI agent runs default to unrestricted filesystem access. `cli/src/utils/create-run-config.ts` applies sensitive-file filtering only when the captured sandbox policy selects project mode.
