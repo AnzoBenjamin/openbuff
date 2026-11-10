@@ -716,6 +716,10 @@ input shape before advisory normalization. Nested `cb_easp` fields, output
 fields, and fields created by a host transform remain ordinary data.
 
 MCP and restored JSON-only tool schemas use nonmutating draft-7 validation.
+Supervised prompt transfers preserve complete tool and agent schema members
+outside the generic bridge marker walk, whose depth limit otherwise truncates
+nested result schemas (including `read_files` summaries and `read_docs`
+library alternatives). Schema literals remain data during this transfer.
 Unsupported schemas fail explicitly during registration or discovery. In
 addition to unsupported dialects and executable behavior, Ajv 6 cannot safely
 compile an own `__proto__` entry in `properties`, `patternProperties`, or

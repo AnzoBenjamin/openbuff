@@ -1259,17 +1259,36 @@ describe('Schema handling error recovery', () => {
       expect(transportedString.handleSteps).toBe(stringHandleSteps)
     })
 
-    test('transport refusal identifies the agent and executable schema member', () => {
+    test('executable members serialize reifiable advertisements instead of refusing the spawn', () => {
       const template = makeTransportTemplate({
         inputSchema: {
           params: z.object({ value: z.string().default('fallback') }),
         },
       })
+      // The old refusal killed every supervised spawn whose template carried
+      // an executable member — the reviewer gate included. The member now
+      // serializes to an advertisement that reifies on the child side.
+      const transported = serializeAgentTemplatesForTransport({
+        'transport-agent': template,
+      })['transport-agent']
       expect(() =>
-        serializeAgentTemplatesForTransport({ 'transport-agent': template }),
-      ).toThrow(
-        'Agent "transport-agent" inputSchema.params: Cannot transport input schema: Cannot transport executable Zod default',
-      )
+        ensureAgentTemplateZodSchemas(
+          JSON.parse(JSON.stringify(transported)) as never,
+        ),
+      ).not.toThrow()
+
+      // Corrupt members still refuse, naming the agent and member.
+      const corrupt = makeTransportTemplate({
+        inputSchema: {
+          params: {
+            type: 'object',
+            unevaluatedProperties: false,
+          } as never,
+        },
+      })
+      expect(() =>
+        serializeAgentTemplatesForTransport({ 'transport-agent': corrupt }),
+      ).toThrow('Agent "transport-agent" inputSchema.params: Cannot transport')
     })
 
     test('returns the original template object when nothing needs conversion', () => {

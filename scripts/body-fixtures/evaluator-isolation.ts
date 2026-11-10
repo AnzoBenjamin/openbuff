@@ -358,7 +358,6 @@ export async function runEvaluatorIsolationFixture(root: string) {
       command: 'printf \'sentinel=%s\n\' "$B30_CONTROLLER_SENTINEL"',
       process_type: 'SYNC',
       mode: 'assistant',
-      permission_profile: 'workspace-write',
       cwd: workspace,
       projectRoot: workspace,
       timeout_seconds: 10,

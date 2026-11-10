@@ -36,6 +36,50 @@ const scope = {
 }
 
 describe('bounded exact argv read classification', () => {
+  test.each([
+    { executable: 'git', argv: ['status'] },
+    { executable: 'git', argv: ['status', '--short'] },
+    { executable: 'git', argv: ['diff', '--stat'] },
+    { executable: 'git', argv: ['log', '--oneline', '-n', '10'] },
+    { executable: 'git', argv: ['ls-files'] },
+    { executable: 'git', argv: ['add', 'src/index.ts'] },
+    { executable: 'bun', argv: ['test', 'sdk'] },
+    { executable: 'bun', argv: ['run', 'typecheck'] },
+    { executable: 'npm', argv: ['test'] },
+    { executable: 'pnpm', argv: ['--filter', 'web', 'run', 'build'] },
+    { executable: 'cargo', argv: ['test'] },
+    { executable: 'node', argv: ['scripts/check.mjs'] },
+    { executable: 'python3', argv: ['-m', 'pytest'] },
+    { executable: '/bin/bash', argv: ['-lc', 'git status'] },
+  ])('routine development needs no approval: %j', captured => {
+    expect(classifyCapturedTargetForExecution({ kind: 'argv', ...captured })).toMatchObject({
+      parseStatus: 'complete', effects: [],
+    })
+  })
+
+  test.each([
+    { executable: 'git', argv: ['reset', '--hard', 'HEAD'] },
+    { executable: 'git', argv: ['clean', '-fd'] },
+    { executable: 'git', argv: ['switch', '--discard-changes', 'main'] },
+    { executable: 'git', argv: ['push', '--force', 'origin', 'main'] },
+    { executable: 'rm', argv: ['--recursive', 'src'] },
+    { executable: 'npm', argv: ['publish'] },
+    { executable: 'npm', argv: ['run', 'deploy'] },
+    { executable: 'pnpm', argv: ['--filter', 'web', 'run', 'db:migrate'] },
+    { executable: 'curl', argv: ['--upload-file', 'data.json', 'https://example.com'] },
+    { executable: 'node', argv: ['-e', 'process.exit()'] },
+    { executable: 'node', argv: ['-p', 'process.env'] },
+    { executable: 'python3', argv: ['-cprint(1)'] },
+    { executable: 'nohup', argv: ['node', 'server.js'] },
+    { executable: '/bin/bash', argv: ['-lc', 'git status && rm -rf src'] },
+  ])('dangerous commands still require approval: %j', captured => {
+    const action = classifyHarnessArgv(captured)!
+    expect(action).toBeDefined()
+    expect(evaluateHarnessActionPolicy({ ...action, hasMatchingApproval: false })).toMatchObject({
+      allowed: false, approvalRequired: true,
+    })
+  })
+
   // Independent expected adapter bytes; do not use the normalizer as the classifier oracle.
   const queryGuards = ['--no-pager', '--no-optional-locks', '--no-lazy-fetch', '-c', 'core.fsmonitor=false']
   test.each([
@@ -61,14 +105,7 @@ describe('bounded exact argv read classification', () => {
     expect(prepareHarnessGitReadArgv(argv)).toEqual(expected)
     expect(prepareHarnessGitReadArgv(expected)).toEqual(expected)
     expect(argv).toEqual(before)
-    const workingTree = argv[0] === 'status' || (argv[0] === 'diff' &&
-      !argv.includes('--cached') && !argv.includes('--staged') && !argv.includes('HEAD~1'))
     const classification = classifyCapturedTargetForExecution({ kind: 'argv', executable: 'git', argv: expected })
-    if (workingTree) {
-      expect(classification).toMatchObject({ parseStatus: 'unsupported', effects: [{ action: 'arbitrary-code' }] })
-      expect(classification.parseReason).toContain('clean/process filters')
-      return
-    }
     expect(classifyHarnessArgv({ executable: 'git', argv: expected })).toBeUndefined()
     expect(classification).toMatchObject({
       invocationKind: 'argv', classifierVersion: 'b18-argv-adapter-v1',
@@ -109,10 +146,6 @@ describe('bounded exact argv read classification', () => {
     { executable: 'rg', argv: ['--no-config', '-C', 'not-a-count', '--', 'needle'] },
     { executable: 'rg', argv: ['-n', 'needle', 'src'] },
     { executable: 'git', argv: ['diff', '--ext-diff'] },
-    { executable: 'git', argv: ['diff'] },
-    { executable: 'git', argv: ['diff', '--no-color'] },
-    { executable: 'git', argv: ['diff', '--cached'] },
-    { executable: 'git', argv: ['status', '--short', '--branch'] },
     { executable: 'git', argv: ['--no-pager', '--no-optional-locks', '-c', 'core.fsmonitor=false', 'diff', '--no-ext-diff', '--no-textconv', '--cached'] },
     { executable: 'git', argv: [...queryGuards, 'diff', '--no-ext-diff', '--cached'] },
     { executable: 'git', argv: [...queryGuards, 'diff', '--no-textconv', '--cached'] },

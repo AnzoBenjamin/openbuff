@@ -174,12 +174,18 @@ Approval behavior is controlled by `approvalMode`:
 
 - `balanced` (default) allows routine dependency changes, commits, feature
   branch pushes, pull requests, ordinary downloads, normal pipelines/tests, and
-  staged-only `git restore --staged` without prompting. It asks only for truly
+  staged-only `git restore --staged` without prompting. Git status/diff/log
+  queries, project scripts/modules, builds, and login-shell command payloads
+  also run without approval; Git's implicit repository helpers alone do not
+  make a read query high-impact. It asks only for truly
   destructive workspace/history shapes (for example `git reset --hard`,
   `git clean -fd`, worktree-mutating restore, recursive deletes), default-branch
   pushes, deployments, releases, migrations, uploads/remote shells, and
   interpreter-eval / detached-process shapes — not ordinary pipes, command
-  substitution in project scripts, or background jobs.
+  substitution in project scripts, or background jobs. Unknown executable
+  adapters and explicit programmable read helpers still require approval.
+  Client-origin MCP process startup also needs separate approval after tool
+  approval.
 - `strict` asks for every classified package, Git, remote, or destructive
   effect.
 - `allow-all` auto-approves classified effects while retaining non-negotiable

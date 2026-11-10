@@ -135,6 +135,12 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
       if (registeredStartupResources.has(input.facts.resourceId) && input.classification.parseStatus !== 'malformed' &&
         effects.every(effect => effect.action === 'arbitrary-code'))
         return { allowed: true as const, approvalRequired: false as const }
+      // A routine interpreter command is still an untrusted server startup
+      // when it comes from a client MCP declaration. Tool approval does not
+      // grant permission to start that process.
+      if (input.facts.family === 'mcp-stdio' && !first && input.classification.parseStatus === 'complete')
+        return evaluateHarnessActionPolicy({ action: 'arbitrary-code', target: '',
+          approvalMode: options.approvalMode ?? 'balanced', hasMatchingApproval: approved })
       if (!first && input.classification.parseStatus === 'complete') return { allowed: true as const, approvalRequired: false as const }
       return evaluateHarnessActionPolicy({ action: first?.action ?? 'arbitrary-code', target: first?.target ?? '',
         effects: effects.map(effect => ({ ...effect, pushRisks: effect.pushRisks ? [...effect.pushRisks] : undefined })),

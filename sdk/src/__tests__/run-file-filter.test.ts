@@ -5,10 +5,12 @@ import {
 } from '@codebuff/common/tools/results/filesystem'
 import * as projectFileTree from '@codebuff/common/project-file-tree'
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { writeFileSync } from 'node:fs'
 
 import { OpenbuffClient } from '../client'
 import { beginSdkCallback, createSdkCallbackFixture } from './sdk-callback-fixture'
 import * as databaseModule from '../impl/database'
+import { nodeConfigReadFs } from '../host-config'
 
 import type { FileFilter } from '../tools/read-files'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
@@ -77,6 +79,16 @@ describe('OpenbuffClientOptions fileFilter', () => {
   let fixture: ReturnType<typeof createSdkCallbackFixture>
   beforeEach(() => {
     fixture = createSdkCallbackFixture('run-file-filter')
+    const configFile = fixture.file('openbuff.json')
+    writeFileSync(configFile, JSON.stringify({ sandbox: { mode: 'project' } }))
+    fixture.options = {
+      ...fixture.options,
+      configReadFs: nodeConfigReadFs,
+      hostConfiguration: {
+        ...fixture.options.hostConfiguration!,
+        selection: { kind: 'explicit', path: configFile, required: true },
+      },
+    }
   })
   afterEach(() => {
     mock.restore()

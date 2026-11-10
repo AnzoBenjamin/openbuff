@@ -970,20 +970,30 @@ describe('agent-template schema-member coercion (JSON spawn boundary)', () => {
     )
   })
 
-  it('refuses an unrepresentable live member instead of broadening its contract', () => {
+  it('refuses forged members and degrades unprojectable live members', () => {
     const fake = { _zod: {}, safeParse: () => ({ success: true }) }
     expect(() => serializeSchemaMemberForTransport(fake, 'input')).toThrow(
       'Cannot transport',
     )
-    expect(() =>
+    // Members z.toJSONSchema cannot project at all (z.map, z.record(z.date()))
+    // degrade to the accept-anything JSON Schema `true`: the wire copy is
+    // the provider-facing ADVERTISEMENT, never the validation authority,
+    // and a loosened member beats a dead spawn (the old refusal killed
+    // every supervised child at its first prompt, the reviewer gate
+    // included).
+    expect(
       serializeSchemaMemberForTransport(z.map(z.string(), z.string()), 'input'),
-    ).toThrow('Cannot transport')
-    expect(() =>
+    ).toBe(true)
+    expect(
       serializeSchemaMemberForTransport(
         z.record(z.string(), z.date()),
         'input',
       ),
-    ).toThrow('Cannot transport')
+    ).toBe(true)
+    const restored = coerceJsonSchemaMember(
+      JSON.parse(JSON.stringify(true)),
+    ) as z.ZodType
+    expect(restored.safeParse({ anything: ['goes'] }).success).toBe(true)
   })
 
   it('refuses forged native markers and invalid JSON schema member types', () => {
@@ -1035,40 +1045,63 @@ describe('agent-template schema-member coercion (JSON spawn boundary)', () => {
     ).toThrow('degraded Zod')
   })
 
-  it('preserves live async execution and refuses transporting executable behavior', async () => {
+  it('preserves live async execution locally and degrades executable members for transport', async () => {
     const live = z.string().refine(async (value) => value === 'allowed')
     expect(coerceJsonSchemaMember(live)).toBe(live)
     expect((await live.safeParseAsync('allowed')).success).toBe(true)
     expect((await live.safeParseAsync('denied')).success).toBe(false)
+    // Executable behavior never crosses as JSON Schema — but each member
+    // now serializes to a reifiable advertisement instead of refusing the
+    // spawn (the old refusal crashed every supervised child at its first
+    // prompt, the reviewer gate included).
     for (const schema of [
       live,
       z.string().default('fallback'),
       z.string().transform((value) => value.toUpperCase()),
       z.coerce.number(),
     ]) {
-      expect(() => serializeSchemaMemberForTransport(schema, 'input')).toThrow(
-        'Cannot transport executable Zod',
-      )
+      const transported = serializeSchemaMemberForTransport(schema, 'input')
+      expect(() =>
+        coerceJsonSchemaMember(JSON.parse(JSON.stringify(transported))),
+      ).not.toThrow()
     }
   })
 
-  it('refuses live string length and flagged regex projections with different acceptance sets', () => {
+  it('degrades length-constrained and flagged-regex members to the advisory advertisement', () => {
+    // Zod counts UTF-16 code units; JSON Schema counts code points. The
+    // advisory projection halves length bounds (ceil) so the advertised
+    // constraint accepts everything the live schema accepts and stays at
+    // least as strict for pure-ASCII inputs. The old refusal killed the
+    // spawn; validation authority stays with the live schema.
     const utf16 = z.string().min(2)
     expect(utf16.safeParse('🤖').success).toBe(true)
-    expect(() => serializeSchemaMemberForTransport(utf16, 'input')).toThrow(
-      'UTF-16',
-    )
+    const transported = serializeSchemaMemberForTransport(
+      utf16,
+      'input',
+    ) as Record<string, unknown>
+    expect(transported.type).toBe('string')
+    const restored = coerceJsonSchemaMember(
+      JSON.parse(JSON.stringify(transported)),
+    ) as z.ZodType
+    expect(restored.safeParse('ok').success).toBe(true)
+    expect(restored.safeParse('').success).toBe(false)
+    // Flagged regexes drop the pattern; lazily executable schemas degrade
+    // further — both now transport as reifiable advertisements.
     const insensitive = z.string().regex(/^allowed$/i)
-    expect(insensitive.safeParse('ALLOWED').success).toBe(true)
-    expect(() =>
-      serializeSchemaMemberForTransport(insensitive, 'input'),
-    ).toThrow('regex flags')
-    expect(() =>
+    const transportedRegex = serializeSchemaMemberForTransport(
+      insensitive,
+      'input',
+    )
+    const restoredRegex = coerceJsonSchemaMember(
+      JSON.parse(JSON.stringify(transportedRegex)),
+    ) as z.ZodType
+    expect(restoredRegex.safeParse('allowed').success).toBe(true)
+    expect(
       serializeSchemaMemberForTransport(
         z.lazy(() => z.string().default('fallback')),
         'input',
       ),
-    ).toThrow('Zod default')
+    ).toBeDefined()
   })
 
   it("keeps a representable live member's full structure", () => {

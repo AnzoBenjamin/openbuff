@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -56,7 +56,7 @@ const shellArg = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 
 const program: AgentDefinition = {
   id: 'b19-programmatic-host', displayName: 'Local execution fixture', model: 'fixture-model',
-  toolNames: ['run_terminal_command', 'run_file_change_hooks', 'set_output'], outputMode: 'structured_output',
+  toolNames: ['run_terminal_command', 'run_file_change_hooks', 'git_status', 'set_output'], outputMode: 'structured_output',
   handleSteps: function* ({ prompt, agentState }) {
     const results = []
     for (const call of JSON.parse(prompt ?? '[]')) {
@@ -116,6 +116,27 @@ function assertStructuredOutput(result: RunState) {
 }
 
 describe('B19 actual programmatic run host wiring', () => {
+  test('balanced runs execute Git reads and prompt only for a destructive command', async () => {
+    const f = fixture()
+    expect(spawnSync('git', ['init', '--quiet'], { cwd: f.root }).status).toBe(0)
+    const approvedTargets: string[] = []
+    const result = await f.run([
+      { toolName: 'git_status', input: {} },
+      f.terminal('git status --short'),
+      f.terminal('rm -rf disposable'),
+    ], {
+      approvalMode: 'balanced',
+      requestApproval: async request => { approvedTargets.push(request.target); return false },
+    })
+    assertStructuredOutput(result)
+    expect(approvedTargets).toHaveLength(1)
+    expect(approvedTargets[0]).toContain('disposable')
+    expect(f.launches.some(launch => launch.argv.includes('status'))).toBe(true)
+    expect(terminalStarts(f.events)).toHaveLength(1)
+    const read = result.actionOutcomes?.find(action => action.toolName === 'git_status')
+    expect(read?.outcome).toBe('succeeded')
+  }, 15_000)
+
   test('terminal callbacks retain actual B02 action/attempt/run identities and unbounded default/-1', async () => {
     const f = fixture()
     const result = await f.run([f.terminal('printf first'), f.terminal('printf second', { timeout_seconds: -1 })])

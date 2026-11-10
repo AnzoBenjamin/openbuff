@@ -150,7 +150,7 @@ describe('B19 Git status and diff branch captures', () => {
             const guards = ['--no-pager', '--no-optional-locks', '--no-lazy-fetch', '-c', 'core.fsmonitor=false']
             expect(processes.calls[0].argv).toEqual([...guards, 'status', '--short', '--branch', ...suffix])
             expect(host.policyInputs[0].classification).toMatchObject({
-              parseStatus: 'unsupported', effects: [{ action: 'arbitrary-code' }],
+              parseStatus: 'complete', parseReason: null, effects: [],
             })
             expect(host.policyInputs[0].facts.branchId).toBe(`git-status.${route}.status.${membership}`)
             expect(processes.calls).toHaveLength(diffKind === 'none' ? 1 : 2)
@@ -158,9 +158,7 @@ describe('B19 Git status and diff branch captures', () => {
               expect(processes.calls[1].argv).toEqual(diffKind === 'staged'
                 ? [...guards, 'diff', '--no-ext-diff', '--no-textconv', '--submodule=short', '--staged', '--no-color', ...suffix]
                 : [...guards, 'diff', '--no-ext-diff', '--no-textconv', '--submodule=short', '--no-color', ...suffix])
-              expect(host.policyInputs[1].classification).toMatchObject(diffKind === 'staged'
-                ? { parseStatus: 'complete', parseReason: null, effects: [] }
-                : { parseStatus: 'unsupported', effects: [{ action: 'arbitrary-code' }] })
+              expect(host.policyInputs[1].classification).toMatchObject({ parseStatus: 'complete', parseReason: null, effects: [] })
               expect(host.policyInputs[1].facts.branchId).toBe(`git-status.${route}.diff-${diffKind}.${membership}`)
               expect(output[0].value).toHaveProperty('diff', expect.stringContaining('+changed'))
             }
@@ -254,7 +252,7 @@ describe('B19 owned actual Git configured-helper controls', () => {
           expect(adverseMarkers.every(mark => mark === kind)).toBe(true)
           fixture.clear()
           const processes = createRealExecutionProcessRecorder()
-          // The fixture's deliberate policy admits unsupported worktree semantics; this is a helper-specific oracle.
+          // The fixture admits routine reads; the marker independently detects helper execution.
           host = createTerminalExecutionFixture({
             projectRoot: fixture.cwd, environment: { ...fixture.environment, ...overlay },
             spawn: processes.spawn, policy: 'full-access', actionLimit: { kind: 'finite', durationMs: 10_000 },
@@ -270,10 +268,8 @@ describe('B19 owned actual Git configured-helper controls', () => {
             '--no-pager', '--no-optional-locks', '--no-lazy-fetch', '-c', 'core.fsmonitor=false',
             'diff', '--no-ext-diff', '--no-textconv', '--submodule=short', ...(staged ? ['--staged'] : []), '--no-color', '--', 'sample.txt',
           ])
-          expect(host.policyInputs[0].classification.parseStatus).toBe('unsupported')
-          expect(host.policyInputs[1].classification).toMatchObject(staged
-            ? { parseStatus: 'complete', parseReason: null, effects: [] }
-            : { parseStatus: 'unsupported', effects: [{ action: 'arbitrary-code' }] })
+          expect(host.policyInputs[0].classification.parseStatus).toBe('complete')
+          expect(host.policyInputs[1].classification).toMatchObject({ parseStatus: 'complete', parseReason: null, effects: [] })
           process.stdout.write(`B19 owned Git helper ${JSON.stringify({ kind, staged, adverseMarkers, sdkMarkers: fixture.marks(), targetStarts: processes.calls.length })}\n`)
         } finally {
           host?.dispose()
@@ -360,7 +356,7 @@ describe('B19 owned actual Git configured-helper controls', () => {
     })
   }
 
-  it('retains configured clean-filter semantics as unsupported and can refuse before actual dispatch', async () => {
+  it('an explicit host policy can refuse a routine diff before configured filters execute', async () => {
     const fixture = ownedGitHelperFixture()
     let host: ReturnType<typeof createTerminalExecutionFixture> | undefined
     try {
@@ -382,16 +378,14 @@ describe('B19 owned actual Git configured-helper controls', () => {
       fixture.clear()
       const processes = createRealExecutionProcessRecorder()
       host = createTerminalExecutionFixture({ projectRoot: fixture.cwd, environment: fixture.environment,
-        spawn: processes.spawn, authorize: input => input.classification.parseStatus === 'unsupported'
-          ? { ok: false, reason: 'denied', cause: 'Configured working-tree filters require explicit policy approval' }
-          : { ok: true, basis: 'explicit-policy', decisionId: 'owned-query-policy' } })
+        spawn: processes.spawn, authorize: () => ({ ok: false, reason: 'denied',
+          cause: 'Fixture policy requires explicit permission for configured filters' }) })
       const result = await runGitBounded(['diff', '--no-color'], fixture.cwd, undefined, {
         executionContext: host.context, branchId: 'owned-filter-refusal', timeoutMs: 5_000, maxOutputBytes: 100_000,
       })
       expect(result.executionRefusal).toMatchObject({ reason: 'denied' })
       expect(processes.calls).toHaveLength(0)
-      expect(host.policyInputs[0].classification).toMatchObject({ parseStatus: 'unsupported', effects: [{ action: 'arbitrary-code' }] })
-      expect(host.policyInputs[0].classification.parseReason).toContain('clean/process filters')
+      expect(host.policyInputs[0].classification).toMatchObject({ parseStatus: 'complete', parseReason: null, effects: [] })
       expect(fixture.marks()).toEqual([])
       process.stdout.write(`B19 owned Git filter ${JSON.stringify({ adverseMarkers, sdkMarkers: fixture.marks(), targetStarts: processes.calls.length })}\n`)
     } finally {

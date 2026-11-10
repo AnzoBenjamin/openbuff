@@ -4,6 +4,7 @@ import {
   assertZodSchemaTransportable,
   jsonSchemaAllowsString,
   jsonSchemaToZod,
+  projectHostToolInputSchema,
   projectZodSchema,
 } from '../util/json-schema'
 
@@ -537,27 +538,63 @@ export function isLiveZodSchema(value: unknown): value is z.ZodType {
   )
 }
 
+/**
+ * Serializes one schema member for a JSON transport boundary (the supervised
+ * spawn request file and the bridge wire copy).
+ *
+ * Fail-closed is reserved for CORRUPT shapes: degraded zod husks (their
+ * executable internals must never be walked across) and values that are
+ * not valid JSON Schema. Live zod members instead degrade TIER-FIRST,
+ * because every transported copy in these pipelines is the
+ * provider-facing ADVERTISEMENT — execution stays authoritative against
+ * each side's own live schemas (the same contract
+ * `projectHostToolInputSchema` already publishes for host-validated tools):
+ *   1. EXACT: `assertZodSchemaTransportable` plus a projection that
+ *      round-trips back to an equivalent validator.
+ *   2. ADVISORY: `projectHostToolInputSchema` strips semantics JSON Schema
+ *      cannot carry faithfully (UTF-16 length units, coercion/overwrites,
+ *      flagged regexes) but must itself reify.
+ *   3. `true`: a member whose projection cannot reify at all (e.g.
+ *      recursive schemas) advertises unconstrained rather than killing the
+ *      spawn — refusing here crashed every supervised child at its first
+ *      prompt, the reviewer gate included.
+ */
 export function serializeSchemaMemberForTransport(
   value: unknown,
   io: 'input' | 'output',
 ): unknown {
   if (value === undefined) return value
-  try {
-    if (!isLiveZodSchema(value)) {
-      if (isDegradedZodHusk(value))
-        throw new Error('Cannot transport degraded Zod schema internals')
+  if (!isLiveZodSchema(value)) {
+    if (isDegradedZodHusk(value))
+      throw new Error('Cannot transport degraded Zod schema internals')
+    try {
       jsonSchemaToZod(value)
-      return value
+    } catch (error) {
+      throw new Error(
+        `Cannot transport ${io} schema: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      )
     }
+    return value
+  }
+  try {
     assertZodSchemaTransportable(value as z.ZodType)
     const converted = projectZodSchema(value as z.ZodType, io)
     jsonSchemaToZod(converted)
     return converted
-  } catch (error) {
-    throw new Error(
-      `Cannot transport ${io} schema: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error },
-    )
+  } catch {
+    // Tier 2: the in-process advisory advertisement; it must still REIFY so
+    // the receiving side never refuses the prompt over this member.
+    try {
+      const advisory = projectHostToolInputSchema(value as z.ZodType)
+      jsonSchemaToZod(advisory)
+      return advisory
+    } catch {
+      // Tier 3: accept-anything advertisement (tradeoff documented above).
+      return true
+    }
   }
 }
 

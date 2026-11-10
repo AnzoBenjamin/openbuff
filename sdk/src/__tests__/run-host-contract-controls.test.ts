@@ -225,7 +225,7 @@ describe('B19 actual SDK host contract controls', () => {
       expect(isOwnedTempPath(directory)).toBe(false)
     }
     const hookFile = path.join(f.root, 'hook.json')
-    const selectedConfiguration = { ...f.config, defaultModel: 'backup/fallback', readableRoots: [f.allowed],
+    const selectedConfiguration = { ...f.config, sandbox: { mode: 'project' }, defaultModel: 'backup/fallback', readableRoots: [f.allowed],
       agents: { 'b19-r3-consumer': 'chosen/selected', 'contradictory-agent': 'advice/recommended' },
       failoverModels: ['backup/fallback'], providers: {
         ...(f.config.providers as Record<string, unknown>),

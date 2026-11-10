@@ -1247,6 +1247,23 @@ function supportedOrdinaryReadArgv(program: string, args: readonly string[]): bo
   return false
 }
 
+/** Routine Git reads need no approval for implicit repository helpers. Explicit
+ * helper execution and output-writing options remain outside this vocabulary. */
+function routineGitReadArgv(args: readonly string[]): boolean {
+  const options = args.slice(1)
+  if (args[0] === 'status') return supportedReadOptions(options,
+    ['--short', '-s', '--branch', '-b', '--porcelain', '--porcelain=v1', '--porcelain=v2', '-uall', '-uno', '--ignored'])
+  if (args[0] === 'diff') return supportedReadOptions(options,
+    ['--cached', '--staged', '--stat', '--name-only', '--name-status', '--check', '--no-color', '--binary', '--quiet', '--exit-code'],
+    { '-U': 'count', '--unified': 'count' })
+  if (args[0] === 'log' || args[0] === 'show') return supportedReadOptions(options,
+    ['--oneline', '--graph', '--decorate', '--no-decorate', '--all', '--stat', '--name-only', '--name-status', '--no-color', '-p', '--patch'],
+    { '-n': 'count', '--max-count': 'count', '--format': 'text', '--pretty': 'text', '--since': 'text', '--until': 'text' })
+  if (args[0] === 'ls-files') return supportedReadOptions(options,
+    ['-z', '--cached', '--modified', '--deleted', '--others', '--exclude-standard', '--stage'])
+  return false
+}
+
 /** Analyze exact tokens; only an explicit supported shell payload is parsed as shell bytes. */
 export function classifyHarnessArgv(params: { executable: string; argv: readonly string[] }): ClassifiedHarnessAction | undefined {
   const identity = JSON.stringify(['openbuff.argv-command.v1', params.executable, params.argv])
@@ -1266,7 +1283,7 @@ export function classifyHarnessArgv(params: { executable: string; argv: readonly
     return undefined
   if (['bash', 'zsh', 'dash', 'ksh', 'sh'].includes(program)) {
     const flag = args.findIndex(arg => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg))
-    if (flag !== 0 || !/^-[euxv]*c[euxv]*$/.test(args[0] ?? '') || args[flag + 1] === undefined)
+    if (flag !== 0 || !/^-[leuxv]*c[leuxv]*$/.test(args[0] ?? '') || args[flag + 1] === undefined)
       return unsupported('Shell startup options or invocation have no supported exact -c payload')
     const classified = classifyTerminalHarnessAction(args[flag + 1])
     if (!classified) return undefined
@@ -1275,16 +1292,20 @@ export function classifyHarnessArgv(params: { executable: string; argv: readonly
   }
   if (['cmd', 'powershell', 'pwsh', 'eval', 'env', 'sudo', 'doas', 'time', 'timeout', 'nice', 'xargs'].includes(program))
     return unsupported('Wrapper or interpreter semantics require a separately supported token adapter')
+  if (['nohup', 'setsid', 'apt', 'apt-get', 'yum', 'dnf', 'pacman', 'apk', 'zypper',
+    'systemctl', 'shutdown', 'reboot', 'mkfs', 'dd', 'shred', 'chown', 'chgrp'].includes(program))
+    return effect('arbitrary-code')
   if (['node', 'bun', 'deno', 'python', 'python3', 'ruby', 'perl'].includes(program)) {
-    if (args.some(arg => ['-e', '--eval', '-c'].includes(arg) || arg.startsWith('--eval='))) return effect('arbitrary-code')
-    // A script file or stdin can execute arbitrary code; its contents are not shell tokens.
-    if (program !== 'bun' || !['install', 'add', 'remove', 'update', 'publish'].includes(args[0] ?? ''))
-      return unsupported('Interpreter script, module or stdin execution is outside the exact-token analysis tier')
+    if (args.some(arg => /^(?:--(?:eval|print)(?:$|=)|-[ec](?:$|[^-]))/.test(arg) ||
+      (['node', 'bun', 'deno'].includes(program) && /^-p(?:$|[^-])/.test(arg)))) return effect('arbitrary-code')
+    // Running project scripts, tests and modules is routine development. Keep
+    // explicit interpreter evaluation gated without treating every script as
+    // dangerous merely because it can execute code (like dependency hooks).
+    if (program !== 'bun') return undefined
   }
   if (program === 'git') {
     const readKind = guardedGitReadQueryKind(args)
-    if (readKind === 'working-tree') return unsupported('Git working-tree queries can execute configured clean/process filters or submodule helpers even with diff, pager and fsmonitor helpers disabled')
-    if (readKind || gitReadQueryKind(args) === 'identity') return undefined
+    if (readKind || gitReadQueryKind(args)) return undefined
     const subcommand = args[0]
     if (!subcommand || subcommand.startsWith('-')) return unsupported('Git global options or missing subcommand can change command context')
     if (subcommand === 'push') {
@@ -1310,11 +1331,14 @@ export function classifyHarnessArgv(params: { executable: string; argv: readonly
         { ...(branch ? { branch } : {}), ...(pushRisks.size ? { pushRisks: [...pushRisks] } : {}) })
     }
     if (subcommand === 'commit') return effect('commit')
+    if (['add', 'init', 'fetch'].includes(subcommand)) return undefined
+    if (subcommand === 'switch' && !args.some(arg => ['--discard-changes', '-f', '--force'].includes(arg))) return undefined
     if (subcommand === 'tag') return effect('release')
     if ((subcommand === 'reset' && args.includes('--hard')) || (subcommand === 'clean' && args.some(arg => /^-[^-]*[fd]/.test(arg))) ||
       (subcommand === 'checkout' && args.includes('--')) ||
       (subcommand === 'restore' && (!args.includes('--staged') || args.some(arg => ['--worktree', '-W', '--source', '--overlay', '--patch', '-p'].includes(arg)))))
       return effect('workspace-delete')
+    if (routineGitReadArgv(args)) return undefined
     if (['status', 'diff', 'show', 'log', 'ls-files', 'rev-parse', 'symbolic-ref', 'merge-base', 'for-each-ref', 'ls-tree', 'check-ignore', 'check-attr', 'show-ref', 'rev-list', 'branch', 'remote', 'config', 'shortlog'].includes(subcommand))
       return unsupported(`Git ${subcommand} requires a supported helper-disabled read-query vector; configuration or operands may execute external commands`)
     return unsupported('Git subcommand may execute aliases, hooks or mutate state outside the supported token tier')
@@ -1347,12 +1371,24 @@ export function classifyHarnessArgv(params: { executable: string; argv: readonly
   if (['prisma', 'knex', 'flyway'].includes(program) && operation === 'migrate' ||
     (['sequelize', 'rails'].includes(program) && operation === 'db:migrate') || (program === 'alembic' && operation === 'upgrade') ||
     (program === 'liquibase' && operation === 'update')) return effect('migration')
-  if (program === 'rm' && args.some(arg => /^-[^-]*r/.test(arg))) return effect('workspace-delete')
+  if (program === 'rm' && args.some(arg => arg === '--recursive' || /^-[^-]*r/.test(arg))) return effect('workspace-delete')
   if (program === 'find' && args.some(arg => ['-delete', '-exec', '-execdir', '-ok', '-okdir'].includes(arg))) return effect('workspace-delete')
   if (supportedOrdinaryReadArgv(program, args) ||
     (program === 'go' && exactArgv(args, ['version'])) || (program === 'java' && exactArgv(args, ['-version']))) return undefined
   if (['echo', 'true', 'false', 'pwd', 'ls', 'rg', 'grep', 'cat', 'head', 'tail', 'wc', 'find'].includes(program))
     return unsupported(`${program} options or operands are outside the supported read-query vectors`)
+  // Tests/builds and ordinary project utilities carry the same routine risk
+  // as shell invocations. Keep unknown executables (including client-provided
+  // servers) explicit so startup authorization does not silently broaden.
+  if (['bun', 'npm', 'pnpm', 'yarn', 'cargo', 'make', 'cmake', 'ctest', 'pytest',
+    'vitest', 'jest', 'tsc', 'eslint', 'prettier', 'ruff', 'sed', 'awk', 'sort',
+    'uniq', 'cut', 'printf', 'test', 'which', 'tee', 'mkdir', 'touch', 'cp', 'mv'].includes(program)) {
+    const runIndex = args.findIndex(arg => arg === 'run' || arg === 'run-script')
+    const script = runIndex >= 0 ? args[runIndex + 1] : operation
+    if (script && /(?:^|[:_-])(?:deploy|publish|release|migrate|migration)(?:$|[:_-])/.test(script))
+      return effect(/migrat/.test(script) ? 'migration' : /deploy/.test(script) ? 'deploy' : 'release')
+    return undefined
+  }
   return unsupported('Unknown executable or programmable command semantics are outside the exact-token tier')
 }
 

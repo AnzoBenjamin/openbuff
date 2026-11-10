@@ -177,7 +177,7 @@ describe('B19 run-owned MCP execution', () => {
     expect(reused.id).toBe(a.id)
     const otherOwner = f.remember(await f.mcp.request(config, two, value(two.operation())))
     const otherMode = f.remember(await f.mcp.request(config, one, value(one.operation({ mode: 'user' }))))
-    const otherProfile = f.remember(await f.mcp.request(config, one, value(one.operation({ profile: { ...f.host.bootstrap.profile, policy: 'full-access' } }))))
+    const otherProfile = f.remember(await f.mcp.request(config, one, value(one.operation({ profile: { ...f.host.bootstrap.profile, policy: 'read-only' } }))))
     const next = fixture(f.root, { PROJECT_VALUE: 'new-epoch' }), nextScope = next.scope('one')
     const otherEpoch = next.remember(await next.mcp.request(config, nextScope, value(nextScope.operation())))
     expect(new Set([a.id, otherOwner.id, otherMode.id, otherProfile.id, otherEpoch.id]).size).toBe(5)

@@ -108,8 +108,8 @@ describe('B19 exact argv approval classification', () => {
 
   test.each([
     ['env', ['X=1', 'git', 'status']], ['sudo', ['git', 'status']], ['timeout', ['3', 'git', 'status']],
-    ['bash', ['-lc', 'git status']], ['bash', ['--rcfile', '/tmp/fixture', '-c', 'git status']],
-    ['sh', ['--', '-c', 'git status']], ['node', ['fixture-script.js']], ['pwsh', ['-Command', 'git status']],
+    ['bash', ['--rcfile', '/tmp/fixture', '-c', 'git status']],
+    ['sh', ['--', '-c', 'git status']], ['pwsh', ['-Command', 'git status']],
   ] as const)('unsupported wrapper/startup semantics stay explicit: %s', (executable, argv) => {
     const result = classifyHarnessArgv({ executable, argv })!
     expect(result.parseStatus).toBe('unsupported')
