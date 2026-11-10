@@ -242,6 +242,118 @@ describe('summarizeSpawnResult', () => {
 })
 
 describe('set_output rendering registration', () => {
+  test.each([
+    [['a.ts', 'b.ts'], '1. a.ts', '2. b.ts'],
+    ['["a.ts","b.ts"]', '1. a.ts', '2. b.ts'],
+    [[{ filePath: 'src/a.ts', verified: true }], 'file path: ', 'src/a.ts'],
+    [42, '42', '42'],
+    [false, 'No', 'No'],
+    [null, 'None', 'None'],
+    [[], 'No results returned', 'No results returned'],
+    [
+      'Saved the requested notes',
+      'Saved the requested notes',
+      'Saved the requested notes',
+    ],
+  ] as const)(
+    'shows arbitrary result %p in the saved result card',
+    (data, first, second) => {
+      let preview = ''
+      const Render = () => {
+        const config = SetOutputComponent.render(
+          {
+            type: 'tool',
+            toolName: 'set_output',
+            toolCallId: 'generic-result',
+            lifecycle: 'succeeded',
+            input: { data },
+            outputRaw: [{ type: 'json', value: { message: 'Output set' } }],
+          },
+          chatThemes.dark,
+          { availableWidth: 100, indentationOffset: 0, labelWidth: 0 },
+        )
+        preview = config.collapsedPreview ?? ''
+        return config.content as React.ReactElement
+      }
+      const markup = renderToStaticMarkup(React.createElement(Render))
+      const text = markup.replace(/<[^>]+>/g, '')
+      expect(markup).toContain('Result saved')
+      expect(text).toContain(first)
+      expect(text).toContain(second)
+      expect(preview).not.toBe('• Result saved')
+      expect(markup).not.toContain('[object Object]')
+      expect(markup).not.toContain('```json')
+    },
+  )
+
+  test('bounds large arbitrary results and preserves rejected acknowledgment status', () => {
+    const render = (data: unknown, rejected = false) => {
+      const Render = () =>
+        SetOutputComponent.render(
+          {
+            type: 'tool',
+            toolName: 'set_output',
+            toolCallId: 'bounded-result',
+            lifecycle: 'succeeded',
+            input: { data },
+            outputRaw: [
+              {
+                type: 'json',
+                value: rejected
+                  ? { errorMessage: 'Result rejected by validation' }
+                  : { message: 'Output set' },
+              },
+            ],
+          },
+          chatThemes.dark,
+          { availableWidth: 100, indentationOffset: 0, labelWidth: 0 },
+        ).content as React.ReactElement
+      return renderToStaticMarkup(React.createElement(Render))
+    }
+    expect(
+      render(Array.from({ length: 100 }, (_, index) => `file-${index}.ts`)),
+    ).toContain('Preview limited')
+    expect(render(false, true)).toContain('output failed')
+    expect(render(false, true)).toContain('Result rejected by validation')
+    expect(render(false, true)).not.toContain('Result saved')
+  })
+
+  test('uses plain verdicts and keeps schema fingerprints in the inspection view', () => {
+    const Render = () =>
+      SetOutputComponent.render(
+        {
+          type: 'tool',
+          toolName: 'set_output',
+          toolCallId: 'review-ready',
+          lifecycle: 'succeeded',
+          input: {
+            data: {
+              verdict: 'LOOKS_GOOD',
+              summary: 'Changes verified',
+              schemaVersion: 2,
+              snapshotFingerprint: 'v3:1234567890abcdef',
+              dimensions: {
+                reliability: 'Retry covered',
+                performance: 'Bounded work',
+              },
+            },
+          },
+          outputRaw: [{ type: 'json', value: { message: 'Output set' } }],
+        },
+        chatThemes.dark,
+        { availableWidth: 100, indentationOffset: 0, labelWidth: 0 },
+      ).content as React.ReactElement
+    const markup = renderToStaticMarkup(React.createElement(Render))
+    expect(markup).toContain('Review passed')
+    expect(markup).toContain('Changes verified')
+    expect(markup).toContain('Dimensions')
+    expect(markup).toContain('Retry covered')
+    expect(markup).not.toContain('LOOKS_GOOD')
+    expect(markup).not.toContain('schema v2')
+    expect(markup).not.toContain('1234567890ab')
+    expect(markup).not.toContain('dimensions · reliability')
+  })
+
   test('pending verdict and salvaged acknowledgment cannot look like accepted success', () => {
     const render = (outputRaw?: unknown) => {
       const Render = () =>

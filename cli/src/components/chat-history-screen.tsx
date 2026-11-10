@@ -4,7 +4,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import stringWidth from 'string-width'
 import { sliceTextCells } from '../utils/text-boundaries'
 import { OutputReaderScreen } from './output-reader-screen'
-import { createTextDocument, type OutputDocument } from '../utils/output-document'
+import {
+  createTextDocument,
+  type OutputDocument,
+} from '../utils/output-document'
 import { readSavedTranscriptInspection } from '../utils/saved-transcript-inspection'
 
 import { Button } from './button'
@@ -20,13 +23,12 @@ import {
 } from '../utils/chat-history'
 import { createTextPasteHandler } from '../utils/strings'
 import { isPlainEnterKey } from '../utils/terminal-enter-detection'
-import { BORDER_CHARS } from '../utils/ui-constants'
 
 import type { SelectableListItem } from './selectable-list'
 
 const LAYOUT = {
   CONTENT_PADDING: 4,
-  COMPACT_MODE_THRESHOLD: 20, // Hide header when terminal height is below this
+  COMPACT_MODE_THRESHOLD: 20, // Reduce spacing in short terminals
   NARROW_WIDTH_THRESHOLD: 70, // Hide buttons when terminal width is below this
   MAIN_CONTENT_PADDING: 2,
   INITIAL_CHATS: 25, // Load this many immediately for fast display
@@ -164,7 +166,7 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
         return
       }
 
-      setStatusMessage('Could not delete chat')
+      setStatusMessage('Could not delete saved session')
     },
     [pendingDelete, chats, dependencies.delete],
   )
@@ -172,13 +174,13 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
   // Calculate available width for the prompt text (last column, variable width)
   // Format: "[time]   [msgs]   [prompt...] [×]"
   // reservedWidth accounts for: time col, msgs col, delete button area,
-  // 2 gaps between columns, list border (2), scrollbar (1), and button padding (2)
+  // 2 gaps between columns, scrollbar (1), and button padding (2)
   const reservedWidth =
     LAYOUT.TIME_COL_WIDTH +
     LAYOUT.MSGS_COL_WIDTH +
     LAYOUT.DELETE_COL_WIDTH +
     LAYOUT.GAP_WIDTH * 2 +
-    5 // border + scrollbar + button padding
+    3 // scrollbar + button padding
   const maxPromptWidth = Math.max(1, contentWidth - reservedWidth)
 
   const truncateText = (text: string, width: number) => {
@@ -200,7 +202,9 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
           LAYOUT.TIME_COL_WIDTH,
         )
         const msgs = padRight(
-          chat.messageCountKnown === false ? 'unknown' : `${chat.messageCount} msgs`,
+          chat.messageCountKnown === false
+            ? 'unknown'
+            : `${chat.messageCount} msgs`,
           LAYOUT.MSGS_COL_WIDTH,
         )
         const prompt = padRight(
@@ -364,7 +368,7 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
     return (
       <SavedTranscriptInspector
         chatId={inspectedId}
-        metadata={`Session: ${inspectedId}\nSaved: ${chat?.timestamp ?? 'unknown'}\nMessages: ${chat?.messageCountKnown === false ? 'unknown' : chat?.messageCount ?? 'unknown'}\n\n${chat?.lastPrompt ?? 'Prompt unavailable'}`}
+        metadata={`Session: ${inspectedId}\nSaved: ${chat?.timestamp ?? 'unknown'}\nMessages: ${chat?.messageCountKnown === false ? 'unknown' : (chat?.messageCount ?? 'unknown')}\n\n${chat?.lastPrompt ?? 'Prompt unavailable'}`}
         inspect={dependencies.inspect ?? readSavedTranscriptInspection}
         onClose={() => setInspectedId(null)}
       />
@@ -385,12 +389,12 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
       <box
         style={{
           flexDirection: 'column',
-          alignItems: 'center',
+          alignItems: 'stretch',
           justifyContent: 'flex-start',
           width: '100%',
           paddingLeft: 2,
           paddingRight: 2,
-          paddingTop: isCompactMode ? 0 : 1,
+          paddingTop: 0,
           paddingBottom: 0,
           gap: 0,
           flexGrow: 1,
@@ -398,23 +402,16 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
         }}
       >
         {/* Title */}
-        {!isCompactMode && (
-          <box
-            style={{
-              flexDirection: 'column',
-              alignItems: 'center',
-              marginBottom: 1,
-              marginTop: 1,
-              flexShrink: 0,
-            }}
-          >
-            <text
-              style={{ fg: theme.foreground, attributes: TextAttributes.BOLD }}
-            >
-              Select a chat to resume
-            </text>
-          </box>
-        )}
+        <text
+          style={{
+            fg: theme.foreground,
+            attributes: TextAttributes.BOLD,
+            marginBottom: isCompactMode ? 0 : 1,
+            flexShrink: 0,
+          }}
+        >
+          Saved sessions
+        </text>
 
         {/* Search input */}
         <box
@@ -440,7 +437,7 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
               },
             )}
             onKeyIntercept={handleKeyIntercept}
-            placeholder="Search chats..."
+            placeholder="Search sessions…"
             focused={true}
             maxHeight={1}
             minHeight={1}
@@ -458,21 +455,19 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
               ? `Loaded ${chats.length} sessions · more may be loading or unavailable`
               : loadState === 'unavailable'
                 ? 'Saved sessions unavailable · Ctrl+R retry'
-                : `${filteredItems.length} saved sessions`}
+                : filteredItems.length < chats.length
+                  ? `${filteredItems.length} of ${chats.length} saved sessions`
+                  : `${chats.length} saved sessions`}
         </text>
         {/* Chat list - grows to fill remaining space */}
         <box
           style={{
             flexDirection: 'column',
             width: contentWidth,
-            borderStyle: 'single',
-            borderColor: theme.muted,
-            customBorderChars: BORDER_CHARS,
             flexGrow: 1,
             flexShrink: 1,
             overflow: 'hidden',
           }}
-          border={['top', 'bottom', 'left', 'right']}
         >
           <SelectableList
             items={filteredItems}
@@ -487,19 +482,23 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
                 : loadState === 'unavailable'
                   ? 'Saved sessions unavailable · Ctrl+R retry'
                   : chats.length === 0
-                    ? 'No chat history yet'
+                    ? 'No saved sessions yet'
                     : searchQuery
-                      ? 'No matching chats'
-                      : 'No chats found'
+                      ? 'No matching sessions'
+                      : 'No saved sessions found'
             }
           />
         </box>
       </box>
 
       {selectedChat && (
-        <text fg={theme.muted} style={{ flexShrink: 0 }} wrapMode="none">
+        <text
+          fg={theme.muted}
+          style={{ flexShrink: 0, paddingLeft: 2, paddingRight: 2 }}
+          wrapMode="none"
+        >
           {sliceTextCells(
-            `${formatRelativeTime(selectedChat.timestamp)} · ${selectedChat.messageCountKnown === false ? 'message count unknown' : `${selectedChat.messageCount} messages`} · ${selectedChat.chatId}`,
+            `${formatRelativeTime(selectedChat.timestamp)} · ${selectedChat.messageCountKnown === false ? 'message count unknown' : `${selectedChat.messageCount} messages`}`,
             0,
             contentWidth,
           )}
@@ -508,7 +507,7 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
       {statusMessage && (
         <text
           fg={pendingDelete ? theme.warning : theme.foreground}
-          style={{ flexShrink: 0 }}
+          style={{ flexShrink: 0, paddingLeft: 2, paddingRight: 2 }}
         >
           {statusMessage}
         </text>
@@ -551,32 +550,26 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
               <Button
                 onClick={onNewChat}
                 style={{
-                  paddingLeft: 2,
-                  paddingRight: 2,
+                  paddingLeft: 1,
+                  paddingRight: 1,
                   paddingTop: 0,
                   paddingBottom: 0,
-                  borderStyle: 'single',
-                  borderColor: theme.primary,
-                  customBorderChars: BORDER_CHARS,
+                  flexShrink: 0,
                 }}
-                border={['top', 'bottom', 'left', 'right']}
               >
-                <text style={{ fg: theme.primary }}>New Chat</text>
+                <text style={{ fg: theme.primary }}>New session</text>
               </Button>
               <Button
                 onClick={onCancel}
                 style={{
-                  paddingLeft: 2,
-                  paddingRight: 2,
+                  paddingLeft: 1,
+                  paddingRight: 1,
                   paddingTop: 0,
                   paddingBottom: 0,
-                  borderStyle: 'single',
-                  borderColor: theme.muted,
-                  customBorderChars: BORDER_CHARS,
+                  flexShrink: 0,
                 }}
-                border={['top', 'bottom', 'left', 'right']}
               >
-                <text style={{ fg: theme.muted }}>Cancel</text>
+                <text style={{ fg: theme.muted }}>Back</text>
               </Button>
             </box>
           )}
@@ -586,27 +579,51 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
   )
 }
 
-function SavedTranscriptInspector({ chatId, metadata, inspect, onClose }: {
+function SavedTranscriptInspector({
+  chatId,
+  metadata,
+  inspect,
+  onClose,
+}: {
   chatId: string
   metadata: string
   inspect: typeof readSavedTranscriptInspection
   onClose: () => void
 }) {
-  const [document, setDocument] = useState<OutputDocument>(() => createTextDocument({
-    id: `saved-inspection:${chatId}`, title: 'Saved session details', text: metadata,
-    availability: 'pending', notice: 'Loading saved capture for inspection · no session restore',
-  }))
+  const [document, setDocument] = useState<OutputDocument>(() =>
+    createTextDocument({
+      id: `saved-inspection:${chatId}`,
+      title: 'Saved session details',
+      text: metadata,
+      availability: 'pending',
+      notice: 'Loading saved capture for inspection · no session restore',
+    }),
+  )
   useEffect(() => {
     const controller = new AbortController()
-    void inspect(chatId, metadata, controller.signal).then(result => {
-      if (!controller.signal.aborted) setDocument(result)
-    }).catch(() => {
-      if (!controller.signal.aborted) setDocument(createTextDocument({
-        id: `saved-inspection:${chatId}`, title: 'Saved session details', text: metadata,
-        availability: 'unavailable', notice: 'Saved capture unavailable · metadata only',
-      }))
-    })
+    void inspect(chatId, metadata, controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) setDocument(result)
+      })
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setDocument(
+            createTextDocument({
+              id: `saved-inspection:${chatId}`,
+              title: 'Saved session details',
+              text: metadata,
+              availability: 'unavailable',
+              notice: 'Saved capture unavailable · metadata only',
+            }),
+          )
+      })
     return () => controller.abort()
   }, [chatId, metadata, inspect])
-  return <OutputReaderScreen messages={[]} initialDocument={document} onClose={onClose} />
+  return (
+    <OutputReaderScreen
+      messages={[]}
+      initialDocument={document}
+      onClose={onClose}
+    />
+  )
 }

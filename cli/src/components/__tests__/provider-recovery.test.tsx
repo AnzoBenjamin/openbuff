@@ -154,6 +154,7 @@ renderTest(
           setup.mockInput.pressArrow('down')
         await Bun.sleep(50)
       })
+      await React.act(async () => setup.flush())
       expect(setup.captureCharFrame()).toContain('Provider 30')
       expect(setup.captureCharFrame()).toContain('30/32')
       await React.act(async () => setup.mockInput.pressEnter())

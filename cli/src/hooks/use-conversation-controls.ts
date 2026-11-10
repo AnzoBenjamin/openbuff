@@ -21,11 +21,17 @@ export function useConversationControls(options: {
     const box = options.scrollRef.current
     if (!box) return []
     const found: Renderable[] = []
-    const pending: Renderable[] = [box.content]
+    const pending: Renderable[] = box.content.getChildren()
     let examined = 0
     while (pending.length && examined++ < 5000) {
       const node = pending.pop()!
-      if (node.visible && node.focusable && node.y + node.height > box.viewport.y && node.y < box.viewport.y + box.viewport.height) found.push(node)
+      if (
+        node.visible &&
+        node.focusable &&
+        node.y + node.height > box.viewport.y &&
+        node.y < box.viewport.y + box.viewport.height
+      )
+        found.push(node)
       for (const child of node.getChildren()) {
         if (pending.length >= 5000) break
         pending.push(child)
@@ -39,7 +45,11 @@ export function useConversationControls(options: {
   }
   useKeyboard((key) => {
     if (!options.enabled()) return
-    if (!activeRef.current && options.composerHasFocus?.() === false && options.scrollRef.current?.parent?.hasFocusedDescendant) {
+    if (
+      !activeRef.current &&
+      options.composerHasFocus?.() === false &&
+      options.scrollRef.current?.parent?.hasFocusedDescendant
+    ) {
       activeRef.current = true
       setActive(true)
       options.onEnter()
@@ -59,7 +69,10 @@ export function useConversationControls(options: {
     else if (activeRef.current && key.name === 'tab') {
       const items = controls()
       const current = items.findIndex((item) => item.focused)
-      if (items.length) items[(current + (key.shift ? -1 : 1) + items.length) % items.length].focus()
+      if (items.length)
+        items[
+          (current + (key.shift ? -1 : 1) + items.length) % items.length
+        ].focus()
     } else if (activeRef.current && key.ctrl && key.name === 'p') {
       leave()
       options.onCommands()

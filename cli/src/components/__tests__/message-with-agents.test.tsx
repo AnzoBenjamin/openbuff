@@ -8,7 +8,7 @@ import {
   test,
 } from 'bun:test'
 import React from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
+import { renderToStaticMarkup } from '../../__tests__/helpers/static-terminal-render'
 import { enableMapSet } from 'immer'
 
 import { initializeThemeStore } from '../../hooks/use-theme'
@@ -133,12 +133,17 @@ mock.module('../../utils/opentui-syntax-style', () => ({
   // Real exports first so createCodeSyntaxStyle and friends survive for
   // later files; the throwing stub below must keep winning while armed.
   ...realSyntaxStyleModule,
-  createMarkdownSyntaxStyle: (palette: MarkdownPalette) => {
+  createMarkdownSyntaxStyle: (
+    palette: MarkdownPalette,
+    owner: Parameters<
+      typeof realSyntaxStyleModule.createMarkdownSyntaxStyle
+    >[1],
+  ) => {
     if (!syntaxStyleArmed) {
       // Delegate to the `?real` module instance — a separate module object
       // this registry-wide mock cannot patch, so this cannot re-enter the
       // override.
-      return realSyntaxStyleModule.createMarkdownSyntaxStyle(palette)
+      return realSyntaxStyleModule.createMarkdownSyntaxStyle(palette, owner)
     }
     if (syntaxStyleSetupError) {
       throw syntaxStyleSetupError
@@ -719,10 +724,7 @@ describe('MessageWithAgents', () => {
       )
 
       const markup = renderToStaticMarkup(
-        <MessageWithAgents
-          {...baseMessageWithAgentsProps}
-          message={message}
-        />,
+        <MessageWithAgents {...baseMessageWithAgentsProps} message={message} />,
       )
 
       // The native renderable is selected with our syntax style and shared
@@ -745,10 +747,7 @@ describe('MessageWithAgents', () => {
       )
 
       const markup = renderToStaticMarkup(
-        <MessageWithAgents
-          {...baseMessageWithAgentsProps}
-          message={message}
-        />,
+        <MessageWithAgents {...baseMessageWithAgentsProps} message={message} />,
       )
 
       // The plain-text path keeps the wrapped text and never mounts the
@@ -770,10 +769,7 @@ describe('MessageWithAgents', () => {
       )
 
       const markup = renderToStaticMarkup(
-        <MessageWithAgents
-          {...baseMessageWithAgentsProps}
-          message={message}
-        />,
+        <MessageWithAgents {...baseMessageWithAgentsProps} message={message} />,
       )
 
       // Degrade-to-plain-text contract: a native setup throw falls back to

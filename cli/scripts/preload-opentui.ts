@@ -35,7 +35,12 @@ if (!process.env.OTUI_ASSET_ROOT) {
   process.env.OTUI_ASSET_ROOT = root
 }
 
-const { setRenderLibPath, SyntaxStyle } = await import('@opentui/core')
+const { setRenderLibPath, SyntaxStyle, ResourceContext } = await import('@opentui/core')
 setRenderLibPath(native.source)
-const style = SyntaxStyle.fromStyles({})
-style.destroy()
+const owner = new ResourceContext({ objectCapacity: 16, renderCellsMax: 1 })
+try {
+  const style = SyntaxStyle.fromStyles({}, owner)
+  style.destroy()
+} finally {
+  owner.destroy()
+}

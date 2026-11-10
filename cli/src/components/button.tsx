@@ -11,7 +11,7 @@ import { TextAttributes } from '@opentui/core'
 import { makeTextUnselectable } from './clickable'
 
 import type { ReactElement, ReactNode, Ref } from 'react'
-import type { BoxRenderable, KeyEvent } from '@opentui/core'
+import type { BoxRenderable, KeyEvent, MouseEvent } from '@opentui/core'
 
 interface ButtonProps {
   onClick?: (e?: unknown) => void | Promise<unknown>
@@ -134,7 +134,20 @@ export const Button = memo(function Button({
     mouseDownRef.current = false
   }
 
-  const handleMouseOut = () => {
+  const handleMouseOut = (event?: MouseEvent) => {
+    const node = nodeRef.current
+    // Native child/focus updates can emit an out event while the pointer
+    // still sits inside this control. Keep its press and hover intact.
+    if (
+      event &&
+      node &&
+      !node.isDestroyed &&
+      event.x >= node.x &&
+      event.x < node.x + node.width &&
+      event.y >= node.y &&
+      event.y < node.y + node.height
+    )
+      return
     // Reset mouse down state when leaving the element
     mouseDownRef.current = false
     onMouseOut?.()

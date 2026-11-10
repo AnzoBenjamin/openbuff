@@ -194,7 +194,7 @@ These targets are proposed, not measured results of the current audit.
 
 Use regression tests for state/producer boundaries, adapter availability/location tests and integration tests for focus/draft/anchor restoration. Use real fixture-driven tmux captures for terminal geometry, plus browser checks for dashboard/OAuth and an actual screen-reader/plain-text baseline. Cover ASCII/wide glyphs, long lines, combining characters, ANSI/control sequences, missing source and interrupted/partial results.
 
-Run relevant renderer suites with Bun 1.3.5 from the CLI package (`bunx --bun bun@1.3.5 run test`), and CLI typecheck (`bun run typecheck`). Use the actual documented workspace invocation (`bun run --cwd cli <script>`) where appropriate. Broaden checks when a slice changes shared/runtime/persistence contracts. No additional full suite is required for these planning documents alone.
+Run relevant renderer suites with the current pinned Bun runtime (1.4.4) from the CLI package (`bun run test`), and CLI typecheck (`bun run typecheck`). Use the actual documented workspace invocation (`bun run --cwd cli <script>`) where appropriate. Broaden checks when a slice changes shared/runtime/persistence contracts. No additional full suite is required for these planning documents alone.
 
 If measured rendering misses targets, introduce lazy/ranged access and retain a readable fallback. Do not advertise complete content access by removing limits without resource bounds and provenance.
 

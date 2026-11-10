@@ -32,7 +32,7 @@ export interface BottomBannerConfig {
   children?: React.ReactNode
   /** Called when close button is clicked. If not provided, no close button is shown. */
   onClose?: () => void
-  /** Which border sides to render. Defaults to ['bottom', 'left', 'right']. */
+  /** Which border sides to render. Defaults to a quiet left rule. */
   border?: ('top' | 'bottom' | 'left' | 'right')[]
 }
 
@@ -99,7 +99,7 @@ export const BottomBanner: React.FC<BottomBannerProps> = ({
         marginTop: 0,
         marginBottom: 0,
       }}
-      border={border ?? ['bottom', 'left', 'right']}
+      border={border ?? ['left']}
       customBorderChars={BORDER_CHARS}
     >
       {hasTextContent ? (
@@ -110,7 +110,7 @@ export const BottomBanner: React.FC<BottomBannerProps> = ({
               fg: textColor,
               wrapMode: 'word',
               flexShrink: 1,
-              marginRight: hasCloseButton ? 3 : 0,
+              marginRight: hasCloseButton ? 1 : 0,
             }}
           >
             {text}
@@ -123,11 +123,12 @@ export const BottomBanner: React.FC<BottomBannerProps> = ({
       {hasCloseButton && (
         <Button
           onClick={onClose}
+          style={{ flexShrink: 0 }}
           onMouseOver={() => setIsCloseHovered(true)}
           onMouseOut={() => setIsCloseHovered(false)}
         >
           <text style={{ fg: isCloseHovered ? theme.error : theme.muted }}>
-            x
+            Dismiss
           </text>
         </Button>
       )}

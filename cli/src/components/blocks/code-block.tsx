@@ -1,4 +1,5 @@
 import { memo, type ReactNode } from 'react'
+import { useRenderer } from '@opentui/react'
 
 import { logger } from '../../utils/logger'
 import { type MarkdownPalette } from '../../utils/markdown-renderer'
@@ -44,9 +45,7 @@ const FILETYPE_MAP: Record<string, string> = {
   md: 'markdown',
 }
 
-export const resolveCodeFiletype = (
-  language?: string,
-): string | undefined => {
+export const resolveCodeFiletype = (language?: string): string | undefined => {
   if (!language) {
     return undefined
   }
@@ -67,9 +66,10 @@ const renderNativeCode = (
   filetype: string | undefined,
   palette: MarkdownPalette,
   availableWidth: number,
+  owner: Parameters<typeof createCodeSyntaxStyle>[1],
 ): ReactNode => {
   try {
-    const syntaxStyle = createCodeSyntaxStyle(palette)
+    const syntaxStyle = createCodeSyntaxStyle(palette, owner)
     const treeSitterClient = getSharedTreeSitterClient()
     // treeSitterClient is optional on CodeOptions, so a null client still
     // renders (the code just loses tree-sitter highlighting). The base
@@ -99,11 +99,14 @@ const renderNativeCode = (
 }
 
 export const CodeBlock = memo(
-  ({ content, filetype, palette, availableWidth }: CodeBlockProps) =>
-    renderNativeCode(
+  ({ content, filetype, palette, availableWidth }: CodeBlockProps) => {
+    const renderer = useRenderer()
+    return renderNativeCode(
       content,
       resolveCodeFiletype(filetype),
       palette,
       availableWidth,
-    ),
+      renderer.nativeScene,
+    )
+  },
 )

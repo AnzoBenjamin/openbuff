@@ -37,7 +37,6 @@ import {
   inputWrapColumns,
   multilineInputMeasurementKey,
 } from '../utils/text-layout'
-import { supportsTruecolor } from '../utils/theme-system'
 
 import type { InputValue } from '../types/store'
 import type {
@@ -1597,8 +1596,7 @@ export const MultilineInput = forwardRef<
       ? theme.inputFocusedFg
       : theme.inputFg
 
-  // Use theme's info color for selection highlight background
-  const highlightBg = theme.info
+  const highlightBg = theme.primary
   const showPosition =
     layoutMetrics.isScrollable && layoutMetrics.heightLines > 1
   const contentHeight = Math.max(
@@ -1659,7 +1657,7 @@ export const MultilineInput = forwardRef<
               {shouldHighlight ? (
                 <span
                   bg={highlightBg}
-                  fg={theme.background}
+                  fg={theme.surface}
                   attributes={TextAttributes.BOLD}
                 >
                   {activeChar === ' ' ? '\u00a0' : activeChar}
@@ -1669,7 +1667,7 @@ export const MultilineInput = forwardRef<
                   visible={true}
                   focused={focused}
                   shouldBlink={effectiveShouldBlinkCursor}
-                  color={supportsTruecolor() ? theme.info : 'lime'}
+                  color={theme.primary}
                   key={lastActivity}
                 />
               )}

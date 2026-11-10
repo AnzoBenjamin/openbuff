@@ -188,11 +188,12 @@ renderTest(
       })
       await React.act(async () => setup.renderOnce())
       const clickToggle = async () => {
+        await React.act(async () => setup.flush())
         const rows = setup.captureCharFrame().split('\n')
-        const y = rows.findIndex((row) => /< (DEFAULT|PLAN)/.test(row))
+        const y = rows.findIndex((row) => /(Default|Plan) ▾/.test(row))
         expect(y).toBeGreaterThanOrEqual(0)
-        const x = rows[y]!.indexOf('< ')
-        await React.act(async () => setup.mockMouse.click(x + 3, y))
+        const x = rows[y]!.search(/(Default|Plan) ▾/)
+        await React.act(async () => setup.mockMouse.click(x + 2, y))
         await React.act(async () => setup.renderOnce())
       }
       try {
@@ -208,6 +209,7 @@ renderTest(
         expect(open).toBe(false)
         expect(latest).toEqual(initial)
         await clickToggle()
+        expect(open).toBe(true)
         await React.act(async () => setup.mockInput.pressEscape())
         expect(open).toBe(false)
         expect(submitted).toBe(0)

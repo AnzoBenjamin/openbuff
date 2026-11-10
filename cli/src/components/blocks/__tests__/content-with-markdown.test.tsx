@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import React from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
+import { renderToStaticMarkup } from '../../../__tests__/helpers/static-terminal-render'
 
 import type { MarkdownPalette } from '../../../utils/markdown-renderer'
 
@@ -38,9 +38,14 @@ mock.module('../../../utils/opentui-syntax-style', () => ({
   // Real exports first (registry-wide leak guard); the counting stub below
   // must keep winning while armed.
   ...realSyntaxStyleModule,
-  createMarkdownSyntaxStyle: (palette: MarkdownPalette) => {
+  createMarkdownSyntaxStyle: (
+    palette: MarkdownPalette,
+    owner: Parameters<
+      typeof realSyntaxStyleModule.createMarkdownSyntaxStyle
+    >[1],
+  ) => {
     if (!syntaxStyleArmed) {
-      return realSyntaxStyleModule.createMarkdownSyntaxStyle(palette)
+      return realSyntaxStyleModule.createMarkdownSyntaxStyle(palette, owner)
     }
     createMarkdownSyntaxStyleCalls.push(palette)
     if (syntaxStyleSetupError) {

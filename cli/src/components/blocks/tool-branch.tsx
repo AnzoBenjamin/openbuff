@@ -5,15 +5,23 @@ import { useTheme } from '../../hooks/use-theme'
 import { useChatStore } from '../../state/chat-store'
 import { shouldCollapseToolByDefault } from '../../utils/constants'
 import {
-  boundedFallbackJson,
-  formatFallbackOutput,
+  boundedFallbackOutput,
   hasFallbackInputValue,
-  summarizeFallbackInput,
 } from '../../utils/fallback-input-summary'
 import { renderToolComponent } from '../tools/registry'
+import { StructuredResult } from '../tools/structured-result'
+import {
+  cleanPreviewText,
+  humanizeFieldName,
+  summarizeStructuredPreview,
+} from '../../utils/structured-preview'
+import { toolDisplayOutput } from '../../utils/tool-display-output'
+import { sliceTextCells } from '../../utils/text-boundaries'
+import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
 import { ToolCallItem } from '../tools/tool-call-item'
 import { Button } from '../button'
 import { documentForTool } from '../../utils/output-catalog'
+import { createJsonDocument } from '../../utils/output-document'
 import { useOutputReaderStore } from '../../state/output-reader-store'
 
 import type { ContentBlock } from '../../types/chat'
@@ -44,8 +52,15 @@ export const ToolBranch = memo(
       state.streamingAgents.has(toolBlock.toolCallId),
     )
 
-    const sanitizePreview = (value: string): string =>
-      value.replace(/[#*_`~\[\]()]/g, '').trim()
+    const sanitizePreview = (value: string): string => {
+      const text = cleanPreviewText(value)
+        .replace(/[#*_`~\[\]()]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      const width = Math.max(1, Math.min(140, availableWidth - 4))
+      const shown = sliceTextCells(text, 0, Math.max(0, width - 1))
+      return shown.length < text.length ? `${shown}…` : text
+    }
 
     if (toolBlock.toolName === 'end_turn') {
       return null
@@ -75,34 +90,36 @@ export const ToolBranch = memo(
         ? shouldCollapseToolByDefault(toolBlock.toolName)
         : true)
 
-    // Registered renderers cover the shipped tools; this branch is the
-    // fallback for custom, MCP, and restored-removed tools. It used to
-    // fenced-dump the whole input as pretty-printed JSON - the raw-JSON wall
-    // the humanized renderers replace - so scalar and string-list entries now
-    // read as `key: value` rows, and only an input with no readable scalar
-    // still renders as bounded JSON.
-    const inputSummary = summarizeFallbackInput(toolBlock.input)
+    // Custom and MCP tools get the same disclosure hierarchy as shipped tools.
+    // Avoid projecting their fallback data at all when a bespoke renderer exists.
     const inputContent =
-      inputSummary.length > 0
-        ? inputSummary
-        : hasFallbackInputValue(toolBlock.input)
-          ? `\`\`\`json\n${boundedFallbackJson(toolBlock.input)}\n\`\`\``
-          : ''
-    // The result is plain text under a bold label; terminal output keeps its
-    // plain fence because a shell transcript reads better as a code block.
-    const resultBody = toolBlock.output
-      ? formatFallbackOutput(toolBlock.output)
-      : ''
-    const resultContent =
-      resultBody.length > 0
-        ? toolBlock.toolName === 'run_terminal_command'
-          ? `\n\n**Result:**\n\`\`\`\n${resultBody}\n\`\`\``
-          : `\n\n**Result:**\n${resultBody}`
-        : ''
-    const fullContent = inputContent + resultContent
+      !hasRegisteredComponent && hasFallbackInputValue(toolBlock.input)
+        ? toolBlock.input
+        : undefined
+    const displayOutput = !hasRegisteredComponent
+      ? toolDisplayOutput(toolBlock.outputRaw, toolBlock.output)
+      : {}
+    const fallbackError = !hasRegisteredComponent
+      ? getStructuredErrorMessages(toolBlock.outputRaw)[0]
+      : undefined
+    const fallbackFailure =
+      !hasRegisteredComponent &&
+      (fallbackError ||
+        toolBlock.lifecycle === 'failed' ||
+        toolBlock.lifecycle === 'cancelled')
+        ? `${toolBlock.lifecycle === 'cancelled' ? 'Cancelled' : 'Failed'}${fallbackError ? ` · ${cleanPreviewText(boundedFallbackOutput(fallbackError))}` : ''}`
+        : undefined
+    const structuredOutput = displayOutput.value
+    const fullContent = cleanPreviewText(
+      boundedFallbackOutput(displayOutput.text ?? ''),
+    )
 
     const lines = fullContent.split('\n').filter((line) => line.trim())
-    const firstLine = lines[0] || ''
+    const firstLine =
+      displayOutput.preview ??
+      (structuredOutput !== undefined
+        ? summarizeStructuredPreview(structuredOutput)
+        : lines[0] || '')
     const lastLine = lines[lines.length - 1] || firstLine
     const commandPreview =
       toolBlock.toolName === 'run_terminal_command' &&
@@ -114,7 +131,7 @@ export const ToolBranch = memo(
         : null
 
     const streamingPreview = isStreaming
-      ? (commandPreview ?? `${sanitizePreview(firstLine)}...`)
+      ? (commandPreview ?? (firstLine ? `${sanitizePreview(firstLine)}…` : ''))
       : ''
 
     const getToolFinishedPreview = useCallback(
@@ -140,7 +157,14 @@ export const ToolBranch = memo(
 
     const finishedPreview = !isStreaming
       ? (toolRenderConfig?.collapsedPreview ??
-        getToolFinishedPreview(commandPreview, lastLine))
+        sanitizePreview(
+          fallbackFailure ??
+            getToolFinishedPreview(
+              commandPreview,
+              displayOutput.preview ??
+                (structuredOutput !== undefined ? firstLine : lastLine),
+            ),
+        ))
       : ''
 
     const agentMarkdownOptions = {
@@ -151,46 +175,58 @@ export const ToolBranch = memo(
       },
     }
 
-    const displayContent = (
-      <ContentWithMarkdown
-        content={fullContent}
-        isStreaming={false}
-        codeBlockWidth={agentMarkdownOptions.codeBlockWidth}
-        palette={agentMarkdownOptions.palette}
-      />
-    )
-
-    // D47 Stage 2: a renderable cannot nest inside a text element. The
-    // fallback text always carries a fenced input block built from the tool
-    // input, so ContentWithMarkdown returns a native <markdown> renderable
-    // whenever hasMarkdown(fullContent) is true — and rendering that inside
-    // the <text> wrapper threw during commit, which the per-block error
-    // boundary in blocks-renderer.tsx replaced with "Could not render this
-    // tool block." (reported for the unregistered recall_context / list_jobs
-    // / check_background_agent fallbacks). Branch like single-block.tsx:
-    // content with markdown renders at box level (native wrapMode handles
-    // wrapping); plain content keeps the <text> wrapper for the fg path.
-    const renderableDisplayContent =
-      displayContent === null ||
-      displayContent === undefined ||
-      displayContent === false ||
-      displayContent === '' ? null : hasMarkdown(fullContent) ? (
-        <box style={{ width: '100%' }}>{displayContent}</box>
+    const resultContent = fullContent ? (
+      hasMarkdown(fullContent) ? (
+        <ContentWithMarkdown
+          content={fullContent}
+          isStreaming={false}
+          codeBlockWidth={agentMarkdownOptions.codeBlockWidth}
+          palette={agentMarkdownOptions.palette}
+        />
       ) : (
-        <text
-          fg={theme.foreground}
-          style={{ wrapMode: 'word' }}
-          attributes={
-            theme.messageTextAttributes && theme.messageTextAttributes !== 0
-              ? theme.messageTextAttributes
-              : undefined
-          }
-        >
-          {displayContent}
+        <text fg={theme.foreground} style={{ wrapMode: 'word' }}>
+          {fullContent}
         </text>
       )
+    ) : null
+    const renderableDisplayContent = (
+      <box style={{ flexDirection: 'column', width: '100%', gap: 1 }}>
+        {fallbackFailure ? (
+          <text fg={theme.error} style={{ wrapMode: 'word' }}>
+            {fallbackFailure}
+          </text>
+        ) : null}
+        {resultContent}
+        {structuredOutput !== undefined ? (
+          <StructuredResult value={structuredOutput} />
+        ) : null}
+        {inputContent !== undefined ? (
+          <box style={{ flexDirection: 'column', width: '100%' }}>
+            <text fg={theme.muted}>Input</text>
+            <StructuredResult value={inputContent} />
+            <Button
+              onClick={() =>
+                useOutputReaderStore.getState().open({
+                  document: createJsonDocument(
+                    `tool:${toolBlock.toolCallId}:input`,
+                    'Submitted input · captured request',
+                    inputContent,
+                  ),
+                })
+              }
+            >
+              <text fg={theme.muted}>Inspect input</text>
+            </Button>
+          </box>
+        ) : null}
+      </box>
+    )
 
-    const headerName = displayInfo.name
+    const readableName = cleanPreviewText(
+      humanizeFieldName(displayInfo.name),
+    ).replace(/\s+/g, ' ')
+    const headerName =
+      readableName.charAt(0).toUpperCase() + readableName.slice(1)
 
     const handleToggle = useCallback(() => {
       onToggleCollapsed(toolBlock.toolCallId)
@@ -207,7 +243,7 @@ export const ToolBranch = memo(
         }}
       >
         <ToolCallItem
-          name={headerName}
+          name={toolRenderConfig?.displayName ?? headerName}
           content={toolRenderConfig?.content ?? renderableDisplayContent}
           isCollapsed={isCollapsed}
           isStreaming={isStreaming}

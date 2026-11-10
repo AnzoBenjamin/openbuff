@@ -3,12 +3,14 @@
 ## Source of truth
 
 - Status: **Active** — implementation and scoped checks pass; exact scenario certification, saved-history recovery design, independent review and human/emulator acceptance remain open. [Current status](docs/design/cli-overhaul/README.md).
-- Last refreshed: 2026-11-05.
+- Last refreshed: 2026-11-10.
 - Primary product surfaces: Openbuff terminal CLI (React/OpenTUI), launch/setup/questions/sessions and command/install/update output, with embedded OAuth callback and SDK dashboard supporting surfaces.
 - User brief: a clean, understandable interface that makes large or complicated content readable and lets people navigate expanded output comfortably.
+- Current refinement: a compact wordmark/project header, quiet graphite/sage surfaces, neutral prose headings, restrained composer borders and caret, text-based mode selection, and grouped structured results. Prefer readable field labels and outcomes over JSON syntax and protocol metadata; keep Inspect available for captured evidence. Short tool summaries share a single row when their complete text fits. Saved sessions and review choices use the same left-aligned hierarchy. [OpenTUI 0.8 refinement](docs/design/cli-overhaul/REFINEMENT.md).
 - Evidence reviewed: [acceptance and source/test coverage](docs/design/cli-overhaul/ACCEPTANCE.json), [research](docs/design/cli-overhaul/RESEARCH.md), [implementation plan](docs/design/cli-overhaul/PLAN.md), [wireframes](docs/design/cli-overhaul/WIREFRAMES.md), existing [provider setup guidance](docs/openbuff-provider-model-setup-ux.md), CLI source and tests cited in those documents.
 - Audit snapshot evidence: 160 primary sources / 44,072 lines across 19 groups; local hash/full-read coverage check, selected passing regression suites, offline OpenTUI fixture frames and injected probes. Limits: no live whole-CLI/browser/emulator/accessibility baseline or usability study; source coverage is distinct from visual validation.
-- Latest evidence: [validation snapshot](docs/design/cli-overhaul/README.md): 4,419 passing CLI tests, 148 passing isolated native checks, 1,530 fixture frames, 14 compiled CLI PTY phases and passing compiled/native validation. All 200 item IDs have review records; executed acceptance differs from source support. [Reference-machine performance](docs/design/cli-overhaul/PERFORMANCE.json). Historical generated evidence and duplicate implementation notes were removed before committing.
+- Latest refinement evidence: [OpenTUI 0.8 checks and previews](docs/design/cli-overhaul/REFINEMENT.md): passing broad CLI/native schedules, final MCP display regressions, typechecks and compiled/native validation, plus light/dark fixtures at 100 and 60 columns.
+- Earlier overhaul evidence: [validation snapshot](docs/design/cli-overhaul/README.md): 4,419 passing CLI tests, 148 passing isolated native checks, 1,530 fixture frames and 14 compiled CLI PTY phases. All 200 item IDs have review records; executed acceptance differs from source support. [Reference-machine performance](docs/design/cli-overhaul/PERFORMANCE.json). Historical generated evidence and duplicate implementation notes were removed before committing.
 
 ## Brand
 
@@ -122,7 +124,8 @@ Tradeoff: the reader introduces one deliberate transition for large content in e
 
 ## Implementation constraints
 
-- React 19 + OpenTUI 0.5.12; Bun 1.3.5 for renderer verification, as documented in `docs/testing.md` and `cli/package.json`.
+- React 19 + OpenTUI 0.8.3; Bun 1.4.4 for development, CI and renderer verification, as documented in `docs/testing.md` and `cli/package.json`.
+- Native syntax resources belong to their renderer's scene. Cache per owner and palette; never reuse a style handle across renderers. Await renderer closure before exiting or reusing terminal streams.
 - Reuse native Markdown/diff and existing semantic themes. Do not revive the removed legacy Markdown renderer.
 - Preserve one scroll writer per viewport, width- and revision-aware message measurements, actual scrollbox chrome heights and user collapse intent. Restore logical anchors on resize and prevent queue activity from taking over paused reading.
 - `ToolContentBlock.outputRaw` is retained UI data, including existing media sanitization; it is not a guarantee of the complete original tool payload (`cli/src/utils/message-block-helpers.ts:2269`).

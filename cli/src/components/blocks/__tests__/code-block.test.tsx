@@ -1,7 +1,10 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import path from 'path'
 import React from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
+import {
+  renderToStaticMarkup,
+  staticRenderer,
+} from '../../../__tests__/helpers/static-terminal-render'
 
 import * as realFs from 'fs'
 import * as realOs from 'os'
@@ -47,12 +50,15 @@ let syntaxStyleArmed = true
 
 mock.module('../../../utils/opentui-syntax-style', () => ({
   ...realSyntaxStyleModule,
-  createCodeSyntaxStyle: (palette: MarkdownPalette) => {
+  createCodeSyntaxStyle: (
+    palette: MarkdownPalette,
+    owner: Parameters<typeof realSyntaxStyleSnapshot.createCodeSyntaxStyle>[1],
+  ) => {
     if (!syntaxStyleArmed) {
       // Delegate to the SNAPSHOT, never the live `import * as` namespace:
       // mock.module patches that binding in place, so a live-namespace read
       // here would call this override again (the same-mock spin).
-      return realSyntaxStyleSnapshot.createCodeSyntaxStyle(palette)
+      return realSyntaxStyleSnapshot.createCodeSyntaxStyle(palette, owner)
     }
     createCodeSyntaxStyleCalls.push(palette)
     if (syntaxStyleSetupError) {
@@ -129,23 +135,11 @@ const buildRealKeywordStyleAndHighlights = async (): Promise<{
   let client: InstanceType<typeof realOpenTuiModule.TreeSitterClient> | null =
     null
   try {
-    const realCreate = (
-      realCodeSyntaxStyleModule as unknown as {
-        createCodeSyntaxStyle: (p: MarkdownPalette) => object
-      }
-    ).createCodeSyntaxStyle
-    const base = realCreate(palette)
-    const fromStyles = (
-      realOpenTuiModule.SyntaxStyle as unknown as {
-        fromStyles: (s: Record<string, unknown>) => SyntaxStyle
-      }
-    ).fromStyles
-    // Merge the real code-token groups with a sentinel-colored keyword scope
-    // so a keyword capture is observable on the rendered native element.
-    syntaxStyle = fromStyles({
-      ...(base as unknown as Record<string, unknown>),
-      keyword: { fg: '#abc123', bold: true },
-    })
+    syntaxStyle = realCodeSyntaxStyleModule.createCodeSyntaxStyle(
+      palette,
+      staticRenderer.nativeScene,
+    )
+    syntaxStyle.registerStyle('keyword', { fg: '#abc123', bold: true })
 
     realOpenTuiModule.addDefaultParsers([typescript])
     client = new realOpenTuiModule.TreeSitterClient({
@@ -154,11 +148,13 @@ const buildRealKeywordStyleAndHighlights = async (): Promise<{
       ),
       initTimeout: 10_000,
     })
-    const result = await client.highlightOnce(
-      'const x = 1',
-      'typescript',
-    )
-    if (!result || result.error || result.warning || !result.highlights?.length) {
+    const result = await client.highlightOnce('const x = 1', 'typescript')
+    if (
+      !result ||
+      result.error ||
+      result.warning ||
+      !result.highlights?.length
+    ) {
       return null
     }
     if (!result.highlights.some((h) => h[2] === 'keyword')) {
@@ -166,9 +162,11 @@ const buildRealKeywordStyleAndHighlights = async (): Promise<{
     }
     return {
       syntaxStyle,
-      highlights: result.highlights.map(
-        (h): [number, number, string] => [h[0], h[1], h[2]],
-      ),
+      highlights: result.highlights.map((h): [number, number, string] => [
+        h[0],
+        h[1],
+        h[2],
+      ]),
     }
   } catch {
     return null
@@ -287,9 +285,7 @@ describe('CodeBlock', () => {
       <code
         content="const x = 1"
         filetype="typescript"
-        syntaxStyle={
-          'fg:#abc123' as unknown as typeof outcome.syntaxStyle
-        }
+        syntaxStyle={'fg:#abc123' as unknown as typeof outcome.syntaxStyle}
         treeSitterClient={
           '__real-tree-sitter-client__' as unknown as InstanceType<
             typeof realOpenTuiModule.TreeSitterClient

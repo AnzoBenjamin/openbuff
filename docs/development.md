@@ -6,6 +6,11 @@ As a Bring Your Own Key (BYOK), local-first fork, developing Openbuff is highly 
 
 New to Openbuff? See [Getting Started](./getting-started.md) for end-user CLI setup (install and provider configuration). This guide covers contributing and development setup.
 
+Use Bun 1.4.4, the version pinned in `.bun-version`, workspace manifests and
+CI. Upgrade an existing installation with `bun upgrade` and verify
+`bun --version` before installing dependencies. The CLI uses OpenTUI 0.8.3,
+which requires Bun >= 1.3.14.
+
 To develop the CLI locally, you do not need to run a web server or database. Simply configure your local providers and run the CLI developer task directly:
 
 1. **Install Dependencies:**
@@ -60,7 +65,7 @@ To run the local test suite:
 
 ```bash
 cd cli
-bun test
+bun run test
 ```
 
 For comprehensive E2E terminal testing (which requires `tmux`):

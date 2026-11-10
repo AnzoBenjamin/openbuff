@@ -29,15 +29,15 @@
     "./src/pre-init/*.ts"
   ],
   "engines": {
-    "bun": "1.3.5"
+    "bun": "1.4.4"
   },
   "dependencies": {
     "@codebuff/common": "workspace:*",
     "@codebuff/indexer": "workspace:*",
     "@openbuff/sdk": "workspace:*",
     "@gravity-ai/api": "^0.1.2",
-    "@opentui/core": "0.5.12",
-    "@opentui/react": "0.5.12",
+    "@opentui/core": "0.8.3",
+    "@opentui/react": "0.8.3",
     "@tanstack/react-query": "^5.90.12",
     "commander": "^14.0.1",
     "immer": "^10.1.3",

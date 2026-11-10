@@ -73,7 +73,9 @@ export const HelpBanner = ({ fileTree }: { fileTree?: FileTreeNode[] }) => {
   return (
     <BottomBanner borderColorKey="info" onClose={() => setInputMode('default')}>
       <box style={{ flexDirection: 'column', gap: 0, flexGrow: 1 }}>
-        <text fg={theme.foreground}>Keyboard help</text>
+        <text fg={theme.foreground}>
+          <b>Keyboard help</b>
+        </text>
         <text fg={theme.muted}>Ctrl+P commands · Ctrl+R history</text>
         <text fg={theme.muted}>Enter send · Shift+Enter newline</text>
         <text fg={theme.muted}>PgUp / PgDn scroll output</text>
@@ -90,7 +92,7 @@ export const HelpBanner = ({ fileTree }: { fileTree?: FileTreeNode[] }) => {
             })
           }
         >
-          <text fg={theme.link}>Inspect keyboard help</text>
+          <text fg={theme.link}>All shortcuts</text>
         </Button>
       </box>
     </BottomBanner>

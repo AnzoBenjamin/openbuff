@@ -29,6 +29,7 @@ const realOpenTuiCore = (await import(
 // recursively call itself when another suite uses the real renderer.
 const realOpenTuiCoreSnapshot = { ...realOpenTuiCore }
 const realSyntaxStyle = realOpenTuiCore.SyntaxStyle
+const owner = new realOpenTuiCore.ResourceContext({ objectCapacity: 128, renderCellsMax: 1 })
 
 interface StubSyntaxStyle {
   stubId: number
@@ -44,12 +45,13 @@ mock.module('@opentui/core', () => ({
   // must keep winning while armed.
   ...realOpenTuiCoreSnapshot,
   SyntaxStyle: {
-    fromStyles: (styles: Record<string, unknown>) => {
+    fromStyles: (styles: Record<string, unknown>, source: import('@opentui/core').NativeResourceOwner) => {
       if (!coreStubArmed) {
         return realSyntaxStyle.fromStyles(
           styles as Parameters<
             typeof realSyntaxStyle.fromStyles
           >[0],
+          source,
         )
       }
       fromStylesCalls += 1
@@ -61,18 +63,24 @@ mock.module('@opentui/core', () => ({
 
 afterAll(() => {
   coreStubArmed = false
+  owner.destroy()
 })
 
 const {
-  createMarkdownSyntaxStyle,
-  createCodeSyntaxStyle,
+  createMarkdownSyntaxStyle: createOwnedMarkdownSyntaxStyle,
+  createCodeSyntaxStyle: createOwnedCodeSyntaxStyle,
   clearSyntaxStyleCachesForTests,
 } = await import('../opentui-syntax-style')
+
+const createMarkdownSyntaxStyle = (palette?: Partial<MarkdownPalette>, source = owner) =>
+  createOwnedMarkdownSyntaxStyle(palette, source)
+const createCodeSyntaxStyle = (palette: MarkdownPalette, source = owner) =>
+  createOwnedCodeSyntaxStyle(palette, source)
 
 test('the disarmed SyntaxStyle mock delegates to the captured implementation', () => {
   coreStubArmed = false
   try {
-    const style = realOpenTuiCore.SyntaxStyle.fromStyles({})
+    const style = realOpenTuiCore.SyntaxStyle.fromStyles({}, owner)
     expect(style).toBeInstanceOf(realSyntaxStyle)
     style.destroy()
   } finally {
@@ -236,6 +244,8 @@ describe('createCodeSyntaxStyle memoization', () => {
     expect(style.styles['string']).toEqual({ fg: '#a8a8ff' })
     expect(style.styles['function']).toEqual({ fg: '#c0c0ff' })
     expect(style.styles['module']).toEqual({ fg: '#89b4fa' })
+    expect(style.styles['tag']).toEqual({ fg: '#c0c0ff' })
+    expect(style.styles['tag.attribute']).toEqual({ fg: '#89b4fa' })
   })
 })
 
@@ -368,6 +378,12 @@ describe('flat cache key equivalence', () => {
     expect(differentHeader).not.toBe(base)
     expect(differentLink).not.toBe(base)
     expect(fromStylesCalls).toBe(4)
+    expect((differentHeader as unknown as StubSyntaxStyle).styles['tag']).toEqual({
+      fg: '#00ff00',
+    })
+    expect(
+      (differentLink as unknown as StubSyntaxStyle).styles['tag.attribute'],
+    ).toEqual({ fg: '#0000ff' })
   })
 
   test('an explicitly present but undefined headingFg slot does not collide with an absent slot', () => {

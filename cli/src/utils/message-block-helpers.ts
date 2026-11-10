@@ -1,4 +1,5 @@
 import { sanitizeMediaForUiState } from './payload-sanitizer'
+import { formatStructuredPreview } from './structured-preview'
 import { isMcpToolResultEnvelope } from '@codebuff/common/mcp/result'
 
 import type {
@@ -1458,6 +1459,10 @@ export const extractSpawnAgentResultContent = (
     return { content: resultValue, hasError: false }
   }
 
+  if (Array.isArray(resultValue)) {
+    return { content: formatStructuredPreview(resultValue), hasError: false }
+  }
+
   if (!isRecordValue(resultValue)) {
     return { content: '', hasError: false }
   }
@@ -1581,10 +1586,10 @@ export const extractSpawnAgentResultContent = (
         return { content: value.data.message, hasError: false }
       }
     }
-    // Fall through to format as JSON. Fenced so the markdown renderer shows
-    // it verbatim instead of conceal-eating the JSON syntax.
+    // Unknown agent results still deserve a readable hierarchy. The original
+    // structured value remains available in the spawn tool's captured output.
     return {
-      content: '```json\n' + cappedJsonStringify(obj.value) + '\n```',
+      content: formatStructuredPreview(obj.value),
       hasError: false,
     }
   }
@@ -1602,10 +1607,9 @@ export const extractSpawnAgentResultContent = (
     return { content: String(nestedValue.message), hasError: false }
   }
 
-  // Fallback to formatted output. Fenced so the markdown renderer shows it
-  // verbatim instead of conceal-eating the JSON syntax.
+  // Keep fallback results readable without exposing a transport JSON dump.
   return {
-    content: '```json\n' + cappedJsonStringify(resultValue) + '\n```',
+    content: formatStructuredPreview(resultValue),
     hasError: false,
   }
 }

@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test'
 import React from 'react'
+import stringWidth from 'string-width'
+import { TextRenderable, type Renderable } from '@opentui/core'
 import { MultilineInput } from '../multiline-input'
 import { initializeThemeStore } from '../../hooks/use-theme'
 import { createTextPasteHandler } from '../../utils/strings'
@@ -7,6 +9,16 @@ import type { InputValue } from '../../types/store'
 
 initializeThemeStore()
 const renderTest = process.env.NODE_ENV === 'production' ? test.skip : test
+
+function draftNode(node: Renderable): TextRenderable | undefined {
+  if (node instanceof TextRenderable && node.plainText.startsWith('ABCDE'))
+    return node
+  for (const child of node.getChildren()) {
+    const found = draftNode(child)
+    if (found) return found
+  }
+  return undefined
+}
 
 renderTest(
   'native clicks after the cursor cell retain tab/newline and Unicode coordinates',
@@ -40,8 +52,8 @@ renderTest(
         await React.act(async () => setup.renderOnce())
         const rows = setup.captureCharFrame().split('\n')
         const y = rows.findIndex((row) => row.includes('Z'))
-        const x = text.includes('\t') ? 9 : 1
         expect(y).toBeGreaterThanOrEqual(0)
+        const x = stringWidth(rows[y].slice(0, rows[y].indexOf('Z')))
         await React.act(async () => setup.mockMouse.click(x, y))
         expect(draft.cursorPosition).toBe(4)
         await React.act(async () => setup.mockInput.typeText('x'))
@@ -133,7 +145,10 @@ renderTest(
     const setup = await testRender(<Host />, { width: 60, height: 18 })
     try {
       await React.act(async () => setup.renderOnce())
-      await React.act(async () => setup.mockMouse.drag(2, 0, 4, 0))
+      const node = draftNode(setup.renderer.root)!
+      await React.act(async () =>
+        setup.mockMouse.drag(node.x + 1, node.y, node.x + 3, node.y),
+      )
       await React.act(async () => setup.mockInput.typeText('x'))
       const replaced = draft.text
       expect(replaced).not.toBe('ABCDE')
@@ -181,7 +196,10 @@ renderTest(
     const setup = await testRender(<Host />, { width: 60, height: 18 })
     try {
       await React.act(async () => setup.renderOnce())
-      await React.act(async () => setup.mockMouse.drag(2, 0, 4, 0))
+      const node = draftNode(setup.renderer.root)!
+      await React.act(async () =>
+        setup.mockMouse.drag(node.x + 1, node.y, node.x + 3, node.y),
+      )
       await React.act(async () => setup.mockInput.typeText('x'))
       expect(draft.text).toBe('AxE')
       await React.act(async () => setup.mockInput.pressKeys(['\x1a']))

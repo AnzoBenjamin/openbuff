@@ -1,14 +1,28 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import React from 'react'
 
 import { initializeThemeStore } from '../../hooks/use-theme'
 import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
 import { BlocksRenderer } from '../blocks/blocks-renderer'
+import { ContentWithMarkdown } from '../blocks/content-with-markdown'
+import { MessageWithAgents } from '../message-with-agents'
+import { useMessageBlockStore } from '../../state/message-block-store'
+import { RGBA } from '@opentui/core'
+import {
+  getSharedTreeSitterClient,
+  resetTreeSitterClientStateForTests,
+} from '../../utils/tree-sitter-client'
 
-import type { ContentBlock } from '../../types/chat'
+import type { ChatMessage, ContentBlock } from '../../types/chat'
 import type { Renderable } from '@opentui/core'
 
 initializeThemeStore()
+let nativeSetupCreated = false
+afterAll(async () => {
+  if (!nativeSetupCreated) return
+  await getSharedTreeSitterClient()?.destroy()
+  resetTreeSitterClientStateForTests()
+})
 
 /**
  * Regression tests for the markdown-in-<text> crash (D47 Stage 2).
@@ -25,24 +39,12 @@ initializeThemeStore()
  * `renderToStaticMarkup` cannot catch this: react-dom happily nests the
  * tags. Only the real OpenTUI reconciler rejects them, so these tests go
  * through `testRender`, mirroring text-nesting.test.tsx's harness. Note
- * that per cli/knowledge.md these tsx render tests only run under the
- * CI-pinned bun (< 1.3.14); in production NODE_ENV runs they are skipped,
- * same convention as agent-branch-overflow.test.tsx.
+ * that production NODE_ENV runs skip native tests; test:native-ui executes
+ * them with the supported Bun runtime and development React.
  *
- * Harness note: unlike the plain <text> path (which paints on the first
- * frame — text-nesting.test.tsx renders content with this same shape), the
- * native <markdown> renderable parses its content after mount and paints on
- * a later frame, so renderFrame wraps testRender/renderOnce in the act shim
- * from status-bar.test.tsx (the cli/knowledge.md Test Conventions pattern)
- * and runs a settle render pass before capture. Without it the capture runs
- * before the markdown paint and the frame comes back blank, and the
- * reconciler updates surface as "not wrapped in act(...)" warnings.
- *
- * Production parity: single-block.tsx's markdown branch carries the same
- * <box style={{ width: '100%' }}> wrapper around ContentWithMarkdown that
- * agent-branch-wrapper.tsx's onSingleBlock markdown branch carries, so the
- * box-level structure matches the proven pattern byte-for-byte and no
- * production change is needed for these tests to pass.
+ * Native markdown parses in a worker after mount. Await actual body text
+ * with bounded polling rather than treating an empty frame without an error
+ * message as success. Dispose the renderer after every capture.
  */
 const renderTest = process.env.NODE_ENV === 'production' ? test.skip : test
 
@@ -71,7 +73,29 @@ const act: (callback: () => Promise<void>) => Promise<void> =
 // render, so set it once at module scope.
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
-const renderFrame = async (node: React.ReactNode): Promise<string> => {
+async function waitForText(
+  setup: Awaited<
+    ReturnType<typeof import('@opentui/react/test-utils').testRender>
+  >,
+  texts: readonly string[],
+): Promise<string> {
+  let frame = ''
+  for (let pass = 0; pass < 100; pass++) {
+    await act(async () => {
+      await setup.renderOnce()
+      // Yield to the real parser worker, including cold initialization.
+      await Bun.sleep(10)
+    })
+    frame = setup.captureCharFrame()
+    if (texts.every((text) => frame.includes(text))) return frame
+  }
+  throw new Error(`Markdown text did not paint: ${texts.join(', ')}\n${frame}`)
+}
+
+const renderFrame = async (
+  node: React.ReactNode,
+  texts: readonly string[],
+): Promise<string> => {
   const { testRender } = await import('@opentui/react/test-utils')
   let setup!: Awaited<ReturnType<typeof testRender>>
   await act(async () => {
@@ -80,21 +104,12 @@ const renderFrame = async (node: React.ReactNode): Promise<string> => {
       { width: 100, height: 40 },
     )
   })
-  // The plain <text> path paints on the first frame, but the native
-  // <markdown> renderable parses its content after mount and paints on a
-  // later frame — without an act-wrapped settle pass the capture runs before
-  // that paint and the frame comes back blank. Two passes with a microtask
-  // flush give the markdown renderable's post-mount work a frame to paint
-  // into.
-  for (let pass = 0; pass < 2; pass++) {
-    await act(async () => {
-      await setup.renderOnce()
-      await Promise.resolve()
-    })
+  nativeSetupCreated = true
+  try {
+    return await waitForText(setup, texts)
+  } finally {
+    await act(async () => setup.dispose())
   }
-  const frame: string = setup.captureCharFrame()
-  setup.renderer.destroy()
-  return frame
 }
 
 const renderTranscript = (
@@ -125,16 +140,22 @@ describe('SingleBlock text blocks render markdown at box level', () => {
     await act(async () => {
       setup = await testRender(
         <box style={{ flexDirection: 'column', width: 100 }}>
-          {renderTranscript([{
-            type: 'text',
-            content: 'Validation is green after the third security repair: 53/53 across `token-counter` and runtime typecheck.',
-          }])}
+          {renderTranscript([
+            {
+              type: 'text',
+              content:
+                'Validation is green after the third security repair: 53/53 across `token-counter` and runtime typecheck.',
+            },
+          ])}
         </box>,
         { width: 100, height: 20 },
       )
     })
+    nativeSetupCreated = true
     try {
-      await act(async () => { await setup.renderOnce() })
+      await act(async () => {
+        await setup.renderOnce()
+      })
       const visit = (node: Renderable): Renderable[] => [
         node,
         ...node.getChildren().flatMap(visit),
@@ -144,7 +165,7 @@ describe('SingleBlock text blocks render markdown at box level', () => {
       )
       expect(markdown?.width).toBe(100)
     } finally {
-      setup.renderer.destroy()
+      await act(async () => setup.dispose())
     }
   })
   renderTest(
@@ -157,19 +178,10 @@ describe('SingleBlock text blocks render markdown at box level', () => {
             content: 'Hello **world** with - dashes and `code`',
           },
         ]),
+        ['Hello world with - dashes and code'],
       )
 
-      // Regression pin: the PRE-FIX code nested the native <markdown>
-      // renderable inside a <text> element, which threw
-      // 'TextNodeRenderable only accepts strings...' at commit time — the
-      // per-block boundary caught it and the frame contained 'Could not
-      // render this text block.'. Its ABSENCE is the pin. Content
-      // visibility itself is NOT asserted: the native markdown renderable
-      // paints asynchronously under the OpenTUI test renderer (the proven
-      // precedent agent-branch-overflow.test.tsx — the same
-      // markdown-at-box-level pattern — never asserts markdown body text in
-      // captured frames either); content visibility is verified in the real
-      // TUI via tmux.
+      expect(frame).toContain('Hello world with - dashes and code')
       expect(frame).not.toContain('Could not render')
     },
   )
@@ -184,6 +196,7 @@ describe('SingleBlock text blocks render markdown at box level', () => {
             content: 'Plain prose without any special characters',
           },
         ]),
+        ['Plain prose without any special characters'],
       )
 
       expect(frame).toContain('Plain prose without any special characters')
@@ -199,13 +212,125 @@ describe('SingleBlock text blocks render markdown at box level', () => {
           [{ type: 'text', content: 'User note **with** emphasis' }],
           true,
         ),
+        ['User note with emphasis'],
       )
 
-      // Same pin as above: absence of the boundary fallback is the
-      // regression assertion (native markdown body text does not paint
-      // synchronously under the test renderer — see agent-branch-overflow
-      // precedent; content visibility verified in the real TUI).
+      expect(frame).toContain('User note with emphasis')
       expect(frame).not.toContain('Could not render')
+    },
+  )
+
+  renderTest(
+    'light-theme heading, prose and list text paint with the palette foreground',
+    async () => {
+      const { testRender } = await import('@opentui/react/test-utils')
+      const theme = chatThemes.light
+      const palette = createMarkdownPalette(theme)
+      let setup!: Awaited<ReturnType<typeof testRender>>
+      await act(async () => {
+        setup = await testRender(
+          <box width={80} height={16} backgroundColor={theme.surface}>
+            <ContentWithMarkdown
+              content={
+                '## Readable heading\n\nHuman readable prose on a light background.\n\n- Readable list item'
+              }
+              isStreaming={false}
+              codeBlockWidth={80}
+              palette={palette}
+            />
+          </box>,
+          { width: 80, height: 16 },
+        )
+      })
+      nativeSetupCreated = true
+      try {
+        const texts = [
+          'Readable heading',
+          'Human readable prose on a light background.',
+          'Readable list item',
+        ]
+        await waitForText(setup, texts)
+        const lines = setup.captureSpans().lines
+        const expected = RGBA.fromHex(palette.codeTextFg)
+        for (const text of texts) {
+          const line = lines.find((line) =>
+            line.spans
+              .map((span) => span.text)
+              .join('')
+              .includes(text),
+          )
+          expect(line).toBeDefined()
+          const span = line!.spans.find((span) => span.text.includes(text))
+          expect(span).toBeDefined()
+          expect(span!.fg.toInts()).toEqual(expected.toInts())
+        }
+      } finally {
+        await act(async () => setup.dispose())
+      }
+    },
+  )
+
+  renderTest(
+    'expanded agent markdown uses the light-theme body foreground',
+    async () => {
+      const { testRender } = await import('@opentui/react/test-utils')
+      const theme = chatThemes.light
+      const palette = createMarkdownPalette(theme)
+      const previousContext = useMessageBlockStore.getState().context
+      const body = 'Expanded agent prose stays readable.'
+      const message: ChatMessage = {
+        id: 'native-light-agent',
+        variant: 'agent',
+        content: `## Agent result\n\n${body}`,
+        timestamp: '2026-11-10T00:00:00.000Z',
+        agent: {
+          agentName: 'Code reviewer',
+          agentType: 'test-agent',
+          responseCount: 1,
+        },
+        metadata: { isCollapsed: false },
+      }
+      let setup: Awaited<ReturnType<typeof testRender>> | undefined
+      try {
+        useMessageBlockStore.getState().setContext({
+          theme,
+          markdownPalette: palette,
+          messageTree: null,
+          isWaitingForResponse: false,
+          timerStartTime: null,
+          availableWidth: 80,
+        })
+        await act(async () => {
+          setup = await testRender(
+            <box width={80} height={18} backgroundColor={theme.surface}>
+              <MessageWithAgents
+                message={message}
+                depth={0}
+                isLastMessage={false}
+                availableWidth={80}
+              />
+            </box>,
+            { width: 80, height: 18 },
+          )
+        })
+        nativeSetupCreated = true
+        await waitForText(setup!, ['Agent result', body])
+        const line = setup!.captureSpans().lines.find((line) =>
+          line.spans
+            .map((span) => span.text)
+            .join('')
+            .includes(body),
+        )
+        expect(line).toBeDefined()
+        const bodySpan = line!.spans.find((span) => span.text.includes(body))
+        expect(bodySpan).toBeDefined()
+        expect(bodySpan!.fg.toInts()).toEqual(
+          RGBA.fromHex(theme.foreground).toInts(),
+        )
+      } finally {
+        if (setup) await act(async () => setup!.dispose())
+        useMessageBlockStore.getState().setContext(previousContext)
+      }
     },
   )
 })

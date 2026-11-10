@@ -229,9 +229,9 @@ async function main(): Promise<void> {
     try {
       const { renderer } = await createTestRenderer({
         exitSignals: [],
-        useThread: process.platform !== 'linux',
       })
-      await renderer.destroy()
+      renderer.destroy()
+      await renderer.closed
       // Marker consumed by cli/scripts/smoke-binary.ts. Keep exact text.
       console.log('opentui smoke ok')
       process.exit(0)

@@ -1,4 +1,5 @@
 import { TextAttributes } from '@opentui/core'
+import { useRenderer } from '@opentui/react'
 import { memo, useCallback, useMemo, type ReactNode } from 'react'
 import React from 'react'
 import { useShallow } from 'zustand/react/shallow'
@@ -75,14 +76,12 @@ const AgentChildrenGrid = memo(
           </text>
           <Button
             onClick={() =>
-              useOutputReaderStore
-                .getState()
-                .open({
-                  document: legacyAgentDescendantDocument(
-                    agentChildren,
-                    useMessageBlockStore.getState().context.messageTree,
-                  ),
-                })
+              useOutputReaderStore.getState().open({
+                document: legacyAgentDescendantDocument(
+                  agentChildren,
+                  useMessageBlockStore.getState().context.messageTree,
+                ),
+              })
             }
           >
             <text fg={theme?.link}>Inspect captured descendants</text>
@@ -398,7 +397,7 @@ export const MessageWithAgents = memo(
 )
 
 /**
- * Renders agent markdown content through OpenTUI 0.5's native <markdown>
+ * Renders agent markdown content through OpenTUI's native <markdown>
  * renderable. Native setup failures (syntax style construction or shared
  * tree-sitter client creation) degrade to a plain-text <text> element
  * (native wrapMode handles wrapping) instead of crashing the agent message
@@ -411,6 +410,7 @@ const renderAgentNativeMarkdown = (
   isStreaming: boolean,
   palette: MarkdownPalette | undefined,
   fallbackFg: string | undefined,
+  owner: Parameters<typeof createMarkdownSyntaxStyle>[1],
 ): ReactNode => {
   try {
     return (
@@ -418,7 +418,8 @@ const renderAgentNativeMarkdown = (
         key={key}
         width="100%"
         content={content}
-        syntaxStyle={createMarkdownSyntaxStyle(palette ?? {})}
+        fg={fallbackFg ?? palette?.codeTextFg}
+        syntaxStyle={createMarkdownSyntaxStyle(palette ?? {}, owner)}
         treeSitterClient={getSharedTreeSitterClient() ?? undefined}
         streaming={isStreaming}
         conceal
@@ -434,7 +435,10 @@ const renderAgentNativeMarkdown = (
     // D47 Stage 4: the <text> element's native wrapMode: 'word' handles
     // wrapping, so the raw content is passed through without JS pre-wrap.
     return (
-      <text key={key} style={{ wrapMode: 'word', fg: fallbackFg }}>
+      <text
+        key={key}
+        style={{ wrapMode: 'word', fg: fallbackFg ?? palette?.codeTextFg }}
+      >
         {content}
       </text>
     )
@@ -445,6 +449,28 @@ interface AgentMessageProps {
   message: ChatMessage
   depth: number
   availableWidth: number
+}
+
+const AgentNativeMarkdown = ({
+  content,
+  isStreaming,
+  palette,
+  fallbackFg,
+}: {
+  content: string
+  isStreaming: boolean
+  palette?: MarkdownPalette
+  fallbackFg?: string
+}) => {
+  const renderer = useRenderer()
+  return renderAgentNativeMarkdown(
+    'agent-native-content',
+    content,
+    isStreaming,
+    palette,
+    fallbackFg,
+    renderer.nativeScene,
+  )
 }
 
 const AgentMessage = memo(
@@ -496,7 +522,8 @@ const AgentMessage = memo(
     const lastLine = lines[lines.length - 1] || firstLine
     const rawDisplayContent = isCollapsed ? lastLine : message.content
     const stateLabel = legacyAgentStateLabel(message, isStreaming)
-    const capturedError = typeof message.userError === 'string' ? message.userError : undefined
+    const capturedError =
+      typeof message.userError === 'string' ? message.userError : undefined
     const stateColor =
       capturedError || ['Failed', 'Cancelled'].includes(stateLabel)
         ? theme?.error
@@ -608,21 +635,19 @@ const AgentMessage = memo(
             </text>
             <Button
               onClick={() =>
-                useOutputReaderStore
-                  .getState()
-                  .open({
-                    document: createJsonDocument(
-                      `legacy-agent:${message.id}`,
-                      `Captured ${agentInfo.agentName}`,
-                      {
-                        agent: agentInfo,
-                        content: message.content,
-                        error: message.userError,
-                        availability:
-                          'Captured legacy fields; absent lifecycle remains unknown',
-                      },
-                    ),
-                  })
+                useOutputReaderStore.getState().open({
+                  document: createJsonDocument(
+                    `legacy-agent:${message.id}`,
+                    `Captured ${agentInfo.agentName}`,
+                    {
+                      agent: agentInfo,
+                      content: message.content,
+                      error: message.userError,
+                      availability:
+                        'Captured legacy fields; absent lifecycle remains unknown',
+                    },
+                  ),
+                })
               }
             >
               <text fg={theme?.link}>Inspect captured agent</text>
@@ -649,13 +674,13 @@ const AgentMessage = memo(
               )}
               {!isCollapsed &&
                 (isMarkdownContent ? (
-                  renderAgentNativeMarkdown(
-                    `agent-content-${message.id}`,
-                    rawDisplayContent,
-                    isStreaming,
-                    agentPalette,
-                    theme?.foreground,
-                  )
+                  <AgentNativeMarkdown
+                    key={`agent-content-${message.id}`}
+                    content={rawDisplayContent}
+                    isStreaming={isStreaming}
+                    palette={agentPalette}
+                    fallbackFg={theme?.foreground}
+                  />
                 ) : (
                   <text
                     key={`agent-content-${message.id}`}

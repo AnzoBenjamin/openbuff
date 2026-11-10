@@ -244,10 +244,10 @@ describe('CI bun toolchain alignment', () => {
         engines?: { bun?: string }
         packageManager?: string
       }
-      expect(parsed.engines?.bun).toBe('1.3.5')
+      expect(parsed.engines?.bun).toBe('1.4.4')
       if (parsed.packageManager !== undefined) {
         expect(manifest).toBe('package.json')
-        expect(parsed.packageManager).toBe('bun@1.3.5')
+        expect(parsed.packageManager).toBe('bun@1.4.4')
       }
     }
 
@@ -256,7 +256,7 @@ describe('CI bun toolchain alignment', () => {
       ...CI_WORKFLOW.matchAll(/bun-version:\s*'([^']+)'/g),
     ].map((match) => match[1]!)
     expect(ciVersions.length).toBeGreaterThan(0)
-    expect(new Set(ciVersions)).toEqual(new Set(['1.3.5']))
+    expect(new Set(ciVersions)).toEqual(new Set(['1.4.4']))
   })
 })
 

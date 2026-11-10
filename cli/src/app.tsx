@@ -5,8 +5,6 @@ import { Chat } from './chat'
 import { ChatHistoryScreen } from './components/chat-history-screen'
 import { ProjectPickerScreen } from './components/project-picker-screen'
 import { TerminalLink } from './components/terminal-link'
-import { useLogo } from './hooks/use-logo'
-import { useTerminalDimensions } from './hooks/use-terminal-dimensions'
 import { useTerminalFocus } from './hooks/use-terminal-focus'
 import { useTheme } from './hooks/use-theme'
 import { getProjectRoot, startNewChat } from './project-files'
@@ -19,7 +17,6 @@ import { createLaunchIntent, type LaunchIntent } from './utils/launch-intent'
 import { openFileAtPath } from './utils/open-file'
 import { formatCwd } from './utils/path-helpers'
 import { consumeCapturedEarlyInput } from './utils/early-input-capture'
-import { getLogoBlockColor, getLogoAccentColor } from './utils/theme-system'
 
 import type { MultilineInputHandle } from './components/multiline-input'
 import type { AgentMode } from './utils/constants'
@@ -55,7 +52,9 @@ export const App = ({
   projectSwitchError,
   switchingProject,
 }: AppProps) => {
-  const [projectLaunchQuery, setProjectLaunchQuery] = useState(() => showProjectPicker ? consumeCapturedEarlyInput() ?? '' : '')
+  const [projectLaunchQuery, setProjectLaunchQuery] = useState(() =>
+    showProjectPicker ? (consumeCapturedEarlyInput() ?? '') : '',
+  )
   useEffect(() => {
     if (!showProjectPicker && projectLaunchQuery) setProjectLaunchQuery('')
   }, [showProjectPicker, projectLaunchQuery])
@@ -71,17 +70,7 @@ export const App = ({
   useEffect(() => {
     if (!showProjectPicker) intent.consumeContinuation()
   }, [intent, showProjectPicker])
-  const { contentMaxWidth } = useTerminalDimensions()
   const theme = useTheme()
-
-  const blockColor = getLogoBlockColor(theme.name)
-  const accentColor = getLogoAccentColor(theme.name)
-
-  const { component: logoComponent } = useLogo({
-    availableWidth: contentMaxWidth,
-    accentColor,
-    blockColor,
-  })
 
   const inputRef = useRef<MultilineInputHandle | null>(null)
   const {
@@ -205,26 +194,15 @@ export const App = ({
           gap: 0,
           paddingLeft: 1,
           paddingRight: 1,
+          marginTop: 1,
+          marginBottom: 1,
         }}
       >
-        <box
-          style={{
-            flexDirection: 'column',
-            marginBottom: 1,
-            marginTop: 2,
-          }}
-        >
-          {logoComponent}
-        </box>
-        <text
-          style={{ wrapMode: 'word', marginBottom: 1, fg: theme.foreground }}
-        >
-          The CLI will run commands on your behalf to help you build.
+        <text fg={theme.foreground}>
+          <b>Openbuff</b>
         </text>
-        <text
-          style={{ wrapMode: 'word', marginBottom: 1, fg: theme.foreground }}
-        >
-          Directory{' '}
+        <text style={{ wrapMode: 'word', fg: theme.muted }}>
+          Project{' '}
           <TerminalLink
             text={displayPath}
             color={theme.muted}
@@ -235,7 +213,7 @@ export const App = ({
         </text>
       </box>
     )
-  }, [logoComponent, projectRoot, theme])
+  }, [projectRoot, theme])
 
   // Auth status is always 'ok' in local/BYOK mode — no cloud backend to query
   const authStatus: AuthStatus = 'ok'

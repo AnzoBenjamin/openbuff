@@ -1,80 +1,28 @@
-import { SyntaxStyle, type StyleDefinitionInput } from '@opentui/core'
+import { SyntaxStyle, type NativeResourceOwner, type StyleDefinitionInput } from '@opentui/core'
 
 import { getSystemProcessEnv } from './env'
 
 import type { MarkdownPalette } from './markdown-renderer'
 
 /**
- * Maps our MarkdownPalette onto an OpenTUI 0.5 SyntaxStyle for the native
- * <markdown> renderable (Stage 2 of the OpenTUI 0.5 migration).
+ * Maps MarkdownPalette to renderer-owned OpenTUI 0.8 SyntaxStyle resources.
+ * Style names follow the shipped Markdown renderable and highlight queries:
+ * markup.raw/strong/italic/link/list/quote/heading, heading depths, and conceal
+ * for blockquote borders and thematic breaks. Plain code fg/bg belongs to
+ * CodeRenderable; there is no separate markdown divider style key.
+ * Partial or missing markdown palettes retain the legacy fallback colors.
  *
- * Every style-entry shape and style NAME below was located in the installed
- * @opentui/core 0.5.12 source, not invented:
+ * Each owner has separate bounded LRU caches for markdown and standalone code.
+ * Flat keys include only fields read by their style records, so equivalent
+ * fresh palettes reuse handles during streaming without record construction
+ * or JSON serialization. Cache hits promote entries to retain hot palettes.
  *
- * - Entry shape (fg/bg ColorInput + bold/italic/underline/dim attributes)
- *   comes from node_modules/@opentui/core/syntax-style.d.ts
- *   (StyleDefinitionInput) and is applied via SyntaxStyle.fromStyles().
- * - Style names come from node_modules/@opentui/core/index.bun.js (bundled
- *   src/renderables/Markdown.ts), whose getStyle() consumers use exactly
- *   these groups: "default" (plain text fallback), "markup.raw" (inline
- *   codespans), "markup.strong", "markup.italic", "markup.strikethrough",
- *   "markup.link" / "markup.link.url" / "markup.link.label",
- *   "markup.list" (list bullet markers), "markup.quote" (blockquote content
- *   base highlight), "markup.heading" (table header cells), and "conceal"
- *   (blockquote border color AND thematic-break/hr border color via
- *   getStyle('conceal').fg).
- * - Per-depth headings: getStyle() falls back from "markup.heading.N" to the
- *   "markup.heading" base name, and the tree-sitter markdown highlights
- *   query shipped at node_modules/@opentui/core/assets/markdown/highlights.scm
- *   emits @markup.heading.1 .. @markup.heading.6, so the dotted names are
- *   registered individually.
- *
- * Palette fields with no unambiguous key in the installed source are
- * intentionally NOT mapped (rather than guessed):
- * - codeTextFg: fenced code blocks are rendered by CodeRenderable using
- *   tree-sitter token groups (string/keyword/comment/...), not a single
- *   markdown style key; there is no key for plain code text.
- * - dividerFg: thematic breaks reuse the "conceal" group (see above), which
- *   carries blockquoteBorderFg here; no separate divider key exists.
- *
- * D47 Stage 2: with the legacy renderer removed, the palette argument is
- * optional and accepts a Partial<MarkdownPalette>; every missing field falls
- * back to the former legacy defaults, so both
- * createMarkdownSyntaxStyle(agentPalette ?? {}) and an undefined palette work
- * without throwing.
- *
- * Memoization (native-handle leak fix): SyntaxStyle.fromStyles() allocates a
- * native handle that is never GC'd and has no finalizer, so both factories
- * below are memoized with a FLAT-KEYED bounded cache: the cache key is a
- * cheap '\0'-joined string of only the palette fields the style records
- * read (markdownStyleCacheKey / codeStyleCacheKey), built WITHOUT
- * constructing the record object or serializing it, so byte-identical style
- * records share one handle regardless of palette object identity while the
- * per-render/per-streaming-chunk hot path pays no record-build or
- * JSON.stringify cost. This covers fresh-object call
- * sites: agent-branch-wrapper.tsx builds a per-indent `{...palette,
- * codeTextFg}` spread and tool-branch.tsx builds a fresh object literal on
- * every render — both produce the same record (codeTextFg and any other
- * unmapped palette fields never reach the record, so they cannot change the
- * key), hence the same key and a cache hit instead of one native handle per
- * streaming chunk. This module is the single choke point for every call
- * site (components/blocks/content-with-markdown.tsx — called per render,
- * once per streaming chunk — and components/message-with-agents.tsx), so no
- * caller needs its own memoization; the undefined-palette path is cached
- * under its own cache key like any other.
- *
- * The caches are bounded at MAX_STYLE_CACHE_ENTRIES entries each, so the
- * worst case for a stream of distinct palettes is a bounded leak (≤ 64
- * handles per factory) instead of one handle per streaming chunk. Eviction
- * is LEAST-RECENTLY-USED, not FIFO: every cache hit re-inserts its entry
- * (Map re-insertion order), so a hot palette that keeps being requested
- * cannot be evicted by a stream of distinct palettes — a pure FIFO policy
- * would evict the hot entry and turn each subsequent request into a
- * handle-allocating miss (unbounded native-handle churn behind a bounded
- * cache). Evicted handles are dropped by reference only — NEVER destroyed
- * (no destroy() call anywhere in app code), because a live renderable may
- * still hold the shared handle. Cached handles are shared across renders.
- * clearSyntaxStyleCachesForTests() resets both caches.
+ * Eviction removes only the cache reference: mounted renderables may still
+ * use the style. Native allocations live until their owner's ResourceContext
+ * closes, so the cache bound does not bound lifetime native allocations under
+ * distinct-palette churn. Handles never cross renderer owners.
+ * clearSyntaxStyleCachesForTests() resets lookup state without destroying
+ * resources owned by an active renderer.
  */
 // Former legacy-renderer defaults (markdown-renderer.tsx before D47 Stage 2).
 const DEFAULT_HEADING_FG: Record<number, string> = {
@@ -100,8 +48,22 @@ const DEFAULT_HEADING_FG: Record<number, string> = {
 // may still hold them.
 //
 // `let` because the test-only reset swaps in fresh maps (existing pattern).
-let markdownStyleHandleCache = new Map<string, SyntaxStyle>()
-let codeStyleHandleCache = new Map<string, SyntaxStyle>()
+type OwnerStyleCaches = {
+  markdown: Map<string, SyntaxStyle>
+  code: Map<string, SyntaxStyle>
+}
+// OpenTUI resources belong to a renderer. Keeping the cache keyed by owner
+// prevents handles from a closed session being reused in a new renderer.
+let ownerStyleCaches = new WeakMap<NativeResourceOwner, OwnerStyleCaches>()
+
+function styleCachesFor(owner: NativeResourceOwner): OwnerStyleCaches {
+  let caches = ownerStyleCaches.get(owner)
+  if (!caches) {
+    caches = { markdown: new Map(), code: new Map() }
+    ownerStyleCaches.set(owner, caches)
+  }
+  return caches
+}
 
 /**
  * Default bound on native SyntaxStyle handles retained per factory cache.
@@ -250,8 +212,10 @@ function markdownStyleCacheKey(palette?: Partial<MarkdownPalette>): string {
 }
 
 export function createMarkdownSyntaxStyle(
-  palette?: Partial<MarkdownPalette>,
+  palette: Partial<MarkdownPalette> | undefined,
+  owner: NativeResourceOwner,
 ): SyntaxStyle {
+  const markdownStyleHandleCache = styleCachesFor(owner).markdown
   // Cheap flat cache key built straight from the palette fields the record
   // reads — the full record object is constructed only on a cache miss, so
   // the per-render/per-streaming-chunk hot path never pays for record
@@ -262,7 +226,7 @@ export function createMarkdownSyntaxStyle(
     promoteCacheEntry(markdownStyleHandleCache, key, cached)
     return cached
   }
-  const style = SyntaxStyle.fromStyles(buildMarkdownStyleRecord(palette))
+  const style = SyntaxStyle.fromStyles(buildMarkdownStyleRecord(palette), owner)
   cacheStyleHandle(markdownStyleHandleCache, key, style)
   return style
 }
@@ -271,11 +235,10 @@ export function createMarkdownSyntaxStyle(
  * TEST-ONLY reset for both syntax-style handle caches, following the repo's
  * `*ForTests` convention (setAgentRegistryLoggerForTests,
  * resetTreeSitterClientStateForTests). Never call from app code: cached
- * handles are shared across renders and must live for the process lifetime.
+ * handles are shared across renders and must live until their owner closes.
  */
 export function clearSyntaxStyleCachesForTests(): void {
-  markdownStyleHandleCache = new Map()
-  codeStyleHandleCache = new Map()
+  ownerStyleCaches = new WeakMap()
 }
 
 /**
@@ -358,11 +321,11 @@ function codeStyleCacheKey(palette: MarkdownPalette): string {
 }
 
 /**
- * Maps our MarkdownPalette onto an OpenTUI 0.5 SyntaxStyle for the native
+ * Maps our MarkdownPalette onto an OpenTUI 0.8 SyntaxStyle for the native
  * <code> renderable (CodeRenderable), used when standalone code text is
  * rendered outside markdown (PLAN.md P1-T6).
  *
- * Verified against the installed @opentui/core 0.5.12, not invented:
+ * Verified against the installed @opentui/core 0.8.3:
  * - CodeOptions (node_modules/@opentui/core/renderables/Code.d.ts) takes the
  *   SyntaxStyle via the required `syntaxStyle` option; unstyled spans are
  *   drawn with the renderable's own fg/bg (TextBufferOptions), so the base
@@ -372,17 +335,21 @@ function codeStyleCacheKey(palette: MarkdownPalette): string {
  *   highlights queries (node_modules/@opentui/core/assets/typescript/
  *   highlights.scm and the shared ecma query it embeds): comment, string,
  *   number, boolean, constant, keyword, function, type, module, attribute,
- *   label, string.escape. CodeRenderable resolves each highlight's group
- *   name against these registered names.
+ *   label, string.escape. The TSX query adds tag/tag.builtin/tag.attribute;
+ *   dotted captures fall back to their base style when no exact entry exists.
  *
  * Palette mapping (attribute-only where no palette field is unambiguous,
  * matching createMarkdownSyntaxStyle's don't-guess-colors philosophy):
  * - strings/numbers reuse inlineCodeFg (legacy code-token accent color).
- * - functions/types reuse codeHeaderFg (legacy code header color).
- * - modules/attributes reuse linkFg.
+ * - functions/types/JSX tags reuse codeHeaderFg (legacy code header color).
+ * - modules/attributes/JSX attributes reuse linkFg.
  * - comments/keywords/booleans/constants get attribute-only styling.
  */
-export function createCodeSyntaxStyle(palette: MarkdownPalette): SyntaxStyle {
+export function createCodeSyntaxStyle(
+  palette: MarkdownPalette,
+  owner: NativeResourceOwner,
+): SyntaxStyle {
+  const codeStyleHandleCache = styleCachesFor(owner).code
   // Cheap flat cache key (see codeStyleCacheKey); the record object is
   // built only on a cache miss.
   const key = codeStyleCacheKey(palette)
@@ -391,7 +358,7 @@ export function createCodeSyntaxStyle(palette: MarkdownPalette): SyntaxStyle {
     promoteCacheEntry(codeStyleHandleCache, key, cached)
     return cached
   }
-  const style = SyntaxStyle.fromStyles(buildCodeStyleRecord(palette))
+  const style = SyntaxStyle.fromStyles(buildCodeStyleRecord(palette), owner)
   cacheStyleHandle(codeStyleHandleCache, key, style)
   return style
 }
@@ -415,6 +382,8 @@ function buildCodeStyleRecord(
     keyword: { bold: true },
     function: { fg: palette.codeHeaderFg },
     type: { fg: palette.codeHeaderFg },
+    tag: { fg: palette.codeHeaderFg },
+    'tag.attribute': { fg: palette.linkFg },
     module: { fg: palette.linkFg },
     attribute: { fg: palette.linkFg },
     label: { italic: true },

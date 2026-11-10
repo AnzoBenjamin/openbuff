@@ -14,7 +14,7 @@ import type { HarnessApprovalRequest } from '../../sdk/src/services/harness-enfo
 
 const argument = process.argv.indexOf('--evidence-dir')
 assert(argument >= 0 && process.argv[argument + 1])
-assert.equal(Bun.version, '1.3.5')
+assert.equal(Bun.version, '1.4.4')
 const evidenceDir = path.resolve(process.argv[argument + 1])
 const invocationDir = path.join(evidenceDir, randomUUID())
 mkdirSync(invocationDir, { recursive: true })

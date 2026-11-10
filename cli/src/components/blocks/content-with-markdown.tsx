@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { useRenderer } from '@opentui/react'
 
 import { logger } from '../../utils/logger'
 import {
@@ -19,7 +20,7 @@ interface ContentWithMarkdownProps {
 }
 
 /**
- * Renders chat content with OpenTUI 0.5's native <markdown> renderable
+ * Renders chat content with OpenTUI's native <markdown> renderable
  * (jsx-namespace.d.ts declares `markdown: MarkdownProps`). The legacy
  * remark-based renderer was removed in D47 Stage 2, so a native setup
  * failure (syntax style construction, shared tree-sitter client creation, or
@@ -33,15 +34,12 @@ const renderNativeMarkdown = (
   content: string,
   isStreaming: boolean,
   palette: MarkdownPalette,
+  owner: ReturnType<typeof useRenderer>['nativeScene'],
 ): ReactNode => {
   try {
-    // createMarkdownSyntaxStyle memoizes one native SyntaxStyle handle per
-    // palette object (WeakMap inside opentui-syntax-style.ts), so this
-    // per-render call hits the cache during streaming re-renders instead of
-    // allocating a native handle per chunk. No useMemo is needed here: the
-    // factory is the single choke point covering every call site (this
-    // component and message-with-agents.tsx).
-    const syntaxStyle = createMarkdownSyntaxStyle(palette)
+    // Styles belong to this renderer's native scene. The shared factory caches
+    // equivalent palettes within the owner, including streaming re-renders.
+    const syntaxStyle = createMarkdownSyntaxStyle(palette, owner)
     const treeSitterClient = getSharedTreeSitterClient()
     // treeSitterClient is optional on MarkdownOptions, so a null client still
     // renders (code fences just lose tree-sitter highlighting). conceal=true
@@ -51,6 +49,7 @@ const renderNativeMarkdown = (
       <markdown
         width="100%"
         content={content}
+        fg={palette?.codeTextFg}
         syntaxStyle={syntaxStyle}
         treeSitterClient={treeSitterClient ?? undefined}
         streaming={isStreaming}
@@ -67,7 +66,11 @@ const renderNativeMarkdown = (
     // D47 Stage 4: degrade contract kept — no <markdown> element and the raw
     // content stays visible — but the <text> element's native wrapMode:
     // 'word' handles wrapping instead of JS pre-wrap.
-    return <text style={{ wrapMode: 'word' }}>{content}</text>
+    return (
+      <text fg={palette?.codeTextFg} style={{ wrapMode: 'word' }}>
+        {content}
+      </text>
+    )
   }
 }
 
@@ -86,6 +89,27 @@ export const ContentWithMarkdown = memo(
 
     // renderNativeMarkdown cannot return null: its catch degrades to a plain
     // <text> element, so the result is used directly.
-    return renderNativeMarkdown(content, isStreaming, palette)
+    return (
+      <NativeMarkdown
+        content={content}
+        isStreaming={isStreaming}
+        palette={palette}
+      />
+    )
   },
 )
+
+/** Plain text can render without allocating or looking up native resources. */
+function NativeMarkdown({
+  content,
+  isStreaming,
+  palette,
+}: Pick<ContentWithMarkdownProps, 'content' | 'isStreaming' | 'palette'>) {
+  const renderer = useRenderer()
+  return renderNativeMarkdown(
+    content,
+    isStreaming,
+    palette,
+    renderer.nativeScene,
+  )
+}

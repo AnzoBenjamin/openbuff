@@ -22,18 +22,20 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
 
 ## Test-infra notes (bun)
 
-- **Pinned bun for OpenTUI tsx render tests.** Local bun >= 1.3.14 cannot initialize
-  the OpenTUI FFI renderer (`Failed to initialize OpenTUI render library: Cannot
-access 'default' before initialization`). bun 1.3.14 is Bun's Rust-rewrite release
-  (1.3.13 is the last Zig build) with confirmed FFI/TDZ regressions
-  (oven-sh/bun#30651, oven-sh/bun#30717 — the latter confirmed for `@opentui/core`
-  and fixed only in 1.4.x). Run tsx suites under the pinned version:
+- **Pinned Bun and OpenTUI runtime.** Development and CI use Bun 1.4.4
+  with OpenTUI 0.8.3. The runtime pin lives in `.bun-version`, workspace
+  manifests and CI setup steps. OpenTUI 0.8.3 requires Bun >= 1.3.14;
+  the old Bun 1.3.5 renderer-test workaround is no longer compatible.
+  Keep the native asset preload and test isolation when running individual
+  renderer suites:
 
   ```bash
-  cd cli && bunx --bun bun@1.3.5 test --preload ./scripts/preload-opentui.ts --isolate <test-files>
+  cd cli && bun test --preload ./scripts/preload-opentui.ts --isolate <test-files>
   ```
 
-  CI runs tests under bun 1.3.5 (the `setup-bun` pin in `.github/workflows/ci.yml`).
+  Check `bun --version` before reproducing CI failures. Older Bun 1.3.x
+  releases had FFI/TDZ initialization failures (oven-sh/bun#30651 and
+  oven-sh/bun#30717); use the current pin rather than downgrading OpenTUI tests.
 
 - **Run the exact CI discovery+invocation before pushing.** `bun test --isolate`
   does NOT give each file its own process — files share a pool of worker processes,
@@ -43,7 +45,7 @@ access 'default' before initialization`). bun 1.3.14 is Bun's Rust-rewrite relea
   and invocation locally first:
 
   ```bash
-  cd cli && bunx --bun bun@1.3.5 run test
+  cd cli && bun run test
   ```
 
   The runner applies the empty-list guard and binds the installed OpenTUI

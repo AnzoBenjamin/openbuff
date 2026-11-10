@@ -616,7 +616,8 @@ describe('extractSpawnAgentResultContent', () => {
   test('falls back to formatted output for unknown structure', () => {
     const result = extractSpawnAgentResultContent({ unknownField: 123 })
     expect(result.hasError).toBe(false)
-    expect(result.content).toContain('unknownField')
+    expect(result.content).toContain('unknown field: 123')
+    expect(result.content).not.toContain('```json')
   })
 
   test('handles null value', () => {
@@ -833,7 +834,9 @@ describe('extractSpawnAgentResultContent', () => {
     })
 
     expect(result.hasError).toBe(false)
-    expect(result.content).toContain('"overallStatus"')
+    expect(result.content).toContain('overall status: success')
+    expect(result.content).toContain('passed: Yes')
+    expect(result.content).not.toContain('```json')
     expect(result.content).not.toContain('Browser test success')
   })
 

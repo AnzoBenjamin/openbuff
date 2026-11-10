@@ -174,8 +174,8 @@ renderTest(
   async () => {
     const setup = await mount(<HelpBanner />, 60, 18)
     try {
-      expect(setup.captureCharFrame()).toContain('Inspect keyboard help')
-      await clickLabel(setup, 'Inspect keyboard help')
+      expect(setup.captureCharFrame()).toContain('All shortcuts')
+      await clickLabel(setup, 'All shortcuts')
       const document = useOutputReaderStore.getState().request?.document
       expect(document?.text).toContain('G: line number, or row <number>')
       expect(document?.text).toContain('Ctrl+T: collapse or expand agents')

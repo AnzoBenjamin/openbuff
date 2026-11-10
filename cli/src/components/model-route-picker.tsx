@@ -899,7 +899,7 @@ export const ModelRoutePicker: React.FC<ModelRoutePickerProps> = ({
       >
         <text fg={theme.foreground} wrapMode="none" style={{ flexShrink: 0 }}>
           {sliceTextCells(
-            `${activePane === 'left' ? 'Routes' : (highlightedRoute?.label ?? 'Models')} · ${focus + 1}/${items.length}`,
+            `${activePane === 'left' ? 'Routes' : (highlightedRoute?.label ?? 'Models')} · ${items.length ? focus + 1 : 0}/${items.length}`,
             0,
             terminalWidth - 2,
           )}

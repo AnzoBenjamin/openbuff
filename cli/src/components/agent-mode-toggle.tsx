@@ -1,12 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useKeyboard } from '@opentui/react'
+import { TextAttributes } from '@opentui/core'
 import stringWidth from 'string-width'
 
 import { Button } from './button'
 import { useTheme } from '../hooks/use-theme'
 import { useChatStore } from '../state/chat-store'
 import { AGENT_MODES } from '../utils/constants'
-import { BORDER_CHARS } from '../utils/ui-constants'
 
 import type { Segment } from './segmented-control'
 import type { AgentMode } from '../utils/constants'
@@ -14,6 +14,14 @@ import type { AgentMode } from '../utils/constants'
 export const OPEN_DELAY_MS = 0 // Delay before expanding on hover
 export const CLOSE_DELAY_MS = 250 // Delay before collapsing when mouse leaves
 export const REOPEN_SUPPRESS_MS = 250 // Time to block reopening after explicit close (prevents flicker)
+
+export const agentModeLabel = (mode: AgentMode): string => {
+  return {
+    DEFAULT: 'Default',
+    PLAN: 'Plan',
+    EXECUTE_PLAN: 'Execute plan',
+  }[mode]
+}
 
 /**
  * Manages the open/close state with hover delays and reopen suppression.
@@ -113,14 +121,14 @@ export function buildExpandedSegments(currentMode: AgentMode): Segment[] {
     // All mode options (disabled for current mode)
     ...AGENT_MODES.map((m) => ({
       id: m,
-      label: m,
+      label: agentModeLabel(m),
       isBold: false,
       disabled: m === currentMode,
     })),
     // Active mode indicator with reversed arrow
     {
       id: `active-${currentMode}`,
-      label: `> ${currentMode}`,
+      label: `> ${agentModeLabel(currentMode)}`,
       isSelected: true,
       defaultHighlighted: true,
     },
@@ -170,6 +178,7 @@ export const AgentModeToggle = ({
   onOpenChange?: (open: boolean) => void
 }) => {
   const theme = useTheme()
+  const label = agentModeLabel(mode)
   const inputFocused = useChatStore((state) => state.inputFocused)
   const [isCollapsedHovered, setIsCollapsedHovered] = useState(false)
   const hoverToggle = useHoverToggle(onOpenChange)
@@ -239,11 +248,8 @@ export const AgentModeToggle = ({
       style={{
         flexDirection: 'row',
         alignItems: 'center',
-        paddingLeft: 1,
-        paddingRight: 1,
-        borderStyle: 'single',
-        borderColor: isCollapsedHovered ? theme.foreground : theme.border,
-        customBorderChars: BORDER_CHARS,
+        paddingLeft: 2,
+        paddingRight: 2,
       }}
       onClick={() => {
         if (!inputFocused) return
@@ -266,15 +272,21 @@ export const AgentModeToggle = ({
     >
       <text
         wrapMode="none"
-        fg={isCollapsedHovered ? theme.foreground : theme.muted}
+        fg={isCollapsedHovered ? theme.primary : theme.muted}
+        attributes={isCollapsedHovered ? TextAttributes.BOLD : 0}
       >
-        {isCollapsedHovered ? <b>{`< ${mode}`}</b> : `< ${mode}`}
+        {`${label} ▾`}
       </text>
     </Button>
   )
 
   return (
-    <box width={stringWidth(`< ${mode}`) + 4} height={3} flexShrink={0}>
+    <box
+      width={stringWidth(`${label} ▾`) + 4}
+      height={3}
+      flexShrink={0}
+      justifyContent="center"
+    >
       {collapsed}
       {hoverToggle.isOpen && (
         <box
@@ -287,19 +299,21 @@ export const AgentModeToggle = ({
           }
           border
           borderColor={theme.border}
-          backgroundColor={theme.background}
+          backgroundColor={theme.surface}
           flexDirection="column"
           paddingLeft={1}
           paddingRight={1}
           onMouseOver={() => hoverToggle.clearCloseTimer()}
           onMouseOut={handleMouseOut}
         >
-          <text fg={theme.secondary}>Agent mode</text>
+          <text fg={theme.foreground}>
+            <b>Mode</b>
+          </text>
           {AGENT_MODES.map((value, index) => (
             <Button key={value} onClick={() => handleSegmentClick(value)}>
               <text
-                fg={selected === index ? theme.foreground : theme.muted}
-              >{`${selected === index ? '> ' : '  '}${value}`}</text>
+                fg={selected === index ? theme.primary : theme.muted}
+              >{`${selected === index ? '> ' : '  '}${agentModeLabel(value)}`}</text>
             </Button>
           ))}
           <text fg={theme.muted}>↑↓ Enter · Esc</text>

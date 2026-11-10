@@ -187,7 +187,7 @@ export const ChatInputBar = ({
   // Increase menu size on larger screen heights
   const normalModeMaxVisible = terminalHeight > 35 ? 15 : 10
   const { submitAnswers, skip } = useAskUserBridge()
-  const [askUserTitle] = React.useState(' Some questions for you ')
+  const askUserTitle = ' Your input needed '
 
   // Shared key intercept handler for suggestion menu navigation and history navigation
   const handleKeyIntercept = useEvent(
@@ -268,13 +268,18 @@ export const ChatInputBar = ({
 
   const effectivePlaceholder =
     inputMode === 'default' ? inputPlaceholder : modeConfig.placeholder
-  const borderColor = theme[modeConfig.color]
+  const borderColor =
+    inputMode === 'default'
+      ? theme.border
+      : inputFocused
+        ? theme[modeConfig.color]
+        : theme.border
 
   if (askUserState) {
     return (
       <box
         title={askUserTitle}
-        titleAlignment="center"
+        titleAlignment="left"
         style={{
           width: '100%',
           borderStyle: 'single',
@@ -303,7 +308,11 @@ export const ChatInputBar = ({
       <>
         {inputBoxTitle?.trim() ? (
           <text height={1} style={{ paddingLeft: 1, fg: theme.muted }}>
-            {sliceTextCells(inputBoxTitle.trim(), 0, Math.max(1, separatorWidth - 2))}
+            {sliceTextCells(
+              inputBoxTitle.trim(),
+              0,
+              Math.max(1, separatorWidth - 2),
+            )}
           </text>
         ) : null}
         {hasSlashSuggestions ? (
@@ -341,8 +350,7 @@ export const ChatInputBar = ({
             <box style={{ flexShrink: 0, paddingRight: 1 }}>
               <text>
                 <span
-                  bg={theme.info}
-                  fg={theme.background}
+                  fg={theme[modeConfig.color]}
                 >{` ${modeConfig.label} `}</span>
               </text>
             </box>
@@ -362,7 +370,9 @@ export const ChatInputBar = ({
           <MultilineInput
             value={inputValue}
             historyContext={inputMode}
-            onRestoreHistoryContext={(mode) => useChatStore.getState().setInputMode(mode as typeof inputMode)}
+            onRestoreHistoryContext={(mode) =>
+              useChatStore.getState().setInputMode(mode as typeof inputMode)
+            }
             onChange={handleInputChange}
             onSubmit={handleSubmit}
             onPaste={onPaste}
@@ -391,7 +401,7 @@ export const ChatInputBar = ({
     <>
       <box
         title={inputBoxTitle}
-        titleAlignment="center"
+        titleAlignment="left"
         style={{
           width: '100%',
           borderStyle: 'single',
@@ -447,8 +457,7 @@ export const ChatInputBar = ({
               <box style={{ flexShrink: 0, paddingRight: 1 }}>
                 <text>
                   <span
-                    bg={theme.info}
-                    fg={theme.background}
+                    fg={theme[modeConfig.color]}
                   >{` ${modeConfig.label} `}</span>
                 </text>
               </box>
@@ -468,8 +477,10 @@ export const ChatInputBar = ({
             <box style={{ flexGrow: 1, minWidth: 0 }}>
               <MultilineInput
                 value={inputValue}
-            historyContext={inputMode}
-            onRestoreHistoryContext={(mode) => useChatStore.getState().setInputMode(mode as typeof inputMode)}
+                historyContext={inputMode}
+                onRestoreHistoryContext={(mode) =>
+                  useChatStore.getState().setInputMode(mode as typeof inputMode)
+                }
                 onChange={handleInputChange}
                 onSubmit={handleSubmit}
                 onPaste={onPaste}
@@ -507,7 +518,10 @@ export const ChatInputBar = ({
           </box>
         </box>
       </box>
-      <InputModeBanner fileTree={fileTree} onManageAttachments={onManageAttachments} />
+      <InputModeBanner
+        fileTree={fileTree}
+        onManageAttachments={onManageAttachments}
+      />
     </>
   )
 }

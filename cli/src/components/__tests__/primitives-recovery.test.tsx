@@ -48,6 +48,7 @@ async function mount(node: React.ReactNode) {
       exitOnCtrlC: false,
     })
   })
+  await React.act(async () => setup.flush())
   return setup
 }
 

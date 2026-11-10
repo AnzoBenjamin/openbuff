@@ -14,11 +14,17 @@ import {
 import type { QuestionValidation } from '../utils/validation'
 
 describe('validateOtherText', () => {
-  it('a backtracking pattern times out without blocking the UI thread', async () => {
+  it('a stalled validation process times out without blocking the UI thread', async () => {
     const spawn = Bun.spawn
     let child: Bun.Subprocess | undefined
     const capture = spyOn(Bun, 'spawn').mockImplementation((...args: any[]) => {
-      const spawned = Reflect.apply(spawn, Bun, args)
+      const isPatternProcess = args[1]?.stdin instanceof Uint8Array &&
+        Buffer.from(args[1].stdin).toString('utf8').includes('(a|aa)+$')
+      // Exercise the hard process boundary independently of the runtime's
+      // regex backtracking limit, which can reject this pattern before timeout.
+      const spawned = Reflect.apply(spawn, Bun, isPatternProcess
+        ? [[process.execPath, '-e', 'setInterval(() => {}, 1000)'], args[1]]
+        : args)
       if (
         !child &&
         args[1]?.stdin instanceof Uint8Array &&

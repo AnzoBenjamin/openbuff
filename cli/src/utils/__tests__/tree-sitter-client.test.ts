@@ -143,7 +143,9 @@ const { buildDefaultParsers, getSharedTreeSitterClient, getTreeSitterDataPath, r
 const realOpenTuiModule = realOpenTuiCoreSnapshot
 
 const snippetFor = (filetype: string): string =>
-  filetype === 'typescript' || filetype === 'typescriptreact'
+  filetype === 'typescriptreact'
+    ? 'const greeting: string = "hello"\nconst view = <div className="greeting">{greeting}</div>\n'
+    : filetype === 'typescript'
     ? 'const greeting: string = "hello"\nexport default greeting\n'
     : 'const greeting = "hello"\n'
 
@@ -220,6 +222,7 @@ describe('getSharedTreeSitterClient', () => {
     expect(registered.map((parser) => parser.filetype)).toEqual([
       'javascript',
       'typescript',
+      'typescriptreact',
       'markdown',
     ])
 
@@ -232,7 +235,18 @@ describe('getSharedTreeSitterClient', () => {
     const typescript = registered.find(
       (parser) => parser.filetype === 'typescript',
     )
-    expect(typescript?.aliases).toEqual(['typescriptreact'])
+    expect(typescript?.aliases).toBeUndefined()
+
+    const typescriptreact = registered.find(
+      (parser) => parser.filetype === 'typescriptreact',
+    )
+    expect(typescriptreact?.wasm).toEndWith(
+      'assets/typescriptreact/tree-sitter-tsx.wasm',
+    )
+    expect(typescriptreact?.queries.highlights).toHaveLength(1)
+    expect(typescriptreact?.queries.highlights[0]).toEndWith(
+      'assets/typescriptreact/highlights.scm',
+    )
 
     const markdown = registered.find(
       (parser) => parser.filetype === 'markdown',
@@ -291,6 +305,7 @@ describe('buildDefaultParsers', () => {
     expect(parsers.map((parser) => parser.filetype)).toEqual([
       'javascript',
       'typescript',
+      'typescriptreact',
       'markdown',
     ])
     expect(parsers.some((parser) => parser.filetype === 'markdown_inline')).toBe(
@@ -371,6 +386,20 @@ describe('getTreeSitterDataPath (SEC: per-user cache isolation)', () => {
 })
 
 describe('highlighted-code fixture (REAL TreeSitterClient, no stub)', () => {
+  test('highlights JSX tags with the shipped TSX grammar', async () => {
+    const typescriptreact = buildDefaultParsers().find(
+      (parser) => parser.filetype === 'typescriptreact',
+    )
+    expect(typescriptreact).toBeDefined()
+    const outcome = await highlightWithRealClient(typescriptreact!)
+    expect(outcome).not.toBeNull()
+    const scopes = new Set(outcome!.highlights.map((highlight) => highlight[2]))
+    expect(scopes.has('tag.builtin')).toBe(true)
+    expect(scopes.has('tag.delimiter')).toBe(true)
+    expect(scopes.has('tag.attribute')).toBe(true)
+    expect(scopes.has('keyword')).toBe(true)
+  })
+
   test('produces non-empty, correctly scoped highlight tokens for the shipped TypeScript grammar', async () => {
     const parsers = buildDefaultParsers()
     const typescript = parsers.find((parser) => parser.filetype === 'typescript')

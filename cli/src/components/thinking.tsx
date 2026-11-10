@@ -117,9 +117,8 @@ export const Thinking = memo(
                   wrapMode: 'none',
                   fg: theme.muted,
                 }}
-                attributes={TextAttributes.ITALIC}
               >
-                {hasMore ? '...' + lines.join('\n') : lines.join('\n')}
+                {hasMore ? '…' + lines.join('\n') : lines.join('\n')}
               </text>
             </box>
           )}
@@ -135,28 +134,33 @@ export const Thinking = memo(
               <text
                 style={{
                   wrapMode: 'word',
-                  fg: theme.muted,
+                  fg: theme.foreground,
                 }}
-                attributes={TextAttributes.ITALIC}
               >
                 {content}
               </text>
             </box>
           )}
         </Button>
-        {thinkingCollapseState === 'hidden' ? (
-          <text fg={theme.muted}>
-            Reasoning hidden · retained source available
-          </text>
-        ) : hasMore ? (
-          <text fg={theme.muted}>
-            Reasoning tail preview · Inspect for full retained source
-          </text>
-        ) : null}
-        {onInspect ? (
-          <Button onClick={onInspect}>
-            <text fg={theme.link}>Inspect reasoning</text>
-          </Button>
+        {thinkingCollapseState === 'hidden' ||
+        (thinkingCollapseState === 'preview' && hasMore) ||
+        onInspect ? (
+          <box style={{ flexDirection: 'row', paddingLeft: 2, minWidth: 0 }}>
+            {thinkingCollapseState === 'hidden' ? (
+              <text fg={theme.muted}>
+                {onInspect ? 'Hidden · ' : 'Reasoning hidden'}
+              </text>
+            ) : thinkingCollapseState === 'preview' && hasMore ? (
+              <text fg={theme.muted}>
+                {onInspect ? 'Tail preview · ' : 'Reasoning tail preview'}
+              </text>
+            ) : null}
+            {onInspect ? (
+              <Button onClick={onInspect} style={{ flexShrink: 0 }}>
+                <text fg={theme.link}>Inspect reasoning</text>
+              </Button>
+            ) : null}
+          </box>
         ) : null}
       </box>
     )

@@ -4,6 +4,9 @@ The CLI uses outcome summaries, bounded inline previews and a focused reader for
 
 [Design contract](../../../DESIGN.md) · [Plan](PLAN.md) · [Acceptance record](ACCEPTANCE.json) · [Research](RESEARCH.md) · [Wireframes](WIREFRAMES.md) · [Human testing](HUMAN-TESTING.md).
 
+[OpenTUI 0.8 refinement](REFINEMENT.md) records the latest dependency check,
+human-readable result presentation, native light/dark previews and scoped validation.
+
 The original audit covered 19 surface groups and 200 item IDs. The acceptance record preserves all 200 IDs and 516 reviewed subclauses: 139 have executed acceptance evidence, 374 have source support, and three retain a design, human or environment gap. Source support does not certify every exact scenario. Backend code was inspected for UI-facing contracts; this was not a general backend/security audit.
 
 ## Validation snapshot
@@ -12,8 +15,8 @@ Recorded 2026-11-05 using Bun 1.3.5:
 
 | Check                                    | Result                                                  |
 | ---------------------------------------- | ------------------------------------------------------- |
-| Full CLI test schedule                   | 4,419 pass / 146 skip / 0 fail; 267 files              |
-| Isolated development-React native checks | 148 pass / 0 skip / 0 fail; 36 files                   |
+| Full CLI test schedule                   | 4,419 pass / 146 skip / 0 fail; 267 files               |
+| Isolated development-React native checks | 148 pass / 0 skip / 0 fail; 36 files                    |
 | CLI and SDK typechecks                   | Exit 0                                                  |
 | CLI/SDK build and standalone OpenTUI     | Pass                                                    |
 | Compiled help/version/answer validation  | Pass                                                    |
@@ -22,7 +25,7 @@ Recorded 2026-11-05 using Bun 1.3.5:
 
 Full/native counts overlap and are not cumulative. Production React skips native cases; `test:native-ui` executes the discovered native suites in separate development runtimes. [Reference-machine performance](PERFORMANCE.json) records the measured reader budgets and scope. Historical captures, repeated receipts, raw logs and one-off implementation scripts were removed before committing; source regressions and useful validation tools remain.
 
-With the supported Bun 1.3.5 runtime, run from the repository root:
+With the supported Bun 1.4.4 runtime, run from the repository root:
 
 ```sh
 bun run --cwd cli test

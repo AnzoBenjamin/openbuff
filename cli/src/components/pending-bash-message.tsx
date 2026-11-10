@@ -86,18 +86,16 @@ export const PendingBashMessage = ({
         )}
         <Button
           onClick={() =>
-            useOutputReaderStore
-              .getState()
-              .open({
-                document: createTextDocument({
-                  id: `pending-shell:${message.id}`,
-                  title: `$ ${message.command}`,
-                  kind: 'log',
-                  text: `Command: ${message.command}\nWorking directory: ${message.cwd ?? 'not captured'}\nState: ${message.isRunning ? 'running' : message.exitCode === undefined ? 'outcome unknown' : `exit ${message.exitCode}`}\n\nstdout · captured\n${message.stdout ?? '(Not captured)'}\n\nstderr · captured\n${message.stderr ?? '(Not captured)'}`,
-                  notice:
-                    'Captured stdout and stderr are grouped by channel; their original interleaving is unavailable.',
-                }),
-              })
+            useOutputReaderStore.getState().open({
+              document: createTextDocument({
+                id: `pending-shell:${message.id}`,
+                title: `$ ${message.command}`,
+                kind: 'log',
+                text: `Command: ${message.command}\nWorking directory: ${message.cwd ?? 'not captured'}\nState: ${message.isRunning ? 'running' : message.exitCode === undefined ? 'outcome unknown' : `exit ${message.exitCode}`}\n\nstdout · captured\n${message.stdout ?? '(Not captured)'}\n\nstderr · captured\n${message.stderr ?? '(Not captured)'}`,
+                notice:
+                  'Captured stdout and stderr are grouped by channel; their original interleaving is unavailable.',
+              }),
+            })
           }
         >
           <text fg={theme.secondary}>Inspect captured channels</text>
@@ -105,18 +103,26 @@ export const PendingBashMessage = ({
 
         {/* Note about pending status */}
         <box style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-          <text fg={theme.muted} attributes={TextAttributes.ITALIC}>
+          <text
+            fg={theme.muted}
+            attributes={TextAttributes.ITALIC}
+            flexShrink={1}
+          >
             {message.isRunning
               ? 'Stop this shell command; agent run and draft remain available.'
               : 'Captured shell result; retained channels remain inspectable.'}
           </text>
           {message.isRunning && (
             <Button
+              flexShrink={0}
+              marginLeft={1}
               onClick={() => {
                 onStopCommand(message.id)
               }}
             >
-              <text fg={theme.error}>Stop shell command</text>
+              <text fg={theme.error} wrapMode="none">
+                Stop shell command
+              </text>
             </Button>
           )}
         </box>

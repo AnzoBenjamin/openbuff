@@ -160,13 +160,14 @@ const nestedChain = (depth: number, leaf: Record<string, unknown>) => {
   return node
 }
 
-describe('message-block-helpers: cappedJsonStringify traversal guards', () => {
+describe('message-block-helpers: structured preview traversal guards', () => {
   test('deeply nested agent result values degrade to a depth marker instead of a stack overflow', () => {
     const result = extractSpawnAgentResultContent(
       nestedChain(20_000, { done: true }),
     )
     expect(result.hasError).toBe(false)
-    expect(result.content).toContain('nested deeper than 32 levels')
+    expect(result.content).toContain('Nested details · Inspect to read')
+    expect(result.content.length).toBeLessThan(4_100)
   })
 
   test('self-referential agent result values degrade to a cycle marker instead of a stack overflow', () => {
@@ -174,7 +175,7 @@ describe('message-block-helpers: cappedJsonStringify traversal guards', () => {
     cyclic.self = cyclic
     const result = extractSpawnAgentResultContent(cyclic)
     expect(result.hasError).toBe(false)
-    expect(result.content).toContain('[Circular]')
+    expect(result.content).toContain('Circular reference · Inspect for details')
   })
 
   test('wide non-string payloads stop enumerating once the budget is spent', () => {
@@ -191,13 +192,19 @@ describe('message-block-helpers: cappedJsonStringify traversal guards', () => {
         reads += 1
         return Reflect.get(t, prop)
       },
+      getOwnPropertyDescriptor: (t, prop) => {
+        reads += 1
+        return Reflect.getOwnPropertyDescriptor(t, prop)
+      },
     })
     const result = extractSpawnAgentResultContent({
       type: 'structuredOutput',
       value: proxy,
     })
     expect(result.hasError).toBe(false)
-    expect(result.content).toContain('[truncated]')
+    expect(result.content).toContain(
+      'Preview limited · Inspect for captured details',
+    )
     // O(cap) work bound: 100_000 entries exist but the budget only admits a
     // few hundred numeric leaves before it is spent.
     expect(reads).toBeLessThan(5_000)
@@ -210,7 +217,9 @@ describe('message-block-helpers: cappedJsonStringify traversal guards', () => {
       value: bigArray,
     })
     expect(result.hasError).toBe(false)
-    expect(result.content).toContain('[truncated]')
+    expect(result.content).toContain(
+      'Preview limited · Inspect for captured details',
+    )
     expect(result.content.length).toBeLessThanOrEqual(4_100)
   })
 })
@@ -659,7 +668,9 @@ describe('message-block-helpers: editor nested output truncation marker', () => 
 })
 
 describe('message-block-helpers: structural rewrites reach deep targets', () => {
-  const agentBlock = (agentId: string): Extract<ContentBlock, { type: 'agent' }> => ({
+  const agentBlock = (
+    agentId: string,
+  ): Extract<ContentBlock, { type: 'agent' }> => ({
     type: 'agent',
     agentId,
     agentName: 'Agent',
@@ -711,12 +722,7 @@ describe('message-block-helpers: structural rewrites reach deep targets', () => 
       deepAgentChain(25, agentBlock('parent-deep')),
       agentBlock('temp-1'),
     ]
-    const moved = moveSpawnAgentBlock(
-      blocks,
-      'temp-1',
-      'real-1',
-      'parent-deep',
-    )
+    const moved = moveSpawnAgentBlock(blocks, 'temp-1', 'real-1', 'parent-deep')
     const parent = findAgentBlock(moved, 'parent-deep')
     expect(
       parent?.type === 'agent' &&
@@ -728,7 +734,9 @@ describe('message-block-helpers: structural rewrites reach deep targets', () => 
   })
 
   test('nestBlockUnderParent reaches a parent beyond the auto-collapse depth cap', () => {
-    const blocks: ContentBlock[] = [deepAgentChain(25, agentBlock('parent-deep'))]
+    const blocks: ContentBlock[] = [
+      deepAgentChain(25, agentBlock('parent-deep')),
+    ]
     const { blocks: nested, parentFound } = nestBlockUnderParent(
       blocks,
       'parent-deep',

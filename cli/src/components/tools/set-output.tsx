@@ -7,6 +7,11 @@ import { wrapTextPreservingNewlines } from '../../utils/text-layout'
 import { capturedArtifacts } from '../../utils/output-artifact'
 import { useOutputReaderStore } from '../../state/output-reader-store'
 import { Button } from '../button'
+import { StructuredResult } from './structured-result'
+import {
+  cleanPreviewText,
+  summarizeStructuredPreview,
+} from '../../utils/structured-preview'
 import {
   getStructuredErrorMessages,
   getToolOutputRecords,
@@ -27,8 +32,11 @@ import type { ChatTheme } from '../../types/theme-system'
 type ReceiptCore = {
   /** LOOKS_GOOD / BLOCKED / success / partial / failed / cancelled / ... */
   outcome?: string
+  isReview?: boolean
   outcomeKind: 'good' | 'warn' | 'bad' | 'neutral'
   message?: string
+  /** Arbitrary array/scalar agent results use the bounded structured preview. */
+  previewValue?: unknown
   findings: string[]
   advisories: string[]
   coverage?: { satisfied: number; total: number }
@@ -140,34 +148,34 @@ function advisoryLines(value: unknown): string[] {
  * manager `status`/`message`, generic `summary`), and anything unrecognized
  * still renders as a neutral one-liner rather than raw JSON.
  */
-export function extractReceiptCore(input: unknown): ReceiptCore {
+function decodeReceiptValue(input: unknown): unknown {
   let receipt: unknown = input
   // The tool input carries `{ data: <receipt> }`; `data` may be a JSON string
   // (models often emit it stringified) or the object itself. Also tolerate the
   // receipt handed to us directly.
   if (receipt && typeof receipt === 'object' && !Array.isArray(receipt)) {
-    const data = (receipt as Record<string, unknown>).data
-    if (typeof data === 'string') {
-      try {
-        receipt = JSON.parse(data)
-      } catch {
-        receipt = data
-      }
-    } else if (data !== undefined) {
-      receipt = data
-    }
-  } else if (typeof receipt === 'string') {
+    const data = Object.getOwnPropertyDescriptor(receipt, 'data')
+    if (data && 'value' in data) receipt = data.value
+  }
+  if (typeof receipt === 'string' && receipt.length <= 500_000) {
     try {
       receipt = JSON.parse(receipt)
     } catch {
       // keep the raw string as the message
     }
   }
+  return receipt
+}
+
+export function extractReceiptCore(input: unknown): ReceiptCore {
+  const receipt = decodeReceiptValue(input)
 
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) {
     return {
       outcomeKind: 'neutral',
-      message: typeof receipt === 'string' ? receipt : undefined,
+      message:
+        receipt === undefined ? undefined : summarizeStructuredPreview(receipt),
+      previewValue: receipt,
       findings: [],
       advisories: [],
       fields: [],
@@ -243,6 +251,8 @@ export function extractReceiptCore(input: unknown): ReceiptCore {
 
   return {
     outcome,
+    isReview:
+      typeof record.verdict === 'string' && Boolean(record.verdict.trim()),
     outcomeKind: classifyOutputOutcome(outcome),
     message,
     findings,
@@ -373,6 +383,24 @@ function outcomeColor(
   }
 }
 
+/** Protocol verdicts stay available in Inspect; the transcript speaks plainly. */
+export function describeReceiptOutcome(outcome: string): string {
+  const labels: Record<string, string> = {
+    LOOKS_GOOD: 'Review passed',
+    NON_BLOCKING: 'Suggestions available',
+    BLOCKED: 'Needs attention',
+    BLOCKING: 'Needs attention',
+    PASS: 'Passed',
+    PASSED: 'Passed',
+    FAIL: 'Failed',
+    FAILED: 'Failed',
+    SUCCESS: 'Complete',
+    PARTIAL: 'Partially complete',
+    CANCELLED: 'Cancelled',
+  }
+  return labels[outcome.toUpperCase()] ?? humanLabel(outcome)
+}
+
 /**
  * UI component for `set_output`: renders the receipt's human core (outcome,
  * message, findings, coverage) and never the raw envelope JSON.
@@ -424,8 +452,8 @@ export const SetOutputComponent = defineToolComponent({
             : pending
               ? 'output pending'
               : core.outcome
-                ? core.outcome
-                : 'output set',
+                ? describeReceiptOutcome(core.outcome)
+                : 'Result saved',
     ]
     const header = headerParts.join(' ')
     const color = outcomeColor(outcomeKind, liveTheme)
@@ -442,10 +470,22 @@ export const SetOutputComponent = defineToolComponent({
       const artifacts = capturedArtifacts(toolBlock.outputRaw)
       artifacts.forEach((artifact, index) => {
         lines.push(
-          <text key={`salvage-path-${index}`} fg={liveTheme.muted} style={{ wrapMode: 'word' }}>
+          <text
+            key={`salvage-path-${index}`}
+            fg={liveTheme.muted}
+            style={{ wrapMode: 'word' }}
+          >
             {`Recovery artifact: ${artifact.path}`}
           </text>,
-          <Button id={`salvage-recovery-${toolBlock.toolCallId}-${index}`} key={`salvage-open-${index}`} onClick={() => useOutputReaderStore.getState().open({ documentId: `tool:${toolBlock.toolCallId}:artifact:${index}` })}>
+          <Button
+            id={`salvage-recovery-${toolBlock.toolCallId}-${index}`}
+            key={`salvage-open-${index}`}
+            onClick={() =>
+              useOutputReaderStore.getState().open({
+                documentId: `tool:${toolBlock.toolCallId}:artifact:${index}`,
+              })
+            }
+          >
             <text fg={liveTheme.primary}>Open recovery artifact</text>
           </Button>,
         )
@@ -469,7 +509,11 @@ export const SetOutputComponent = defineToolComponent({
         </text>,
       )
     }
-    if (core.message && !ignored) {
+    if (core.previewValue !== undefined && !ignored) {
+      lines.push(
+        <StructuredResult key="result-value" value={core.previewValue} />,
+      )
+    } else if (core.message && !ignored) {
       lines.push(
         <text key="message" style={{ wrapMode: 'word' }}>
           <span fg={liveTheme.foreground}>
@@ -531,10 +575,27 @@ export const SetOutputComponent = defineToolComponent({
           </text>,
         )
     }
-    for (const field of core.fields) {
+    let fieldGroup = ''
+    for (const [index, field] of core.fields.entries()) {
+      const segments = field.label.split(' · ')
+      const group = segments.length > 1 ? segments.shift()! : ''
+      if (group && group !== fieldGroup) {
+        lines.push(
+          <text
+            key={`group-${index}`}
+            fg={liveTheme.foreground}
+            style={{ marginTop: 1 }}
+          >
+            {group.charAt(0).toUpperCase() + group.slice(1)}
+          </text>,
+        )
+      }
+      fieldGroup = group
       lines.push(
-        <text key={`field-${field.label}`} style={{ wrapMode: 'word' }}>
-          <span fg={liveTheme.muted}>{`${field.label}: `}</span>
+        <text key={`field-${index}`} style={{ wrapMode: 'word' }}>
+          <span
+            fg={liveTheme.muted}
+          >{`${group ? '  ' : ''}${segments.join(' · ')}: `}</span>
           <span fg={liveTheme.foreground}>
             {wrapTextPreservingNewlines(field.value, width)}
           </span>
@@ -551,9 +612,6 @@ export const SetOutputComponent = defineToolComponent({
       metaBits.push(
         `${core.reviewedFileCount} file${core.reviewedFileCount === 1 ? '' : 's'} reviewed`,
       )
-    }
-    if (core.footer) {
-      metaBits.push(core.footer)
     }
     if (metaBits.length > 0) {
       lines.push(
@@ -577,13 +635,17 @@ export const SetOutputComponent = defineToolComponent({
         </text>
       )
 
-    const previewText = failureMessage || core.message
+    const previewText = failureMessage || (ignored ? undefined : core.message)
     const previewMessage = previewText
-      ? (wrapTextPreservingNewlines(previewText, Math.max(20, width - 4))
+      ? (wrapTextPreservingNewlines(
+          cleanPreviewText(previewText.slice(0, 2_000)),
+          Math.max(20, width - 4),
+        )
           .split('\n')
           .filter((line) => line.trim())[0] ?? '')
       : ''
     return {
+      displayName: core.isReview ? 'Review result' : 'Agent result',
       content,
       collapsedPreview: previewMessage
         ? `${header} — ${previewMessage}`

@@ -5,6 +5,8 @@ import type { CliRenderer } from '@opentui/core'
 let renderer: CliRenderer | null = null
 let handlersInstalled = false
 let terminalStateReset = false
+let closingPromise: Promise<void> | null = null
+let exiting = false
 
 /**
  * Terminal escape sequences to reset terminal state.
@@ -66,20 +68,31 @@ function resetTerminalState(): void {
  * Clean up the renderer by calling destroy().
  * This resets terminal state to prevent garbled output after exit.
  */
-function cleanup(): void {
+function cleanup(): CliRenderer | null {
   // FIRST: Reset terminal state by writing escape sequences directly to stdout.
   // This ensures mouse mode, focus reporting, etc. are disabled even if
   // renderer.destroy() fails or doesn't fully clean up.
   resetTerminalState()
 
-  if (renderer && !renderer.isDestroyed) {
+  const current = renderer
+  renderer = null
+  if (current && !current.isDestroyed) {
     try {
-      renderer.destroy()
+      current.destroy()
     } catch {
       // Ignore errors during cleanup - we're exiting anyway
     }
-    renderer = null
   }
+  return current
+}
+
+/** Let OpenTUI finish restoring the terminal and draining stdout before exit. */
+export function cleanupRenderer(): Promise<void> {
+  if (!closingPromise) {
+    const current = cleanup()
+    closingPromise = current?.closed.catch(() => undefined) ?? Promise.resolve()
+  }
+  return closingPromise
 }
 
 /**
@@ -101,8 +114,9 @@ export function installProcessCleanupHandlers(cliRenderer: CliRenderer): void {
   renderer = cliRenderer
 
   const cleanupAndExit = (exitCode: number) => {
-    cleanup()
-    process.exit(exitCode)
+    if (exiting) return
+    exiting = true
+    void cleanupRenderer().then(() => process.exit(exitCode))
   }
 
   // SIGTERM - Default kill signal (e.g., `kill <pid>`)
@@ -122,7 +136,7 @@ export function installProcessCleanupHandlers(cliRenderer: CliRenderer): void {
 
   // beforeExit - Called when the event loop is empty and about to exit
   process.on('beforeExit', () => {
-    cleanup()
+    void cleanupRenderer()
   })
 
   // exit - Last chance to run synchronous cleanup code
@@ -132,23 +146,29 @@ export function installProcessCleanupHandlers(cliRenderer: CliRenderer): void {
 
   // uncaughtException - Safety net for unhandled errors
   process.on('uncaughtException', (error) => {
-    cleanup() // Exit alt screen FIRST so error output is visible on the main screen
-    try {
-      console.error('Uncaught exception:', error)
-    } catch {
-      // Ignore logging errors
-    }
-    process.exit(1)
+    if (exiting) return
+    exiting = true
+    void cleanupRenderer().then(() => {
+      try {
+        console.error('Uncaught exception:', error)
+      } catch {
+        // Ignore logging errors
+      }
+      process.exit(1)
+    })
   })
 
   // unhandledRejection - Safety net for unhandled promise rejections
   process.on('unhandledRejection', (reason) => {
-    cleanup() // Exit alt screen FIRST so error output is visible on the main screen
-    try {
-      console.error('Unhandled rejection:', reason)
-    } catch {
-      // Ignore logging errors
-    }
-    process.exit(1)
+    if (exiting) return
+    exiting = true
+    void cleanupRenderer().then(() => {
+      try {
+        console.error('Unhandled rejection:', reason)
+      } catch {
+        // Ignore logging errors
+      }
+      process.exit(1)
+    })
   })
 }

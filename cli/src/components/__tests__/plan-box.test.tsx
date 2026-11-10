@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import React from 'react'
 import { useOutputReaderStore } from '../../state/output-reader-store'
-import { renderToStaticMarkup } from 'react-dom/server'
+import { renderToStaticMarkup } from '../../__tests__/helpers/static-terminal-render'
 
 import { chatThemes, createMarkdownPalette } from '../../utils/theme-system'
 
@@ -131,12 +131,17 @@ mock.module('../../utils/opentui-syntax-style', () => ({
   // Real exports first so createCodeSyntaxStyle and friends survive for
   // later files; the throwing stub below must keep winning while armed.
   ...realSyntaxStyleModule,
-  createMarkdownSyntaxStyle: (palette: MarkdownPalette) => {
+  createMarkdownSyntaxStyle: (
+    palette: MarkdownPalette,
+    owner: Parameters<
+      typeof realSyntaxStyleModule.createMarkdownSyntaxStyle
+    >[1],
+  ) => {
     if (!syntaxStyleArmed) {
       // Delegate to the `?real` module instance — a separate module object
       // this registry-wide mock cannot patch, so this cannot re-enter the
       // override.
-      return realSyntaxStyleModule.createMarkdownSyntaxStyle(palette)
+      return realSyntaxStyleModule.createMarkdownSyntaxStyle(palette, owner)
     }
     if (syntaxStyleSetupError) {
       throw syntaxStyleSetupError

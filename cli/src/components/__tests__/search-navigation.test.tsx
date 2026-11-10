@@ -367,7 +367,19 @@ renderTest(
       await React.act(async () => Bun.sleep(2200))
       await setup.renderOnce()
       expect(setup.captureCharFrame()).not.toContain('History incomplete')
+      expect(setup.captureCharFrame()).toContain('Retained first')
+      // The short viewport retains the selected prompt. The new first row
+      // stays reachable by navigating up rather than displacing that focus.
+      await React.act(async () => {
+        setup.mockInput.pressArrow('up')
+        setup.mockInput.pressArrow('up')
+      })
+      await React.act(async () => setup.flush())
       expect(setup.captureCharFrame()).toContain('New arrival')
+      await React.act(async () => {
+        setup.mockInput.pressArrow('down')
+        setup.mockInput.pressArrow('down')
+      })
       await React.act(async () => setup.mockInput.pressEnter())
       expect(selected).toEqual(['Retained first'])
     } finally {

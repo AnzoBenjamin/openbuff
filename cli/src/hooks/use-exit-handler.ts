@@ -6,6 +6,7 @@ import { detachOnExit } from '../utils/attach-session'
 import { getAttachTarget } from '../utils/codebuff-client'
 import { withTimeout } from '../utils/terminal-color-detection'
 import { cancelAllBashCommands } from '../utils/bash-command-controller'
+import { cleanupRenderer } from '../utils/renderer-cleanup'
 
 import type { InputValue } from '../types/store'
 
@@ -32,9 +33,7 @@ let exiting = false
 // stream are dropped on that path too (reliability finding
 // exit-handler-drops-queued-prompts).
 let queuedPromptDrain: (() => void) | undefined
-export function setQueuedPromptDrain(
-  drain: (() => void) | undefined,
-): void {
+export function setQueuedPromptDrain(drain: (() => void) | undefined): void {
   queuedPromptDrain = drain
 }
 
@@ -104,12 +103,13 @@ function exitCli(): void {
         () => undefined,
       )
     : undefined
-  const exitChain = boundedDetach
-    ? Promise.all([flush, boundedDetach])
-    : flush
-  exitChain.finally(() => {
-    process.exit(0)
-  })
+  const exitChain = boundedDetach ? Promise.all([flush, boundedDetach]) : flush
+  void exitChain
+    .catch(() => undefined)
+    .then(async () => {
+      await cleanupRenderer()
+      process.exit(0)
+    })
 }
 
 export const useExitHandler = ({

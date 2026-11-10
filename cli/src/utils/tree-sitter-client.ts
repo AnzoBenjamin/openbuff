@@ -13,9 +13,9 @@ import { logger } from './logger'
 
 /**
  * Lazily-created shared TreeSitterClient used by the native <markdown> and
- * code renderables (Stage 2 of the OpenTUI 0.5 migration).
+ * code renderables.
  *
- * API verified against the installed @opentui/core 0.5.12:
+ * API verified against the installed @opentui/core 0.8.3:
  * - node_modules/@opentui/core/lib/tree-sitter/types.d.ts:
  *   TreeSitterClientOptions = { dataPath: string; workerPath?: string | URL;
  *   initTimeout?: number }.
@@ -34,7 +34,7 @@ import { logger } from './logger'
  *
  * Parser assets: only filetypes whose grammar wasm AND highlights query are
  * actually shipped inside node_modules/@opentui/core/assets are registered;
- * anything missing (e.g. python, which has no asset directory in 0.5.12) is
+ * anything missing (e.g. python, which has no shipped asset directory) is
  * skipped instead of guessing a path. Highlight queries are OpenTUI's own
  * shipped highlights.scm files (tree-sitter capture-name style, verified on
  * disk) — our repo's packages/code-map *-tags.scm files are TAGS queries for
@@ -61,13 +61,16 @@ const DEFAULT_PARSER_DESCRIPTORS: readonly ParserAssetDescriptor[] = [
     highlights: ['assets/javascript/highlights.scm'],
   },
   {
-    // tsx fences resolve to the "typescriptreact" filetype (see the markdown
-    // injection infoStringMap below); there is no separate tsx wasm in the
-    // @opentui/core assets, so the alias covers it.
     filetype: 'typescript',
-    aliases: ['typescriptreact'],
     wasm: 'assets/typescript/tree-sitter-typescript.wasm',
     highlights: ['assets/typescript/highlights.scm'],
+  },
+  {
+    // TSX has its own grammar. Aliasing it to TypeScript overrides OpenTUI's
+    // shipped React parser and prevents JSX tags/attributes from highlighting.
+    filetype: 'typescriptreact',
+    wasm: 'assets/typescriptreact/tree-sitter-tsx.wasm',
+    highlights: ['assets/typescriptreact/highlights.scm'],
   },
   {
     filetype: 'markdown',

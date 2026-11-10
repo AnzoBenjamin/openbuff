@@ -5,7 +5,7 @@
  * - Keyboard navigation (controlled by parent via focusedIndex)
  * - Hover highlighting
  * - Scrollbox with configurable height
- * - Theme-aware highlighting (theme.primary background when focused/hovered)
+ * - Theme-aware highlighting with a quiet surface when focused/hovered
  */
 
 import { TextAttributes } from '@opentui/core'
@@ -188,7 +188,7 @@ export const SelectableList = forwardRef<
           const backgroundColor = isHighlighted
             ? theme.surfaceHover
             : 'transparent'
-          const textColor = isHighlighted ? theme.foreground : theme.muted
+          const textColor = theme.foreground
 
           return (
             <box

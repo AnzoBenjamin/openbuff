@@ -104,9 +104,24 @@ test('named custom primary fills use the renderer color contract and readable fo
     )
     return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
   }
-  for (const primary of ['blue', 'navy', 'green', 'red', 'white', 'black', '#00f']) {
-    const colors = getRenderUIButtonColors({ ...chatThemes.light, primary }, 'primary', false)
-    const values = [luminance(colors.backgroundColor), luminance(colors.foregroundColor)].sort((a, b) => a - b)
+  for (const primary of [
+    'blue',
+    'navy',
+    'green',
+    'red',
+    'white',
+    'black',
+    '#00f',
+  ]) {
+    const colors = getRenderUIButtonColors(
+      { ...chatThemes.light, primary },
+      'primary',
+      false,
+    )
+    const values = [
+      luminance(colors.backgroundColor),
+      luminance(colors.foregroundColor),
+    ].sort((a, b) => a - b)
     expect((values[1] + 0.05) / (values[0] + 0.05)).toBeGreaterThanOrEqual(4.5)
   }
 })
@@ -150,6 +165,7 @@ nativeTest(
         await setup.mockMouse.click(2, 0)
       })
       expect(launches).toBe(1)
+      await React.act(async () => setup.flush())
       expect(setup.captureCharFrame()).toContain('Opening browser')
       await React.act(async () => resolve(false))
       await setup.renderOnce()

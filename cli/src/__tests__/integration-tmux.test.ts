@@ -97,7 +97,7 @@ describe.skipIf(!tmuxAvailable || !sdkBuilt)(
           let cleanOutput = ''
           for (let i = 0; i < 10; i += 1) {
             await sleep(300)
-            const output = await tmux(['capture-pane', '-t', sessionName, '-p'])
+            const output = await tmux(['capture-pane', '-t', sessionName, '-p', '-S', '-'])
             cleanOutput = stripAnsi(output)
             if (cleanOutput.includes('--agent')) {
               break

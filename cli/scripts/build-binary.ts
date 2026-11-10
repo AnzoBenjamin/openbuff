@@ -1778,13 +1778,12 @@ function patchOpenTuiAssetPaths() {
 // manifest, which covers the sibling wasm assets staged elsewhere in this
 // script. Digests are pinned per released tarball version; re-pin (update
 // every entry together) whenever the OpenTUI core version bumps.
-// Re-pinned 2026-09-28 for @opentui/core 0.5.12 (0.2.2 → 0.5.12 migration,
-// Stage 1); the version is read from the installed core's package.json, so
+// Re-pinned 2026-11-10 for @opentui/core 0.8.3; the version is read from the installed core's package.json, so
 // only these digests change on a bump.
 /**
  * Pinned integrity digests for the OpenTUI optional native packages, copied
  * from the `sha512-…` integrity records bun.lock resolved for the
- * @opentui/core 0.5.12 optionalDependencies. Because the pin shares a source
+ * @opentui/core 0.8.3 optionalDependencies. Because the pin shares a source
  * with the lock, assertTarballIntegrity cross-checks every pinned digest
  * against the dist.integrity the registry publishes for the exact version
  * (fetched live during the build) before trusting it: a compromised or
@@ -1798,14 +1797,14 @@ function patchOpenTuiAssetPaths() {
  * the build ships unverified tarballs.
  */
 const OPENTUI_TARBALL_SHA512: Record<string, string> = {
-  '@opentui/core-linux-x64': 'sha512-eZiCjEzwbb6qClPPfk32Nha9xmr9obt69Xj0+9SKsXxWLBKkjQEGOMRoh/R9ObaQF4aq8If1xV3VEY0sD9W9vg==',
-  '@opentui/core-linux-arm64': 'sha512-XeKhuIaEtgipvuPHbl4qPOBj+Ut+2zObmsxMVM1jDcjz/FatG9PGeGQPx1G1SnvH2AgpT4K+eCu7DUF0+yIqoQ==',
-  '@opentui/core-darwin-x64': 'sha512-uRrQJdHmLUSj3PV23QPi3WSimYTTxcXnVouxF6U4xMXlOv4N3SxnHfVwMRQkPqbGOfvVWHeLE6FdK4C+ubU0sQ==',
-  '@opentui/core-darwin-arm64': 'sha512-YdVnP0tAyerBNl0mIcmQEOotPeZzW1VnSXKBl5cyZ5e6nDd2Y+ui/8eRPpn1oqcamf1NCnzS4ohMgejOvna8Zg==',
-  '@opentui/core-win32-x64': 'sha512-KTwtwpfd2zF9opVh3SyRJYDd1o3Xv4XL8OZb8Zi+CqWUel6Y2IDCiVivCv8fGJt3J7wOIXXtuZI9ZUkLyKJCiQ==',
-  '@opentui/core-win32-arm64': 'sha512-aLbm6870Ybls6CYL4zMOCImTBPLZHZMUXJFGqMI44lIWxitkAtT6zg5lYA4oRqFRzzryDclxr29+hDgT3p3Blw==',
-  '@opentui/core-linux-x64-musl': 'sha512-WWW0hVBoSYZ3D6AgZ4u2Y5/u/IyIq2pDb+4yI3WgJ70Wyt6ofHy+6kRGRgbXFn1p+rPInAHjCXD2v6C7iEKSrA==',
-  '@opentui/core-linux-arm64-musl': 'sha512-VZ2sNMw1d/r1SLPjUbOP9LKscKz1CQjID8adTL6gG8Lrrq+mYcIUxutyB+P/eG0J/7oRZLPR6OMt7dUOap6RTg==',
+  '@opentui/core-linux-x64': 'sha512-DIhEmsACFqucaqSMYZqQKXi10WmGuO0TpmqEz9hScqktcRlNAPpsB5qmO6qCEyXxTIbfaVxxlABcq1Xn3eB0aQ==',
+  '@opentui/core-linux-arm64': 'sha512-1GeV1UZqzMTfOUKuymGUhCHD5XTJC4w2eA+zPDs/jBVgv2NqPL7sofoBHLzkyhlxZpuptQR+vVPs4sW4T+7YVg==',
+  '@opentui/core-darwin-x64': 'sha512-rHW+b4mnUgdy7cs1jxFOQqd/C0n+sumjJaNVKIPKvk+EuVr+HM2pIdhFvOThnKWTyp2GlNZtIJNKCaAf+QxvkA==',
+  '@opentui/core-darwin-arm64': 'sha512-9YaOiVlld+J/POWW0TnUe9kX5+/9B0iEszdTAfgHFqSkVz4ndnYnFJTCC9fnwLrS+WOCked+7M9sS2DXiPpFQw==',
+  '@opentui/core-win32-x64': 'sha512-yjpxLUXeBc1eMW3pr4Fl9tpNuA7a4JdcGNVved9zFD3HZ07mM2YVfreLJeDn4n61jXUJKM8XtXVWBZM8RHF4gg==',
+  '@opentui/core-win32-arm64': 'sha512-g0R4PrOI93z7KaWXFw/PdA6DGWDcaK9aH88ECmnsI9At1KZoEb+Jik137qEz7bGWKGOXtn+JaHsne3vipB3vwQ==',
+  '@opentui/core-linux-x64-musl': 'sha512-MJoGBVxNtmaQSu8rvzHrJKjS0Fd/ER/Sf9NKD+ep8nPanlffJPhRbX0cT0gvkKhK3G2Od+RXUr/tlUqy0U69ow==',
+  '@opentui/core-linux-arm64-musl': 'sha512-U2IbCGI7sjUZoO8h8UizREHRDWk0u/bOAmJ0L46xB3uyMWKfNU9f8x5jQF4v6apMMmb56/TPl/PUoVR1sQg15A==',
 }
 
 /**
