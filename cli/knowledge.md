@@ -5,6 +5,12 @@
 - CLI agent runs default to unrestricted filesystem access. `cli/src/utils/create-run-config.ts` applies sensitive-file filtering only when the captured sandbox policy selects project mode.
 - Set `sandbox.mode` to `project` in `openbuff.json` to enable tool-level containment. The generated starter tool types describe absolute and project-relative paths; regenerate all mirrors after changing public tool schemas.
 
+## Command approval controls
+
+- `--approval-mode balanced|strict|allow-all` selects command approvals for TUI, headless `run`, and `serve`. `/permissions` (alias `/approvals`) shows the current policy and choices; `/permissions <mode>` overrides it for this CLI session; `/permissions reset` returns to loaded config.
+- `cli/src/utils/command-approvals.ts` owns the session override. `create-run-config.ts` and `ManagedOpenbuffClient.run()` capture it for each run, including headless and server callers. Changes cannot alter operations already awaiting approval. Attached clients use the server's setting; their local flag and slash command cannot override it.
+- `balanced` and `strict` keep ordinary reads and development commands prompt-free; inline interpreter evaluation and unclassified shell effects still ask. `allow-all` disables command prompts independently of filesystem sandbox rules. Persistent preferences remain in `openbuff.json`; SDK hosts now honor that captured config when no explicit SDK mode is supplied.
+
 ## Polyglot execution context and result evidence
 
 - `cli/src/utils/output-outcome.ts` projects typed run and task outcomes into completion summaries. Headless runs return failure/cancellation consistently with SDK and journal results; verified recovery can complete a task while preserving earlier failed actions.
