@@ -307,12 +307,15 @@ function createChildBridgeClient(socket: net.Socket): ChildBridgeClient {
   const failClosed = (error: unknown): void => {
     if (closed) return
     closed = true
+    // A native transport error can precede the parent's close notification.
+    // Keep closure typed while retaining the original transport error as cause;
+    // malformed/oversized protocol failures keep their distinct classification.
+    const rejection =
+      error instanceof BridgeClosedError || error instanceof BridgeProtocolError
+        ? error
+        : new BridgeClosedError('bridge socket closed', { cause: error })
     for (const entry of pending.values()) {
-      entry.reject(
-        error instanceof Error
-          ? error
-          : new BridgeClosedError('bridge socket closed'),
-      )
+      entry.reject(rejection)
     }
     pending.clear()
     for (const callback of closeCallbacks) {

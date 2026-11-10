@@ -291,8 +291,8 @@ export class BridgeProtocolError extends Error {
 
 /** Typed error used to kill pending requests when the bridge closes. */
 export class BridgeClosedError extends Error {
-  constructor(message = 'bridge socket closed') {
-    super(message)
+  constructor(message = 'bridge socket closed', options?: ErrorOptions) {
+    super(message, options)
     this.name = 'BridgeClosedError'
   }
 }

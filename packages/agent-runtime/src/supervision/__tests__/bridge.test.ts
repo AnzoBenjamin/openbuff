@@ -601,17 +601,25 @@ describe('bridge fail-closed behavior (P2-T8b)', () => {
 
   it('close(): unlinks the socket file and subsequent calls reject promptly', async () => {
     const bridge = await startBridge({ trackEvent: async () => null })
+    let closeEvents = 0
+    bridge.client.onClose(() => {
+      closeEvents++
+    })
     try {
       expect(existsSync(bridge.socketPath)).toBe(true)
       await withTimeout(bridge.server.close(), CALL_BUDGET_MS, 'server close')
       expect(existsSync(bridge.socketPath)).toBe(false)
-      const outcome = await settleWithin(
-        bridge.client.call('trackEvent', {}),
-        CALL_BUDGET_MS,
+      const outcomes = await Promise.all(
+        Array.from({ length: 3 }, () =>
+          settleWithin(bridge.client.call('trackEvent', {}), CALL_BUDGET_MS),
+        ),
       )
-      expect(outcome.kind).toBe('rejected')
-      if (outcome.kind !== 'rejected') return
-      expect(outcome.error instanceof BridgeClosedError).toBe(true)
+      for (const outcome of outcomes) {
+        expect(outcome.kind).toBe('rejected')
+        if (outcome.kind !== 'rejected') continue
+        expect(outcome.error instanceof BridgeClosedError).toBe(true)
+      }
+      expect(closeEvents).toBe(1)
     } finally {
       bridge.client.close()
       rmSync(bridge.dir, { recursive: true, force: true })
