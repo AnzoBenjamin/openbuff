@@ -514,7 +514,12 @@ export const providerConfigFileSchema = z
     /** Explicit trust boundary for manifest-inferred commands. These may execute repository-controlled build scripts/plugins. Default is disabled; set true only for trusted projects. */
     autoFileChangeHooks: z.boolean().optional(),
     /** Approval UX for classified terminal effects. */
-    approvalMode: z.enum(['balanced', 'strict', 'allow-all']).optional(),
+    approvalMode: z
+      .enum(['balanced', 'strict', 'allow-all'])
+      .optional()
+      .describe(
+        'Command approvals: balanced permits routine development and asks for high-impact or unclassified effects; strict asks for every classified effect; allow-all disables command approval prompts. Independent of the filesystem sandbox.',
+      ),
     /**
      * Additional roots OUTSIDE the project that read-only tools may reach
      * (read_files, read_logs, read_image, list_directory).

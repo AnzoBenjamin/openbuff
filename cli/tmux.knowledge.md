@@ -349,6 +349,10 @@ When updating CLI interaction tests, keep tmux knowledge current with any change
 
 The CLI `src/` changes since the last refresh — safe git slash-command argument parsing, the gate-state renderer, the edit-transaction tool card, and background-job event handling — are non-visual or covered by unit tests, and none of them changed tmux readiness waits, input encoding, or capture behavior. The best-effort `tmux set-environment -g` propagation and the `*integration*.test.ts` / `*e2e*.test.ts` filename conventions remain current.
 
+## Command approvals
+
+- Use `--approval-mode balanced|strict|allow-all` to choose command approvals at startup, including `run` and `serve`. `/permissions` displays the current policy; `/permissions <mode>` changes the next run in this CLI session and `/permissions reset` returns to config. Attached clients use the server's policy. These controls do not change tmux readiness or input encoding.
+
 ## Live TUI Exercise Lessons (2026-10-18)
 
 From driving the compiled CLI binary in tmux sessions for bounded live exercises (edit-transaction smoke checks against `~/.local/share/openbuff-test/openbuff-branch`):

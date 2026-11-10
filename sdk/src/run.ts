@@ -408,7 +408,8 @@ export type OpenbuffClientOptions = {
    * Receipts are matched and consumed atomically only for the high-impact
    * action, workspace, root run, and current snapshot they authorize. */
   approvalReceiptIds?: string[]
-  /** Approval behavior for classified terminal effects. Defaults to balanced. */
+  /** Approval behavior for classified terminal effects. Overrides loaded
+   * configuration; defaults to the configured mode, then balanced. */
   approvalMode?: HarnessApprovalMode
   /** Host callback used to pause the current run for an exact approval. */
   requestApproval?: (request: HarnessApprovalRequest) => Promise<boolean>
@@ -855,6 +856,7 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
   const hostServices = services.value
   // Workspace discovery stays opt-in; session metadata uses the captured root.
   const capturedOptions = { ...options,
+    approvalMode: hostServices.approvalMode,
     cwd: options.cwd !== undefined || options.hostConfiguration !== undefined
       ? snapshot.inputs.projectRoot : undefined,
     skillsDir: options.skillsDir === undefined ? undefined : path.resolve(snapshot.inputs.invocationCwd, options.skillsDir),

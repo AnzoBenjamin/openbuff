@@ -103,6 +103,12 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     description: 'Show, add, remove, connect, or disconnect providers',
   },
   {
+    id: 'permissions',
+    label: 'permissions',
+    description: 'Command approvals: balanced, strict, or allow-all',
+    aliases: ['approvals'],
+  },
+  {
     id: 'undo',
     label: 'undo',
     description:

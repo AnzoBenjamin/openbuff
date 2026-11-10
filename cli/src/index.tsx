@@ -74,6 +74,7 @@ import { runMcpCommand } from './commands/mcp-command'
 import { runReplayCommand } from './commands/replay-command'
 import { runHeadlessCommand } from './commands/run-command'
 import { isRendererCommand, parseCliArgs } from './cli-args'
+import { setCommandApprovalMode } from './utils/command-approvals'
 import { runDashCommand } from './commands/dash-command'
 
 const require = createRequire(import.meta.url)
@@ -447,6 +448,7 @@ async function main(): Promise<void> {
     // reading ambient process.env itself.
     env: getCliEnv(),
   })
+  setCommandApprovalMode(parsedArgs.approvalMode)
   const {
     initialPrompt,
     agent,

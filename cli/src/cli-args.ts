@@ -1,6 +1,8 @@
-import { Command } from 'commander'
+import { Command, Option } from 'commander'
+import { COMMAND_APPROVAL_MODES } from './utils/command-approvals'
 
 import type { AgentMode } from './utils/constants'
+import type { HarnessApprovalMode } from '@openbuff/sdk'
 
 export type ParsedArgs = {
   initialPrompt: string | null
@@ -11,6 +13,7 @@ export type ParsedArgs = {
   cwd?: string
   initialMode?: AgentMode
   trustProjectAgents: boolean
+  approvalMode?: HarnessApprovalMode
   /**
    * Populated ONLY when the `serve` subcommand ran (undefined otherwise).
    * `trustProjectAgents` mirrors the serve-level `--trust-project-agents`
@@ -122,7 +125,28 @@ export function parseCliArgs(
   // Registering `.command('serve')` on the same program that parses prompts
   // makes commander treat the first positional prompt as an unknown command,
   // so the two paths are kept fully separate.
-  const userArgs = argv.slice(2)
+  const rawUserArgs = argv.slice(2)
+  const approvalPrefixLength =
+    rawUserArgs[0] === '--approval-mode'
+      ? 2
+      : rawUserArgs[0]?.startsWith('--approval-mode=')
+        ? 1
+        : 0
+  const subcommand = rawUserArgs[approvalPrefixLength]
+  // Support a session-wide flag before the command, including shell aliases.
+  const userArgs =
+    approvalPrefixLength && ['run', 'serve'].includes(subcommand)
+      ? [
+          subcommand,
+          ...rawUserArgs.slice(0, approvalPrefixLength),
+          ...rawUserArgs.slice(approvalPrefixLength + 1),
+        ]
+      : rawUserArgs
+  const approvalOption = () =>
+    new Option(
+      '--approval-mode <mode>',
+      'Command approvals: balanced (routine commands run freely), strict, or allow-all (no prompts)',
+    ).choices([...COMMAND_APPROVAL_MODES])
 
   if (userArgs[0] === 'serve') {
     // `openbuff serve` subcommand (P1-T2 Wave-2). This wave only PARSES it
@@ -131,6 +155,7 @@ export function parseCliArgs(
     const serveProgram = new Command()
     serveProgram
       .name('openbuff serve')
+      .addOption(approvalOption())
       .description(
         'Run the ACP bridge over stdio (default) or a unix domain socket',
       )
@@ -207,6 +232,9 @@ export function parseCliArgs(
       continue: false,
       continueId: null,
       trustProjectAgents: false,
+      ...(serveOpts.approvalMode
+        ? { approvalMode: serveOpts.approvalMode }
+        : {}),
       serve,
     }
   }
@@ -251,6 +279,7 @@ export function parseCliArgs(
     const runProgram = new Command()
     runProgram
       .name('openbuff run')
+      .addOption(approvalOption())
       .description(
         'Run an agent non-interactively on a prompt and exit (headless/CI mode)',
       )
@@ -302,6 +331,7 @@ export function parseCliArgs(
       continue: false,
       continueId: null,
       trustProjectAgents: false,
+      ...(runOpts.approvalMode ? { approvalMode: runOpts.approvalMode } : {}),
       run: {
         prompt,
         json: runOpts.json === true,
@@ -508,6 +538,7 @@ export function parseCliArgs(
   const program = new Command()
   program
     .name('openbuff')
+    .addOption(approvalOption())
     .description('Local/BYOK AI coding assistant')
     .version(options.version, '-v, --version', 'Print the CLI version')
     .option(
@@ -587,6 +618,11 @@ export function parseCliArgs(
       '--attach requires a serve socket: pass --serve-socket <path> or set OPENBUFF_SERVE_SOCKET',
     )
   }
+  if (parsed.attach === true && parsed.approvalMode !== undefined) {
+    program.error(
+      '--approval-mode is controlled by openbuff serve when using --attach',
+    )
+  }
   return {
     initialPrompt: program.args.length > 0 ? program.args.join(' ') : null,
     agent: parsed.agent,
@@ -599,6 +635,7 @@ export function parseCliArgs(
     cwd: parsed.cwd,
     initialMode: parsed.plan ? 'PLAN' : undefined,
     trustProjectAgents: parsed.trustProjectAgents === true,
+    ...(parsed.approvalMode ? { approvalMode: parsed.approvalMode } : {}),
     serve: undefined,
     mcp: undefined,
     ...(attach ? { attach } : {}),

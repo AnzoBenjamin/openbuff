@@ -562,6 +562,22 @@ concurrent runs. Changes apply on the next run.
 
 `approvalMode` controls when terminal effects pause for confirmation:
 
+Use `openbuff --approval-mode balanced` for a session override, or change it
+in chat with `/permissions balanced`. Run `/permissions` to see the choices
+and current setting. `/permissions reset` returns to your JSON configuration.
+Changes apply to the next run; a command already awaiting approval keeps the
+policy captured when its run started.
+
+Headless and server invocations accept the same flag:
+
+```bash
+openbuff run --approval-mode allow-all "run the tests and fix failures"
+openbuff serve --approval-mode balanced
+```
+
+For attached sessions, set the policy on `openbuff serve`. The attached
+client cannot override the server's command approvals.
+
 ```jsonc
 {
   "approvalMode": "balanced", // balanced | strict | allow-all
@@ -576,6 +592,14 @@ concurrent runs. Changes apply on the next run.
   effect.
 - `allow-all` suppresses approval prompts. Filesystem access is controlled
   separately by `sandbox`; it defaults to unrestricted.
+
+Ordinary reads, searches, project scripts, builds, and tests run without
+approval prompts in `balanced` and `strict`. Inline interpreter evaluation
+(for example `python -c`) and shell syntax the classifier cannot resolve
+still ask in these modes. `allow-all` also permits those commands without
+prompting; malformed commands remain rejected. Use the JSON setting above
+to keep your preference across CLI sessions. SDK runs honor the same loaded
+configuration; an explicit SDK `approvalMode` option overrides it.
 
 ## File-change hooks (verification gate)
 

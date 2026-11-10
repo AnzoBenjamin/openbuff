@@ -10,6 +10,37 @@ const parse = (args: string[], env?: { OPENBUFF_SERVE_SOCKET?: string }) =>
   })
 
 describe('production CLI argument parser', () => {
+  test.each(['balanced', 'strict', 'allow-all'])(
+    'accepts --approval-mode %s for TUI, headless, and server invocations',
+    (mode) => {
+      for (const args of [
+        ['--approval-mode', mode, 'hello'],
+        ['run', '--approval-mode', mode, 'hello'],
+        ['serve', '--approval-mode', mode],
+        ['--approval-mode', mode, 'run', 'hello'],
+        [`--approval-mode=${mode}`, 'serve'],
+      ])
+        expect(parse(args).approvalMode).toBe(mode)
+    },
+  )
+
+  test('rejects missing, invalid, and client-side remote approval modes', () => {
+    for (const prefix of [[], ['run'], ['serve']]) {
+      expect(() => parse([...prefix, '--approval-mode', 'typo'])).toThrow()
+      expect(() => parse([...prefix, '--approval-mode'])).toThrow()
+    }
+    expect(() =>
+      parse([
+        '--attach',
+        '--serve-socket',
+        '/tmp/socket',
+        '--approval-mode',
+        'allow-all',
+      ]),
+    ).toThrow(/controlled by openbuff serve/)
+    expect(parse([]).approvalMode).toBeUndefined()
+  })
+
   test('parses agent, cwd, mode, trust, logs, and prompt together', () => {
     expect(
       parse([

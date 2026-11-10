@@ -116,6 +116,53 @@ function assertStructuredOutput(result: RunState) {
 }
 
 describe('B19 actual programmatic run host wiring', () => {
+  test('loaded approval config applies to actual SDK runs without an explicit option', async () => {
+    const f = fixture({ approvalMode: 'allow-all' })
+    let prompts = 0
+    const result = await f.run([
+      f.terminal(`${shellArg(nodeExecutable!)} -e 'process.stdout.write("configured")'`),
+    ], { approvalMode: undefined, requestApproval: async () => { prompts++; return false } })
+    assertStructuredOutput(result)
+    expect(prompts).toBe(0)
+    expect(terminalStarts(f.events)).toHaveLength(1)
+    expect(actualHosts[0]?.approvalMode).toBe('allow-all')
+  }, 15_000)
+
+  test('explicit SDK mode overrides config and config changes cannot alter an active run', async () => {
+    const f = fixture({ approvalMode: 'allow-all' })
+    let prompts = 0
+    const result = await f.run([
+      f.terminal('printf routine'),
+      f.terminal(`${shellArg(nodeExecutable!)} -e 'process.stdout.write("first")'`),
+      f.terminal(`${shellArg(nodeExecutable!)} -e 'process.stdout.write("second")'`),
+    ], {
+      approvalMode: 'strict',
+      requestApproval: async () => {
+        prompts++
+        fs.writeFileSync(f.configFile, JSON.stringify({ approvalMode: 'allow-all' }))
+        return false
+      },
+    })
+    assertStructuredOutput(result)
+    expect(prompts).toBe(2)
+    expect(terminalStarts(f.events)).toHaveLength(1)
+    expect(actualHosts[0]?.approvalMode).toBe('strict')
+  }, 15_000)
+
+  test('configured strict asks for classified effects while routine commands remain prompt-free', async () => {
+    const f = fixture({ approvalMode: 'strict' })
+    const actions: string[] = []
+    const result = await f.run([
+      f.terminal('printf routine'),
+      f.terminal('git commit -m example'),
+      f.terminal('rm -rf disposable'),
+    ], { approvalMode: undefined, requestApproval: async request => { actions.push(request.action); return false } })
+    assertStructuredOutput(result)
+    expect(actions).toEqual(['commit', 'workspace-delete'])
+    expect(terminalStarts(f.events)).toHaveLength(1)
+    expect(actualHosts[0]?.approvalMode).toBe('strict')
+  }, 15_000)
+
   test('balanced runs execute Git reads and prompt only for a destructive command', async () => {
     const f = fixture()
     expect(spawnSync('git', ['init', '--quiet'], { cwd: f.root }).status).toBe(0)

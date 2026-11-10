@@ -10,6 +10,7 @@ import { handleIndexCommandBlocks } from './index-command'
 import { handleHelpCommand } from './help'
 import { handleImageCommand, parseImageCommandArgs } from './image'
 import { handleInfoCommand } from './info'
+import { handlePermissionsCommand } from './permissions'
 import { buildUpdateStatus, buildUpdateStatusMessage } from './update-command'
 import { handleMemoryCommandBlocks } from './memory-command'
 import { handleSnapshotRestoreCommand } from './snapshot-commands'
@@ -501,6 +502,14 @@ const setPlanUse = (input: string): string => {
 }
 
 const ALL_COMMANDS: CommandDefinition[] = [
+  defineCommandWithArgs({
+    name: 'permissions',
+    aliases: ['approvals'],
+    handler: (params, args) => {
+      appendLocalMessage(params, handlePermissionsCommand(args))
+      clearInput(params)
+    },
+  }),
   defineCommand({
     name: 'help',
     aliases: ['h', '?'],

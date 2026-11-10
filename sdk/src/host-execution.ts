@@ -52,6 +52,7 @@ export type ExecutionScope = Readonly<{
 }>
 
 export type RunHostServices = Readonly<{
+  approvalMode: HarnessApprovalMode
   provider: ProviderHostContext
   llm: LlmHostDeps
   execution: HostAuthority
@@ -100,6 +101,7 @@ export type HostExecutionOptions = Readonly<{
 export function createHostExecutionServices(options: HostExecutionOptions): Result<RunHostServices> {
   try {
     const snapshot = options.snapshot
+    const approvalMode = options.approvalMode ?? snapshot.loaded.config.approvalMode ?? 'balanced'
     const provider = createProviderHostContext(snapshot, options.credentials)
     const clock = options.clock ?? executionClock
     const selectedProfile = options.profile ?? (snapshot.sandboxPolicy.mode === 'unrestricted'
@@ -140,12 +142,12 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
       // grant permission to start that process.
       if (input.facts.family === 'mcp-stdio' && !first && input.classification.parseStatus === 'complete')
         return evaluateHarnessActionPolicy({ action: 'arbitrary-code', target: '',
-          approvalMode: options.approvalMode ?? 'balanced', hasMatchingApproval: approved })
+          approvalMode, hasMatchingApproval: approved })
       if (!first && input.classification.parseStatus === 'complete') return { allowed: true as const, approvalRequired: false as const }
       return evaluateHarnessActionPolicy({ action: first?.action ?? 'arbitrary-code', target: first?.target ?? '',
         effects: effects.map(effect => ({ ...effect, pushRisks: effect.pushRisks ? [...effect.pushRisks] : undefined })),
         parseStatus: input.classification.parseStatus, parseReason: input.classification.parseReason ?? undefined,
-        approvalMode: options.approvalMode ?? 'balanced', hasMatchingApproval: approved, ...context })
+        approvalMode, hasMatchingApproval: approved, ...context })
     }
     const captureMetadata = (input: PolicyInput, approvalReceiptId?: string) => {
       const first = input.classification.effects[0]
@@ -360,7 +362,7 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
       },
       action() { return unavailable('A direct host operation does not have B02 action authority') },
     })
-    const services: RunHostServices = Object.freeze({ provider, llm: Object.freeze({ providerContext: provider }), execution,
+    const services: RunHostServices = Object.freeze({ approvalMode, provider, llm: Object.freeze({ providerContext: provider }), execution,
       readPolicy: snapshot.readPolicy, rootLifetime, rootSignal: (() => {
         const signal = execution.signal(rootLifetime)
         if (!signal.ok) throw new Error(signal.cause)

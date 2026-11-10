@@ -19,6 +19,7 @@ import {
   getSystemProcessEnv,
 } from './env'
 import { logger } from './logger'
+import { getCommandApprovalOverride } from './command-approvals'
 
 import type { ClientToolCall } from '@codebuff/common/tools/list'
 import type { JSONObject } from '@codebuff/common/types/json'
@@ -95,9 +96,11 @@ export class ManagedOpenbuffClient extends OpenbuffClient {
     if (this.retired) throw new Error('This client has been retired.')
     this.activeRuns++
     try {
+      const approvalMode = options.approvalMode ?? getCommandApprovalOverride()
+      const runOptions = approvalMode ? { ...options, approvalMode } : options
       return this.runDelegate
-        ? await this.runDelegate(options)
-        : await super.run(options)
+        ? await this.runDelegate(runOptions)
+        : await super.run(runOptions)
     } finally {
       this.activeRuns--
       await this.maybeRelease()

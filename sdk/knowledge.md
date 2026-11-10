@@ -34,6 +34,10 @@
 
 - Output recovery: SYNC terminal overflow is streamed to a full JSON artifact through `sdk/src/tools/terminal-output-spool.ts`; failures return `logPersisted: false` without a path. Directory listings accept `offset` and `limit`, return `nextOffset` when more visible entries remain, and apply read policy before pagination. Background output reads now allow 1,000,000 bytes. Blender operations use an attempt-owned JSON file; `sdk/src/tools/3d-artifact-retention.ts` retains recent receipts across calls with per-project adapter state, a rotating bounded stat window, and scans across operation directories.
 
+## Command approvals
+
+- Command approvals resolve once per host run: an explicit SDK `approvalMode` option overrides the captured config; otherwise `openbuff.json` supplies the mode (default `balanced`). `run.ts` passes this resolved value through to all tool dispatch. Editing config while a command awaits approval cannot change the active run's policy.
+
 ## Request token overhead
 
 - `OpenbuffClientOptions.projectContextMode` selects eager `'symbols'` scoring (the SDK default) or `'paths'` startup context. `run.ts` forwards the mode to initial and continued session preparation in `run-state.ts`; path mode refreshes the tree and knowledge files without reading source for token scores. Virtual project files and explicit knowledge overrides remain authoritative, and retrieval tools can still parse symbols on demand.

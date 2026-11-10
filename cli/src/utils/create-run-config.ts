@@ -14,6 +14,7 @@ import {
   createStreamChunkHandler,
 } from './sdk-event-handlers'
 import { ensureIndexWorkspaceWatcher } from './index-workspace-watcher'
+import { resolveCommandApprovalMode } from './command-approvals'
 
 import type { EventHandlerState } from './sdk-event-handlers'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -234,7 +235,7 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
   }
 
   const loadedConfig = loadProviderConfigSync().config
-  const approvalMode = loadedConfig.approvalMode ?? 'balanced'
+  const approvalMode = resolveCommandApprovalMode(loadedConfig.approvalMode)
   const sandboxMode = loadedConfig.sandbox?.mode ?? 'unrestricted'
 
   return {
