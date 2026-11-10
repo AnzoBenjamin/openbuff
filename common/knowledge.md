@@ -1,5 +1,10 @@
 # Common Package Knowledge
 
+## Memory reuse receipt contract
+
+- `common/src/types/memory-v2.ts` allows an optional `reason` of at most 64 characters on each `MemoryReuseReceiptV1.byTool` entry. Older receipts remain valid; callers can explain full discovery when scope or fresh verified coverage is missing.
+- `recordsServed` counts reused evidence, while `recordedDecisions` counts newly accepted decisions. CLI presentation must retain those meanings without estimating saved file reads or treating a failed coverage check as an empty memory store.
+
 ## Bounded provider error diagnostics
 
 - `common/src/util/error.ts` exposes `getErrorObject(error, { includeRequestBody?: boolean, includeRawError?: boolean })`. `includeRequestBody: false` skips the typed `requestBodyValues` serialization/redaction path for callers that need error metadata without processing a large prompt transcript. Omission is opt-in; existing callers retain the prior default behavior.

@@ -1,5 +1,12 @@
 # SDK Package Knowledge
 
+## Memory recall and local embeddings
+
+- `sdk/src/services/memory-v2/coordinator.ts` retrieves prior project evidence across task boundaries; the active task ID remains on lifecycle events and turn context rather than restricting startup retrieval to a new task with no observations.
+- Complete native `read_files` results establish file freshness only when their schema, metadata, edit anchor and whole-file `cap.v4` raw basis agree. Evidence and verification use the same actual raw file digest. Confirmed mutations use their observed after-hash, including the destination for moves; discovery counts do not establish file freshness.
+- `sdk/src/provider-config.ts` merges indexing settings only when a declaring file or fragment explicitly supplies them. Defaults from unrelated fragments must not disable configured semantic indexing.
+- `sdk/src/impl/embeddings.ts` uses serial batches of at most eight inputs for loopback endpoints and exposes that preference through `EmbedFn.maxBatchSize`. Cache identity includes the resolved provider, endpoint and model, excluding credentials. The [local mode guide](../docs/local-mode.md) documents Ollama configuration, vector checkpoints and the index warming script.
+
 ## Memory V2 terminal events and provider diagnostics
 
 - `sdk/src/services/memory-v2/coordinator.ts` assigns startup `task.transitioned` drafts source index 1 and completed/failed/cancelled transition drafts source index 2. These events share task identity but must have distinct append-only event IDs. Repeated terminal delivery retains its deterministic identity for idempotent replay.
