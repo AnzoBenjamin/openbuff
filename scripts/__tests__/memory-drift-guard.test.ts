@@ -911,6 +911,22 @@ test('memory-drift guard skips .bun-install cache directories', () => {
   expect(brokenFindings.some(touched)).toBe(false)
 })
 
+test('memory-drift guard does not flag links into gitignored roadmap evidence', () => {
+  // Expanded evidence is gitignored and only restored into disposable
+  // checkouts, so status docs may link to it without a local copy.
+  mkdirSync(join(tmpRoot, 'docs', 'execution', 'body-roadmap'), {
+    recursive: true,
+  })
+  writeFileSync(
+    join(tmpRoot, 'docs', 'execution', 'body-roadmap', 'STATE.md'),
+    '[receipt](evidence/B99/receipt.json) and [gone](./gone.md).\n',
+  )
+  const findings = checkBrokenLink(tmpRoot).filter((f) =>
+    f.path.endsWith('body-roadmap/STATE.md'),
+  )
+  expect(findings.map((f) => f.message)).toEqual(['broken link ./gone.md'])
+})
+
 test('memory-drift guard skips .agents/sessions plan-session markdown', () => {
   // Session plan artifacts under `.agents/sessions/` are local/runtime state
   // and must not be treated as repo knowledge (task commits exclude them).

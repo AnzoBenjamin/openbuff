@@ -100,7 +100,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - A 401/403 failover leaves a persistent status warning naming the env var.
   - The extractive compaction pass is labelled extractive.
   - Pruner skips and failures appear in the compaction card.
-- **Accept:** Each listed tool has a negative test reproducing its failure state and asserting the typed status, a reason and a next step. The `glob('Dockerfile', cwd:'src')` probe with only `src/auth/login.ts` in memory returns no match.
+- **Accept:** Each listed tool has a negative test reproducing its failure state and asserting the typed status, a reason and a next step. The `glob('Dockerfile', cwd:'src')` probe with only src/auth/login.ts in memory returns no match.
 - **Verify:** `bun test packages/agent-runtime/src/tools/handlers/tool/__tests__/discovery-coordinator.test.ts sdk/src/__tests__/language-intelligence.test.ts packages/agent-runtime/src/tools/handlers/tool/__tests__/web-search.test.ts` plus new negative cases in each.
 - **Prereqs:** none.
 
@@ -154,7 +154,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - Overflow recovery recognises Gemini, Ollama, LM Studio and vLLM wordings and the `context_length_exceeded` code, and retries after a stronger compaction.
 - **Accept:**
   - `/compact keep the API notes` compacts and keeps that focus.
-  - A fixture with root `AGENTS.md`, `CLAUDE.md` and `pkg/AGENTS.md` (which imports `docs/x.md`) loads all four when working in `pkg/`, each once.
+  - A fixture with root `AGENTS.md`, `CLAUDE.md` and `pkg/AGENTS.md` (which imports docs/x.md) loads all four when working in `pkg/`, each once.
   - Each overflow wording triggers one compaction and retry.
 - **Verify:** `bun test cli/src/commands/__tests__/router.test.ts sdk/src/__tests__/run-state.test.ts packages/agent-runtime/src/__tests__/run-agent-step.test.ts`.
 - **Prereqs:** none (B11 lists it in the menu).
@@ -174,7 +174,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - Run a small task subset on PRs that touch `agents/`, `common/src/tools/params/` or system prompts.
   - Report per model the edit-commit rate, tool error rate, LSP call rate and static prompt tokens.
 - **Accept:** A deliberately broken prompt change fails the PR subset. The nightly writes a results artifact and fails on regression. Every `evals/package.json` script resolves to an existing file.
-- **Verify:** `bun run --cwd evals` the nightly entry against a two-task subset, and a workflow dry run via `act` or CI.
+- **Verify:** run `bun evals/buffbench/main-nightly.ts --dry-run` and the nightly against a two-task subset, and a workflow dry run via `act` or CI.
 - **Prereqs:** B30 (accepted).
 
 ### Wave 2 — cost, onboarding and command UX
@@ -443,7 +443,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - A release run records a Terminal-Bench score and cost alongside the release.
   - `/feedback` writes a record.
   - With OTel enabled, a local collector receives spans. With it disabled, nothing leaves the machine.
-- **Verify:** `bun run --cwd evals` the benchmark adapters on a two-task subset, and `bun test sdk/src/__tests__/telemetry-export.test.ts` *(new)*.
+- **Verify:** run the new benchmark adapters through BuffBench on a two-task subset, and `bun test sdk/src/__tests__/telemetry-export.test.ts` *(new)*.
 - **Prereqs:** N10.
 
 #### N30 — Docs, prompt drift and repo hygiene

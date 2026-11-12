@@ -90,7 +90,7 @@
       "title": "Product audit fixes: security, cost, UX and parity with reference CLIs",
       "document": {
         "path": "docs/execution/body-roadmap/product-audit-addendum.md",
-        "sha256": "2b643e6aff5963b215253d93d47b990f0d390752d26700d865fa601069bf1684"
+        "sha256": "395570615c46db6106d17b9842fb65b1c3027051abad77482d5342b6e8570a4f"
       },
       "sourceInspection": {
         "path": ".agents/sessions/product-audit-2026-11-12/REPORT.md",

@@ -26,6 +26,7 @@ const SKIP_DIRECTORIES = new Set([
   '.git',
   '.next',
   '.omx',
+  '.tmp',
   'build',
   'coverage',
   'dist',
@@ -99,6 +100,13 @@ function projectRoot(): string {
 
 function toProjectPath(root: string, path: string): string {
   return relative(root, path).split(sep).join('/')
+}
+
+/** Expanded roadmap evidence is gitignored (see `.gitignore`). */
+const GITIGNORED_EVIDENCE_PREFIX = 'docs/execution/body-roadmap/evidence/'
+
+function isGitignoredEvidencePath(root: string, path: string): boolean {
+  return `${toProjectPath(root, path)}/`.startsWith(GITIGNORED_EVIDENCE_PREFIX)
 }
 
 function shouldSkipPath(projectPath: string): boolean {
@@ -1389,6 +1397,16 @@ export function checkBrokenLink(
         // Other colon suffixes remain literal paths and must still resolve.
         const targetPath = target.replace(/(\.mdx?):[1-9]\d*$/, '$1')
         const resolved = resolve(dir, targetPath)
+        // Roadmap evidence is gitignored and restored into disposable
+        // checkouts from the archive, so links into it from tracked docs
+        // outside it cannot be validated from a source checkout or CI.
+        // Links between evidence documents are still checked.
+        if (
+          isGitignoredEvidencePath(root, resolved) &&
+          !isGitignoredEvidencePath(root, filePath)
+        ) {
+          continue
+        }
         if (!existsSync(resolved)) {
           findings.push({
             path: projectPath,

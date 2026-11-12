@@ -159,6 +159,13 @@ Use the `openbuff` namespace for new commands and help text. Do not reintroduce 
 
 ## Diagnostics scripts
 
+`scripts/body-bootstrap.ts` is the body roadmap's verification-only toolchain
+bootstrap. Run it as `bun scripts/body-bootstrap.ts --manifest <file>
+--require <tools> --evidence-dir <dir>` (for example with
+`test/fixtures/body/toolchain-manifest.json`). It checks the selected Bun,
+Node, Cargo, rustc and bwrap binaries against the manifest's hashes and writes
+a receipt; it does not download tools or enable native enforcement.
+
 `scripts/diag-count-side-table.ts` is a permanent in-tree diagnostic (not part
 of the test suite): it re-runs the `run_event_counts` side-table invariants
 (exactness after appends and over-cap enforcement, retention caps) backing the
