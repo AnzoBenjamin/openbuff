@@ -165,6 +165,7 @@ export const handleReadDocs = (async (
       creditsUsed,
     }
   } catch (error) {
+    // NOTE(P2-T1): log-only duration telemetry; not persisted.
     const docsDuration = Date.now() - docsStartTime
     const errMsg = `Error fetching documentation for "${libraryTitle}": ${
       error instanceof Error ? error.message : 'Unknown error'

@@ -138,6 +138,7 @@ const parseRetryAfterSeconds = (value: string | null | undefined) => {
   if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds)
   const date = Date.parse(value)
   if (Number.isNaN(date)) return undefined
+  // NOTE(P2-T1): wall clock converts an HTTP-date Retry-After into seconds; not persisted.
   return Math.max(0, Math.ceil((date - Date.now()) / 1000))
 }
 
@@ -401,6 +402,7 @@ export async function fetchContext7LibraryDocumentation(
       {
         ...apiContext,
         searchDuration,
+        // NOTE(P2-T1): log-only duration telemetry; not persisted.
         totalDuration: Date.now() - apiStartTime,
         librariesFound: 0,
       },

@@ -147,15 +147,15 @@ export const handleSkill = (async (params: {
 
   // If skill not in cache, try to load it dynamically from disk
   // This supports skills created during the session
-  const diskSkill = cachedSkill
-    ? null
-    : fileContext.projectRoot
-      ? await loadSkillFromDisk(
-          fileContext.projectRoot,
+  const projectRoot = fileContext?.projectRoot
+  const diskSkill =
+    cachedSkill || !projectRoot
+      ? null
+      : await loadSkillFromDisk(
+          projectRoot,
           name,
           fileContext.projectSkillsTrusted !== false,
         )
-      : null
 
   const skill = cachedSkill ?? diskSkill
 
