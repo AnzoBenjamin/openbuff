@@ -679,6 +679,18 @@
       "license": "MIT",
       "tarball": "https://registry.npmjs.org/bun-types/-/bun-types-1.4.4.tgz",
       "deprecated": false
+    },
+    "cross-spawn@7.0.6": {
+      "integrity": "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/cross-spawn/-/cross-spawn-7.0.6.tgz",
+      "deprecated": false
+    },
+    "@types/cross-spawn@6.0.6": {
+      "integrity": "sha512-fXRhhUkG4H3TQk5dBhQ7m/JDdSNHKwR2BBia62lhwEIq9xGiQKLxd6LymNhn47SjXhsUEPmxi+PKw2OkW4LLjA==",
+      "license": "MIT",
+      "tarball": "https://registry.npmjs.org/@types/cross-spawn/-/cross-spawn-6.0.6.tgz",
+      "deprecated": false
     }
   }
 }
