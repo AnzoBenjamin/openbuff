@@ -7,7 +7,7 @@ import {
   test,
 } from 'bun:test'
 import { randomUUID } from 'node:crypto'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -285,6 +285,53 @@ describe('MCP generation-bound tool catalogs over real stdio', () => {
       .split('\n')
       .map((line) => JSON.parse(line))
     expect(events.map((event) => event.event)).toEqual(['started', 'closed'])
+  }, 30_000)
+
+  test('eviction preserves a real active request while closing an idle peer', async () => {
+    const activeLog = join(directory, `held-${randomUUID()}.jsonl`)
+    const idleLog = join(directory, `idle-${randomUUID()}.jsonl`)
+    const held = await connect('held', activeLog)
+    const idle = await connect('paged', idleLog)
+    const pending = listMCPTools(held.clientId)
+    // Attach a rejection handler immediately so an unexpected close is observed
+    // by the assertion below rather than becoming an unhandled rejection.
+    const outcome = pending.then(
+      (value) => ({ value }),
+      (error) => ({ error }),
+    )
+    const deadline = performance.now() + 10_000
+    while (
+      !readFileSync(activeLog, 'utf8').includes('list:first') &&
+      performance.now() < deadline
+    )
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    const activeEvents = readFileSync(activeLog, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+    expect(activeEvents.map((event) => event.event)).toContain('list:first')
+    const activePid = activeEvents[0].pid as number
+
+    try {
+      for (let index = 0; index < 63; index++) await connect('empty')
+      expect(getMCPClientGeneration(held.clientId)).toBeDefined()
+      expect(getMCPClientGeneration(idle.clientId)).toBeUndefined()
+      const exitDeadline = performance.now() + 2000
+      while (
+        !readFileSync(idleLog, 'utf8').includes('"event":"closed"') &&
+        performance.now() < exitDeadline
+      )
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(readFileSync(idleLog, 'utf8')).toContain('"event":"closed"')
+      expect(() => process.kill(activePid, 0)).not.toThrow()
+      expect(readFileSync(activeLog, 'utf8')).not.toContain('"event":"closed"')
+    } finally {
+      writeFileSync(`${activeLog}.release`, '')
+    }
+    const result = await outcome
+    expect('error' in result ? result.error : undefined).toBeUndefined()
+    expect('value' in result && result.value.tools[0].name).toBe('first')
+    expect(readFileSync(activeLog, 'utf8')).toContain('"event":"list:released"')
   }, 30_000)
 
   test('missing clients and invalid limits return explicit incomplete status', async () => {

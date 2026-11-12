@@ -53,17 +53,34 @@
  *  - Returns a structured outcome; never throws.
  */
 import { BYOK_OPENROUTER_ENV_VAR } from '@codebuff/common/constants/byok'
+import { realIdGen } from '@codebuff/common/deps/real-runtime-deps'
 import {
   CHATGPT_OAUTH_TOKEN_ENV_VAR,
   OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR,
 } from '@codebuff/common/constants/chatgpt-oauth'
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
+import type { IdGen } from '@codebuff/common/types/contracts/agent-runtime'
 import type {
+  AbsoluteDeadline,
   ExecutionAdapterContext,
   LaunchObserver,
   Refusal,
 } from '@codebuff/common/types/contracts/execution-context'
+import type {
+  CleanupResult,
+  OwnedProcessScope,
+  ProcessScopeDriver,
+  ProcessScopeOptions,
+  ScopeObservation,
+  ScopeStreams,
+  ScopeTier,
+} from '@codebuff/common/types/contracts/process-scope'
+import { captureLinuxProcessGroup } from '@codebuff/common/util/linux-process-scope'
+import {
+  createOwnedProcessScope,
+  processScopeClock,
+} from '@codebuff/common/util/owned-process-scope'
 import { SUPERVISED_CHILD_RUNTIME_ENV_KEYS } from './supervised-child-env-keys'
 import { formatValidationIssues } from '../util/format-validation-issues'
 
@@ -101,7 +118,7 @@ export const SETTLE_STDOUT_CAP_BYTES = 8 * 1024 * 1024
 export const SETTLE_STDERR_CAP_BYTES = 64 * 1024
 
 /** Grace window between SIGTERM and SIGKILL when settling a timed-out child. */
-export const SETTLE_KILL_GRACE_MS = 2_000
+export const SETTLE_KILL_GRACE_MS = 200
 
 /** Default settle deadline: 10 minutes. */
 export const SETTLE_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000
@@ -132,11 +149,15 @@ export type SettleSpawnRequest = {
   stdin: 'ignore'
   stdout: 'pipe'
   stderr: 'pipe'
+  /** Captured before admission and consumed verbatim by the runtime seam. */
+  detached: boolean
 }
 
 /** Minimal subprocess surface the supervisor settles against. Injectable so
  * tests can stub spawns without a real child process. */
 export type SettleChildProcess = {
+  /** Runtime-owned PID, used for the default Bun launch observation only. */
+  pid?: number
   stdout: ReadableStream<Uint8Array>
   stderr: ReadableStream<Uint8Array>
   /** Resolves with the exit code, or null when the child died by signal. */
@@ -148,6 +169,8 @@ export type SettleChildProcess = {
    * without it fall back to the direct `kill` above.
    */
   killGroup?: (signal?: 'SIGTERM' | 'SIGKILL') => void
+  /** Runtime-neutral ownership/observation seam. Bare fake seams use injected coverage. */
+  processScopeDriver?: Readonly<{ tier: ScopeTier; driver: ProcessScopeDriver }>
 }
 
 export type SettleSpawnSeam = (
@@ -192,6 +215,8 @@ export type SpawnSettledSubagentParams = {
   cwd?: string
   /** Injectable monotonic clock for durationMs (see NOTE below). */
   now?: () => number
+  /** Trusted host ID source; never serialized into the child request. */
+  idGen?: Pick<IdGen, 'uuid'>
   /**
    * cancel-softlock fix: the PARENT's AbortSignal. When it aborts — or is
    * already aborted at spawn time — the child's WHOLE process group is
@@ -211,6 +236,14 @@ export type SpawnSettledSubagentParams = {
    *  unsubscribe. Fired listeners reset the idle window. Omitted → no external
    *  activity source. */
   onActivity?: (listener: () => void) => () => void
+  cleanupPolicy?: Pick<
+    ProcessScopeOptions,
+    | 'termGraceMs'
+    | 'killGraceMs'
+    | 'observationMs'
+    | 'probeTimeoutMs'
+    | 'pollMs'
+  >
 }
 
 // Structurally identical to the seam contract in common
@@ -219,6 +252,7 @@ export type SpawnSettledSubagentParams = {
 export type SettledSubagentResult = {
   /** A refused dispatch is distinguishable from a runtime spawn failure. */
   executionRefusal?: Refusal
+  cleanup?: CleanupResult
   /** Process-level settle outcome (transport truth). When a valid envelope
    * arrived, the child's self-declared `receipt.outcome` is preserved on
    * `receipt` untouched for downstream PR-T1 reconciliation. */
@@ -237,6 +271,198 @@ export type SettledSubagentResult = {
   stderrTail: string
 }
 
+const managedSupervisedScopes = new Map<
+  OwnedProcessScope,
+  ExecutionAdapterContext['execution'] | undefined
+>()
+
+/** Trusted-host handles retained until physical cleanup, including failed attempts. */
+export function retainedSupervisedProcessScopes(): readonly OwnedProcessScope[] {
+  return [...managedSupervisedScopes.keys()]
+}
+
+/** Own stream EOF and runtime wait separately from covered-group membership. */
+function ownSettleChild(
+  raw: SettleChildProcess,
+  runtime?: Readonly<{ pid: number; detached: boolean }>,
+): SettleChildProcess {
+  const tier: ScopeTier = runtime
+    ? runtime.detached && process.platform === 'linux'
+      ? 'posix-owned-group'
+      : 'direct-child'
+    : 'injected'
+  const group =
+    tier === 'posix-owned-group' && runtime
+      ? captureLinuxProcessGroup(runtime.pid)
+      : undefined
+  let reaped = false
+  let exitUnknown = false
+  const streams: {
+    stdin: ScopeStreams['stdin']
+    stdout: ScopeStreams['stdout']
+    stderr: ScopeStreams['stderr']
+  } = {
+    stdin: 'closed',
+    stdout: 'open',
+    stderr: 'open',
+  }
+  let resolveStreams!: (value: ScopeStreams) => void
+  const streamsFinished = new Promise<ScopeStreams>((resolve) => {
+    resolveStreams = resolve
+  })
+  const checkStreams = () => {
+    if (streams.stdout !== 'open' && streams.stderr !== 'open')
+      resolveStreams({ ...streams })
+  }
+  const ownStream = (
+    source: ReadableStream<Uint8Array>,
+    name: 'stdout' | 'stderr',
+  ) => {
+    const reader = source.getReader()
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    let closed = false
+    const mark = (state: ScopeStreams[typeof name]) => {
+      streams[name] = state
+      checkStreams()
+    }
+    const abandon = () => {
+      if (closed) return
+      closed = true
+      mark('closed-incomplete')
+      controller.close()
+      // Cancellation is observed as incomplete output. Never await an unbounded cancel hook.
+      void reader.cancel().catch(() => undefined)
+    }
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start(value) {
+          controller = value
+        },
+        async pull() {
+          try {
+            const { done, value } = await reader.read()
+            if (closed) return
+            if (done) {
+              closed = true
+              mark('drained')
+              controller.close()
+            } else if (value) controller.enqueue(value)
+          } catch (error) {
+            if (closed) return
+            closed = true
+            mark('closed-incomplete')
+            controller.error(error)
+          }
+        },
+        cancel() {
+          if (closed) return
+          closed = true
+          mark('closed-incomplete')
+          return reader.cancel()
+        },
+      },
+      { highWaterMark: 64 * 1024, size: (chunk) => chunk?.byteLength ?? 0 },
+    )
+    return { stream, abandon }
+  }
+  const stdout = ownStream(raw.stdout, 'stdout')
+  const stderr = ownStream(raw.stderr, 'stderr')
+  const exited = raw.exited.then(
+    (code) => {
+      reaped = true
+      return typeof code === 'number' ? code : null
+    },
+    (error) => {
+      exitUnknown = true
+      throw error
+    },
+  )
+  // The generic scope observes this rejection; do not expose a transient unhandled promise.
+  void exited.catch(() => undefined)
+  const driver: ProcessScopeDriver = {
+    leaderExited: exited.then(() => 'exited-reaped'),
+    streamsFinished,
+    async observe() {
+      const presence = group?.observe() ?? {
+        scopePresence: exitUnknown
+          ? ('unknown' as const)
+          : reaped
+            ? ('absent' as const)
+            : ('living' as const),
+        members: [],
+        membershipComplete: !exitUnknown,
+        identity: 'verified' as const,
+      }
+      if (
+        group &&
+        reaped &&
+        presence.identity === 'verified' &&
+        presence.membershipComplete &&
+        (presence.scopePresence === 'absent' ||
+          presence.scopePresence === 'zombie-only')
+      )
+        group.seal()
+      return {
+        sampledAtMs: processScopeClock.nowMs(),
+        clockDomainId: processScopeClock.domainId,
+        leader: reaped ? 'exited-reaped' : exitUnknown ? 'unknown' : 'running',
+        ...presence,
+        streams: { ...streams },
+      }
+    },
+    async signal(name) {
+      const atMs = processScopeClock.nowMs()
+      if (group?.identity) {
+        if (reaped) {
+          const presence = group.observe()
+          if (
+            presence.identity === 'verified' &&
+            presence.membershipComplete &&
+            (presence.scopePresence === 'absent' ||
+              presence.scopePresence === 'zombie-only')
+          )
+            group.seal()
+        }
+        return { ...group.signal(name), atMs }
+      }
+      const base = {
+        signal: name,
+        atMs,
+        targetTier:
+          tier === 'posix-owned-group' ? ('direct-child' as const) : tier,
+      }
+      if (reaped) return { ...base, result: 'already-absent' }
+      try {
+        // Missing initial group identity never grants broadcast authority.
+        // The owned runtime child remains available for direct cancellation.
+        if (tier === 'posix-owned-group') raw.kill(name)
+        else if (raw.killGroup) raw.killGroup(name)
+        else raw.kill(name)
+        return { ...base, result: 'delivered' }
+      } catch (error) {
+        const errorCode = (error as NodeJS.ErrnoException).code
+        return {
+          ...base,
+          result: errorCode === 'ESRCH' ? 'already-absent' : 'unknown',
+          ...(errorCode ? { errorCode } : {}),
+        }
+      }
+    },
+    closeInput() {}, // stdin was selected as ignore before dispatch.
+    abandonStreams() {
+      stdout.abandon()
+      stderr.abandon()
+    },
+  }
+  return {
+    ...raw,
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+    exited,
+    processScopeDriver: { tier, driver },
+  }
+}
+
 function defaultSpawnSeam(request: SettleSpawnRequest): SettleChildProcess {
   const proc = Bun.spawn(request.cmd, {
     env: request.env,
@@ -244,56 +470,29 @@ function defaultSpawnSeam(request: SettleSpawnRequest): SettleChildProcess {
     stdin: request.stdin,
     stdout: request.stdout,
     stderr: request.stderr,
-    // Group leader: makes the child a process-group leader so the timeout
-    // path can kill the WHOLE group (shell grandchildren included) via a
-    // negative-pid kill.
-    detached: true,
+    detached: request.detached,
   })
-  if (request.observer) {
-    let observationError: string | undefined
-    if (!Number.isInteger(proc.pid) || proc.pid <= 0) {
-      request.observer.failure({
-        source: 'adapter-observation-error',
-        cause: 'Bun child has no valid runtime PID',
-      })
-      observationError = 'Bun child has no valid runtime PID'
-    } else {
-      const observed = request.observer.spawnObserved({
-        source: 'bun-spawn-result',
-        pid: proc.pid,
-      })
-      if (!observed.ok) observationError = observed.cause
-    }
-    if (observationError) {
-      try {
-        if (Number.isSafeInteger(proc.pid) && proc.pid > 0) process.kill(proc.pid, 'SIGTERM')
-      } catch {
-        /* termination request only */
-      }
-      throw new Error(observationError)
-    }
-  }
-  return {
-    stdout: proc.stdout,
-    stderr: proc.stderr,
-    exited: proc.exited.then((code) =>
-      typeof code === 'number' ? code : null,
-    ),
-    kill: (signal) => {
-      // process.kill is used instead of proc.kill so the signal type is
-      // portable across Bun versions; ESRCH after exit is swallowed upstream.
-      process.kill(proc.pid, signal ?? 'SIGTERM')
+  return ownSettleChild(
+    {
+      pid: proc.pid,
+      stdout: proc.stdout,
+      stderr: proc.stderr,
+      exited: proc.exited.then((code) =>
+        typeof code === 'number' ? code : null,
+      ),
+      kill: (signal) => {
+        process.kill(proc.pid, signal ?? 'SIGTERM')
+      },
+      ...(request.detached
+        ? {
+            killGroup: (signal?: 'SIGTERM' | 'SIGKILL') => {
+              process.kill(-proc.pid, signal ?? 'SIGTERM')
+            },
+          }
+        : {}),
     },
-    killGroup: (signal) => {
-      // Negative pid targets the child's process group; ESRCH after the
-      // group is gone is swallowed like the direct kill above.
-      try {
-        process.kill(-proc.pid, signal ?? 'SIGTERM')
-      } catch {
-        // Group already gone.
-      }
-    },
-  }
+    { pid: proc.pid, detached: request.detached },
+  )
 }
 
 function concatChunks(chunks: Uint8Array[]): Uint8Array {
@@ -316,24 +515,36 @@ async function captureStream(
   stream: ReadableStream<Uint8Array>,
   capBytes: number,
   onActivity?: () => void,
-): Promise<{ bytes: Uint8Array; totalBytes: number }> {
+  onProgress?: (kept: number, totalBytes: number) => void,
+  onError?: (error: unknown) => void,
+  onReader?: (reader: ReadableStreamDefaultReader<Uint8Array>) => void,
+): Promise<{ bytes: Uint8Array; totalBytes: number; failed?: true }> {
   const chunks: Uint8Array[] = []
   let kept = 0
   let totalBytes = 0
   const reader = stream.getReader()
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (!value || value.byteLength === 0) continue
-    // Chunk arrival is a secondary activity signal (resets the idle window).
-    onActivity?.()
-    totalBytes += value.byteLength
-    if (kept < capBytes) {
-      const room = capBytes - kept
-      const keep = room >= value.byteLength ? value : value.subarray(0, room)
-      chunks.push(keep)
-      kept += keep.byteLength
+  onReader?.(reader)
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value || value.byteLength === 0) continue
+      // Chunk arrival is a secondary activity signal (resets the idle window).
+      onActivity?.()
+      totalBytes += value.byteLength
+      if (kept < capBytes) {
+        const room = capBytes - kept
+        const keep = room >= value.byteLength ? value : value.slice(0, room)
+        chunks.push(keep)
+        kept += keep.byteLength
+      }
+      onProgress?.(kept, totalBytes)
     }
+  } catch (error) {
+    onError?.(error)
+    return { bytes: concatChunks(chunks), totalBytes, failed: true }
+  } finally {
+    reader.releaseLock()
   }
   return { bytes: concatChunks(chunks), totalBytes }
 }
@@ -346,42 +557,231 @@ async function captureStream(
 export async function spawnSettledSubagent(
   params: SpawnSettledSubagentParams,
 ): Promise<SettledSubagentResult> {
-  // No implicit default: when params.timeoutMs is omitted (and no idle/max
-  // bound is set either) the child runs UNBOUNDED — zero timers are armed
-  // and the function simply awaits child exit. SETTLE_DEFAULT_TIMEOUT_MS is
-  // still exported for callers that choose it, but is no longer silently
-  // applied here.
-  // Mediated execution uses the host's absolute, chunked lifetime timer. Do
-  // not restart a duration after bridge setup/admission or overflow setTimeout.
-  const timeoutMs = params.execution ? undefined : params.timeoutMs
-  let processSignal = params.signal
-  const maximumLifetimeMs = params.execution ? undefined : params.maxLifetimeMs
-  // NOTE (determinism guard): durationMs is a performance.now delta — a
-  // monotonic interval, never a Date.now-derived absolute timestamp.
-  // Injectable via params.now so tests stay deterministic.
   const now = params.now ?? (() => performance.now())
   const startedAt = now()
+  const startedClockAt = processScopeClock.nowMs()
+  const timeoutMs = params.execution ? undefined : params.timeoutMs
+  const idleWindowMs = params.execution ? undefined : params.idleTimeoutMs
+  const maximumLifetimeMs = params.execution ? undefined : params.maxLifetimeMs
+  let processSignal = params.signal
+  let proc: SettleChildProcess | undefined
+  let scope: OwnedProcessScope | undefined
+  let exitCode: number | null = null
+  let timedOut = false
+  let killed = false
+  let stopCommitted = false
+  let captureFailed = false
+  let forcedOutputClosure = false
+  let termTimer: ReturnType<typeof setTimeout> | undefined
+  let idleTimer: ReturnType<typeof setTimeout> | undefined
+  let maxTimer: ReturnType<typeof setTimeout> | undefined
+  let unsubscribeActivity: (() => void) | undefined
+  let resolveCleanup!: (value: CleanupResult) => void
+  const cleanupFinished = new Promise<CleanupResult>((resolve) => {
+    resolveCleanup = resolve
+  })
+  const stdoutProgress = { kept: 0, total: 0 }
+  const stderrProgress = { kept: 0, total: 0 }
+  type Capture = Awaited<ReturnType<typeof captureStream>>
+  let stdoutPromise: Promise<Capture> | undefined
+  let stderrPromise: Promise<Capture> | undefined
+  let stdoutReader: ReadableStreamDefaultReader<Uint8Array> | undefined
+  let stderrReader: ReadableStreamDefaultReader<Uint8Array> | undefined
 
   const crashResult = (
     crashReason: SettleCrashReason,
-    exitCode: number | null,
+    code: number | null,
     overrides?: Partial<SettledSubagentResult>,
   ): SettledSubagentResult => ({
     outcome: 'crashed',
     crashReason,
-    exitCode,
+    exitCode: code,
     durationMs: now() - startedAt,
-    stdoutBytes: 0,
-    killed: false,
+    stdoutBytes: stdoutProgress.total,
+    killed,
     stderrTail: '',
     ...overrides,
   })
+  const clearTimers = () => {
+    if (termTimer !== undefined) clearTimeout(termTimer)
+    if (idleTimer !== undefined) clearTimeout(idleTimer)
+    if (maxTimer !== undefined) clearTimeout(maxTimer)
+    termTimer = idleTimer = maxTimer = undefined
+    const unsubscribe = unsubscribeActivity
+    unsubscribeActivity = undefined
+    try {
+      unsubscribe?.()
+    } catch {
+      /* activity callbacks cannot release physical ownership */
+    }
+    processSignal?.removeEventListener('abort', onParentAbort)
+  }
+  const commitKill = (markTimedOut = true, force = false) => {
+    if (markTimedOut) timedOut = true
+    if (stopCommitted && !force) return
+    stopCommitted = true
+    killed = true
+    clearTimers()
+    void scope?.requestStop(
+      markTimedOut ? 'deadline' : force ? 'adapter-error' : 'owner-cancel',
+      force,
+    )
+  }
+  const armIdle = () => {
+    idleTimer = setTimeout(() => commitKill(), idleWindowMs as number)
+  }
+  const markActivity = () => {
+    if (idleWindowMs === undefined || stopCommitted) return
+    if (idleTimer !== undefined) clearTimeout(idleTimer)
+    armIdle()
+  }
+  const onParentAbort = () => {
+    commitKill(false)
+  }
+  const captureError = () => {
+    captureFailed = true
+    commitKill(false, true)
+  }
 
-  let proc: SettleChildProcess
+  // Refuse a retry under the same admitted execution port when its previous
+  // scope has published a failed/unknown cleanup attempt.
+  if (
+    params.execution &&
+    [...managedSupervisedScopes].some(
+      ([owned, execution]) =>
+        execution === params.execution!.execution &&
+        owned.currentCleanup() &&
+        owned.currentCleanup()!.status !== 'complete',
+    )
+  ) {
+    return crashResult('spawn_failed', null, {
+      executionRefusal: {
+        ok: false,
+        reason: 'unavailable',
+        cause: 'A prior supervised process scope still requires cleanup',
+      },
+    })
+  }
+  for (const value of Object.values(params.cleanupPolicy ?? {})) {
+    if (!Number.isSafeInteger(value) || value < 0)
+      return crashResult('spawn_failed', null)
+  }
+
+  const attach = (
+    raw: SettleChildProcess,
+    scopeId: string,
+    options: Pick<
+      ProcessScopeOptions,
+      'originalDeadline' | 'remainingMs' | 'launchFacts' | 'onStop'
+    > = {},
+  ): SettleChildProcess => {
+    const owned = raw.processScopeDriver ? raw : ownSettleChild(raw)
+    proc = owned
+    const capability = owned.processScopeDriver!
+    const driver: ProcessScopeDriver = {
+      leaderExited: capability.driver.leaderExited,
+      streamsFinished: capability.driver.streamsFinished,
+      observe: () => capability.driver.observe(),
+      signal: (signal) => capability.driver.signal(signal),
+      closeInput: () => capability.driver.closeInput(),
+      abandonStreams() {
+        forcedOutputClosure = true
+        try {
+          capability.driver.abandonStreams?.()
+        } finally {
+          // Own the readers even when the injected driver's optional hook is absent.
+          for (const reader of [stdoutReader, stderrReader]) {
+            try {
+              void reader?.cancel().catch(() => undefined)
+            } catch {}
+          }
+        }
+      },
+    }
+    const absoluteBounds = [timeoutMs, maximumLifetimeMs].filter(
+      (value): value is number => value !== undefined,
+    )
+    const originalDeadline: AbsoluteDeadline = absoluteBounds.length
+      ? {
+          kind: 'finite',
+          limitId: scopeId,
+          domainId: processScopeClock.domainId,
+          expiresAtMs: startedClockAt + Math.min(...absoluteBounds),
+        }
+      : { kind: 'unbounded', limitId: scopeId }
+    scope = createOwnedProcessScope({
+      scopeId,
+      tier: capability.tier,
+      driver,
+      signal: processSignal,
+      originalDeadline,
+      termGraceMs: SETTLE_KILL_GRACE_MS,
+      killGraceMs: 200,
+      observationMs: 1_000,
+      ...params.cleanupPolicy,
+      ...options,
+      output: () => ({
+        stdoutSeenBytes: stdoutProgress.total,
+        stderrSeenBytes: stderrProgress.total,
+        retainedBytes: stdoutProgress.kept + stderrProgress.kept,
+        droppedBytes:
+          stdoutProgress.total +
+          stderrProgress.total -
+          stdoutProgress.kept -
+          stderrProgress.kept,
+        complete: !captureFailed && !forcedOutputClosure,
+      }),
+      onCleanup(result) {
+        stopCommitted = true
+        killed ||= result.signals.some(
+          (signal) => signal.result === 'delivered',
+        )
+        clearTimers()
+        if (result.status === 'complete') managedSupervisedScopes.delete(scope!)
+        resolveCleanup(result)
+      },
+    })
+    managedSupervisedScopes.set(scope, params.execution?.execution)
+    // Readers are established inside dispatch, before any observation or await.
+    stdoutPromise = captureStream(
+      owned.stdout,
+      SETTLE_STDOUT_CAP_BYTES,
+      markActivity,
+      (kept, total) => {
+        stdoutProgress.kept = kept
+        stdoutProgress.total = total
+      },
+      captureError,
+      (reader) => {
+        stdoutReader = reader
+      },
+    )
+    stderrPromise = captureStream(
+      owned.stderr,
+      SETTLE_STDERR_CAP_BYTES,
+      markActivity,
+      (kept, total) => {
+        stderrProgress.kept = kept
+        stderrProgress.total = total
+      },
+      captureError,
+      (reader) => {
+        stderrReader = reader
+      },
+    )
+    void owned.exited.then((code) => {
+      exitCode = code
+      // Productive work has ended; only the common physical cleanup schedule
+      // remains. Final stream bytes continue draining without renewing activity.
+      stopCommitted = true
+      clearTimers()
+    }, captureError)
+    return owned
+  }
+
   try {
+    const scopeId = `supervised:${(params.idGen ?? realIdGen).uuid()}`
     const spawnRequest: SettleSpawnRequest = {
-      // P2-T8d SELF-EXEC: cmdOverride is used verbatim when supplied;
-      // absent keeps the default bun-source cmd byte-identical.
       cmd: params.cmdOverride ?? [
         process.execPath,
         ...(params.execution ? ['--no-env-file'] : []),
@@ -389,13 +789,12 @@ export async function spawnSettledSubagent(
         params.childModulePath,
         ...(params.args ?? []),
       ],
-      // Env architecture: allowlist only. An omitted allowlist means an
-      // EMPTY child env — ambient keys are never forwarded.
       env: params.env ?? {},
       ...(params.cwd !== undefined ? { cwd: params.cwd } : {}),
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
+      detached: process.platform !== 'win32',
     }
     if (params.execution) {
       const context = params.execution
@@ -415,7 +814,7 @@ export async function spawnSettledSubagent(
           adapterOptions: {
             runtime: 'bun',
             stdio: 'ignore,pipe,pipe',
-            detached: true,
+            detached: spawnRequest.detached,
           },
         },
       })
@@ -428,239 +827,166 @@ export async function spawnSettledSubagent(
         admitted.value.permit,
         (input, observer) => {
           processSignal = input.resourceSignal
-          return (params.spawn ?? defaultSpawnSeam)({
-            ...spawnRequest,
-            cmd: [input.executable, ...input.argv],
-            env: { ...input.env },
-            cwd: input.cwd,
-            observer,
-          })
+          const capturedAt = processScopeClock.nowMs()
+          const remainingMs = () =>
+            input.resourceRemainingMs === null
+              ? null
+              : Math.max(
+                  0,
+                  input.resourceRemainingMs -
+                    (processScopeClock.nowMs() - capturedAt),
+                )
+          const child = attach(
+            (params.spawn ?? defaultSpawnSeam)({
+              ...spawnRequest,
+              cmd: [input.executable, ...input.argv],
+              env: { ...input.env },
+              cwd: input.cwd,
+              observer,
+              detached: input.adapterOptions.detached === true,
+            }),
+            scopeId,
+            {
+              originalDeadline: input.deadlines.resourceLifetime,
+              remainingMs,
+              launchFacts: () => prepared.value.facts(),
+              onStop: () => { observer.cleanupCommitted() },
+            },
+          )
+          if (!params.spawn) {
+            const pid = child.pid
+            if (!Number.isSafeInteger(pid) || (pid ?? -1) <= 0) {
+              observer.failure({
+                source: 'adapter-observation-error',
+                cause: 'Bun child has no valid runtime PID',
+              })
+              throw new Error('Bun child has no valid runtime PID')
+            }
+            const observed = observer.spawnObserved({
+              source: 'bun-spawn-result',
+              pid: pid!,
+            })
+            if (!observed.ok) throw new Error(observed.cause)
+          }
+          return child
         },
       )
       if (!dispatched.ok) {
-        return crashResult(
-          'spawn_failed',
-          null,
-          dispatched.reason === 'dispatch-failed'
-            ? undefined
-            : { executionRefusal: dispatched },
-        )
+        const cleanup = scope
+          ? await scope.requestStop('adapter-error', true)
+          : undefined
+        return crashResult('spawn_failed', exitCode, {
+          ...(cleanup ? { cleanup } : {}),
+          ...(dispatched.reason === 'dispatch-failed'
+            ? {}
+            : { executionRefusal: dispatched }),
+        })
       }
-      proc = dispatched.value.handle
-    } else {
-      proc = (params.spawn ?? defaultSpawnSeam)(spawnRequest)
-    }
+    } else attach((params.spawn ?? defaultSpawnSeam)(spawnRequest), scopeId)
   } catch {
-    return crashResult('spawn_failed', null)
+    const cleanup = scope
+      ? await scope.requestStop('adapter-error', true)
+      : undefined
+    return crashResult(
+      'spawn_failed',
+      exitCode,
+      cleanup ? { cleanup } : undefined,
+    )
   }
 
-  let timedOut = false
-  let killed = false
-  let termTimer: ReturnType<typeof setTimeout> | undefined
-  let idleTimer: ReturnType<typeof setTimeout> | undefined
-  let killTimer: ReturnType<typeof setTimeout> | undefined
-  let maxTimer: ReturnType<typeof setTimeout> | undefined
-
-  // Process-group teardown when the seam provides killGroup (the default
-  // seam does): both the SIGTERM and the escalation SIGKILL target the
-  // WHOLE group so shell grandchildren die too; seams without killGroup
-  // fall back to the direct-pid kill.
-  const killChild = (signal: 'SIGTERM' | 'SIGKILL'): void => {
-    const groupKill = proc.killGroup
-    if (groupKill !== undefined) {
-      groupKill(signal)
-    } else {
-      proc.kill(signal)
+  const scheduleAbsolute = (
+    expiresAtMs: number,
+    setTimer: (timer: ReturnType<typeof setTimeout>) => void,
+  ) => {
+    const arm = () => {
+      const remaining = expiresAtMs - processScopeClock.nowMs()
+      const timer = setTimeout(
+        () => {
+          if (stopCommitted) return
+          if (processScopeClock.nowMs() >= expiresAtMs) commitKill()
+          else arm()
+        },
+        Math.max(1, Math.min(2_147_483_647, Math.ceil(remaining))),
+      )
+      setTimer(timer)
     }
+    arm()
   }
-
-  // Idempotent kill latch: once committed, late activity events are
-  // neutralized (markActivity's killCommitted guard) and the maxLifetime cap
-  // never gets rearmed. The deadline callers keep the legacy timedOut=true
-  // semantics so the settle path still picks crashReason='timeout'; the
-  // parent-abort caller passes markTimedOut=false so the settle keeps the
-  // honest signal-death reason instead of a fabricated 'timeout'
-  // (cancel-softlock fix).
-  let killCommitted = false
-  const commitKill = (markTimedOut = true) => {
-    if (killCommitted) return
-    killCommitted = true
-    if (markTimedOut) timedOut = true
-    killed = true
+  if (!stopCommitted) {
+    if (idleWindowMs !== undefined) armIdle()
+    else if (timeoutMs !== undefined)
+      scheduleAbsolute(startedClockAt + timeoutMs, (timer) => {
+        termTimer = timer
+      })
+    if (maximumLifetimeMs !== undefined)
+      scheduleAbsolute(startedClockAt + maximumLifetimeMs, (timer) => {
+        maxTimer = timer
+      })
     try {
-      killChild('SIGTERM')
+      unsubscribeActivity = params.onActivity?.(markActivity)
     } catch {
-      // Child already exited between timer fire and kill.
+      captureError()
     }
-    killTimer = setTimeout(() => {
-      try {
-        killChild('SIGKILL')
-      } catch {
-        // Child already gone.
-      }
-    }, SETTLE_KILL_GRACE_MS)
+    if (processSignal?.aborted) onParentAbort()
+    else processSignal?.addEventListener('abort', onParentAbort, { once: true })
   }
 
-  const idleWindowMs = params.execution ? undefined : params.idleTimeoutMs
-  const armIdle = () => {
-    idleTimer = setTimeout(commitKill, idleWindowMs as number)
+  // This promise resolves at the scope's bounded physical cleanup result,
+  // even when exited/EOF never arrives. The scope retains failed authority.
+  const cleanup = await cleanupFinished
+  const [stdoutCapture, stderrCapture] = await Promise.all([
+    stdoutPromise!,
+    stderrPromise!,
+  ])
+  clearTimers()
+  const base = {
+    exitCode,
+    durationMs: now() - startedAt,
+    stdoutBytes: stdoutCapture.totalBytes,
+    killed,
+    stderrTail: new TextDecoder().decode(stderrCapture.bytes),
+    cleanup,
   }
-  const markActivity = () => {
-    // No idle window configured → activity has nothing to reset. This keeps
-    // the legacy single-wall-clock-timer path byte-identical even when an
-    // activity source (stdout/stderr capture, or an injected onActivity) is
-    // wired: without this guard armIdle() would schedule setTimeout(commitKill,
-    // undefined), which fires immediately and spuriously kills the child.
-    if (idleWindowMs === undefined) return
-    if (killCommitted) return
-    if (idleTimer !== undefined) clearTimeout(idleTimer)
-    armIdle()
-  }
-  // idleTimeoutMs present → inactivity window (reset on activity). Otherwise
-  // an EXPLICIT timeoutMs arms the single wall-clock timer; when timeoutMs is
-  // ALSO absent (the no-bounds case) NO term timer is armed — the function
-  // just awaits child exit, matching the unbounded in-process path.
-  if (idleWindowMs !== undefined) armIdle()
-  else if (timeoutMs !== undefined)
-    termTimer = setTimeout(commitKill, timeoutMs)
-  // Optional absolute lifetime cap (default off): never reset by activity.
-  if (maximumLifetimeMs !== undefined) {
-    maxTimer = setTimeout(commitKill, maximumLifetimeMs)
-  }
-  const unsubscribeActivity = params.onActivity?.(markActivity)
-
-  // Parent-cancellation kill (cancel-softlock fix): the PARENT's signal does
-  // the killing (the child never observes it — the request is
-  // JSON-serialized). On abort the SAME SIGTERM → SIGKILL grace escalation
-  // runs through the shared killCommitted latch, so a concurrent deadline
-  // commit wins and the abort becomes a no-op — never a double kill — and
-  // NO new wall-clock watchdog is armed: the grace settle stays the only
-  // timer. An already-aborted signal kills the just-spawned child
-  // immediately instead of letting it run. The kill is wrapped in
-  // commitKill's try/catch (the child may already be dead — ESRCH), so the
-  // listener can never throw out of the abort event and crash the parent.
-  const onParentAbort = (): void => {
-    commitKill(false)
-  }
-  if (processSignal !== undefined) {
-    if (processSignal.aborted) {
-      onParentAbort()
-    } else {
-      processSignal.addEventListener('abort', onParentAbort, { once: true })
-    }
-  }
-
-  const clearTimers = () => {
-    if (termTimer !== undefined) clearTimeout(termTimer)
-    if (idleTimer !== undefined) clearTimeout(idleTimer)
-    if (killTimer !== undefined) clearTimeout(killTimer)
-    if (maxTimer !== undefined) clearTimeout(maxTimer)
-    unsubscribeActivity?.()
-    // cancel-softlock fix: drop the parent-abort listener on EVERY settle
-    // path (ok / crashed / internal error) — no listener leak across spawns.
-    processSignal?.removeEventListener('abort', onParentAbort)
-  }
-
-  try {
-    const [stdoutCapture, stderrCapture] = await Promise.all([
-      captureStream(proc.stdout, SETTLE_STDOUT_CAP_BYTES, markActivity),
-      captureStream(proc.stderr, SETTLE_STDERR_CAP_BYTES, markActivity),
-    ])
-    const rawExit = await proc.exited
-    clearTimers()
-
-    const exitCode = typeof rawExit === 'number' ? rawExit : null
-    // PR-T1 precedence: crashed wins over everything (timeout, signal death,
-    // or non-zero exit all count as crashed here).
-    const crashReason: SettleCrashReason | undefined = timedOut
-      ? 'timeout'
-      : exitCode === null || exitCode !== 0
+  const crashReason: SettleCrashReason | undefined = timedOut
+    ? 'timeout'
+    : captureFailed ||
+        stdoutCapture.failed ||
+        stderrCapture.failed ||
+        cleanup.status !== 'complete'
+      ? 'internal_error'
+      : exitCode === null || exitCode !== 0 || processSignal?.aborted
         ? 'nonzero_exit'
         : undefined
+  if (crashReason !== undefined) return crashResult(crashReason, exitCode, base)
 
-    const base = {
-      exitCode,
-      durationMs: now() - startedAt,
-      stdoutBytes: stdoutCapture.totalBytes,
-      killed,
-      stderrTail: new TextDecoder().decode(stderrCapture.bytes),
+  const text = new TextDecoder().decode(stdoutCapture.bytes)
+  const lines = text.split('\n')
+  if (text.length > 0 && !text.endsWith('\n')) lines.pop()
+  const lastLine = [...lines].reverse().find((line) => line.trim().length > 0)
+  if (lastLine === undefined) {
+    if (stdoutCapture.totalBytes === 0)
+      return { outcome: 'missing_output', ...base }
+    return {
+      outcome: 'schema_invalid',
+      schemaError: 'child stdout had bytes but no newline-terminated JSON line',
+      ...base,
     }
-    if (crashReason !== undefined) {
-      return crashResult(crashReason, exitCode, base)
-    }
-
-    const text = new TextDecoder().decode(stdoutCapture.bytes)
-    const lines = text.split('\n')
-    // A trailing segment without a newline is an INCOMPLETE line (the child
-    // contract requires newline-terminated JSON lines) — drop it. This is
-    // also what keeps a cap-cut tail from being parsed as a complete line.
-    if (text.length > 0 && !text.endsWith('\n')) lines.pop()
-    const lastLine = [...lines].reverse().find((line) => line.trim().length > 0)
-
-    const baseWithStdout = { ...base, stdoutBytes: stdoutCapture.totalBytes }
-    if (lastLine === undefined) {
-      // ONLY a truly EMPTY stdout settles as missing_output. Stdout bytes
-      // with no complete newline-terminated line mean the child wrote
-      // something that never formed the contracted single JSON envelope:
-      // garbage output is never ok and never missing_output (security
-      // contract — garbage stdout settles crashed/truncated/schema_invalid,
-      // never ok).
-      if (stdoutCapture.totalBytes === 0) {
-        return { outcome: 'missing_output', ...baseWithStdout }
-      }
-      return {
-        outcome: 'schema_invalid',
-        schemaError:
-          'child stdout had bytes but no newline-terminated JSON line',
-        ...baseWithStdout,
-      }
-    }
-
-    let parsed: { receipt: AgentReceipt } | { error: string } | undefined
-    try {
-      const candidate = agentReceiptSchema.safeParse(JSON.parse(lastLine))
-      parsed = candidate.success
-        ? { receipt: candidate.data }
-        : {
-            error: formatValidationIssues({ issues: candidate.error.issues }),
-          }
-    } catch (error) {
-      parsed = { error: error instanceof Error ? error.message : String(error) }
-    }
-
-    if (parsed === undefined || 'error' in parsed) {
-      return {
-        outcome: 'schema_invalid',
-        ...(parsed !== undefined ? { schemaError: parsed.error } : {}),
-        ...baseWithStdout,
-      }
-    }
-    // Validated envelope + stdout cap exceeded → 'truncated' (still above
-    // 'ok' in the PR-T1 precedence).
-    if (stdoutCapture.totalBytes > SETTLE_STDOUT_CAP_BYTES) {
-      return {
-        outcome: 'truncated',
-        receipt: parsed.receipt,
-        ...baseWithStdout,
-      }
-    }
-    return { outcome: 'ok', receipt: parsed.receipt, ...baseWithStdout }
-  } catch {
-    clearTimers()
-    // The child must never be orphaned when the supervisor itself fails: a
-    // stream/settle error leaves a live child (and its process group) behind,
-    // so kill it best-effort before settling — SIGKILL immediately, no grace
-    // window needed for an internal error.
-    try {
-      killChild('SIGKILL')
-      killed = true
-    } catch {
-      // Child already gone.
-    }
-    // Total settle: even an unexpected supervisor-internal failure resolves
-    // as a structured crash instead of throwing.
-    return crashResult('internal_error', null, { killed })
   }
+  let parsed: { receipt: AgentReceipt } | { error: string }
+  try {
+    const candidate = agentReceiptSchema.safeParse(JSON.parse(lastLine))
+    parsed = candidate.success
+      ? { receipt: candidate.data }
+      : { error: formatValidationIssues({ issues: candidate.error.issues }) }
+  } catch (error) {
+    parsed = { error: error instanceof Error ? error.message : String(error) }
+  }
+  if ('error' in parsed)
+    return { outcome: 'schema_invalid', schemaError: parsed.error, ...base }
+  if (stdoutCapture.totalBytes > SETTLE_STDOUT_CAP_BYTES) {
+    return { outcome: 'truncated', receipt: parsed.receipt, ...base }
+  }
+  return { outcome: 'ok', receipt: parsed.receipt, ...base }
 }
 
 // ── P2-T8 adoption slice: supervised spawn request + env allowlist ────────

@@ -7,10 +7,13 @@ import type { OpenbuffClient } from '@openbuff/sdk'
 import type { AgentDefinition } from '@openbuff/sdk'
 import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 import {
+  captureEvaluationCommand,
   createEvaluationExecution,
   deriveEvaluationExecution,
-  prepareEvaluationCommand,
+  retainEvaluationRootUntilCleanup,
 } from './execution'
+import type { EvaluationCaptureResult } from './execution'
+import type { OwnedProcessScope } from '@codebuff/common/types/contracts/process-scope'
 
 const isolatedClients = new WeakSet<object>()
 const isolatedClientMarker = Symbol('isolated SDK adapter')
@@ -120,17 +123,79 @@ export function createIsolatedEvaluationClient(
         const request = path.join(root, 'request.json')
         const response = path.join(root, 'response.json')
         const events = path.join(root, 'events.jsonl')
-        const stderrPath = path.join(root, 'stderr')
-        const stderrFd = fs.openSync(stderrPath, 'wx')
         fs.writeFileSync(
           request,
           JSON.stringify({ ...payload, input: { ...payload.input, env } }),
           { flag: 'wx' },
         )
         fs.writeFileSync(events, '', { flag: 'wx' })
+        let retained = false
+        let scope: OwnedProcessScope | undefined
+        let pid: number | undefined
+        let eventFd: number | undefined
+        let polling: ReturnType<typeof setInterval> | undefined
+        let evidenceError: Error | undefined
+        let eventOffset = 0
+        let eventSeenBytes = 0
+        let eventsReplayed = 0
+        let pendingEvent = ''
+        const decoder = new StringDecoder('utf8')
+        const buffer = Buffer.alloc(64 * 1024)
+        const limit = 8 * 1024 * 1024
+        // The source worker refuses event lines before writing past 8 MiB.
+        // Keep sampling and dropping after failure until scope cleanup ends.
+        const drain = () => {
+          if (eventFd === undefined) return
+          try {
+            const available = fs.fstatSync(eventFd).size
+            eventSeenBytes = Math.max(eventSeenBytes, available)
+            while (eventOffset < Math.min(available, limit)) {
+              const count = fs.readSync(
+                eventFd,
+                buffer,
+                0,
+                Math.min(
+                  buffer.length,
+                  available - eventOffset,
+                  limit - eventOffset,
+                ),
+                eventOffset,
+              )
+              if (!count) break
+              eventOffset += count
+              if (evidenceError) continue
+              pendingEvent += decoder.write(buffer.subarray(0, count))
+              let newline: number
+              while ((newline = pendingEvent.indexOf('\n')) >= 0) {
+                const line = pendingEvent.slice(0, newline)
+                pendingEvent = pendingEvent.slice(newline + 1)
+                if (line) {
+                  handleEvent?.(JSON.parse(line))
+                  eventsReplayed++
+                }
+              }
+            }
+            if (available > limit)
+              throw new Error('Isolated SDK event evidence exceeds 8 MiB')
+          } catch (error) {
+            evidenceError ??=
+              error instanceof Error ? error : new Error(String(error))
+            pendingEvent = ''
+            void scope?.requestStop('output-limit')
+          }
+        }
+        const stopMonitoring = () => {
+          if (polling !== undefined) clearInterval(polling)
+          drain()
+          if (eventFd !== undefined) {
+            fs.closeSync(eventFd)
+            eventFd = undefined
+          }
+        }
         try {
           signal?.throwIfAborted()
-          const dispatch = await prepareEvaluationCommand(
+          eventFd = fs.openSync(events, 'r')
+          const pending = captureEvaluationCommand(
             process.execPath,
             [
               '--no-env-file',
@@ -142,132 +207,117 @@ export function createIsolatedEvaluationClient(
             {
               cwd: root,
               env: { ...env, OPENBUFF_TELEMETRY: '0', DO_NOT_TRACK: '1' },
-              stdio: ['ignore', stderrFd, stderrFd],
-              detached: process.platform !== 'win32',
+              signal,
               execution,
+              captureLimitBytes: limit,
               branchId: 'supplemental.evaluator.isolated-worker',
+              onProcessScope: (owned, child) => {
+                scope = owned
+                pid = child.pid
+              },
             },
+          ).then(
+            (value) => ({ value }),
+            (error) => ({ error }),
           )
-          const child = dispatch()
-          let escalation: ReturnType<typeof setTimeout> | undefined
-          let evidenceError: Error | undefined
-          let eventOffset = 0
-          let eventsReplayed = 0
-          let pendingEvent = ''
-          const decoder = new StringDecoder('utf8')
-          const eventFd = fs.openSync(events, 'r')
-          const kill = (termination: NodeJS.Signals) => {
-            try {
-              if (process.platform !== 'win32' && child.pid)
-                process.kill(-child.pid, termination)
-              else child.kill(termination)
-            } catch {
-              /* already exited */
-            }
-          }
-          const abort = () => {
-            kill('SIGTERM')
-            escalation ??= setTimeout(() => kill('SIGKILL'), 250)
-          }
-          // Replay complete prefixes while running, including paid finish events.
-          // Bounds describe evidence transport, not OS resource confinement.
-          const drain = () => {
-            if (evidenceError) return
-            try {
-              const available = fs.fstatSync(eventFd).size
-              const limit = 8 * 1024 * 1024
-              const buffer = Buffer.alloc(64 * 1024)
-              while (eventOffset < Math.min(available, limit)) {
-                const count = fs.readSync(
-                  eventFd,
-                  buffer,
-                  0,
-                  Math.min(
-                    buffer.length,
-                    available - eventOffset,
-                    limit - eventOffset,
-                  ),
-                  eventOffset,
-                )
-                if (!count) break
-                eventOffset += count
-                pendingEvent += decoder.write(buffer.subarray(0, count))
-                let newline: number
-                while ((newline = pendingEvent.indexOf('\n')) >= 0) {
-                  const line = pendingEvent.slice(0, newline)
-                  pendingEvent = pendingEvent.slice(newline + 1)
-                  if (line) {
-                    handleEvent?.(JSON.parse(line))
-                    eventsReplayed++
-                  }
-                }
-              }
-              if (available > limit)
-                throw new Error('Isolated SDK event evidence exceeds 8 MiB')
-              if (fs.statSync(stderrPath).size > limit)
-                throw new Error('Isolated SDK stderr exceeds 8 MiB')
-            } catch (error) {
-              evidenceError =
-                error instanceof Error ? error : new Error(String(error))
-              abort()
-            }
-          }
-          const polling = setInterval(drain, 20)
-          signal?.addEventListener('abort', abort, { once: true })
-          if (signal?.aborted) abort()
-          let launchError: Error | undefined
-          const exitCode = await new Promise<number | null>((resolve) => {
-            child.once('error', (error) => {
-              launchError = error
-            })
-            child.once('close', resolve)
-          })
-          signal?.removeEventListener('abort', abort)
-          if (escalation) clearTimeout(escalation)
-          clearInterval(polling)
+          polling = setInterval(drain, 20)
+          const settled = await pending
           drain()
-          fs.closeSync(eventFd)
-          if (escalation) clearTimeout(escalation)
+          const capture: EvaluationCaptureResult | undefined =
+            'value' in settled
+              ? settled.value
+              : settled.error.processCleanup
+                ? settled.error
+                : undefined
+          const captureError: Error | undefined =
+            'error' in settled ? settled.error : undefined
+          const withCapture = (error: Error) =>
+            Object.assign(error, capture ?? {})
           const evidence = {
             adapterScope: 'child_process_replacement_environment',
-            pid: child.pid,
+            pid,
             cwd: root,
             home: env.HOME,
-            exitCode,
-            cancelled: Boolean(signal?.aborted),
+            exitCode: capture?.commandExitCode ?? null,
+            cancelled: Boolean(
+              signal?.aborted || captureError?.name === 'AbortError',
+            ),
             eventBytes: eventOffset,
+            eventSeenBytes,
             eventsReplayed,
+            eventIncomplete: pendingEvent.length > 0,
             evidenceError: evidenceError?.message,
+            processCleanup: capture?.processCleanup,
+            outputCapture: capture?.outputCapture,
+          }
+          if (capture?.processCleanup.status !== 'complete') {
+            observations.push(evidence)
+            throw withCapture(
+              captureError ??
+                new Error('Isolated SDK worker cleanup was not observed'),
+            )
           }
           if (fs.existsSync(response)) {
-            if (fs.statSync(response).size > 8 * 1024 * 1024) {
+            if (fs.statSync(response).size > limit) {
               observations.push({
                 ...evidence,
                 evidenceError: 'Isolated SDK response exceeds 8 MiB',
               })
-              throw new Error('Isolated SDK response exceeds 8 MiB')
+              throw withCapture(
+                new Error('Isolated SDK response exceeds 8 MiB'),
+              )
             }
             const output = JSON.parse(fs.readFileSync(response, 'utf8'))
-            observations.push({ ...evidence, ...output.observation })
-            signal?.throwIfAborted()
-            if (evidenceError) throw evidenceError
-            if (output.error) throw new Error(output.error)
-            if (exitCode !== 0)
-              throw new Error(`Isolated SDK worker exited ${exitCode}`)
+            observations.push({ ...output.observation, ...evidence })
+            if (signal?.aborted)
+              throw withCapture(
+                signal.reason instanceof Error
+                  ? signal.reason
+                  : new Error(
+                      String(
+                        signal.reason ?? 'Isolated SDK worker was aborted',
+                      ),
+                    ),
+              )
+            if (evidenceError) throw withCapture(evidenceError)
+            if (output.error) throw withCapture(new Error(output.error))
+            if (captureError) throw withCapture(captureError)
             return output.result
           }
           observations.push(evidence)
-          signal?.throwIfAborted()
-          if (evidenceError) throw evidenceError
-          throw (
-            launchError ??
-            new Error(
-              `Isolated SDK worker exited ${exitCode}: ${fs.readFileSync(stderrPath, 'utf8').slice(0, 2000)}`,
+          if (signal?.aborted)
+            throw withCapture(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error(
+                    String(signal.reason ?? 'Isolated SDK worker was aborted'),
+                  ),
             )
+          if (evidenceError) throw withCapture(evidenceError)
+          throw withCapture(
+            captureError ??
+              new Error(
+                `Isolated SDK worker exited ${capture.commandExitCode}: ${capture.stderr.slice(0, 2_000)}`,
+              ),
           )
+        } catch (error) {
+          retained = retainEvaluationRootUntilCleanup(error, () => {
+            stopMonitoring()
+            fs.rmSync(root, { recursive: true, force: true })
+          })
+          if (retained && error && typeof error === 'object') {
+            try {
+              Object.assign(error, { retainedWorkerRoot: root })
+            } catch {
+              /* preserve original failure */
+            }
+          }
+          throw error
         } finally {
-          fs.closeSync(stderrFd)
-          fs.rmSync(root, { recursive: true, force: true })
+          if (!retained) {
+            stopMonitoring()
+            fs.rmSync(root, { recursive: true, force: true })
+          }
         }
       },
     )

@@ -18,7 +18,7 @@ const evidenceDir = path.resolve(
   argument('--evidence-dir') ??
     '/tmp/openbuff-body-execution-20261106/B02/actual-consumers',
 )
-assert.equal(Bun.version, '1.3.5', 'B02 acceptance requires pinned Bun')
+assert.equal(Bun.version, '1.4.4', 'B02 acceptance requires pinned Bun')
 mkdirSync(evidenceDir, { recursive: true })
 const invocationDir = path.join(evidenceDir, crypto.randomUUID())
 mkdirSync(invocationDir)

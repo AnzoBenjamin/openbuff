@@ -7,6 +7,7 @@ import path from 'node:path'
 import { z } from 'zod'
 
 import * as mainPrompt from '@codebuff/agent-runtime/main-prompt'
+import { checkJobParams } from '@codebuff/common/tools/params/tool/check-job'
 import { captureRootDeadline, isExecutionDeadlineSignal } from '@codebuff/common/util/execution-context'
 import { OpenbuffClient } from '../client'
 import { loadHostConfigSnapshot, nodeConfigReadFs } from '../host-config'
@@ -283,6 +284,13 @@ describe('B19 check_job settlement execution context', () => {
     expect(() => process.kill(job.child.pid!, 0)).not.toThrow()
     fs.writeFileSync(finishFile, 'finish')
     await host.calls.find(call => call.child === job.child)!.close
+    // Join the scope cleanup already requested by kill_on_timeout and exit.
+    const cleanup = await job.nodeLaunch!.scope.requestStop('job-kill')
+    expect(cleanup.status).toBe('complete')
+    expect(cleanup.finalObservation).toMatchObject({ leader: 'exited-reaped', membershipComplete: true, identity: 'verified',
+      streams: { stdin: 'closed', stdout: 'drained', stderr: 'drained' } })
+    expect(cleanup.finalObservation.members.some(member => member.disposition === 'living')).toBe(false)
+    expect(job.processCleanup).toBe(cleanup)
     expect(job.status).toBe('stopped')
     const settled = value(await checkJobModule.checkJob({ jobId: job.jobId, owner,
       executionContext: contextRequest(host) }))
@@ -294,7 +302,7 @@ describe('B19 check_job settlement execution context', () => {
     expect(later.touchedPaths).toBeUndefined()
     expect(gitCalls(host)).toHaveLength(1)
     observedGit(host)
-    retain('stopping-then-real-exit', host, { stopping, settled, later })
+    retain('stopping-then-real-exit', host, { stopping, cleanup, settled, later })
   }, 20_000)
 
   test('settlement.kill: failed signal delivery leaves running without attributing dirt', async () => {
@@ -586,6 +594,40 @@ describe('B19 check_job settlement execution context', () => {
     retain('registered-deadline-waiter', host, { denied, result, later })
   })
 
+  test('settlement.sdk: a refused side observation preserves the job id and native failure through normalization', async () => {
+    const f = createSdkCallbackFixture('settlement-refusal-result')
+    cleanups.push(f.close)
+    const refusal = { ok: false as const, reason: 'unavailable' as const,
+      cause: 'Native report plan identity mismatch' }
+    const jobId = 'settlement-refused-job'
+    const jobSpy = spyOn(checkJobModule, 'checkJob').mockRejectedValue(new ExecutionRefusalError(refusal))
+    restore.push(() => jobSpy.mockRestore())
+    const userSpy = spyOn(database, 'getUserInfoFromApiKey').mockResolvedValue({
+      id: 'fixture-user', email: 'fixture@example.invalid', discord_id: null, stripe_customer_id: null,
+      banned: false, created_at: new Date('2024-01-01T00:00:00Z'),
+    })
+    const agentSpy = spyOn(database, 'fetchAgentFromDatabase').mockResolvedValue(null)
+    const startSpy = spyOn(database, 'startAgentRun').mockImplementation(async () => randomUUID())
+    const finishSpy = spyOn(database, 'finishAgentRun').mockResolvedValue(undefined)
+    const stepSpy = spyOn(database, 'addAgentStep').mockImplementation(async () => randomUUID())
+    for (const current of [userSpy, agentSpy, startSpy, finishSpy, stepSpy]) restore.push(() => current.mockRestore())
+    let observed: unknown
+    const promptSpy = spyOn(mainPrompt, 'callMainPrompt').mockImplementation(async params => {
+      const callback = await beginSdkCallback(params)
+      const handled = await callback.request({ toolName: 'check_job', input: { jobId } })
+      observed = handled.output
+      const result = { sessionState: callback.sessionState, output: { type: 'lastMessage' as const, value: [] } }
+      await params.sendAction({ action: { type: 'prompt-response', promptId: params.promptId, ...result } })
+      return result
+    })
+    restore.push(() => promptSpy.mockRestore())
+    await new OpenbuffClient({ ...f.options, approvalMode: 'allow-all', executionProfile: fullAccess })
+      .run({ agent: 'base2', prompt: 'settlement refusal result control' })
+    expect(jobSpy).toHaveBeenCalledTimes(1)
+    expect(checkJobParams.outputSchema.safeParse(observed).success).toBe(true)
+    expect(observed).toEqual([{ type: 'json', value: { jobId,
+      errorMessage: 'Native report plan identity mismatch', executionRefusal: refusal } }])
+  }, 20_000)
   test('settlement.sdk: actual SDK callbacks pin the current owner, signal and execution context over tool input', async () => {
     const f = createSdkCallbackFixture('settlement-pinning')
     cleanups.push(f.close)

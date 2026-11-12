@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process'
 
 import { isExecutionDeadlineSignal } from '@codebuff/common/util/execution-context'
+import { createNodeProcessScope } from '@codebuff/common/util/node-process-scope'
+import { captureRegisteredNativeTarget, dispatchRegisteredNativeLaunch, inheritNativeExecutionPort, registerPreparedNativeLaunch } from './native-host-execution'
 
 import type { ChildProcess } from 'node:child_process'
 import type {
@@ -17,6 +19,8 @@ import type {
   TargetPermit,
 } from '@codebuff/common/types/contracts/execution-context'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+import type { CleanupResult, OwnedProcessScope, ScopeOutput } from '@codebuff/common/types/contracts/process-scope'
+import type { NativeFinalResult } from './native-exec'
 
 export class ExecutionRefusalError extends Error {
   constructor(readonly refusal: Refusal) {
@@ -69,6 +73,7 @@ export function deriveExecutionContext(
   if (context.signal?.aborted) return refusalForSignal(context.signal)
   try {
     const derived = context.execution.derive({ memoKey, limit })
+    if (derived.ok) inheritNativeExecutionPort(context.execution, derived.value)
     return derived.ok
       ? {
           ok: true,
@@ -103,9 +108,7 @@ export function captureNodeTarget(input: NodeTargetInput): Result<TargetDescript
   if (!context) return executionRefusal('unavailable', 'Captured execution context is unavailable')
   if (context.signal?.aborted) return refusalForSignal(context.signal)
   if (!input.branchId) return executionRefusal('invalid-context', 'Execution branch identity is unavailable')
-  try { return {
-    ok: true,
-    value: Object.freeze({
+  try { return captureRegisteredNativeTarget(context.execution, Object.freeze({
       executable: input.executable,
       argv: Object.freeze([...input.argv]),
       ...(input.shellCommandBytes !== undefined ? { shellCommandBytes: input.shellCommandBytes } : {}),
@@ -114,13 +117,13 @@ export function captureNodeTarget(input: NodeTargetInput): Result<TargetDescript
       allowedPaths: Object.freeze([...context.allowedPaths]),
       mode: context.mode,
       processType: input.processType ?? 'SYNC',
-      profile: Object.freeze({ ...context.profile, required: Object.freeze([...context.profile.required]) }),
+      profile: Object.freeze({ ...context.profile, required: Object.freeze([...context.profile.required]),
+        ...(context.profile.optional ? { optional: Object.freeze([...context.profile.optional]) } : {}) }),
       family: input.family ?? 'sync-shell',
       branchId: input.branchId,
       ...(input.environmentOverlay ? { environmentOverlay: Object.freeze({ ...input.environmentOverlay }) } : {}),
       adapterOptions: Object.freeze({ ...input.adapterOptions, runtime: 'node' }),
-    }),
-  } } catch {
+    })) } catch {
     return executionRefusal('invalid-context', 'Captured Node execution context is invalid')
   }
 }
@@ -129,7 +132,9 @@ export function prepareNodeLaunch(input: NodeTargetInput): Result<PreparedLaunch
   const target = captureNodeTarget(input)
   if (!target.ok) return target
   try {
-    return input.executionContext!.execution.prepareTarget({ target: target.value })
+    const prepared = input.executionContext!.execution.prepareTarget({ target: target.value })
+    if (prepared.ok) registerPreparedNativeLaunch(input.executionContext!.execution, target.value, prepared.value)
+    return prepared
   } catch {
     return executionRefusal('invalid-context', 'Execution launch facade is invalid')
   }
@@ -165,6 +170,8 @@ export type NodeDispatchHandle = Readonly<{
   observation: () => Result<Readonly<{ pid: number }>>
   resourceRefusal: () => Refusal | undefined
   remainingResourceMs: () => number | null
+  scope: OwnedProcessScope
+  nativeResult?: Promise<Result<NativeFinalResult>>
 }>
 
 export type NodeDispatchResult = Result<NodeDispatchHandle> | (Refusal & Readonly<{ dispatchFailed: true }>)
@@ -216,9 +223,22 @@ export function scheduleNodeDeadline(
 }
 
 export type NodeTerminationOptions = Readonly<{
-  terminate?: (child: ChildProcess, signal: 'SIGTERM' | 'SIGKILL') => boolean
   sigtermGraceMs?: number
+  output?: () => ScopeOutput
 }>
+
+// Failed scopes stay reachable for the trusted host, independently of result
+// labels. Serialized scope IDs and PID observations do not expose this handle.
+const ownedNodeScopes = new Map<OwnedProcessScope, { facts: () => LaunchFacts; child: ChildProcess; signal: AbortSignal }>()
+export async function joinNodeScopeCleanup(hostContextId: string): Promise<readonly CleanupResult[]> {
+  const owned = [...ownedNodeScopes].filter(([, value]) => value.facts().hostContextId === hostContextId)
+  const stopped = owned.filter(([scope, value]) => value.signal.aborted || scope.currentCleanup() !== undefined ||
+    value.child.exitCode != null || value.child.signalCode != null)
+  return Promise.all(stopped.map(([scope]) => scope.requestStop('owner-shutdown')))
+}
+export function retainedNodeScopes(hostContextId: string): readonly OwnedProcessScope[] {
+  return [...ownedNodeScopes].filter(([, value]) => value.facts().hostContextId === hostContextId).map(([scope]) => scope)
+}
 
 export function trustedNodeSpawn(context?: ExecutionAdapterContext): CodebuffSpawn {
   return context?.spawn ?? ((command, args = [], options) => spawn(command, [...args], options ?? {}))
@@ -232,51 +252,29 @@ export function dispatchNodeLaunch(
 ): NodeDispatchResult {
   const { launch, permit } = admitted
   try {
+    if (launch.facts().profile?.selected?.backend === 'native-exec')
+      return dispatchRegisteredNativeLaunch(admitted, termination)
     const dispatched = launch.dispatchNow(permit, (input, observer): NodeDispatchHandle => {
+      if (launch.facts().profile?.selected?.backend === 'native-exec')
+        throw new Error('Native execution requires the captured native adapter')
       let child: ChildProcess | undefined
-      let closed = false
       let cancelDeadlineTimer: (() => void) | undefined
-      let cancelEscalationTimer: (() => void) | undefined
+      let scope: OwnedProcessScope | undefined
       let lifetimeRefusal: Refusal | undefined
-      let killRequested = false
+      let leaderExited = false
       const startedAt = performance.now()
-      const terminate = (signal: 'SIGTERM' | 'SIGKILL') => {
-        if (!child || closed) return false
-        // Resource expiry and the local deadline backstop can arrive together.
-        // One kill request is enough; settlement does not prove process death.
-        if (signal === 'SIGKILL') {
-          if (killRequested) return false
-          killRequested = true
-        }
-        try { return termination.terminate ? termination.terminate(child, signal) : child.kill(signal) }
-        catch { return false }
-      }
       const remaining = () => input.resourceRemainingMs === null ? Infinity
         : Math.max(0, input.resourceRemainingMs - (performance.now() - startedAt))
       const remainingResourceMs = () => input.resourceRemainingMs === null ? null : remaining()
       const onResourceAbort = () => {
-        if (!child || closed) return
-        lifetimeRefusal = refusalForSignal(input.resourceSignal)
-        if (refusalForSignal(input.resourceSignal).reason === 'deadline-exhausted' || remaining() <= 0) {
-          terminate('SIGKILL')
-          return
-        }
-        const graceMs = Math.min(termination.sigtermGraceMs ?? 5_000, remaining())
-        const graceStartedAt = performance.now()
-        const signalled = terminate('SIGTERM')
-        if (closed) return
-        if (!signalled || graceMs <= 0) {
-          terminate('SIGKILL')
-          return
-        }
-        cancelEscalationTimer = scheduleNodeDeadline(
-          () => Math.max(0, graceMs - (performance.now() - graceStartedAt)),
-          () => terminate('SIGKILL'),
-        )
+        if (!child) return
+        const refusal = refusalForSignal(input.resourceSignal)
+        if (!leaderExited) lifetimeRefusal = refusal
+        const deadline = refusal.reason === 'deadline-exhausted' || remaining() <= 0
+        void scope?.requestStop(deadline ? 'deadline' : 'owner-cancel', deadline)
       }
       const clearLifetime = () => {
         cancelDeadlineTimer?.()
-        cancelEscalationTimer?.()
         input.resourceSignal.removeEventListener('abort', onResourceAbort)
       }
       // Node may synchronously emit AbortError from its own signal listener.
@@ -298,6 +296,19 @@ export function dispatchNodeLaunch(
       try { child = createChild(input) }
       catch (error) { clearLifetime(); throw error }
       const nodeChild = child
+      scope = createNodeProcessScope(nodeChild, {
+        detached: input.adapterOptions.detached === true,
+        termGraceMs: termination.sigtermGraceMs ?? 200,
+        originalDeadline: launch.facts().deadlines.resourceLifetime,
+        launchFacts: () => launch.facts(),
+        output: termination.output,
+        onStop() { observer.cleanupCommitted() },
+        onCleanup(result) {
+          if (result.status === 'complete') { clearLifetime(); ownedNodeScopes.delete(scope!) }
+        },
+      })
+      ownedNodeScopes.set(scope, { facts: () => launch.facts(), child: nodeChild, signal: input.resourceSignal })
+      nodeChild.once('exit', () => { leaderExited = true })
       // Observe the child immediately. A signal may abort inside an injected
       // spawn seam, and its termination may synchronously close the child.
       // Install all start/failure observers before handling that abort.
@@ -318,8 +329,7 @@ export function dispatchNodeLaunch(
           : executionRefusal('unavailable', error.message))
       })
       nodeChild.once('close', () => {
-        closed = true
-        clearLifetime()
+        // Leader close cannot disarm a covered descendant's cleanup schedule.
         if (startSettled) return
         const cause = 'Node process closed without a validated spawn event and PID'
         const recorded = observer.failure({ source: 'adapter-observation-error', cause })
@@ -328,14 +338,14 @@ export function dispatchNodeLaunch(
       })
       if (input.resourceRemainingMs !== null) {
         cancelDeadlineTimer = scheduleNodeDeadline(remainingResourceMs, () => {
-          lifetimeRefusal = input.resourceSignal.aborted ? refusalForSignal(input.resourceSignal)
+          if (!leaderExited) lifetimeRefusal = input.resourceSignal.aborted ? refusalForSignal(input.resourceSignal)
             : lifetimeRefusal ?? executionRefusal('deadline-exhausted', 'Execution resource deadline exhausted')
-          terminate('SIGKILL')
+          void scope?.requestStop('deadline', true)
         })
       }
       if (input.resourceSignal.aborted) onResourceAbort()
       return Object.freeze({ child: nodeChild, input, facts: () => launch.facts(), started,
-        observation: () => observed, resourceRefusal: () => lifetimeRefusal, remainingResourceMs })
+        observation: () => observed, resourceRefusal: () => lifetimeRefusal, remainingResourceMs, scope })
     })
     if (dispatched.ok) return { ok: true, value: dispatched.value.handle }
     return dispatched.reason === 'dispatch-failed'

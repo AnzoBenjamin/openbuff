@@ -7,6 +7,11 @@ export function executionFixture(options: { refusal?: Refusal; refusalFor?: (tar
   const resource = new AbortController()
   let dispatches = 0
   const observer: LaunchObserver = {
+    nativeTransportObserved() { return { ok: false, reason: 'unavailable', cause: 'Fixture has no native transport' } },
+    nativePrepared() { return { ok: false, reason: 'unavailable', cause: 'Fixture has no native preparation' } },
+    commitNativeTargetEntry() { return { ok: false, reason: 'unavailable', cause: 'Fixture has no native entry authority' } },
+    nativeTargetEntered() { return { ok: false, reason: 'unavailable', cause: 'Fixture has no native entry observation' } },
+    cleanupCommitted() { return { ok: true, value: undefined } },
     spawnObserved(value) { observations.push({ phase: 'spawn-observed', ...value }); return { ok: true, value: { processObservationId: 'fixture-observation' } } },
     failure(value) { observations.push({ phase: 'dispatch-failed', ...value }); return { ok: true, value: undefined } },
   }

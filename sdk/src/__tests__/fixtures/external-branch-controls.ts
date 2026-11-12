@@ -6,6 +6,8 @@ import path from 'node:path'
 import { spawn as nodeSpawn } from 'node:child_process'
 import { WebSocketServer } from 'ws'
 import { captureRootDeadline } from '@codebuff/common/util/execution-context'
+import { registerInjectedNodeScopeDriver } from '@codebuff/common/util/node-process-scope'
+import { processScopeClock } from '@codebuff/common/util/owned-process-scope'
 import { hashActionInput } from '@codebuff/common/util/action-outcomes'
 import { markMCPConfigOrigin } from '@codebuff/common/mcp/client'
 import { createHostExecutionServices } from '../../host-execution'
@@ -21,6 +23,7 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import type { AgentReceipt } from '@codebuff/common/types/agent-handoff'
 import type { LaunchFacts, PolicyInput, Result } from '@codebuff/common/types/contracts/execution-context'
+import type { ScopeStreams } from '@codebuff/common/types/contracts/process-scope'
 
 export type Control = 'happy' | 'denied' | 'unavailable' | 'pre-aborted' | 'deadline-zero' | 'delayed-authorizer-cancellation' | 'exhausted-before-later-branch'
 export const BASE_CONTROLS: readonly Control[] = ['happy', 'denied', 'unavailable', 'pre-aborted', 'deadline-zero', 'delayed-authorizer-cancellation']
@@ -301,6 +304,39 @@ function syntheticMcpChild() {
     done()
   } })
   Object.assign(child, { stdin })
+  let reaped = false, closed = false
+  let resolveExit!: (value: 'exited-reaped') => void
+  let resolveStreams!: (value: ScopeStreams) => void
+  const leaderExited = new Promise<'exited-reaped'>(resolve => { resolveExit = resolve })
+  const streamsFinished = new Promise<ScopeStreams>(resolve => { resolveStreams = resolve })
+  const streams = (): ScopeStreams => ({
+    stdin: closed || child.stdin?.writableEnded ? 'closed' : 'open',
+    stdout: child.stdout?.readableEnded ? 'drained' : closed ? 'closed-incomplete' : 'open',
+    stderr: child.stderr?.readableEnded ? 'drained' : closed ? 'closed-incomplete' : 'open',
+  })
+  child.once('exit', () => { reaped = true; resolveExit('exited-reaped') })
+  child.once('close', () => {
+    reaped = true; closed = true; resolveExit('exited-reaped')
+    child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy()
+    resolveStreams(streams())
+  })
+  // Synthetic protocol lifecycle only. Closed pipes without EOF stay incomplete;
+  // the trusted registration fixes the tier to injected and grants no OS proof.
+  registerInjectedNodeScopeDriver(child, {
+    leaderExited, streamsFinished,
+    async observe() { return {
+      sampledAtMs: processScopeClock.nowMs(), clockDomainId: processScopeClock.domainId,
+      leader: reaped ? 'exited-reaped' : 'running', scopePresence: closed ? 'absent' : 'living',
+      members: [], membershipComplete: true, identity: 'verified', streams: streams(),
+    } },
+    async signal(signal) {
+      const atMs = processScopeClock.nowMs()
+      if (closed) return { signal, atMs, targetTier: 'injected', result: 'already-absent' }
+      return { signal, atMs, targetTier: 'injected', result: child.kill(signal) ? 'delivered' : 'unknown' }
+    },
+    closeInput() { child.stdin?.end() },
+    abandonStreams() { child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy() },
+  })
   queueMicrotask(() => child.emit('spawn'))
   return child
 }

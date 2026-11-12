@@ -12,6 +12,7 @@ import type {
   ProfileRequest,
   ResourceHandle,
   Result,
+  Limit,
 } from '../../types/contracts/execution-context'
 
 export function value<T>(result: Result<T>): T {
@@ -20,7 +21,10 @@ export function value<T>(result: Result<T>): T {
 }
 
 /** Real private authority; the policy/classifier are explicit fixture stubs. */
-export function executionFixture(overrides: Partial<HostAuthorityInputs> = {}) {
+export function executionFixture(
+  overrides: Partial<HostAuthorityInputs> = {},
+  rootLimit: Limit = { kind: 'unbounded' },
+) {
   const events: LaunchEvent[] = []
   const stop = new AbortController()
   const clock = overrides.clock ?? {
@@ -99,9 +103,7 @@ export function executionFixture(overrides: Partial<HostAuthorityInputs> = {}) {
   const lifetime = value(
     authority.registerRootLifetime({
       signal: stop.signal,
-      boundary: value(
-        captureRootDeadline({ clock, limit: { kind: 'unbounded' } }),
-      ),
+      boundary: value(captureRootDeadline({ clock, limit: rootLimit })),
     }),
   )
   const owner = value(

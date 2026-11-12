@@ -6,6 +6,8 @@ import { finished } from 'node:stream/promises'
 
 import type { Readable } from 'node:stream'
 
+export const MAX_TERMINAL_SPOOL_BYTES = 10 * 1024 * 1024
+
 /** Disk-backed full output, created only when the inline output overflows. */
 export class TerminalOutputSpool {
   private readonly dir = fs.mkdtempSync(
@@ -28,6 +30,8 @@ export class TerminalOutputSpool {
     ),
   )
   private error: unknown
+  private retainedBytes = 0
+  private droppedBytes = 0
 
   constructor(stdout: string, stderr: string) {
     for (const stream of Object.values(this.streams)) {
@@ -35,14 +39,24 @@ export class TerminalOutputSpool {
         this.error = error
       })
     }
-    this.streams.stdout.write(stdout)
-    this.streams.stderr.write(stderr)
+    this.write('stdout', stdout)
+    this.write('stderr', stderr)
+  }
+
+  get bytesRetained(): number { return this.retainedBytes }
+  get bytesDropped(): number { return this.droppedBytes }
+  private write(name: 'stdout' | 'stderr', text: string): boolean {
+    const bytes = Buffer.from(text)
+    const keep = Math.min(bytes.length, MAX_TERMINAL_SPOOL_BYTES - this.retainedBytes)
+    this.retainedBytes += keep
+    this.droppedBytes += bytes.length - keep
+    return keep === 0 || this.streams[name].write(bytes.subarray(0, keep))
   }
 
   append(name: 'stdout' | 'stderr', text: string, source: Readable): void {
     if (this.error) return
     const stream = this.streams[name]
-    if (!stream.write(text)) {
+    if (!this.write(name, text)) {
       source.pause()
       const resume = () => {
         stream.off('drain', resume)
@@ -59,6 +73,7 @@ export class TerminalOutputSpool {
     logBytes?: number
     logPersisted?: false
     logError?: string
+    logComplete?: boolean
   }> {
     let output: fs.WriteStream | undefined
     let completion: Promise<unknown> | undefined
@@ -101,7 +116,7 @@ export class TerminalOutputSpool {
           fs.promises.unlink(path.join(this.dir, name)),
         ),
       )
-      return { fullLogPath, logBytes }
+      return { fullLogPath, logBytes, logComplete: this.droppedBytes === 0 }
     } catch (error) {
       for (const stream of Object.values(this.streams)) stream.destroy()
       output?.destroy()

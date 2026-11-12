@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { OpenbuffClient } from '../client'
+import { captureRunDeadline } from '../run'
 import * as hostExecution from '../host-execution'
 import { nodeConfigReadFs } from '../host-config'
 import { createNodeFileSystem } from '../tools/node-filesystem'
@@ -18,6 +19,8 @@ import type { ConfigReadFs } from '../provider-config'
 import type { HostConfigurationInputs } from '../host-config'
 import type { OpenbuffClientOptions } from '../run'
 import type { RunState } from '../run-state'
+import type { JournalEvent } from '@codebuff/common/types/contracts/agent-runtime'
+import type { AgentState } from '@codebuff/common/types/session-state'
 
 const roots: string[] = []
 const children: ChildProcess[] = []
@@ -102,7 +105,7 @@ function fixture(configuration: Record<string, unknown> = {}) {
   const run = (calls: unknown[], options: OpenbuffClientOptions = {}, signal?: AbortSignal) =>
     client.run({ agent: program, prompt: JSON.stringify(calls), ...options, signal })
   const terminal = (command: string, extra: Record<string, unknown> = {}) => ({ toolName: 'run_terminal_command', input: { command, process_type: 'SYNC', ...extra } })
-  return { root, configFile, environment, hostConfiguration, configReadFs, configReads, launches, launch, spawned, events, callbacks, run, terminal }
+  return { root, configFile, environment, hostConfiguration, configReadFs, configReads, launches, launch, spawned, events, callbacks, run, terminal, client }
 }
 
 function terminalStarts(events: LaunchEvent[]) {
@@ -248,6 +251,57 @@ describe('B19 actual programmatic run host wiring', () => {
     expect(JSON.stringify(result)).toMatch(/unavailable|required|backend/i)
   }, 15_000)
 
+  test('an inherited deadline retains its original expiry and a relative limit can only narrow it', async () => {
+    for (const runTimeoutMs of [undefined, 1000]) {
+      const f = fixture()
+      const captured = captureRunDeadline(5000)
+      if (!captured.ok) throw new Error(captured.cause)
+      const parent = captured.value.deadline
+      if (parent.kind !== 'finite') throw new Error('Expected a finite captured deadline')
+      const before = performance.now()
+      const result = await f.run([f.terminal('printf inherited-deadline')], { runDeadline: captured.value, runTimeoutMs })
+      expect(result.output.type).toBe('structuredOutput')
+      const starts = terminalStarts(f.events)
+      expect(starts).toHaveLength(1)
+      const deadline = starts[0]!.facts.deadlines.action
+      expect(deadline.kind).toBe('finite')
+      if (deadline.kind !== 'finite') throw new Error('Expected inherited finite action deadline')
+      expect(deadline.expiresAtMs).toBeLessThanOrEqual(parent.expiresAtMs)
+      if (runTimeoutMs === undefined) expect(deadline.expiresAtMs).toBe(parent.expiresAtMs)
+      else {
+        expect(deadline.expiresAtMs).toBeGreaterThanOrEqual(before + runTimeoutMs)
+        expect(deadline.expiresAtMs).toBeLessThanOrEqual(performance.now() + runTimeoutMs)
+        expect(deadline.expiresAtMs).toBeLessThan(parent.expiresAtMs)
+      }
+    }
+  })
+
+  test('an expired inherited deadline refuses before configuration and target setup', async () => {
+    const f = fixture()
+    const captured = captureRunDeadline(5)
+    if (!captured.ok) throw new Error(captured.cause)
+    const until = performance.now() + 10
+    while (performance.now() < until) { /* host/client setup consumed the original budget */ }
+    const result = await f.run([f.terminal('printf must-not-run')], { runDeadline: captured.value, runTimeoutMs: 5000 })
+    expect(result.runOutcome?.termination).toBe('deadline_exhausted')
+    expect(result.output).toMatchObject({ type: 'error', message: 'Run deadline exhausted before setup' })
+    expect(f.configReads).toEqual([])
+    expect(f.launches).toEqual([])
+  })
+
+  test('foreign-clock and malformed inherited deadline seeds fail closed before setup', async () => {
+    const captured = captureRunDeadline(5000)
+    if (!captured.ok) throw new Error(captured.cause)
+    for (const runDeadline of [{ ...captured.value, domainId: 'foreign-sdk-clock' },
+      { domainId: captured.value.domainId, sampledAtMs: captured.value.sampledAtMs }] as import('@codebuff/common/types/contracts/execution-context').RootDeadlineSeed[]) {
+      const f = fixture()
+      const result = await f.run([f.terminal('printf must-not-run')], { runDeadline })
+      expect(result.runOutcome).toMatchObject({ termination: 'failed', cause: { code: 'execution_invalid-context' } })
+      expect(f.configReads).toEqual([])
+      expect(f.launches).toEqual([])
+    }
+  })
+
   test('the root deadline starts before a blocking configuration read', async () => {
     const f = fixture()
     let blocked = false
@@ -292,10 +346,12 @@ describe('B19 actual programmatic run host wiring', () => {
 
   test('same-text caller cancellation during an actual SDK terminal action remains cancelled', async () => {
     const f = fixture(), stop = new AbortController()
+    const journal: JournalEvent[] = []
     let started!: () => void
     const start = new Promise<void>(resolve => { started = resolve })
     const pending = f.run([f.terminal('/usr/bin/sleep 30')], {
       runTimeoutMs: 5_000,
+      journalWriter: { append: (_id, event) => journal.push(structuredClone(event)) },
       recordExecution(event) {
         f.events.push(event)
         if (event.phase === 'spawn-observed' && event.facts.branchId === 'terminal.sync') started()
@@ -311,11 +367,81 @@ describe('B19 actual programmatic run host wiring', () => {
       expect(result.runOutcome).toMatchObject({ termination: 'cancelled', cause: { code: 'run_cancelled' } })
       expect(result.sessionState).toBeDefined()
       expect(terminalStarts(f.events)).toHaveLength(1)
+      const terminal = journal.filter(event => (event.payload as { terminal?: boolean }).terminal)
+      expect(terminal).toHaveLength(1)
+      expect(terminal[0].payload).toMatchObject({ runOutcome: result.runOutcome, taskAcceptance: { status: 'unknown' } })
+      expect(result.output).toEqual({ type: 'error', message: result.runOutcome!.cause!.message })
     } finally {
       if (timer !== undefined) clearTimeout(timer)
       stop.abort(new Error('Fixture cleanup'))
       await pending
     }
+  })
+
+  test('authenticated root deadline agrees across SDK output and terminal journal', async () => {
+    const f = fixture(), journal: JournalEvent[] = []
+    const result = await f.run([f.terminal('/usr/bin/sleep 30')], {
+      runTimeoutMs: 500,
+      journalWriter: { append: (_id, event) => journal.push(structuredClone(event)) },
+    })
+    expect(terminalStarts(f.events)).toHaveLength(1)
+    expect(result.runOutcome).toEqual({ termination: 'deadline_exhausted',
+      cause: { code: 'run_deadline_exhausted', message: 'Run timed out after 500ms' } })
+    const terminal = journal.filter(event => (event.payload as { terminal?: boolean }).terminal)
+    expect(terminal).toHaveLength(1)
+    expect(terminal[0].payload).toMatchObject({ runOutcome: result.runOutcome, taskAcceptance: { status: 'unknown' } })
+    expect(result.output).toEqual({ type: 'error', message: result.runOutcome!.cause!.message })
+  }, 5_000)
+
+  test('caller abort after terminal journal publication preserves the finalized outcome', async () => {
+    const f = fixture(), stop = new AbortController(), journal: JournalEvent[] = []
+    const result = await f.run([], {
+      journalWriter: { append: (_id, event) => {
+        journal.push(structuredClone(event))
+        if ((event.payload as { terminal?: boolean }).terminal) stop.abort(new Error('late caller cancellation'))
+      } },
+    }, stop.signal)
+    expect(stop.signal.aborted).toBe(true)
+    expect(result.runOutcome).toEqual({ termination: 'completed' })
+    expect(result.output.type).toBe('structuredOutput')
+    const terminal = journal.filter(event => (event.payload as { terminal?: boolean }).terminal)
+    expect(terminal).toHaveLength(1)
+    expect(terminal[0].payload).toMatchObject({ runOutcome: result.runOutcome })
+  })
+
+  test('child-local failure cannot select the root outcome by clearing mutable ancestry', async () => {
+    const f = fixture(), journal: Array<{ runId: string; event: JournalEvent }> = []
+    const child: AgentDefinition = {
+      id: 'b19-child-outcome', displayName: 'Child outcome control', model: 'fixture-model',
+      toolNames: [], outputMode: 'structured_output',
+      handleSteps: function* ({ agentState }) {
+        const state = agentState as unknown as AgentState
+        state.ancestorRunIds = []
+        throw new Error('Execution deadline exhausted')
+      },
+    }
+    const parent: AgentDefinition = {
+      id: 'b19-parent-outcome', displayName: 'Parent outcome control', model: 'fixture-model',
+      toolNames: ['spawn_agent_inline'], spawnableAgents: [child.id], outputMode: 'structured_output',
+      handleSteps: function* ({ agentState }) {
+        // The runtime's internal inline tool is omitted from the public ToolCall union.
+        yield { toolName: 'spawn_agent_inline', input: { agent_type: 'b19-child-outcome', prompt: 'local failure control' } } as unknown as ToolCall
+        const state = agentState as unknown as AgentState
+        state.output = { childReturned: true }
+      },
+    }
+    const result = await f.client.run({ agent: parent, prompt: 'root outcome control', agentDefinitions: [child],
+      journalWriter: { append: (runId, event) => journal.push({ runId, event: structuredClone(event) }) },
+    })
+    expect(result.runOutcome).toEqual({ termination: 'completed' })
+    const terminal = journal.filter(({ event }) => (event.payload as { terminal?: boolean }).terminal)
+    expect(terminal).toHaveLength(2)
+    const rootRunId = result.sessionState!.mainAgentState.runId
+    const root = terminal.find(row => row.runId === rootRunId)!
+    const local = terminal.find(row => row.runId !== rootRunId)!
+    expect(root.event.payload).toMatchObject({ runOutcome: result.runOutcome })
+    expect(local.event.payload).toMatchObject({ runOutcome: { termination: 'failed',
+      cause: { code: 'programmatic_execution_error' } } })
   })
 
   test.each([false, true])('child inheritance=%s preserves deletion and keeps provider credentials separate', async inheritEnv => {

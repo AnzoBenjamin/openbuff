@@ -13,6 +13,7 @@ import {
 } from './run-terminal-command'
 import { raceAbort } from './concurrency'
 import { ExecutionRefusalError, refusalForSignal } from '../services/execution-launch'
+import { processCleanupSchema } from '@codebuff/common/tools/params/process-cleanup'
 
 import type { BackgroundJobOwner } from './background-jobs'
 import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
@@ -304,6 +305,13 @@ function buildCheckJobPollResult(params: {
     exitCode?: number | null
     logFile: string
     lastCheckCursor?: number
+    failureReason?: string
+    processCleanup?: import('@codebuff/common/types/contracts/process-scope').CleanupResult
+    executionUsage?: Readonly<{ cpuMicros: number; maxRssKiB: number; scope: string }>
+    executionSignal?: number
+    executionWaitStatusSource?: import('../services/native-exec').NativeFinalResult['waitStatusSource']
+    nativeWrapperExitCode?: number
+    nativeWrapperSignal?: number
   }
   waitFor?: string
   matched: boolean
@@ -321,6 +329,13 @@ function buildCheckJobPollResult(params: {
   exitCode?: number
   matched?: boolean
   logFile: string
+  failureReason?: string
+  processCleanup?: import('zod/v4').infer<typeof import('@codebuff/common/tools/params/process-cleanup').processCleanupSchema>
+  executionUsage?: Readonly<{ cpuMicros: number; maxRssKiB: number; scope: string }>
+  executionSignal?: number
+  executionWaitStatusSource?: import('../services/native-exec').NativeFinalResult['waitStatusSource']
+  nativeWrapperExitCode?: number
+  nativeWrapperSignal?: number
 } {
   const {
     jobId,
@@ -365,6 +380,13 @@ function buildCheckJobPollResult(params: {
     ...(exitCode !== undefined && exitCode !== null ? { exitCode } : {}),
     ...(waitFor ? { matched } : {}),
     logFile: job.logFile,
+    ...(job.failureReason ? { failureReason: job.failureReason } : {}),
+    ...(job.processCleanup ? { processCleanup: processCleanupSchema.parse(job.processCleanup) } : {}),
+    ...(job.executionUsage ? { executionUsage: job.executionUsage } : {}),
+    ...(job.executionSignal ? { executionSignal: job.executionSignal } : {}),
+    ...(job.executionWaitStatusSource ? { executionWaitStatusSource: job.executionWaitStatusSource } : {}),
+    ...(job.nativeWrapperExitCode !== undefined ? { nativeWrapperExitCode: job.nativeWrapperExitCode } : {}),
+    ...(job.nativeWrapperSignal !== undefined ? { nativeWrapperSignal: job.nativeWrapperSignal } : {}),
   }
 }
 

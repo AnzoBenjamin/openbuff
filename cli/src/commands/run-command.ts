@@ -1,6 +1,6 @@
 import { getProjectRoot } from '../project-files'
 import { runFailureMessage } from '@codebuff/common/types/run-outcome'
-import { projectRunOutcomes } from '@openbuff/sdk'
+import { captureRunDeadline, projectRunOutcomes } from '@openbuff/sdk'
 import { getCodebuffClient } from '../utils/codebuff-client'
 import {
   openRunJournalForRun,
@@ -174,11 +174,13 @@ export async function runHeadlessCommand(
   let timedOut = false
   let timeoutSeconds: number | undefined
   let timeoutController: AbortController | undefined
+  let runDeadline: ReturnType<typeof captureRunDeadline> | undefined
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined
   let forwardExternalAbort: (() => void) | undefined
   if (typeof args.timeout === 'number' && args.timeout > 0) {
     const seconds = args.timeout
     timeoutSeconds = seconds
+    runDeadline = captureRunDeadline(seconds * 1000)
     timeoutController = new AbortController()
     timeoutTimer = setTimeout(() => {
       timedOut = true
@@ -210,6 +212,7 @@ export async function runHeadlessCommand(
   }
 
   try {
+    if (runDeadline && !runDeadline.ok) throw new Error(runDeadline.cause)
     const client = await getClient()
     const result = projectRunOutcomes(
       await client.run({
@@ -221,6 +224,7 @@ export async function runHeadlessCommand(
         // object serves writer and reader (one connection, one file).
         ...(journal ? { journalWriter: journal, journalReader: journal } : {}),
         ...(runSignal ? { signal: runSignal } : {}),
+        ...(runDeadline?.ok ? { runDeadline: runDeadline.value } : {}),
       }),
     )
     flushStdout()

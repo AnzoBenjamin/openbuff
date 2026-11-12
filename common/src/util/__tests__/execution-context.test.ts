@@ -298,6 +298,82 @@ describe('authenticated execution authority', () => {
     expect(exact.resourceSignal.aborted).toBe(true)
   })
 
+  test('expiry during the final basis check prevents dispatch without relying on timers', async () => {
+    let dispatching = false
+    const h = harness({ isCurrentBasis: () => {
+      if (dispatching) h.setTime(111)
+      return true
+    } })
+    const launch = value(h.action({ kind: 'finite', durationMs: 10 }).execution.prepareTarget({ target: h.target() }))
+    const targetPermit = permit(await launch.admit())
+    dispatching = true
+    let calls = 0
+    expect(launch.dispatchNow(targetPermit, () => { calls++; return 'child' }))
+      .toMatchObject({ ok: false, reason: 'deadline-exhausted' })
+    expect(calls).toBe(0)
+    expect(h.events.some(event => event.phase === 'dispatched')).toBe(false)
+  })
+
+  for (const interruption of ['cancel', 'expire'] as const) {
+    test(`${interruption} during dispatch recording prevents the spawn callback`, async () => {
+      const controller = new AbortController()
+      const events: LaunchEvent[] = []
+      const h = harness({ record: event => {
+        events.push(event)
+        if (event.phase !== 'dispatched') return
+        if (interruption === 'cancel') controller.abort(new Error('cancel before spawn'))
+        else h.setTime(111)
+      } })
+      const launch = value(h.action({ kind: 'finite', durationMs: 10 }, controller.signal)
+        .execution.prepareTarget({ target: h.target() }))
+      const targetPermit = permit(await launch.admit())
+      let calls = 0
+      expect(launch.dispatchNow(targetPermit, () => { calls++; return 'child' }))
+        .toMatchObject({ ok: false, reason: interruption === 'cancel' ? 'cancelled' : 'deadline-exhausted' })
+      expect(calls).toBe(0)
+      expect(events.findLast(event => event.phase === 'dispatch-failed'))
+        .toMatchObject({ processStart: 'not-observed', facts: { profile: { active: null } } })
+      expect(launch.dispatchNow(targetPermit, () => { calls++; return 'late child' }).ok).toBe(false)
+      expect(calls).toBe(0)
+    })
+  }
+
+  test('dispatch samples the remaining deadline after recording', async () => {
+    let recorded = false
+    const h = harness({ clock: { domainId: 'clock-1', nowMs: () => recorded ? 105 : 100 },
+      record: event => { if (event.phase === 'dispatched') recorded = true } })
+    const launch = value(h.action({ kind: 'finite', durationMs: 10 }).execution.prepareTarget({ target: h.target() }))
+    const result = value(launch.dispatchNow(permit(await launch.admit()), input => input.resourceRemainingMs))
+    expect(result.handle).toBe(5)
+  })
+
+  test('the final sampled deadline cannot authorize a dispatch at expiry', async () => {
+    let recorded = false
+    const h = harness({ clock: { domainId: 'clock-1', nowMs: () => recorded ? 110 : 100 },
+      record: event => { if (event.phase === 'dispatched') recorded = true } })
+    const launch = value(h.action({ kind: 'finite', durationMs: 10 }).execution.prepareTarget({ target: h.target() }))
+    let calls = 0
+    expect(launch.dispatchNow(permit(await launch.admit()), () => { calls++; return 'child' }))
+      .toMatchObject({ ok: false, reason: 'deadline-exhausted' })
+    expect(calls).toBe(0)
+  })
+
+  test('basis callbacks cannot dispatch the same permit twice', async () => {
+    let reenter = () => {}
+    const h = harness({ isCurrentBasis: () => { reenter(); return true } })
+    const launch = value(h.action().execution.prepareTarget({ target: h.target() }))
+    const targetPermit = permit(await launch.admit())
+    let nested: ReturnType<typeof launch.dispatchNow> | undefined, calls = 0
+    const spawn = () => { calls++; return 'child' }
+    reenter = () => {
+      reenter = () => {}
+      nested = launch.dispatchNow(targetPermit, spawn)
+    }
+    expect(launch.dispatchNow(targetPermit, spawn).ok).toBe(true)
+    expect(nested).toMatchObject({ ok: false, reason: 'already-consumed' })
+    expect(calls).toBe(1)
+  })
+
   test('root configuration time counts and large deadlines are chunked', () => {
     const h = harness()
     const boundary = value(captureRootDeadline({ clock: h.clock, limit: { kind: 'finite', durationMs: 10 } }))
@@ -384,6 +460,62 @@ describe('authenticated execution authority', () => {
     expect(h.policyInputs.at(-1)?.target.adapterOptions.resourceUseOperationDigest).toBe('op-A')
   })
 
+  for (const interruption of ['basis-expiry', 'recorder-cancel'] as const) {
+    test(`resource use refuses ${interruption} before the operation callback`, async () => {
+      let using = false
+      const controller = new AbortController()
+      const h = harness({
+        isCurrentBasis: () => {
+          if (using && interruption === 'basis-expiry') h.setTime(111)
+          return true
+        },
+        record: event => {
+          if (event.phase === 'resource-reused' && interruption === 'recorder-cancel') controller.abort()
+        },
+      })
+      const first = h.action(), resource = h.resource()
+      const { launch } = h.prepare(resource, first.budget, first.request)
+      value(launch.dispatchNow(permit(await launch.admit()), (_exact, observer) => {
+        value(observer.spawnObserved({ source: 'node-spawn-event', pid: 50 }))
+        return 'child'
+      }))
+      const second = h.action({ kind: 'finite', durationMs: 10 }, controller.signal)
+      const request = value(second.execution.requestResource(resource))
+      const use = value(await request.admitUse('interrupted-operation'))
+      using = true
+      let calls = 0
+      expect(request.useNow(use, () => { calls++; return 'response' }))
+        .toMatchObject({ ok: false, reason: interruption === 'basis-expiry' ? 'deadline-exhausted' : 'cancelled' })
+      expect(calls).toBe(0)
+      const third = value(h.action().execution.requestResource(resource))
+      using = false
+      const freshUse = value(await third.admitUse('fresh-operation'))
+      expect(value(third.useNow(freshUse, () => 'fresh response'))).toBe('fresh response')
+    })
+  }
+
+  test('basis callbacks cannot reuse the same operation permit twice', async () => {
+    let reenter = () => {}
+    const h = harness({ isCurrentBasis: () => { reenter(); return true } })
+    const first = h.action(), resource = h.resource()
+    const { launch } = h.prepare(resource, first.budget, first.request)
+    value(launch.dispatchNow(permit(await launch.admit()), (_exact, observer) => {
+      value(observer.spawnObserved({ source: 'node-spawn-event', pid: 50 }))
+      return 'child'
+    }))
+    const request = value(h.action().execution.requestResource(resource))
+    const use = value(await request.admitUse('one-operation'))
+    let nested: ReturnType<typeof request.useNow> | undefined, calls = 0
+    const operation = () => { calls++; return 'response' }
+    reenter = () => {
+      reenter = () => {}
+      nested = request.useNow(use, operation)
+    }
+    expect(value(request.useNow(use, operation))).toBe('response')
+    expect(nested).toMatchObject({ ok: false, reason: 'already-consumed' })
+    expect(calls).toBe(1)
+  })
+
   test('reuse binds every operation and rechecks basis before use', async () => {
     const h = harness(), first = h.action(), resource = h.resource(), { launch } = h.prepare(resource, first.budget, first.request)
     value(launch.dispatchNow(permit(await launch.admit()), (_exact, observer) => { value(observer.spawnObserved({ source: 'node-spawn-event', pid: 50 })); return 'child' }))
@@ -468,6 +600,46 @@ describe('authenticated execution authority', () => {
     for (const origin of ['user', 'host'] as const)
       expect(h.authority.registerDelegation({ ...registration, origin })).toMatchObject({ ok: false, reason: 'invalid-context' })
     expect(h.authority.registerDelegation({ ...registration, origin: 'project' }).ok).toBe(true)
+  })
+
+  test.each(['offer', 'accept', 'commit'] as const)('cleanup commitment fences authenticated transfer at %s', async stage => {
+    const h = harness(), first = h.action(), resource = h.resource(h.target(), first.budget)
+    const { launch } = h.prepare(resource, first.budget, first.request)
+    const receiver = value(h.authority.registerOwner({ description: { kind: 'run', owner: { ...jobOwner, parentAgentId: 'receiver' } }, lifetime: h.lifetime }))
+    const offerTransfer = () => h.authority.offerTransfer({ resource, sender: h.owner, receiver: receiver.owner,
+      expectedGeneration: value(h.authority.resourceGeneration(resource)), request: first.request })
+    const offer = stage !== 'offer' ? value(offerTransfer()) : undefined
+    const accepted = stage === 'commit' ? value(h.authority.acceptTransfer({ offer: offer!, receiver: receiver.receiver })) : undefined
+    const dispatched = value(launch.dispatchNow(permit(await launch.admit()), (_input, observer) => {
+      value(observer.spawnObserved({ source: 'node-spawn-event', pid: 50 }))
+    }))
+    expect(dispatched.observer.cleanupCommitted.call({ ...dispatched.observer })).toMatchObject({ ok: false, reason: 'stale-authority' })
+    value(dispatched.observer.cleanupCommitted())
+    const refused = stage === 'offer' ? offerTransfer() : stage === 'accept'
+      ? h.authority.acceptTransfer({ offer: offer!, receiver: receiver.receiver }) : h.authority.commitTransfer(accepted!)
+    expect(refused).toMatchObject({ ok: false, reason: 'stale-authority', cause: 'Physical resource cleanup is committed' })
+    expect(h.events.filter(event => event.phase === 'resource-transferred')).toHaveLength(0)
+  })
+
+  test('dispatch without an observed start cannot transfer even with a previously accepted permit', async () => {
+    const h = harness(), first = h.action(), resource = h.resource(h.target(), first.budget)
+    const { launch } = h.prepare(resource, first.budget, first.request)
+    const receiver = value(h.authority.registerOwner({ description: { kind: 'run', owner: { ...jobOwner, parentAgentId: 'receiver' } }, lifetime: h.lifetime }))
+    const offered = value(h.authority.offerTransfer({ resource, sender: h.owner, receiver: receiver.owner,
+      expectedGeneration: launch.facts().resourceGeneration, request: first.request }))
+    const accepted = value(h.authority.acceptTransfer({ offer: offered, receiver: receiver.receiver }))
+    const dispatched = value(launch.dispatchNow(permit(await launch.admit()), () => undefined))
+    expect(h.authority.commitTransfer(accepted)).toMatchObject({ ok: false, reason: 'stale-authority' })
+    value(dispatched.observer.spawnObserved({ source: 'node-spawn-event', pid: 51 }))
+    value(h.authority.commitTransfer(accepted))
+    value(dispatched.observer.cleanupCommitted())
+    const second = value(h.authority.registerOwner({ description: { kind: 'run', owner: { ...jobOwner, parentAgentId: 'second' } }, lifetime: h.lifetime }))
+    const budget = value(h.authority.registerAction({ owner: receiver.owner, parent: h.lifetime, limit: unbounded,
+      correlation: { kind: 'action', owner: { ...jobOwner, parentAgentId: 'receiver' }, actionId: 'receive', attemptId: '1', basisId: 'b' } }))
+    const request = value(h.authority.registerRequest({ budget }))
+    value(h.authority.acquireLease({ request, resource, owner: receiver.owner }))
+    expect(h.authority.offerTransfer({ resource, sender: receiver.owner, receiver: second.owner,
+      expectedGeneration: value(h.authority.resourceGeneration(resource)), request })).toMatchObject({ ok: false, cause: 'Physical resource cleanup is committed' })
   })
 
   test('transfer requires receiver capability and cannot extend the original deadline', async () => {

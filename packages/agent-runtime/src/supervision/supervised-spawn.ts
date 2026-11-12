@@ -367,6 +367,8 @@ function waitForRestart(
 function isRestartableCrash(
   result: SettledSubagentResult,
 ): result is SettledSubagentResult & { crashReason: string } {
+  // A crashed result cannot release an owned scope with unresolved cleanup.
+  if (result.cleanup && result.cleanup.status !== 'complete') return false
   if (
     result.outcome !== 'crashed' ||
     ('executionRefusal' in result && result.executionRefusal)

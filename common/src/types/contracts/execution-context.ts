@@ -2,6 +2,7 @@
 // Common remains independent of the SDK and provider configuration.
 import type { JobOwner } from '../../util/job-registry'
 import type { CodebuffSpawn } from '../spawn'
+import type { NativeLifecycleObserver } from './native-execution'
 
 export type Result<T> = Readonly<{ ok: true; value: T }> | Refusal
 export type Refusal = Readonly<{
@@ -82,11 +83,12 @@ export type ProfileRequest = Readonly<{
   policy: PolicyProfile
   preferredBackend: 'portable-ts' | 'native-exec'
   required: readonly Capability[]
+  optional?: readonly Capability[]
   allowBackendFallback: boolean
 }>
 export type BackendSelection = Readonly<{
   backend: string; generation: string; policy: PolicyProfile
-  cancellation: 'cooperative' | 'unavailable'
+  cancellation: 'cooperative' | 'os-scoped' | 'unavailable'
 }>
 export type ProfileFacts = Readonly<{
   requested: ProfileRequest
@@ -183,7 +185,10 @@ export type TargetClassification = Readonly<{
 // and keyed canonical classification digest BEFORE constructing PolicyInput.
 // No classification digest or command hash is accepted from the callback.
 
-export interface LaunchObserver {
+export interface LaunchObserver extends NativeLifecycleObserver {
+  // Private physical-lifecycle commitment. Survives an authenticated logical
+  // owner transfer, but cannot address another launch or resource generation.
+  cleanupCommitted(): Result<undefined>
   // Valid only for this private dispatch and captured adapter/runtime kind.
   // Registry mints observation ID; callers cannot choose launch/generation IDs.
   spawnObserved(observation: Readonly<{
@@ -318,6 +323,13 @@ export type LaunchEvent = Readonly<{
 }> | Readonly<{
   phase: 'dispatched'; facts: LaunchFacts
 }> | Readonly<{
+  phase: 'native-transport-observed'; facts: LaunchFacts
+  transportObservationId: string; pid: number
+}> | Readonly<{
+  phase: 'native-prepared'; facts: LaunchFacts
+}> | Readonly<{
+  phase: 'native-entry-committed'; facts: LaunchFacts
+}> | Readonly<{
   phase: 'spawn-observed'; facts: LaunchFacts
   processObservationId: string; pid?: number
 }> | Readonly<{
@@ -350,7 +362,7 @@ export type HostAuthorityInputs = Readonly<{
   inheritEnv: boolean
   platform: 'win32' | 'linux' | 'darwin' | 'other'
   clock: Clock; scheduler: Scheduler
-  resolveProfile: (request: ProfileRequest) => ProfileFacts
+  resolveProfile: (request: ProfileRequest, target: TargetDescription) => ProfileFacts
   classifyTarget: (captured: CapturedExecutable) => TargetClassification
   authorizeAsync: (request: PolicyInput) => Promise<AsyncDecision>
   authorizeSync?: (request: PolicyInput) => SyncDecision
@@ -470,7 +482,8 @@ export interface HostAuthority {
   }>): Result<TransferPermit>
   // Atomic registry update; receiver's signal attached before old binding is
   // relinquished. Effective deadline is min(existing, receiver), never wider.
-  // Real cleanup/listener/lease race verification remains B20 evidence.
+  // Once dispatch begins, transfer waits for an authenticated start observation
+  // and refuses after the physical adapter commits cleanup.
   commitTransfer(permit: TransferPermit): Result<Readonly<{
     transferId: string; resource: ResourceHandle
   }>>

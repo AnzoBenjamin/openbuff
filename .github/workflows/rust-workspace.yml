@@ -55,8 +55,8 @@ jobs:
         with:
           workspaces: rust
 
-      - run: cargo build --workspace
-      - run: cargo test --workspace
+      - run: cargo build --workspace --locked
+      - run: cargo test --workspace --locked
 
   # D49: `openbuff-native` is ONE multi-call binary shipped for all 5 targets.
   # Each leg runs on a host whose toolchain can link that target (native OS
@@ -124,20 +124,20 @@ jobs:
       # Point cargo at the aarch64 cross linker. The env var is target-scoped
       # (CARGO_TARGET_<TARGET>_LINKER), so it is inert on every other leg even
       # when empty.
-      - run: cargo build --workspace --target ${{ matrix.target }} --release
+      - run: cargo build --workspace --locked --target ${{ matrix.target }} --release
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${{ matrix.linker }}
 
       # Cross-compiled test binaries cannot execute without emulation, so
       # `cargo test` runs only where host == target.
-      - run: cargo test --workspace
-        if: matrix.runs-tests
+      - run: cargo test --workspace --locked
+        if: ${{ matrix.runs-tests == true }}
 
       # Charter rule 2: the leg that CAN run the binary must smoke-test it.
       # Only the host-runnable legs set runs-smoke; the path is target-scoped
       # so each runnable leg smoke-tests its own binary.
       - name: Smoke test openbuff-native
-        if: matrix.runs-smoke
+        if: ${{ matrix.runs-smoke == true }}
         run: ./scripts/smoke-test-sidecar.sh target/${{ matrix.target }}/release/openbuff-native
 
       # Per-target binary artifact (windows leg produces openbuff-native.exe;

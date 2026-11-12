@@ -86,6 +86,7 @@
         "@modelcontextprotocol/sdk": "^1.18.2",
         "ai": "^5.0.52",
         "ajv": "6.12.6",
+        "cross-spawn": "7.0.6",
         "ignore": "5.3.2",
         "lodash": "4.17.23",
         "next-auth": "^4.24.11",
@@ -98,6 +99,7 @@
         "zod-from-json-schema": "0.4.2",
       },
       "devDependencies": {
+        "@types/cross-spawn": "6.0.6",
         "@types/lodash": "^4.17.21",
         "@types/pg": "^8.11.10",
         "@types/readable-stream": "^4.0.18",
@@ -204,6 +206,7 @@
         "@vscode/tree-sitter-wasm": "0.1.4",
         "ai": "^5.0.52",
         "ajv": "6.12.6",
+        "cross-spawn": "7.0.6",
         "diff": "8.0.3",
         "gray-matter": "^4.0.3",
         "ignore": "7.0.5",
@@ -217,6 +220,7 @@
         "zod": "^4.2.1",
       },
       "devDependencies": {
+        "@types/cross-spawn": "6.0.6",
         "@types/diff": "8.0.0",
         "@types/lodash": "^4.17.21",
         "@types/micromatch": "^4.0.9",
@@ -601,6 +605,8 @@
     "@types/braces": ["@types/braces@3.0.5", "", {}, "sha512-SQFof9H+LXeWNz8wDe7oN5zu7ket0qwMu5vZubW4GCJ8Kkeh6nBWUz87+KTz/G3Kqsrp0j/W253XJb3KMEeg3w=="],
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
+
+    "@types/cross-spawn": ["@types/cross-spawn@6.0.6", "", { "dependencies": { "@types/node": "*" } }, "sha512-fXRhhUkG4H3TQk5dBhQ7m/JDdSNHKwR2BBia62lhwEIq9xGiQKLxd6LymNhn47SjXhsUEPmxi+PKw2OkW4LLjA=="],
 
     "@types/diff": ["@types/diff@8.0.0", "", { "dependencies": { "diff": "*" } }, "sha512-o7jqJM04gfaYrdCecCVMbZhNdG6T1MHg/oQoRFdERLV+4d+V7FijhiEAbFu0Usww84Yijk9yH58U4Jk4HbtzZw=="],
 

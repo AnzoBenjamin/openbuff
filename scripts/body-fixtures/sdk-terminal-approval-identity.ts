@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   existsSync,
@@ -122,10 +123,17 @@ for (const fixture of [
   const tracePath = path.join(cwd, 'trace.txt')
   const harnessStateDir = path.join(cwd, 'harness')
   mkdirSync(bin, { recursive: true })
+  // Approval requires an actual repository/snapshot basis. The target shims
+  // record effects, while identity/preflight reads use the real owned repo.
+  for (const args of [
+    ['init', '--quiet', cwd],
+    ['-C', cwd, '-c', 'user.name=B18 fixture', '-c', 'user.email=b18@example.invalid',
+      'commit', '--quiet', '--allow-empty', '-m', 'fixture basis'],
+  ]) assert.equal(spawnSync('/usr/bin/git', args).status, 0)
   for (const name of ['git', 'rm'])
     writeFileSync(
       path.join(bin, name),
-      '#!/bin/sh\nif [ "${0##*/}" = git ]; then case "$1" in push|commit) ;; *) exit 0;; esac; fi\nprintf "%s\\n" "${0##*/}:$*" >> "$B18_TRACE"\n',
+      '#!/bin/sh\nif [ "${0##*/}" = git ]; then case "$1" in push|commit) ;; *) exec /usr/bin/git "$@";; esac; fi\nprintf "%s\\n" "${0##*/}:$*" >> "$B18_TRACE"\n',
       { mode: 0o700 },
     )
   const approvals: HarnessApprovalRequest[] = []
@@ -237,7 +245,7 @@ for (const fixture of [
     assert.equal(approval.commandHash, hashCommand(fixture.command))
     assert.equal(approval.rawCommand, fixture.command)
     assert.equal(approval.risk, 'high')
-    assert(approval.executionContextHash && approval.effects?.length)
+    assert(approval.executionAuthority?.version === 2 && approval.executionAuthority.bindingDigest && approval.effects?.length)
   }
   assert.equal(
     records.length,
@@ -253,7 +261,7 @@ for (const fixture of [
         record.workspaceId,
     )
     assert.equal(record.commandHash, hashCommand(fixture.command))
-    assert.equal(record.executionContextHash, approvals[0].executionContextHash)
+    assert.deepEqual(record.executionAuthority, approvals[0].executionAuthority)
   }
   assert.equal(providerCalls, 0)
 }

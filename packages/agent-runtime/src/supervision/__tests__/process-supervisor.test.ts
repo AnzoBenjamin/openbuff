@@ -10,10 +10,25 @@ import {
   CHATGPT_OAUTH_TOKEN_ENV_VAR,
   OPENBUFF_CHATGPT_OAUTH_TOKEN_ENV_VAR,
 } from '@codebuff/common/constants/chatgpt-oauth'
-import { describe, expect, it } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { describe, expect, it, spyOn } from 'bun:test'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import {
+  parseProcStat,
+  readLinuxProcessIdentity,
+} from '@codebuff/common/util/linux-process-scope'
+import type {
+  ProcessScopeDriver,
+  ScopeObservation,
+  ScopeStreams,
+} from '@codebuff/common/types/contracts/process-scope'
 
 import {
   buildSupervisedChildEnv,
@@ -22,14 +37,50 @@ import {
   SUPERVISED_CHILD_ENV_ALLOWLIST,
   SUPERVISED_CHILD_RUNTIME_ENV_KEYS,
   spawnSettledSubagent,
+  retainedSupervisedProcessScopes,
   type SettleChildProcess,
   type SettleSpawnSeam,
   type SupervisedChildEnvSeed,
 } from '../process-supervisor'
 
-const canSpawn =
-  typeof Bun !== 'undefined' && typeof Bun.spawn === 'function'
+const canSpawn = typeof Bun !== 'undefined' && typeof Bun.spawn === 'function'
 const fixturePath = join(import.meta.dir, '../__fixtures__/settle-child.ts')
+const descendantFixture = join(
+  import.meta.dir,
+  '../__fixtures__/b20-descendant.ts',
+)
+
+function processLiving(pid: number): boolean {
+  try {
+    return !['Z', 'X', 'x'].includes(
+      parseProcStat(readFileSync(`/proc/${pid}/stat`, 'utf8')).state,
+    )
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw error
+  }
+}
+
+async function waitUntil(
+  predicate: () => boolean,
+  timeoutMs = 1_500,
+): Promise<void> {
+  const until = performance.now() + timeoutMs
+  while (!predicate() && performance.now() < until) await Bun.sleep(5)
+  if (!predicate())
+    throw new Error(
+      'Timed out waiting for genuine supervised child observation',
+    )
+}
+
+function retainReceipt(name: string, receipt: unknown): void {
+  const directory = process.env.B20_SUPERVISION_EVIDENCE_DIR
+  if (directory)
+    writeFileSync(
+      join(directory, `${name}.json`),
+      `${JSON.stringify(receipt, null, 2)}\n`,
+    )
+}
 
 /**
  * A fake child that survives every kill until the SIGKILL step (recording
@@ -171,13 +222,30 @@ function controllableChildSeam(): {
 }
 
 describe('spawnSettledSubagent', () => {
+  it('an ID source failure prevents child dispatch', async () => {
+    let spawnCalls = 0
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      idGen: { uuid: () => { throw new Error('ID source unavailable') } },
+      spawn: () => {
+        spawnCalls++
+        throw new Error('Child dispatch must remain unreachable')
+      },
+    })
+    expect(result.outcome).toBe('crashed')
+    expect(result.crashReason).toBe('spawn_failed')
+    expect(spawnCalls).toBe(0)
+  })
+
   it.skipIf(!canSpawn)(
     'happy path: settles a healthy child as ok with a validated receipt',
     async () => {
+      let generatedIds = 0
       const result = await spawnSettledSubagent({
         childModulePath: fixturePath,
         args: ['ok'],
         timeoutMs: 10_000,
+        idGen: { uuid: () => `healthy-scope-${++generatedIds}` },
       })
       expect(result.outcome).toBe('ok')
       expect(result.crashReason).toBeUndefined()
@@ -187,6 +255,8 @@ describe('spawnSettledSubagent', () => {
       expect(result.receipt?.taskId).toBe('settle-fixture-task')
       expect(result.durationMs).toBeGreaterThan(0)
       expect(result.killed).toBe(false)
+      expect(result.cleanup?.scopeId).toBe('supervised:healthy-scope-1')
+      expect(generatedIds).toBe(1)
     },
   )
 
@@ -279,25 +349,22 @@ describe('spawnSettledSubagent', () => {
     },
   )
 
-  it(
-    'timeout: kills the WHOLE process group (SIGTERM → SIGKILL) when the seam provides killGroup',
-    async () => {
-      const directKills: Array<'SIGTERM' | 'SIGKILL'> = []
-      const groupKills: Array<'SIGTERM' | 'SIGKILL'> = []
-      const result = await spawnSettledSubagent({
-        childModulePath: fixturePath,
-        timeoutMs: 50,
-        spawn: recordingChildSeam({ direct: directKills, group: groupKills }),
-      })
-      expect(result.outcome).toBe('crashed')
-      expect(result.crashReason).toBe('timeout')
-      expect(result.killed).toBe(true)
-      // Group kill first so shell grandchildren die too: SIGTERM, then the
-      // escalation SIGKILL, both to the group — and NEVER the direct kill.
-      expect(groupKills).toEqual(['SIGTERM', 'SIGKILL'])
-      expect(directKills).toEqual([])
-    },
-  )
+  it('timeout: kills the WHOLE process group (SIGTERM → SIGKILL) when the seam provides killGroup', async () => {
+    const directKills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const groupKills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      timeoutMs: 50,
+      spawn: recordingChildSeam({ direct: directKills, group: groupKills }),
+    })
+    expect(result.outcome).toBe('crashed')
+    expect(result.crashReason).toBe('timeout')
+    expect(result.killed).toBe(true)
+    // Group kill first so shell grandchildren die too: SIGTERM, then the
+    // escalation SIGKILL, both to the group — and NEVER the direct kill.
+    expect(groupKills).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(directKills).toEqual([])
+  })
 
   it.skipIf(process.platform !== 'linux')(
     'timeout: reaps REAL shell grandchildren via the process-group kill (P2-T8 audit gap)',
@@ -353,7 +420,7 @@ describe('spawnSettledSubagent', () => {
         const deadline = Date.now() + 3_000
         let alive = true
         while (Date.now() < deadline) {
-          alive = existsSync(`/proc/${grandchildPid}`)
+          alive = processLiving(grandchildPid!)
           if (!alive) break
           await Bun.sleep(50)
         }
@@ -374,23 +441,20 @@ describe('spawnSettledSubagent', () => {
     },
   )
 
-  it(
-    'timeout: falls back to the direct-pid kill (SIGTERM → SIGKILL) when the seam has no killGroup',
-    async () => {
-      const directKills: Array<'SIGTERM' | 'SIGKILL'> = []
-      const result = await spawnSettledSubagent({
-        childModulePath: fixturePath,
-        timeoutMs: 50,
-        spawn: recordingChildSeam({ direct: directKills }),
-      })
-      expect(result.outcome).toBe('crashed')
-      expect(result.crashReason).toBe('timeout')
-      expect(result.killed).toBe(true)
-      // Injected seams without killGroup keep the pre-existing behavior:
-      // SIGTERM then SIGKILL against the direct child pid.
-      expect(directKills).toEqual(['SIGTERM', 'SIGKILL'])
-    },
-  )
+  it('timeout: falls back to the direct-pid kill (SIGTERM → SIGKILL) when the seam has no killGroup', async () => {
+    const directKills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      timeoutMs: 50,
+      spawn: recordingChildSeam({ direct: directKills }),
+    })
+    expect(result.outcome).toBe('crashed')
+    expect(result.crashReason).toBe('timeout')
+    expect(result.killed).toBe(true)
+    // Injected seams without killGroup keep the pre-existing behavior:
+    // SIGTERM then SIGKILL against the direct child pid.
+    expect(directKills).toEqual(['SIGTERM', 'SIGKILL'])
+  })
 
   // ── Behavior A: idle-aware deadline (idleTimeoutMs / maxLifetimeMs /
   // onActivity) ─────────────────────────────────────────────────────────
@@ -501,74 +565,68 @@ describe('spawnSettledSubagent', () => {
     expect(directKills).toEqual(['SIGTERM', 'SIGKILL'])
   })
 
-  it(
-    'P2-T8d SELF-EXEC: cmdOverride is used VERBATIM and args are ignored',
-    async () => {
-      const received: string[][] = []
-      const spawn: SettleSpawnSeam = (request) => {
-        received.push(request.cmd)
-        return {
-          stdout: new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.close()
-            },
-          }),
-          stderr: new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.close()
-            },
-          }),
-          exited: Promise.resolve(0),
-          kill: () => {},
-        }
+  it('P2-T8d SELF-EXEC: cmdOverride is used VERBATIM and args are ignored', async () => {
+    const received: string[][] = []
+    const spawn: SettleSpawnSeam = (request) => {
+      received.push(request.cmd)
+      return {
+        stdout: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close()
+          },
+        }),
+        stderr: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close()
+          },
+        }),
+        exited: Promise.resolve(0),
+        kill: () => {},
       }
-      const override = [
-        '/opt/openbuff/openbuff',
-        '--supervised-child',
-        '/tmp/request.json',
-      ]
-      const result = await spawnSettledSubagent({
-        childModulePath: fixturePath,
-        args: ['ignored'],
-        cmdOverride: override,
-        spawn,
-      })
-      // Empty stdout + exit 0 settles missing_output (transport lives
-      // elsewhere); the assertion is the COMMAND the seam received.
-      expect(result.outcome).toBe('missing_output')
-      expect(received).toEqual([override])
-    },
-  )
+    }
+    const override = [
+      '/opt/openbuff/openbuff',
+      '--supervised-child',
+      '/tmp/request.json',
+    ]
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      args: ['ignored'],
+      cmdOverride: override,
+      spawn,
+    })
+    // Empty stdout + exit 0 settles missing_output (transport lives
+    // elsewhere); the assertion is the COMMAND the seam received.
+    expect(result.outcome).toBe('missing_output')
+    expect(received).toEqual([override])
+  })
 
-  it(
-    'P2-T8d SELF-EXEC: without cmdOverride the default bun-source cmd is byte-identical',
-    async () => {
-      const received: string[][] = []
-      const spawn: SettleSpawnSeam = (request) => {
-        received.push(request.cmd)
-        return {
-          stdout: new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.close()
-            },
-          }),
-          stderr: new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.close()
-            },
-          }),
-          exited: Promise.resolve(0),
-          kill: () => {},
-        }
+  it('P2-T8d SELF-EXEC: without cmdOverride the default bun-source cmd is byte-identical', async () => {
+    const received: string[][] = []
+    const spawn: SettleSpawnSeam = (request) => {
+      received.push(request.cmd)
+      return {
+        stdout: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close()
+          },
+        }),
+        stderr: new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.close()
+          },
+        }),
+        exited: Promise.resolve(0),
+        kill: () => {},
       }
-      await spawnSettledSubagent({
-        childModulePath: fixturePath,
-        args: ['ok'],
-        spawn,
-      })
-      expect(received).toEqual([[process.execPath, 'run', fixturePath, 'ok']])
-    },
-  )
+    }
+    await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      args: ['ok'],
+      spawn,
+    })
+    expect(received).toEqual([[process.execPath, 'run', fixturePath, 'ok']])
+  })
 
   it('spawn failure (ENOENT via injected seam) settles as crashed spawn_failed', async () => {
     const spawn: SettleSpawnSeam = () => {
@@ -584,107 +642,98 @@ describe('spawnSettledSubagent', () => {
     expect(result.receipt).toBeUndefined()
   })
 
-  it(
-    'internal error: a stream error kills the child instead of orphaning it',
-    async () => {
-      const kills: Array<'SIGTERM' | 'SIGKILL'> = []
-      const spawn: SettleSpawnSeam = () => ({
-        stdout: new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.error(new Error('stdout stream blew up'))
-          },
-        }),
-        stderr: new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.close()
-          },
-        }),
-        // The child never exits on its own — only the supervisor's kill
-        // settles it, proving the internal-error path reaps the child.
-        exited: new Promise<number | null>(() => {}),
-        kill: (signal) => {
-          kills.push(signal ?? 'SIGTERM')
+  it('internal error: a stream error kills the child instead of orphaning it', async () => {
+    const kills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const spawn: SettleSpawnSeam = () => ({
+      stdout: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.error(new Error('stdout stream blew up'))
         },
-      })
-      const result = await spawnSettledSubagent({
-        childModulePath: fixturePath,
-        spawn,
-      })
-      expect(result.outcome).toBe('crashed')
-      expect(result.crashReason).toBe('internal_error')
-      // The child was actually killed (never orphaned) and reported as such.
-      expect(result.killed).toBe(true)
-      expect(kills).toEqual(['SIGKILL'])
-    },
-  )
-
-  it(
-    'internal error: a rejected exited promise kills the child instead of orphaning it',
-    async () => {
-      const kills: Array<'SIGTERM' | 'SIGKILL'> = []
-      const spawn: SettleSpawnSeam = () => ({
-        stdout: new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.close()
-          },
-        }),
-        stderr: new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.close()
-          },
-        }),
-        exited: Promise.reject(new Error('exited promise failed')),
-        kill: (signal) => {
-          kills.push(signal ?? 'SIGTERM')
+      }),
+      stderr: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close()
         },
-      })
-      const result = await spawnSettledSubagent({
-        childModulePath: fixturePath,
-        spawn,
-      })
-      expect(result.outcome).toBe('crashed')
-      expect(result.crashReason).toBe('internal_error')
-      expect(result.killed).toBe(true)
-      expect(kills).toEqual(['SIGKILL'])
-    },
-  )
+      }),
+      // The child never exits on its own — only the supervisor's kill
+      // settles it, proving the internal-error path reaps the child.
+      exited: new Promise<number | null>(() => {}),
+      kill: (signal) => {
+        kills.push(signal ?? 'SIGTERM')
+      },
+    })
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      spawn,
+    })
+    expect(result.outcome).toBe('crashed')
+    expect(result.crashReason).toBe('internal_error')
+    // The child was actually killed (never orphaned) and reported as such.
+    expect(result.killed).toBe(true)
+    expect(kills).toEqual(['SIGKILL'])
+  })
 
-  it(
-    'stdout bytes with NO newline-terminated line settle as schema_invalid — never ok, never missing_output',
-    async () => {
-      // Security contract: only EMPTY stdout maps to missing_output. A child
-      // that wrote bytes that never form the contracted single
-      // newline-terminated JSON envelope produced garbage, and garbage
-      // stdout must never settle ok (or masquerade as a silent child).
-      const spawn: SettleSpawnSeam = () => ({
-        stdout: new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(
-              new TextEncoder().encode(
-                'child-entry: not json garbage without a trailing newline',
-              ),
-            )
-            controller.close()
-          },
-        }),
-        stderr: new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.close()
-          },
-        }),
-        exited: Promise.resolve(0),
-        kill: () => {},
-      })
-      const result = await spawnSettledSubagent({
-        childModulePath: fixturePath,
-        spawn,
-      })
-      expect(result.outcome).toBe('schema_invalid')
-      expect(result.receipt).toBeUndefined()
-      expect(result.exitCode).toBe(0)
-      expect(result.stdoutBytes).toBeGreaterThan(0)
-    },
-  )
+  it('internal error: a rejected exited promise kills the child instead of orphaning it', async () => {
+    const kills: Array<'SIGTERM' | 'SIGKILL'> = []
+    const spawn: SettleSpawnSeam = () => ({
+      stdout: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close()
+        },
+      }),
+      stderr: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close()
+        },
+      }),
+      exited: Promise.reject(new Error('exited promise failed')),
+      kill: (signal) => {
+        kills.push(signal ?? 'SIGTERM')
+      },
+    })
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      spawn,
+    })
+    expect(result.outcome).toBe('crashed')
+    expect(result.crashReason).toBe('internal_error')
+    expect(result.killed).toBe(true)
+    expect(kills).toEqual(['SIGKILL'])
+  })
+
+  it('stdout bytes with NO newline-terminated line settle as schema_invalid — never ok, never missing_output', async () => {
+    // Security contract: only EMPTY stdout maps to missing_output. A child
+    // that wrote bytes that never form the contracted single
+    // newline-terminated JSON envelope produced garbage, and garbage
+    // stdout must never settle ok (or masquerade as a silent child).
+    const spawn: SettleSpawnSeam = () => ({
+      stdout: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              'child-entry: not json garbage without a trailing newline',
+            ),
+          )
+          controller.close()
+        },
+      }),
+      stderr: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.close()
+        },
+      }),
+      exited: Promise.resolve(0),
+      kill: () => {},
+    })
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      spawn,
+    })
+    expect(result.outcome).toBe('schema_invalid')
+    expect(result.receipt).toBeUndefined()
+    expect(result.exitCode).toBe(0)
+    expect(result.stdoutBytes).toBeGreaterThan(0)
+  })
 
   it.skipIf(!canSpawn)(
     'env allowlist: the child sees ONLY the injected keys, never ambient env',
@@ -942,6 +991,393 @@ describe('spawnSettledSubagent parent-abort kill (cancel-softlock fix)', () => {
       expect(result.durationMs).toBeLessThan(SETTLE_KILL_GRACE_MS + 1_500)
     },
   )
+})
+
+describe('B20 owned Bun process scope', () => {
+  it.skipIf(!canSpawn || process.platform !== 'linux')(
+    'missing initial group identity cancels the owned child directly without broadcast credit',
+    async () => {
+      const virtualPid = 2_147_483_647
+      const rawKills: Array<{ pid: number; signal: unknown }> = []
+      let closeStdout!: () => void
+      let closeStderr!: () => void
+      let resolveExit!: (code: number) => void
+      const fake = {
+        pid: virtualPid,
+        stdout: new ReadableStream<Uint8Array>({
+          start(controller) {
+            closeStdout = () => controller.close()
+          },
+        }),
+        stderr: new ReadableStream<Uint8Array>({
+          start(controller) {
+            closeStderr = () => controller.close()
+          },
+        }),
+        exited: new Promise<number>((resolve) => {
+          resolveExit = resolve
+        }),
+      }
+      const actualKill = process.kill.bind(process)
+      const kill = spyOn(process, 'kill').mockImplementation((pid, signal) => {
+        if (pid !== virtualPid) return actualKill(pid, signal)
+        rawKills.push({ pid, signal })
+        closeStdout()
+        closeStderr()
+        resolveExit(0)
+        return true
+      })
+      const spawn = spyOn(Bun, 'spawn').mockReturnValue(
+        fake as unknown as ReturnType<typeof Bun.spawn>,
+      )
+      try {
+        const result = await spawnSettledSubagent({
+          childModulePath: fixturePath,
+          timeoutMs: 10,
+          cleanupPolicy: {
+            termGraceMs: 10,
+            killGraceMs: 10,
+            observationMs: 30,
+          },
+        })
+        expect(rawKills).toEqual([{ pid: virtualPid, signal: 'SIGTERM' }])
+        expect(result.cleanup?.selectedTier).toBe('posix-owned-group')
+        expect(result.cleanup?.status).toBe('unknown')
+        expect(result.cleanup?.satisfiesSelectedTier).toBe(false)
+        expect(result.cleanup?.cleanupAuthorityRetained).toBe(true)
+        expect(result.cleanup?.finalObservation.leader).toBe('exited-reaped')
+        expect(result.cleanup?.finalObservation.identity).toBe('unknown')
+        expect(
+          result.cleanup?.signals.every(
+            (signal) => signal.targetTier === 'direct-child',
+          ),
+        ).toBe(true)
+        retainReceipt('bun-missing-group-identity', {
+          result,
+          rawKills,
+          source: 'injected-Bun-runtime-and-process-kill',
+          realProcessEvidence: false,
+          oraclePass: true,
+        })
+      } finally {
+        spawn.mockRestore()
+        kill.mockRestore()
+      }
+    },
+  )
+
+  const realCase = !canSpawn || process.platform !== 'linux' ? it.skip : it
+  realCase.each([
+    {
+      name: 'deadline-redirected',
+      mode: 'redirected',
+      abort: false,
+      normal: false,
+    },
+    {
+      name: 'abort-redirected',
+      mode: 'redirected',
+      abort: true,
+      normal: false,
+    },
+    {
+      name: 'deadline-inherited',
+      mode: 'inherited',
+      abort: false,
+      normal: false,
+    },
+    {
+      name: 'normal-leader-exit',
+      mode: 'normal-exit',
+      abort: false,
+      normal: true,
+    },
+  ])(
+    'reconciles $name before returning the process result',
+    async ({ name, mode, abort, normal }) => {
+      const directory = mkdtempSync(join(tmpdir(), 'b20-bun-scope-'))
+      const controller = new AbortController()
+      let writerPid: number | undefined
+      const receipt: Record<string, unknown> = {
+        branch: 'bun-supervised-child',
+        tier: 'posix-owned-group',
+        fixture: name,
+        selectedDeadlineMs: 250,
+        G: 200,
+        K: 200,
+        J: 1_000,
+      }
+      try {
+        const startedAtMs = performance.now()
+        const settling = spawnSettledSubagent({
+          childModulePath: descendantFixture,
+          args: [mode, directory],
+          cwd: directory,
+          timeoutMs: 250,
+          signal: controller.signal,
+        })
+        await waitUntil(() => existsSync(join(directory, 'writer.pid')))
+        writerPid = Number(readFileSync(join(directory, 'writer.pid'), 'utf8'))
+        const leaderPid = JSON.parse(
+          readFileSync(join(directory, 'leader.json'), 'utf8'),
+        ).pid as number
+        const identity = readLinuxProcessIdentity(writerPid)
+        receipt.initial = {
+          leaderPid,
+          writer: identity,
+          living: processLiving(writerPid),
+          atMs: performance.now(),
+        }
+        expect(identity.pgid).toBe(leaderPid)
+        expect(identity.sid).toBe(leaderPid)
+        expect(processLiving(writerPid)).toBe(true)
+        if (abort) controller.abort()
+        await waitUntil(
+          () =>
+            existsSync(join(directory, 'leader-exit.json')) &&
+            existsSync(join(directory, 'writer-term.json')),
+        )
+        receipt.afterLeaderClose = {
+          leaderLiving: processLiving(leaderPid),
+          writerLiving: processLiving(writerPid),
+          atMs: performance.now(),
+        }
+        expect(processLiving(leaderPid)).toBe(false)
+        expect(processLiving(writerPid)).toBe(true)
+        const result = await settling
+        receipt.result = result
+        receipt.writerLivingAtOracle = processLiving(writerPid)
+        receipt.elapsedMs = performance.now() - startedAtMs
+        expect(result.cleanup?.status).toBe('complete')
+        expect(result.cleanup?.selectedTier).toBe('posix-owned-group')
+        expect(result.cleanup?.satisfiesSelectedTier).toBe(true)
+        expect(result.cleanup?.finalObservation.leader).toBe('exited-reaped')
+        expect(result.cleanup?.output.complete).toBe(true)
+        expect(result.cleanup?.killAtMs).toBe(
+          result.cleanup!.firstStopAtMs + 200,
+        )
+        expect(result.cleanup?.signals.map((signal) => signal.signal)).toEqual([
+          'SIGTERM',
+          'SIGKILL',
+        ])
+        expect(processLiving(writerPid)).toBe(false)
+        expect(result.durationMs).toBeLessThan(1_650)
+        expect(result.cleanup?.originalDeadline.kind).toBe('finite')
+        if (result.cleanup?.originalDeadline.kind === 'finite') {
+          const selected =
+            result.cleanup.originalDeadline.expiresAtMs - startedAtMs
+          expect(selected).toBeGreaterThanOrEqual(250)
+          expect(selected).toBeLessThan(255)
+        }
+        expect(
+          retainedSupervisedProcessScopes().some(
+            (scope) => scope.scopeId === result.cleanup?.scopeId,
+          ),
+        ).toBe(false)
+        if (normal) {
+          expect(result.outcome).toBe('ok')
+          expect(result.receipt?.receiptId).toBe('b20-normal-exit')
+          expect(result.cleanup?.trigger).toBe('normal-leader-exit')
+        } else {
+          expect(result.outcome).toBe('crashed')
+          expect(result.crashReason).toBe(abort ? 'nonzero_exit' : 'timeout')
+        }
+        receipt.oraclePass = true
+      } finally {
+        // The failing observation remains recorded even if emergency cleanup works.
+        retainReceipt(`bun-${name}`, receipt)
+        controller.abort()
+        if (writerPid && processLiving(writerPid)) {
+          try {
+            process.kill(writerPid, 'SIGKILL')
+          } catch {}
+        }
+        rmSync(directory, { recursive: true, force: true })
+      }
+    },
+  )
+
+  it('keeps a completed leader result while a class driver cleans its descendant past D', async () => {
+    let resolveExit!: (code: number) => void
+    const exited = new Promise<number>((resolve) => {
+      resolveExit = resolve
+    })
+    const closed: ScopeStreams = {
+      stdin: 'closed',
+      stdout: 'drained',
+      stderr: 'drained',
+    }
+    class Driver implements ProcessScopeDriver {
+      reaped = false
+      living = true
+      signals: string[] = []
+      leaderExited = exited.then(() => {
+        this.reaped = true
+        return 'exited-reaped' as const
+      })
+      streamsFinished = Promise.resolve(closed)
+      async observe(): Promise<ScopeObservation> {
+        return {
+          sampledAtMs: performance.now(),
+          clockDomainId: 'process-monotonic',
+          leader: this.reaped ? 'exited-reaped' : 'running',
+          scopePresence: this.living ? 'living' : 'absent',
+          members: [],
+          membershipComplete: true,
+          identity: 'verified',
+          streams: closed,
+        }
+      }
+      async signal(signal: 'SIGTERM' | 'SIGKILL') {
+        this.signals.push(signal)
+        if (signal === 'SIGKILL') this.living = false
+        return {
+          signal,
+          atMs: performance.now(),
+          targetTier: 'injected' as const,
+          result: 'delivered' as const,
+        }
+      }
+      closeInput() {}
+    }
+    const driver = new Driver()
+    const resultPromise = spawnSettledSubagent({
+      childModulePath: fixturePath,
+      timeoutMs: 30,
+      cleanupPolicy: { termGraceMs: 40, killGraceMs: 10, observationMs: 50 },
+      spawn: () => ({
+        stdout: new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                `${JSON.stringify(VALID_SETTLE_RECEIPT)}\n`,
+              ),
+            )
+            controller.close()
+          },
+        }),
+        stderr: new ReadableStream({
+          start(controller) {
+            controller.close()
+          },
+        }),
+        exited,
+        kill: () => {},
+        processScopeDriver: { tier: 'injected', driver },
+      }),
+    })
+    setTimeout(() => resolveExit(0), 10)
+    const result = await resultPromise
+    expect(result.outcome).toBe('ok')
+    expect(result.durationMs).toBeGreaterThan(30)
+    expect(result.cleanup?.trigger).toBe('normal-leader-exit')
+    expect(result.cleanup?.status).toBe('complete')
+    expect(driver.signals).toEqual(['SIGTERM', 'SIGKILL'])
+    retainReceipt('bun-completed-leader-cleanup', {
+      result,
+      declaredTier: 'injected',
+      oraclePass: true,
+    })
+  })
+
+  it('bounds a never-resolving probe, retains cleanup authority, and fences late observations', async () => {
+    const probes: Array<(observation: ScopeObservation) => void> = []
+    let recovered = false
+    let exited = false
+    let resolveExit!: (code: number) => void
+    const exitPromise = new Promise<number>((resolve) => {
+      resolveExit = resolve
+    })
+    let streams: ScopeStreams = {
+      stdin: 'closed',
+      stdout: 'open',
+      stderr: 'open',
+    }
+    const observation = (): ScopeObservation => ({
+      sampledAtMs: performance.now(),
+      clockDomainId: 'process-monotonic',
+      leader: exited ? 'exited-reaped' : 'running',
+      scopePresence: recovered ? 'absent' : 'unknown',
+      members: [],
+      membershipComplete: recovered,
+      identity: 'verified',
+      streams,
+    })
+    const driver: ProcessScopeDriver = {
+      leaderExited: exitPromise.then(() => {
+        exited = true
+        return 'exited-reaped'
+      }),
+      streamsFinished: new Promise(() => {}),
+      observe: () =>
+        recovered
+          ? Promise.resolve(observation())
+          : new Promise((resolve) => probes.push(resolve)),
+      signal: async (signal) => ({
+        signal,
+        atMs: performance.now(),
+        targetTier: 'injected',
+        result: 'unknown',
+        errorCode: 'EPERM',
+      }),
+      closeInput() {},
+    }
+    const startedAtMs = performance.now()
+    const result = await spawnSettledSubagent({
+      childModulePath: fixturePath,
+      timeoutMs: 10,
+      cleanupPolicy: {
+        termGraceMs: 10,
+        killGraceMs: 10,
+        observationMs: 30,
+        probeTimeoutMs: 10,
+      },
+      spawn: () => ({
+        stdout: new ReadableStream({
+          cancel() {
+            streams = { ...streams, stdout: 'closed-incomplete' }
+            return new Promise<void>(() => {})
+          },
+        }),
+        stderr: new ReadableStream({
+          cancel() {
+            streams = { ...streams, stderr: 'closed-incomplete' }
+            return new Promise<void>(() => {})
+          },
+        }),
+        exited: exitPromise,
+        kill: () => {},
+        processScopeDriver: { tier: 'injected', driver },
+      }),
+    })
+    expect(performance.now() - startedAtMs).toBeLessThan(250)
+    expect(result.cleanup?.status).toBe('unknown')
+    expect(result.cleanup?.cleanupAuthorityRetained).toBe(true)
+    expect(result.cleanup?.selectedLimitSatisfied).toBe(false)
+    const scope = retainedSupervisedProcessScopes().find(
+      (scope) => scope.scopeId === result.cleanup?.scopeId,
+    )!
+    expect(scope).toBeDefined()
+    recovered = true
+    exited = true
+    for (const resolve of probes) resolve(observation())
+    await Bun.sleep(1)
+    expect(scope.currentCleanup()).toBe(result.cleanup)
+    expect(result.cleanup?.status).toBe('unknown')
+    resolveExit(0)
+    const recovery = await scope.retryCleanup(true)
+    expect(recovery.status).toBe('complete')
+    expect(recovery.selectedLimitSatisfied).toBe(false)
+    expect(result.cleanup?.selectedLimitSatisfied).toBe(false)
+    expect(retainedSupervisedProcessScopes().includes(scope)).toBe(false)
+    retainReceipt('bun-unknown-recovery', {
+      initial: result,
+      recovery,
+      lateProbeDidNotRewriteInitial: result.cleanup?.status === 'unknown',
+      declaredTier: 'injected',
+      oraclePass: true,
+    })
+  })
 })
 
 // P2-T8 adoption slice: buildSupervisedChildEnv — the child env allowlist

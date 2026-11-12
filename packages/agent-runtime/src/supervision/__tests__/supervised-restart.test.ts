@@ -210,6 +210,59 @@ async function referenceDelays(policy: {
 }
 
 describe('supervised-spawn restart policy (P2-T8c)', () => {
+  it.each(['failed', 'unknown'] as const)(
+    'refuses another spawn after %s physical cleanup',
+    async (status) => {
+      resetSpawnQueue()
+      const stopped = settledCrash('internal_error', {
+        cleanup: {
+          attemptId: 'injected-stop:1',
+          scopeId: 'injected-stop',
+          status,
+          selectedTier: 'injected',
+          observedTier: 'injected',
+          satisfiesSelectedTier: false,
+          trigger: 'adapter-error',
+          originalDeadline: { kind: 'unbounded', limitId: 'injected-limit' },
+          firstStopAtMs: 0,
+          killAtMs: 10,
+          observeUntilMs: 50,
+          signals: [],
+          finalObservation: {
+            sampledAtMs: 50,
+            clockDomainId: 'injected-clock',
+            leader: 'unknown',
+            scopePresence: status === 'failed' ? 'living' : 'unknown',
+            members: [],
+            membershipComplete: false,
+            identity: 'unknown',
+            streams: {
+              stdin: 'closed',
+              stdout: 'closed-incomplete',
+              stderr: 'closed-incomplete',
+            },
+          },
+          output: {
+            stdoutSeenBytes: 0,
+            stderrSeenBytes: 0,
+            retainedBytes: 0,
+            droppedBytes: 0,
+            complete: false,
+          },
+          cleanupAuthorityRetained: true,
+          selectedLimitSatisfied: null,
+        },
+      })
+      queueSpawns(stopped, settledOk())
+      const { seam, record } = buildRestartingSeam({ maxAttempts: 2 })
+      const result = await settleBounded(seam, REQUEST)
+      expect(result).toBe(stopped)
+      expect(spawnCallParams).toHaveLength(1)
+      expect(record.delays).toEqual([])
+      expect(record.observes).toEqual([])
+    },
+  )
+
   it(
     'crash→respawn fault injection: up to maxAttempts restarts, then settles ok',
     async () => {

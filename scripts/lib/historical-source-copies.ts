@@ -9,4 +9,5 @@ export const HISTORICAL_SOURCE_COPY_PREFIXES = [
   'docs/execution/body-roadmap/evidence/B05/root-development/format-root-03/preimages/',
   'docs/execution/body-roadmap/evidence/B05/resume-20261108/root-repair-preimages/',
   'docs/execution/body-roadmap/evidence/B19/implementation/design-input-preimages/',
+  'docs/execution/body-roadmap/evidence/B19/continuation-20261111/canonical-input-recovery-r1/files/',
 ] as const

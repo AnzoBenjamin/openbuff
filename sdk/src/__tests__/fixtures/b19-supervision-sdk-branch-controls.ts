@@ -169,29 +169,25 @@ export async function runSupervisionSdkControl(branch: SupervisionBranch, contro
     if (options.branchId === targetBranch) {
       if (control === 'pre-aborted') stop.abort(new Error('Pre-aborted at target adapter entry'))
     }
-    attempt.result = await actualSettle(options)
+    attempt.result = await actualSettle({ ...options, spawn: spawnSynthetic })
     return attempt.result
   })
   restores.push(() => settleSpy.mockRestore())
-  const spawnDescriptor = Object.getOwnPropertyDescriptor(Bun, 'spawn')!
-  const originalSpawn = Bun.spawn
-  Object.defineProperty(Bun, 'spawn', { ...spawnDescriptor, value: (...args: unknown[]) => {
-    const cmd = args[0]
-    if (!Array.isArray(cmd) || !cmd.some(arg => typeof arg === 'string' && arg.endsWith('/supervision/child-entry.ts')))
-      return Reflect.apply(originalSpawn, Bun, args)
-    const options = args[1] as { env: Record<string, string>; cwd?: string }
+  const spawnSynthetic: supervisor.SettleSpawnSeam = request => {
+    const cmd = request.cmd
+    assert(cmd.some(arg => arg.endsWith('/supervision/child-entry.ts')), 'Synthetic seam is restricted to supervised source children')
     const admitted = [...policies].reverse().find(input => input.facts.family === 'supervised-child')
     assert(admitted, 'Supervisor process boundary requires actual admission')
-    const boundary: typeof boundaries[number] = { cmd: [...cmd], env: { ...options.env }, cwd: options.cwd,
+    const boundary: typeof boundaries[number] = { cmd: [...cmd], env: { ...request.env }, cwd: request.cwd,
       launchId: admitted.facts.launchId, branch: admitted.facts.branchId }
     boundaries.push(boundary)
     if ((branch === 'retry' && boundaries.length === 1) || control === 'retry-budget-exhausted') {
       boundary.failure = 'Injected process boundary throw before OS spawn'
       throw new Error(boundary.failure)
     }
-    const request = attempts.at(-1)!.request
-    const receipt = agentReceiptSchema.parse({ schemaVersion: 1, receiptId: `fixture-receipt-${id}`, taskId: `spawn-${request.child!.agentId}`,
-      role: 'specialist', agentId: request.child!.agentId, status: control === 'failed-child-receipt' ? 'failed' : 'completed',
+    const childRequest = attempts.at(-1)!.request
+    const receipt = agentReceiptSchema.parse({ schemaVersion: 1, receiptId: `fixture-receipt-${id}`, taskId: `spawn-${childRequest.child!.agentId}`,
+      role: 'specialist', agentId: childRequest.child!.agentId, status: control === 'failed-child-receipt' ? 'failed' : 'completed',
       runOutcome: control === 'failed-child-receipt' ? { termination: 'failed', cause: { code: 'fixture-child-failure', message: 'Schema-valid child failure' } } : { termination: 'completed' },
       taskAcceptance: { status: 'unknown' }, actionOutcomes: [], changedFiles: [], requirementsAddressed: [], acceptanceCriteriaAddressed: [],
       findingsAddressed: [], evidence: [], assumptions: [], unresolved: [], requestedValidation: [], artifacts: [],
@@ -201,11 +197,12 @@ export async function runSupervisionSdkControl(branch: SupervisionBranch, contro
       if (content) controller.enqueue(new TextEncoder().encode(content)); controller.close()
     } })
     boundary.syntheticPid = 650_000 + boundaries.length
-    // The production default Bun adapter invokes its observer on this synthetic
-    // result. These source controls make no actual OS process/PID claim.
-    return { pid: boundary.syntheticPid, stdout: stream(JSON.stringify(receipt) + '\n'), stderr: stream(''), exited: Promise.resolve(0) }
-  } })
-  restores.push(() => Object.defineProperty(Bun, 'spawn', spawnDescriptor))
+    const observed = request.observer?.spawnObserved({ source: 'bun-spawn-result', pid: boundary.syntheticPid })
+    if (observed && !observed.ok) throw new Error(observed.cause)
+    // The explicit spawn seam uses the supervisor's injected scope driver,
+    // which owns these synthetic stream EOF and exit promises without OS credit.
+    return { pid: boundary.syntheticPid, stdout: stream(JSON.stringify(receipt) + '\n'), stderr: stream(''), exited: Promise.resolve(0), kill() {} }
+  }
   const forbid = () => { networkCalls++; throw new Error('Provider/network calls forbidden in supervision control') }
   const networkSpy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async () => forbid(), { preconnect: forbid }))
   restores.push(() => networkSpy.mockRestore())
@@ -246,12 +243,12 @@ export async function runSupervisionSdkControl(branch: SupervisionBranch, contro
     for (const restore of restores.reverse()) restore()
   }
   const evidence = { schemaVersion: 1, producer: 'sdk.supervision', targetBranch, control, id, captureStatus: 'unasserted',
-    evidenceKind: 'actual-sdk-run-factory-source-with-injected-final-bun-process',
+    evidenceKind: 'actual-sdk-run-factory-source-with-injected-settle-spawn',
     zeroSemantics: control === 'literal-zero' ? 'SDK scalar zero rejected before host/factory; retry is consequently unreachable' : undefined,
     hostSnapshots, runtimeCalls, factoryCalls, registrations, actionStarts, resolverCalls, attempts, boundaries,
     settledResults, clockTransitions, policies, events, result, error, networkCalls,
     removedSandboxes: attempts.map(attempt => ({ path: attempt.cwd, removed: !existsSync(attempt.cwd) })),
-    limitations: ['Source final Bun process/result/PID is synthetic', 'Clock and target authorization decision are injected into the actual host factory',
+    limitations: ['Settle-spawn result/PID is synthetic; Bun.spawn is bypassed and scope coverage is injected', 'Clock and target authorization decision are injected into the actual host factory',
       'All factory/resolver/runtime wrappers call through; restart count/backoff and bridge remain production',
       'No provider task, complete child strategy, MCP, OS containment, or B29 equivalence claim'] }
   if (artifactDir) {

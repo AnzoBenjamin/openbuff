@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { retainEvaluationEnvironmentUntilCleanup } from './execution'
 
 export type EvaluationExecutionScope = 'trusted_task' | 'key_free_environment'
 
@@ -23,9 +24,12 @@ export async function withEvaluationEnvironment<T>(
     )
   }
   if (
-    Object.entries(supplied ?? {}).some(([name, value]) =>
-      value !== undefined &&
-      /(?:API_KEY|ACCESS_TOKEN|AUTH_TOKEN|SECRET|PASSWORD|CREDENTIALS)$/i.test(name),
+    Object.entries(supplied ?? {}).some(
+      ([name, value]) =>
+        value !== undefined &&
+        /(?:API_KEY|ACCESS_TOKEN|AUTH_TOKEN|SECRET|PASSWORD|CREDENTIALS)$/i.test(
+          name,
+        ),
     )
   ) {
     throw new Error(
@@ -35,6 +39,7 @@ export async function withEvaluationEnvironment<T>(
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'buffbench-key-free-'))
   const home = path.join(root, 'home')
   fs.mkdirSync(home)
+  let operationError: unknown
   try {
     const environment = {
       PATH: '/usr/local/bin:/usr/bin:/bin',
@@ -55,7 +60,22 @@ export async function withEvaluationEnvironment<T>(
         ),
       ),
     )
+  } catch (error) {
+    operationError = error
+    throw error
   } finally {
-    fs.rmSync(root, { recursive: true, force: true })
+    const retained = retainEvaluationEnvironmentUntilCleanup(
+      home,
+      () => fs.rmSync(root, { recursive: true, force: true }),
+      operationError,
+    )
+    if (retained && operationError && typeof operationError === 'object') {
+      try {
+        Object.assign(operationError, { retainedEnvironmentRoot: root })
+      } catch {
+        /* preserve original failure */
+      }
+    }
+    if (!retained) fs.rmSync(root, { recursive: true, force: true })
   }
 }

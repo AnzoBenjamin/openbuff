@@ -54,4 +54,18 @@ case "$ROLE_OUT" in
 esac
 echo "smoke: not_implemented exit 2 ok"
 
+# The implemented exec role requires dedicated control descriptors. Closing
+# them must refuse before any target starts, with raw stdout still empty.
+SMOKE_EXEC_OUTPUT="$(mktemp "${TMPDIR:-/tmp}/openbuff-native-smoke.XXXXXX")" \
+  || fail "could not create exec output capture"
+trap 'rm -f -- "$SMOKE_EXEC_OUTPUT"' EXIT
+set +e
+"$BIN" exec 3<&- 4>&- >"$SMOKE_EXEC_OUTPUT" 2>/dev/null
+EXEC_STATUS=$?
+set -e
+[ "$EXEC_STATUS" -eq 125 ] \
+  || fail "'exec' without private control exited $EXEC_STATUS, expected 125"
+[ ! -s "$SMOKE_EXEC_OUTPUT" ] || fail "'exec' without private control wrote target stdout"
+echo "smoke: implemented exec private-control refusal ok"
+
 echo "smoke: all checks passed for $BIN"

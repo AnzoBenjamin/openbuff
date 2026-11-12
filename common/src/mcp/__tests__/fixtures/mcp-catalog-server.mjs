@@ -1,4 +1,4 @@
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, existsSync } from 'node:fs'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -42,6 +42,14 @@ server.setRequestHandler(ListToolsRequestSchema, async (request) => {
   requests++
   const cursor = request.params?.cursor
   record(`list:${cursor ?? 'first'}`)
+  if (mode === 'held') {
+    const deadline = Date.now() + 20_000
+    while (!existsSync(`${logPath}.release`) && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    if (!existsSync(`${logPath}.release`))
+      throw new Error('fixture release timeout')
+    record('list:released')
+  }
   if (mode === 'slow') await new Promise((resolve) => setTimeout(resolve, 80))
   if (mode === 'slow-page' && cursor !== undefined)
     await new Promise((resolve) => setTimeout(resolve, 120))

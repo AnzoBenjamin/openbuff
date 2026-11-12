@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process'
+import { execSync, spawn } from 'node:child_process'
 import {
   chmodSync,
   existsSync,
@@ -13,6 +13,7 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   runAgentOnCommit,
+  readContextFiles,
   runFinalCheckCommands,
   runWithTimeoutSignal,
 } from '../agent-runner'
@@ -21,8 +22,38 @@ import { ClaudeRunner } from '../runners/claude'
 import { CodebuffRunner } from '../runners/codebuff'
 import { createArtifactSink } from '../evaluation-artifacts'
 import { isAbortError } from '../runners/runner'
+import { executionFixture } from '../../../common/src/mcp/__tests__/execution-fixture'
 
 import type { OpenbuffClient } from '@openbuff/sdk'
+
+test('context file read propagates resource-only cancellation', async () => {
+  const fixture = executionFixture()
+  const context = fixture.context()
+  try {
+    const pending = readContextFiles(
+      process.cwd(),
+      'HEAD',
+      ['any-file'],
+      undefined,
+      undefined,
+      {
+        ...context,
+        spawn: (_command, _args, options) => {
+          const child = spawn(
+            process.execPath,
+            ['--no-env-file', '-e', 'setTimeout(() => {}, 30000)'],
+            options ?? {},
+          )
+          child.once('spawn', () => fixture.close())
+          return child
+        },
+      },
+    )
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  } finally {
+    fixture.close()
+  }
+})
 
 async function waitForFile(path: string): Promise<void> {
   const deadline = Date.now() + 2000
@@ -411,24 +442,76 @@ describe('executeInitCommand', () => {
 })
 
 describe('runFinalCheckCommands', () => {
+  test.skipIf(process.platform === 'win32')(
+    'reports truncated captured output alongside cancellation',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'buffbench-check-output-'))
+      const ready = join(dir, 'ready')
+      const controller = new AbortController()
+      const script = `process.on('SIGTERM', () => require('fs').writeSync(1, Buffer.alloc(11 * 1024 * 1024, 120))); require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 30000)`
+      try {
+        const pending = runFinalCheckCommands(
+          [`exec node -e ${JSON.stringify(script)}`],
+          dir,
+          undefined,
+          controller.signal,
+        )
+        await waitForFile(ready)
+        controller.abort()
+        const [result] = await pending
+        expect(result?.outcome).toBe('cancelled')
+        expect(result?.stdout.length).toBe(10 * 1024 * 1024)
+        expect(result?.stderr.toLowerCase()).toContain('abort')
+        expect(result?.stderr).toContain('Command output truncated')
+        expect(result?.processCleanup?.status).toBe('complete')
+        expect(result?.outputCapture?.droppedBytes).toBeGreaterThan(0)
+      } finally {
+        controller.abort()
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+    10000,
+  )
+
   test('aborts an in-flight final check command and preserves output shape', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'buffbench-check-after-ready-'))
+    const ready = join(dir, 'ready')
     const controller = new AbortController()
-    const runPromise = runFinalCheckCommands(
-      ['node -e "setTimeout(() => {}, 10000)"'],
+    try {
+      const script = `require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 10000)`
+      const runPromise = runFinalCheckCommands(
+        [`exec node -e ${JSON.stringify(script)}`],
+        dir,
+        undefined,
+        controller.signal,
+      )
+      await waitForFile(ready)
+      controller.abort()
+      const [result] = await runPromise
+      expect(result).toBeDefined()
+      expect(result!.command).toContain('setTimeout')
+      expect(result!.exitCode).toBe(130)
+      expect(result!.outcome).toBe('cancelled')
+      expect(typeof result!.stdout).toBe('string')
+      expect(result!.stderr.toLowerCase()).toContain('abort')
+      expect(result!.processCleanup?.status).toBe('complete')
+    } finally {
+      controller.abort()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a successful check remains complete when its signal aborts later', async () => {
+    const controller = new AbortController()
+    const [result] = await runFinalCheckCommands(
+      ['node -e "process.stdout.write(\u0027complete\u0027)"'],
       process.cwd(),
       undefined,
       controller.signal,
     )
-
     controller.abort()
-    const [result] = await runPromise
-
-    expect(result).toBeDefined()
-    expect(result!.command).toContain('setTimeout')
-    expect(result!.exitCode).toBe(130)
-    expect(result!.outcome).toBe('cancelled')
-    expect(typeof result!.stdout).toBe('string')
-    expect(result!.stderr.toLowerCase()).toContain('abort')
+    expect(result?.outcome).toBe('passed')
+    expect(result?.stdout).toBe('complete')
   })
 
   test('runs independent object checks concurrently and preserves input order', async () => {

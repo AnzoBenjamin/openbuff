@@ -1,11 +1,11 @@
 //! Thin binary wrapper around the `openbuff_native` role dispatcher.
 //!
-//! All logic lives in `src/lib.rs` (pure, unit-tested); this file only maps
-//! argv + outcomes to stdout/stderr and process exit codes.
+//! Dispatch lives in `src/lib.rs`; the exec role enters its one-shot monitor.
+//! This wrapper maps argv and returned outcomes to streams and exit codes.
 
 use std::process::ExitCode;
 
-use openbuff_native::{handle_role, parse_role, version_line, RoleOutcome};
+use openbuff_native::{handle_role, parse_role, version_json, version_line, RoleOutcome};
 
 const USAGE: &str = "usage: openbuff-native <role>\n\nroles:\n  exec         job executor sandbox (P5-T1)\n  daemon       jobd supervisor (P5-T2)\n  infer        parse/inference tier (P9-T6)\n  plugin-host  plugin host (P5)\n  a11y         accessibility host (P5)\n  version      print sidecar protocol + crate version\n";
 
@@ -13,7 +13,14 @@ fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         // `version` is not a Role: it is the handshake probe.
         Some("version") => {
-            println!("{}", version_line());
+            println!(
+                "{}",
+                if std::env::args().nth(2).as_deref() == Some("--json") {
+                    version_json()
+                } else {
+                    version_line()
+                }
+            );
             ExitCode::SUCCESS
         }
         Some(arg) => match parse_role(arg) {

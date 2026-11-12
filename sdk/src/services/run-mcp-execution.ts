@@ -104,7 +104,8 @@ export function createRunMcpExecution(options: Readonly<{
         cwd: options.snapshot.inputs.projectRoot, projectRoot: context.projectRoot, allowedPaths: context.allowedPaths,
         mode: context.mode, profile: context.profile, processType: 'BACKGROUND', family: 'mcp-stdio', branchId: 'mcp.initial-connect',
         environmentOverlay: resolved.env, ...(delegation?.ok ? { delegation: delegation.value } : {}),
-        adapterOptions: { runtime: 'node', stdio: 'pipe', shell: false } }
+        adapterOptions: { runtime: 'node', stdio: 'pipe-pipe-ignore', shell: false,
+          detached: options.snapshot.inputs.platform === 'linux' } }
       const registered = scope.resources(target, destination)
       if (!registered.ok) throw new ExecutionRefusalError(registered)
       resource = registered.value

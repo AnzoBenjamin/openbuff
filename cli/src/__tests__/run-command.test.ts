@@ -447,10 +447,32 @@ describe('runHeadlessCommand', () => {
       })
     })
 
+    test('delayed client setup retains the original numeric deadline', async () => {
+      let release!: () => void
+      const waiting = new Promise<void>(resolve => { release = resolve })
+      const h = makeHarness({ args: { timeout: 1 } })
+      const client = await h.deps.getClient!()
+      let entered = 0
+      h.deps.getClient = async () => { entered = performance.now(); await waiting; return client }
+      const before = performance.now()
+      const pending = runHeadlessCommand(h.args, h.deps)
+      await new Promise(resolve => setTimeout(resolve, 30))
+      release()
+      expect(await pending).toBe(0)
+      const seed = h.runCalls[0].runDeadline as import('@openbuff/sdk').RootDeadlineSeed
+      expect(seed.deadline.kind).toBe('finite')
+      if (seed.deadline.kind !== 'finite') throw new Error('Expected a finite CLI deadline')
+      expect(seed.deadline.expiresAtMs).toBeGreaterThanOrEqual(before + 1000)
+      expect(seed.deadline.expiresAtMs).toBeLessThanOrEqual(entered + 1000)
+      expect(seed.sampledAtMs).toBeLessThanOrEqual(entered)
+      expect(h.runCalls[0].runTimeoutMs).toBeUndefined()
+    })
+
     test('the run receives a signal when a timeout is set (none before this change)', async () => {
       const h = makeHarness({ args: { prompt: 'hi' } })
       await runHeadlessCommand(h.args, h.deps)
       expect(h.runCalls[0].signal).toBeUndefined()
+      expect(h.runCalls[0].runDeadline).toBeUndefined()
 
       const t = makeTimeoutHarness()
       // Fractional deadline (the suite's fast-deadline pattern): a whole-second

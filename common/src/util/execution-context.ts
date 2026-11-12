@@ -2,7 +2,7 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
 
 import type {
   AbsoluteDeadline, ActionExecutionPort, Admission, AuthorityBindingV2,
-  BudgetHandle, CapturedExecutable, Clock, Correlation,
+  BudgetHandle, Capability, CapturedExecutable, Clock, Correlation,
   DeadlineFacts, DelegationHandle, DestinationHandle, ExactLaunchInput,
   HostAuthority, HostAuthorityInputs, LaunchEvent, LaunchFacts, LaunchObserver,
   LeaseHandle, LifetimeHandle, Limit, OwnerHandle, PolicyInput, PreparedLaunch,
@@ -10,6 +10,7 @@ import type {
   Result, RootDeadlineSeed, TargetClassification, TargetDescription, TargetPermit,
   TransferOffer, TransferPermit, UsePermit,
 } from '../types/contracts/execution-context'
+import type { NativePlanIdentity, NativePreparedObservation } from '../types/contracts/native-execution'
 
 const MAX_TIMER_MS = 2_147_483_647
 const policies = new Set(['read-only', 'librarian-read-only', 'git-commit',
@@ -141,7 +142,7 @@ type Resource = {
   reuse: 'none' | 'exact-host-scope-lifetime-owner'
   restartPolicy: Parameters<HostAuthority['registerResource']>[0]['restartPolicy']
   restartAttempts: number; correlation?: Correlation; originalBudget?: Budget
-  transferId: string | null; current: boolean; controller: AbortController
+  transferId: string | null; current: boolean; controller: AbortController; stopCommitted: boolean
   unlinkOwner?: () => void; unlinkExtraSignal?: () => void; extraSignal?: AbortSignal; leases: Set<Lease>
   observed?: { id: string; launch: Launch }; launch?: Launch
 }
@@ -154,6 +155,9 @@ type Launch = {
   classification: TargetClassification; capturedDeadlines: DeadlineFacts
   stage: 'planned' | 'admitting' | 'admitted' | 'dispatched' | 'failed'
   permit?: TargetPermit; consumed: boolean; observed: boolean; failedBeforeStart: boolean
+  nativeTransport?: NativePlanIdentity & { pid: number }
+  nativeReady?: NativePreparedObservation
+  nativeEntryCommitted?: boolean
 }
 type Permit = { launch: Launch; consumed: boolean }
 type Use = { request: Request; resource: Resource; lease: Lease; generation: string;
@@ -290,8 +294,8 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
       : refuse('cancelled', cancelledCause)
   }
 
-  function checkLimiter(state: Limiter): Refusal | undefined {
-    const now = sample()
+  function checkLimiter(state: Limiter, sampledNow?: number): Refusal | undefined {
+    const now = sampledNow === undefined ? sample() : ok(sampledNow)
     if (!now.ok) return now
     if (expires(state.deadline) <= now.value) return refuse('deadline-exhausted', 'Execution deadline exhausted')
     return signalRefusal(state.controller.signal, 'Execution lifetime cancelled')
@@ -346,7 +350,12 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
       !['assistant', 'user'].includes(target.mode) || !['SYNC', 'BACKGROUND'].includes(target.processType) ||
       !families.has(target.family) || !nonempty(target.branchId) || !plain(target.profile) ||
       !policies.has(target.profile.policy) || !['portable-ts', 'native-exec'].includes(target.profile.preferredBackend) ||
+      Object.keys(target.profile).some(key => !['policy', 'preferredBackend', 'required', 'optional', 'allowBackendFallback'].includes(key)) ||
       !Array.isArray(target.profile.required) || target.profile.required.some(value => !capabilities.has(value)) ||
+      new Set(target.profile.required).size !== target.profile.required.length ||
+      (target.profile.optional !== undefined && (!Array.isArray(target.profile.optional) ||
+        target.profile.optional.some(value => !capabilities.has(value) || target.profile.required.includes(value)) ||
+        new Set(target.profile.optional).size !== target.profile.optional.length)) ||
       typeof target.profile.allowBackendFallback !== 'boolean' || !plain(target.adapterOptions) ||
       !['node', 'bun', 'spawn-sync'].includes(String(target.adapterOptions.runtime))) return false
     if (target.shellCommandBytes !== undefined && (typeof target.shellCommandBytes !== 'string' || /\0/.test(target.shellCommandBytes))) return false
@@ -378,7 +387,7 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
 
   function captureProfile(target: TargetDescription): Result<ProfileFacts> {
     try {
-      const profile = inputs.resolveProfile(copy(target.profile))
+      const profile = inputs.resolveProfile(copy(target.profile), copy(target))
       if (thenable(profile) || !plain(profile) || !Array.isArray(profile.available) || !Array.isArray(profile.enforced) ||
         JSON.stringify(profile.requested) !== JSON.stringify(target.profile) || profile.active !== null ||
         profile.available.some(backend => !nonempty(backend.backend) || !nonempty(backend.generation) ||
@@ -389,9 +398,14 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
       if (profile.selected !== null) {
         const selected = profile.selected
         const backend = profile.available.find(value => value.backend === selected.backend && value.generation === selected.generation)
-        if (!backend || selected.policy !== target.profile.policy || !['cooperative', 'unavailable'].includes(selected.cancellation) ||
+        if (!backend || selected.policy !== target.profile.policy || !['cooperative', 'os-scoped', 'unavailable'].includes(selected.cancellation) ||
           target.profile.required.some(capability => !backend.capabilities.includes(capability)))
           return refuse('invalid-context', 'Selected backend cannot satisfy the captured profile')
+        if (selected.backend === 'native-exec' && (target.adapterOptions.runtime !== 'node' ||
+          target.adapterOptions.nativeAdapter !== 'openbuff.exec.v1' ||
+          typeof target.adapterOptions.nativeArtifactSha256 !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(target.adapterOptions.nativeArtifactSha256)))
+          return refuse('invalid-context', 'Native selection requires a captured native adapter and artifact')
         if (!target.profile.allowBackendFallback && selected.backend !== target.profile.preferredBackend)
           return refuse('invalid-context', 'Backend fallback was not selected')
       }
@@ -436,32 +450,44 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
     return ok({ env: Object.freeze(result), delegation })
   }
 
-  function checkRequest(request: Request): Refusal | undefined {
-    return checkLimiter(request.budget) ?? checkLimiter(request.budget.owner.lifetime) ??
+  function checkRequest(request: Request, sampledNow?: number): Refusal | undefined {
+    return checkLimiter(request.budget, sampledNow) ?? checkLimiter(request.budget.owner.lifetime, sampledNow) ??
       signalRefusal(request.controller.signal, 'Execution request cancelled')
   }
 
-  function checkResource(resource: Resource): Refusal | undefined {
+  function checkResource(resource: Resource, sampledNow?: number): Refusal | undefined {
     if (!resource.current) return refuse('stale-authority', 'Resource generation is stale')
-    return checkLimiter(resource.lifetime) ?? checkLimiter(resource.owner.lifetime) ??
+    return checkLimiter(resource.lifetime, sampledNow) ?? checkLimiter(resource.owner.lifetime, sampledNow) ??
       signalRefusal(resource.controller.signal, 'Execution resource cancelled') ??
-      (resource.delegation ? checkLimiter(resource.delegation.lifetime) : undefined)
+      (resource.delegation ? checkLimiter(resource.delegation.lifetime, sampledNow) : undefined)
   }
 
-  function checkLease(lease: Lease): Refusal | undefined {
-    const requestFailure = checkRequest(lease.request)
+  function checkTransferLifecycle(resource: Resource): Refusal | undefined {
+    if (resource.stopCommitted) return refuse('stale-authority', 'Physical resource cleanup is committed')
+    if (resource.launch?.consumed && !resource.observed)
+      return refuse('stale-authority', 'Dispatched resource start is not yet observed')
+    return undefined
+  }
+
+  function checkLease(lease: Lease, sampledNow?: number): Refusal | undefined {
+    const requestFailure = checkRequest(lease.request, sampledNow)
     if (requestFailure) return requestFailure
     if (lease.released || lease.generation !== lease.resource.generation || lease.owner !== lease.resource.owner)
       return refuse('stale-authority', 'Request lease is released or stale')
-    return checkResource(lease.resource)
+    return checkResource(lease.resource, sampledNow)
+  }
+
+  function checkLaunchState(launch: Launch, sampledNow?: number): Refusal | undefined {
+    const now = sampledNow === undefined ? sample() : ok(sampledNow)
+    if (!now.ok) return now
+    if (launch.resource.generation !== launch.generation || launch.resource.launch !== launch)
+      return refuse('stale-authority', 'Prepared launch generation is stale')
+    return checkLease(launch.lease, now.value) ?? checkLimiter(launch.budget, now.value)
   }
 
   function checkLaunch(launch: Launch): Refusal | undefined {
-    if (launch.resource.generation !== launch.generation || launch.resource.launch !== launch)
-      return refuse('stale-authority', 'Prepared launch generation is stale')
-    const failure = checkLease(launch.lease) ?? checkLimiter(launch.budget)
-    if (failure) return failure
-    return checkBasisAndProfile(launch)
+    // Host callbacks can cancel a request or consume its remaining time.
+    return checkLaunchState(launch) ?? checkBasisAndProfile(launch) ?? checkLaunchState(launch)
   }
 
   function checkBasisAndProfile(launch: Launch): Refusal | undefined {
@@ -478,10 +504,16 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
     return undefined
   }
 
-  function checkUse(launch: Launch): Refusal | undefined {
+  function checkUseState(launch: Launch): Refusal | undefined {
+    const now = sample()
+    if (!now.ok) return now
     if (!launch.resource.observed || launch.resource.observed.launch.stage === 'failed')
       return refuse('stale-authority', 'Resource no longer has a usable process observation')
-    return checkLease(launch.lease) ?? checkBasisAndProfile(launch)
+    return checkLease(launch.lease, now.value)
+  }
+
+  function checkUse(launch: Launch): Refusal | undefined {
+    return checkUseState(launch) ?? checkBasisAndProfile(launch) ?? checkUseState(launch)
   }
 
   async function awaitDecision(launch: Launch): Promise<unknown> {
@@ -532,8 +564,11 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
       parseStatus: c.parseStatus, hostContextId, configurationSnapshotId: configuration.snapshotId,
       correlationDigest: keyed(correlationTuple(launch.correlation)), cwd: target.cwd,
       projectRoot: target.projectRoot, allowedPaths: target.allowedPaths,
-      profileRequestDigest: keyed(['openbuff.profile-request.v1', target.profile.policy, target.profile.preferredBackend,
-        target.profile.required, target.profile.allowBackendFallback]),
+      profileRequestDigest: keyed(target.profile.optional === undefined
+        ? ['openbuff.profile-request.v1', target.profile.policy, target.profile.preferredBackend,
+          target.profile.required, target.profile.allowBackendFallback]
+        : ['openbuff.profile-request.v2', target.profile.policy, target.profile.preferredBackend,
+          target.profile.required, target.profile.optional, target.profile.allowBackendFallback]),
       selectedBackendDigest: keyed(selected ? ['openbuff.backend.v1', selected.backend, selected.generation, selected.policy, selected.cancellation]
         : ['openbuff.backend.v1', null]),
       environmentDigest: keyed(['openbuff.env.v1', platform === 'win32' ? 'case-insensitive' : 'case-sensitive', environmentPairs]),
@@ -560,6 +595,7 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
         inherited: inheritEnv, entryCount: Object.keys(resource.env).length, rosterId: configuration.rosterId,
         delegationIds: resource.delegation ? [resource.delegation.id] : [] },
       deadlines: deadlineFacts(launch), profile: { ...resource.profile,
+        ...(launch.observed && launch.nativeReady ? { enforced: launch.nativeReady.enforced } : {}),
         active: launch.observed ? resource.profile.selected : null },
       executionBindingVersion: 2, executionBindingDigest: launch.bindingDigest })
   }
@@ -605,14 +641,143 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
     emit({ phase: 'dispatch-failed', facts: facts(launch), processStart: launch.observed ? 'observed' : 'not-observed', cause })
   }
 
+  function nativeIdentity(value: unknown): value is NativePlanIdentity {
+    return plain(value) && typeof value.planDigest === 'string' && /^[a-f0-9]{64}$/.test(value.planDigest) &&
+      typeof value.artifactSha256 === 'string' && /^[a-f0-9]{64}$/.test(value.artifactSha256) &&
+      nonempty(value.nonce) && value.nonce.length <= 256 && !value.nonce.includes('\0')
+  }
+
+  function sameNativeIdentity(left: NativePlanIdentity, right: NativePlanIdentity): boolean {
+    return left.planDigest === right.planDigest && left.nonce === right.nonce &&
+      left.artifactSha256 === right.artifactSha256
+  }
+
+  function nativeLaunchFailure(launch: Launch): Refusal | undefined {
+    if (launch.resource.profile.selected?.backend !== 'native-exec' ||
+      launch.resource.target.adapterOptions.runtime !== 'node' ||
+      launch.resource.target.adapterOptions.nativeAdapter !== 'openbuff.exec.v1')
+      return refuse('invalid-context', 'Native observer requires a captured native dispatch')
+    if (!launch.consumed || launch.stage !== 'dispatched' || launch.observed || launch.failedBeforeStart)
+      return refuse('stale-authority', 'Native setup observation is out of order')
+    if (launch.resource.stopCommitted)
+      return refuse('stale-authority', 'Physical resource cleanup is committed')
+    return checkLaunch(launch)
+  }
+
   function observerFor(launch: Launch): LaunchObserver {
     const observer: LaunchObserver = {
+      nativeTransportObserved(observation) {
+        if (get(observers, this) !== launch) return refuse('stale-authority', 'Invalid native observer receiver')
+        const failure = nativeLaunchFailure(launch)
+        if (failure) return failure
+        if (launch.nativeTransport || !nativeIdentity(observation) || observation.source !== 'native-monitor-spawn' ||
+          !Number.isSafeInteger(observation.pid) || observation.pid <= 0 ||
+          observation.artifactSha256 !== launch.resource.target.adapterOptions.nativeArtifactSha256)
+          return refuse('invalid-context', 'Invalid or repeated native transport identity')
+        launch.nativeTransport = copy({ planDigest: observation.planDigest, nonce: observation.nonce,
+          artifactSha256: observation.artifactSha256, pid: observation.pid })
+        emit({ phase: 'native-transport-observed', facts: facts(launch),
+          transportObservationId: randomUUID(), pid: observation.pid })
+        return ok(undefined)
+      },
+      nativePrepared(observation) {
+        if (get(observers, this) !== launch) return refuse('stale-authority', 'Invalid native observer receiver')
+        const failure = nativeLaunchFailure(launch)
+        if (failure) return failure
+        if (!launch.nativeTransport || launch.nativeReady || launch.nativeEntryCommitted ||
+          !nativeIdentity(observation) || observation.source !== 'native-adapter-ready' ||
+          !sameNativeIdentity(observation, launch.nativeTransport) || !nonempty(observation.scopeId) ||
+          observation.scopeId.length > 256 || observation.scopeId.includes('\0') || !Array.isArray(observation.enforced))
+          return refuse('invalid-context', 'Invalid native prepared identity or order')
+        const selected = launch.resource.profile.selected!
+        const backend = launch.resource.profile.available.find(value => value.backend === selected.backend &&
+          value.generation === selected.generation)!
+        const seen = new Set<string>()
+        for (const mechanism of observation.enforced) {
+          if (!plain(mechanism) || typeof mechanism.capability !== 'string' ||
+            !capabilities.has(mechanism.capability) || seen.has(mechanism.capability) ||
+            typeof mechanism.status !== 'string' ||
+            !['not-requested', 'not-enforced', 'unknown', 'enforced'].includes(mechanism.status) ||
+            (mechanism.status === 'enforced' && (!nonempty(mechanism.evidenceId) ||
+              !backend.capabilities.includes(mechanism.capability as Capability))))
+            return refuse('invalid-context', 'Invalid native mechanism observation')
+          seen.add(mechanism.capability)
+        }
+        const enforced = (capability: string) => observation.enforced.some(value =>
+          value.capability === capability && value.status === 'enforced')
+        if (launch.resource.target.profile.required.some(capability => !enforced(capability)) ||
+          (selected.cancellation === 'os-scoped' && !enforced('process-tree-containment')))
+          return refuse('unavailable', 'Native setup did not enforce the selected required capabilities')
+        launch.nativeReady = copy(observation)
+        emit({ phase: 'native-prepared', facts: facts(launch) })
+        return ok(undefined)
+      },
+      commitNativeTargetEntry(identity) {
+        if (get(observers, this) !== launch) return refuse('stale-authority', 'Invalid native observer receiver')
+        const failure = nativeLaunchFailure(launch)
+        if (failure) return failure
+        if (!launch.nativeReady || launch.nativeEntryCommitted || !nativeIdentity(identity) ||
+          !sameNativeIdentity(identity, launch.nativeReady))
+          return refuse('stale-authority', 'Native entry requires one matching prepared identity')
+        const now = sample()
+        if (!now.ok) return now
+        const interrupted = checkLaunchState(launch, now.value)
+        if (interrupted || launch.resource.stopCommitted)
+          return interrupted ?? refuse('stale-authority', 'Physical resource cleanup is committed')
+        launch.nativeEntryCommitted = true
+        emit({ phase: 'native-entry-committed', facts: facts(launch) })
+        // An event callback can cancel, consume time or invalidate the basis.
+        const afterRecord = checkLaunch(launch)
+        if (afterRecord || launch.resource.stopCommitted) {
+          const refusal = afterRecord ?? refuse('stale-authority', 'Physical resource cleanup is committed')
+          failDispatch(launch, refusal.cause)
+          return refusal
+        }
+        const committedAt = sample()
+        if (!committedAt.ok) { failDispatch(launch, committedAt.cause); return committedAt }
+        const lastCheck = checkLaunchState(launch, committedAt.value)
+        if (lastCheck) { failDispatch(launch, lastCheck.cause); return lastCheck }
+        return ok(copy({ planDigest: identity.planDigest, nonce: identity.nonce,
+          artifactSha256: identity.artifactSha256,
+          resourceRemainingMs: launch.resource.lifetime.deadline.kind === 'finite'
+            ? launch.resource.lifetime.deadline.expiresAtMs - committedAt.value : null,
+          facts: facts(launch) }))
+      },
+      nativeTargetEntered(observation) {
+        if (get(observers, this) !== launch) return refuse('stale-authority', 'Invalid native observer receiver')
+        if (!launch.nativeEntryCommitted || !launch.nativeReady || launch.observed || launch.stage !== 'dispatched' ||
+          !launch.resource.current || launch.resource.generation !== launch.generation || launch.resource.launch !== launch)
+          return refuse('stale-authority', 'Native target observation is out of order or stale')
+        if (!nativeIdentity(observation) || observation.source !== 'native-adapter-exec-status' ||
+          !sameNativeIdentity(observation, launch.nativeReady) || observation.scopeId !== launch.nativeReady.scopeId ||
+          !Number.isSafeInteger(observation.pid) || observation.pid <= 0)
+          return refuse('invalid-context', 'Invalid native target entry identity')
+        // Entry is a physical observation. Cancellation after the commit cannot
+        // erase a real start, but it still prevents success and resource reuse.
+        launch.observed = true
+        const processObservationId = randomUUID()
+        launch.resource.observed = { id: processObservationId, launch }
+        emit({ phase: 'spawn-observed', facts: facts(launch), processObservationId, pid: observation.pid })
+        const failure = checkLaunch(launch) ?? (launch.resource.stopCommitted
+          ? refuse('stale-authority', 'Physical resource cleanup is committed') : undefined)
+        if (failure) { failDispatch(launch, failure.cause); return failure }
+        return ok({ processObservationId })
+      },
+      cleanupCommitted() {
+        if (get(observers, this) !== launch || !launch.consumed || !launch.resource.current ||
+          (launch.resource.launch !== launch && launch.resource.observed?.launch !== launch))
+          return refuse('stale-authority', 'Invalid physical cleanup observer')
+        launch.resource.stopCommitted = true
+        return ok(undefined)
+      },
       spawnObserved(observation) {
         if (get(observers, this) !== launch) return refuse('stale-authority', 'Invalid observer receiver')
         if (!launch.resource.current || launch.resource.generation !== launch.generation || launch.resource.launch !== launch)
           return refuse('stale-authority', 'Observer resource generation is stale')
         if (launch.stage !== 'dispatched' || launch.observed || launch.failedBeforeStart)
           return refuse('stale-authority', 'Process start observation is out of order')
+        if (launch.resource.profile.selected?.backend === 'native-exec')
+          return refuse('invalid-context', 'Native target entry requires its authenticated native observer')
         const expected = launch.resource.target.adapterOptions.runtime === 'node' ? 'node-spawn-event' :
           launch.resource.target.adapterOptions.runtime === 'bun' ? 'bun-spawn-result' : 'spawn-sync-result'
         if (observation.source !== expected || !Number.isSafeInteger(observation.pid) || observation.pid <= 0)
@@ -682,10 +847,23 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
           return noLaunch(launch, refuse('stale-authority', 'Invalid target permit'))
         if (authority.consumed || launch.consumed || launch.stage !== 'admitted')
           return refuse('already-consumed', 'Target dispatch authority was already consumed')
+        // Reserve before invoking host callbacks, which may reenter dispatch.
+        authority.consumed = true
+        launch.consumed = true
         const failure = checkLaunch(launch)
         if (failure) return noLaunch(launch, failure)
+        launch.stage = 'dispatched'
+        emit({ phase: 'dispatched', facts: facts(launch) })
         const now = sample()
-        if (!now.ok) return noLaunch(launch, now)
+        if (!now.ok) {
+          failDispatch(launch, now.cause)
+          return now
+        }
+        const interrupted = checkLaunchState(launch, now.value)
+        if (interrupted) {
+          failDispatch(launch, interrupted.cause)
+          return interrupted
+        }
         const resource = launch.resource
         const remaining = resource.lifetime.deadline.kind === 'finite'
           ? resource.lifetime.deadline.expiresAtMs - now.value : null
@@ -694,10 +872,6 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
           resourceSignal: resource.controller.signal, resourceRemainingMs: remaining,
           deadlines: deadlineFacts(launch), adapterOptions: resource.target.adapterOptions })
         const observer = observerFor(launch)
-        authority.consumed = true
-        launch.consumed = true
-        launch.stage = 'dispatched'
-        emit({ phase: 'dispatched', facts: facts(launch) })
         try {
           if (poisoned) throw new Error('Execution event recorder unavailable')
           const child = spawnNow(exact, observer)
@@ -925,12 +1099,12 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
       if (p.reuse === 'exact-host-scope-lifetime-owner') {
         const existing = reusedResources.get(compatibility)
         const state = existing && get(resources, existing)
-        if (state?.current && !state.controller.signal.aborted) return ok(existing!)
+        if (state?.current && !state.stopCommitted && !state.controller.signal.aborted) return ok(existing!)
       }
       const resource: Resource = { id: randomUUID(), generation: randomUUID(), generationNumber: 0, owner, lifetime, destination,
         target: capturedTarget, env: environment.value.env, delegation: environment.value.delegation, profile: profile.value,
         compatibility, reuse: p.reuse, restartPolicy: copy(p.restartPolicy), restartAttempts: 0,
-        transferId: null, current: true, controller: registeredController(), extraSignal: p.resourceSignal, leases: new Set() }
+        transferId: null, current: true, stopCommitted: false, controller: registeredController(), extraSignal: p.resourceSignal, leases: new Set() }
       resource.unlinkOwner = link(lifetime.controller.signal, resource.controller)
       resource.unlinkExtraSignal = link(p.resourceSignal, resource.controller)
       const result = handle<ResourceHandle, Resource>(resources, resource)
@@ -964,7 +1138,7 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
       previous.current = false
       const resource: Resource = { ...previous, generation: randomUUID(), generationNumber: previous.generationNumber + 1,
         target: p.branchId === undefined ? previous.target : Object.freeze({ ...previous.target, branchId: p.branchId }),
-        restartAttempts: previous.restartAttempts + 1, current: true, controller: registeredController(), leases: new Set(),
+        restartAttempts: previous.restartAttempts + 1, current: true, stopCommitted: false, controller: registeredController(), leases: new Set(),
         observed: undefined, launch: undefined }
       resource.unlinkOwner = link(resource.lifetime.controller.signal, resource.controller)
       resource.unlinkExtraSignal = link(resource.extraSignal, resource.controller)
@@ -1060,12 +1234,14 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
       if (value.consumed) return refuse('already-consumed', 'Resource use permit already consumed')
       if (value.generation !== value.resource.generation || !value.resource.observed)
         return refuse('stale-authority', 'Resource use generation is stale')
+      value.consumed = true
       const failure = checkUse(value.launch)
       if (failure) return failure
-      value.consumed = true
       emit({ phase: 'resource-reused', facts: facts(value.launch),
         processObservationId: value.resource.observed.id, originalLaunchId: value.resource.observed.launch.id })
       if (poisoned) return refuse('unavailable', 'Execution event recorder unavailable')
+      const interrupted = checkUseState(value.launch)
+      if (interrupted) return interrupted
       try { return ok(use()) }
       catch (error) { return refuse('unavailable', error instanceof Error ? error.message : 'Resource operation failed') }
     },
@@ -1106,6 +1282,8 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
         return refuse('stale-authority', 'Transfer owner, generation or sender lease does not match')
       const failure = checkRequest(request) ?? checkResource(resource) ?? checkLimiter(receiver.lifetime)
       if (failure) return failure
+      const transferFailure = checkTransferLifecycle(resource)
+      if (transferFailure) return transferFailure
       if (resource.delegation && !resource.delegation.owners.has(receiver)) return refuse('denied', 'Receiver has no captured credential delegation')
       return ok(handle<TransferOffer, Offer>(offers, { resource, sender, receiver, request, generation: resource.generation, consumed: false }))
     },
@@ -1114,6 +1292,8 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
       if (!offer || !receiver || offer.receiver !== receiver || offer.consumed) return refuse('stale-authority', 'Transfer receiver capability does not match')
       const failure = checkRequest(offer.request) ?? checkResource(offer.resource) ?? checkLimiter(receiver.lifetime)
       if (failure) return failure
+      const transferFailure = checkTransferLifecycle(offer.resource)
+      if (transferFailure) return transferFailure
       offer.consumed = true
       return ok(handle<TransferPermit, Transfer>(transfers, { offer, consumed: false }))
     },
@@ -1125,6 +1305,8 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
         return refuse('stale-authority', 'Transfer resource changed')
       const failure = checkRequest(request) ?? checkResource(resource) ?? checkLimiter(receiver.lifetime)
       if (failure) return failure
+      const transferFailure = checkTransferLifecycle(resource)
+      if (transferFailure) return transferFailure
       const now = sample()
       if (!now.ok) return now
       const deadline = boundedDeadline(inputs.clock, now.value, { kind: 'unbounded' },

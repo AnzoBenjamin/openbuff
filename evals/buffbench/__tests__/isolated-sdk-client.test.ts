@@ -106,6 +106,11 @@ describe('actual source SDK evaluator process isolation', () => {
     const evidence = adapter.observations[0]!
     expect(evidence.cancelled).toBe(true)
     expect(evidence.eventsReplayed).toBe(observed)
+    expect((evidence.processCleanup as any).status).toBe('complete')
+    expect((evidence.processCleanup as any).finalObservation.leader).toBe(
+      'exited-reaped',
+    )
+    expect((evidence.outputCapture as any).complete).toBe(true)
     expect(fs.existsSync(String(evidence.cwd))).toBe(false)
     expect(fs.existsSync(String(evidence.home))).toBe(false)
     expect(() => process.kill(Number(evidence.pid), 0)).toThrow()

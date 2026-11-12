@@ -1,5 +1,13 @@
 import { spawn } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
+import { createNodeProcessScope } from '@codebuff/common/util/node-process-scope'
+import type { NodeProcessScopeOptions } from '@codebuff/common/util/node-process-scope'
+import type {
+  CleanupResult,
+  OwnedProcessScope,
+  ScopeStreams,
+  StopReason,
+} from '@codebuff/common/types/contracts/process-scope'
 import { getChildProcessEnv } from '../env'
 
 const DEFAULT_RESTART_BACKOFF_MS = 200
@@ -17,13 +25,14 @@ const STDERR_TAIL_LIMIT = 4_096
  */
 const MAX_STDOUT_BUFFER_BYTES = 1_048_576
 const HANDSHAKE_REQUEST_ID = 1
-const KILL_GRACE_MS = 500
+const KILL_GRACE_MS = 200
 
 export type SidecarSupervisorState =
   | 'idle'
   | 'starting'
   | 'running'
   | 'restarting'
+  | 'stopping'
   | 'stopped'
 
 export type SidecarSupervisorEvent =
@@ -46,6 +55,16 @@ export type SidecarSupervisorOptions = {
   maxRestartAttempts?: number
   requestTimeoutMs?: number
   onEvent?: (event: SidecarSupervisorEvent) => void
+  /** Trusted host seams. Injected children do not establish real group coverage. */
+  spawn?: typeof spawn
+  createProcessScope?: (
+    child: ChildProcess,
+    options: NodeProcessScopeOptions,
+  ) => OwnedProcessScope
+  cleanupPolicy?: Pick<
+    NodeProcessScopeOptions,
+    'termGraceMs' | 'killGraceMs' | 'observationMs' | 'probeTimeoutMs'
+  >
 }
 
 export type SidecarRequestFailureReason =
@@ -92,6 +111,27 @@ type ExitInfo = {
   error?: unknown
 }
 
+type SidecarGeneration = {
+  id: number
+  epoch: number
+  child: ChildProcess
+  scope: OwnedProcessScope
+  pending: Map<number, PendingEntry>
+  nextRequestId: number
+  stdoutBuffer: Buffer
+  stdoutBufferDropCount: number
+  stdoutSeenBytes: number
+  stderrSeenBytes: number
+  stderrTail: Buffer
+  stdoutState: ScopeStreams['stdout']
+  stderrState: ScopeStreams['stderr']
+  protocolActive: boolean
+  stopRequested: boolean
+  cleanupPromise: Promise<void> | null
+  stopPromise: Promise<void> | null
+  cancelBackoff?: () => void
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -107,7 +147,9 @@ function describeValue(value: unknown): string {
 function formatExit(info: ExitInfo): string {
   if (info.error !== undefined) {
     return `spawn error: ${
-      info.error instanceof Error ? info.error.message : describeValue(info.error)
+      info.error instanceof Error
+        ? info.error.message
+        : describeValue(info.error)
     }`
   }
   return info.signal !== null
@@ -124,12 +166,6 @@ function unrefTimer(timer: unknown): void {
   }
 }
 
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise<void>((resolve) => {
-    unrefTimer(setTimeout(resolve, milliseconds))
-  })
-}
-
 /**
  * Spawns, health-checks, restarts, and version-negotiates a stdio JSON-RPC
  * sidecar process. Line-delimited JSON-RPC over the child's stdin/stdout with
@@ -138,16 +174,9 @@ function sleep(milliseconds: number): Promise<void> {
  */
 export class SidecarSupervisor {
   private currentState: SidecarSupervisorState = 'idle'
-  private child: ChildProcess | null = null
-  private readonly pending = new Map<number, PendingEntry>()
-  private nextRequestId = HANDSHAKE_REQUEST_ID + 1
-  private stdoutBuffer: Buffer = Buffer.alloc(0)
-  private stdoutBufferDropCount = 0
-  private stderrTail = ''
-  private stopPromise: Promise<void> | null = null
-  // Set while a supervisor-initiated kill is in flight so the child's exit
-  // event is never mistaken for an unexpected crash worth restarting from.
-  private stopRequested = false
+  private current: SidecarGeneration | null = null
+  private epoch = 0
+  private nextGeneration = 0
 
   private readonly sidecarPath: string
   private readonly args: readonly string[]
@@ -157,6 +186,11 @@ export class SidecarSupervisor {
   private readonly maxRestartAttempts: number
   private readonly requestTimeoutMs: number
   private readonly onEvent?: (event: SidecarSupervisorEvent) => void
+  private readonly spawnProcess: typeof spawn
+  private readonly createProcessScope: NonNullable<
+    SidecarSupervisorOptions['createProcessScope']
+  >
+  private readonly cleanupPolicy: SidecarSupervisorOptions['cleanupPolicy']
 
   constructor(options: SidecarSupervisorOptions) {
     this.sidecarPath = options.sidecarPath
@@ -170,19 +204,29 @@ export class SidecarSupervisor {
     this.requestTimeoutMs =
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     this.onEvent = options.onEvent
+    this.spawnProcess = options.spawn ?? spawn
+    this.createProcessScope =
+      options.createProcessScope ?? createNodeProcessScope
+    this.cleanupPolicy = options.cleanupPolicy
+    for (const value of Object.values(options.cleanupPolicy ?? {})) {
+      if (!Number.isSafeInteger(value) || value < 0) {
+        throw new RangeError('Invalid sidecar cleanup policy.')
+      }
+    }
   }
 
   get state(): SidecarSupervisorState {
     return this.currentState
   }
 
-  /**
-   * How many times the stdout reassembly buffer exceeded
-   * MAX_STDOUT_BUFFER_BYTES without a newline and was discarded, for the
-   * current child (diagnostic counter for the bounded-buffer guard).
-   */
+  /** Diagnostic drops for the current child, never a predecessor's stream. */
   get stdoutBufferDrops(): number {
-    return this.stdoutBufferDropCount
+    return this.current?.stdoutBufferDropCount ?? 0
+  }
+
+  /** Physical cleanup evidence; a failed/unknown scope remains reachable here. */
+  get cleanup(): CleanupResult | undefined {
+    return this.current?.scope.currentCleanup()
   }
 
   /** Spawns the sidecar and completes the `initialize` handshake. */
@@ -190,30 +234,61 @@ export class SidecarSupervisor {
     if (
       this.currentState === 'starting' ||
       this.currentState === 'running' ||
-      this.currentState === 'restarting'
+      this.currentState === 'restarting' ||
+      this.currentState === 'stopping' ||
+      this.hasOpenScope()
     ) {
       throw new SidecarRequestError(
         `Sidecar is already ${this.currentState}; start() cannot be called again.`,
         { reason: 'invalid-state' },
       )
     }
+    const epoch = ++this.epoch
     this.currentState = 'starting'
+    let generation: SidecarGeneration | undefined
     try {
-      const child = this.spawnChild()
-      const protocolVersion = await this.handshake(child)
+      generation = this.spawnChild(epoch)
+      const protocolVersion = await this.handshake(generation)
+      if (!this.isProtocolCurrent(generation)) {
+        throw new SidecarRequestError('Sidecar start was stopped.', {
+          reason: 'stopped',
+        })
+      }
       this.currentState = 'running'
       this.emit({ kind: 'handshake', protocolVersion, attempt: 1 })
-      return { pid: child.pid, protocolVersion }
+      return { pid: generation.child.pid, protocolVersion }
     } catch (error) {
-      this.currentState = 'stopped'
-      await this.killChild()
-      this.rejectAllPending(
-        error instanceof Error
-          ? error
-          : new SidecarRequestError(String(error), { reason: 'protocol' }),
-      )
+      if (epoch === this.epoch) {
+        if (generation && this.current === generation) {
+          generation.protocolActive = false
+          generation.stopRequested = true
+          this.currentState = 'stopping'
+          this.rejectAllPending(generation, this.asError(error))
+          await this.cleanupGeneration(generation, 'adapter-error')
+        }
+        if (epoch === this.epoch) this.currentState = 'stopped'
+      }
       throw error
     }
+  }
+
+  private hasOpenScope(): boolean {
+    return (
+      this.current !== null &&
+      this.current.scope.currentCleanup()?.status !== 'complete'
+    )
+  }
+
+  private isCurrent(generation: SidecarGeneration): boolean {
+    return (
+      this.current === generation &&
+      this.epoch === generation.epoch &&
+      this.current.child === generation.child
+    )
+  }
+
+  private isProtocolCurrent(generation: SidecarGeneration): boolean {
+    return this.isCurrent(generation) && generation.protocolActive
   }
 
   /** Sends a JSON-RPC request and awaits the correlated response. */
@@ -224,98 +299,208 @@ export class SidecarSupervisor {
         { reason: 'restarting' },
       )
     }
-    if (this.currentState !== 'running') {
+    const generation = this.current
+    if (
+      this.currentState !== 'running' ||
+      !generation ||
+      !this.isProtocolCurrent(generation)
+    ) {
       throw new SidecarRequestError(
         `Sidecar is not running (state '${this.currentState}'); request '${method}' was rejected.`,
         { reason: 'not-running' },
       )
     }
-    if (this.pending.size >= MAX_PENDING_REQUESTS) {
+    if (generation.pending.size >= MAX_PENDING_REQUESTS) {
       throw new SidecarRequestError(
         `Sidecar pending-request limit of ${MAX_PENDING_REQUESTS} reached.`,
         { reason: 'pending-limit' },
       )
     }
-    const child = this.child
-    if (!child) {
-      throw new SidecarRequestError(
-        `Sidecar process is unavailable; request '${method}' was rejected.`,
-        { reason: 'not-running' },
-      )
-    }
-    const id = this.nextRequestId++
+    const id = generation.nextRequestId++
     const message: Record<string, unknown> = { jsonrpc: '2.0', id, method }
-    if (params !== undefined) {
-      message['params'] = params
+    if (params !== undefined) message['params'] = params
+    return this.send(generation, id, message, 'request', method)
+  }
+
+  /** Rejects protocol work promptly, then joins physical scope cleanup. */
+  stop(): Promise<void> {
+    const generation = this.current
+    // Do not cache a stop promise while idle: an immediate start is a new run.
+    if (!generation) return Promise.resolve()
+    const previous = generation.scope.currentCleanup()
+    if (
+      generation.stopPromise &&
+      (generation.cleanupPromise !== null ||
+        !previous ||
+        previous.status === 'complete')
+    ) {
+      return generation.stopPromise
     }
-    return this.send(child, id, message, 'request', method)
-  }
-
-  /** Kills the child, rejects every pending request, and reports `stopped`. */
-  async stop(): Promise<void> {
-    this.stopPromise ??= this.performStop()
-    await this.stopPromise
-  }
-
-  private async performStop(): Promise<void> {
     const wasLive =
       this.currentState === 'starting' ||
       this.currentState === 'running' ||
       this.currentState === 'restarting'
-    this.currentState = 'stopped'
-    // Mark the exit as self-initiated before killing so handleChildGone can
-    // never classify our own kill as an unexpected crash.
-    this.stopRequested = true
+    const epoch = ++this.epoch
+    this.currentState = 'stopping'
+    generation.protocolActive = false
+    generation.stopRequested = true
+    generation.cancelBackoff?.()
     this.rejectAllPending(
+      generation,
       new SidecarRequestError('Sidecar was stopped with requests in flight.', {
         reason: 'stopped',
       }),
     )
-    await this.killChild()
-    this.stdoutBuffer = Buffer.alloc(0)
-    if (wasLive) {
-      this.emit({ kind: 'stopped' })
-    }
+    // Reserve the public stop promise before invoking the scope or callbacks.
+    const stop = Promise.resolve().then(async () => {
+      await this.cleanupGeneration(
+        generation,
+        'owner-shutdown',
+        false,
+        previous !== undefined && previous.status !== 'complete',
+      )
+      if (this.current === generation && this.epoch === epoch) {
+        generation.stdoutBuffer = Buffer.alloc(0)
+        this.currentState = 'stopped'
+        if (wasLive) this.emit({ kind: 'stopped' })
+      }
+    })
+    generation.stopPromise = stop
+    return stop
   }
 
-  private spawnChild(): ChildProcess {
-    // Each spawned child begins a fresh lifecycle: a stop request from a
-    // previous run does not carry over into start() or restart attempts.
-    this.stopRequested = false
-    const child = spawn(this.sidecarPath, this.args, {
+  private spawnChild(epoch: number): SidecarGeneration {
+    if (this.hasOpenScope()) {
+      throw new SidecarRequestError(
+        'Prior sidecar scope cleanup is incomplete.',
+        { reason: 'invalid-state' },
+      )
+    }
+    const child = this.spawnProcess(this.sidecarPath, this.args, {
       env: { ...getChildProcessEnv(), ...(this.env ?? {}) },
       stdio: ['pipe', 'pipe', 'pipe'],
+      // Trusted-host selection. Production B19 launchers bind this before admission.
+      detached: process.platform !== 'win32',
     })
-    this.child = child
-    // Each spawned child begins with fresh stream state: a partial line left
-    // behind by a crashed predecessor must never corrupt the new child's
-    // first messages.
-    this.stdoutBuffer = Buffer.alloc(0)
-    this.stdoutBufferDropCount = 0
-    this.stderrTail = ''
-    child.stdout?.on('data', (chunk: Buffer) => {
-      this.consumeStdout(chunk)
+    let generation: SidecarGeneration | undefined
+    const scope = this.createProcessScope(child, {
+      detached: process.platform !== 'win32',
+      termGraceMs: KILL_GRACE_MS,
+      killGraceMs: 200,
+      observationMs: 1_000,
+      ...this.cleanupPolicy,
+      output: () => {
+        const stdoutSeenBytes = generation?.stdoutSeenBytes ?? 0
+        const stderrSeenBytes = generation?.stderrSeenBytes ?? 0
+        const retainedBytes =
+          (generation?.stdoutBuffer.length ?? 0) +
+          (generation?.stderrTail.length ?? 0)
+        return {
+          stdoutSeenBytes,
+          stderrSeenBytes,
+          retainedBytes,
+          droppedBytes: Math.max(
+            0,
+            stdoutSeenBytes + stderrSeenBytes - retainedBytes,
+          ),
+          complete:
+            generation?.stdoutState === 'drained' &&
+            generation?.stderrState === 'drained',
+        }
+      },
     })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      this.stderrTail = `${this.stderrTail}${String(chunk)}`.slice(
-        -STDERR_TAIL_LIMIT,
-      )
+    generation = {
+      id: ++this.nextGeneration,
+      epoch,
+      child,
+      scope,
+      pending: new Map(),
+      nextRequestId: HANDSHAKE_REQUEST_ID + 1,
+      stdoutBuffer: Buffer.alloc(0),
+      stdoutBufferDropCount: 0,
+      stdoutSeenBytes: 0,
+      stderrSeenBytes: 0,
+      stderrTail: Buffer.alloc(0),
+      stdoutState:
+        !child.stdout || child.stdout.readableEnded ? 'drained' : 'open',
+      stderrState:
+        !child.stderr || child.stderr.readableEnded ? 'drained' : 'open',
+      protocolActive: true,
+      stopRequested: false,
+      cleanupPromise: null,
+      stopPromise: null,
+    }
+    const owned = generation
+    this.current = owned
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+      owned.stdoutSeenBytes += bytes.length
+      if (this.isProtocolCurrent(owned)) this.consumeStdout(owned, bytes)
     })
-    // Write failures surface through the child's exit event, which rejects
-    // every pending entry; the duplicate stdin stream error is swallowed.
+    child.stderr?.on('data', (chunk: Buffer | string) => {
+      const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+      owned.stderrSeenBytes += bytes.length
+      // Old streams remain drained by their own scope and bounded retained sink.
+      owned.stderrTail =
+        bytes.length >= STDERR_TAIL_LIMIT
+          ? Buffer.from(bytes.subarray(-STDERR_TAIL_LIMIT))
+          : Buffer.concat([
+              owned.stderrTail.subarray(
+                Math.max(
+                  0,
+                  owned.stderrTail.length + bytes.length - STDERR_TAIL_LIMIT,
+                ),
+              ),
+              bytes,
+            ])
+    })
+    for (const name of ['stdout', 'stderr'] as const) {
+      const stream = child[name]
+      const state = name === 'stdout' ? 'stdoutState' : 'stderrState'
+      stream?.once('end', () => {
+        if (owned[state] !== 'closed-incomplete') owned[state] = 'drained'
+      })
+      stream?.once('close', () => {
+        if (owned[state] === 'open')
+          owned[state] = stream.readableEnded ? 'drained' : 'closed-incomplete'
+      })
+      stream?.once('error', () => {
+        owned[state] = 'closed-incomplete'
+      })
+    }
     child.stdin?.on('error', () => undefined)
-    child.once('exit', (exitCode, signal) => {
-      this.handleChildGone(child, { exitCode, signal })
-    })
+    child.once('exit', (exitCode, signal) =>
+      this.handleChildGone(owned, { exitCode, signal }),
+    )
     child.once('error', (error) => {
-      this.handleChildGone(child, { exitCode: null, signal: null, error })
+      if (!this.isCurrent(owned)) return
+      if (child.pid && child.exitCode === null && child.signalCode === null) {
+        owned.protocolActive = false
+        owned.stopRequested = true
+        this.currentState = 'stopping'
+        this.rejectAllPending(
+          owned,
+          new SidecarRequestError(
+            'Sidecar process error; exit is unconfirmed.',
+            { reason: 'protocol', cause: error },
+          ),
+        )
+        void this.cleanupGeneration(owned, 'adapter-error', true).then(
+          () => {
+            if (this.isCurrent(owned)) this.currentState = 'stopped'
+          },
+          () => undefined,
+        )
+        return
+      }
+      this.handleChildGone(owned, { exitCode: null, signal: null, error })
     })
-    return child
+    return owned
   }
 
-  private async handshake(child: ChildProcess): Promise<string> {
+  private async handshake(generation: SidecarGeneration): Promise<string> {
     const result = await this.send(
-      child,
+      generation,
       HANDSHAKE_REQUEST_ID,
       {
         jsonrpc: '2.0',
@@ -340,15 +525,28 @@ export class SidecarSupervisor {
   }
 
   private send(
-    child: ChildProcess,
+    generation: SidecarGeneration,
     id: number,
     message: Record<string, unknown>,
     kind: PendingEntryKind,
     methodLabel: string,
   ): Promise<unknown> {
     return new Promise<unknown>((resolve, reject) => {
+      if (!this.isProtocolCurrent(generation)) {
+        reject(
+          new SidecarRequestError('Sidecar generation was stopped.', {
+            reason: 'stopped',
+          }),
+        )
+        return
+      }
       const timer = setTimeout(() => {
-        this.pending.delete(id)
+        if (
+          !this.isProtocolCurrent(generation) ||
+          generation.pending.get(id) !== entry
+        )
+          return
+        generation.pending.delete(id)
         reject(
           kind === 'handshake'
             ? new SidecarHandshakeError(
@@ -361,7 +559,7 @@ export class SidecarSupervisor {
         )
       }, this.requestTimeoutMs)
       unrefTimer(timer)
-      this.pending.set(id, {
+      const entry: PendingEntry = {
         kind,
         resolve: (value) => {
           clearTimeout(timer)
@@ -371,18 +569,17 @@ export class SidecarSupervisor {
           clearTimeout(timer)
           reject(error)
         },
-      })
+      }
+      generation.pending.set(id, entry)
       try {
-        this.writeMessage(child, message)
+        this.writeMessage(generation.child, message)
       } catch (error) {
-        this.pending.delete(id)
+        if (generation.pending.get(id) === entry) generation.pending.delete(id)
         clearTimeout(timer)
         reject(
           kind === 'handshake'
             ? new SidecarHandshakeError(
-                `Failed to send the sidecar handshake: ${
-                  error instanceof Error ? error.message : String(error)
-                }`,
+                `Failed to send the sidecar handshake: ${error instanceof Error ? error.message : String(error)}`,
                 { cause: error },
               )
             : new SidecarRequestError(
@@ -398,39 +595,36 @@ export class SidecarSupervisor {
     child: ChildProcess,
     message: Record<string, unknown>,
   ): void {
-    const stdin = child.stdin
-    if (!stdin || child.exitCode !== null) {
+    if (!child.stdin || child.exitCode !== null || child.signalCode !== null) {
       throw new Error('Sidecar stdin is not available.')
     }
-    stdin.write(`${JSON.stringify(message)}\n`)
+    child.stdin.write(`${JSON.stringify(message)}\n`)
   }
 
-  private consumeStdout(chunk: Buffer): void {
-    this.stdoutBuffer =
-      this.stdoutBuffer.length === 0
+  private consumeStdout(generation: SidecarGeneration, chunk: Buffer): void {
+    generation.stdoutBuffer =
+      generation.stdoutBuffer.length === 0
         ? chunk
-        : Buffer.concat([this.stdoutBuffer, chunk])
-    let newlineIndex = this.stdoutBuffer.indexOf(0x0a)
-    while (newlineIndex !== -1) {
-      const line = this.stdoutBuffer
+        : Buffer.concat([generation.stdoutBuffer, chunk])
+    let newlineIndex = generation.stdoutBuffer.indexOf(0x0a)
+    while (newlineIndex !== -1 && this.isProtocolCurrent(generation)) {
+      const line = generation.stdoutBuffer
         .subarray(0, newlineIndex)
         .toString('utf8')
-      this.stdoutBuffer = this.stdoutBuffer.subarray(newlineIndex + 1)
-      this.handleLine(line)
-      newlineIndex = this.stdoutBuffer.indexOf(0x0a)
+      generation.stdoutBuffer = generation.stdoutBuffer.subarray(
+        newlineIndex + 1,
+      )
+      this.handleLine(generation, line)
+      newlineIndex = generation.stdoutBuffer.indexOf(0x0a)
     }
-    // Bounded reassembly: with no newline left in the buffer these bytes
-    // cannot become a valid line-delimited JSON-RPC message, so a sidecar
-    // that crashes mid-line, emits binary garbage, or streams one
-    // pathological multi-MB line must not grow host memory without bound —
-    // discard the partial data instead of retaining it.
-    if (this.stdoutBuffer.length > MAX_STDOUT_BUFFER_BYTES) {
-      this.stdoutBuffer = Buffer.alloc(0)
-      this.stdoutBufferDropCount++
+    if (generation.stdoutBuffer.length > MAX_STDOUT_BUFFER_BYTES) {
+      generation.stdoutBuffer = Buffer.alloc(0)
+      generation.stdoutBufferDropCount++
     }
   }
 
-  private handleLine(line: string): void {
+  private handleLine(generation: SidecarGeneration, line: string): void {
+    if (!this.isProtocolCurrent(generation)) return
     const trimmed = line.trim()
     if (!trimmed) return
     let message: unknown
@@ -439,12 +633,11 @@ export class SidecarSupervisor {
     } catch {
       return
     }
-    if (!isRecord(message)) return
+    if (!isRecord(message) || typeof message['id'] !== 'number') return
     const id = message['id']
-    if (typeof id !== 'number') return
-    const entry = this.pending.get(id)
+    const entry = generation.pending.get(id)
     if (!entry) return
-    this.pending.delete(id)
+    generation.pending.delete(id)
     const errorPayload = message['error']
     if (errorPayload !== undefined && errorPayload !== null) {
       entry.reject(
@@ -463,95 +656,176 @@ export class SidecarSupervisor {
     entry.resolve(message['result'])
   }
 
-  private handleChildGone(child: ChildProcess, info: ExitInfo): void {
-    // Stale events from a previously replaced or deliberately killed child.
-    if (this.child !== child) return
-    this.child = null
-    const cause: Record<string, unknown> = {
+  private handleChildGone(generation: SidecarGeneration, info: ExitInfo): void {
+    if (!this.isCurrent(generation)) return
+    generation.protocolActive = false
+    const cause = {
       exitCode: info.exitCode,
       signal: info.signal,
-      stderrTail: this.stderrTail,
+      stderrTail: generation.stderrTail.toString('utf8'),
+      ...(info.error !== undefined ? { error: info.error } : {}),
     }
-    if (info.error !== undefined) {
-      cause['error'] = info.error
-    }
-    const exitDescription = formatExit(info)
-    for (const [id, entry] of this.pending) {
-      this.pending.delete(id)
+    const description = formatExit(info)
+    for (const [id, entry] of generation.pending) {
+      generation.pending.delete(id)
       entry.reject(
         entry.kind === 'handshake'
           ? new SidecarHandshakeError(
-              `Sidecar process died during the handshake (${exitDescription}).`,
+              `Sidecar process died during the handshake (${description}).`,
               { cause },
             )
           : new SidecarRequestError(
-              `Sidecar process died before responding to request id ${id} (${exitDescription}).`,
+              `Sidecar process died before responding to request id ${id} (${description}).`,
               { reason: 'child-exited', cause },
             ),
       )
     }
-    // Restart only for unexpected exits of a running sidecar: never when the
-    // supervisor itself initiated the stop, and never from other states.
-    if (!this.stopRequested && this.currentState === 'running') {
+    if (!generation.stopRequested && this.currentState === 'running') {
+      this.currentState = 'restarting'
       void this.restartLoop(
-        `Sidecar exited unexpectedly (${exitDescription}).`,
+        `Sidecar exited unexpectedly (${description}).`,
+        generation,
       )
     }
   }
 
-  private async restartLoop(initialReason: string): Promise<void> {
-    this.currentState = 'restarting'
+  private async restartLoop(
+    initialReason: string,
+    previous: SidecarGeneration,
+  ): Promise<void> {
+    const epoch = previous.epoch
     let reason = initialReason
+    try {
+      // Leader close cannot release the old scope or cancel escalation.
+      await this.cleanupGeneration(previous, 'normal-leader-exit')
+    } catch (error) {
+      if (this.isCurrent(previous)) {
+        this.currentState = 'stopping'
+        this.emit({
+          kind: 'gave-up',
+          attempts: 0,
+          reason: this.asError(error).message,
+        })
+      }
+      return
+    }
+    let generation = previous
     for (let attempt = 1; attempt <= this.maxRestartAttempts; attempt++) {
+      if (!this.isCurrent(generation) || this.currentState !== 'restarting')
+        return
       const delayMs = Math.min(
         this.restartBackoffMs * 2 ** (attempt - 1),
         this.restartBackoffMs * BACKOFF_CAP_MULTIPLIER,
       )
       this.emit({ kind: 'restart', attempt, delayMs, reason })
-      await sleep(delayMs)
-      if (this.currentState !== 'restarting') return
+      if (!this.isCurrent(generation) || this.currentState !== 'restarting')
+        return
+      if (!(await this.waitBackoff(generation, delayMs))) return
       try {
-        const child = this.spawnChild()
-        const protocolVersion = await this.handshake(child)
+        generation = this.spawnChild(epoch)
+        const protocolVersion = await this.handshake(generation)
+        if (
+          !this.isProtocolCurrent(generation) ||
+          this.currentState !== 'restarting'
+        )
+          return
         this.currentState = 'running'
         this.emit({ kind: 'handshake', protocolVersion, attempt: attempt + 1 })
         return
       } catch (error) {
-        if (this.currentState !== 'restarting') return
-        await this.killChild()
-        if (this.currentState !== 'restarting') return
-        reason = error instanceof Error ? error.message : String(error)
+        if (!this.isCurrent(generation) || this.currentState !== 'restarting')
+          return
+        generation.protocolActive = false
+        generation.stopRequested = true
+        this.rejectAllPending(generation, this.asError(error))
+        try {
+          await this.cleanupGeneration(generation, 'adapter-error')
+        } catch (cleanupError) {
+          if (this.isCurrent(generation)) {
+            this.currentState = 'stopping'
+            this.emit({
+              kind: 'gave-up',
+              attempts: attempt,
+              reason: this.asError(cleanupError).message,
+            })
+          }
+          return
+        }
+        reason = this.asError(error).message
       }
     }
-    this.emit({ kind: 'gave-up', attempts: this.maxRestartAttempts, reason })
+    if (!this.isCurrent(generation) || this.currentState !== 'restarting')
+      return
     this.currentState = 'stopped'
+    this.emit({ kind: 'gave-up', attempts: this.maxRestartAttempts, reason })
   }
 
-  private rejectAllPending(error: Error): void {
-    for (const [, entry] of this.pending) {
-      entry.reject(error)
-    }
-    this.pending.clear()
-  }
-
-  private async killChild(): Promise<void> {
-    const child = this.child
-    this.child = null
-    if (!child) return
-    child.stdin?.end()
-    if (child.exitCode !== null || child.signalCode !== null) return
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, KILL_GRACE_MS)
-      unrefTimer(timer)
-      child.once('exit', () => {
+  private waitBackoff(
+    generation: SidecarGeneration,
+    milliseconds: number,
+  ): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const finish = (elapsed: boolean) => {
         clearTimeout(timer)
-        resolve()
-      })
-      child.kill()
+        if (generation.cancelBackoff === cancel)
+          generation.cancelBackoff = undefined
+        resolve(
+          elapsed &&
+            this.isCurrent(generation) &&
+            this.currentState === 'restarting',
+        )
+      }
+      const cancel = () => finish(false)
+      const timer = setTimeout(() => finish(true), milliseconds)
+      unrefTimer(timer)
+      generation.cancelBackoff = cancel
     })
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGKILL')
+  }
+
+  private rejectAllPending(generation: SidecarGeneration, error: Error): void {
+    const entries = [...generation.pending.values()]
+    generation.pending.clear()
+    for (const entry of entries) entry.reject(error)
+  }
+
+  private cleanupGeneration(
+    generation: SidecarGeneration,
+    reason: StopReason,
+    force = false,
+    retry = false,
+  ): Promise<void> {
+    if (generation.cleanupPromise) {
+      if (force) void generation.scope.requestStop(reason, true)
+      return generation.cleanupPromise
     }
+    const cleanup = Promise.resolve()
+      .then(() =>
+        retry
+          ? generation.scope.retryCleanup(force)
+          : generation.scope.requestStop(reason, force),
+      )
+      .then((result) => {
+        if (result.status !== 'complete') {
+          throw new SidecarRequestError(
+            'Sidecar cleanup could not confirm process exit and scope drainage.',
+            { reason: 'child-exited', cause: result },
+          )
+        }
+      })
+    generation.cleanupPromise = cleanup
+    void cleanup
+      .finally(() => {
+        if (generation.cleanupPromise === cleanup)
+          generation.cleanupPromise = null
+      })
+      .catch(() => undefined)
+    return cleanup
+  }
+
+  private asError(error: unknown): Error {
+    return error instanceof Error
+      ? error
+      : new SidecarRequestError(String(error), { reason: 'protocol' })
   }
 
   private emit(event: SidecarSupervisorEvent): void {

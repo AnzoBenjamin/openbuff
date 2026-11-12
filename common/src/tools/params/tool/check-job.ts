@@ -1,6 +1,9 @@
 import z from 'zod/v4'
 
 import { $getNativeToolCallExampleString, jsonToolResultSchema } from '../utils'
+import { processCleanupSchema } from '../process-cleanup'
+import { executionUsageSchema } from '../execution-usage'
+import { nativeWaitStatusFields } from '../native-wait-status'
 
 import type { $ToolParams } from '../../constants'
 
@@ -80,6 +83,11 @@ export const checkJobParams = {
     z.union([
       z.object({
         jobId: z.string(),
+        failureReason: z.string().optional(),
+        processCleanup: processCleanupSchema.optional(),
+        executionUsage: executionUsageSchema.optional(),
+        ...nativeWaitStatusFields,
+        executionSignal: z.number().int().positive().max(64).optional(),
         state: z.enum([
           'queued',
           'running',

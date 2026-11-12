@@ -37,6 +37,7 @@
     "@modelcontextprotocol/sdk": "^1.18.2",
     "ai": "^5.0.52",
     "ajv": "6.12.6",
+    "cross-spawn": "7.0.6",
     "ignore": "5.3.2",
     "lodash": "4.17.23",
     "next-auth": "^4.24.11",
@@ -49,6 +50,7 @@
     "zod-from-json-schema": "0.4.2"
   },
   "devDependencies": {
+    "@types/cross-spawn": "6.0.6",
     "@types/lodash": "^4.17.21",
     "@types/pg": "^8.11.10",
     "@types/readable-stream": "^4.0.18",

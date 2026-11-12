@@ -3,6 +3,7 @@ import {
   createEvaluationExecution,
   deriveEvaluationExecution,
   isExecutionRefusal,
+  isEvaluationCleanupRetained,
 } from './execution'
 import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 import { isIsolatedEvaluationClient } from './isolated-sdk-client'
@@ -326,7 +327,13 @@ export async function readContextFiles(
           )
           return stdout
         } catch (error) {
-          if (signal?.aborted || isExecutionRefusal(error)) throw error
+          if (
+            signal?.aborted ||
+            isAbortError(error) ||
+            isExecutionRefusal(error) ||
+            isEvaluationCleanupRetained(error)
+          )
+            throw error
           return ''
         }
       }),
@@ -560,14 +567,15 @@ async function runFinalCheckCommand(
   console.log(`  Running [${check.id}]: ${check.command}`)
   try {
     if (check.preparationError) throw check.preparationError
-    const { stdout, stderr } = await captureCommand(check.command, [], {
-      cwd,
-      shell: true,
-      env,
-      signal: controller.signal,
-      execution: check.execution,
-      branchId: `supplemental.evaluator.final-check:${check.id}`,
-    })
+    const { stdout, stderr, commandExitCode, processCleanup, outputCapture } =
+      await captureCommand(check.command, [], {
+        cwd,
+        shell: true,
+        env,
+        signal: controller.signal,
+        execution: check.execution,
+        branchId: `supplemental.evaluator.final-check:${check.id}`,
+      })
     console.log(`  ✓ Command succeeded [${check.id}]: ${check.command}`)
     return {
       checkId: check.id,
@@ -578,10 +586,24 @@ async function runFinalCheckCommand(
       durationMs: Date.now() - startedAt,
       stdout,
       stderr,
+      commandExitCode,
+      processCleanup,
+      outputCapture,
     }
   } catch (error: any) {
-    const aborted = isAbortError(error) || controller.signal.aborted
-    const outcome = aborted ? (timedOut ? 'timed_out' : 'cancelled') : 'failed'
+    // A timeout during cleanup cannot rewrite an already observed task failure.
+    const deadlineFailure =
+      error.processCleanup?.trigger === 'deadline' ||
+      error.executionRefusal?.reason === 'deadline-exhausted'
+    const aborted =
+      isAbortError(error) ||
+      (!error.processCleanup && controller.signal.aborted)
+    const outcome =
+      deadlineFailure || (aborted && timedOut)
+        ? 'timed_out'
+        : aborted
+          ? 'cancelled'
+          : 'failed'
     const exitCode =
       typeof error.code === 'number'
         ? error.code
@@ -593,6 +615,26 @@ async function runFinalCheckCommand(
     console.log(
       `  ✗ Command ${outcome} (exit ${exitCode}) [${check.id}]: ${check.command}`,
     )
+    let stderr = typeof error.stderr === 'string' ? error.stderr : ''
+    if (
+      !stderr ||
+      aborted ||
+      error.name === 'EvaluationOutputLimitError' ||
+      error.name === 'EvaluationCleanupError'
+    ) {
+      const message = String(
+        aborted
+          ? (controller.signal.reason ?? error.message ?? error)
+          : (error.message ?? error),
+      )
+      if (!stderr.includes(message)) stderr += `${stderr ? '\n' : ''}${message}`
+    }
+    if (error.processCleanup && error.processCleanup.status !== 'complete') {
+      stderr += `\n[Process cleanup ${error.processCleanup.status}; cleanup authority retained: ${error.processCleanup.cleanupAuthorityRetained}.]`
+    }
+    if (error.outputTruncated === true) {
+      stderr += '\n[Command output truncated at the capture limit.]'
+    }
     return {
       checkId: check.id,
       command: check.command,
@@ -601,10 +643,14 @@ async function runFinalCheckCommand(
       outcome,
       durationMs: Date.now() - startedAt,
       stdout: typeof error.stdout === 'string' ? error.stdout : '',
-      stderr:
-        typeof error.stderr === 'string' && error.stderr
-          ? error.stderr
-          : String(controller.signal.reason ?? error.message ?? error),
+      stderr,
+      ...(error.processCleanup
+        ? {
+            commandExitCode: error.commandExitCode,
+            processCleanup: error.processCleanup,
+            outputCapture: error.outputCapture,
+          }
+        : {}),
     }
   } finally {
     clearTimeout(timeout)

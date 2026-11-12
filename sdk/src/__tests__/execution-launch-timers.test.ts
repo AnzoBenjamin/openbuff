@@ -83,13 +83,14 @@ async function dispatchedSleep(durationMs: number) {
     adapterOptions: { stdio: 'ignore', detached: false, shell: false },
   }))
   const admitted = executionValue(await admitNodeLaunch(launch, host.context.signal))
-  const kills: string[] = []
   const node = executionValue(dispatchNodeLaunch(admitted, input => processes.spawn(input.executable, input.argv, {
     cwd: input.cwd, env: input.env, signal: input.resourceSignal,
     stdio: 'ignore', detached: false, shell: false,
-  }), { terminate(child, signal) { kills.push(signal); return child.kill(signal) } }))
+  })))
   expect(executionValue(await node.started).pid).toBeGreaterThan(0)
-  return { manual, abort, processes, host, kills, node }
+  return { manual, abort, processes, host, node, get kills() {
+    return node.scope.currentCleanup()?.signals.filter(signal => signal.result === 'delivered').map(signal => signal.signal) ?? []
+  } }
 }
 afterEach(async () => {
   for (const recorder of injected.splice(0)) for (const call of recorder.calls) call.finish()
@@ -196,6 +197,7 @@ describe('R2 bounded finite Node deadline scheduling', () => {
   test('actual helper ordinary finite backstop expires without the controlled host clock', async () => {
     const control = await dispatchedSleep(100)
     const [, signal] = await closeWithin(control.node.child)
+    await control.node.scope.requestStop('owner-shutdown')
     expect(signal).toBe('SIGKILL')
     expect(control.kills).toEqual(['SIGKILL'])
     expect(control.node.resourceRefusal()).toMatchObject({ reason: 'deadline-exhausted' })
@@ -208,6 +210,7 @@ describe('R2 bounded finite Node deadline scheduling', () => {
     if (expired) control.manual.advance(5_000)
     else control.abort.abort(new Error('Execution deadline exhausted'))
     await closeWithin(control.node.child)
+    await control.node.scope.requestStop('owner-shutdown')
     expect(control.node.resourceRefusal()).toMatchObject({ reason: expired ? 'deadline-exhausted' : 'cancelled' })
     expect(control.kills).toEqual([expired ? 'SIGKILL' : 'SIGTERM'])
   })
@@ -216,6 +219,7 @@ describe('R2 bounded finite Node deadline scheduling', () => {
     const control = await dispatchedSleep(5_000)
     control.abort.abort(new ExecutionRefusalError({ ok: false, reason: 'deadline-exhausted', cause: 'Caller claimed expiry' }))
     await closeWithin(control.node.child)
+    await control.node.scope.requestStop('owner-shutdown')
     expect(control.node.resourceRefusal()).toMatchObject({ reason: 'cancelled', cause: 'Caller claimed expiry' })
     expect(control.kills).toEqual(['SIGTERM'])
   })
@@ -227,14 +231,12 @@ describe('R2 bounded finite Node deadline scheduling', () => {
     const launch = executionValue(prepareNodeLaunch({ executionContext: host.context,
       executable: '/usr/bin/printf', argv: ['timer-close'], cwd: host.context.projectRoot,
       branchId: 'terminal.sync', adapterOptions: { stdio: 'ignore', detached: false, shell: false } }))
-    const kills: string[] = []
     const node = executionValue(dispatchNodeLaunch(executionValue(await admitNodeLaunch(launch, host.context.signal)), input =>
-      processes.spawn(input.executable, input.argv, { cwd: input.cwd, env: input.env, signal: input.resourceSignal, stdio: 'ignore' }),
-    { terminate(child, signal) { kills.push(signal); return child.kill(signal) } }))
+      processes.spawn(input.executable, input.argv, { cwd: input.cwd, env: input.env, signal: input.resourceSignal, stdio: 'ignore' })))
     expect(executionValue(await node.started).pid).toBeGreaterThan(0)
     expect((await closeWithin(node.child))[0]).toBe(0)
     await delay(130)
-    expect(kills).toEqual([])
+    expect(node.scope.currentCleanup()?.signals.filter(signal => signal.result === 'delivered')).toEqual([])
     expect(node.resourceRefusal()).toBeUndefined()
   })
 
@@ -278,7 +280,15 @@ describe('R2 timer consumer captures', () => {
       const manual = createControlledExecutionClock()
       const processes = createExecutionProcessRecorder({ autoClose: false, closeOnKill: false })
       injected.push(processes)
-      const host = fixture({ ...manual, projectRoot: '/timer-fixture', spawn: processes.spawn,
+      let observeSignal!: () => void
+      const signalRequested = new Promise<void>(resolve => { observeSignal = resolve })
+      const spawn: CodebuffSpawn = (command, argv, options) => {
+        const child = processes.spawn(command, argv, options)
+        const kill = child.kill.bind(child)
+        child.kill = signal => { const delivered = kill(signal); observeSignal(); return delivered }
+        return child
+      }
+      const host = fixture({ ...manual, projectRoot: '/timer-fixture', spawn,
         actionLimit: { kind: 'finite', durationMs } })
       const options = { executionContext: host.context, branchId: bounded ? 'git-status.bounded.status.all' : 'git-status.legacy.status.all', phase: 'timer-control' }
       const pending = bounded
@@ -305,6 +315,8 @@ describe('R2 timer consumer captures', () => {
         expect((await pending).executionRefusal).toBeUndefined()
       } else {
         expect((await pending).executionRefusal).toMatchObject({ reason: 'deadline-exhausted' })
+        // Logical refusal can settle before the owned scope's signal callback.
+        await signalRequested
         expect(actual.signals).toEqual(['SIGKILL'])
         actual.finish(undefined, 'SIGKILL')
       }
@@ -381,6 +393,7 @@ describe('R2 timer consumer captures', () => {
       else expect(settled).toBe(false)
       abort.abort(new Error('cancel inherited long finite adapter'))
       await closeWithin(actual.child)
+      if (background) await getBackgroundJobAdapter(value!.jobId)!.nodeLaunch!.scope.requestStop('owner-cancel')
       if (background) expect(getBackgroundJobAdapter(value!.jobId)?.status).toBe('stopped')
       else expect((await pending)[0].value).toMatchObject({ executionRefusal: { reason: 'cancelled' }, stdout: 'ready' })
     })

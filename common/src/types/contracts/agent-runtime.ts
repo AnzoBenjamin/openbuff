@@ -29,6 +29,7 @@ import type {
 import type { Logger } from './logger'
 import type { CodebuffFileSystem } from '../filesystem'
 import type { PlaybookGateOutcomeEvent } from '../memory-playbook'
+import type { RunOutcome } from '../run-outcome'
 
 /** Deterministic id generation (P2-T1). */
 export interface IdGen {
@@ -278,6 +279,8 @@ export type SettledSubagentResult = {
   crashReason?: string
   /** Host admission refusal is distinct from a child process crash. */
   executionRefusal?: import('./execution-context').Refusal
+  /** Physical scope cleanup evidence, independent of the receipt outcome. */
+  cleanup?: import('./process-scope').CleanupResult
   /** A validated `AgentReceipt` envelope; present for ok/truncated. */
   receipt?: unknown
   schemaError?: string
@@ -341,6 +344,12 @@ export interface SupervisedRestartPolicy {
 /** Shared dependencies */
 export type AgentRuntimeDeps = {
   onExecutionActionStart?: OnExecutionActionStart
+  /** Select the host's canonical terminal outcome before journal publication. */
+  resolveRunOutcome?: (params: {
+    runId: string
+    ancestorRunIds: readonly string[]
+    outcome: RunOutcome
+  }) => RunOutcome
   // Environment
   clientEnv: ClientEnv
   ciEnv: CiEnv

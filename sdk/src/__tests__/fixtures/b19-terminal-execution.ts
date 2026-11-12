@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events'
 import { appendFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { registerInjectedNodeScopeDriver } from '../../../../common/src/util/node-process-scope'
 
 import {
   captureRootDeadline,
@@ -133,6 +134,23 @@ export function createExecutionProcessRecorder(options: {
       },
     }
     calls.push(call)
+    let exited!: (value: 'exited-reaped') => void
+    const leaderExited = new Promise<'exited-reaped'>(resolve => { exited = resolve })
+    childState.once('exit', () => exited('exited-reaped'))
+    childState.once('close', () => { call.closed = true; exited('exited-reaped') })
+    registerInjectedNodeScopeDriver(call.child, {
+      leaderExited, streamsFinished: Promise.resolve({ stdin: 'closed', stdout: 'drained', stderr: 'drained' }),
+      async observe() { return { sampledAtMs: performance.now(), clockDomainId: 'injected-node-recorder',
+        leader: call.closed ? 'exited-reaped' : 'running', scopePresence: call.closed ? 'absent' : 'living',
+        members: [], membershipComplete: true, identity: 'verified',
+        streams: { stdin: 'closed', stdout: call.closed ? 'drained' : 'open', stderr: call.closed ? 'drained' : 'open' } } },
+      async signal(signal) {
+        if (call.closed) return { signal, atMs: performance.now(), targetTier: 'injected', result: 'already-absent' }
+        const delivered = call.child.kill(signal)
+        return { signal, atMs: performance.now(), targetTier: 'injected', result: delivered ? 'delivered' : 'unknown' }
+      },
+      closeInput() {},
+    })
     queueMicrotask(() => {
       if (call.closed) return
       childState.emit('spawn')
@@ -396,7 +414,7 @@ export function createTerminalExecutionFixture(options: FixtureOptions = {}) {
     rmSync(scratch, { recursive: true, force: true })
   }
   return {
-    context, authority, owner, registeredOwner, budget, request, lifetime,
+    context, authority, snapshotId, owner, registeredOwner, budget, request, lifetime,
     events, policyInputs, environment, clock, scheduler, home, xdg,
     getTerminalLaunchMetadata, prepareTransferredLaunch, admitBackground, dispose,
   }

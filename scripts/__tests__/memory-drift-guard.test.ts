@@ -189,7 +189,9 @@ test('B05 preimages and the closed failed-path diagnosis do not suppress adjacen
 test('B19 exact historical inputs preserve their bytes without suppressing active reference checks', () => {
   const evidence = 'docs/execution/body-roadmap/evidence'
   const archive = `${evidence}/B19/implementation/design-input-preimages`
+  const recovery = `${evidence}/B19/continuation-20261111/canonical-input-recovery-r1/files`
   const excludedPaths = [
+    `${recovery}/docs/architecture.md`,
     `${archive}/docs/architecture.md`,
     `${archive}/docs/execution/body-roadmap/evidence/B19/design-20261108/DESIGN.md`,
     `${evidence}/B19/design-20261108/DESIGN.md`,
@@ -199,6 +201,9 @@ test('B19 exact historical inputs preserve their bytes without suppressing activ
     `${evidence}/B19/implementation/independent-architecture-20261109/r3-preflight-11-v2/precheck.md`,
   ]
   const activePaths = [
+    `${recovery}-active/docs/architecture.md`,
+    `${evidence}/B19/continuation-20261111/canonical-input-recovery-r2/files/docs/architecture.md`,
+    `${evidence}/B20/continuation-20261111/canonical-input-recovery-r1/files/docs/architecture.md`,
     `${evidence}/B19/implementation/REVIEW.md`,
     `${archive}-active/docs/architecture.md`,
     `${archive}-newer/docs/architecture.md`,

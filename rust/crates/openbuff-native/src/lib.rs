@@ -1,19 +1,17 @@
 //! Role dispatch for the `openbuff-native` multi-call binary (SPEC D49).
 //!
 //! ONE binary, five roles: `exec`, `daemon`, `infer`, `plugin-host`, `a11y`.
-//! The dispatch table lives here as pure functions so it is unit-testable
-//! without spawning the binary; `main.rs` is a thin wrapper that maps a
-//! [`RoleOutcome`] to stdout/stderr plus a process exit code.
+//! The dispatch table lives here; `main.rs` maps version and unimplemented-role
+//! outcomes to stdout/stderr plus a process exit code.
 //!
 //! Exit-code contract (fail-loud, never silently no-op):
 //! - `version`       -> 0, one version line on stdout.
-//! - known role      -> 2, one structured `not_implemented` JSON line on
-//!   stdout (real role implementations land with P5-T1+).
+//! - `exec`          -> the one-shot monitor's result and exit code.
+//! - remaining role  -> 2, one structured `not_implemented` JSON line on stdout.
 //! - unknown/missing -> 1, usage line on stderr.
 //!
-//! The `exec` role is the first real implementation (P5-T1): it diverges into
-//! [`exec::run`] (JSON-RPC `initialize` handshake + Landlock sandbox + `exec`)
-//! and never produces a [`RoleOutcome`].
+//! The exec role runs a dedicated fd3/fd4 one-shot monitor. It retains its
+//! target scope through entry, termination and reap; target streams stay raw.
 
 pub mod exec;
 
@@ -68,18 +66,14 @@ pub fn parse_role(arg: &str) -> Option<Role> {
 
 /// Dispatch a known role.
 ///
-/// `Role::Exec` is implemented (P5-T1): it delegates to [`exec::run`], which
-/// never returns (it either `exec`s the target process or `process::exit`s on
-/// failure), so that arm diverges. The remaining four roles are still explicit
+/// `Role::Exec` delegates to [`exec::run`], which never returns. The remaining four roles are still explicit
 /// `not_implemented` outcomes (exit code 2) until their slices land.
 pub fn handle_role(role: Role) -> RoleOutcome {
     match role {
         Role::Exec => exec::run(),
-        Role::Daemon | Role::Infer | Role::PluginHost | Role::A11y => {
-            RoleOutcome::NotImplemented {
-                line: not_implemented_line(role.name()),
-            }
-        }
+        Role::Daemon | Role::Infer | Role::PluginHost | Role::A11y => RoleOutcome::NotImplemented {
+            line: not_implemented_line(role.name()),
+        },
     }
 }
 
@@ -100,6 +94,24 @@ pub fn version_line() -> String {
         openbuff_workspace_harness::workspace_protocol_version(),
         env!("CARGO_PKG_VERSION"),
     )
+}
+
+/// Separate bounded exec protocol registration. A probe is not a native job.
+pub fn version_json() -> String {
+    #[cfg(target_os = "linux")]
+    let monotonic = Some(exec::control::monotonic_ns().to_string());
+    #[cfg(not(target_os = "linux"))]
+    let monotonic: Option<String> = None;
+    let platform = if cfg!(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu"
+    )) {
+        "linux-x64-gnu"
+    } else {
+        "unavailable"
+    };
+    serde_json::json!({"workspaceProtocol":openbuff_workspace_harness::workspace_protocol_version().to_string(),"execProtocol":"openbuff.exec.v1","crateVersion":env!("CARGO_PKG_VERSION"),"platform":platform,"monotonicNs":monotonic,"enforcementAvailable":false}).to_string()
 }
 
 #[cfg(test)]
@@ -138,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn every_role_outcome_is_structured_not_implemented() {
+    fn remaining_role_outcomes_are_structured_not_implemented() {
         // `Role::Exec` is deliberately excluded: it is now implemented and
         // `handle_role(Role::Exec)` diverges into `exec::run` (it never yields a
         // `RoleOutcome`). The four roles below are still unimplemented stubs.

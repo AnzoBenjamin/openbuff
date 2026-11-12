@@ -352,6 +352,7 @@ export function getAgentRuntimeImpl(
     | 'onPlaybookGateOutcome'
     | 'processSupervision'
     | 'spawnSupervised'
+    | 'resolveRunOutcome'
   > &
     Pick<
       AgentRuntimeScopedDeps,
@@ -473,8 +474,17 @@ export function getAgentRuntimeImpl(
     return bounded
   }
 
+  const resolveRunOutcome = params.resolveRunOutcome
   return {
     onExecutionActionStart: params.onExecutionActionStart,
+    ...(resolveRunOutcome ? {
+      resolveRunOutcome: (input) => {
+        const registered = localActors.get(input.runId)
+        return registered ? resolveRunOutcome({
+          ...input, ancestorRunIds: registered.ancestorRunIds,
+        }) : input.outcome
+      },
+    } : {}),
     // Environment
     clientEnv,
     ciEnv: getCiEnv(params.hostServices?.provider.credentialEnvironment),
