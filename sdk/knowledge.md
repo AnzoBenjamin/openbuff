@@ -13,6 +13,11 @@
 - Coordinator append warnings include the storage rejection message alongside outcome, code and attempt, so lifecycle event conflicts can be traced from logs.
 - The provider stream/retry diagnostics in `sdk/src/impl/llm.ts` call `getErrorObject` with `includeRequestBody: false`. This avoids serializing the potentially large typed request body during routine error reporting while retaining error classification and metadata.
 
+## Command defaults and attached job lifetime
+
+- `sdk/src/tools/run-terminal-command.ts` resolves timeouts through `resolveTerminalTimeout`: an omitted SYNC timeout is a 120 s execution-time default armed at dispatch (approval waits excluded), explicit values keep their documented meaning, and a trusted `timeoutPolicy` can cap or forbid `-1`. SYNC stdin is closed (`ignore-pipe-pipe`). A 30 s silence adds `idleOutputHint`/`idleOutputMs` without stopping the command, and cancellation keeps partial output and the spool artifact.
+- `sdk/src/tools/attached-job-lifetime.ts` owns attached BACKGROUND jobs: it unrefs their handles, runs the cooperative `owner-shutdown` scope stop on `beforeExit` and SIGINT/SIGTERM/SIGHUP, exits with 128 + signal only when no other listener owns the signal, and SIGTERM→SIGKILLs groups synchronously on `exit`. Hooks exist only while an attached job is live. Transferred jobs are not registered. Real-process coverage: `sdk/src/__tests__/attached-job-exit.test.ts`, `terminal-sync-defaults.test.ts`.
+
 ## Routine execution and CI controls
 
 - Balanced approval permits routine Git reads and project scripts. Client-origin MCP startup retains separate process approval even when the interpreter is a known routine executable; trusted project/user startup registration and exact action binding stay authoritative.

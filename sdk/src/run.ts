@@ -59,7 +59,10 @@ import { getAgentRuntimeImpl } from './impl/agent-runtime'
 import { captureAmbientHostInputs, getCapturedProviderConfig, loadHostConfigSnapshot, nodeConfigReadFs } from './host-config'
 import { createHostExecutionServices, defaultExecutionProfile, executionClock } from './host-execution'
 import { bindHostFileSystem } from './services/host-filesystem'
-import { executionLimitMs, ExecutionRefusalError, isExecutionRefusalError } from './services/execution-launch'
+import { executionLimitMs, ExecutionRefusalError, isExecutionRefusalError, joinNodeScopeCleanup } from './services/execution-launch'
+import { joinNativeScopeCleanup } from './services/native-exec'
+import type { NativeHostExecution } from './services/native-host-execution'
+import { configureHostExecution } from './services/configured-host-execution'
 import { initialSessionState, applyOverridesToSessionState } from './run-state'
 import {
   codebuffFsToNodePromises,
@@ -112,6 +115,7 @@ import {
 } from './tools/browser-logs'
 import { replaceRange } from './tools/replace-range'
 import { runTerminalCommand } from './tools/run-terminal-command'
+import { refuseByDeclaredTerminalProfile } from './tools/terminal-profile-bound'
 import { checkJob } from './tools/check-job'
 import { killJob } from './tools/kill-job'
 import { readLogs } from './tools/read-logs'
@@ -203,6 +207,7 @@ import { fingerprintListJobsRows } from '@codebuff/common/util/list-jobs-view'
 import { getSystemProcessEnv } from './env'
 import { spawn as nodeSpawn } from 'node:child_process'
 import type {
+  AgentRuntimeDeps,
   JournalReader,
   JournalWriter,
 } from '@codebuff/common/types/contracts/agent-runtime'
@@ -210,7 +215,7 @@ import { createRunResumeDriver } from './services/run-resume-driver'
 import type { CapturedCredentialPort, HostConfigurationInputs, HostConfigSnapshot } from './host-config'
 import type { ConfigReadFs } from './provider-config'
 import type { ExecutionScope, HostExecutionOptions, RunHostServices } from './host-execution'
-import type { BoundResourceFactory, ExecutionAdapterContext, LaunchEvent, PolicyInput, ProfileRequest } from '@codebuff/common/types/contracts/execution-context'
+import type { BoundResourceFactory, ExecutionAdapterContext, LaunchEvent, PolicyInput, ProfileRequest, Result, RootDeadlineSeed } from '@codebuff/common/types/contracts/execution-context'
 import type { MediatedMcpRequest } from '@codebuff/common/mcp/request'
 import type { CapturedHookConfiguration } from './tools/file-change-hooks'
 import type { ExecutionActor, ToolExecutionIdentity } from '@codebuff/common/types/contracts/client'
@@ -394,12 +399,23 @@ export type OpenbuffClientOptions = {
   inheritEnv?: boolean
   /** Complete host-only inputs. Child env overrides do not change provider configuration. */
   hostConfiguration?: HostConfigurationInputs
+  /**
+   * N02 project trust. true/false is the host's explicit decision for the
+   * project's openbuff.json/openbuff.d, project skills and .agents/mcp.json;
+   * omitted uses the decision stored for this project path + config hash in
+   * the Openbuff config dir (untrusted when none matches). Untrusted project
+   * config can only tighten policy. Ignored when hostConfiguration is given
+   * (set hostConfiguration.trust.projectConfig instead).
+   */
+  trustProjectConfig?: boolean
   /** Synchronous configuration reader; explicit injection never uses another reader. */
   configReadFs?: ConfigReadFs
   /** Private provider credential service for this run. */
   credentials?: CapturedCredentialPort
   /** Selected process policy and required backend capabilities. */
   executionProfile?: ProfileRequest
+  /** Verified host-native installation, calibration, and runtime mount roster. */
+  nativeExecution?: NativeHostExecution
   /** Secret-free execution phase observations. */
   recordExecution?: (event: LaunchEvent) => void
   /** Harness control-plane state root. Defaults to the Openbuff config directory. */
@@ -473,6 +489,11 @@ export type OpenbuffClientOptions = {
    *  unref'd so it won't keep a host process alive on its own; it still fires
    *  while the event loop is busy with the active run. */
   runTimeoutMs?: number
+
+  /** Same-process, clock-scoped parent deadline captured before asynchronous host
+   * setup. This structural seed is not an authentication token. A relative
+   * runTimeoutMs may narrow it; another SDK clock instance is refused. */
+  runDeadline?: RootDeadlineSeed
 
   /**
    * P1-T3 backend seam. Optional pluggable execution backend for
@@ -789,10 +810,18 @@ const transactionRecoveryPerformed = new Set<string>()
  */
 let exactTokenProvidersRegistrationAttempted = false
 
+/** Capture a same-process deadline before awaiting host/client setup. */
+export function captureRunDeadline(timeoutMs: number): Result<RootDeadlineSeed> {
+  if (typeof timeoutMs !== 'number') return { ok: false, reason: 'invalid-context', cause: 'Run deadline duration must be a number' }
+  const limit = executionLimitMs(timeoutMs)
+  return limit.ok ? captureRootDeadline({ clock: executionClock, limit: limit.value }) : limit
+}
+
 export async function run(options: RunExecutionOptions): Promise<RunState> {
   options = Object.freeze({ ...options, env: options.env && Object.freeze({ ...options.env }),
     executionProfile: options.executionProfile && Object.freeze({ ...options.executionProfile,
-      required: Object.freeze([...options.executionProfile.required]) }) })
+      required: Object.freeze([...options.executionProfile.required]),
+      ...(options.executionProfile.optional ? { optional: Object.freeze([...options.executionProfile.optional]) } : {}) }) })
   const { signal } = options
 
   if (signal?.aborted) {
@@ -816,7 +845,18 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
   }
 
   const limit = executionLimitMs(options.runTimeoutMs)
-  const boundary = limit.ok ? captureRootDeadline({ clock: executionClock, limit: limit.value }) : limit
+  const clock = options.nativeExecution?.clock ?? executionClock
+  const parent = options.runDeadline
+  const parentShapeValid = parent === undefined || (parent !== null && typeof parent === 'object' &&
+    parent.deadline !== null && typeof parent.deadline === 'object' &&
+    (parent.deadline.kind === 'finite' || parent.deadline.kind === 'unbounded'))
+  const capturedBoundary = !parentShapeValid
+    ? { ok: false as const, reason: 'invalid-context' as const, cause: 'Invalid run deadline seed' }
+    : limit.ok ? captureRootDeadline({ clock, limit: limit.value, existingParent: parent }) : limit
+  const boundary = capturedBoundary.ok && capturedBoundary.value.deadline.kind === 'finite' &&
+    capturedBoundary.value.deadline.expiresAtMs <= capturedBoundary.value.sampledAtMs
+    ? { ok: false as const, reason: 'deadline-exhausted' as const, cause: 'Run deadline exhausted before setup' }
+    : capturedBoundary
   const refusalState = (message: string, termination: RunOutcome['termination'], code: string, sessionState = options.previousRun?.sessionState) =>
     projectRunOutcomes({ sessionState: sessionState ? cloneDeep(sessionState) : undefined, output: { type: 'error', message } },
       { runOutcome: { termination, cause: { code, message } }, taskAcceptance: { status: 'unknown' } })
@@ -826,12 +866,25 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
   const requestedRoot = path.resolve(options.cwd ?? '.')
   const inputs = options.hostConfiguration ?? captureAmbientHostInputs({
     cwd: requestedRoot, projectRoot: requestedRoot,
+    ...(options.trustProjectConfig === undefined ? {} : {
+      projectTrust: options.trustProjectConfig ? 'trusted' as const : 'untrusted' as const }),
   })
   const captured = loadHostConfigSnapshot({ inputs, fs: options.configReadFs ?? nodeConfigReadFs })
   if (captured.status !== 'complete') return refusalState(captured.cause, 'failed', 'host_configuration_unavailable')
   const snapshot = captured.snapshot
   if (options.cwd !== undefined && requestedRoot !== snapshot.inputs.projectRoot)
     return refusalState('Run cwd differs from the captured project root', 'failed', 'execution_invalid_context')
+  const configured = await configureHostExecution({
+    snapshot, clock, boundary: boundary.value, signal,
+    profile: options.executionProfile, nativeExecution: options.nativeExecution, spawnSource: options.spawnSource,
+  })
+  if (!configured.ok) {
+    const result = refusalState(configured.cause,
+      configured.reason === 'deadline-exhausted' ? 'deadline_exhausted' : configured.reason === 'cancelled' ? 'cancelled' : 'failed',
+      `execution_${configured.reason}`)
+    return 'cleanup' in configured && configured.cleanup.length ? { ...result, executionCleanup: configured.cleanup } : result
+  }
+  const configuredExecution = configured.value
   let spawn: CodebuffSpawn = (command, args = [], spawnOptions) => nodeSpawn(command, [...args], spawnOptions ?? {})
   let approvalResolver: HostExecutionOptions['resolveApprovalContext']
   let basisResolver: HostExecutionOptions['isCurrentBasis']
@@ -840,73 +893,109 @@ export async function run(options: RunExecutionOptions): Promise<RunState> {
   const completion = new AbortController()
   let disposeMcp: (() => Promise<void>) | undefined
   const services = createHostExecutionServices({
-    snapshot, boundary: boundary.value,
+    snapshot, clock, boundary: boundary.value, nativeExecution: configuredExecution.nativeExecution,
     childInheritanceEnvironment: { ...snapshot.inputs.environment }, env: options.env ? { ...options.env } : {},
     inheritEnv: options.inheritEnv, signal: signal ? AbortSignal.any([signal, completion.signal]) : completion.signal,
-    profile: options.executionProfile,
+    profile: configuredExecution.profile,
     spawn: (command, args, spawnOptions) => spawn(command, args, spawnOptions),
     credentials: options.credentials, record: options.recordExecution,
     approvalMode: options.approvalMode, requestApproval: options.requestApproval,
     resolveApprovalContext: input => approvalResolver?.(input) ?? Promise.resolve(undefined),
     isCurrentBasis: correlation => correlation.kind !== 'action' || basisResolver?.(correlation) === true,
   })
-  if (!services.ok) return refusalState(services.cause,
+  if (!services.ok) {
+    configuredExecution.close()
+    const result = refusalState(services.cause,
     services.reason === 'deadline-exhausted' ? 'deadline_exhausted' : services.reason === 'cancelled' ? 'cancelled' : 'failed',
     `execution_${services.reason}`)
+    return configuredExecution.cleanup.length ? { ...result, executionCleanup: configuredExecution.cleanup } : result
+  }
   const hostServices = services.value
+  let finalizedRootOutcome: RunOutcome | undefined
+  const resolveRootOutcome = (outcome: RunOutcome): RunOutcome => {
+    if (finalizedRootOutcome) return finalizedRootOutcome
+    const remaining = hostServices.execution.remainingMs(hostServices.rootLifetime)
+    // An action's timer can fire before the root's timer in the same turn.
+    // Consult the registered root deadline; caller cancellation keeps priority.
+    const exhausted = hostServices.rootSignal.aborted
+      ? isExecutionDeadlineSignal(hostServices.rootSignal)
+      : remaining.ok ? remaining.value === 0 : remaining.reason === 'deadline-exhausted'
+    if (hostServices.rootSignal.aborted || exhausted) {
+      const message = exhausted ? (options.runTimeoutMs === undefined ? 'Run deadline exhausted' : `Run timed out after ${options.runTimeoutMs}ms`)
+        : createAbortError(hostServices.rootSignal).message
+      outcome = {
+        termination: exhausted ? 'deadline_exhausted' : 'cancelled',
+        cause: { code: exhausted ? 'run_deadline_exhausted' : 'run_cancelled', message },
+      }
+    }
+    // Freeze selection before the runtime publishes its terminal journal event.
+    finalizedRootOutcome = outcome
+    return outcome
+  }
   // Workspace discovery stays opt-in; session metadata uses the captured root.
   const capturedOptions = { ...options,
+    executionProfile: configuredExecution.profile,
+    nativeExecution: configuredExecution.nativeExecution,
+    ...(configuredExecution.spawn ? { spawnSource: configuredExecution.spawn } : {}),
     approvalMode: hostServices.approvalMode,
     cwd: options.cwd !== undefined || options.hostConfiguration !== undefined
       ? snapshot.inputs.projectRoot : undefined,
     skillsDir: options.skillsDir === undefined ? undefined : path.resolve(snapshot.inputs.invocationCwd, options.skillsDir),
     env: options.env ? { ...options.env } : undefined, signal: hostServices.rootSignal }
+  let result: RunState
+  let executionCleanup: NonNullable<RunState['executionCleanup']> = []
   try {
     const execution = withFilesystemSandbox(snapshot.sandboxPolicy, () => runOnce(capturedOptions, {
       snapshot, hostServices, setSpawn: value => { spawn = value },
-      profileExplicitlySelected: options.executionProfile !== undefined,
+      profileExplicitlySelected: configuredExecution.profile !== undefined,
       setApprovalResolver: value => { approvalResolver = value },
       setBasisResolver: value => { basisResolver = value },
       onSessionReady: value => { activeSession = value },
       onCancellationReady: () => { cancellationReady = true },
       onMcpReady: value => { disposeMcp = value },
+      resolveRunOutcome: ({ ancestorRunIds, outcome }) => ancestorRunIds.length === 0
+        ? resolveRootOutcome(outcome) : outcome,
     }), { projectRoot: snapshot.inputs.projectRoot, readPolicyToken: hostServices.readPolicy })
-    return await raceAgainstAbort(execution, hostServices.rootSignal).catch(async (error) => {
+    result = await raceAgainstAbort(execution, hostServices.rootSignal).catch(async (error) => {
       if (!hostServices.rootSignal.aborted || !cancellationReady) throw error
       // Startup dependencies remain abortable. Once the runtime owns
       // cancellation, wait for its tools, callbacks and cleanup to settle so
       // the public result retains their final history and action outcomes.
       const state = await execution
-      const exhausted = isExecutionDeadlineSignal(hostServices.rootSignal)
-      const message = exhausted
-        ? `Run timed out after ${options.runTimeoutMs}ms`
-        : createAbortError(hostServices.rootSignal).message
-      return projectRunOutcomes({ ...state, output: { type: 'error', message } }, {
-        runOutcome: {
-          termination: exhausted ? 'deadline_exhausted' : 'cancelled',
-          cause: { code: exhausted ? 'run_deadline_exhausted' : 'run_cancelled', message },
-        },
-        taskAcceptance: { status: 'unknown' },
-      })
+      const runOutcome = resolveRootOutcome(state.runOutcome ?? { termination: 'cancelled' })
+      const interrupted = runOutcome.termination === 'cancelled' || runOutcome.termination === 'deadline_exhausted'
+      return projectRunOutcomes({ ...state, ...(interrupted ? {
+        output: { type: 'error' as const, message: runOutcome.cause?.message ?? 'Run cancelled by user' },
+      } : {}) }, { runOutcome, ...(interrupted ? { taskAcceptance: { status: 'unknown' as const } } : {}) })
     })
   } catch (error) {
     const exhausted = isExecutionDeadlineSignal(hostServices.rootSignal)
-    const message = exhausted ? `Run timed out after ${options.runTimeoutMs}ms` : error instanceof Error ? error.message : String(error)
-    return refusalState(message, exhausted ? 'deadline_exhausted' : hostServices.rootSignal.aborted ? 'cancelled' : 'failed',
+    const message = exhausted ? (options.runTimeoutMs === undefined ? 'Run deadline exhausted' : `Run timed out after ${options.runTimeoutMs}ms`) : error instanceof Error ? error.message : String(error)
+    result = refusalState(message, exhausted ? 'deadline_exhausted' : hostServices.rootSignal.aborted ? 'cancelled' : 'failed',
       exhausted ? 'run_deadline_exhausted' : hostServices.rootSignal.aborted ? 'run_cancelled' : 'run_setup_failed', activeSession)
   } finally {
     // End the authenticated root lifetime on every terminal path. Explicitly
     // transferred resources retain their receiver lifetime and finite cap.
     completion.abort(new Error('Run execution scope completed'))
+    const firstEvent = hostServices.events[0]
+    const hostContextId = firstEvent ? 'facts' in firstEvent ? firstEvent.facts.hostContextId : firstEvent.hostContextId : ''
+    const cleanup = (await Promise.all([joinNodeScopeCleanup(hostContextId), joinNativeScopeCleanup(hostContextId)])).flat()
+    executionCleanup = Object.freeze([...configuredExecution.cleanup, ...cleanup])
+    configuredExecution.close()
+    if (cleanup.some(result => result.status !== 'complete')) {
+      options.logger?.warn({ cleanup }, 'Run-owned process cleanup remains unconfirmed')
+    }
     try {
       await disposeMcp?.()
     } catch (error) {
       options.logger?.warn({ error }, 'Run-owned MCP cleanup failed')
     }
   }
+  return executionCleanup.length ? { ...result, executionCleanup } : result
 }
 
 type RunHostBootstrap = {
+  resolveRunOutcome: NonNullable<AgentRuntimeDeps['resolveRunOutcome']>
   snapshot: HostConfigSnapshot
   hostServices: RunHostServices
   profileExplicitlySelected: boolean
@@ -979,6 +1068,8 @@ async function runOnce({
     ? path.resolve(snapshot.inputs.invocationCwd, snapshot.inputs.home.path)
     : null
   const includeGlobalSkills = snapshot.inputs.globals.kind === 'directory'
+  // N02: project skills reach fileContext only for a trusted project.
+  const includeProjectSkills = snapshot.loaded.projectTrust?.status === 'trusted'
   const loadedProviderConfig = getCapturedProviderConfig(snapshot)
   const capturedHookConfiguration: CapturedHookConfiguration = Object.freeze({
     autoFileChangeHooks: loadedProviderConfig.config.autoFileChangeHooks === true,
@@ -1200,6 +1291,7 @@ async function runOnce({
         contextCwd,
         homeDir,
         includeGlobalSkills,
+        includeProjectSkills,
         skillsDir,
         knowledgeFiles,
         userKnowledgeFiles,
@@ -1220,6 +1312,7 @@ async function runOnce({
       contextCwd,
       homeDir,
       includeGlobalSkills,
+      includeProjectSkills,
       skillsDir,
       knowledgeFiles,
       userKnowledgeFiles,
@@ -1413,7 +1506,7 @@ async function runOnce({
   const processOptionsFor = (toolName: string, input: Record<string, any>) => {
     const terminal = toolName === 'run_terminal_command'
     const hooks = toolName === 'run_file_change_hooks' || toolName === 'run_targeted_validation'
-    const processProfile = hostServices.bootstrap.profile
+    const processProfile = hostServices.profile
     const profile: ProfileRequest = (terminal || hooks) && !host.profileExplicitlySelected && snapshot.sandboxPolicy.mode === 'unrestricted'
       ? Object.freeze({ ...processProfile, policy: 'full-access' }) : processProfile
     const limit = executionLimitMs(terminal && typeof input.timeout_seconds === 'number'
@@ -1769,6 +1862,7 @@ async function runOnce({
   )
   const agentRuntimeImpl = getAgentRuntimeImpl({
     logger,
+    resolveRunOutcome: host.resolveRunOutcome,
     registerExecutionActor,
     onExecutionActionStart,
     executionForAction: contextForRegisteredAction,
@@ -2089,7 +2183,7 @@ async function runOnce({
     requestMcpToolData: async (request) => {
       const scope = scopeForActor(request.executionActor)
       const signal = request.signal ? AbortSignal.any([runSignal, request.signal]) : runSignal
-      const registered = scope.operation({ signal, profile: hostServices.bootstrap.profile,
+      const registered = scope.operation({ signal, profile: hostServices.profile,
         limit: { kind: 'finite', durationMs: 15_000 } })
       if (!registered.ok) throw new ExecutionRefusalError(registered)
       const config = resolveRunMcpConfig(request)
@@ -3357,19 +3451,27 @@ export async function handleToolCall({
         )
       }
       const terminalInput = parsed.input
-      // `permission_profile` passes through verbatim from the client tool call
-      // input, but that input is constructed by the agent runtime handler
-      // (handleRunTerminalCommand), which always sets it from the agent
-      // template's declared `terminalPermissionProfile` (defaulting to
-      // 'full-access') and never from model/tool input — see the parity test
-      // in packages/agent-runtime/src/tools/handlers/tool/__tests__/
-      // run-terminal-command.test.ts. The per-profile policy engine is
-      // therefore clamped to the template declaration, never widened by the
-      // model. The schema on the SDK side still validates the value.
-      result = await runTerminalCommand({
+      // `permission_profile` is set by the agent runtime handler
+      // (handleRunTerminalCommand) from the agent template's declared
+      // `terminalPermissionProfile` (`read-only` for plan-mode lineage,
+      // `full-access` when undeclared), never from model input. The host
+      // execution context keeps its own profile and runTerminalCommand
+      // evaluates that one; a declared read-only/workspace-write profile is an
+      // additional upper bound checked first (see terminal-profile-bound.ts).
+      const declaredProfileRefusal = refuseByDeclaredTerminalProfile({
+        command: terminalInput.command,
+        declaredProfile: terminalInput.permission_profile,
+        hostProfile: executionContext?.profile.policy,
+        mode: executionContext?.mode ?? terminalInput.mode,
+        projectRoot: executionContext?.projectRoot ?? projectRoot,
+        allowedPaths: terminalInput.allowed_paths ?? executionContext?.allowedPaths,
+        cwd: terminalInput.cwd,
+      })
+      result = declaredProfileRefusal ?? await runTerminalCommand({
         ...terminalInput,
         permission_profile: executionContext?.profile.policy as typeof terminalInput.permission_profile ?? terminalInput.permission_profile,
-        timeout_seconds: terminalInput.timeout_seconds ?? -1,
+        // Omitted stays omitted: runTerminalCommand applies the SYNC default.
+        timeout_seconds: terminalInput.timeout_seconds,
         // Ownership identity is runtime-injected from trusted run state; any
         // model-supplied `owner` in terminalInput is overridden here.
         owner: trustedJobOwner,
@@ -3803,6 +3905,7 @@ export async function handleToolCall({
       {
         type: 'json',
         value: {
+          ...(toolName === 'check_job' ? { jobId: (input as { jobId: string }).jobId } : {}),
           errorMessage:
             error &&
             typeof error === 'object' &&

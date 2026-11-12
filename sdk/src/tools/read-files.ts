@@ -21,6 +21,7 @@ import {
   getRawReadBasis,
 } from '@codebuff/common/util/byte-text'
 import { parseRawReadBasis } from '@codebuff/common/util/raw-read-basis'
+import { rankNearPaths } from '@codebuff/common/util/path-suggestions'
 import {
   isEnvTemplatePath,
   isMandatorySensitiveReadPath,
@@ -1089,7 +1090,153 @@ export async function getFilesStructured(params: {
       ? renderWholeFileItem(selector, snapshot, capabilityIssuer)
       : renderRangeItem(selector, snapshot, capabilityIssuer)
   })
+  await attachNotFoundCandidates({
+    results,
+    cwd,
+    fs,
+    fileFilter,
+    signal,
+  })
   return buildReadFilesResultV1(results)
+}
+
+const SUGGESTION_SKIP_DIRS = new Set([
+  '.git',
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  'target',
+  '.next',
+  '.turbo',
+])
+const SUGGESTION_MAX_ENTRIES = 2_000
+const SUGGESTION_MAX_ANCESTOR_HOPS = 3
+const SUGGESTION_MAX_MISSING = 8
+
+/**
+ * Bounded listing of files under `dir` (project-relative, portable), two
+ * levels deep. `undefined` when `dir` itself cannot be listed, so the caller
+ * can walk up to the nearest existing ancestor.
+ */
+async function listNearbyFiles(
+  fs: CodebuffFileSystem,
+  cwd: string,
+  dir: string,
+  signal?: AbortSignal,
+): Promise<string[] | undefined> {
+  const files: string[] = []
+  const queue: Array<{ rel: string; depth: number }> = [{ rel: dir, depth: 0 }]
+  let first = true
+  while (queue.length > 0 && files.length < SUGGESTION_MAX_ENTRIES) {
+    throwIfAborted(signal)
+    const { rel, depth } = queue.shift()!
+    let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>
+    try {
+      entries = (await fs.readdir(path.join(cwd, rel), {
+        withFileTypes: true,
+      })) as unknown as typeof entries
+    } catch {
+      if (first) return undefined
+      continue
+    }
+    first = false
+    for (const entry of entries) {
+      const child = rel === '.' || rel === '' ? entry.name : `${rel}/${entry.name}`
+      if (entry.isDirectory()) {
+        if (depth < 1 && !SUGGESTION_SKIP_DIRS.has(entry.name)) {
+          queue.push({ rel: child, depth: depth + 1 })
+        }
+      } else if (entry.isFile()) {
+        files.push(child)
+        if (files.length >= SUGGESTION_MAX_ENTRIES) break
+      }
+    }
+  }
+  return files
+}
+
+/**
+ * Up to 3 near-match paths for a missing project-relative path
+ * (read-search-12). Every suggestion passes the same read authorization as
+ * a real read, so blocked or sensitive files are never revealed.
+ * Best-effort: any failure yields no suggestions.
+ */
+async function suggestNearPaths(params: {
+  requestedPath: string
+  cwd: string
+  canonicalRoot: string
+  fs: CodebuffFileSystem
+  fileFilter?: FileFilter
+  signal?: AbortSignal
+}): Promise<string[]> {
+  const { requestedPath, cwd, canonicalRoot, fs, fileFilter, signal } = params
+  try {
+    if (path.isAbsolute(requestedPath)) return []
+    const portable = toPortablePath(requestedPath)
+    if (!portable || portable.split('/').includes('..')) return []
+    let dir = path.posix.dirname(portable)
+    let listed: string[] | undefined
+    for (let hop = 0; hop <= SUGGESTION_MAX_ANCESTOR_HOPS; hop++) {
+      listed = await listNearbyFiles(fs, cwd, dir, signal)
+      if (listed !== undefined || dir === '.') break
+      dir = path.posix.dirname(dir)
+    }
+    if (!listed || listed.length === 0) return []
+    const suggestions: string[] = []
+    for (const candidate of rankNearPaths(portable, listed, 10)) {
+      const authorized = await authorizeReadTarget({
+        requestedPath: candidate,
+        cwd,
+        canonicalRoot,
+        fs,
+        fileFilter,
+      })
+      if (authorized.ok) suggestions.push(candidate)
+      if (suggestions.length >= 3) break
+    }
+    return suggestions
+  } catch {
+    return []
+  }
+}
+
+async function attachNotFoundCandidates(params: {
+  results: ReadFilesItemV1[]
+  cwd: string
+  fs: CodebuffFileSystem
+  fileFilter?: FileFilter
+  signal?: AbortSignal
+}): Promise<void> {
+  const { results, cwd, fs, fileFilter, signal } = params
+  const missing = results.filter(
+    (item) =>
+      item.status === 'error' &&
+      'error' in item &&
+      item.error?.code === 'not_found',
+  )
+  if (missing.length === 0) return
+  let canonicalRoot = path.resolve(cwd)
+  try {
+    const root = await resolveFilePathForFileSystemOperation(cwd, '.', fs)
+    if (root?.operationPath) canonicalRoot = root.operationPath
+  } catch {
+    // Fall back to the resolved cwd.
+  }
+  for (const item of missing.slice(0, SUGGESTION_MAX_MISSING)) {
+    const withError = item as ReadFilesItemV1 & { error: FilesystemError }
+    const candidates = await suggestNearPaths({
+      requestedPath: item.path,
+      cwd,
+      canonicalRoot,
+      fs,
+      fileFilter,
+      signal,
+    })
+    if (candidates.length > 0) {
+      withError.error = { ...withError.error, candidates }
+    }
+  }
 }
 
 export async function getFileForEditResult(params: {

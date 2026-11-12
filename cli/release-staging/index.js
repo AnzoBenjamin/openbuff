@@ -16,6 +16,10 @@ const MIN_SUPPORTED_MACOS_MAJOR = 13
 const OLD_BINARY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const OLD_BINARY_MAX_COUNT = 2
 const TREE_SITTER_MANIFEST = 'tree-sitter-manifest.json'
+// N09: tag queries ship in this subdirectory next to the binary. Without them
+// the index parses files but extracts no symbols, calls or imports.
+const TREE_SITTER_QUERY_DIR = 'tree-sitter-queries'
+const TREE_SITTER_QUERY_NAME = /^tree-sitter-[a-z0-9_-]+-tags\.scm$/i
 const REQUIRED_TREE_SITTER_ASSETS = [
   'tree-sitter.wasm',
   'tree-sitter-c-sharp.wasm',
@@ -45,6 +49,29 @@ function resolveConfigDir(env, platform, homeDir) {
   return path.join(homeDir, '.config', 'openbuff')
 }
 
+function getQuerySiblingNames(dir) {
+  const queryDir = path.join(dir, TREE_SITTER_QUERY_DIR)
+  let stat
+  try {
+    stat = fs.lstatSync(queryDir)
+  } catch (error) {
+    if (error.code === 'ENOENT') return []
+    throw error
+  }
+  // A symlinked or non-directory entry could redirect the install outside
+  // the extraction directory.
+  if (!stat.isDirectory()) {
+    throw new Error(
+      `Release archive entry must be a directory: ${TREE_SITTER_QUERY_DIR}`,
+    )
+  }
+  return fs
+    .readdirSync(queryDir)
+    .filter((name) => TREE_SITTER_QUERY_NAME.test(name))
+    .sort()
+    .map((name) => `${TREE_SITTER_QUERY_DIR}/${name}`)
+}
+
 function getManagedSiblingNames(tempDir) {
   const extracted = fs.existsSync(tempDir) ? fs.readdirSync(tempDir) : []
   const wasmSiblings = extracted.filter(
@@ -55,6 +82,7 @@ function getManagedSiblingNames(tempDir) {
   return [
     ...new Set([
       ...wasmSiblings,
+      ...getQuerySiblingNames(tempDir),
       ...(extracted.includes(TREE_SITTER_MANIFEST)
         ? [TREE_SITTER_MANIFEST]
         : []),
@@ -99,6 +127,32 @@ function getTreeSitterAssetProblems(dir) {
       .update(fs.readFileSync(filePath))
       .digest('hex')
     if (actualHash !== expectedHash) problems.push(`${name}:checksum`)
+  }
+  // N09: releases that ship tag queries list them under `queries` (older
+  // manifests have no such key and are accepted unchanged, so an install from
+  // an older release is never forced into a re-download loop).
+  if (manifest.queries !== undefined) {
+    if (!manifest.queries || typeof manifest.queries !== 'object') {
+      return [...problems, `${TREE_SITTER_MANIFEST}:invalid`]
+    }
+    for (const [name, expectedHash] of Object.entries(manifest.queries)) {
+      if (!TREE_SITTER_QUERY_NAME.test(name)) {
+        problems.push(`${TREE_SITTER_QUERY_DIR}/${name}:invalid-name`)
+        continue
+      }
+      const filePath = path.join(dir, TREE_SITTER_QUERY_DIR, name)
+      if (!fs.existsSync(filePath)) {
+        problems.push(`${TREE_SITTER_QUERY_DIR}/${name}`)
+        continue
+      }
+      const actualHash = crypto
+        .createHash('sha256')
+        .update(fs.readFileSync(filePath))
+        .digest('hex')
+      if (actualHash !== expectedHash) {
+        problems.push(`${TREE_SITTER_QUERY_DIR}/${name}:checksum`)
+      }
+    }
   }
   return problems
 }
@@ -981,6 +1035,12 @@ async function downloadBinary(version, options = {}) {
       if (process.platform !== 'win32' && file.name === 'rg') {
         fs.chmodSync(file.source, 0o755)
       }
+    }
+
+    if (managedSiblings.some(({ name }) => name.startsWith(`${TREE_SITTER_QUERY_DIR}/`))) {
+      fs.mkdirSync(path.join(path.dirname(config.binaryPath), TREE_SITTER_QUERY_DIR), {
+        recursive: true,
+      })
     }
 
     const committed = []

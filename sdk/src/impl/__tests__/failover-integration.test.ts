@@ -10,7 +10,7 @@ import type { LanguageModelV2StreamPart } from '@ai-sdk/provider'
 import * as modelProvider from '../model-provider'
 import * as retryConfig from '../../retry-config'
 import { promptAiSdkStream } from '../llm'
-import { resolveModelsToTry } from '../failover'
+import { clearDegradedProviderRoutes, resolveModelsToTry } from '../failover'
 import {
   PROVIDER_CONFIG_ENV_VAR,
   providerConfigFileSchema,
@@ -383,6 +383,9 @@ describe('promptAiSdkStream failover loop (integration)', () => {
   })
 
   afterEach(() => {
+    // A primary 401 failover demotes the route in the process-wide session
+    // registry (N07); reset it so the next test starts on the primary.
+    clearDegradedProviderRoutes()
     spiedGetModelForRequest?.mockRestore()
     spiedGetModelForRequest = undefined
     spiedWaitForBackoffDelay?.mockRestore()

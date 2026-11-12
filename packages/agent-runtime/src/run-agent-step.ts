@@ -37,8 +37,15 @@ import {
 } from './util/orchestration-ledger'
 import { reconcileInterruptedPathLeases } from './util/workspace-path-leases'
 import { reconcileInterruptedDiscoveryShards } from './orchestration/discovery-coordinator'
-import { additionalSystemPrompts } from './system-prompt/prompts'
+import {
+  getAdditionalSystemPrompt,
+  parseCompactCommand,
+} from './system-prompt/prompts'
 import { getAgentTemplate } from './templates/agent-registry'
+import { buildNestedInstructionFilesMessage } from './util/nested-instruction-files'
+import { classifyContextOverflowError } from './util/context-overflow'
+import { PLACEHOLDER } from './templates/types'
+import { inheritPlanLineage } from './tools/plan-mode-guard'
 import { reconcileInterruptedBackgroundAgentIntents } from './util/background-agent-jobs'
 import {
   buildRunResumeReport,
@@ -120,6 +127,7 @@ import {
 } from './util/context-budget'
 import { revokeImplicitReadAuthorizationsAfterCompaction } from './util/read-authorization'
 import { runRuntimeSemanticCompaction } from './util/runtime-semantic-compaction'
+import type { RuntimeSemanticCompactionOutcome } from './util/runtime-semantic-compaction'
 import {
   commitTaskMemory,
   compileTaskMemoryContext,
@@ -135,7 +143,9 @@ import {
 } from './util/memory-v2-context'
 import { compileActivePlaybooksContext } from './memory/playbook-context'
 
+import type { ContextOverflowClassification } from './util/context-overflow'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
+import type { AgentRuntimeDeps } from '@codebuff/common/types/contracts/agent-runtime'
 import type { TrackEventFn } from '@codebuff/common/types/contracts/analytics'
 import type {
   AddAgentStepFn,
@@ -1184,10 +1194,10 @@ export const runAgentStep = async (
   )
 
   // Handle /compact command: replace message history with the summary
-  const wasCompacted =
-    prompt &&
-    (prompt.toLowerCase() === '/compact' || prompt.toLowerCase() === 'compact')
-  if (wasCompacted) {
+  // `/compact [focus]`: the focus text is carried into the compacted summary
+  // so later steps keep the area the user asked to preserve.
+  const compactRequest = parseCompactCommand(prompt)
+  if (compactRequest) {
     // Use the same conversation-summary envelope as automatic compaction and
     // preserve the newest authoritative operational blocks, rather than the
     // first (potentially stale) knowledge-memory block in the transcript.
@@ -1208,7 +1218,7 @@ export const runAgentStep = async (
           .replace(/<[^>]+>/g, ' ')
           .replace(/\s+/g, ' ')
           .trim()
-        if (!plainText || /^(?:\/compact|compact)$/i.test(plainText)) continue
+        if (!plainText || parseCompactCommand(plainText)) continue
         const boundedGoal =
           plainText.length <= 2_400
             ? plainText
@@ -1227,6 +1237,11 @@ export const runAgentStep = async (
     const summaryText = [
       '<conversation_summary>',
       'This is a summary of the conversation so far. The original messages have been condensed to save context space.',
+      ...(compactRequest.focus
+        ? [
+            `<compaction_focus>\nThe user compacted with this focus; keep it in view: ${compactRequest.focus}\n</compaction_focus>`,
+          ]
+        : []),
       '<historical_memory>',
       fullResponse,
       ...pinnedBlocks,
@@ -1251,7 +1266,8 @@ export const runAgentStep = async (
     agentState.messageHistory = [
       userMessage({
         content: withSystemTags(summaryText),
-        keepDuringTruncation: pinnedBlocks.length > 0,
+        keepDuringTruncation:
+          pinnedBlocks.length > 0 || compactRequest.focus !== undefined,
       }),
     ]
     // The retained ledger describes the still-cached system prompt, which is
@@ -1442,6 +1458,14 @@ export const runAgentStep = async (
  * matters when an error is thrown mid-run and the normal return path is
  * skipped.
  */
+/** Settle-event fields for a skipped or failed runtime pass (memory-context-06). */
+function compactionOutcomeFields(
+  outcome: RuntimeSemanticCompactionOutcome | undefined,
+): { outcome?: 'skipped' | 'failed'; reason?: string } {
+  if (!outcome || outcome.outcome === 'completed') return {}
+  return { outcome: outcome.outcome, reason: outcome.reason }
+}
+
 export async function loopAgentSteps(
   params: {
     addAgentStep: AddAgentStepFn
@@ -1453,6 +1477,7 @@ export async function loopAgentSteps(
     costMode?: string
     fileContext: ProjectFileContext
     finishAgentRun: FinishAgentRunFn
+    resolveRunOutcome?: AgentRuntimeDeps['resolveRunOutcome']
     localAgentTemplates: Record<string, AgentTemplate>
     logger: Logger
     parentSystemPrompt?: string
@@ -1737,10 +1762,18 @@ export async function loopAgentSteps(
                 }
                 let launched = false
                 try {
-                  const template = await getAgentTemplate({
+                  const registryTemplate = await getAgentTemplate({
                     ...params,
                     agentId: agentType,
                   })
+                  // A re-driven child keeps the parent's plan lineage (N03):
+                  // the registry template lacks the spawn-time derivation.
+                  const template = registryTemplate
+                    ? inheritPlanLineage({
+                        child: registryTemplate,
+                        parent: agentTemplate,
+                      })
+                    : registryTemplate
                   if (!template) {
                     logger.debug(
                       { runId: resumeParentRunId, jobId, agentType },
@@ -2088,15 +2121,22 @@ export async function loopAgentSteps(
   // Highest progress percent already reported for the CURRENT announced pass.
   // Declared alongside the pending flag because the two are settled together.
   let lastCompactionProgressPercent = 0
+  // Outcome of the runtime-driven pass for the CURRENT announced pass, so the
+  // settle reports a skipped or failed pass instead of a silent "nothing
+  // reclaimed" (memory-context-06). Reset with the pending flag.
+  let pendingCompactionOutcome: RuntimeSemanticCompactionOutcome | undefined
   const settleCompactionStatus = () => {
     if (!unsettledCompactionStart) return
     unsettledCompactionStart = false
     // A later pass in this same run announces its own progress from 0 again.
     lastCompactionProgressPercent = 0
+    const outcome = pendingCompactionOutcome
+    pendingCompactionOutcome = undefined
     onResponseChunk({
       type: 'context_compaction_status',
       state: 'settled',
       ...compactionCorrelation,
+      ...compactionOutcomeFields(outcome),
     })
   }
 
@@ -2136,6 +2176,15 @@ export async function loopAgentSteps(
 
   const finalizeRun = async () => {
     currentAgentState.runOutcome ??= { termination: 'completed' }
+    currentAgentState.runOutcome = params.resolveRunOutcome?.({
+      runId,
+      ancestorRunIds: currentAgentState.ancestorRunIds,
+      outcome: currentAgentState.runOutcome,
+    }) ?? currentAgentState.runOutcome
+    if (currentAgentState.runOutcome.termination === 'cancelled' ||
+        currentAgentState.runOutcome.termination === 'deadline_exhausted') {
+      currentAgentState.taskAcceptance = { status: 'unknown' }
+    }
     currentAgentState.taskAcceptance ??= { status: 'unknown' }
     const { termination, cause } = currentAgentState.runOutcome
     const status = runStatusFromOutcome(currentAgentState.runOutcome)
@@ -2396,14 +2445,9 @@ export async function loopAgentSteps(
           // James: Deprecate the below, only use tags, which are not prescriptive.
           keepDuringTruncation: true,
         },
-        prompt &&
-          prompt in additionalSystemPrompts &&
+        getAdditionalSystemPrompt(prompt) !== undefined &&
           userMessage(
-            withSystemInstructionTags(
-              additionalSystemPrompts[
-                prompt as keyof typeof additionalSystemPrompts
-              ],
-            ),
+            withSystemInstructionTags(getAdditionalSystemPrompt(prompt)!),
           ),
       ],
 
@@ -2648,6 +2692,12 @@ export async function loopAgentSteps(
       return true
     }
 
+    const templateLoadsInstructionFiles =
+      agentTemplate.inheritParentSystemPrompt === true ||
+      [
+        PLACEHOLDER.KNOWLEDGE_FILES_CONTENTS,
+        PLACEHOLDER.ROUTED_KNOWLEDGE_FILES,
+      ].some((placeholder) => agentTemplate.systemPrompt?.includes(placeholder))
     while (true) {
       if (signal.aborted) {
         throw new AbortError()
@@ -2661,6 +2711,22 @@ export async function loopAgentSteps(
                 .success)))
       if (stopForSelectedLimit(!canSettlePriorWork)) break
       totalSteps++
+
+      // N08: nested AGENTS.md / CLAUDE.md / knowledge.md files reach the
+      // model once the agent touches a path under their directory, only for
+      // templates whose prompt carries the project instruction files.
+      if (templateLoadsInstructionFiles) {
+        const nestedInstructions = buildNestedInstructionFilesMessage({
+          fileContext,
+          messages: currentAgentState.messageHistory,
+        })
+        if (nestedInstructions) {
+          currentAgentState.messageHistory = [
+            ...currentAgentState.messageHistory,
+            nestedInstructions,
+          ]
+        }
+      }
 
       const startTime = new Date()
 
@@ -2785,7 +2851,7 @@ export async function loopAgentSteps(
       // Continuous light consolidation, FIRST: deterministic, zero-cost
       // eviction of stale tool-result bodies above the eviction floor. This
       // frequently pulls context below the semantic trigger on its own, so
-      // the expensive LLM pruner pass below becomes a last resort rather
+      // the pruner pass below (an extractive rewrite) becomes a last resort rather
       // than the first response to context pressure. Skipped when the model
       // window is unknown (floor 0): eviction is only valuable while it is
       // strictly cheaper than the alternatives.
@@ -3082,8 +3148,9 @@ export async function loopAgentSteps(
         // existing reporting branch observes the reduction unchanged, and
         // before the task-memory goal capture below so the pruner's
         // `set_messages` revision guard sees the same persisted revision the
-        // programmatic path does. Failures are absorbed by the helper.
-        await runRuntimeSemanticCompaction({
+        // programmatic path does. Failures are absorbed by the helper and
+        // reported on the settle.
+        pendingCompactionOutcome = await runRuntimeSemanticCompaction({
           ...params,
 
           agentState: currentAgentState,
@@ -3349,7 +3416,7 @@ export async function loopAgentSteps(
           removedCategories: report.removedCategories,
           retainedKnowledgeMemory: report.retainedKnowledgeMemory,
           recovery: !report.fitsBudget
-            ? 'This request may still exceed the provider budget: reduce pinned state (fewer keepDuringTruncation blocks, or /compact) or start a fresh turn before retrying.'
+            ? 'This request may still exceed the provider budget: run /compact [focus] to summarize the conversation, reduce pinned state (fewer keepDuringTruncation blocks), or start a fresh turn before retrying.'
             : report.retainedKnowledgeMemory
               ? 'Resume from <knowledge_memory>; re-read exact live files before editing.'
               : 'Re-gather exact constraints, files, and validation evidence before continuing.',
@@ -3564,8 +3631,134 @@ export async function loopAgentSteps(
           additionalToolDefinitions: additionalToolDefinitionsWithCache,
         })
 
-      const stepHistoryBefore = currentAgentState.messageHistory
+      const recoverFromContextOverflow = async (
+        overflow: ContextOverflowClassification,
+      ) => {
+        logger.warn(
+          {
+            agentId: currentAgentState.agentId,
+            matched: overflow.matched,
+            providerLimitTokens: overflow.providerLimitTokens,
+          },
+          'Provider rejected the request as over its context window; compacting harder and retrying once',
+        )
+        const semanticBudget = getSemanticCompactionBudget(
+          currentAgentState.contextWindowTokens,
+        )
+        onResponseChunk({
+          type: 'context_compaction_status',
+          state: 'started',
+          ...compactionCorrelation,
+          contextTokens: currentAgentState.contextTokenCount,
+          resolvedContextWindowTokens:
+            semanticBudget.resolvedContextWindowTokens,
+          triggerBudgetTokens: semanticBudget.triggerBudgetTokens,
+          targetBudgetTokens: semanticBudget.targetBudgetTokens,
+        })
+        const overflowCompactionOutcome = await runRuntimeSemanticCompaction({
+          ...params,
+          agentState: currentAgentState,
+          agentTemplate,
+          localAgentTemplates,
+          logger,
+          system,
+          tools,
+          userInputId,
+          onCompactionProgress: emitCompactionProgress,
+        })
+        invalidateHistoryAggregate()
+        const historyTokens = incrementalTokenCounter.messagesTokens(
+          currentAgentState.messageHistory,
+        )
+        const requestTokens = historyTokens + systemAndToolsTokens
+        const targetTokens = Math.max(
+          1,
+          Math.floor(
+            Math.min(
+              requestTokens * 0.5,
+              overflow.providerLimitTokens !== undefined
+                ? overflow.providerLimitTokens * 0.75
+                : Number.POSITIVE_INFINITY,
+            ),
+          ),
+        )
+        const trim = maybePruneContext({
+          messages: currentAgentState.messageHistory,
+          systemTokens: systemAndToolsTokens,
+          contextTokenCount: requestTokens,
+          maxTotalTokens: targetTokens,
+          logger,
+        })
+        if (trim.pruned && trim.report) {
+          archivePreCompaction(
+            currentAgentState,
+            currentAgentState.messageHistory,
+            'mechanical_trim',
+            EVICTION_KEEP_RECENT_STEPS,
+            clock.now(),
+          )
+          revokeImplicitReadAuthorizationsAfterCompaction(currentAgentState)
+          currentAgentState.messageHistory = trim.messages
+          invalidateHistoryAggregate()
+          currentAgentState.contextTokenCount =
+            incrementalTokenCounter.messagesTokens(trim.messages) +
+            systemAndToolsTokens
+          const report = trim.report
+          const telemetry = registerCompaction({
+            action: 'mechanical_trim',
+            preCompactionHistoryTokens: report.beforeTokens,
+            postCompactionHistoryTokens: report.afterTokens,
+          })
+          onResponseChunk({
+            type: 'context_compaction',
+            action: 'mechanical_trim',
+            ...compactionCorrelation,
+            resolvedContextWindowTokens: currentAgentState.contextWindowTokens,
+            triggerBudgetTokens: requestTokens,
+            targetBudgetTokens: targetTokens,
+            compactionCount: telemetry.compactionCount,
+            consecutiveNoProgressCompactions:
+              telemetry.consecutiveNoProgressCompactions,
+            fitsBudget: report.fitsBudget,
+            shortfallTokens: report.shortfallTokens,
+            escalated: report.escalated,
+            reason: `The provider rejected the request as over its context window (${overflow.matched}); compacted to ${targetTokens} tokens and retrying once.`,
+            before: {
+              tokens: report.beforeTokens,
+              messages: report.beforeMessageCount,
+              categories: report.beforeCategories,
+            },
+            after: {
+              tokens: report.afterTokens,
+              messages: report.afterMessageCount,
+              categories: report.afterCategories,
+            },
+            removedCategories: report.removedCategories,
+            retainedKnowledgeMemory: report.retainedKnowledgeMemory,
+            recovery: report.retainedKnowledgeMemory
+              ? 'Resume from <knowledge_memory>; re-read exact live files before editing.'
+              : 'Re-gather exact constraints, files, and validation evidence before continuing.',
+          })
+        }
+        onResponseChunk({
+          type: 'context_compaction_status',
+          state: 'settled',
+          ...compactionCorrelation,
+          ...compactionOutcomeFields(overflowCompactionOutcome),
+        })
+        maybeCheckpoint(currentAgentState, true)
+        onResponseChunk({
+          type: 'provider_status',
+          status: 'retrying',
+          model: effectiveAgentTemplate.model,
+          attempt: 2,
+          maxAttempts: 2,
+        })
+      }
+
+      let stepHistoryBefore = currentAgentState.messageHistory
       let emptyStreamRetryCount = 0
+      let contextOverflowRetried = false
       // Definite-assignment assertion: the only exits from the retry loop
       // below are the try-block's break (after llmStep is assigned) and the
       // guarded throw, so the post-loop destructure always sees an assigned
@@ -3601,6 +3794,25 @@ export async function loopAgentSteps(
         const attemptCommittedNothingVisible =
           countPersistentMessages(currentAgentState.messageHistory) ===
           countPersistentMessages(stepHistoryBefore)
+        // N08 (memory-context-07): a provider that rejects the request as
+        // over its context window gets ONE harder compaction (semantic pass
+        // when the template allows it, then a mechanical trim to half the
+        // request or 75% of the reported limit) and one retry. Same
+        // committed-state guard as the empty-stream retry below.
+        const contextOverflow = classifyContextOverflowError(stepAttemptError)
+        if (
+          contextOverflow &&
+          !contextOverflowRetried &&
+          attemptCommittedNothingVisible &&
+          !signal.aborted
+        ) {
+          contextOverflowRetried = true
+          await recoverFromContextOverflow(contextOverflow)
+          // The compacted history is the new committed baseline for the
+          // retried attempt's guards.
+          stepHistoryBefore = currentAgentState.messageHistory
+          continue
+        }
         const isCleanEmptyStreamFailure =
           errorMessage.startsWith('No output generated') &&
           attemptCommittedNothingVisible
@@ -3672,7 +3884,7 @@ export async function loopAgentSteps(
           })
           // Same best-effort contract as the loop's own semantic branch:
           // failures are absorbed by the helper and never abort the step.
-          await runRuntimeSemanticCompaction({
+          const retryCompactionOutcome = await runRuntimeSemanticCompaction({
             ...params,
             agentState: currentAgentState,
             agentTemplate,
@@ -3687,6 +3899,7 @@ export async function loopAgentSteps(
             type: 'context_compaction_status',
             state: 'settled',
             ...compactionCorrelation,
+            ...compactionOutcomeFields(retryCompactionOutcome),
           })
         }
 
@@ -3805,17 +4018,19 @@ export async function loopAgentSteps(
     }
 
     await finalizeRun()
+    const runOutcome = currentAgentState.runOutcome
 
     return {
       agentState: currentAgentState,
       output:
-        currentAgentState.runOutcome?.termination === 'failed' ||
-        currentAgentState.runOutcome?.termination === 'cancelled'
+        runOutcome && (runOutcome.termination === 'failed' ||
+          runOutcome.termination === 'cancelled' ||
+          runOutcome.termination === 'deadline_exhausted')
           ? {
               type: 'error',
               message:
-                currentAgentState.runOutcome.cause?.message ??
-                `Agent run ${currentAgentState.runOutcome.termination}`,
+                runOutcome.cause?.message ??
+                `Agent run ${runOutcome.termination}`,
             }
           : getAgentOutput(currentAgentState, agentTemplate),
     }
@@ -3862,7 +4077,7 @@ export async function loopAgentSteps(
         agentState: currentAgentState,
         output: {
           type: 'error',
-          message: 'Run cancelled by user',
+          message: currentAgentState.runOutcome.cause?.message ?? 'Run cancelled by user',
         },
       }
     }

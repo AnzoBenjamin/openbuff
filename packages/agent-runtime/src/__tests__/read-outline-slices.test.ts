@@ -89,6 +89,34 @@ const myArrow = (y: string) => {
     const result = output[0].value
     expect(result.outline).toBe('Error: File does not exist.')
   })
+
+  it('reports a missing file in errorMessage with near-match candidates', async () => {
+    const { output } = await handleReadOutline({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: { input: { path: 'src/missng.ts' } },
+      requestOptionalFile: async () => null,
+      fileContext: {
+        projectRoot: '/repo',
+        fileTree: [
+          {
+            name: 'src',
+            type: 'directory',
+            filePath: 'src',
+            children: [
+              { name: 'missing.ts', type: 'file', filePath: 'src/missing.ts' },
+              { name: 'other.ts', type: 'file', filePath: 'src/other.ts' },
+            ],
+          },
+        ],
+      },
+    } as any)
+    const result = output[0].value as {
+      errorMessage?: string
+      candidates?: string[]
+    }
+    expect(result.candidates).toEqual(['src/missing.ts'])
+    expect(result.errorMessage).toContain('src/missing.ts')
+  })
 })
 
 describe('symbol slices', () => {

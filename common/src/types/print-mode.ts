@@ -45,6 +45,12 @@ export const printModeProviderStatusSchema = z.object({
   maxAttempts: z.number().int().positive().optional(),
   delayMs: z.number().nonnegative().optional(),
   statusCode: z.number().int().optional(),
+  /** Provider id of the route that failed (failover only). */
+  providerId: z.string().optional(),
+  /** Env var holding the failed route's key (failover only). */
+  apiKeyEnv: z.string().optional(),
+  /** True when the failed route is skipped for the rest of the session. */
+  degraded: z.boolean().optional(),
 })
 export type PrintModeProviderStatus = z.infer<
   typeof printModeProviderStatusSchema
@@ -455,6 +461,12 @@ export const printModeContextCompactionStatusSchema = z.object({
   // part of the reclaim was free. Absent on events emitted before eviction
   // existed and whenever the evictor ran as a no-op.
   evictedTokens: z.number().optional(),
+  // ADDITIVE, optional, `settled` only (memory-context-06): the announced pass
+  // did not run (`skipped`, e.g. the agent does not declare context-pruner)
+  // or threw (`failed`). Absent when the pass ran, and on events from older
+  // producers. `reason` is a short user-facing explanation.
+  outcome: z.enum(['skipped', 'failed']).optional(),
+  reason: z.string().optional(),
 })
 export type PrintModeContextCompactionStatus = z.infer<
   typeof printModeContextCompactionStatusSchema

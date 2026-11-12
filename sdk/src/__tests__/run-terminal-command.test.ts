@@ -1,4 +1,5 @@
 import { spawnSync } from 'child_process'
+import { EventEmitter } from 'node:events'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -49,7 +50,7 @@ function runMediatedTerminal(
     signal: params.signal,
     owner: params.owner,
     inheritEnv: params.inheritEnv,
-    ...(params.detach ? { transferLimit: executionValue(executionLimitSeconds(params.timeout_seconds)) } : {}),
+    ...(params.detach ? { transferLimit: executionValue(executionLimitSeconds(params.timeout_seconds ?? -1)) } : {}),
     ...options,
   })
   executionHosts.push(host)
@@ -369,7 +370,7 @@ describe('runTerminalCommand cwd containment', () => {
 
       const deadline = Date.now() + 5_000
       let job = getBackgroundJob(value.jobId!)
-      while (job?.status === 'running' && Date.now() < deadline) {
+      while ((job?.status === 'running' || job?.status === 'stopping') && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 25))
         job = getBackgroundJob(value.jobId!)
       }
@@ -385,6 +386,64 @@ describe('runTerminalCommand cwd containment', () => {
       fs.rmSync(projectRoot, { recursive: true, force: true })
     }
   })
+
+  it.skipIf(process.platform === 'win32')('retains kill authority after a log quota failure until the leader exits', async () => {
+    const projectRoot = initTempGitRepo('terminal-background-quota-resistant-')
+    let jobId: string | undefined
+    try {
+      const source = "process.on('SIGTERM', () => {}); process.stdout.write('x'.repeat(12000000)); setInterval(() => {}, 1000)"
+      const result = await runMediatedTerminal({
+        command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(source)}`,
+        process_type: 'BACKGROUND', permission_profile: 'full-access', cwd: projectRoot, projectRoot, timeout_seconds: 15,
+      })
+      jobId = (result[0].value as { jobId?: string }).jobId
+      expect(jobId).toBeDefined()
+      const deadline = Date.now() + 5_000
+      let job = getBackgroundJob(jobId!)
+      while (job?.status === 'running' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        job = getBackgroundJob(jobId!)
+      }
+      expect(job?.status).toBe('stopping')
+      expect(job?.settledAt).toBeUndefined()
+      expect(killBackgroundJob(jobId!, 'SIGKILL')).toMatchObject({ killed: true, status: 'stopping' })
+      while (job?.status === 'stopping' && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        job = getBackgroundJob(jobId!)
+      }
+      expect(job?.status).toBe('error')
+      expect(fs.statSync(job!.logFile).size).toBeLessThanOrEqual(10 * 1024 * 1024)
+    } finally {
+      if (jobId) killBackgroundJob(jobId, 'SIGKILL')
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('escalates a quota-stopped TERM-resistant leader', async () => {
+    const projectRoot = initTempGitRepo('terminal-background-quota-escalation-')
+    let jobId: string | undefined
+    try {
+      const source = "process.on('SIGTERM', () => {}); process.stdout.write('x'.repeat(12000000)); setInterval(() => {}, 1000)"
+      const result = await runMediatedTerminal({
+        command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(source)}`,
+        process_type: 'BACKGROUND', permission_profile: 'full-access', cwd: projectRoot, projectRoot, timeout_seconds: 15,
+      })
+      jobId = (result[0].value as { jobId?: string }).jobId
+      expect(jobId).toBeDefined()
+      const deadline = Date.now() + 8_000
+      let job = getBackgroundJob(jobId!)
+      while ((job?.status === 'running' || job?.status === 'stopping') && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        job = getBackgroundJob(jobId!)
+      }
+      expect(job?.status).toBe('error')
+      expect(job?.child.signalCode).toBe('SIGKILL')
+      expect(() => process.kill(job!.child.pid!, 0)).toThrow()
+    } finally {
+      if (jobId) killBackgroundJob(jobId, 'SIGKILL')
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  }, 12_000)
 
   it('accepts the project root itself as cwd', async () => {
     const result = await runMediatedTerminal({
@@ -1238,6 +1297,183 @@ describe('runTerminalCommand BACKGROUND abort window around job start', () => {
       if (value?.jobId !== undefined) {
         killBackgroundJob(value.jobId, 'SIGKILL')
       }
+    }
+  })
+})
+
+describe('background child error ownership', () => {
+  it('classifies a synchronous exit from a direct kill as stopped', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'background-sync-stop-'))
+    const processes = createExecutionProcessRecorder({ autoClose: false })
+    const spawn: CodebuffSpawn = (executable, argv, options) => {
+      const child = processes.spawn(executable, argv, options)
+      const call = processes.calls.find((item) => item.child === child)!
+      if (executable === 'git') queueMicrotask(() => call.finish())
+      return child
+    }
+    try {
+      const result = await runMediatedTerminal({
+        command: 'sleep 30', process_type: 'BACKGROUND', cwd: projectRoot, projectRoot, timeout_seconds: 10,
+      }, { spawn })
+      const jobId = (result[0].value as { jobId: string }).jobId
+      const job = getBackgroundJob(jobId)!
+      expect(killBackgroundJob(jobId)).toMatchObject({ killed: true, status: 'stopping' })
+      await job.nodeLaunch!.scope.requestStop('job-kill')
+      expect(job.status).toBe('stopped')
+      expect(jobRegistry.get(jobId)?.state).toBe('stopped')
+      expect(job.killEscalationTimer).toBeUndefined()
+    } finally {
+      for (const call of processes.calls) call.finish()
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('does not settle a live-drainer job when its pid is unavailable', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'background-missing-pid-'))
+    const processes = createExecutionProcessRecorder({ autoClose: false, closeOnKill: false })
+    const spawn: CodebuffSpawn = (executable, argv, options) => {
+      const child = processes.spawn(executable, argv, options)
+      const call = processes.calls.find((item) => item.child === child)!
+      if (executable === 'git') queueMicrotask(() => call.finish())
+      return child
+    }
+    try {
+      const result = await runMediatedTerminal({
+        command: 'sleep 30', process_type: 'BACKGROUND', cwd: projectRoot, projectRoot, timeout_seconds: 10,
+      }, { spawn })
+      const jobId = (result[0].value as { jobId: string }).jobId
+      const job = getBackgroundJob(jobId)!
+      Object.defineProperty(job.child, 'pid', { value: undefined, configurable: true })
+      expect(killBackgroundJob(jobId)).toMatchObject({ errorMessage: expect.stringContaining('exit remains unconfirmed') })
+      expect(job.status).toBe('stopping')
+      expect(job.settledAt).toBeUndefined()
+      expect(jobRegistry.get(jobId)?.state).toBe('stopping')
+    } finally {
+      for (const call of processes.calls) call.finish()
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps terminal state when signaling synchronously emits exit', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'background-error-sync-exit-'))
+    const processes = createExecutionProcessRecorder({ autoClose: false })
+    const spawn: CodebuffSpawn = (executable, argv, options) => {
+      const child = processes.spawn(executable, argv, options)
+      const call = processes.calls.find((item) => item.child === child)!
+      if (executable === 'git') queueMicrotask(() => call.finish())
+      return child
+    }
+    try {
+      const result = await runMediatedTerminal({
+        command: 'sleep 30', process_type: 'BACKGROUND', cwd: projectRoot, projectRoot, timeout_seconds: 10,
+      }, { spawn })
+      const jobId = (result[0].value as { jobId: string }).jobId
+      const job = getBackgroundJob(jobId)!
+      job.child.emit('error', new Error('initial child error'))
+      await job.nodeLaunch!.scope.requestStop('adapter-error')
+      expect(job.status).toBe('error')
+      expect(jobRegistry.get(jobId)?.state).toBe('error')
+      expect(jobRegistry.get(jobId)?.error).toBe('initial child error')
+      expect(job.killEscalationTimer).toBeUndefined()
+    } finally {
+      for (const call of processes.calls) call.finish()
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('does not recursively signal when signaling emits child errors', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'background-error-signal-'))
+    const processes = createExecutionProcessRecorder({ autoClose: false, closeOnKill: false })
+    const spawn: CodebuffSpawn = (executable, argv, options) => {
+      const child = processes.spawn(executable, argv, options)
+      const call = processes.calls.find((item) => item.child === child)!
+      if (executable === 'git') queueMicrotask(() => call.finish())
+      return child
+    }
+    try {
+      const result = await runMediatedTerminal({
+        command: 'sleep 30', process_type: 'BACKGROUND', cwd: projectRoot, projectRoot, timeout_seconds: 10,
+      }, { spawn })
+      const jobId = (result[0].value as { jobId: string }).jobId
+      const job = getBackgroundJob(jobId)!
+      const call = processes.calls.find((item) => item.child === job.child)!
+      let killCalls = 0
+      job.child.kill = () => {
+        killCalls++
+        job.child.emit('error', new Error('signal failed'))
+        return false
+      }
+      job.child.emit('error', new Error('initial child error'))
+      expect(killCalls).toBe(1)
+      expect(job.status).toBe('stopping')
+      killBackgroundJob(jobId, 'SIGKILL')
+      expect(killCalls).toBe(2)
+      expect(job.status).toBe('stopping')
+      call.finish(0)
+      await job.nodeLaunch!.scope.requestStop('adapter-error')
+      expect(jobRegistry.get(jobId)?.error).toBe('initial child error')
+    } finally {
+      for (const call of processes.calls) call.finish()
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps draining and retains kill authority after a spawned child error', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'background-error-live-'))
+    const processes = createExecutionProcessRecorder({ autoClose: false, closeOnKill: false })
+    const spawn: CodebuffSpawn = (executable, argv, options) => {
+      const child = processes.spawn(executable, argv, options)
+      const call = processes.calls.find((item) => item.child === child)!
+      if (executable === 'git') queueMicrotask(() => call.finish())
+      return child
+    }
+    let jobId: string | undefined
+    try {
+      const result = await runMediatedTerminal({
+        command: 'sleep 30', process_type: 'BACKGROUND', cwd: projectRoot, projectRoot, timeout_seconds: 10,
+      }, { spawn })
+      jobId = (result[0].value as { jobId?: string }).jobId
+      expect(jobId).toBeDefined()
+      const job = getBackgroundJob(jobId!)!
+      const call = processes.calls.find((item) => item.child === job.child)!
+      job.child.emit('error', new Error('injected child error'))
+      expect(job.status).toBe('stopping')
+      expect(job.settledAt).toBeUndefined()
+      fs.appendFileSync(job.logFile, 'after-error\n')
+      await new Promise((resolve) => setTimeout(resolve, 350))
+      const events = jobRegistry.snapshot(jobId!, 0)?.events ?? []
+      expect(events.some((event) => event.payload.type === 'output' && event.payload.data.includes('after-error'))).toBe(true)
+      expect(killBackgroundJob(jobId!, 'SIGKILL')).toMatchObject({ killed: true, status: 'stopping' })
+      call.finish(undefined, 'SIGKILL')
+      await job.nodeLaunch!.scope.requestStop('adapter-error')
+      expect(job.status).toBe('error')
+      expect(jobRegistry.get(jobId!)?.error).toBe('injected child error')
+    } finally {
+      for (const call of processes.calls) call.finish()
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('settles a failed spawn with no child pid as an error', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'background-error-spawn-'))
+    const owner = { clientSessionId: 'failed-spawn', rootRunId: 'failed-spawn', parentRunId: 'failed-spawn', parentAgentId: 'failed-spawn' }
+    const processes = createExecutionProcessRecorder()
+    const spawn: CodebuffSpawn = (executable, argv, options) => {
+      if (executable === 'git') return processes.spawn(executable, argv, options)
+      const child = Object.assign(new EventEmitter(), { pid: undefined, exitCode: null, signalCode: null })
+      queueMicrotask(() => child.emit('error', new Error('injected spawn failure')))
+      return child as ReturnType<CodebuffSpawn>
+    }
+    try {
+      const result = await runMediatedTerminal({
+        command: 'sleep 30', process_type: 'BACKGROUND', cwd: projectRoot, projectRoot, timeout_seconds: 10, owner,
+      }, { spawn })
+      expect(result[0].value).toMatchObject({ executionRefusal: { reason: 'unavailable' } })
+      const job = jobRegistry.list(owner).find((record) => record.label === 'sleep 30')
+      expect(job?.state).toBe('error')
+      expect(job?.error).toBe('injected spawn failure')
+    } finally {
+      fs.rmSync(projectRoot, { recursive: true, force: true })
     }
   })
 })

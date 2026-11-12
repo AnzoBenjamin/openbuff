@@ -79,7 +79,10 @@ evals/buffbench/
 ├── main-openbuff.ts          # Entry: eval-openbuff-v2.json (OPENBUFF_REPO_PATH override)
 ├── main-single-eval.ts       # Entry: single task by id
 ├── main-hard-tasks.ts        # Entry: the *2.json "hard" task sets
-├── main-nightly.ts           # Entry: nightly run + stdout summary
+├── main-nightly.ts           # Entry: gated nightly / PR-subset run (base2), writes FINAL_RESULTS.json
+├── regression-gate.ts        # Compares a run with the last green run; exits 1 past the noise band
+├── quality-metrics.ts        # Per-model edit-commit, tool error and LSP call rates
+├── static-prompt-tokens.ts   # Fixed prompt + tool-definition tokens of an agent
 │
 ├── agent-runner.ts           # Executes agents in test repos
 ├── setup-test-repo.ts        # Clone / checkout parent commit
@@ -133,10 +136,19 @@ Some entrypoints are wired as package scripts in `evals/package.json`
 bun run main                  # buffbench/main.ts — base2 on eval-codebuff.json
 bun run main-openbuff         # buffbench/main-openbuff.ts — eval-openbuff-v2.json
 bun run run-buffbench         # alias of main (buffbench/main.ts)
-bun run run-buffbench-nightly # buffbench/main-nightly.ts — nightly run + summary
+bun run run-buffbench-nightly # buffbench/main-nightly.ts --subset nightly (base2, eval-codebuff.json)
+bun run run-buffbench-pr-subset # buffbench/main-nightly.ts --subset pr (3 small tasks)
+bun run eval-gate -- --current <FINAL_RESULTS.json|dir> --baseline <FINAL_RESULTS.json|dir>
+bun run run-single-eval       # buffbench/main-single-eval.ts — one task by id
+bun run gen-repo-eval <repo>  # buffbench/gen-repo-eval.ts — generate an eval set
+
+# The nightly and PR-subset entries accept --tasks a,b, --results-out <path>
+# and --dry-run (validates eval file, task ids and agent; no LLM calls).
+# .github/workflows/nightly-evals.yml and eval-pr-subset.yml upload the
+# results as an artifact and run eval-gate against the last green run.
+# Every script must resolve to an existing file (__tests__/package-scripts.test.ts).
 
 # Direct by path (entrypoints without a dedicated script)
-bun run evals/buffbench/main-single-eval.ts   # single task by id
 bun run evals/buffbench/main-hard-tasks.ts    # the *2.json hard task sets
 ```
 

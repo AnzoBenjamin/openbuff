@@ -263,6 +263,32 @@ describe('provider-specific metadata merging', () => {
     ])
   })
 
+  it('sends a system message with cache_control as one text part carrying it', () => {
+    const result = convertToOpenAICompatibleChatMessages([
+      {
+        role: 'system',
+        content: 'You are a helpful assistant.',
+        providerOptions: {
+          openaiCompatible: { cache_control: { type: 'ephemeral' }, name: 'sys' },
+        },
+      },
+    ])
+
+    expect(result).toEqual([
+      {
+        role: 'system',
+        content: [
+          {
+            type: 'text',
+            text: 'You are a helpful assistant.',
+            cache_control: { type: 'ephemeral' },
+          },
+        ],
+        name: 'sys',
+      },
+    ])
+  })
+
   it('should merge user message content metadata', async () => {
     const result = convertToOpenAICompatibleChatMessages([
       {

@@ -25,6 +25,25 @@ the exact rules):
    walk is bounded by `MAX_ANCESTOR_SCAN_DEPTH` (10) and never crosses above
    `$HOME` unless `OPENBUFF_TRUST_ANCESTOR_CONFIG=1` is set.
 
+> **Project trust.** Config from step 4 (and its `openbuff.d/` fragments) is
+> project scope. Until you trust the project it can only tighten policy:
+> providers with `apiKeyEnv`, ChatGPT OAuth providers and redefinitions of
+> your own providers are ignored; `defaultModel`, `visionModel`, mode, agent,
+> failover and semantic-indexing routes are kept only when they resolve to a
+> provider you configured; `fileChangeHooks` and `autoFileChangeHooks` are
+> ignored; `approvalMode` may only get stricter; `sandbox.mode` cannot be
+> turned off. Project skills, `.agents/` agents and `.agents/mcp.json` follow
+> the same decision. The interactive TUI asks once per project and lists what
+> would be enabled; `openbuff run` and `serve` print a notice and stay
+> untrusted. `--trust-project-agents` (TUI, `run`, `serve`) records an
+> explicit grant. Decisions are stored in
+> `~/.config/openbuff/project-trust.json` (owner-only), keyed by the project's
+> real path and a hash of its config files plus `.agents/mcp.json`; any change
+> to those files asks again. CI can set `OPENBUFF_TRUST_PROJECT_CONFIG=1`, and
+> SDK hosts pass `trustProjectConfig: true | false` to `run()` (omitted uses
+> the stored decision). Step 1 (`OPENBUFF_PROVIDER_CONFIG`) and the user
+> config dir are never gated.
+
 > **Credentials** (`credentials.json`, ChatGPT OAuth tokens) live in
 > `~/.config/openbuff/credentials.json` — the same global dir, with no
 > env-suffix variants. The directory is created `0700` and the credentials
@@ -174,10 +193,18 @@ Behavior, matched to the implementation in `sdk/src/impl/failover.ts` and
   misconfigured list like `["backup-a", "backup-a", "backup-b"]` is treated as
   `["backup-a", "backup-b"]` and the loop never wastefully retries the same
   backup model twice.
-- **Failover-eligible errors:** `401`, `403` (auth) and `500`, `502`, `503`,
-  `504` (server). These match `FAILOVER_ELIGIBLE_STATUS_CODES`. Auth errors
-  failover immediately (the inner retry loop does not retry them); 5xx are
-  retried first by the inner loop, and only failover once retries exhaust.
+- **Failover-eligible errors:** `401`, `403` (auth), `500`, `502`, `503`,
+  `504` (server) and `529` (Anthropic overloaded, including an SSE
+  `overloaded_error` event on a 200 stream). These match
+  `FAILOVER_ELIGIBLE_STATUS_CODES`. Auth errors failover immediately (the
+  inner retry loop does not retry them); 5xx and 529 are retried first by the
+  inner loop, and only failover once retries exhaust.
+- **Auth failures demote the route for the session:** after a `401`/`403`
+  failover, later requests start on the backup instead of paying another
+  round trip to the failed primary. The demoted route stays in the list as a
+  last resort. Restarting or running `/provider` clears the demotion. The
+  CLI keeps a warning line naming the status, the provider and its
+  `apiKeyEnv`.
 - **Retry-only carve-out:** `429` (rate limit) and `408` (timeout) are **not**
   failover-eligible — backoff is the proven response and failing over on 429
   risks cascading load across providers.
@@ -189,7 +216,9 @@ Behavior, matched to the implementation in `sdk/src/impl/failover.ts` and
   streaming, text and structured requests. Its shared policy defaults to
   three retries after the initial attempt, with jittered exponential waits
   capped at eight seconds. A valid integer or HTTP-date `Retry-After` hint is
-  capped at the same limit; malformed hints fall back to exponential waits.
+  honoured up to 120 seconds, and one request waits at most 180 seconds in
+  total; malformed hints fall back to exponential waits. The wait is
+  cancelled with the run, so it never outlives the run deadline.
   Content-policy refusals and aborts do not retry or fail over, even when
   wrapped around a retryable HTTP status. Context repair and OAuth recovery
   consume the same finite request attempt ledger. Nonstreaming requests use
@@ -459,6 +488,8 @@ parent → fragment), Openbuff merges them with **override wins** semantics.
 Most fields use shallow-record merge (`{ ...base, ...override }`): the
 override entry replaces the base entry for the same key. Providers, routes,
 modes, agents, and reasoning efforts all follow this rule.
+The `execution` block replaces the earlier block as a whole; omitting it
+inherits the earlier declaration, including its declaring file.
 
 ### `fileChangeHooks` — concat-with-dedup
 
@@ -557,6 +588,61 @@ exceptions in project mode. An omitted sandbox block inherits any earlier
 config block; `"sandbox": { "mode": "unrestricted" }` explicitly disables it.
 Each run captures its policy, including its subagents, independently of other
 concurrent runs. Changes apply on the next run.
+
+## Execution backend
+
+The SDK and ordinary local CLI runs can select an execution profile through
+an optional `execution` block. Declare it in the user-global configuration
+directory or the exact file selected by `OPENBUFF_PROVIDER_CONFIG`. Includes
+retain their own origin: an external included file does not inherit its
+parent's execution trust. Project and ancestor read-trust flags do not grant
+execution trust. An untrusted execution declaration fails startup.
+
+```json
+{
+  "execution": {
+    "profile": {
+      "policy": "workspace-write",
+      "preferredBackend": "native-exec",
+      "required": ["exact-env", "filesystem-isolation", "process-tree-containment"],
+      "optional": ["network-isolation"],
+      "allowBackendFallback": false
+    },
+    "native": {
+      "artifact": {
+        "path": "/absolute/installation/openbuff-native",
+        "sha256": "<trusted lowercase SHA-256 of the installed artifact>",
+        "platform": "linux-x64-gnu",
+        "crateVersion": "0.1.0",
+        "workspaceProtocol": "1"
+      },
+      "bwrap": {
+        "path": "/usr/bin/bwrap",
+        "sha256": "<trusted lowercase SHA-256 of bubblewrap>"
+      },
+      "runtimePaths": ["/usr", "/bin", "/lib", "/lib64"],
+      "network": "deny",
+      "landlock": "optional"
+    }
+  }
+}
+```
+
+Replace both checksum placeholders with trusted 64-character lowercase hex
+digests. Paths must be absolute. Native setup verifies the artifact and
+performs an owned version/clock probe within the original run deadline and
+a two-second setup cap. Failed verification or unconfirmed setup cleanup
+prevents target dispatch. The version probe alone does not establish OS
+enforcement.
+
+The current native adapter supports Linux x64 GNU one-shot shell, background,
+diagnostic and native-role processes. Other platforms and process families
+remain unavailable for native selection. Required capabilities must all be
+available; optional capabilities may remain unenforced. Full-access profiles
+inherit networking and do not provide filesystem or process-tree isolation.
+`portable-ts` selects the existing portable adapter and omits `native`.
+Explicit SDK `executionProfile` or `nativeExecution` options replace the
+entire configuration decision; the SDK caller owns injected installations.
 
 ## Harness approval mode
 

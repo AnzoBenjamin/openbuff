@@ -151,7 +151,9 @@ export const validatePersistedMessages = (
       if (block.type === 'context')
         return (
           (block.ledgerText === null || typeof block.ledgerText === 'string') &&
-          typeof block.gateBudgetsText === 'string'
+          typeof block.gateBudgetsText === 'string' &&
+          (block.instructionFilesText === undefined ||
+            typeof block.instructionFilesText === 'string')
         )
       if (block.type === 'info')
         return (

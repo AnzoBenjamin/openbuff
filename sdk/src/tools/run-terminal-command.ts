@@ -10,12 +10,13 @@ import {
 import {
   killBackgroundJob,
   startBackgroundJob,
-  terminateProcessTree,
 } from './background-jobs'
 import { resolveFilePathForOperation } from './path-utils'
 import { runGit } from './git-status'
 import { prepareHarnessGitReadArgv } from '../services/harness-enforcement'
-import { TerminalOutputSpool } from './terminal-output-spool'
+import { MAX_TERMINAL_SPOOL_BYTES, TerminalOutputSpool } from './terminal-output-spool'
+import { processCleanupSchema } from '@codebuff/common/tools/params/process-cleanup'
+import { registerPreparedNativeLaunch } from '../services/native-host-execution'
 import {
   evaluateTerminalCommandPolicy,
   type TerminalPermissionProfile,
@@ -44,6 +45,64 @@ import type {
 } from '@codebuff/common/types/contracts/execution-context'
 
 const COMMAND_OUTPUT_LIMIT = 50_000
+
+/** Execution-time bound for a SYNC command whose caller omitted `timeout_seconds`. */
+export const DEFAULT_SYNC_TIMEOUT_SECONDS = 120
+/** Silence after which a SYNC result carries a "waiting for input?" hint. The command keeps running. */
+export const IDLE_OUTPUT_HINT_MS = 30_000
+
+/**
+ * Host/user limits on model-supplied terminal timeouts. Model input never
+ * supplies this policy; the trusted host does.
+ */
+export type TerminalTimeoutPolicy = Readonly<{
+  /** Replaces DEFAULT_SYNC_TIMEOUT_SECONDS for SYNC commands that omit a timeout. */
+  defaultSyncSeconds?: number
+  /** Upper bound applied to every finite or unbounded (-1) request. */
+  maxSeconds?: number
+  /** `false` turns a SYNC `-1` request into the default bound. Defaults to `true`. */
+  allowUnbounded?: boolean
+}>
+
+export type TerminalTimeoutResolution = Readonly<{
+  /** Captured local limit; -1 leaves only the parent deadline in force. */
+  localSeconds: number
+  /** Execution-time default that starts at dispatch, after any approval wait. */
+  defaultExecutionMs?: number
+}>
+
+/**
+ * An omitted SYNC timeout becomes an execution-time default (120 s) that starts
+ * after admission, so an approval wait never consumes it. Explicit values keep
+ * their documented meaning (including approval waits). A finite parent deadline
+ * always still applies through the derived execution context.
+ */
+export function resolveTerminalTimeout(
+  requested: number | undefined,
+  processType: 'SYNC' | 'BACKGROUND',
+  policy: TerminalTimeoutPolicy = {},
+): TerminalTimeoutResolution {
+  const cap = policy.maxSeconds !== undefined && policy.maxSeconds > 0 ? policy.maxSeconds : undefined
+  const syncDefault = Math.min(policy.defaultSyncSeconds ?? DEFAULT_SYNC_TIMEOUT_SECONDS, cap ?? Infinity)
+  const defaulted = (): TerminalTimeoutResolution => processType === 'SYNC'
+    ? { localSeconds: -1, defaultExecutionMs: Math.round(syncDefault * 1000) }
+    : { localSeconds: cap ?? -1 }
+  if (requested === undefined) return defaulted()
+  if (requested === -1) {
+    if (cap !== undefined) return { localSeconds: cap }
+    return policy.allowUnbounded === false ? defaulted() : { localSeconds: -1 }
+  }
+  return { localSeconds: cap !== undefined && requested > cap ? cap : requested }
+}
+
+export type TerminalIdleOutputHint = Readonly<{ idleMs: number; stdoutBytes: number; stderrBytes: number }>
+
+function idleOutputHintText(idleMs: number): string {
+  return `No output for ${Math.round(idleMs / 1000)} s. stdin is closed, so a command waiting for interactive input ` +
+    `(a /dev/tty prompt, pager or editor) will never get it: rerun it non-interactively (--yes, CI=1, --no-pager) ` +
+    `or as BACKGROUND if it is long-running.`
+}
+
 export type CapturedTerminalLaunchMetadata = Readonly<{
   requiresCommitSafety?: boolean
   approvalReceiptId?: string
@@ -790,7 +849,8 @@ async function runGitForSafety(
     executable: 'git', argv: prepareHarnessGitReadArgv(args), cwd,
     branchId: options?.branchId ?? '',
     environmentOverlay: { ...options?.env, GIT_OPTIONAL_LOCKS: '0' },
-    adapterOptions: { stdio: 'ignore-pipe-pipe', shell: false, detached: false, windowsHide: false },
+    adapterOptions: { stdio: 'ignore-pipe-pipe', shell: false, detached: false, windowsHide: false,
+      maxRetainedOutputBytes: 2 * GIT_SAFETY_OUTPUT_LIMIT },
   })
   if (!launch.ok) return refuse(launch)
   const admitted = await admitNodeLaunch(launch.value, context.value.signal ?? options?.signal)
@@ -915,7 +975,11 @@ async function runGitForSafety(
       appendStderrTail(error.message)
       settle(-1)
     })
-    child.on('close', (code) => settle(code ?? -1))
+    child.on('close', async (code) => {
+      const native = await node.nativeResult
+      if (native && !native.ok) { lifetimeRefusal = native; settle(-1); return }
+      settle(native?.ok ? native.value.exitCode ?? -1 : code ?? -1)
+    })
     if (resourceSignal.aborted) onAbort()
   })
 }
@@ -1215,6 +1279,9 @@ export async function runTerminalCommand({
   prepareTransferredLaunch,
   executionFamily,
   executionBranchId,
+  timeoutPolicy,
+  idleOutputHintMs = IDLE_OUTPUT_HINT_MS,
+  onIdleOutput,
 }: {
   command: string
   process_type: 'SYNC' | 'BACKGROUND'
@@ -1224,7 +1291,8 @@ export async function runTerminalCommand({
   allowed_paths?: string[]
   cwd: string
   projectRoot?: string
-  timeout_seconds: number
+  /** Omitted: SYNC gets DEFAULT_SYNC_TIMEOUT_SECONDS of execution time; BACKGROUND stays unbounded. */
+  timeout_seconds?: number
   env?: Record<string, string | undefined>
   /** Child inheritance is captured by the root host before this call. */
   inheritEnv?: boolean
@@ -1252,6 +1320,12 @@ export async function runTerminalCommand({
   /** SDK-only hook attribution; never accepted from model tool payloads. */
   executionFamily?: Family
   executionBranchId?: string
+  /** Trusted host/user timeout limits; never read from model input. */
+  timeoutPolicy?: TerminalTimeoutPolicy
+  /** SYNC silence before the idle-output hint (default IDLE_OUTPUT_HINT_MS). */
+  idleOutputHintMs?: number
+  /** Called once per silent period of at least `idleOutputHintMs`; the command is not stopped. */
+  onIdleOutput?: (hint: TerminalIdleOutputHint) => void
 }): Promise<CodebuffToolOutput<'run_terminal_command'>> {
   const mode = executionContext?.mode ?? requestedMode
   const permission_profile = requestedPermissionProfile ?? (executionContext?.profile.policy as TerminalPermissionProfile | undefined) ?? 'workspace-write'
@@ -1267,7 +1341,8 @@ export async function runTerminalCommand({
     },
   }]
   if (signal?.aborted) return refused(refusalForSignal(signal))
-  const limit = executionLimitSeconds(timeout_seconds)
+  const timeout = resolveTerminalTimeout(timeout_seconds, process_type, timeoutPolicy)
+  const limit = executionLimitSeconds(timeout.localSeconds)
   if (!limit.ok) return refused(limit)
   const branchId = executionBranchId ?? (process_type === 'BACKGROUND'
     ? detach ? 'background.transferred' : 'background.attached'
@@ -1315,8 +1390,10 @@ export async function runTerminalCommand({
     environmentOverlay: env,
     adapterOptions: {
       runtime: 'node', platform: os.platform(), shell: false,
-      stdio: process_type === 'BACKGROUND' ? 'owned-log-fd' : 'pipe',
+      // SYNC stdin is closed too: a prompt reads EOF instead of waiting forever.
+      stdio: 'ignore-pipe-pipe',
       detached: !isWindows, windowsHide: false,
+      maxRetainedOutputBytes: MAX_TERMINAL_SPOOL_BYTES,
     },
   })
   if (!target.ok) return refused(target)
@@ -1330,6 +1407,7 @@ export async function runTerminalCommand({
   }
   if (!prepared.ok) return refused(prepared)
   const preparedLaunch = prepared.value
+  registerPreparedNativeLaunch(context.value.execution, target.value, preparedLaunch)
   const admitted = await admitNodeLaunch(preparedLaunch, signal)
   if (!admitted.ok) return refused(admitted)
   const launchFacts = preparedLaunch.facts()
@@ -1430,6 +1508,9 @@ export async function runTerminalCommand({
           dirtyBeforePaths: dirtyBefore ? [...dirtyBefore] : undefined,
           admittedLaunch: admitted.value,
           executionContext: context.value,
+          // Attached jobs end with this process; transferred jobs follow
+          // their receiver lifetime.
+          attached: !detach,
         })
       } catch (error) {
         if (isExecutionRefusalError(error)) return refused(error.refusal)
@@ -1464,10 +1545,20 @@ export async function runTerminalCommand({
       >((resolve) => {
         const spawnCwd = containedCwd
         const spawn = trustedNodeSpawn(context.value)
+        let stdoutSeenBytes = 0
+        let stderrSeenBytes = 0
+        let outputLimitExceeded = false
+        let outputSpool: TerminalOutputSpool | undefined
+        let spoolError: unknown
         const dispatched = dispatchNodeLaunch(admitted.value, (input) => spawn(input.executable, input.argv, {
           cwd: input.cwd, env: input.env, signal: input.resourceSignal,
-          stdio: 'pipe', detached: !isWindows, shell: false, windowsHide: false,
-        }), { terminate: terminateProcessTree })
+          stdio: ['ignore', 'pipe', 'pipe'], detached: input.adapterOptions.detached === true, shell: false, windowsHide: false,
+        }), { output: () => {
+          const seen = stdoutSeenBytes + stderrSeenBytes
+          const retained = outputSpool?.bytesRetained ?? Math.min(seen, COMMAND_OUTPUT_LIMIT * 4)
+          return { stdoutSeenBytes, stderrSeenBytes, retainedBytes: retained,
+            droppedBytes: Math.max(0, seen - retained), complete: !outputLimitExceeded && !spoolError }
+        } })
         if (!dispatched.ok) {
           resolve(refused(dispatched))
           return
@@ -1475,6 +1566,8 @@ export async function runTerminalCommand({
         const node = dispatched.value
         const childProcess = node.child
         const resourceSignal = node.input.resourceSignal
+        // A backend that still hands us a stdin pipe gets EOF immediately.
+        try { childProcess.stdin?.end() } catch { /* already closed */ }
 
         // These mutable bookkeeping fields are read by `onAbort`, the timeout
         // callback, and the close/error handlers below. Declare them BEFORE
@@ -1483,13 +1576,46 @@ export async function runTerminalCommand({
         // but throws on access until the declaration line runs).
         let cancelTimer: (() => void) | null = null
         let settled = false
+        let completing = false
         let terminationReason: 'abort' | 'timeout' | null = null
+        let defaultTimeoutFired = false
+        let defaultTimeoutTimer: ReturnType<typeof setTimeout> | undefined
+        // Idle-output watchdog: a hint only, never a kill.
+        let lastOutputAt = performance.now()
+        let maxIdleMs = 0
+        let idleTimer: ReturnType<typeof setTimeout> | undefined
+        const armIdle = () => {
+          if (idleTimer !== undefined || !(idleOutputHintMs > 0)) return
+          idleTimer = setTimeout(() => {
+            idleTimer = undefined
+            if (settled || completing) return
+            const idleMs = performance.now() - lastOutputAt
+            if (idleMs < idleOutputHintMs) { armIdle(); return }
+            maxIdleMs = Math.max(maxIdleMs, idleMs)
+            try { onIdleOutput?.({ idleMs, stdoutBytes: stdoutSeenBytes, stderrBytes: stderrSeenBytes }) } catch { /* observer only */ }
+            // Re-armed by the next output chunk, so one hint per silent period.
+          }, Math.max(1, idleOutputHintMs - (performance.now() - lastOutputAt)))
+          idleTimer.unref?.()
+        }
+        const noteOutput = () => {
+          const now = performance.now()
+          maxIdleMs = Math.max(maxIdleMs, now - lastOutputAt)
+          lastOutputAt = now
+          armIdle()
+        }
+        const stopWatchdogs = () => {
+          if (idleTimer !== undefined) clearTimeout(idleTimer)
+          idleTimer = undefined
+          if (defaultTimeoutTimer !== undefined) clearTimeout(defaultTimeoutTimer)
+          defaultTimeoutTimer = undefined
+          maxIdleMs = Math.max(maxIdleMs, performance.now() - lastOutputAt)
+        }
+        const idleFields = () => idleOutputHintMs > 0 && maxIdleMs >= idleOutputHintMs
+          ? { idleOutputMs: Math.round(maxIdleMs), idleOutputHint: idleOutputHintText(maxIdleMs) } : {}
         let stdout = ''
         let stderr = ''
         const stdoutDecoder = new StringDecoder('utf8')
         const stderrDecoder = new StringDecoder('utf8')
-        let outputSpool: TerminalOutputSpool | undefined
-        let spoolError: unknown
         const spoolChunk = (name: 'stdout' | 'stderr', text: string) => {
           if (
             !outputSpool &&
@@ -1510,7 +1636,7 @@ export async function runTerminalCommand({
         // The shared launch helper controls physical termination. These flags
         // only select the output shape and never arm another kill schedule.
         const markTermination = (reason: 'abort' | 'timeout') => {
-          if (settled || terminationReason) return
+          if (settled || terminationReason || childProcess.exitCode != null || childProcess.signalCode != null) return
           terminationReason = reason
         }
         const onAbort = () => {
@@ -1528,6 +1654,19 @@ export async function runTerminalCommand({
             markTermination('timeout')
           })
         }
+        if (timeout.defaultExecutionMs !== undefined) {
+          defaultTimeoutTimer = setTimeout(() => {
+            defaultTimeoutTimer = undefined
+            if (settled || completing || terminationReason) return
+            markTermination('timeout')
+            if (terminationReason !== 'timeout') return
+            defaultTimeoutFired = true
+            // SIGTERM, bounded grace, then SIGKILL of the owned process group.
+            void node.scope.requestStop('deadline')
+          }, timeout.defaultExecutionMs)
+          defaultTimeoutTimer.unref?.()
+        }
+        armIdle()
 
         // Collect stdout. Cap accumulation during streaming so a chatty process
         // can't OOM the agent runtime; final truncation at close still applies.
@@ -1550,6 +1689,12 @@ export async function runTerminalCommand({
         }
         childProcess.stdout?.on('data', (data: Buffer) => {
           if (settled) return
+          stdoutSeenBytes += data.length
+          noteOutput()
+          if (!outputLimitExceeded && stdoutSeenBytes + stderrSeenBytes > MAX_TERMINAL_SPOOL_BYTES) {
+            outputLimitExceeded = true
+            void node.scope.requestStop('output-limit')
+          }
           const text = stdoutDecoder.write(data)
           spoolChunk('stdout', text)
           stdout = appendCapped(stdout, text)
@@ -1558,6 +1703,12 @@ export async function runTerminalCommand({
         // Collect stderr (same cap)
         childProcess.stderr?.on('data', (data: Buffer) => {
           if (settled) return
+          stderrSeenBytes += data.length
+          noteOutput()
+          if (!outputLimitExceeded && stdoutSeenBytes + stderrSeenBytes > MAX_TERMINAL_SPOOL_BYTES) {
+            outputLimitExceeded = true
+            void node.scope.requestStop('output-limit')
+          }
           const text = stderrDecoder.write(data)
           spoolChunk('stderr', text)
           stderr = appendCapped(stderr, text)
@@ -1565,7 +1716,19 @@ export async function runTerminalCommand({
 
         // Handle process completion
         childProcess.on('close', async (exitCode) => {
-          if (settled) return
+          if (completing) return
+          completing = true
+          stopWatchdogs()
+          const native = await node.nativeResult
+          if (native?.ok) exitCode = native.value.exitCode
+          const nativeFields = native?.ok ? {
+            executionUsage: native.value.targetUsage ?? native.value.usage,
+            executionWaitStatusSource: native.value.waitStatusSource,
+            ...(native.value.wrapperExitCode !== null ? { nativeWrapperExitCode: native.value.wrapperExitCode } : {}),
+            ...(native.value.wrapperSignal !== null ? { nativeWrapperSignal: native.value.wrapperSignal } : {}),
+            ...(native.value.signal !== null ? { executionSignal: native.value.signal } : {}),
+          } : {}
+          const processCleanup = processCleanupSchema.parse(await node.scope.requestStop('normal-leader-exit'))
           settled = true
           const resourceRefusal = node.resourceRefusal()
           if (resourceRefusal?.reason === 'deadline-exhausted') terminationReason = 'timeout'
@@ -1583,12 +1746,29 @@ export async function runTerminalCommand({
           stdout = appendCapped(stdout, stdoutTail)
           stderr = appendCapped(stderr, stderrTail)
           if (terminationReason === 'abort') {
-            await outputSpool?.discard()
-            resolve(refused(resourceRefusal ?? refusalForSignal(resourceSignal)))
+            // Cancellation keeps what the command printed, like a timeout.
+            const output = refused(resourceRefusal ?? refusalForSignal(resourceSignal))[0]
+            const partialStdout = truncateStringWithMessage({ str: stripColors(stdout), maxLength: COMMAND_OUTPUT_LIMIT, remove: 'MIDDLE' })
+            const partialStderr = truncateStringWithMessage({ str: stripColors(stderr), maxLength: COMMAND_OUTPUT_LIMIT, remove: 'MIDDLE' })
+            const partialLogFields = outputSpool
+              ? await outputSpool.finish({ command, startingCwd: spawnCwd, ...(exitCode !== null ? { exitCode } : {}) })
+              : spoolError ? {
+                logPersisted: false as const,
+                logError: 'Full command output could not be saved; only the bounded inline output remains.',
+              } : {}
+            resolve([{ ...output, value: { ...output.value, startingCwd: spawnCwd, processCleanup, ...nativeFields,
+              ...partialLogFields, stdout: partialStdout, ...(partialStderr ? { stderr: partialStderr } : {}),
+              ...idleFields(), ...(exitCode !== null ? { exitCode } : {}) } }])
             return
           }
 
           const observation = node.observation()
+          if (native && !native.ok) {
+            await outputSpool?.discard()
+            const output = refused(native)[0]
+            resolve([{ ...output, value: { ...output.value, processCleanup } }])
+            return
+          }
           if (!observation.ok) {
             await outputSpool?.discard()
             resolve(refused(observation))
@@ -1628,10 +1808,17 @@ export async function runTerminalCommand({
                 type: 'json',
                 value: {
                   command,
-                  errorMessage: 'Command resource deadline exhausted',
+                  errorMessage: defaultTimeoutFired
+                    ? `Command timed out after the default ${Math.round(timeout.defaultExecutionMs! / 1000)} s SYNC timeout ` +
+                      `(timeout_seconds was omitted). Pass a larger timeout_seconds for long builds or tests, or use BACKGROUND.`
+                    : 'Command resource deadline exhausted',
                   timedOut: true,
-                  executionRefusal: executionRefusal('deadline-exhausted', 'Command resource deadline exhausted'),
+                  executionRefusal: executionRefusal('deadline-exhausted', defaultTimeoutFired
+                    ? 'Default SYNC command timeout exhausted' : 'Command resource deadline exhausted'),
                   startingCwd: spawnCwd,
+                  processCleanup,
+                  ...nativeFields,
+                  ...idleFields(),
                   ...fullLogFields,
                   stdout: truncatedStdout,
                   ...(truncatedStderr ? { stderr: truncatedStderr } : {}),
@@ -1645,6 +1832,15 @@ export async function runTerminalCommand({
           const combinedOutput = {
             command,
             startingCwd: spawnCwd,
+            processCleanup,
+            ...nativeFields,
+            ...(native?.ok && native.value.signal !== null ? { errorMessage: `Command terminated by signal ${native.value.signal}` } : {}),
+            ...(resourceRefusal?.reason === 'unavailable' ? { errorMessage: resourceRefusal.cause } : {}),
+            ...(outputLimitExceeded ? { errorMessage: 'Command exceeded the retained output quota' } : {}),
+            ...(processCleanup.status !== 'complete' ? {
+              errorMessage: 'Command exited but covered process cleanup remains unconfirmed',
+            } : {}),
+            ...idleFields(),
             ...fullLogFields,
             stdout: truncatedStdout,
             ...(truncatedStderr ? { stderr: truncatedStderr } : {}),
@@ -1656,7 +1852,10 @@ export async function runTerminalCommand({
 
         // Handle spawn errors
         childProcess.on('error', async (error) => {
-          if (settled) return
+          if (completing) return
+          completing = true
+          stopWatchdogs()
+          const processCleanup = processCleanupSchema.parse(await node.scope.requestStop('adapter-error'))
           settled = true
 
           cancelTimer?.()
@@ -1666,7 +1865,7 @@ export async function runTerminalCommand({
           const refusal = node.resourceRefusal() ?? (resourceSignal.aborted ? refusalForSignal(resourceSignal)
             : !observation.ok ? observation : executionRefusal('unavailable', error.message))
           let fullLogFields = {}
-          if (refusal.reason === 'deadline-exhausted') {
+          if (refusal.reason === 'deadline-exhausted' || refusal.reason === 'cancelled') {
             const stdoutTail = stdoutDecoder.end()
             const stderrTail = stderrDecoder.end()
             spoolChunk('stdout', stdoutTail)
@@ -1696,6 +1895,8 @@ export async function runTerminalCommand({
                 ...(node.facts().profile.active === null ? { spawnFailed: true } : {}),
                 ...(refusal.reason === 'deadline-exhausted' ? { timedOut: true } : {}),
                 startingCwd: spawnCwd,
+                processCleanup,
+                ...idleFields(),
                 ...fullLogFields,
                 stdout: truncatedStdout,
                 ...(truncatedStderr ? { stderr: truncatedStderr } : {}),

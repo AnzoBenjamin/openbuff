@@ -41,8 +41,15 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'context',
     label: 'context',
-    description: 'Show per-turn context token budget breakdown',
+    description:
+      'Show the context token budget and the instruction files in effect',
     aliases: ['ctx'],
+  },
+  {
+    id: 'compact',
+    label: 'compact',
+    description:
+      'Summarize the conversation to free context; /compact [focus] keeps that focus',
   },
   {
     id: 'doctor',

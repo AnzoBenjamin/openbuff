@@ -34,6 +34,15 @@ import {
   sumFiniteCosts,
 } from './statistics'
 import { analyzeAgentTraces, type AgentTraceData } from './trace-analyzer'
+import {
+  aggregateQualityMetrics,
+  computeRunQualityMetrics,
+  formatQualityMetricsTable,
+} from './quality-metrics'
+import {
+  computeStaticPromptTokens,
+  type StaticPromptDefinition,
+} from './static-prompt-tokens'
 import { logger } from '../logger'
 import { analyzeAllTasks } from './meta-analyzer'
 
@@ -429,6 +438,7 @@ async function runTaskWithEnvironment(options: {
         finalCheckOutputs: agentResult.finalCheckOutputs,
         cacheRecallEval: agentResult.cacheRecallEval,
         retrievalFlow: agentResult.retrievalFlow,
+        qualityMetrics: computeRunQualityMetrics(agentResult.trace),
         idiomTraceability,
         thinkerHarvest,
         proposalDryRun,
@@ -1174,6 +1184,26 @@ async function runBuffBenchWithEnvironment(options: {
       agentData.costComplete && agentData.averageCost > 0
         ? agentData.averageScore / agentData.averageCost
         : undefined
+
+    // N10: per-model edit-commit / tool error / LSP call rates and the
+    // agent definition's static prompt tokens.
+    const definition = loadedAgents[agentData.agentId] as
+      | StaticPromptDefinition
+      | undefined
+    const staticPromptTokens = definition
+      ? await computeStaticPromptTokens(definition)
+          .then((tokens) => tokens.total)
+          .catch(() => undefined)
+      : undefined
+    agentData.qualityMetrics = aggregateQualityMetrics(
+      agentData.runs.map((run) => run.qualityMetrics),
+      {
+        model:
+          definition?.model ??
+          agentData.runs.find((run) => run.providerRoute)?.providerRoute,
+        staticPromptTokens,
+      },
+    )
   }
 
   const metaRecorder = recordEvaluatorModelAttempts(
@@ -1339,6 +1369,14 @@ async function runBuffBenchWithEnvironment(options: {
   }
 
   console.log(`Traces saved to ${logsDir}`)
+  console.log('\n=== Harness quality (per model) ===')
+  console.log(
+    formatQualityMetricsTable(
+      Object.fromEntries(
+        Object.entries(results).map(([id, data]) => [id, data.qualityMetrics]),
+      ),
+    ),
+  )
   console.log('\n=== Summary ===')
   for (const [agentId, data] of Object.entries(results)) {
     const { validRuns, measuredRuns } = summarizeAgentRuns(data)

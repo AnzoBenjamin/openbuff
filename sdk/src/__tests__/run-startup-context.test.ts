@@ -285,7 +285,8 @@ describe('SDK optional workspace cwd and captured startup context', () => {
     test.each([false, true])(`deferred ${dependency} initialization retains captured skills and metadata on continued=%s`, async continued => {
       const f = fixture()
       await withAmbient(f, f.root, async changeCwd => {
-        const client = new OpenbuffClient({ ...f.options, projectFiles: {}, knowledgeFiles: {} })
+        // N02: project skills load only for a trusted project.
+        const client = new OpenbuffClient({ ...f.options, projectFiles: {}, knowledgeFiles: {}, trustProjectConfig: true })
         const previous = continued ? await client.run({ agent: program, prompt: 'observe-startup', signal: f.stop.signal }) : undefined
         if (previous) completed(previous)
         const capturedRoot = continued ? f.peer : f.root

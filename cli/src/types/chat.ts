@@ -348,6 +348,14 @@ export type CompactionContentBlock = {
    * uncorrelated events.
    */
   runId?: string
+  /**
+   * Set on a 'declined' block when the runtime reported that the announced
+   * pass did not run ('skipped', e.g. the agent does not declare
+   * context-pruner) or threw ('failed'); `reason` then explains why
+   * (memory-context-06). Absent for a pass that ran and reclaimed nothing,
+   * and on blocks from older CLIs.
+   */
+  passOutcome?: 'skipped' | 'failed'
   action: 'semantic_compaction' | 'mechanical_trim'
   beforeTokens: number
   afterTokens: number
@@ -542,6 +550,8 @@ export type ContextContentBlock = {
   type: 'context'
   ledgerText: string | null
   gateBudgetsText: string
+  /** N08: the instruction files in effect; absent when there are none. */
+  instructionFilesText?: string
 }
 
 export type InfoContentBlock = {

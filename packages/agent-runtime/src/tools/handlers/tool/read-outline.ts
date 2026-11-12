@@ -1,5 +1,7 @@
 import { resolveProjectPathForRead } from '@codebuff/common/util/project-path-containment'
 import { jsonToolResult } from '@codebuff/common/util/messages'
+import { getAllFilePaths } from '@codebuff/common/project-file-tree'
+import { rankNearPaths } from '@codebuff/common/util/path-suggestions'
 
 import {
   getFileStructure,
@@ -53,6 +55,7 @@ export const handleReadOutline = (async (params: {
       output: jsonToolResult({
         path,
         outline: 'Error: File does not exist.',
+        errorMessage: 'File does not exist inside the project.',
       }),
     }
   }
@@ -70,10 +73,19 @@ export const handleReadOutline = (async (params: {
     }
   }
   if (rawContent === null) {
+    // The legacy `outline` text stays for existing renderers; the failure is
+    // also reported in the schema's `errorMessage`, with near-match paths
+    // from the project file tree (read-search-12).
+    const candidates = nearMatchPaths(path, fileContext)
     return {
       output: jsonToolResult({
         path,
         outline: 'Error: File does not exist.',
+        errorMessage:
+          candidates.length > 0
+            ? `File does not exist. Did you mean: ${candidates.join(', ')}?`
+            : 'File does not exist.',
+        ...(candidates.length > 0 ? { candidates } : {}),
       }),
     }
   }
@@ -108,6 +120,22 @@ export const handleReadOutline = (async (params: {
     }),
   }
 }) satisfies CodebuffToolHandlerFunction<ToolName>
+
+function nearMatchPaths(
+  requestedPath: string,
+  fileContext: { fileTree?: unknown } | undefined,
+): string[] {
+  try {
+    const tree = fileContext?.fileTree
+    if (!Array.isArray(tree) || tree.length === 0) return []
+    return rankNearPaths(
+      requestedPath,
+      getAllFilePaths(tree).map((entry) => entry.split('\\').join('/')),
+    )
+  } catch {
+    return []
+  }
+}
 
 function isMarkdownPath(path: string): boolean {
   return /\.(md|mdx|markdown)$/i.test(path)

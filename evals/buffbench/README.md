@@ -186,7 +186,7 @@ npm install -g @openai/codex
 evals/buffbench/
 ├── run-buffbench.ts          # Main orchestrator
 ├── main.ts                   # Example usage
-├── main-nightly.ts           # Nightly evaluation runner with email reporting
+├── main-nightly.ts           # Gated nightly / PR-subset runner (base2)
 ├── main-single-eval.ts       # Single evaluation runner
 │
 ├── agent-runner.ts           # Executes agents in test repos
@@ -240,7 +240,7 @@ bun run evals/buffbench/main.ts
 # Run single evaluation
 bun run evals/buffbench/main-single-eval.ts
 
-# Run nightly evaluation with email reporting
+# Run the gated nightly set (or --subset pr, --tasks a,b, --dry-run)
 bun run evals/buffbench/main-nightly.ts
 ```
 
@@ -373,12 +373,17 @@ Run validation commands after agent execution:
 
 ### Nightly Evaluations
 
-Run automated nightly evaluations with email reporting:
-
-The nightly evaluation runner automatically sends email reports with results.
+`.github/workflows/nightly-evals.yml` runs `base2` on the nightly set,
+uploads `FINAL_RESULTS.json` as the `buffbench-nightly-results` artifact and
+runs `regression-gate.ts` against the last green scheduled run. The job fails
+when an agent's score, errored runs, edit-commit rate, tool error rate or
+static prompt tokens move past the noise band (`DEFAULT_NOISE_BAND`).
+`.github/workflows/eval-pr-subset.yml` does the same for a three-task subset
+on PRs that touch `agents/`, `common/src/tools/params/` or system prompts.
 
 ```bash
-bun run evals/buffbench/main-nightly.ts
+bun run evals/buffbench/main-nightly.ts --dry-run
+bun run evals/buffbench/regression-gate.ts --current <run> --baseline <last-green>
 ```
 
 ## Output Files

@@ -43,6 +43,12 @@ export const ContextBox = memo(({ block }: ContextBoxProps) => {
     block.gateBudgetsText && block.gateBudgetsText.trim().length > 0
       ? block.gateBudgetsText.split('\n')
       : []
+  const instructionLines =
+    block.instructionFilesText && block.instructionFilesText.trim().length > 0
+      ? block.instructionFilesText
+          .split('\n')
+          .filter((line) => line !== 'Instruction files')
+      : []
 
   return (
     <HarnessBox tone="secondary" title="Context" gap={1} paddingBottom={1}>
@@ -120,6 +126,27 @@ export const ContextBox = memo(({ block }: ContextBoxProps) => {
                 </text>
               )
             }}
+          />
+        </box>
+      ) : null}
+      {instructionLines.length > 0 ? (
+        <box style={{ flexDirection: 'column', gap: 0 }}>
+          <text style={{ wrapMode: 'word', fg: theme.secondary }}>
+            Instruction files
+          </text>
+          <InlineResults
+            scope="instructions"
+            items={instructionLines}
+            previewCount={8}
+            noun="instruction file"
+            renderItem={(line, idx) => (
+              <text
+                key={`instruction-${idx}`}
+                style={{ wrapMode: 'word', fg: theme.foreground }}
+              >
+                {line.length > 0 ? clipEvidenceLine(line, 120) : ' '}
+              </text>
+            )}
           />
         </box>
       ) : null}

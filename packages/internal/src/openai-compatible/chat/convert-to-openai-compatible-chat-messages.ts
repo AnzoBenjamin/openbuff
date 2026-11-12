@@ -31,6 +31,18 @@ export function convertToOpenAICompatibleChatMessages(
         ) {
           break
         }
+        // Prompt-cache breakpoints (OpenRouter → Anthropic) are honoured on
+        // content parts, not on the message, so a system message carrying
+        // `cache_control` is sent as a single text part that holds it.
+        const { cache_control: cacheControl, ...messageMetadata } = metadata
+        if (cacheControl !== undefined && typeof content === 'string') {
+          messages.push({
+            role: 'system',
+            content: [{ type: 'text', text: content, cache_control: cacheControl }],
+            ...messageMetadata,
+          })
+          break
+        }
         messages.push({ role: 'system', content, ...metadata })
         break
       }

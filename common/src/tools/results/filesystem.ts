@@ -86,6 +86,11 @@ export const filesystemErrorSchema = z.object({
       'split_transaction',
     ])
     .optional(),
+  /**
+   * Up to 3 existing, readable project paths that nearly match a missing
+   * path (`not_found` only). Suggestions only; never read automatically.
+   */
+  candidates: z.array(z.string()).max(3).optional(),
 })
 
 export const toolLifecycleStateV1Schema = z.enum([

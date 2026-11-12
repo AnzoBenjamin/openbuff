@@ -500,6 +500,76 @@ describe('createLspMultiplexer', () => {
     await mux.dispose()
   })
 
+  // N04 / language-intel-07: a missing server binary is `not-installed`
+  // (with the install hint), never a 'crashed' error, and is not respawned.
+  test('a missing server binary rejects with not-installed and is negatively cached', async () => {
+    let spawned = 0
+    const mux = createLspMultiplexer({
+      spawner: () => {
+        spawned++
+        const errorListeners: Array<(error: unknown) => void> = []
+        const child: LspChildHandle = {
+          stdin: { write() {}, end() {} },
+          stdout: { on() {} },
+          on(event: 'exit' | 'error', listener: (...args: never[]) => void) {
+            if (event === 'error') errorListeners.push(listener as (error: unknown) => void)
+          },
+          kill() {},
+        }
+        queueMicrotask(() => {
+          const error = Object.assign(
+            new Error('Executable not found in $PATH: "typescript-language-server"'),
+            { code: 'ENOENT' },
+          )
+          for (const listener of errorListeners) listener(error)
+        })
+        return child
+      },
+    })
+    const first = await mux
+      .definition({ filePath: '/proj/a.ts', position: { line: 0, character: 0 } })
+      .then(() => undefined, (error: unknown) => error)
+    expect(first).toBeInstanceOf(LspServerUnavailableError)
+    expect(first).not.toBeInstanceOf(LspServerError)
+    const typed = first as LspServerUnavailableError
+    expect(typed.reason).toBe('not-installed')
+    expect(typed.command).toBe('typescript-language-server')
+    expect(typed.languageId).toBe('typescript')
+    expect(typed.install).toContain('typescript-language-server')
+
+    const second = await mux
+      .hover({ filePath: '/proj/b.ts', position: { line: 0, character: 0 } })
+      .then(() => undefined, (error: unknown) => error)
+    expect((second as LspServerUnavailableError).reason).toBe('not-installed')
+    expect(spawned).toBe(1)
+    await mux.dispose()
+  })
+
+  test('a warm server answering null for workspace/symbol is an empty answer, and a rejection is typed unavailable', async () => {
+    let symbolMode: 'null' | 'error' = 'null'
+    const mux = createLspMultiplexer({
+      spawner: () =>
+        makePeer((message) => {
+          const id = message.id as number
+          if (message.method === 'workspace/symbol') {
+            return symbolMode === 'null'
+              ? { jsonrpc: '2.0', id, result: null }
+              : { jsonrpc: '2.0', id, error: { code: -32601, message: 'Unhandled method workspace/symbol' } }
+          }
+          return defaultBehavior(message)
+        }).child,
+    })
+    await mux.definition({ filePath: '/proj/a.ts', position: { line: 0, character: 0 } })
+    expect(await mux.workspaceSymbol('foo')).toEqual([])
+    symbolMode = 'error'
+    const rejected = await mux
+      .workspaceSymbol('foo')
+      .then(() => undefined, (error: unknown) => error)
+    expect(rejected).toBeInstanceOf(LspServerUnavailableError)
+    expect((rejected as LspServerUnavailableError).reason).toBe('workspace-symbol-unsupported')
+    await mux.dispose()
+  })
+
   test('workspaceSymbol with no warm server returns null without spawning', async () => {
     let spawned = 0
     const mux = createLspMultiplexer({

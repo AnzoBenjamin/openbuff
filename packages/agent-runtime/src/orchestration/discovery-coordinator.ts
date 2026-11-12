@@ -623,6 +623,48 @@ export function evaluateMemoryCover(params: {
   workspaceSnapshotId?: string
   indexSnapshotId?: string
   existingIndexSnapshotId?: string
+  /**
+   * The caller answers an "all X" question (glob, list_directory,
+   * code_search, find_files_matching_content). A handful of memory excerpts
+   * can never prove that every match is known, and the prefix check below
+   * never matches the pattern against the served paths. For these callers
+   * the result is always `full`; any covering excerpts are returned only as
+   * hints (reason `exhaustive-tool`) and must not replace the real call.
+   */
+  exhaustive?: boolean
+}): MemoryCoverEvaluation {
+  const evaluation = evaluateMemoryCoverInner(params)
+  if (params.exhaustive === true && evaluation.decision !== 'full') {
+    return {
+      decision: 'full',
+      coveringExcerpts: evaluation.coveringExcerpts,
+      remainingGaps: [],
+      reason: 'exhaustive-tool',
+    }
+  }
+  return evaluation
+}
+
+/**
+ * Tools whose result claims to enumerate every match. Memory must never
+ * short-circuit them (read-search-01).
+ */
+export const EXHAUSTIVE_DISCOVERY_TOOLS: ReadonlySet<string> = new Set([
+  'glob',
+  'list_directory',
+  'code_search',
+  'find_files_matching_content',
+])
+
+function evaluateMemoryCoverInner(params: {
+  excerpts?: VerifiedExcerpt[] | null
+  pathPrefixes?: string[] | null
+  query?: string | null
+  unresolvedGaps?: string[] | null
+  workspaceRevision?: number
+  workspaceSnapshotId?: string
+  indexSnapshotId?: string
+  existingIndexSnapshotId?: string
 }): MemoryCoverEvaluation {
   try {
     if (

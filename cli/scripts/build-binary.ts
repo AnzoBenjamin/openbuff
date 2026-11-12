@@ -649,10 +649,6 @@ async function main() {
       .digest('hex')
     copiedGrammarCount++
   }
-  writeFileSync(
-    join(binDir, 'tree-sitter-manifest.json'),
-    `${JSON.stringify({ schemaVersion: 1, files: wasmManifest }, null, 2)}\n`,
-  )
   logAlways(`Copied ${copiedGrammarCount} tree-sitter language grammars`)
 
   // Ship the tree-sitter tag-query files as siblings next to the binary, in a
@@ -670,15 +666,29 @@ async function main() {
   const queriesDestDir = join(binDir, 'tree-sitter-queries')
   mkdirSync(queriesDestDir, { recursive: true })
   let copiedQueryCount = 0
-  for (const queryFile of readdirSync(queriesSourceDir)) {
+  const queryManifest: Record<string, string> = {}
+  for (const queryFile of readdirSync(queriesSourceDir).sort()) {
     if (!queryFile.endsWith('.scm')) continue
     copyFileSync(
       join(queriesSourceDir, queryFile),
       join(queriesDestDir, queryFile),
     )
+    queryManifest[queryFile] = createHash('sha256')
+      .update(readFileSync(join(queriesDestDir, queryFile)))
+      .digest('hex')
     copiedQueryCount++
   }
+  if (copiedQueryCount === 0) {
+    throw new Error(`No tree-sitter tag queries found in ${queriesSourceDir}`)
+  }
   logAlways(`Copied ${copiedQueryCount} tree-sitter tag queries`)
+
+  // `queries` lists the tag queries (N09) so the npm wrapper can verify and
+  // repair them; older wrappers read only `files` and ignore it.
+  writeFileSync(
+    join(binDir, 'tree-sitter-manifest.json'),
+    `${JSON.stringify({ schemaVersion: 1, files: wasmManifest, queries: queryManifest }, null, 2)}\n`,
+  )
 
   if (targetInfo.platform !== 'win32') {
     chmodSync(outputFile, 0o755)

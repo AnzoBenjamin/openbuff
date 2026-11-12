@@ -49,7 +49,17 @@ export type ProviderContentPolicyError = Error & {
 /**
  * HTTP status codes that should trigger automatic retry
  */
-export const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504])
+export const RETRYABLE_STATUS_CODES = new Set([
+  408, 429, 500, 502, 503, 504, 529,
+])
+
+/**
+ * Anthropic's "overloaded" status. It also arrives as an SSE `error` event
+ * (`{ type: 'overloaded_error' }`) on a stream that already returned 200;
+ * {@link getErrorStatusCode} maps that event to this status so retry and
+ * failover treat both forms the same way.
+ */
+export const PROVIDER_OVERLOADED_STATUS_CODE = 529
 
 // ============================================================================
 // Error Factory Functions
@@ -230,6 +240,7 @@ export function isRetryableStatusCode(statusCode: number | undefined): boolean {
  * Checks both 'statusCode' (our convention) and 'status' (AI SDK's APICallError convention).
  */
 export function getErrorStatusCode(error: unknown): number | undefined {
+  let overloaded = false
   for (const value of providerErrorChain(error)) {
     for (const status of [value.statusCode, value.status]) {
       if (
@@ -241,8 +252,10 @@ export function getErrorStatusCode(error: unknown): number | undefined {
         return status
       }
     }
+    if (value.type === 'overloaded_error') overloaded = true
   }
-  return undefined
+  // An SSE `overloaded_error` event carries no HTTP status of its own.
+  return overloaded ? PROVIDER_OVERLOADED_STATUS_CODE : undefined
 }
 
 /**

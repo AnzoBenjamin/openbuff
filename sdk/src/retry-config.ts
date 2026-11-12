@@ -49,6 +49,21 @@ export const RETRY_BACKOFF_BASE_DELAY_MS = 1000
 export const RETRY_BACKOFF_MAX_DELAY_MS = 8000
 
 /**
+ * Maximum server-requested wait (`Retry-After`) honoured for one retry.
+ * Tier-limited Anthropic and OpenAI keys commonly ask for 30–60 s; retrying
+ * after the 8 s backoff cap only burns attempts. Longer hints are clamped to
+ * this value. The wait is aborted by the run signal, so it never outlives the
+ * run deadline.
+ */
+export const RETRY_AFTER_MAX_DELAY_MS = 120_000
+
+/**
+ * Total backoff wait allowed for one request across all its retries and
+ * failover routes. Bounds a chain of long `Retry-After` waits.
+ */
+export const RETRY_MAX_TOTAL_DELAY_MS = 180_000
+
+/**
  * Jitter multiplier range applied to backoff delays (±20%).
  *
  * Each computed delay is multiplied by a random factor in
@@ -185,6 +200,8 @@ export const RETRY_POLICY = {
   baseDelayMs: RETRY_BACKOFF_BASE_DELAY_MS,
   maxDelayMs: RETRY_BACKOFF_MAX_DELAY_MS,
   jitterFraction: RETRY_BACKOFF_JITTER_FRACTION,
+  retryAfterMaxDelayMs: RETRY_AFTER_MAX_DELAY_MS,
+  maxTotalDelayMs: RETRY_MAX_TOTAL_DELAY_MS,
 } as const
 
 export type RetryPolicy = {
@@ -196,6 +213,8 @@ export type RetryPolicy = {
   maxTotalAttempts?: number
   retryAfterMaxDelayMs?: number
   maxTotalDelayMs?: number
+  /** Clock for HTTP-date `Retry-After` values. Defaults to `Date.now`. */
+  now?: () => number
 }
 
 /** Internal execution seam shared by streaming and nonstreaming requests. */
@@ -519,6 +538,7 @@ export function classifyRetryableError(
     if (header !== undefined) {
       const delayMs = parseRetryAfterMs({
         header,
+        now: policy.now?.(),
         maxDelayMs: policy.retryAfterMaxDelayMs ?? policy.maxDelayMs,
       })
       if (delayMs !== undefined) return { retryable: true, delayMs }

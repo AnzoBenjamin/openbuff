@@ -1669,6 +1669,7 @@ const findLastPendingCompactionIndex = (
 const declinePendingCompactionBlocks = (
   blocks: ContentBlock[],
   runId: string,
+  outcome?: { passOutcome: 'skipped' | 'failed'; reason?: string },
 ): ContentBlock[] => {
   let changed = false
   const next: ContentBlock[] = []
@@ -1686,7 +1687,16 @@ const declinePendingCompactionBlocks = (
     changed = true
     // The live stamp is meaningless once the pass is terminal.
     const { liveSessionId: _liveSessionId, ...rest } = block
-    const declined: CompactionContentBlock = { ...rest, status: 'declined' }
+    const declined: CompactionContentBlock = {
+      ...rest,
+      status: 'declined',
+      // A skipped or failed pass says so, with the runtime's reason, instead
+      // of reading as "nothing reclaimed" (memory-context-06).
+      ...(outcome && {
+        passOutcome: outcome.passOutcome,
+        ...(outcome.reason && { reason: outcome.reason }),
+      }),
+    }
     const previous = next[next.length - 1]
     if (
       previous &&
@@ -1844,8 +1854,17 @@ const handleContextCompactionStatus = (
     return
   }
 
+  const settledOutcome =
+    event.outcome === 'skipped' || event.outcome === 'failed'
+      ? {
+          passOutcome: event.outcome,
+          ...(typeof event.reason === 'string' && event.reason.trim()
+            ? { reason: event.reason.trim().slice(0, 400) }
+            : {}),
+        }
+      : undefined
   state.message.updater.updateAiMessageBlocks((blocks) =>
-    declinePendingCompactionBlocks(blocks, event.runId),
+    declinePendingCompactionBlocks(blocks, event.runId, settledOutcome),
   )
   state.streaming.setCompactionNotice((previous) => {
     if (!previous) return null
@@ -1981,7 +2000,7 @@ const handleContextRequestTrim = (
     reductionPercent,
     retainedKnowledgeMemory: false,
     recovery:
-      'The runtime compaction brakes were exceeded: reduce pinned state (fewer keepDuringTruncation blocks, or /compact) or start a fresh turn.',
+      'The runtime compaction brakes were exceeded: run /compact [focus] to summarize the conversation, reduce pinned state (fewer keepDuringTruncation blocks), or start a fresh turn.',
     categoryDeltas: [],
     reason:
       'Request-time emergency brake: messages still exceeded the provider-safe request budget at dispatch time.',
@@ -2316,34 +2335,52 @@ const handleRuntimeError = (
   )
 }
 
+const PROVIDER_FAILOVER_COLOR = 'yellow'
+
+const describeProviderFailover = (
+  event: Extract<SDKEvent, { type: 'provider_status' }>,
+): string => {
+  const from = event.model ?? 'primary model'
+  const to = event.nextModel ?? 'backup model'
+  const status = event.statusCode !== undefined ? ` returned ${event.statusCode}` : ' failed'
+  const provider = event.providerId ? ` (${event.providerId})` : ''
+  const key = event.apiKeyEnv ? `; check ${event.apiKeyEnv}` : ''
+  const scope = event.degraded ? ' for the rest of this session (/provider resets it)' : ''
+  return `Provider failover: ${from}${provider}${status}${key}. Using ${to}${scope}.`
+}
+
 const handleProviderStatus = (
   state: EventHandlerState,
   event: Extract<SDKEvent, { type: 'provider_status' }>,
 ) => {
   state.setIsRetrying(event.status !== 'recovered')
+  const failover = event.status === 'failover'
   const content =
     event.status === 'retrying'
       ? `Provider request failed; retrying${event.attempt ? ` (attempt ${event.attempt}/${event.maxAttempts})` : ''}${event.delayMs ? ` in ${(event.delayMs / 1000).toFixed(1)}s` : ''}.`
-      : event.status === 'failover'
-        ? `Provider failover: ${event.model ?? 'primary model'} → ${event.nextModel ?? 'backup model'}.`
+      : failover
+        ? describeProviderFailover(event)
         : `Provider connection recovered${event.model ? ` on ${event.model}` : ''}.`
   // Transient connection status is NOT assistant prose: it renders as a muted
   // status line (textType 'status', color honored by the text renderers) and
-  // COALESCES — each event replaces the previous status block, so a retry
-  // storm shows one line instead of one per attempt. The final line stays as
-  // a quiet record that a retry happened at all.
+  // COALESCES — each event replaces the previous transient status block, so a
+  // retry storm shows one line instead of one per attempt. The final line
+  // stays as a quiet record that a retry happened at all. A failover notice
+  // is different (N07): traffic and billing moved to another model, so it is
+  // a persistent warning line that later status events never replace.
   state.message.updater.updateAiMessageBlocks((blocks) => [
     ...blocks.filter(
       (block) =>
         !(
           block.type === 'text' &&
-          (block as { textType?: string }).textType === 'status'
+          (block as { textType?: string }).textType === 'status' &&
+          (block as { color?: string }).color !== PROVIDER_FAILOVER_COLOR
         ),
     ),
     {
       type: 'text' as const,
       textType: 'status' as const,
-      color: 'muted',
+      color: failover ? PROVIDER_FAILOVER_COLOR : 'muted',
       content,
     },
   ])

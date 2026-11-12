@@ -61,8 +61,8 @@ Runtime agent restrictions keep real security boundaries while removing over-str
 - Project-path containment for reads/writes/spawned work
 - `cap.v4` HMAC signing with project/path/run scope and exact raw basis binding
 - `replace_range` authority chain (authenticated capability, not prose hashes)
-- Plan-only terminal attenuation (descendants stay on the read-only terminal profile) — currently overridden by the global full-access terminal profile, so it is no longer effective in the bundled runtime
-- Privilege-escalation, system-package, and env-dump bans (these apply to the non-full-access policy profiles, still enforced for SDK hosts and the high-impact approval gate, not to bundled agents now on full-access)
+- Plan mode is read-only at dispatch: plan-lineage tool calls to mutating tools fail with `plan_mode_read_only`, descendants run terminal commands under the enforced `read-only` profile, and plan templates spawn only agents without mutating tools (`common/src/tools/plan-mode-policy.ts`)
+- Privilege-escalation, system-package, and env-dump bans (these apply to the non-full-access policy profiles; bundled agents that declare `read-only` or `workspace-write` now run under them, agents with no declared profile stay on full-access)
 - Force/delete/default-branch push gating
 - Large-file scoped `basedOnRead` hard-fail when the anchor is required and invalid
 - `str_replace` circuit-breaker non-draining success (limit 5)

@@ -193,6 +193,61 @@ describe('language-intelligence service', () => {
     expect(firstValue(output).hover).toEqual({ contents: 'const foo: number' })
   })
 
+  // N04 / language-intel-02: a cold workspace_symbol is `unavailable`, not
+  // an empty success that reads as "the symbol does not exist".
+  test('workspace_symbol with no warm server returns unavailable with a next step', async () => {
+    const service = createLanguageIntelligence({
+      cwd: CWD,
+      multiplexer: makeMultiplexer({ workspaceSymbol: async () => null }),
+    })
+    const value = firstValue(await service.workspaceSymbol({ query: 'createUser' }))
+    expect(value.symbols).toBeUndefined()
+    expect(value.unavailable).toMatchObject({
+      reason: 'no-warm-server',
+      status: 'unavailable',
+    })
+    expect(value.unavailable.nextStep).toContain('go_to_definition')
+  })
+
+  test('workspace_symbol keeps a real empty answer as symbols: []', async () => {
+    const service = createLanguageIntelligence({
+      cwd: CWD,
+      multiplexer: makeMultiplexer({ workspaceSymbol: async () => [] }),
+    })
+    const value = firstValue(await service.workspaceSymbol({ query: 'nothing' }))
+    expect(value).toEqual({ symbols: [] })
+  })
+
+  // N04 / language-intel-07: a missing binary is `not_installed` with the
+  // install hint, never an errorMessage that reads as a crash.
+  test('a missing server binary returns not_installed with an install hint', async () => {
+    const service = createLanguageIntelligence({
+      cwd: CWD,
+      multiplexer: makeMultiplexer({
+        definition: async () => {
+          throw new LspServerUnavailableError('not installed', {
+            reason: 'not-installed',
+            languageId: 'typescript',
+            command: 'typescript-language-server',
+            install: 'npm install -g typescript-language-server typescript',
+          })
+        },
+      }),
+    })
+    const value = firstValue(
+      await service.goToDefinition({ path: 'src/foo.ts', line: 1, character: 0 }),
+    )
+    expect(value.errorMessage).toBeUndefined()
+    expect(value.unavailable).toMatchObject({
+      reason: 'not-installed',
+      status: 'not_installed',
+      languageId: 'typescript',
+      command: 'typescript-language-server',
+      install: 'npm install -g typescript-language-server typescript',
+    })
+    expect(value.unavailable.nextStep).toContain('npm install -g typescript-language-server')
+  })
+
   test('workspace_symbol returns structured symbols with location paths', async () => {
     const service = createLanguageIntelligence({
       cwd: CWD,
@@ -1161,7 +1216,11 @@ describe('extract_symbol service (command resolution, destination gate, empty-ba
     // Fail-closed destination gate: an in-place refactor is NEVER applied
     // under a to-new-file tool name, and nothing was spliced or written.
     expect(firstValue(output)).toEqual({
-      unavailable: { reason: 'no new-file destination in the workspace edit' },
+      unavailable: {
+        reason: 'no new-file destination in the workspace edit',
+        status: 'unavailable',
+        nextStep: 'The language server cannot perform this refactor here. Make the change with the edit tools instead.',
+      },
     })
     expect(fsReadPaths(mockFs)).toEqual([])
   })
@@ -1179,7 +1238,11 @@ describe('extract_symbol service (command resolution, destination gate, empty-ba
       symbol_name: 'x',
     })
     expect(firstValue(output)).toEqual({
-      unavailable: { reason: 'no extract action available' },
+      unavailable: {
+        reason: 'no extract action available',
+        status: 'unavailable',
+        nextStep: 'The language server cannot perform this refactor here. Make the change with the edit tools instead.',
+      },
     })
   })
 
@@ -1233,7 +1296,12 @@ describe('extract_symbol service (command resolution, destination gate, empty-ba
       symbol_name: 'x',
     })
     expect(firstValue(output)).toEqual({
-      unavailable: { reason: 'no-server-spec', languageId: 'typescript' },
+      unavailable: {
+        reason: 'no-server-spec',
+        languageId: 'typescript',
+        status: 'unavailable',
+        nextStep: expect.stringContaining('No supported language server'),
+      },
     })
   })
 })

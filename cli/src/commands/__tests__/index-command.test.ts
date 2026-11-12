@@ -544,3 +544,65 @@ describe('/index scip', () => {
     expect(result).toContain('scip')
   })
 })
+
+describe('/index status tag-query degradation (N09)', () => {
+  const allMissing = {
+    total: 14,
+    available: [],
+    missing: [
+      'tree-sitter-typescript-tags.scm',
+      'tree-sitter-javascript-tags.scm',
+      'tree-sitter-python-tags.scm',
+      'tree-sitter-rust-tags.scm',
+    ],
+  }
+
+  test('says degraded when the tag queries are missing', async () => {
+    const { deps } = createDeps()
+    const result = await handleIndexCommand('status', {
+      ...deps,
+      getTagQueryStatus: () => ({ ...allMissing, total: 4 }),
+    })
+    expect(result).toContain('Index status: degraded.')
+    expect(result).toContain('degraded: no queries')
+    expect(result).toContain('all of 4 tree-sitter tag queries missing')
+    expect(result).toContain('tree-sitter-typescript-tags.scm')
+    expect(result).toContain('and 1 more')
+    // The manager's own message is kept below the degradation line.
+    expect(result).toContain('Index ready.')
+  })
+
+  test('block renderer and rebuild path report the same degradation', async () => {
+    const { deps } = createDeps()
+    const withMissing = { ...deps, getTagQueryStatus: () => allMissing }
+    const block = (await handleIndexCommandBlocks('status', withMissing)) as {
+      statusLine: string
+      messageLine: string
+    }
+    expect(block.statusLine).toBe('Index status: degraded.')
+    expect(block.messageLine).toContain('4 of 14 tree-sitter tag queries missing')
+
+    const rebuilt = await handleIndexCommand('rebuild', withMissing)
+    expect(rebuilt).toContain('Index status: degraded.')
+  })
+
+  test('stays ready when every query is available', async () => {
+    const { deps } = createDeps()
+    const result = await handleIndexCommand('status', {
+      ...deps,
+      getTagQueryStatus: () => ({
+        total: 1,
+        available: ['tree-sitter-typescript-tags.scm'],
+        missing: [],
+      }),
+    })
+    expect(result).toContain('Index status: ready.')
+    expect(result).not.toContain('no queries')
+  })
+
+  test('default seam finds the in-repo queries', async () => {
+    const { deps } = createDeps()
+    const result = await handleIndexCommand('status', deps)
+    expect(result).not.toContain('no queries')
+  })
+})

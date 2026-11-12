@@ -172,6 +172,7 @@ jobs:
             common,
             evals,
             packages/agent-runtime,
+            packages/code-map,
             packages/indexer,
             packages/internal,
             sdk,

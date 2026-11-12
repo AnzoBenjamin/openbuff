@@ -43,8 +43,6 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'browser_logs',
   'check_background_agent',
   'check_job',
-  'code_action',
-  'extract_symbol',
   'code_search',
   'create_plan',
   'end_turn',
@@ -52,7 +50,6 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'find_files_matching_content',
   'find_references',
   'git_status',
-  'git_branch',
   'go_to_definition',
   'get_task',
   'get_change_review_bundle',
@@ -65,7 +62,6 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'inspect_feature_completeness',
   'evaluate_audit_coverage',
   'glob',
-  'kill_job',
   'list_directory',
   'list_jobs',
   'lookup_agent_info',
@@ -80,17 +76,12 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'read_logs',
   'read_outline',
   'read_subtree',
-  'replace_range',
-  'rename_symbol',
-  'rewrite_symbol',
   'render_ui',
-  'run_file_change_hooks',
   'set_messages',
   'set_output',
   'skill',
   'spawn_agents',
   'spawn_agent_inline',
-  'str_replace',
   'suggest_followups',
   'task_completed',
   'think_deeply',
@@ -98,7 +89,8 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'update_subgoal',
   'web_search',
   'workspace_symbol',
-  'write_file',
+  // Plan artifact sink (runtime-derived .agents/sessions/*/findings path),
+  // allowed in plan mode like create_plan.
   'write_audit_findings',
 ] as const satisfies readonly AllToolNames[]
 
@@ -114,6 +106,19 @@ export const MODE_GATED_TOOL_NAMES = [
   'edit_3d_asset',
   'run_targeted_validation',
   'run_terminal_command',
+  // Plan mode is read-only (N03): every plan-refused tool from
+  // common/src/tools/plan-mode-policy.ts, plus kill_job (the plan root starts
+  // no jobs, and the runtime refuses killing jobs outside the plan lineage).
+  'code_action',
+  'extract_symbol',
+  'git_branch',
+  'kill_job',
+  'replace_range',
+  'rename_symbol',
+  'rewrite_symbol',
+  'run_file_change_hooks',
+  'str_replace',
+  'write_file',
 ] as const satisfies readonly AllToolNames[]
 
 const MODE_NEUTRAL_ALLOWED: ReadonlySet<AllToolNames> = new Set(
@@ -133,6 +138,17 @@ export function modeAllowsTool(name: AllToolNames, gates: ModeGates): boolean {
       return !gates.planOnly
     case 'run_terminal_command':
       return !gates.planOnly && gates.executePlan
+    case 'code_action':
+    case 'extract_symbol':
+    case 'git_branch':
+    case 'kill_job':
+    case 'replace_range':
+    case 'rename_symbol':
+    case 'rewrite_symbol':
+    case 'run_file_change_hooks':
+    case 'str_replace':
+    case 'write_file':
+      return !gates.planOnly
     // M1-T6 fail-closed default: only names with an explicit MODE_NEUTRAL
     // policy pass. An unlisted tool (e.g. a future ToolName added to common
     // without updating this policy) is denied in every mode.

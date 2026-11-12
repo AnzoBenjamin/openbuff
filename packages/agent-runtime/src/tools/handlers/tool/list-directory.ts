@@ -6,7 +6,6 @@ import {
   recordMemoryReuse,
 } from '../../../orchestration/discovery-coordinator'
 
-import type { VerifiedExcerpt } from '../../../orchestration/discovery-coordinator'
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import type {
@@ -20,24 +19,6 @@ type ToolName = 'list_directory'
 function buildDiscoveryQuestion(input: { path?: string }): string {
   const question = `list_directory:${input.path ?? ''}`
   return question.slice(0, 4000)
-}
-
-function buildSkipOutput(
-  covering: VerifiedExcerpt[],
-  requestedPath: string,
-): CodebuffToolOutput<ToolName> {
-  const bounded = covering.slice(0, 5)
-  const files = bounded.map((entry) => entry.path).slice(0, 5)
-  return [
-    {
-      type: 'json',
-      value: {
-        files,
-        directories: [],
-        path: requestedPath,
-      },
-    },
-  ] as unknown as CodebuffToolOutput<ToolName>
 }
 
 export const handleListDirectory = (async (params: {
@@ -81,60 +62,38 @@ export const handleListDirectory = (async (params: {
       // Coverage recording must never break the tool call.
     }
   }
-  // Memory-first check (best-effort, never breaks the call).
+  // Memory is accounting-only here. A directory listing must come from the
+  // filesystem: memory excerpts are nested file paths, not direct children,
+  // and never prove the listing is complete (read-search-01).
   try {
-    if (
-      agentState &&
-      typeof agentState === 'object' &&
-      input.offset === undefined &&
-      input.limit === undefined
-    ) {
+    if (agentState && typeof agentState === 'object') {
       const excerpts = getVerifiedMemoryExcerpts(agentState, {
         limit: 5,
         maxCharsPerExcerpt: 2_000,
       })
-      const pathPrefixes: string[] = []
-      if (typeof input.path === 'string' && input.path.length > 0) {
-        pathPrefixes.push(input.path)
-      }
       const cover = evaluateMemoryCover({
         excerpts,
-        pathPrefixes: pathPrefixes.length > 0 ? pathPrefixes : undefined,
+        pathPrefixes:
+          typeof input.path === 'string' && input.path.length > 0
+            ? [input.path]
+            : undefined,
         query: typeof input.path === 'string' ? input.path : '',
         unresolvedGaps: agentState.discoveryCoverage?.unresolvedGaps,
         workspaceRevision: agentState.workspaceState?.revision,
         workspaceSnapshotId: agentState.workspaceState?.snapshotId,
         existingIndexSnapshotId: agentState.discoveryCoverage?.indexSnapshotId,
+        exhaustive: true,
       })
-      const reuseSkip =
-        cover.decision === 'skip' && cover.coveringExcerpts.length > 0
       recordMemoryReuse(agentState, {
         tool: 'list_directory',
-        decision: reuseSkip ? 'skip' : 'full',
+        decision: 'full',
         reason: cover.reason,
-        served: reuseSkip ? cover.coveringExcerpts.length : 0,
+        served: 0,
         gaps: cover.remainingGaps.length,
-        coveredStableChunkIds: reuseSkip
-          ? cover.coveringExcerpts
-              .map((entry) => entry.chunkId)
-              .filter(
-                (id): id is string => typeof id === 'string' && id.length > 0,
-              )
-          : undefined,
       })
-      if (cover.decision === 'skip' && cover.coveringExcerpts.length > 0) {
-        const requestedPath =
-          typeof input.path === 'string' && input.path.length > 0
-            ? input.path
-            : '.'
-        const output = buildSkipOutput(cover.coveringExcerpts, requestedPath)
-        recordCoverage(output)
-        return { output }
-      }
-      // Narrow falls through to the full call: listing cannot be narrowed safely.
     }
   } catch {
-    // Fall through to the full call on any memory-check failure.
+    // Accounting failure never affects the call.
   }
   const output = await requestClientToolCall(
     toolCall as unknown as ClientToolCall<ToolName>,

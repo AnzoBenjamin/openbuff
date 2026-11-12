@@ -109,9 +109,14 @@ function hasReadableDiagnosticShape(source: object): boolean {
       )
     case 'context':
       return (
-        dataFields(source, ['ledgerText', 'gateBudgetsText']) &&
+        dataFields(source, [
+          'ledgerText',
+          'gateBudgetsText',
+          'instructionFilesText',
+        ]) &&
         (source.ledgerText === null || text(source.ledgerText)) &&
-        text(source.gateBudgetsText)
+        text(source.gateBudgetsText) &&
+        optionalText(source.instructionFilesText)
       )
     case 'info':
       return (
@@ -216,6 +221,9 @@ export function createCommandDiagnosticDocument(
         '',
         'Gate budgets',
         block.gateBudgetsText || 'Gate budgets not captured.',
+        ...(block.instructionFilesText
+          ? ['', block.instructionFilesText]
+          : []),
       ]
       break
     case 'info':

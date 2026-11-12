@@ -36,6 +36,7 @@ import {
   reconcileTaskMemoryEvidence,
 } from './services/task-memory-store'
 import { loadSkills } from './skills/load-skills'
+import { loadInstructionFiles } from './instruction-files'
 import { runGit } from './tools/git-status'
 
 // Re-export for SDK consumers
@@ -46,6 +47,7 @@ export {
 } from '@codebuff/common/constants/knowledge'
 
 import type { CustomToolDefinition } from './custom-tool'
+import type { LoadedInstructionFiles } from './instruction-files'
 import type { WorkspaceMoveRecord } from './services/task-memory-store'
 import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -63,6 +65,7 @@ import type {
 } from '@codebuff/common/types/session-state'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
+import type { CleanupResult } from '@codebuff/common/types/contracts/process-scope'
 import type {
   CustomToolDefinitions,
   FileTreeNode,
@@ -92,6 +95,8 @@ export type RunState = {
   runOutcome?: RunOutcome
   taskAcceptance?: TaskAcceptance
   actionOutcomes?: ActionOutcome[]
+  /** Physical root-owned cleanup observations, collected after logical completion. */
+  executionCleanup?: readonly CleanupResult[]
 }
 
 /** Project the runtime's three outcome levels onto the public SDK result. */
@@ -198,6 +203,11 @@ export type InitialSessionStateOptions = {
   homeDir?: string | null
   /** Include home skill directories. Defaults to true for standalone callers. */
   includeGlobalSkills?: boolean
+  /**
+   * Include project `.agents/skills` / `.claude/skills`. Defaults to true for
+   * standalone callers; `run()` passes its project trust decision (N02).
+   */
+  includeProjectSkills?: boolean
   /** Optional directory path to load skills from. When provided, skills are loaded from this directory instead of the default locations. */
   skillsDir?: string
   projectFiles?: Record<string, string>
@@ -707,52 +717,50 @@ export function selectKnowledgeFilePaths(allFilePaths: string[]): string[] {
 }
 
 /**
- * Auto-derives knowledge files from project files if knowledgeFiles is undefined.
- * Implements fallback priority: knowledge.md > AGENTS.md > CLAUDE.md per directory.
+ * Auto-derives instruction files from in-memory project files: every
+ * knowledge file per directory plus contained `@path` imports (N08).
  */
-function deriveKnowledgeFiles(
+async function deriveKnowledgeFiles(
   projectFiles: Record<string, string>,
-): Record<string, string> {
-  const allFilePaths = Object.keys(projectFiles)
-  const selectedFilePaths = selectKnowledgeFilePaths(allFilePaths)
-
-  const knowledgeFiles: Record<string, string> = {}
-  for (const filePath of selectedFilePaths) {
-    knowledgeFiles[filePath] = projectFiles[filePath]
-  }
-  return knowledgeFiles
+  logger: Logger,
+  cwd?: string,
+): Promise<LoadedInstructionFiles> {
+  const normalized = new Map(
+    Object.entries(projectFiles).map(([key, content]) => [
+      key.split(path.sep).join('/').replace(/^\.\//, ''),
+      content,
+    ]),
+  )
+  return loadInstructionFiles({
+    projectRoot: cwd ?? path.resolve('/'),
+    filePaths: [...normalized.keys()],
+    logger,
+    readVirtualFile: (relativePath) => normalized.get(relativePath),
+  })
 }
 
+/**
+ * Loads instruction files from disk: ancestors up to the git root, every
+ * knowledge file per project directory, and contained `@path` imports (N08).
+ */
 async function loadKnowledgeFilesFromPaths(params: {
   cwd: string
   filePaths: string[]
   fs: CodebuffFileSystem
   logger: Logger
-}): Promise<Record<string, string>> {
-  const { cwd, filePaths, fs, logger } = params
-  const selectedFilePaths = selectKnowledgeFilePaths(filePaths)
-
-  const knowledgeFiles: Record<string, string> = {}
-  for (const filePath of selectedFilePaths) {
-    try {
-      knowledgeFiles[filePath] = await fs.readFile(
-        path.join(cwd, filePath),
-        'utf8',
-      )
-    } catch (error) {
-      logger.debug?.(
-        { filePath, error: getErrorObject(error) },
-        'Failed to read project knowledge file',
-      )
-    }
-  }
-  return knowledgeFiles
+}): Promise<LoadedInstructionFiles> {
+  return loadInstructionFiles({
+    projectRoot: params.cwd,
+    filePaths: params.filePaths,
+    fs: params.fs,
+    logger: params.logger,
+  })
 }
 
 export async function initialSessionState(
   params: InitialSessionStateOptions,
 ): Promise<SessionState> {
-  const { cwd, maxAgentSteps, skillsDir, homeDir, includeGlobalSkills } = params
+  const { cwd, maxAgentSteps, skillsDir, homeDir, includeGlobalSkills, includeProjectSkills } = params
   let {
     agentDefinitions,
     customToolDefinitions,
@@ -791,19 +799,20 @@ export async function initialSessionState(
   if (projectFiles === undefined && cwd) {
     discoveredProject = await discoverProjectPaths({ cwd, fs })
   }
+  let instructionFiles: LoadedInstructionFiles['instructionFiles'] | undefined
   if (knowledgeFiles === undefined) {
-    if (projectFiles) {
-      knowledgeFiles = deriveKnowledgeFiles(projectFiles)
-    } else if (cwd && discoveredProject) {
-      knowledgeFiles = await loadKnowledgeFilesFromPaths({
-        cwd,
-        filePaths: discoveredProject.filePaths,
-        fs,
-        logger,
-      })
-    } else {
-      knowledgeFiles = {}
-    }
+    const loaded = projectFiles
+      ? await deriveKnowledgeFiles(projectFiles, logger, cwd)
+      : cwd && discoveredProject
+        ? await loadKnowledgeFilesFromPaths({
+            cwd,
+            filePaths: discoveredProject.filePaths,
+            fs,
+            logger,
+          })
+        : { knowledgeFiles: {}, instructionFiles: [] }
+    knowledgeFiles = loaded.knowledgeFiles
+    instructionFiles = loaded.instructionFiles
   }
 
   let processedAgentTemplates: Record<string, any> = {}
@@ -860,6 +869,7 @@ export async function initialSessionState(
     skillsPath: skillsDir,
     homeDir,
     includeGlobalSkills,
+    includeProjectSkills,
     verbose: false,
   })
 
@@ -871,10 +881,12 @@ export async function initialSessionState(
     fileTokenScores,
     tokenCallers,
     knowledgeFiles,
+    ...(instructionFiles ? { instructionFiles } : {}),
     userKnowledgeFiles,
     agentTemplates: processedAgentTemplates,
     customToolDefinitions: processedCustomToolDefinitions,
     skills,
+    ...(includeProjectSkills === false ? { projectSkillsTrusted: false } : {}),
     gitChanges,
     changesSinceLastChat: {},
     shellConfigFiles: {},
@@ -1083,6 +1095,7 @@ export async function applyOverridesToSessionState(
     contextCwd?: string
     homeDir?: string | null
     includeGlobalSkills?: boolean
+    includeProjectSkills?: boolean
     skillsDir?: string
     userKnowledgeFiles?: Record<string, string>
     projectFiles?: Record<string, string>
@@ -1171,8 +1184,8 @@ export async function applyOverridesToSessionState(
     }
 
     if (overrides.knowledgeFiles === undefined) {
-      sessionState.fileContext.knowledgeFiles = overrides.projectFiles
-        ? deriveKnowledgeFiles(overrides.projectFiles)
+      const loaded = overrides.projectFiles
+        ? await deriveKnowledgeFiles(overrides.projectFiles, logger, cwd)
         : discoveredProject
           ? await loadKnowledgeFilesFromPaths({
               cwd,
@@ -1180,7 +1193,9 @@ export async function applyOverridesToSessionState(
               fs,
               logger,
             })
-          : {}
+          : { knowledgeFiles: {}, instructionFiles: [] }
+      sessionState.fileContext.knowledgeFiles = loaded.knowledgeFiles
+      sessionState.fileContext.instructionFiles = loaded.instructionFiles
     }
   } else if (overrides.projectFiles !== undefined) {
     // Explicit virtual files without a cwd cannot be scored safely.
@@ -1190,15 +1205,21 @@ export async function applyOverridesToSessionState(
     sessionState.fileContext.tokenCallers = {}
 
     if (overrides.knowledgeFiles === undefined) {
-      sessionState.fileContext.knowledgeFiles = deriveKnowledgeFiles(
+      const loaded = await deriveKnowledgeFiles(
         overrides.projectFiles,
+        runtime?.logger ?? { debug() {}, info() {}, warn() {}, error() {} },
       )
+      sessionState.fileContext.knowledgeFiles = loaded.knowledgeFiles
+      sessionState.fileContext.instructionFiles = loaded.instructionFiles
     }
   }
 
   // Apply knowledgeFiles override
   if (overrides.knowledgeFiles !== undefined) {
     sessionState.fileContext.knowledgeFiles = overrides.knowledgeFiles
+    // Caller-supplied files carry no load-order records; the prompt then
+    // falls back to the root-file rendering.
+    delete sessionState.fileContext.instructionFiles
   }
 
   if (overrides.homeDir !== undefined) {
@@ -1231,14 +1252,18 @@ export async function applyOverridesToSessionState(
   }
 
   if (overrides.contextCwd !== undefined || overrides.homeDir !== undefined ||
-    overrides.includeGlobalSkills !== undefined || overrides.skillsDir !== undefined) {
+    overrides.includeGlobalSkills !== undefined || overrides.skillsDir !== undefined ||
+    overrides.includeProjectSkills !== undefined) {
     sessionState.fileContext.skills = await loadSkills({
       cwd: cwd ?? overrides.contextCwd ?? baseSessionState.fileContext.cwd,
       homeDir: overrides.homeDir,
       includeGlobalSkills: overrides.includeGlobalSkills,
+      includeProjectSkills: overrides.includeProjectSkills,
       skillsPath: overrides.skillsDir,
       verbose: false,
     })
+    if (overrides.includeProjectSkills === false) sessionState.fileContext.projectSkillsTrusted = false
+    else delete sessionState.fileContext.projectSkillsTrusted
   }
 
   // Apply agentDefinitions override (merge by id, last-in wins)

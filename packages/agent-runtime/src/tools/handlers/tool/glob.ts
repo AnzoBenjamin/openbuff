@@ -6,7 +6,6 @@ import {
   recordMemoryReuse,
 } from '../../../orchestration/discovery-coordinator'
 
-import type { VerifiedExcerpt } from '../../../orchestration/discovery-coordinator'
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import type {
@@ -24,28 +23,6 @@ function buildDiscoveryQuestion(input: {
   let question = `glob:${input.pattern ?? ''}`
   if (input.cwd) question += ` cwd:${input.cwd}`
   return question.slice(0, 4000)
-}
-
-function buildSkipOutput(
-  covering: VerifiedExcerpt[],
-): CodebuffToolOutput<ToolName> {
-  const bounded = covering.slice(0, 5)
-  const files = bounded.map((entry) => entry.path).slice(0, 5)
-  const message =
-    `Served from verified memory; skipped glob (${files.length} paths fully covered).`.slice(
-      0,
-      2500,
-    )
-  return [
-    {
-      type: 'json',
-      value: {
-        files,
-        count: files.length,
-        message,
-      },
-    },
-  ] as unknown as CodebuffToolOutput<ToolName>
 }
 
 export const handleGlob = (async (params: {
@@ -88,52 +65,38 @@ export const handleGlob = (async (params: {
       // Coverage recording must never break the tool call.
     }
   }
-  // Memory-first check (best-effort, never breaks the call).
+  // Memory is accounting-only here. glob answers "every file matching X",
+  // which a few memory excerpts can never prove, so memory never replaces the
+  // real call (read-search-01). Best-effort, never breaks the call.
   try {
     if (agentState && typeof agentState === 'object') {
       const excerpts = getVerifiedMemoryExcerpts(agentState, {
         limit: 5,
         maxCharsPerExcerpt: 2_000,
       })
-      const pathPrefixes: string[] = []
-      if (typeof input.cwd === 'string' && input.cwd.length > 0) {
-        pathPrefixes.push(input.cwd)
-      }
       const cover = evaluateMemoryCover({
         excerpts,
-        pathPrefixes: pathPrefixes.length > 0 ? pathPrefixes : undefined,
+        pathPrefixes:
+          typeof input.cwd === 'string' && input.cwd.length > 0
+            ? [input.cwd]
+            : undefined,
         query: typeof input.pattern === 'string' ? input.pattern : '',
         unresolvedGaps: agentState.discoveryCoverage?.unresolvedGaps,
         workspaceRevision: agentState.workspaceState?.revision,
         workspaceSnapshotId: agentState.workspaceState?.snapshotId,
         existingIndexSnapshotId: agentState.discoveryCoverage?.indexSnapshotId,
+        exhaustive: true,
       })
-      const reuseSkip = cover.decision === 'skip' && cover.coveringExcerpts.length > 0
       recordMemoryReuse(agentState, {
         tool: 'glob',
-        decision: reuseSkip ? 'skip' : 'full',
+        decision: 'full',
         reason: cover.reason,
-        served: reuseSkip ? cover.coveringExcerpts.length : 0,
+        served: 0,
         gaps: cover.remainingGaps.length,
-        coveredStableChunkIds: reuseSkip
-          ? cover.coveringExcerpts
-              .map((entry) => entry.chunkId)
-              .filter(
-                (id): id is string => typeof id === 'string' && id.length > 0,
-              )
-          : undefined,
       })
-      if (cover.decision === 'skip' && cover.coveringExcerpts.length > 0) {
-        const output = buildSkipOutput(cover.coveringExcerpts)
-        recordCoverage(output)
-        return { output }
-      }
-      // Narrow falls through to the full call: remainingGaps are file-like
-      // paths, but glob's cwd must be a directory, so rooting glob at a gap
-      // path would yield empty/incorrect results.
     }
   } catch {
-    // Fall through to the full call on any memory-check failure.
+    // Accounting failure never affects the call.
   }
   const output = await requestClientToolCall(
     toolCall as unknown as ClientToolCall<ToolName>,

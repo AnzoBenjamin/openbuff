@@ -234,7 +234,10 @@ describe('Initial Session State', () => {
     expect(sessionState.fileContext.knowledgeFiles['knowledge.md']).toBe(
       '# Knowledge\n\nThis is a knowledge file.',
     )
-    expect(sessionState.fileContext.knowledgeFiles['claude.md']).toBeUndefined()
+    // N08: every instruction file in a directory loads, not only the first by priority.
+    expect(sessionState.fileContext.knowledgeFiles['claude.md']).toBe(
+      '# Claude context\n\nThis is claude context.',
+    )
     expect(sessionState.fileContext.knowledgeFiles['README.md']).toBeUndefined()
   })
 

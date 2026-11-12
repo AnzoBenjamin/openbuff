@@ -11,9 +11,12 @@ export type {
 // persisted task-memory evidence OUTSIDE a run (the CLI `/memory` command)
 // can read the same journal-recorded moves hydration uses; without them,
 // moved-file evidence reconciles stale and prune deletes it.
-export { collectWorkspaceMoves, run } from './run'
+export { captureRunDeadline, collectWorkspaceMoves, run } from './run'
 export { createDirectHostExecution, createHostExecutionServices } from './host-execution'
 export type { ExecutionScope, HostExecutionOptions, RunHostServices } from './host-execution'
+export { verifyNativeInstallation, calibrateNativeClock } from './services/native-exec'
+export type { NativeArtifactIdentity, NativeToolIdentity, NativeClockMapping, NativeCalibrationSetup, VerifiedNativeInstallation } from './services/native-exec'
+export type { NativeHostExecution } from './services/native-host-execution'
 export { captureAmbientHostInputs, loadHostConfigSnapshot, nodeConfigReadFs } from './host-config'
 export type { CapturedCredentialPort, DeepReadonly, HostConfigurationInputs, HostConfigSnapshot, ProviderHostContext, SnapshotResult } from './host-config'
 export { captureRootDeadline } from '@codebuff/common/util/execution-context'
@@ -237,6 +240,7 @@ export * from './run-state'
 export { ToolHelpers } from './tools'
 export * from './constants'
 export * from './provider-config'
+export * from './project-trust'
 export * from './model-discovery'
 export { getUserInfoFromApiKey } from './impl/database'
 export * from './credentials'
@@ -282,6 +286,8 @@ export {
   RECONNECTION_RETRY_DELAY_MS,
   computeBackoffDelayMs,
 } from './retry-config'
+// Session route health (N07): `/provider` clears auth-degraded routes.
+export { clearDegradedProviderRoutes } from './impl/failover'
 
 // The complete `CodebuffFileSystem` type closure. Every alias the adapter
 // surface reaches is published, so a consumer's generated `.d.ts` resolves an

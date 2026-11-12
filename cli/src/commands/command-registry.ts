@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs'
 
 import { CHATGPT_OAUTH_ENABLED } from '@codebuff/common/constants/chatgpt-oauth'
 import { isValidPlanSlug } from '@codebuff/common/util/plan-artifacts'
+import { clearDegradedProviderRoutes } from '@openbuff/sdk'
 
 import { registerPlanTimelineCommand } from './plan-timeline'
 import { handleContextCommand } from './context'
@@ -1006,6 +1007,9 @@ const ALL_COMMANDS: CommandDefinition[] = [
   defineCommandWithArgs({
     name: 'provider',
     handler: async (params, args) => {
+      // N07: any /provider action ends the session demotion of routes that
+      // failed authentication, so a fixed key is tried again.
+      clearDegradedProviderRoutes()
       const trimmedArgs = args.trim()
       if (!trimmedArgs || trimmedArgs.match(/^(add|wizard)$/)) {
         params.saveToHistory(params.inputValue.trim() || '/provider')
@@ -1075,6 +1079,19 @@ const ALL_COMMANDS: CommandDefinition[] = [
       }
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
+    },
+  }),
+  defineCommandWithArgs({
+    // N08: `/compact [focus]` reaches the runtime's manual compaction handler
+    // (run-agent-step parseCompactCommand) with the focus text intact. While
+    // a turn is running, sendPromptCommand queues it like any other prompt.
+    name: 'compact',
+    handler: (params, args) => {
+      const focus = args.trim()
+      const prompt = focus ? `/compact ${focus}` : '/compact'
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+      return sendPromptCommand(params, prompt)
     },
   }),
   defineCommand({

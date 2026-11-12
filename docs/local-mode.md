@@ -294,7 +294,7 @@ provider can declare compatibility behavior:
 }
 ```
 
-- `stripCacheControl`: removes Anthropic/OpenRouter prompt-cache metadata.
+- `stripCacheControl`: removes Anthropic/OpenRouter prompt-cache metadata. Defaults to `true` for OpenAI-compatible providers and `false` for `anthropic-compatible` ones. `anthropic/*` models on `openrouter.ai` always send the markers, because OpenRouter forwards them to Anthropic.
 - `stringifyTextContent`: sends text-only user messages as a plain string.
 - `supportsTools`: set `false` for chat-only providers that reject tool schemas.
 - `supportsRequiredToolChoice`: set `false` for providers that accept tools but reject `tool_choice: "required"`.

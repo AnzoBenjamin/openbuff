@@ -1,10 +1,24 @@
 name: Nightly Evals
 
+# N10: run base2 on the nightly buffbench set, upload FINAL_RESULTS.json as an
+# artifact, and fail when the run regresses past the noise band against the
+# last green scheduled run (evals/buffbench/regression-gate.ts).
+
 on:
   schedule:
     # Run every night at 1:00 AM PT (9:00 AM UTC)
     - cron: '0 9 * * *'
   workflow_dispatch: # Allow manual triggering
+    inputs:
+      tasks:
+        description: 'Comma-separated task ids (default: the full nightly set)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  # Read the last green run's results artifact for the baseline.
+  actions: read
 
 jobs:
   run-nightly-evals:
@@ -46,8 +60,56 @@ jobs:
           echo "NEXT_PUBLIC_INFISICAL_UP=true" >> $GITHUB_ENV
           echo "CODEBUFF_GITHUB_TOKEN=${{ secrets.OPENBUFF_GITHUB_TOKEN }}" >> $GITHUB_ENV
 
-      - name: Run nightly evals
-        run: cd evals && bun run-buffbench-nightly
+      - name: Validate eval configuration (no LLM calls)
+        run: cd evals && bun run-buffbench-nightly --dry-run
 
-      - name: Workflow completed
-        run: echo "Nightly evals workflow completed successfully"
+      - name: Run nightly evals (base2)
+        id: run
+        env:
+          TASKS: ${{ inputs.tasks }}
+        run: |
+          set -euo pipefail
+          ARGS=(--results-out "$RUNNER_TEMP/eval-results/FINAL_RESULTS.json")
+          if [ -n "${TASKS:-}" ]; then ARGS+=(--tasks "$TASKS"); fi
+          cd evals && bun run-buffbench-nightly "${ARGS[@]}"
+
+      - name: Download last green nightly results
+        if: steps.run.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          # Only scheduled runs on the full set serve as the baseline, so a
+          # manual subset run never becomes the comparison point.
+          RUN_ID=$(gh run list --repo "$GITHUB_REPOSITORY" \
+            --workflow nightly-evals.yml --event schedule --status success \
+            --limit 1 --json databaseId -q '.[0].databaseId // empty')
+          mkdir -p "$RUNNER_TEMP/eval-baseline"
+          if [ -n "$RUN_ID" ]; then
+            gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" \
+              -n buffbench-nightly-results -D "$RUNNER_TEMP/eval-baseline" \
+              || echo "Baseline artifact for run $RUN_ID is unavailable."
+          else
+            echo "No green scheduled nightly yet; this run can become the baseline."
+          fi
+
+      - name: Compare with last green run
+        if: steps.run.outcome == 'success'
+        run: |
+          set +e
+          cd evals && bun eval-gate \
+            --current "$RUNNER_TEMP/eval-results/FINAL_RESULTS.json" \
+            --baseline "$RUNNER_TEMP/eval-baseline" \
+            --report "$RUNNER_TEMP/eval-results/GATE_REPORT.md"
+          STATUS=$?
+          cat "$RUNNER_TEMP/eval-results/GATE_REPORT.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null
+          exit $STATUS
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: buffbench-nightly-results
+          path: ${{ runner.temp }}/eval-results/
+          if-no-files-found: warn
+          retention-days: 90

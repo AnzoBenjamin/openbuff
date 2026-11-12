@@ -121,8 +121,11 @@ function assertCapturedBoundary(f: BranchFixture) {
     expect(events.map(event => event.phase)).toContain('dispatched')
     const observed = events.some(event => event.phase === 'spawn-observed')
     expect(observed || events.some(event => event.phase === 'dispatch-failed')).toBe(true)
-    if (call.observerMethods) expect(call.observerMethods).toEqual(['failure', 'spawnObserved'])
-    else expect(call.signal).toBeInstanceOf(AbortSignal)
+    if (call.observerMethods) {
+      expect(call.observerMethods).toContain('failure')
+      expect(call.observerMethods).toContain('spawnObserved')
+      expect(call.observerMethods).toEqual(['cleanupCommitted', 'failure', 'spawnObserved'])
+    } else expect(call.signal).toBeInstanceOf(AbortSignal)
   }
   for (const event of f.host.events) {
     if (!('facts' in event)) continue

@@ -2,6 +2,8 @@ import z from 'zod/v4'
 
 import { jsonToolResultSchema } from '../utils'
 
+import { lspUnavailableSchema } from './go-to-definition'
+
 import type { $ToolParams } from '../../constants'
 import { jsonValueSchema } from '../../../types/json'
 
@@ -51,12 +53,7 @@ export const hoverTypeParams = {
             .optional(),
         })
         .optional(),
-      unavailable: z
-        .object({
-          reason: z.string(),
-          languageId: z.string().optional(),
-        })
-        .optional(),
+      unavailable: lspUnavailableSchema.optional(),
       errorMessage: z.string().optional(),
     }),
   ),

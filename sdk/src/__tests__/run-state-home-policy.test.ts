@@ -253,7 +253,8 @@ test('actual SDK fresh and continued runs consume their captured home and global
     platform: 'linux', invocationCwd: f.project, projectRoot: f.project,
     home: { kind: 'path', path: f.home }, globals: { kind: 'directory', path: globalDirectory },
     selection: { kind: 'explicit', path: configuration, required: true },
-    trust: { ancestorConfig: false, projectReadableRoots: false } }
+    // N02: project skills load only for a project the SDK host trusts.
+    trust: { ancestorConfig: false, projectReadableRoots: false, projectConfig: 'trusted' } }
   const options: OpenbuffClientOptions = { cwd: f.project, projectFiles: {}, knowledgeFiles: {},
     userKnowledgeFiles: { 'caller.md': 'caller persisted knowledge' }, hostConfiguration: inputs, configReadFs: nodeConfigReadFs,
     harnessStateDir: path.join(f.root, 'harness'), approvalMode: 'allow-all',

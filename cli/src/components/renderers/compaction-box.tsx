@@ -120,6 +120,9 @@ const deriveTone = (
   // reads as neutral regardless of `action`; a pass that never settled reads
   // as a warning, and a declined one is merely uneventful.
   if (presentation.interrupted) return 'warning'
+  // A skipped or failed pass left context unchanged: only the emergency trim
+  // remains, so it reads as a warning, not as an uneventful pass.
+  if (presentation.declined && block.passOutcome !== undefined) return 'warning'
   if (presentation.pending || presentation.declined) return 'secondary'
   // The request-time emergency brake fired only because every runtime brake was
   // already exceeded.
@@ -184,12 +187,18 @@ export const CompactionBox = memo(({ block }: CompactionBoxProps) => {
     : interrupted
       ? 'Compaction interrupted'
       : declined
-        ? 'Compaction pass — nothing reclaimed'
+        ? block.passOutcome === 'failed'
+          ? 'Compaction failed — context unchanged'
+          : block.passOutcome === 'skipped'
+            ? 'Compaction skipped — context unchanged'
+            : 'Compaction pass — nothing reclaimed'
         : block.trimSource === 'request'
           ? 'Context trimmed at request time'
           : block.action === 'mechanical_trim'
             ? 'Context trimmed (emergency)'
-            : 'Context compacted'
+            : // The default pruner keeps excerpts and a knowledge-memory
+              // skeleton; it does not write a summary (memory-context-05).
+              'Context compacted (extractive)'
   // A nested run's pass is labelled so it is not mistaken for the root turn's.
   const title = block.subagent === true ? `Subagent: ${baseTitle}` : baseTitle
 

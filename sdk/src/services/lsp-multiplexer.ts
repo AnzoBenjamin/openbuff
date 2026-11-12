@@ -7,6 +7,8 @@ import path from 'node:path'
 import { getLanguageToolSpecs } from '@codebuff/common/util/language-capabilities'
 import { LANGUAGE_CAPABILITY_REGISTRY } from '@codebuff/common/util/language-capabilities'
 
+import { lspInstallHint } from './lsp-install-hints'
+
 import type { ChildProcess } from 'node:child_process'
 import type {
   LanguageToolSpec,
@@ -117,6 +119,11 @@ export type LspServerUnavailableReason =
   // extract semantic gates.
   | 'no extract action available'
   | 'no new-file destination in the workspace edit'
+  // N04 (language-intel-07): the server binary is not on PATH. Carries the
+  // missing command and the spec's install hint.
+  | 'not-installed'
+  // N04 (language-intel-02): the warm server rejected workspace/symbol.
+  | 'workspace-symbol-unsupported'
 
 export type LspServerFailureReason =
   | 'spawn-failed'
@@ -131,19 +138,51 @@ export type LspServerFailureReason =
 export class LspServerUnavailableError extends Error {
   readonly reason: LspServerUnavailableReason
   readonly languageId?: SupportedLanguageId
+  /** Missing server command (argv[0]) for `not-installed`. */
+  readonly command?: string
+  /** Install hint from the language spec for `not-installed`. */
+  readonly install?: string
 
   constructor(
     message: string,
     options: ErrorOptions & {
       reason: LspServerUnavailableReason
       languageId?: SupportedLanguageId
+      command?: string
+      install?: string
     },
   ) {
     super(message, options)
     this.name = 'LspServerUnavailableError'
     this.reason = options.reason
     this.languageId = options.languageId
+    this.command = options.command
+    this.install = options.install
   }
+}
+
+/** A spawn failure that means "the executable is not on PATH". */
+export function isMissingExecutableError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const code = (error as { code?: unknown }).code
+  if (code === 'ENOENT') return true
+  const message = (error as { message?: unknown }).message
+  return (
+    typeof message === 'string' &&
+    /\bENOENT\b|executable not found/i.test(message)
+  )
+}
+
+function notInstalledError(
+  command: string,
+  languageId: SupportedLanguageId | undefined,
+  install: string | undefined,
+  cause?: unknown,
+): LspServerUnavailableError {
+  return new LspServerUnavailableError(
+    `Language server '${command}' is not installed (not found on PATH).`,
+    { reason: 'not-installed', languageId, command, install, cause },
+  )
 }
 
 export class LspServerError extends Error {
@@ -295,6 +334,8 @@ class LspServerConnection {
   private readonly maxPendingRequests: number
   private readonly maxFrameBytes: number
   private readonly onCrash: (reason: string) => void
+  private readonly languageId?: SupportedLanguageId
+  private readonly install?: string
   private stopRequested = false
 
   constructor(params: {
@@ -306,6 +347,8 @@ class LspServerConnection {
     maxPendingRequests: number
     maxFrameBytes: number
     onCrash: (reason: string) => void
+    languageId?: SupportedLanguageId
+    install?: string
   }) {
     this.admitSpawn = params.admitSpawn
     this.spawner = params.spawner
@@ -315,6 +358,8 @@ class LspServerConnection {
     this.maxPendingRequests = params.maxPendingRequests
     this.maxFrameBytes = params.maxFrameBytes
     this.onCrash = params.onCrash
+    this.languageId = params.languageId
+    this.install = params.install
   }
 
   get isRunning(): boolean {
@@ -326,7 +371,20 @@ class LspServerConnection {
     const admitted = await this.admitSpawn(this.spawnSpec)
     if (this.stopRequested) throw new LspServerError('LSP start was stopped during admission.', { reason: 'stopped' })
     if (!admitted.ok) throw new LspExecutionError(admitted)
-    const child = this.spawner(this.spawnSpec, admitted.value)
+    let child: LspChildHandle
+    try {
+      child = this.spawner(this.spawnSpec, admitted.value)
+    } catch (error) {
+      if (isMissingExecutableError(error)) {
+        throw notInstalledError(
+          this.spawnSpec.argv[0] ?? '',
+          this.languageId,
+          this.install,
+          error,
+        )
+      }
+      throw error
+    }
     this.child = child
     this.frameBuffer = Buffer.alloc(0)
     child.stdout.on('data', (chunk) => this.consume(chunk))
@@ -334,8 +392,18 @@ class LspServerConnection {
       this.handleGone(`exit code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}`)
     })
     child.on('error', (error) => {
+      // A missing binary is not a crash: reject with a typed not-installed
+      // result carrying the install hint (language-intel-07).
       this.handleGone(
         `spawn error: ${error instanceof Error ? error.message : describeValue(error)}`,
+        isMissingExecutableError(error)
+          ? notInstalledError(
+              this.spawnSpec.argv[0] ?? '',
+              this.languageId,
+              this.install,
+              error,
+            )
+          : undefined,
       )
     })
     await this.send(
@@ -362,7 +430,8 @@ class LspServerConnection {
       this.startupTimeoutMs,
     ).catch((error) => {
       this.killChild()
-      throw error instanceof LspServerError
+      throw error instanceof LspServerError ||
+        error instanceof LspServerUnavailableError
         ? error
         : new LspServerError('LSP initialize handshake failed.', {
             reason: 'protocol',
@@ -593,12 +662,13 @@ class LspServerConnection {
     entry.resolve(message['result'])
   }
 
-  private handleGone(reason: string): void {
+  private handleGone(reason: string, rejection?: Error): void {
     const wasRunning = this.running
     this.running = false
     this.child = null
     this.rejectAll(
-      new LspServerError(`LSP server died (${reason}).`, { reason: 'crashed' }),
+      rejection ??
+        new LspServerError(`LSP server died (${reason}).`, { reason: 'crashed' }),
     )
     if (wasRunning && !this.stopRequested) {
       this.onCrash(reason)
@@ -789,6 +859,10 @@ export type LspMultiplexer = {
    * context-free warm-anchor path. Activating per-language routing requires
    * threading filePath through workspaceSymbolParams (the tool schema), this
    * service, and the run.ts handler.
+   *
+   * Result contract (N04): `null` means no warm server could answer; a warm
+   * server's empty or null answer is `[]`; a warm server that rejects the
+   * request throws LspServerUnavailableError('workspace-symbol-unsupported').
    */
   workspaceSymbol(
     query: string,
@@ -929,6 +1003,8 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     }
   }
 
+  const missingCommands = new Map<string, LspServerUnavailableError>()
+
   async function acquire(filePath: string, executionContext?: LspRequestContext): Promise<ServerEntry> {
     if (!executionContext || !options.resourceFactory) throw new LspExecutionError({ ok: false, reason: 'unavailable', cause: 'LSP execution context or resource factory is unavailable.' })
     throwIfAborted(executionContext.signal)
@@ -937,6 +1013,10 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     }
     const languageId = resolveLanguage(filePath)
     const spec = selectServerSpec(languageId)
+    // Negative cache (language-intel-07): once a server binary is observed
+    // missing, later calls answer not-installed without respawning it.
+    const knownMissing = missingCommands.get(spec.argv[0] ?? '')
+    if (knownMissing) throw knownMissing
     const root = rootResolver({ filePath, rootMarkers: spec.rootMarkers ?? [] })
     const rootUri = filePathToUri(root)
     const key = `${languageId}:${rootUri}`
@@ -998,6 +1078,8 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
             startupTimeoutMs,
             maxPendingRequests,
             maxFrameBytes,
+            languageId,
+            install: lspInstallHint(spec.argv[0] ?? ''),
             onCrash: (reason) => {
               if (entry.resource !== resource || disposed) return
               emit({ kind: 'restart', key, reason })
@@ -1016,6 +1098,8 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
                     startupTimeoutMs,
                     maxPendingRequests,
                     maxFrameBytes,
+                    languageId,
+                    install: lspInstallHint(spec.argv[0] ?? ''),
                     onCrash: (again) => {
                       emit({ kind: 'gave-up', key, reason: again })
                     },
@@ -1042,6 +1126,13 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
           await entry.connection.start(rootUri)
         } catch (error) {
           if (servers.get(key) === entry) servers.delete(key)
+          if (
+            error instanceof LspServerUnavailableError &&
+            error.reason === 'not-installed' &&
+            error.command
+          ) {
+            missingCommands.set(error.command, error)
+          }
           throw error
         }
         if (servers.get(key) === entry) break
@@ -1308,18 +1399,28 @@ export function createLspMultiplexer(options: LspMultiplexerOptions): LspMultipl
     query: string,
     executionContext?: LspRequestContext,
   ): Promise<LspWorkspaceSymbol[] | null> {
-    // Degrade a server that reports a protocol error or lacks support to the
-    // same null (unavailable) result the no-warm-server path returns rather
-    // than throwing.
+    // A server that reports a protocol error or lacks support degrades to a
+    // typed unavailable ('workspace-symbol-unsupported'), distinct from the
+    // no-warm-server null and from a real empty answer.
     try {
       const result = (await withResourceUse(entry, executionContext, 'workspace/symbol', { query }, () => entry.connection.request('workspace/symbol', { query }))) as LspWorkspaceSymbol[] | null
-      return result ?? null
+      // A warm server that answered null found nothing: that is an empty
+      // answer, not "unavailable". `null` from this function is reserved for
+      // "no server could answer" (language-intel-02).
+      return result ?? []
     } catch (error) {
       if (
         !(error instanceof LspExecutionError) && error instanceof LspServerError &&
         (error.reason === 'protocol' || error.reason === 'unavailable')
       ) {
-        return null
+        throw new LspServerUnavailableError(
+          `The warm '${entry.languageId}' server cannot answer workspace/symbol: ${error.message}`,
+          {
+            reason: 'workspace-symbol-unsupported',
+            languageId: entry.languageId,
+            cause: error,
+          },
+        )
       }
       throw error
     }

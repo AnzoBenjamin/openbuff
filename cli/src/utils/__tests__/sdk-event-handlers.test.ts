@@ -169,14 +169,47 @@ describe('sdk-event-handlers', () => {
     const textBlocks = blocks.filter(
       (block) => 'content' in block && 'textType' in block,
     ) as Array<{ content: string; textType?: string; color?: string }>
-    // A retry storm shows ONE status line, not one per attempt: each event
-    // replaces the previous status block, and the survivor is the final
-    // (recovered) line. It is a muted status line, not assistant prose.
-    expect(textBlocks).toHaveLength(1)
+    // A retry storm shows ONE transient status line, not one per attempt:
+    // each event replaces the previous transient block, and the survivor is
+    // the final (recovered) line. The failover notice is a persistent warning
+    // (N07) that the recovered line does not replace.
+    expect(textBlocks).toHaveLength(2)
     expect(textBlocks[0]!.textType).toBe('status')
-    expect(textBlocks[0]!.color).toBe('muted')
-    expect(textBlocks[0]!.content).toContain('recovered')
-    expect(textBlocks[0]!.content).not.toContain('retrying')
+    expect(textBlocks[0]!.color).toBe('yellow')
+    expect(textBlocks[0]!.content).toContain('Provider failover: primary')
+    expect(textBlocks[1]!.textType).toBe('status')
+    expect(textBlocks[1]!.color).toBe('muted')
+    expect(textBlocks[1]!.content).toContain('recovered')
+    expect(textBlocks.some((b) => b.content.includes('retrying'))).toBe(false)
+  })
+
+  test('a 401 failover notice persists and names the status, provider and env var', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+
+    dispatchValidEvent(handleEvent, {
+      type: 'provider_status',
+      status: 'failover',
+      model: 'openrouter/anthropic/claude-sonnet-4.5',
+      nextModel: 'anthropic/claude-sonnet-4-5',
+      statusCode: 401,
+      providerId: 'openrouter',
+      apiKeyEnv: 'OPENROUTER_API_KEY',
+      degraded: true,
+    })
+    dispatchValidEvent(handleEvent, {
+      type: 'provider_status',
+      status: 'recovered',
+    })
+
+    const contents = (getMessages()[0].blocks ?? [])
+      .filter((block) => 'content' in block)
+      .map((block) => (block as { content: string }).content)
+    const notice = contents.find((c) => c.startsWith('Provider failover'))
+    expect(notice).toBe(
+      'Provider failover: openrouter/anthropic/claude-sonnet-4.5 (openrouter) returned 401; check OPENROUTER_API_KEY. Using anthropic/claude-sonnet-4-5 for the rest of this session (/provider resets it).',
+    )
+    expect(contents.some((c) => c.includes('recovered'))).toBe(true)
   })
 
   test('provider status lines never displace non-status text blocks', () => {
@@ -2415,6 +2448,61 @@ describe('sdk-event-handlers', () => {
       pending: true,
       pendingRunIds: ['root-run'],
     })
+  })
+
+  // memory-context-06: a skipped or failed pass is visible on the card.
+  test('a settled pass reported skipped or failed keeps that outcome and reason on the card', () => {
+    for (const outcome of ['skipped', 'failed'] as const) {
+      const { ctx, getMessages } = createTestContext()
+      const handleEvent = createEventHandler(ctx)
+      dispatchValidEvent(handleEvent, {
+        type: 'context_compaction_status',
+        state: 'started',
+        runId: 'root-run',
+        ancestorRunIds: [],
+        contextTokens: 152_000,
+      })
+      dispatchValidEvent(handleEvent, {
+        type: 'context_compaction_status',
+        state: 'settled',
+        runId: 'root-run',
+        ancestorRunIds: [],
+        outcome,
+        reason: `pass ${outcome}: because`,
+      })
+      const blocks = (getMessages()[0].blocks ?? []).filter(
+        (block) => block.type === 'compaction',
+      )
+      expect(blocks).toHaveLength(1)
+      expect(blocks[0]).toMatchObject({
+        status: 'declined',
+        passOutcome: outcome,
+        reason: `pass ${outcome}: because`,
+      })
+    }
+  })
+
+  test('a plain settle without an outcome stays an unlabelled declined pass', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handleEvent = createEventHandler(ctx)
+    dispatchValidEvent(handleEvent, {
+      type: 'context_compaction_status',
+      state: 'started',
+      runId: 'root-run',
+      ancestorRunIds: [],
+      contextTokens: 152_000,
+    })
+    dispatchValidEvent(handleEvent, {
+      type: 'context_compaction_status',
+      state: 'settled',
+      runId: 'root-run',
+      ancestorRunIds: [],
+    })
+    const blocks = (getMessages()[0].blocks ?? []).filter(
+      (block) => block.type === 'compaction',
+    )
+    expect(blocks[0]).toMatchObject({ status: 'declined' })
+    expect(blocks[0]).not.toHaveProperty('passOutcome')
   })
 
   test('a compaction result settles the pending block in place instead of duplicating it', () => {

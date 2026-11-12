@@ -43,6 +43,8 @@ export const readOutlineParams = {
       path: z.string(),
       outline: z.string(),
       errorMessage: z.string().optional(),
+      /** Near-match project paths when the file does not exist. */
+      candidates: z.array(z.string()).max(3).optional(),
     }),
   ),
 } satisfies $ToolParams

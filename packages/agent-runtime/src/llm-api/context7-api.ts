@@ -88,20 +88,175 @@ function rankLibraryCandidate(candidate: SearchResult, query: string): number {
 }
 
 /**
- * Lists all available documentation projects from Context7
- * @returns Array of projects with their metadata, or null if the request fails
+ * Typed Context7 failure (N04). Each failure names its cause so the model
+ * does not conclude a library is undocumented when the key is missing, the
+ * API is rate limiting, or the network failed.
  */
-export async function searchLibraries(params: {
+export type Context7FailureStatus =
+  | 'auth_required'
+  | 'rate_limited'
+  | 'timeout'
+  | 'cancelled'
+  | 'network_error'
+  | 'unavailable'
+  | 'invalid_response'
+  | 'not_found'
+
+export interface Context7Failure {
+  ok: false
+  status: Context7FailureStatus
+  reason: string
+  nextStep: string
+  httpStatus?: number
+  retryAfterSeconds?: number
+}
+
+export type Context7DocumentationOutcome =
+  | ({ ok: true } & Context7DocumentationResult)
+  | Context7Failure
+
+export const CONTEXT7_API_KEY_ENV = 'CONTEXT7_API_KEY'
+
+/** Reads the Context7 key from an env snapshot; blank values count as unset. */
+export function readContext7ApiKey(
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const value = env[CONTEXT7_API_KEY_ENV]?.trim()
+  return value ? value : undefined
+}
+
+const buildHeaders = (
+  apiKey: string | undefined,
+  extra: Record<string, string> = {},
+): Record<string, string> =>
+  // Never send `Bearer undefined`: omit Authorization when no key is set.
+  apiKey ? { ...extra, Authorization: `Bearer ${apiKey}` } : { ...extra }
+
+const parseRetryAfterSeconds = (value: string | null | undefined) => {
+  if (!value) return undefined
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds)
+  const date = Date.parse(value)
+  if (Number.isNaN(date)) return undefined
+  return Math.max(0, Math.ceil((date - Date.now()) / 1000))
+}
+
+const failure = (
+  status: Context7FailureStatus,
+  reason: string,
+  nextStep: string,
+  extra: { httpStatus?: number; retryAfterSeconds?: number } = {},
+): Context7Failure => ({ ok: false, status, reason, nextStep, ...extra })
+
+function failureFromResponse(
+  response: Response,
+  apiKey: string | undefined,
+  what: string,
+): Context7Failure {
+  const httpStatus = response.status
+  const label = `${what} failed with HTTP ${httpStatus}${
+    response.statusText ? ` ${response.statusText}` : ''
+  }`
+  if (httpStatus === 401 || httpStatus === 403) {
+    return failure(
+      'auth_required',
+      apiKey
+        ? `${label}: Context7 rejected the configured ${CONTEXT7_API_KEY_ENV}.`
+        : `${label}: Context7 requires an API key and ${CONTEXT7_API_KEY_ENV} is not set.`,
+      apiKey
+        ? `Check that ${CONTEXT7_API_KEY_ENV} is a valid Context7 key, or use web_search to read the library's docs site.`
+        : `Set ${CONTEXT7_API_KEY_ENV} (free key from https://context7.com/dashboard) and retry, or use web_search to read the library's docs site.`,
+      { httpStatus },
+    )
+  }
+  if (httpStatus === 429) {
+    const retryAfterSeconds = parseRetryAfterSeconds(
+      response.headers?.get?.('retry-after'),
+    )
+    return failure(
+      'rate_limited',
+      `${label}: Context7 is rate limiting requests.`,
+      `${
+        retryAfterSeconds !== undefined
+          ? `Wait about ${retryAfterSeconds}s before retrying`
+          : 'Wait before retrying'
+      }${apiKey ? '' : `, or set ${CONTEXT7_API_KEY_ENV} for a higher limit`}. Use web_search for the docs site meanwhile.`,
+      {
+        httpStatus,
+        ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+      },
+    )
+  }
+  if (httpStatus === 404) {
+    return failure(
+      'not_found',
+      `${label}.`,
+      'Try the official library name, or use web_search for the docs site.',
+      { httpStatus },
+    )
+  }
+  return failure(
+    'unavailable',
+    `${label}: the Context7 service is unavailable.`,
+    'Retry later, or use web_search to read the library docs site.',
+    { httpStatus },
+  )
+}
+
+function failureFromError(
+  error: unknown,
+  signal: AbortSignal | undefined,
+  what: string,
+): Context7Failure {
+  const message = error instanceof Error ? error.message : String(error)
+  if (signal?.aborted) {
+    return failure('cancelled', `${what} was cancelled.`, 'No action needed.')
+  }
+  const name = error instanceof Error ? error.name : ''
+  if (name === 'TimeoutError' || /timed out/i.test(message)) {
+    return failure(
+      'timeout',
+      `${what} timed out: ${message}`,
+      'Retry once, or use web_search to read the library docs site.',
+    )
+  }
+  return failure(
+    'network_error',
+    `${what} failed: ${message}`,
+    'Check network access to context7.com, or use web_search for the docs site.',
+  )
+}
+
+const requestSignal = (signal: AbortSignal | undefined): AbortSignal =>
+  signal
+    ? AbortSignal.any([signal, AbortSignal.timeout(FETCH_TIMEOUT_MS)])
+    : AbortSignal.timeout(FETCH_TIMEOUT_MS)
+
+/**
+ * Searches Context7 for libraries matching `query`, returning a typed
+ * outcome. `searchLibraries` is the null-on-failure wrapper.
+ */
+export async function searchLibrariesOutcome(params: {
   query: string
   logger: Logger
   fetch: typeof globalThis.fetch
-}): Promise<SearchResult[] | null> {
-  const { query, logger, fetch } = params
+  /**
+   * Context7 key. Omit to read CONTEXT7_API_KEY; pass undefined for "no key".
+   * Named distinctly from the runtime's provider `apiKey` so the LLM key is
+   * never forwarded to Context7.
+   */
+  context7ApiKey?: string
+  signal?: AbortSignal
+}): Promise<{ ok: true; results: SearchResult[] } | Context7Failure> {
+  const { query, logger, fetch, signal } = params
+  const apiKey =
+    'context7ApiKey' in params ? params.context7ApiKey : readContext7ApiKey()
 
   const searchStartTime = Date.now()
   const searchContext = {
     query,
     queryLength: query.length,
+    hasApiKey: Boolean(apiKey),
   }
 
   try {
@@ -111,9 +266,8 @@ export async function searchLibraries(params: {
     const fetchStartTime = Date.now()
     const response = await withTimeout(
       fetch(url, {
-        headers: {
-          Authorization: `Bearer ${process.env['CONTEXT7_API_KEY']}`,
-        },
+        headers: buildHeaders(apiKey),
+        signal: requestSignal(signal),
       }),
       FETCH_TIMEOUT_MS,
     )
@@ -130,11 +284,11 @@ export async function searchLibraries(params: {
         },
         `Library search failed with status ${response.status}`,
       )
-      return null
+      return failureFromResponse(response, apiKey, 'Context7 library search')
     }
 
     const parseStartTime = Date.now()
-    // M3-T1: bounded body read + zod validation (fail closed to null).
+    // M3-T1: bounded body read + zod validation (fail closed).
     const responseBody = await withTimeout(
       response.json(),
       BODY_READ_TIMEOUT_MS,
@@ -151,52 +305,57 @@ export async function searchLibraries(params: {
         },
         'Library search returned an invalid response shape',
       )
-      return null
+      return failure(
+        'invalid_response',
+        'Context7 library search returned a response in an unexpected shape.',
+        'Retry later, or use web_search to read the library docs site.',
+      )
     }
     const projects = parsedResponse.data
-    const parseDuration = Date.now() - parseStartTime
-    const totalDuration = Date.now() - searchStartTime
-
     logger.debug(
       {
         ...searchContext,
         fetchDuration,
-        parseDuration,
-        totalDuration,
+        parseDuration: Date.now() - parseStartTime,
+        totalDuration: Date.now() - searchStartTime,
         resultsCount: projects.results?.length || 0,
         success: true,
       },
       'Library search completed successfully',
     )
 
-    return projects.results
+    return { ok: true, results: projects.results }
   } catch (error) {
-    const totalDuration = Date.now() - searchStartTime
     logger.error(
       {
         ...searchContext,
         error:
           error instanceof Error
-            ? {
-                name: error.name,
-                message: error.message,
-                stack: error.stack,
-              }
+            ? { name: error.name, message: error.message, stack: error.stack }
             : error,
-        totalDuration,
+        totalDuration: Date.now() - searchStartTime,
         success: false,
       },
       'Error during library search',
     )
-    return null
+    return failureFromError(error, signal, 'Context7 library search')
   }
 }
 
 /**
- * Fetches documentation context for a specific library
- * @param libraryId The library ID to fetch documentation for
- * @param options Options for the request
- * @returns The documentation text or null if the request fails
+ * Lists matching documentation projects from Context7.
+ * @returns Array of projects with their metadata, or null if the request fails
+ */
+export async function searchLibraries(
+  params: ParamsOf<typeof searchLibrariesOutcome>,
+): Promise<SearchResult[] | null> {
+  const outcome = await searchLibrariesOutcome(params)
+  return outcome.ok ? outcome.results : null
+}
+
+/**
+ * Fetches documentation context for the best-matching library.
+ * Returns the documentation, or a typed {@link Context7Failure}.
  */
 export async function fetchContext7LibraryDocumentation(
   params: {
@@ -206,9 +365,13 @@ export async function fetchContext7LibraryDocumentation(
     folders?: string
     logger: Logger
     fetch: typeof globalThis.fetch
-  } & ParamsOf<typeof searchLibraries>,
-): Promise<Context7DocumentationResult | null> {
-  const { query, tokens, topic, folders, logger, fetch } = params
+    context7ApiKey?: string
+    signal?: AbortSignal
+  } & ParamsOf<typeof searchLibrariesOutcome>,
+): Promise<Context7DocumentationOutcome> {
+  const { query, tokens, topic, folders, logger, fetch, signal } = params
+  const apiKey =
+    'context7ApiKey' in params ? params.context7ApiKey : readContext7ApiKey()
 
   const apiStartTime = Date.now()
   const apiContext = {
@@ -216,13 +379,24 @@ export async function fetchContext7LibraryDocumentation(
     requestedTokens: tokens,
     topic,
     folders,
+    hasApiKey: Boolean(apiKey),
   }
 
   const searchStartTime = Date.now()
-  const libraries = await searchLibraries(params)
+  const search = await searchLibrariesOutcome({
+    query,
+    logger,
+    fetch,
+    signal,
+    context7ApiKey: apiKey,
+  })
   const searchDuration = Date.now() - searchStartTime
 
-  if (!libraries || libraries.length === 0) {
+  if (!search.ok) {
+    return search
+  }
+  const libraries = search.results
+  if (libraries.length === 0) {
     logger.warn(
       {
         ...apiContext,
@@ -232,7 +406,11 @@ export async function fetchContext7LibraryDocumentation(
       },
       'No libraries found for query',
     )
-    return null
+    return failure(
+      'not_found',
+      `Context7 has no library matching "${query}".`,
+      'Try the official library name (e.g. "Next.js"), or use web_search to read the docs site.',
+    )
   }
 
   const rankedLibraries = libraries
@@ -270,10 +448,8 @@ export async function fetchContext7LibraryDocumentation(
     const fetchStartTime = Date.now()
     const response = await withTimeout(
       fetch(url, {
-        headers: {
-          Authorization: `Bearer ${process.env['CONTEXT7_API_KEY']}`,
-          'X-Context7-Source': 'codebuff',
-        },
+        headers: buildHeaders(apiKey, { 'X-Context7-Source': 'codebuff' }),
+        signal: requestSignal(signal),
       }),
       FETCH_TIMEOUT_MS,
     )
@@ -292,7 +468,11 @@ export async function fetchContext7LibraryDocumentation(
         },
         `Failed to fetch documentation with status ${response.status}`,
       )
-      return null
+      return failureFromResponse(
+        response,
+        apiKey,
+        `Context7 documentation fetch for ${libraryId}`,
+      )
     }
 
     const parseStartTime = Date.now()
@@ -319,7 +499,13 @@ export async function fetchContext7LibraryDocumentation(
         },
         'Received empty or no-content response',
       )
-      return null
+      return failure(
+        'not_found',
+        `Context7 has no documentation content for ${libraryId}${
+          topic ? ` (topic: ${topic})` : ''
+        }.`,
+        'Try a broader topic or another listed library, or use web_search for the docs site.',
+      )
     }
 
     const estimatedTokens = Math.ceil(text.length / 4) // Rough token estimate
@@ -340,30 +526,30 @@ export async function fetchContext7LibraryDocumentation(
     )
 
     return {
+      ok: true,
       documentation: text,
       selectedLibrary,
       alternatives: rankedLibraries.slice(1, 5).map(({ library }) => library),
     }
   } catch (error) {
-    const totalDuration = Date.now() - apiStartTime
     logger.error(
       {
         ...apiContext,
         libraryId,
         error:
           error instanceof Error
-            ? {
-                name: error.name,
-                message: error.message,
-                stack: error.stack,
-              }
+            ? { name: error.name, message: error.message, stack: error.stack }
             : error,
         searchDuration,
-        totalDuration,
+        totalDuration: Date.now() - apiStartTime,
         success: false,
       },
       'Error fetching library documentation',
     )
-    return null
+    return failureFromError(
+      error,
+      signal,
+      `Context7 documentation fetch for ${libraryId}`,
+    )
   }
 }

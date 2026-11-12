@@ -10,6 +10,15 @@ import type {
   UserMessage,
 } from './types/util-types'
 
+/**
+ * Extractive context compaction (memory-context-05). This agent is purely
+ * programmatic: `handleSteps` only yields `set_messages`. It makes no model
+ * call. It keeps recent turns, caps each older item (user, assistant, tool
+ * entry, agent result) at a fixed token budget, drops file bodies, and carries
+ * reasoning forward only through the `<knowledge_memory>` skeleton. Prose that
+ * does not survive the caps is lost; it is not paraphrased. Call it extractive
+ * in comments and UI, never an "LLM summary".
+ */
 const definition: AgentDefinition = {
   id: 'context-pruner',
   publisher,
@@ -18,7 +27,7 @@ const definition: AgentDefinition = {
   // set_messages records its successful transaction as structured output.
   outputMode: 'structured_output',
 
-  spawnerPrompt: `Spawn this agent between steps to prune context, summarizing the conversation into a condensed format when context exceeds the limit.`,
+  spawnerPrompt: `Spawn this agent between steps to prune context when it exceeds the limit. It condenses the conversation extractively (truncated excerpts plus a knowledge-memory skeleton); it does not write an LLM summary.`,
 
   inputSchema: {
     params: {
@@ -129,7 +138,7 @@ const definition: AgentDefinition = {
     const TOKEN_COUNT_FUDGE_FACTOR = 1_000
 
     /**
-     * Default pruning threshold for the LLM-based context-pruner agent. Keep
+     * Default pruning threshold for the extractive context-pruner agent. Keep
      * below provider hard limits because tool schemas and step prompts are
      * added after history.
      *

@@ -6,6 +6,10 @@ import type {
   ProposalPromotionDecision,
 } from './proposals'
 import type { ThinkerHarvestEvaluation } from './thinker-harvest-signals'
+import type {
+  CleanupResult,
+  ScopeOutput,
+} from '@codebuff/common/types/contracts/process-scope'
 
 export interface FileState {
   path: string
@@ -160,6 +164,10 @@ export interface FinalCheckOutput {
   durationMs?: number
   stdout: string
   stderr: string
+  /** Command exit and physical cleanup are independent observations. */
+  commandExitCode?: number | null
+  processCleanup?: CleanupResult
+  outputCapture?: ScopeOutput
 }
 
 export interface ProposalDryRunReport {
@@ -212,6 +220,8 @@ export interface EvalRun extends EvalAttemptEvidence {
   finalCheckOutputs?: FinalCheckOutput[]
   cacheRecallEval?: CacheRecallEvalResult
   retrievalFlow?: import('./retrieval-flow-metrics').RetrievalFlowMetrics
+  /** N10: tool/edit/LSP counts from the agent trace. */
+  qualityMetrics?: import('./quality-metrics').RunQualityMetrics
   idiomTraceability?: IdiomTraceabilityEvaluation
   thinkerHarvest?: ThinkerHarvestEvaluation
   proposalDryRun?: ProposalDryRunReport
@@ -234,4 +244,9 @@ export interface AgentEvalResults {
   scorePerDollar?: number
   /** Number of measured (non-synthetic) runs contributing to averageScore. Optional. */
   measuredRunCount?: number
+  /**
+   * N10: pooled edit-commit, tool error and LSP call rates plus the agent's
+   * static prompt tokens. Optional for back-compat with older results.
+   */
+  qualityMetrics?: import('./quality-metrics').AgentQualityMetrics
 }

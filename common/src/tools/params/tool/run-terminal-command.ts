@@ -2,12 +2,24 @@ import z from 'zod/v4'
 
 import { $getNativeToolCallExampleString, jsonToolResultSchema } from '../utils'
 import { executionRefusalSchema } from '../execution-refusal'
+import { processCleanupSchema } from '../process-cleanup'
+import { executionUsageSchema } from '../execution-usage'
+import { nativeWaitStatusFields } from '../native-wait-status'
 
 import { gitCommitGuidePrompt } from '../../../constants/git-discipline'
 
 import type { $ToolParams } from '../../constants'
 
 const executionMetadata = {
+  ...nativeWaitStatusFields,
+  executionSignal: z.number().int().positive().max(64).optional(),
+  executionUsage: executionUsageSchema.optional(),
+  processCleanup: processCleanupSchema.optional(),
+  logComplete: z.boolean().optional(),
+  /** Longest SYNC silence (ms), reported once it reaches the idle-output threshold (30 s). */
+  idleOutputMs: z.number().optional(),
+  /** "Waiting for input?" hint attached when a SYNC command went silent; the command was not stopped for it. */
+  idleOutputHint: z.string().optional(),
   executionRefusal: executionRefusalSchema.optional(),
   dirtyObservationRefusal: executionRefusalSchema.optional(),
   executionBindingVersion: z.literal(2).optional(),
@@ -150,10 +162,9 @@ const inputSchema = z
       ),
     timeout_seconds: z
       .number()
-      .default(-1)
       .optional()
       .describe(
-        `Wall-clock bound in seconds for SYNC and BACKGROUND commands, including startup and approval waits. Omit or use -1 for no local timeout (the default). A finite parent deadline still applies.`,
+        `Wall-clock bound in seconds, including startup and approval waits. If omitted, SYNC commands get 120 s of execution time (approval waits excluded) and BACKGROUND jobs have no local timeout. Raise it for long builds or test suites. -1 means no local timeout where the host allows it; a host cap and any finite parent deadline still apply.`,
       ),
     owner: z
       .object({
@@ -185,7 +196,8 @@ DO NOT do any of the following:
 6. Use the wrong package manager for the project. For example, if the project uses \`pnpm\` or \`bun\` or \`yarn\`, you should not use \`npm\`. Similarly not everyone uses \`pip\` for python, etc.
 
 Do:
-- If there's an opportunity to use "-y" or "--yes" flags, use them. Any command that prompts for confirmation will hang if you don't use the flags.
+- If there's an opportunity to use "-y" or "--yes" flags, use them. stdin is closed (reads get EOF), so a command that prompts for confirmation fails or stalls without them. A SYNC result with idleOutputHint means the command went 30 s without output; it may be waiting on a terminal prompt.
+- SYNC commands time out after 120 s unless you pass timeout_seconds; set it higher for long builds or test suites. The timeout keeps the partial output, and so does a user cancel.
 
 Notes:
 - If the user references a specific file, it could be either from their cwd or from the project root. You **must** determine which they are referring to (either infer or ask). Then, you must specify the path relative to the project root (or use the cwd parameter)

@@ -114,3 +114,8 @@ export type {
   ScipRunnerInvocation,
   ScipRunnerResult,
 } from './scip-runner'
+// N09: tag-query availability, re-exported so the CLI `/index status` and the
+// release smoke probe can report a degraded (symbol-less) index without a
+// direct code-map dependency.
+export { getFileTokenScores, getTagQueryStatus } from '@codebuff/code-map'
+export type { TagQueryStatus } from '@codebuff/code-map'

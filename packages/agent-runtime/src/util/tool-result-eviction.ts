@@ -14,8 +14,9 @@ import type { Message, ToolMessage } from '@codebuff/common/types/messages/codeb
  * Deterministic, zero-LLM-cost tool-result eviction — the "continuous light
  * consolidation" layer of the compaction pipeline.
  *
- * WHY: the semantic (LLM) pruner pass costs a full model call over the whole
- * transcript. Old tool-result bodies (file reads, command output, search
+ * WHY: the semantic pruner pass rewrites the whole transcript (the default
+ * pruner is extractive and makes no model call, but every pass invalidates the
+ * prompt cache, and a custom pruner may call a model). Old tool-result bodies (file reads, command output, search
  * hits) are usually the bulk of that transcript and carry almost no forward
  * value once their step is over. Evicting them deterministically — every
  * iteration above the eviction floor (see `getSemanticEvictionFloorTokens`),

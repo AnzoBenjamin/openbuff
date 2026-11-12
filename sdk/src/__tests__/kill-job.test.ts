@@ -80,25 +80,65 @@ describe('killJob', () => {
     expect(value(out).jobId).toBe('job-does-not-exist')
   })
 
-  test('kills a running job with SIGTERM by default and reports stopping until exit (M2-T4)', async () => {
+  test('a child that has not exited is reported stopping with killed: false, a reason and a next step (exec-jobs-13)', async () => {
     const job = makeJob()
-    const out = await killJob({ jobId: job.jobId, owner: TRUSTED_OWNER })
-    // M2-T4 (Fix 3): signal DELIVERY is no longer terminal. The job folds into
-    // the non-terminal 'stopping' state; only the child's 'exit' event settles
-    // 'stopped'.
-    expect(value(out)).toEqual({
+    const out = await killJob({
+      jobId: job.jobId,
+      owner: TRUSTED_OWNER,
+      waitForExitMs: 30,
+    })
+    // M2-T4 (Fix 3): signal DELIVERY is not terminal. N04: so `killed` is
+    // false until the exit is observed.
+    expect(value(out)).toMatchObject({
       jobId: job.jobId,
       status: 'stopping',
-      killed: true,
+      killed: false,
+      exitObserved: false,
       signal: 'SIGTERM',
       exitCode: null,
     })
+    expect(value(out).reason).toContain('had not exited')
+    expect(value(out).nextStep).toContain('check_job')
     expect(job.status).toBe('stopping')
+  })
+
+  test('killed: true is reported only after the exit is observed (exec-jobs-13)', async () => {
+    let job: BackgroundJob
+    job = makeJob({
+      child: {
+        pid: 53000 + 4242,
+        kill: () => {
+          // The real child settles through its own exit event, asynchronously.
+          setTimeout(() => {
+            job.status = 'stopped'
+            job.exitCode = 143
+          }, 40)
+          return true
+        },
+      } as unknown as BackgroundJob['child'],
+    })
+    const out = await killJob({
+      jobId: job.jobId,
+      owner: TRUSTED_OWNER,
+      waitForExitMs: 2_000,
+    })
+    expect(value(out)).toEqual({
+      jobId: job.jobId,
+      status: 'stopped',
+      killed: true,
+      exitObserved: true,
+      signal: 'SIGTERM',
+      exitCode: 143,
+    })
   })
 
   test('graceful exit after SIGTERM folds stopping into a terminal state with the exit code (M2-T4)', async () => {
     const job = makeJob()
-    const out = await killJob({ jobId: job.jobId, owner: TRUSTED_OWNER })
+    const out = await killJob({
+      jobId: job.jobId,
+      owner: TRUSTED_OWNER,
+      waitForExitMs: 0,
+    })
     expect(value(out).status).toBe('stopping')
     expect(jobRegistry.get(job.jobId)?.state).toBe('stopping')
 
@@ -123,7 +163,7 @@ describe('killJob', () => {
         kill: () => true,
       } as unknown as BackgroundJob['child'],
     })
-    await killJob({ jobId: job.jobId, owner: TRUSTED_OWNER })
+    await killJob({ jobId: job.jobId, owner: TRUSTED_OWNER, waitForExitMs: 0 })
 
     // The registry is non-terminal ('stopping') — the job must NOT be
     // reported as settled/do_not_repoll, since the SIGTERM-ignoring child has
@@ -141,9 +181,12 @@ describe('killJob', () => {
       jobId: job.jobId,
       signal: 'SIGKILL',
       owner: TRUSTED_OWNER,
+      waitForExitMs: 0,
     })
     expect(value(out).signal).toBe('SIGKILL')
-    expect(value(out).killed).toBe(true)
+    // The fake child never exits, so the kill is not confirmed.
+    expect(value(out).killed).toBe(false)
+    expect(value(out).nextStep).toContain('check_job')
   })
 
   test('does not attempt to kill an already-finished job', async () => {
@@ -196,8 +239,13 @@ describe('killJob', () => {
     // pin owner to the trusted value. The trusted owner wins and the kill is
     // allowed; the foreign owner in the input is ignored.
     const modelInput = { jobId: job.jobId, owner: FOREIGN_OWNER }
-    const out = await killJob({ ...modelInput, owner: TRUSTED_OWNER })
-    expect(value(out).killed).toBe(true)
+    const out = await killJob({
+      ...modelInput,
+      owner: TRUSTED_OWNER,
+      waitForExitMs: 0,
+    })
+    // The trusted owner's kill was attempted (the fake child never exits).
     expect(value(out).status).toBe('stopping')
+    expect(value(out).errorMessage).toBeUndefined()
   })
 })

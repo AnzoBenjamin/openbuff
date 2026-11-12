@@ -82,6 +82,7 @@ import {
 import { formatValueForError } from '../util/format-value'
 import { lifecycleTagsForToolResult } from '../util/tool-result-lifecycle'
 import { codebuffToolHandlers } from './handlers/list'
+import { checkPlanModeToolCall } from './plan-mode-guard'
 import {
   getMatchingSpawn,
   isBaseAgent,
@@ -2989,6 +2990,30 @@ async function executeNativeToolCall<T extends ToolName>(
     logger,
     providerReportedTruncation,
   })
+
+  // Plan mode is read-only (N03). Enforced here for every caller, including
+  // handleSteps (which skips the tool-list check below), so a plan lineage
+  // cannot reach a mutating tool through any template or programmatic step.
+  const planModeRefusal = checkPlanModeToolCall({
+    toolName,
+    input,
+    agentTemplate,
+    agentState,
+    clientSessionId: params.clientSessionId,
+  })
+  if (planModeRefusal) {
+    logger.warn(
+      { toolName, agentId: agentTemplate.id, fromHandleSteps },
+      'Refused mutating tool call in plan-mode lineage',
+    )
+    onResponseChunk({
+      type: 'error',
+      message: planModeRefusal.message,
+      userMessage: planModeRefusal.userMessage,
+      errorCode: planModeRefusal.errorCode,
+    } as PrintModeEvent & { errorCode: typeof planModeRefusal.errorCode })
+    return abortablePreviousToolCallFinished
+  }
 
   // Filter out restricted tools - emit error instead of tool call/result
   // This prevents the CLI from showing tool calls that the agent doesn't have permission to use

@@ -50,7 +50,7 @@ const basher: AgentDefinition = {
         timeout_seconds: {
           type: 'number',
           description:
-            'Optional wall-clock bound in seconds. Omit or use -1 for no timeout (the default). Set a positive value to cap long-running commands.',
+            'Optional wall-clock bound in seconds. If omitted, SYNC commands time out after 120 s of execution and BACKGROUND jobs have no timeout. Pass a larger value for long builds or test suites; -1 means no timeout where the host allows it.',
         },
         process_type: {
           type: 'string',
@@ -176,15 +176,12 @@ Do not use any tools! Only report the output of the command.`,
     )
     const inlineHeadLines = Math.floor(inlineLineLimit * 0.6)
     const inlineTailLines = inlineLineLimit - inlineHeadLines
-    // No default timeout cap: agent tasks can take arbitrarily long, and a
-    // hard wall-clock limit kills legitimate long-running work (test suites,
-    // builds, editor think-time). Callers that want a cap pass timeout_seconds
-    // explicitly; -1 (or omit) means no timeout, which is the right default
-    // for agentic use. The underlying run_terminal_command schema already
-    // documents -1 as "no timeout".
-    const DEFAULT_TIMEOUT_SECONDS = -1
-    const effectiveTimeoutSeconds =
-      timeout_seconds !== undefined ? timeout_seconds : DEFAULT_TIMEOUT_SECONDS
+    // Default timeout (N06): an omitted timeout_seconds is passed through as
+    // omitted, so the SDK applies its SYNC default (120 s of execution time,
+    // approval waits excluded) and leaves BACKGROUND jobs unbounded. Callers
+    // raise it explicitly for long builds or test suites; -1 stays an explicit
+    // opt-in that the host may cap.
+    const effectiveTimeoutSeconds = timeout_seconds
     const shellQuote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`
     // Use crypto.randomUUID() (Node global, no import needed) for the temp
     // log path. crypto.randomUUID is cryptographically random, unlike
@@ -240,7 +237,7 @@ Do not use any tools! Only report the output of the command.`,
       input: {
         command: commandToRun,
         ...(process_type !== undefined && { process_type }),
-        timeout_seconds: effectiveTimeoutSeconds,
+        ...(effectiveTimeoutSeconds !== undefined && { timeout_seconds: effectiveTimeoutSeconds }),
         ...(cwd !== undefined && { cwd }),
         ...(detach !== undefined && { detach }),
       },

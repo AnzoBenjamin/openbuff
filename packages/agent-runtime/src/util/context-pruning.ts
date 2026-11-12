@@ -74,7 +74,15 @@ export const DEFAULT_SEMANTIC_REARM_BUDGET_TOKENS = 120_000
 export const COMPACTION_NO_PROGRESS_FRACTION = 0.05
 
 /**
- * Governor budgets for the semantic (LLM) compaction pass.
+ * Governor budgets for the semantic compaction pass.
+ *
+ * NAMING (memory-context-05): "semantic" is historical. The default pass is
+ * the programmatic `context-pruner` agent, an EXTRACTIVE rewrite: fixed
+ * per-item caps and budget shares, dropped file bodies and older entries, a
+ * `<knowledge_memory>` skeleton. It makes no model call and writes no prose
+ * summary. "LLM"/"paid" below describes the original design and the cost of a
+ * custom pruner that does call a model; the governor still paces the pass
+ * because each one rewrites the transcript (and breaks the prompt cache).
  *
  * WHY: the previous design announced — and paid for — a full-transcript LLM
  * pruner pass on EVERY loop iteration above the trigger until a
@@ -377,7 +385,7 @@ export type SemanticCompactionGovernorState =
   | 'rearm-pending'
 
 /**
- * Loop-local state machine deciding when the expensive semantic (LLM)
+ * Loop-local state machine deciding when the semantic (extractive pruner)
  * compaction pass may run. One instance per `loopAgentSteps` invocation; it
  * deliberately does NOT persist to `AgentState` — a settled pass bought
  * headroom that is visible in the token counts themselves, so surviving across

@@ -1,6 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 
+import { agentHasPlanModeRefusedTools } from '@codebuff/common/tools/plan-mode-policy'
 import { pluralize } from '@codebuff/common/util/string'
 import {
   loadLocalAgents as sdkLoadLocalAgents,
@@ -414,6 +415,28 @@ export const loadLocalAgents = (
  * of any base agent (agents with IDs starting with 'base'), so users can spawn
  * their custom agents without needing to modify the base agent definition.
  */
+/**
+ * Plan mode is read-only (N03): a plan-mode template (programmaticConfig
+ * .planOnly, e.g. base2-plan) may spawn only agents that declare no
+ * plan-refused tool. This covers bundled agents and the user/project
+ * `.agents/` agents auto-added above, including `~/.agents`. Unknown ids are
+ * dropped too, since their tools cannot be checked. The runtime still refuses
+ * mutating calls from any plan-lineage child at dispatch.
+ */
+export function filterPlanModeSpawnableAgents(
+  definitions: AgentDefinition[],
+): void {
+  const byId = new Map(definitions.map((def) => [def.id, def]))
+  for (const def of definitions) {
+    if (def.programmaticConfig?.planOnly !== true || !def.spawnableAgents)
+      continue
+    def.spawnableAgents = def.spawnableAgents.filter((id) => {
+      const child = byId.get(id)
+      return child !== undefined && !agentHasPlanModeRefusedTools(child.toolNames)
+    })
+  }
+}
+
 export const loadAgentDefinitions = (): AgentDefinition[] => {
   // Start with bundled agents - these are the default Openbuff agents
   const bundledAgents = getBundledAgents()
@@ -454,6 +477,8 @@ export const loadAgentDefinitions = (): AgentDefinition[] => {
       }
     }
   }
+
+  filterPlanModeSpawnableAgents(definitions)
 
   // Merge MCP servers from mcp.json into base agents
   // This allows users to configure MCP tools that are available to the main agent

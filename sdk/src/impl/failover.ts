@@ -29,14 +29,15 @@ import type { LoadedProviderConfig } from '../provider-config'
  *   loop throws (the retry loop does NOT retry auth errors since they're not
  *   in RETRYABLE_STATUS_CODES, so the outer failover loop sees them right
  *   away).
- * - 500/502/503/504 (server): retryable, so the inner loop retries first; if
- *   retries exhaust, the outer loop failovers.
+ * - 500/502/503/504 (server) and 529 (Anthropic overloaded, including the
+ *   SSE `overloaded_error` event): retryable, so the inner loop retries
+ *   first; if retries exhaust, the outer loop failovers.
  * - 429 (rate limit): retry-only. Failover on 429 risks cascading load across
  *   providers; backoff is the proven response.
  * - 408 (timeout): retry-only. Network-level; failover unlikely to help.
  */
 export const FAILOVER_ELIGIBLE_STATUS_CODES = new Set([
-  401, 403, 500, 502, 503, 504,
+  401, 403, 500, 502, 503, 504, 529,
 ])
 
 /**
@@ -75,7 +76,7 @@ export function resolveModelsToTry(
  *
  * Per the documented `failoverModels` contract (provider-config.ts): failover
  * fires on errors carrying a failover-eligible HTTP status code
- * (401/403/500/502/503/504). Provider content-policy errors are NOT
+ * (401/403/500/502/503/504/529). Provider content-policy errors are NOT
  * failover-eligible (M3-T4): a policy refusal is deterministic, so retrying
  * the same prompt against the next configured model/provider is a
  * documented-contract violation and a policy-evasion path — the policy error
@@ -109,4 +110,68 @@ export function isFailoverEligibleError(error: unknown): boolean {
   const statusCode = getErrorStatusCode(error)
   if (statusCode === undefined) return false
   return FAILOVER_ELIGIBLE_STATUS_CODES.has(statusCode)
+}
+
+/** Auth statuses that mark a route degraded for the rest of the session. */
+export const ROUTE_DEGRADING_STATUS_CODES: ReadonlySet<number> = new Set([
+  401, 403,
+])
+
+export type DegradedRoute = Readonly<{
+  model: string
+  statusCode: number
+  /** The model the request failed over to when the route was marked. */
+  replacementModel?: string
+  markedAtMs: number
+}>
+
+/**
+ * Session record of routes that failed authentication (N07). A revoked or
+ * expired key will keep failing, so later requests skip the route instead of
+ * paying a 401 round trip every time. Cleared on restart or by
+ * {@link clearDegradedProviderRoutes} (the CLI calls it from `/provider`).
+ */
+export type RouteHealthRegistry = {
+  markDegraded(route: Omit<DegradedRoute, 'markedAtMs'>): void
+  get(model: string): DegradedRoute | undefined
+  clear(): void
+}
+
+export function createRouteHealthRegistry(
+  now: () => number = Date.now,
+): RouteHealthRegistry {
+  const degraded = new Map<string, DegradedRoute>()
+  return {
+    markDegraded(route) {
+      degraded.set(route.model, Object.freeze({ ...route, markedAtMs: now() }))
+    },
+    get: (model) => degraded.get(model),
+    clear: () => degraded.clear(),
+  }
+}
+
+/** Process-wide registry used when the caller does not inject one. */
+export const sessionRouteHealth: RouteHealthRegistry =
+  createRouteHealthRegistry()
+
+export function clearDegradedProviderRoutes(): void {
+  sessionRouteHealth.clear()
+}
+
+/**
+ * Move degraded routes behind the healthy ones, keeping relative order. A
+ * degraded route stays in the list as a last resort, so a request still has a
+ * route to try when every route is degraded (or the key has been fixed).
+ */
+export function orderModelsByRouteHealth(
+  models: readonly string[],
+  health: Pick<RouteHealthRegistry, 'get'>,
+): string[] {
+  const healthy = models.filter((model) => health.get(model) === undefined)
+  if (healthy.length === 0 || healthy.length === models.length)
+    return [...models]
+  return [
+    ...healthy,
+    ...models.filter((model) => health.get(model) !== undefined),
+  ]
 }

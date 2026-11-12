@@ -47,11 +47,13 @@ import { connectChatGptOAuth } from './utils/chatgpt-oauth'
 import { trackEvent } from './utils/analytics'
 import { resetCodebuffClient, setAttachTarget } from './utils/codebuff-client'
 import {
+  discardEarlyInputCapture,
   startEarlyInputCapture,
   stopEarlyInputCapture,
 } from './utils/early-input-capture'
 import { getCliEnv } from './utils/env'
 import { initializeAgentRegistry, getProjectAgentTrustStatus } from './utils/local-agent-registry'
+import { createTerminalTrustPrompt, resolveProjectTrust } from './utils/project-trust-gate'
 import { clearLogFile, logger } from './utils/logger'
 import { shouldShowProjectPicker } from './utils/project-picker'
 import { hasGitDirectoryAsync } from './utils/directory-browser'
@@ -223,6 +225,20 @@ async function main(): Promise<void> {
       process.exit(0)
     } catch (err) {
       console.error('answer validation worker FAIL:', err)
+      process.exit(1)
+    }
+  }
+  // N09 release gate: index a TS fixture and require non-empty symbols, calls
+  // and imports (fails when tree-sitter-queries/*.scm were not shipped).
+  if (process.argv.includes('--smoke-code-map')) {
+    try {
+      const { runCodeMapSmoke, formatCodeMapSmoke } = await import('./utils/code-map-smoke')
+      const result = await runCodeMapSmoke()
+      // Marker consumed by cli/scripts/smoke-binary.ts. Keep exact text.
+      ;(result.ok ? console.log : console.error)(formatCodeMapSmoke(result))
+      process.exit(result.ok ? 0 : 1)
+    } catch (err) {
+      console.error('code-map smoke FAIL:', err)
       process.exit(1)
     }
   }
@@ -592,23 +608,53 @@ async function main(): Promise<void> {
   // allowlist read/validation error fails closed (untrusted). On the TUI
   // path `effectiveTrust` stays equal to the raw `--trust-project-agents`
   // flag, so non-serve behavior is unchanged.
-  let effectiveTrust = trustProjectAgents
-  if (serve) {
-    // The serve subcommand carries its own --trust-project-agents; the
-    // top-level program hardcodes trustProjectAgents to false for serve runs.
-    effectiveTrust = serve.trustProjectAgents
-    if (!effectiveTrust) {
-      try {
-        effectiveTrust = isTrustedProjectRoot(
-          fs.realpathSync(projectRoot),
-          await loadTrustedRoots(),
-        )
-      } catch {
-        // Fail closed: realpathSync threw (e.g. missing project root) so
-        // serve stays untrusted (effectiveTrust is false here).
-      }
+  // The serve subcommand carries its own --trust-project-agents; the
+  // top-level program hardcodes trustProjectAgents to false for serve runs.
+  const trustFlag = serve ? serve.trustProjectAgents : trustProjectAgents
+  let allowlisted = false
+  if (serve && !trustFlag) {
+    try {
+      allowlisted = isTrustedProjectRoot(
+        fs.realpathSync(projectRoot),
+        await loadTrustedRoots(),
+      )
+    } catch {
+      // Fail closed: realpathSync threw (e.g. missing project root) so
+      // serve stays untrusted.
     }
   }
+  // N02 project trust gate: one decision covers .agents/**, project skills,
+  // .agents/mcp.json AND the project's openbuff.json/openbuff.d (providers,
+  // routes, hooks, approvalMode, sandbox). It is persisted per project path
+  // + config hash in the user config dir; the SDK loaders enforce it for
+  // TUI, run, serve and mcp. Only the interactive TUI launch asks; headless
+  // commands print one stderr notice and stay untrusted.
+  const interactiveTrustPrompt =
+    !serve && !mcp && !run && !replay && !dash &&
+    process.stdin.isTTY === true && process.stdout.isTTY === true
+  const projectTrust = await resolveProjectTrust(
+    { projectRoot, flag: trustFlag, allowlisted },
+    {
+      ...(interactiveTrustPrompt
+        ? {
+            prompt: async (lines: string[]) => {
+              // The early-input capture holds stdin in raw mode and would
+              // replay the answer into the chat input; suspend it (dropping
+              // anything typed before the question) while the prompt reads a
+              // cooked line, then resume it for the renderer handoff.
+              discardEarlyInputCapture()
+              try {
+                return await createTerminalTrustPrompt({ input: process.stdin, output: process.stdout })(lines)
+              } finally {
+                startEarlyInputCapture()
+              }
+            },
+          }
+        : {}),
+      notice: (line) => process.stderr.write(line + '\n'),
+    },
+  )
+  const effectiveTrust = projectTrust.trusted
 
   // P1-T9: the agent/skill registries are NOT awaited here. They are started
   // (not awaited) just before the renderer mounts below, so the .agents disk
@@ -791,11 +837,21 @@ async function main(): Promise<void> {
             prepare: async () => {
               resetDeferredRegistryLoads()
               await resetCodebuffClient()
+              // N02: re-resolve trust for the new root (cwd is already the
+              // target). Stored decisions and the flag apply; no prompt is
+              // shown while the renderer owns the terminal (follow-up: in-TUI
+              // trust screen), so an undecided project stays untrusted.
+              const switchedTrust = (
+                await resolveProjectTrust({
+                  projectRoot: getProjectRoot(),
+                  flag: trustProjectAgents,
+                })
+              ).trusted
               if (isPublishCommand || !hasAgentOverride) {
-                await initializeAgentRegistry({ trustProjectAgents })
+                await initializeAgentRegistry({ trustProjectAgents: switchedTrust })
               }
               await initializeSkillRegistry({
-                trustProjectSkills: trustProjectAgents,
+                trustProjectSkills: switchedTrust,
               })
             },
             recover: async () => {

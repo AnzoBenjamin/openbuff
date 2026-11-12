@@ -8,10 +8,12 @@ import { createHostReadPolicy } from '@codebuff/common/util/project-path-contain
 import { getValidChatGptOAuthCredentials, refreshChatGptOAuthToken } from './credentials'
 import { CREDENTIAL_ENV_KEYS } from './credential-env-keys'
 import { getSystemProcessEnv, getChatGptOAuthTokenFromEnv } from './env'
+import { PROJECT_TRUST_ENV_VAR, getProjectTrustOverride } from './project-trust'
 import { loadProviderConfigForHost } from './provider-config'
 
 import type { HostReadPolicy } from '@codebuff/common/util/project-path-containment'
 import type { ChatGptOAuthCredentials } from './credentials'
+import type { ProjectTrustDecision } from './project-trust'
 import type { ConfigReadFs, LoadedProviderConfig } from './provider-config'
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown ? T :
@@ -26,7 +28,12 @@ export type HostConfigurationInputs = Readonly<{
   home: Readonly<{ kind: 'path'; path: string }> | Readonly<{ kind: 'none' }>
   globals: Readonly<{ kind: 'directory'; path: string }> | Readonly<{ kind: 'disabled' }>
   selection: Readonly<{ kind: 'discover' }> | Readonly<{ kind: 'explicit'; path: string; required: true }> | Readonly<{ kind: 'none' }>
-  trust: Readonly<{ ancestorConfig: boolean; projectReadableRoots: boolean }>
+  /**
+   * projectConfig (N02): explicit host decision for project-scope
+   * openbuff.json/openbuff.d. Absent means "use the stored decision for this
+   * project path + config hash" (untrusted when none matches).
+   */
+  trust: Readonly<{ ancestorConfig: boolean; projectReadableRoots: boolean; projectConfig?: ProjectTrustDecision }>
 }>
 
 export type HostConfigSnapshot = Readonly<{
@@ -48,6 +55,8 @@ export type HostConfigSnapshot = Readonly<{
   sandboxPolicy: Readonly<{ mode: 'unrestricted' | 'project'; allowPaths: readonly string[] }>
   readPolicy: HostReadPolicy
   configDir?: string
+  /** Captured canonical declaring file; read/ancestor trust never grants execution trust. */
+  executionOrigin?: Readonly<{ filePath: string; trusted: boolean }>
 }>
 
 export type SnapshotResult = Readonly<{ status: 'complete'; snapshot: HostConfigSnapshot }> |
@@ -83,7 +92,12 @@ function absoluteFrom(base: string, candidate: string): string {
 }
 
 /** Ambient reads are confined to this intake wrapper. Child env overrides never reach it. */
-export function captureAmbientHostInputs(p: { cwd: string; projectRoot: string }): HostConfigurationInputs {
+export function captureAmbientHostInputs(p: {
+  cwd: string
+  projectRoot: string
+  /** N02: explicit project trust decision from the SDK host. Wins over the process override and env opt-in. */
+  projectTrust?: ProjectTrustDecision
+}): HostConfigurationInputs {
   const environment = { ...getSystemProcessEnv() }
   const platform = process.platform
   const home = os.homedir()
@@ -92,11 +106,14 @@ export function captureAmbientHostInputs(p: { cwd: string; projectRoot: string }
   const configDir = environment.OPENBUFF_CONFIG_DIR ??
     (platform === 'win32' && environment.APPDATA ? path.join(environment.APPDATA, 'openbuff') : undefined) ??
     (environment.XDG_CONFIG_HOME ? path.join(environment.XDG_CONFIG_HOME, 'openbuff') : path.join(home, '.config', 'openbuff'))
+  const projectConfig = p.projectTrust ?? getProjectTrustOverride(projectRoot) ??
+    (environment[PROJECT_TRUST_ENV_VAR] === '1' ? 'trusted' as const : undefined)
   return freezeCopy({ environment, platform, invocationCwd, projectRoot,
     home: { kind: 'path', path: home }, globals: { kind: 'directory', path: absoluteFrom(invocationCwd, configDir) },
     selection: environment.OPENBUFF_PROVIDER_CONFIG ? { kind: 'explicit', path: environment.OPENBUFF_PROVIDER_CONFIG, required: true } : { kind: 'discover' },
     trust: { ancestorConfig: environment.OPENBUFF_TRUST_ANCESTOR_CONFIG === '1',
-      projectReadableRoots: environment.OPENBUFF_TRUST_PROJECT_READABLE_ROOTS === '1' } })
+      projectReadableRoots: environment.OPENBUFF_TRUST_PROJECT_READABLE_ROOTS === '1',
+      ...(projectConfig ? { projectConfig } : {}) } })
 }
 
 export function getConfigDirForContext(inputs: HostConfigurationInputs): string | undefined {
@@ -156,7 +173,8 @@ export function loadHostConfigSnapshot(p: { inputs: HostConfigurationInputs; fs:
       !input.home || !['path', 'none'].includes(input.home.kind) || !input.globals || !['directory', 'disabled'].includes(input.globals.kind) ||
       !input.selection || !['none', 'explicit', 'discover'].includes(input.selection.kind) ||
       (input.selection.kind === 'explicit' && input.selection.required !== true) ||
-      typeof input.trust?.ancestorConfig !== 'boolean' || typeof input.trust?.projectReadableRoots !== 'boolean')
+      typeof input.trust?.ancestorConfig !== 'boolean' || typeof input.trust?.projectReadableRoots !== 'boolean' ||
+      (input.trust.projectConfig !== undefined && input.trust.projectConfig !== 'trusted' && input.trust.projectConfig !== 'untrusted'))
       return { status: 'unavailable', cause: 'Invalid explicit host configuration inputs' }
     const inputs = freezeCopy({ ...input, invocationCwd: path.resolve(input.invocationCwd), projectRoot: path.resolve(input.projectRoot) })
     if (inputs.home.kind === 'path') absoluteFrom(inputs.invocationCwd, inputs.home.path)
@@ -203,7 +221,18 @@ export function loadHostConfigSnapshot(p: { inputs: HostConfigurationInputs; fs:
     const realExplicit = inputs.selection.kind === 'explicit' ? trustedRoot(absoluteFrom(inputs.invocationCwd, inputs.selection.path)) : undefined
     const isTrusted = (candidate: string) => inputs.trust.ancestorConfig || inside(realProjectRoot, candidate) ||
       (realConfigDir !== undefined && inside(realConfigDir, candidate)) || candidate === realExplicit
-    const loaded = loadProviderConfigForHost({ configPaths, reader, isTrustedPath: isTrusted })
+    // N02: everything outside the user config dir and the explicit selection is
+    // project scope and only tightens policy until the project is trusted.
+    const isUserScope = (selectedPath: string) => inputs.selection.kind === 'explicit' ||
+      (configDir !== undefined && inside(configDir, selectedPath))
+    const loaded = loadProviderConfigForHost({ configPaths, reader, isTrustedPath: isTrusted,
+      projectTrust: { projectRoot: realProjectRoot, isUserScope, explicit: inputs.trust.projectConfig,
+        storeDir: realConfigDir } })
+    const executionFile = loaded.sourceFiles?.execution
+    const executionOrigin = executionFile === undefined ? undefined : Object.freeze({
+      filePath: executionFile,
+      trusted: (realConfigDir !== undefined && inside(realConfigDir, executionFile)) || executionFile === realExplicit,
+    })
     const readableRoots = [...new Set([...(configDir ? [configDir] : []), ...loaded.config.readableRoots.filter(root => {
       if (!path.isAbsolute(root)) return false
       const origin = loaded.readableRootsSources?.[root]
@@ -230,7 +259,7 @@ export function loadHostConfigSnapshot(p: { inputs: HostConfigurationInputs; fs:
         inputs.invocationCwd, inputs.projectRoot, inputs.home, inputs.globals, inputs.selection, inputs.trust,
         [...observations.entries()].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([name, record]) => [name, record.identity])]),
       credentialNames: extractConfiguredCredentialNames(immutableLoaded), readableRoots: Object.freeze(readableRoots),
-      sandboxPolicy, readPolicy })
+      sandboxPolicy, readPolicy, ...(executionOrigin ? { executionOrigin } : {}) })
     snapshots.add(snapshot)
     return { status: 'complete', snapshot }
   } catch (error) {

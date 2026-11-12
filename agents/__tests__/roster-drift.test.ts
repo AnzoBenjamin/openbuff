@@ -222,6 +222,8 @@ describe('intentional per-mode spawnable deltas (M3.2)', () => {
     'git-committer',
     'doc-writer',
     'test-writer',
+    // N03: synthesizer writes its report with write_file.
+    'synthesizer',
   ])
 
   test('browser-use is unconditional across every mode', () => {

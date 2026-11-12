@@ -28,7 +28,14 @@ import {
   markChatGptOAuthRateLimited,
   resolveModelContextWindow,
 } from './model-provider'
-import { resolveModelsToTry, isFailoverEligibleError } from './failover'
+import {
+  ROUTE_DEGRADING_STATUS_CODES,
+  isFailoverEligibleError,
+  orderModelsByRouteHealth,
+  resolveModelsToTry,
+  sessionRouteHealth,
+} from './failover'
+import type { RouteHealthRegistry } from './failover'
 import { buildSpawnAgentsInputForDirectAgentCall } from './direct-agent-tool-repair'
 import {
   getMaxOutputBytesForModel,
@@ -40,7 +47,12 @@ import { getCapturedProviderConfig } from '../host-config'
 import type { ProviderHostContext } from '../host-config'
 import { refreshChatGptOAuthToken } from '../credentials'
 
-export type LlmHostDeps = Readonly<{ providerContext: ProviderHostContext; getModel?: typeof getModelForRequest }>
+export type LlmHostDeps = Readonly<{
+  providerContext: ProviderHostContext
+  getModel?: typeof getModelForRequest
+  /** Session route health (N07). Defaults to the process-wide registry. */
+  routeHealth?: RouteHealthRegistry
+}>
 import {
   getProviderContentPolicyFinishError,
   getErrorStatusCode,
@@ -1108,6 +1120,38 @@ export function countToolSurfaceTokensForCalibration(
   return countToolSurfaceTokens(tools)
 }
 
+/**
+ * N01: put an Anthropic prompt-cache breakpoint on the last tool definition.
+ * Anthropic orders the cached prefix tools → system → messages, so this
+ * breakpoint keeps the tool block cached even when the system prompt changes
+ * (a plan/execute switch, for example). The message anchors placed by
+ * `convertCbToModelMessages` use at most three breakpoints, so this is the
+ * fourth and last one Anthropic allows. Providers other than Anthropic ignore
+ * the `anthropic` provider option. Returns the input unchanged when empty.
+ */
+export function withToolsCacheBreakpoint<T>(tools: T): T {
+  if (!tools || typeof tools !== 'object') return tools
+  const names = Object.keys(tools as Record<string, unknown>)
+  const lastName = names[names.length - 1]
+  if (lastName === undefined) return tools
+  const record = tools as Record<string, { providerOptions?: Record<string, Record<string, unknown>> }>
+  const lastTool = record[lastName]
+  if (!lastTool || typeof lastTool !== 'object') return tools
+  return {
+    ...record,
+    [lastName]: {
+      ...lastTool,
+      providerOptions: {
+        ...(lastTool.providerOptions ?? {}),
+        anthropic: {
+          ...(lastTool.providerOptions?.anthropic ?? {}),
+          cacheControl: { type: 'ephemeral' },
+        },
+      },
+    },
+  } as T
+}
+
 export function classifyChatGptOAuthStreamError(params: {
   isChatGptOAuth: boolean
   skipChatGptOAuth?: boolean
@@ -1201,6 +1245,9 @@ export async function* promptAiSdkStream(
     maxAttempts?: number
     delayMs?: number
     statusCode?: number
+    providerId?: string
+    apiKeyEnv?: string
+    degraded?: boolean
   }) => {
     params.sendAction({
       action: {
@@ -1225,13 +1272,29 @@ export async function* promptAiSdkStream(
     model: params.model,
     loadedConfig,
   }).model
-  const modelsToTry = resolveModelsToTry(effectiveRequestedModel, loadedConfig)
+  const routeHealth = deps?.routeHealth ?? sessionRouteHealth
+  // N07: a route that failed authentication earlier in this session goes to
+  // the back of the list, so the request starts on the working backup.
+  const modelsToTry = orderModelsByRouteHealth(
+    resolveModelsToTry(effectiveRequestedModel, loadedConfig),
+    routeHealth,
+  )
+  if (modelsToTry[0] !== effectiveRequestedModel) {
+    logger.debug(
+      {
+        primaryModel: effectiveRequestedModel,
+        firstModel: modelsToTry[0],
+        degraded: routeHealth.get(effectiveRequestedModel),
+      },
+      'Primary route is degraded for this session; starting on the backup',
+    )
+  }
   const policy: RetryPolicy = params.retryPolicy ?? RETRY_POLICY
   const retryBudget =
     params.retryBudget ??
     createRequestRetryBudget(
       policy,
-      effectiveRequestedModel,
+      modelsToTry[0] ?? effectiveRequestedModel,
       modelsToTry.length,
     )
   const routeContextWindowTokens = resolveModelContextWindow({
@@ -1294,7 +1357,10 @@ export async function* promptAiSdkStream(
             // failoverModel over openbuff.json mode/agent/defaultModel routing;
             // otherwise every backup model would silently re-resolve to the same
             // primary and failover would be a no-op (M8.1).
-            preferModelParam: failoverIndex > 0,
+            // A degraded primary moved behind its backup (N07) puts a backup at
+            // index 0, and that backup must also bypass the routing.
+            preferModelParam:
+              failoverIndex > 0 || failoverModel !== effectiveRequestedModel,
           }
           const modelResult = await (deps?.getModel ?? getModelForRequest)({ ...modelParams, providerContext: deps?.providerContext }).catch(
             (error) => {
@@ -1395,6 +1461,7 @@ export async function* promptAiSdkStream(
             )
           }
 
+          const requestCacheControl = compatibility.stripCacheControl === false
           const requestMessages = convertCbToModelMessages({
             ...params,
             messages: getMessagesForModelContext({
@@ -1409,11 +1476,15 @@ export async function* promptAiSdkStream(
               model: effectiveModel,
               onTrimmed: params.onRequestContextTrimmed,
             }),
-            includeCacheControl:
-              isChatGptOAuth && compatibility.stripCacheControl === false,
+            // N01: same gate as the non-streaming paths. The route's resolved
+            // compatibility decides; the provider type and the caller's hint do not.
+            includeCacheControl: requestCacheControl,
           })
           response = streamText({
             ...streamParams,
+            ...(requestCacheControl && compatibility.supportsTools !== false
+              ? { tools: withToolsCacheBreakpoint(streamParams.tools) }
+              : {}),
             system: requestSystem || undefined,
             // Provider-config default output ceiling (defaultCapabilities/modelCapabilities
             // context.outputTokens). The caller's explicit maxOutputTokens (agent template)
@@ -2129,11 +2200,32 @@ export async function* promptAiSdkStream(
         },
         'Provider failover: primary model failed, trying next configured model',
       )
+      const failedRoute = resolveConfiguredProviderModelMetadata({
+        model: attemptModel,
+        loadedConfig,
+      })
+      const apiKeyEnv =
+        failedRoute?.provider.type === 'openai-compatible' ||
+        failedRoute?.provider.type === 'anthropic-compatible'
+          ? failedRoute.provider.apiKeyEnv
+          : undefined
+      const degraded =
+        statusCode !== undefined && ROUTE_DEGRADING_STATUS_CODES.has(statusCode)
+      if (degraded) {
+        routeHealth.markDegraded({
+          model: failoverModel,
+          statusCode,
+          replacementModel: modelsToTry[failoverIndex + 1],
+        })
+      }
       emitProviderStatus({
         status: 'failover',
         model: attemptModel,
         nextModel: modelsToTry[failoverIndex + 1],
         ...(statusCode !== undefined ? { statusCode } : {}),
+        ...(failedRoute ? { providerId: failedRoute.providerId } : {}),
+        ...(apiKeyEnv ? { apiKeyEnv } : {}),
+        ...(degraded ? { degraded: true } : {}),
       })
     }
   }

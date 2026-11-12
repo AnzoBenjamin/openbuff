@@ -155,16 +155,68 @@ export type LanguageIntelligenceService = {
 }
 
 type UnavailableResult = {
-  unavailable: { reason: string; languageId?: string }
+  unavailable: {
+    reason: string
+    languageId?: string
+    status?: 'unavailable' | 'not_installed'
+    nextStep?: string
+    command?: string
+    install?: string
+  }
+}
+
+const FALLBACK_NEXT_STEP =
+  'Use code_search or query_index for this lookup instead.'
+
+/** Concrete next step per unavailable reason (N04: status + reason + next step). */
+function unavailableNextStep(error: LspServerUnavailableError): string {
+  switch (error.reason) {
+    case 'not-installed':
+      return error.install
+        ? `Ask the user to install '${error.command ?? 'the language server'}' (${error.install}), then retry. Until then, ${FALLBACK_NEXT_STEP.charAt(0).toLowerCase()}${FALLBACK_NEXT_STEP.slice(1)}`
+        : `Ask the user to install '${error.command ?? 'the language server'}' and put it on PATH. Until then, ${FALLBACK_NEXT_STEP.charAt(0).toLowerCase()}${FALLBACK_NEXT_STEP.slice(1)}`
+    case 'unsupported-language':
+    case 'no-server-spec':
+    case 'tcp-transport':
+      return `No supported language server for this file. ${FALLBACK_NEXT_STEP}`
+    case 'workspace-symbol-unsupported':
+      return `The running server does not support symbol search. ${FALLBACK_NEXT_STEP}`
+    case 'position is not renameable':
+    case 'unsupported action kind (v1 organizes imports only)':
+    case 'no organize-imports action available':
+    case 'no extract action available':
+    case 'no new-file destination in the workspace edit':
+      return 'The language server cannot perform this refactor here. Make the change with the edit tools instead.'
+    default:
+      return FALLBACK_NEXT_STEP
+  }
 }
 
 function toUnavailable(error: LspServerUnavailableError): UnavailableResult {
   return {
     unavailable: {
       reason: error.reason,
+      status: error.reason === 'not-installed' ? 'not_installed' : 'unavailable',
+      nextStep: unavailableNextStep(error),
       ...(error.languageId ? { languageId: error.languageId } : {}),
+      ...(error.command ? { command: error.command } : {}),
+      ...(error.install ? { install: error.install } : {}),
     },
   }
+}
+
+/**
+ * workspace_symbol never cold-starts a server, so "no warm server" is the
+ * normal state at the start of a turn. It must not look like "no symbols"
+ * (language-intel-02).
+ */
+const NO_WARM_SERVER_UNAVAILABLE: UnavailableResult = {
+  unavailable: {
+    reason: 'no-warm-server',
+    status: 'unavailable',
+    nextStep:
+      'workspace_symbol only queries an already running language server. Call go_to_definition, hover_type or find_references on a file in the target language to start one, then retry; or use code_search / query_index to find the symbol by name.',
+  },
 }
 
 function toErrorMessage(error: LspServerError): { errorMessage: string; executionRefusal?: LspExecutionError['refusal'] } {
@@ -742,10 +794,13 @@ export function createLanguageIntelligence(
 
     async workspaceSymbol(params, executionContext) {
       const result = await runQuery((mux) => mux.workspaceSymbol(params.query, undefined, executionContext))
-      if (result !== null && ('unavailable' in result || 'errorMessage' in result)) {
+      if (result === null) {
+        return [{ type: 'json', value: NO_WARM_SERVER_UNAVAILABLE }]
+      }
+      if ('unavailable' in result || 'errorMessage' in result) {
         return [{ type: 'json', value: result }]
       }
-      const symbols = (result ?? []).map((symbol) => ({
+      const symbols = result.map((symbol) => ({
         name: symbol.name,
         kind: symbol.kind,
         location: toStructuredLocation(symbol.location),

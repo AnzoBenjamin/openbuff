@@ -15,9 +15,10 @@ type JsonRecord<T = never> = Record<
   JSONValue | JSONValue[] | T | T[] | undefined
 >
 
-export interface OpenAICompatibleSystemMessage extends JsonRecord {
+export interface OpenAICompatibleSystemMessage extends JsonRecord<OpenAICompatibleContentPartText> {
   role: 'system'
-  content: string
+  /** A text-part array is used only to carry a `cache_control` breakpoint. */
+  content: string | Array<OpenAICompatibleContentPartText>
 }
 
 export interface OpenAICompatibleUserMessage extends JsonRecord<OpenAICompatibleContentPart> {

@@ -507,8 +507,9 @@ export function createBase2(
     //     delegating to the editor family, and skips the thinker for speed.
     //   - Implementation-only (dropped in plan, `!planOnly`):
     //     dependency-manager, tmux-cli, git-committer, doc-writer,
-    //     test-writer, and the default-only editor/repair-editor. Plan mode
-    //     is read-only, so mutation agents are withheld.
+    //     test-writer, synthesizer, and the default-only
+    //     editor/repair-editor. Plan mode is read-only, so mutation agents
+    //     are withheld (see common/src/tools/plan-mode-policy.ts).
     spawnableAgents: buildArray(
       // handleSteps invokes this automatically through spawn_agent_inline on
       // every loop. It must still be declared for derived IDs such as
@@ -535,7 +536,9 @@ export function createBase2(
       !planOnly && 'doc-writer',
       !planOnly && 'test-writer',
       'librarian',
-      'synthesizer',
+      // synthesizer writes its report with write_file, so plan mode (read-only,
+      // N03) withholds it.
+      !planOnly && 'synthesizer',
       'architect',
       'product-reviewer',
       'integration-agent',
@@ -770,7 +773,6 @@ ${
 </example>
 
 ${PLACEHOLDER.FILE_TREE_PROMPT_SMALL}
-${PLACEHOLDER.KNOWLEDGE_FILES_CONTENTS}
 ${PLACEHOLDER.ROUTED_KNOWLEDGE_FILES}
 ${PLACEHOLDER.PATTERNS_INDEX}
 ${PLACEHOLDER.LANGUAGE_PROFILE}

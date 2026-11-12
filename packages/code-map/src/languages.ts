@@ -263,6 +263,16 @@ function tryResolveFromPackage(wasmFileName: string): string | null {
  * `createLanguageConfig`).
  */
 function resolveQueryPath(queryFileName: string): string {
+  const candidates = getQueryCandidatePaths(queryFileName)
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0]
+}
+
+/**
+ * Ordered candidate locations for one tag-query file. Shared by
+ * {@link resolveQueryPath} and {@link getTagQueryStatus} so the status report
+ * probes exactly the paths the loader reads.
+ */
+function getQueryCandidatePaths(queryFileName: string): string[] {
   // Get the directory of this module
   const moduleDir = (() => {
     const dirname = getDirnameDynamically()
@@ -274,48 +284,57 @@ function resolveQueryPath(queryFileName: string): string {
     return process.cwd()
   })()
 
-  const primary = path.join(moduleDir, 'tree-sitter-queries', queryFileName)
-  if (fs.existsSync(primary)) {
-    return primary
-  }
+  return [
+    // Primary: the module directory directly contains `tree-sitter-queries`
+    // (dev/monorepo and Bun-resolved layouts).
+    path.join(moduleDir, 'tree-sitter-queries', queryFileName),
+    // npm/bundled layouts where the module directory is the package entry
+    // (e.g. `dist/index.js`); the src/ tree sits one level below it.
+    path.join(moduleDir, 'src', 'tree-sitter-queries', queryFileName),
+    // Compiled binaries: the release tarball ships `tree-sitter-queries/`
+    // next to the executable (see cli/scripts/release-tarball-files.sh).
+    path.join(path.dirname(process.execPath), 'tree-sitter-queries', queryFileName),
+    // Fallback for development/monorepo layouts where the module directory
+    // doesn't contain the queries directly.
+    path.join(process.cwd(), 'tree-sitter-queries', queryFileName),
+  ]
+}
 
-  // Candidate for npm/bundled layouts where the module directory is the
-  // package entry (e.g. `dist/index.js`) and does not directly contain
-  // `tree-sitter-queries`; the src/ tree with the queries sits one level
-  // below the entry directory.
-  const srcCandidate = path.join(
-    moduleDir,
-    'src',
-    'tree-sitter-queries',
-    queryFileName,
-  )
-  if (fs.existsSync(srcCandidate)) {
-    return srcCandidate
-  }
+/** Every distinct tag-query file the language table needs. */
+export const TAG_QUERY_FILES: readonly string[] = Object.freeze([
+  ...new Set(Object.values(QUERY_FILES)),
+])
 
-  // Candidate for compiled binaries: the release layout can ship the
-  // `tree-sitter-queries/` directory next to the executable, where no
-  // module-relative (bundle) nor src-relative (monorepo) layout applies.
-  // Existence-checked like the src candidate so a binary shipped without the
-  // query dir simply falls through — its grammar stays cached with `query`
-  // undefined (see createLanguageConfig).
-  const execDirCandidate = path.join(
-    path.dirname(process.execPath),
-    'tree-sitter-queries',
-    queryFileName,
-  )
-  if (fs.existsSync(execDirCandidate)) {
-    return execDirCandidate
-  }
+export interface TagQueryStatus {
+  /** Number of distinct query files the language table needs. */
+  total: number
+  /** Query files found on disk, by file name. */
+  available: string[]
+  /** Query files that no candidate location provides. */
+  missing: string[]
+}
 
-  // Fallback for development/monorepo layouts where the module directory
-  // doesn't contain the queries directly.
-  const cwdCandidate = path.join(
-    process.cwd(),
-    'tree-sitter-queries',
-    queryFileName,
-  )
-  return fs.existsSync(cwdCandidate) ? cwdCandidate : primary
+/**
+ * Report which tag-query files can be found, probing the same locations the
+ * loader reads. When queries are missing, parsing still succeeds but yields
+ * no symbols, calls or imports for that language, so callers surface this as
+ * a degraded index rather than relying on the DEBUG_PARSING log.
+ * `exists` is an injection seam for tests.
+ */
+export function getTagQueryStatus(
+  options: { exists?: (filePath: string) => boolean } = {},
+): TagQueryStatus {
+  const exists = options.exists ?? fs.existsSync
+  const available: string[] = []
+  const missing: string[] = []
+  for (const file of TAG_QUERY_FILES) {
+    if (getQueryCandidatePaths(file).some((candidate) => exists(candidate))) {
+      available.push(file)
+    } else {
+      missing.push(file)
+    }
+  }
+  return { total: TAG_QUERY_FILES.length, available, missing }
 }
 
 /**

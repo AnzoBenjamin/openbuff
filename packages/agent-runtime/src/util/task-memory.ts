@@ -61,7 +61,8 @@ function boundText(value: string, maxChars: number): string {
 
 function normalizeTrustedRequestText(value: string): string {
   const normalized = boundText(value, CURRENT_REQUEST_MAX_CHARS)
-  if (!normalized || /^(?:\/compact|compact)$/i.test(normalized)) return ''
+  if (!normalized || /^(?:\/compact(?:\s[\s\S]*)?|compact)$/i.test(normalized))
+    return ''
   return normalized
 }
 

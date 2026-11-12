@@ -174,7 +174,7 @@ export function parseCliArgs(
       )
       .option(
         '--trust-project-agents',
-        'Allow executable agents and MCP config from this project or its parent directory',
+        'Trust this project: load its agents, skills, MCP config and openbuff.json providers/hooks/approvalMode (recorded as a persistent grant)',
       )
       .allowExcessArguments(true)
     if (options.exitOverride) {
@@ -289,6 +289,10 @@ export function parseCliArgs(
       )
       .option('--agent <id>', 'Run a specific agent id (default: base)')
       .option(
+        '--trust-project-agents',
+        'Trust this project (agents, skills, MCP config and openbuff.json); recorded as an explicit grant',
+      )
+      .option(
         '--timeout <seconds>',
         'Abort the run after this many seconds (default: no timeout)',
       )
@@ -330,7 +334,7 @@ export function parseCliArgs(
       clearLogs: false,
       continue: false,
       continueId: null,
-      trustProjectAgents: false,
+      trustProjectAgents: runOpts.trustProjectAgents === true,
       ...(runOpts.approvalMode ? { approvalMode: runOpts.approvalMode } : {}),
       run: {
         prompt,
@@ -558,7 +562,7 @@ export function parseCliArgs(
     .option('--local', 'Local/BYOK mode (default; kept for compatibility)')
     .option(
       '--trust-project-agents',
-      'Allow executable agents and MCP config from this project or its parent directory',
+      'Trust this project: load its agents, skills, MCP config and openbuff.json providers/hooks/approvalMode (recorded as a persistent grant)',
     )
     .option(
       '--attach',

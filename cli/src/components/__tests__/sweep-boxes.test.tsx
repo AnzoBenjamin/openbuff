@@ -320,6 +320,43 @@ describe('CompactionBox', () => {
     expect(markup).not.toContain('Re-read exact files before editing.')
   })
 
+  // memory-context-06: skipped and failed passes are not "nothing reclaimed".
+  test('renders a skipped or failed pass with its own title and reason', () => {
+    for (const [passOutcome, title] of [
+      ['skipped', 'Compaction skipped — context unchanged'],
+      ['failed', 'Compaction failed — context unchanged'],
+    ] as const) {
+      const markup = renderToStaticMarkup(
+        <CompactionBox
+          block={compactionBlock({
+            status: 'declined',
+            passOutcome,
+            reason: 'Agent does not list context-pruner in spawnableAgents.',
+            beforeTokens: 152_000,
+            afterTokens: 0,
+            beforeMessages: 0,
+            afterMessages: 0,
+            reductionPercent: 0,
+            retainedKnowledgeMemory: false,
+            recovery: '',
+            categoryDeltas: [],
+          })}
+        />,
+      )
+      expect(markup).toContain(title)
+      expect(markup).not.toContain('nothing reclaimed')
+      expect(markup).toContain('Agent does not list context-pruner in spawnableAgents.')
+    }
+  })
+
+  // memory-context-05: the default pass is labelled extractive.
+  test('labels a completed semantic pass as extractive', () => {
+    const markup = renderToStaticMarkup(
+      <CompactionBox block={compactionBlock({ action: 'semantic_compaction' })} />,
+    )
+    expect(markup).toContain('Context compacted (extractive)')
+  })
+
   test('renders a request-time trim with its own title, distinct from the runtime emergency trim', () => {
     const markup = renderToStaticMarkup(
       <CompactionBox

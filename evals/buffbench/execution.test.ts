@@ -1,11 +1,53 @@
 import { describe, expect, test } from 'bun:test'
 import { spawn } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { executionFixture } from '../../common/src/mcp/__tests__/execution-fixture'
 import { createDirectHostExecution } from '../../sdk/src/host-execution'
 import { captureEvaluationCommand, prepareEvaluationCommand } from './execution'
 
 describe('supplemental evaluator execution', () => {
+  test('resource-only cancellation retains bounded output written during cleanup', async () => {
+    const fixture = executionFixture()
+    const dir = mkdtempSync(path.join(tmpdir(), 'evaluator-resource-abort-'))
+    const ready = path.join(dir, 'ready')
+    const fallback = new AbortController()
+    try {
+      const pending = captureEvaluationCommand(
+        process.execPath,
+        [
+          '--no-env-file',
+          '-e',
+          `process.on('SIGTERM', () => require('fs').writeSync(1, Buffer.alloc(11 * 1024 * 1024, 120))); require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 30000)`,
+        ],
+        {
+          branchId: 'supplemental.evaluator.resource-abort',
+          execution: fixture.context(),
+          signal: fallback.signal,
+        },
+      )
+      for (let i = 0; i < 300 && !existsSync(ready); i++) await Bun.sleep(10)
+      expect(existsSync(ready)).toBe(true)
+      fixture.close()
+      const error = await pending.catch((caught) => caught)
+      expect(error.name).toBe('AbortError')
+      expect(error.message).toContain('aborted')
+      expect(error.stdout.length).toBe(10 * 1024 * 1024)
+      expect(error.outputTruncated).toBe(true)
+      expect(error.processCleanup.status).toBe('complete')
+      expect(error.outputCapture.stdoutSeenBytes).toBeGreaterThan(
+        10 * 1024 * 1024,
+      )
+      expect(error.outputCapture.complete).toBe(true)
+      expect(fallback.signal.aborted).toBe(false)
+    } finally {
+      fallback.abort()
+      fixture.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 10000)
   test('missing runtime PID cannot return a successful evaluator capture', async () => {
     const fixture = executionFixture()
     try {
@@ -187,7 +229,7 @@ describe('supplemental evaluator execution', () => {
     }
   })
 
-  test('real evaluator child uses exact scrubbed env and bounded file capture', async () => {
+  test('real evaluator child uses exact scrubbed env and bounded pipe capture', async () => {
     const fixture = executionFixture()
     try {
       const result = await captureEvaluationCommand(

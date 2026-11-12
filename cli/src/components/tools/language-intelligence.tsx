@@ -144,6 +144,21 @@ function makeLanguageIntelligenceComponent(
         typeof output.unavailable.reason === 'string'
           ? output.unavailable.reason
           : undefined
+      // N04: a missing binary says so and names the install command.
+      const unavailableInstall =
+        isRecord(output?.unavailable) &&
+        output.unavailable.status === 'not_installed'
+          ? {
+              command:
+                typeof output.unavailable.command === 'string'
+                  ? output.unavailable.command
+                  : undefined,
+              install:
+                typeof output.unavailable.install === 'string'
+                  ? output.unavailable.install
+                  : undefined,
+            }
+          : undefined
 
       const target =
         toolName === 'workspace_symbol'
@@ -182,7 +197,9 @@ function makeLanguageIntelligenceComponent(
       const colWidth = Math.max(10, availableWidth - INDENT_LEFT - 3)
 
       const summary =
-        unavailableReason !== undefined
+        unavailableInstall !== undefined
+          ? `${target} — language server not installed${unavailableInstall.command ? ` (${unavailableInstall.command})` : ''}${unavailableInstall.install ? ` · install: ${unavailableInstall.install}` : ''}`
+          : unavailableReason !== undefined
           ? `${target} — no language server (${unavailableReason})`
           : error
             ? `${target} — error`

@@ -2,7 +2,7 @@ import z from 'zod/v4'
 
 import { jsonToolResultSchema } from '../utils'
 
-import { lspLocationSchema } from './go-to-definition'
+import { lspLocationSchema, lspUnavailableSchema } from './go-to-definition'
 
 import type { $ToolParams } from '../../constants'
 
@@ -36,12 +36,7 @@ export const findReferencesParams = {
   outputSchema: jsonToolResultSchema(
     z.object({
       locations: z.array(lspLocationSchema).optional(),
-      unavailable: z
-        .object({
-          reason: z.string(),
-          languageId: z.string().optional(),
-        })
-        .optional(),
+      unavailable: lspUnavailableSchema.optional(),
       errorMessage: z.string().optional(),
     }),
   ),

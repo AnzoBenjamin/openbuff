@@ -9,6 +9,7 @@ import {
 
 import type { CodebuffFileSystem } from '../types/filesystem'
 import type { SkillsMap } from '../types/skill'
+import type { InstructionFileRecord } from './instruction-files'
 
 export const FileTreeNodeSchema: z.ZodType<FileTreeNode> = z.object({
   name: z.string(),
@@ -121,9 +122,22 @@ export const ProjectFileContextSchema = z.object({
     .optional(),
   knowledgeFiles: z.record(z.string(), z.string()),
   userKnowledgeFiles: z.record(z.string(), z.string()).optional(),
+  /** N08: load-order records for instruction files in `knowledgeFiles`. */
+  instructionFiles: z
+    .array(
+      z.object({
+        path: z.string(),
+        scope: z.enum(['ancestor', 'project', 'nested', 'import']),
+        importedBy: z.string().optional(),
+        chars: z.number(),
+      }),
+    )
+    .optional(),
   agentTemplates: z.record(z.string(), z.any()).default(() => ({})),
   customToolDefinitions: customToolDefinitionsSchema,
   skills: z.record(z.string(), z.any()).optional(),
+  /** N02: false when the host withheld project skills (untrusted project). */
+  projectSkillsTrusted: z.boolean().optional(),
   gitChanges: z.object({
     status: z.string(),
     diff: z.string(),
@@ -163,9 +177,20 @@ export type ProjectFileContext = {
   tokenCallers?: Record<string, Record<string, string[]>>
   knowledgeFiles: Record<string, string>
   userKnowledgeFiles?: Record<string, string>
+  /**
+   * N08: instruction files (AGENTS.md / CLAUDE.md / knowledge.md and their
+   * `@path` imports) in load order. Content lives in `knowledgeFiles`. Absent
+   * when the caller supplied `knowledgeFiles` directly.
+   */
+  instructionFiles?: InstructionFileRecord[]
   agentTemplates: Record<string, any>
   customToolDefinitions: CustomToolDefinitions
   skills?: SkillsMap
+  /**
+   * N02: false when the host withheld project skills because the project is
+   * not trusted. The `skill` tool's disk fallback then skips project dirs.
+   */
+  projectSkillsTrusted?: boolean
   gitChanges: {
     status: string
     diff: string

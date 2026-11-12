@@ -29,6 +29,7 @@ import {
 } from '../../../memory/session-evidence-log'
 import { loopAgentSteps } from '../../../run-agent-step'
 import { getAgentTemplate } from '../../../templates/agent-registry'
+import { inheritPlanLineage } from '../../plan-mode-guard'
 import { isContextPrunerAgentId } from '../../../util/context-pruner-identity'
 import { formatValidationIssues } from '../../../util/format-validation-issues'
 import { formatValueForError } from '../../../util/format-value'
@@ -508,22 +509,13 @@ export function deriveSpawnTemplateCapabilities(params: {
   projectRoot: string
 }): AgentTemplate {
   const { agentTemplate, parentAgentTemplate, handoff, projectRoot } = params
-  const inheritsPlanOnlyAuthority =
-    parentAgentTemplate.programmaticConfig?.planOnly === true
-  const inheritedTemplate: AgentTemplate = inheritsPlanOnlyAuthority
-    ? {
-        ...agentTemplate,
-        terminalPermissionProfile: getEffectiveAgentToolNames(
-          agentTemplate,
-        ).includes('run_terminal_command')
-          ? 'read-only'
-          : agentTemplate.terminalPermissionProfile,
-        programmaticConfig: {
-          ...agentTemplate.programmaticConfig,
-          planOnly: true,
-        },
-      }
-    : agentTemplate
+  // Plan lineage (N03): the child is marked plan-only, loses every
+  // plan-refused tool, and runs terminal commands under `read-only`. The
+  // dispatch guard in tool-executor enforces the same rule per call.
+  const inheritedTemplate: AgentTemplate = inheritPlanLineage({
+    child: agentTemplate,
+    parent: parentAgentTemplate,
+  })
   if (!handoff) return inheritedTemplate
 
   const staticTools = getEffectiveAgentToolNames(inheritedTemplate)

@@ -2,6 +2,10 @@ import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
 
 import { isBlockedMcpAddress } from './client'
+import {
+  buildPinnedRequest,
+  runtimeSupportsTlsServerName,
+} from '../util/pinned-fetch'
 
 /**
  * NEW-7 DNS-rebinding pinning for client-origin (untrusted) http/sse MCP
@@ -122,13 +126,9 @@ export const isAllowedLoopbackMcpAuthority = (
 
 /**
  * True when this runtime honors the Bun-only `tls` RequestInit extension
- * (`tls.serverName`): the extension lets a fetch to a pinned-IP https URL
- * still present the original hostname, so certificate validation keeps
- * working. Bun defines the global; Node/undici does not (and silently
- * ignores the extension, leaving a pinned-IP https request with no SNI).
+ * (`tls.serverName`). Re-exported from the shared pinned-fetch helpers.
  */
-export const runtimeSupportsTlsServerName = (): boolean =>
-  (globalThis as { Bun?: unknown }).Bun !== undefined
+export { runtimeSupportsTlsServerName }
 
 /**
  * Reads the OPENBUFF_ALLOWED_LOOPBACK_MCP environment variable — the
@@ -317,31 +317,11 @@ export function createPinnedMcpFetch(
       )
     }
 
-    const pinnedUrl = new URL(requestUrl.href)
-    pinnedUrl.hostname = isIP(pin.address) === 6 ? `[${pin.address}]` : pin.address
-    if (pin.port) {
-      pinnedUrl.port = pin.port
-    }
-
     // Preserve the original authority for Host-based routing and TLS SNI: the
     // socket dials the pinned IP literal, but the server still sees the
     // configured hostname (and the certificate is validated against it).
-    const headers = new Headers(init.headers)
-    if (!headers.has('host')) {
-      headers.set('host', authorityFor(requestUrl.hostname.replace(/^\[|\]$/g, ''), requestUrl.port))
-    }
-    requestInit.headers = headers
-
-    const bunInit = requestInit as RequestInit & {
-      tls?: { serverName?: string }
-    }
-    if (requestUrl.protocol === 'https:') {
-      bunInit.tls = {
-        ...(bunInit.tls ?? {}),
-        serverName: requestUrl.hostname.replace(/^\[|\]$/g, ''),
-      }
-    }
-
-    return fetch(pinnedUrl, bunInit)
+    // N05: the rewrite is shared with the web fetch tool.
+    const pinned = buildPinnedRequest(requestUrl, pin.address, init, pin.port)
+    return fetch(pinned.url, pinned.init)
   }
 }

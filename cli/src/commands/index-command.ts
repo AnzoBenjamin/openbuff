@@ -1,6 +1,10 @@
 import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
-import { IndexManager, runScipIngest } from '@codebuff/indexer'
-import type { MetadataIndex } from '@codebuff/indexer'
+import {
+  getTagQueryStatus,
+  IndexManager,
+  runScipIngest,
+} from '@codebuff/indexer'
+import type { MetadataIndex, TagQueryStatus } from '@codebuff/indexer'
 import { createConfiguredEmbedder, loadProviderConfigSync } from '@openbuff/sdk'
 
 import { getProjectRoot } from '../project-files'
@@ -78,6 +82,60 @@ export type IndexCommandDeps = {
   runScipIngest?: typeof runScipIngest
   /** Injectable project-root seam (P3-T4); defaults to getProjectRoot. */
   getRoot?: () => string
+  /**
+   * Injectable tag-query availability seam (N09); defaults to code-map's
+   * getTagQueryStatus, which probes the same paths the parser loads from.
+   */
+  getTagQueryStatus?: () => TagQueryStatus
+}
+
+/**
+ * N09: without the tree-sitter tag queries the parser still succeeds but
+ * extracts no symbols, calls or imports, so the index would read "ready"
+ * while graph modes silently degrade to path/content search. Mark the
+ * status degraded and name the missing files instead.
+ */
+export function applyTagQueryStatus(
+  result: IndexQueryResult,
+  queryStatus: TagQueryStatus | undefined,
+): IndexQueryResult {
+  if (!queryStatus || queryStatus.missing.length === 0) return result
+  if (result.status.state === 'disabled') return result
+  const allMissing = queryStatus.missing.length === queryStatus.total
+  const shown = queryStatus.missing.slice(0, 3).join(', ')
+  const more =
+    queryStatus.missing.length > 3
+      ? ` and ${queryStatus.missing.length - 3} more`
+      : ''
+  const message =
+    `degraded: no queries — ${allMissing ? 'all' : queryStatus.missing.length} of ${queryStatus.total} tree-sitter tag queries missing (${shown}${more}); ` +
+    'symbols, calls and imports are unavailable for those languages. Reinstall openbuff or place tree-sitter-queries/ next to the binary.'
+  return {
+    ...result,
+    status: {
+      ...result.status,
+      state: 'degraded',
+      message: `${message}\n${result.status.message}`,
+    },
+  }
+}
+
+function readTagQueryStatus(deps: IndexCommandDeps): TagQueryStatus | undefined {
+  try {
+    return (deps.getTagQueryStatus ?? getTagQueryStatus)()
+  } catch {
+    return undefined
+  }
+}
+
+function queryStatusResult(
+  manager: IndexManagerLike,
+  deps: IndexCommandDeps,
+): IndexQueryResult {
+  return applyTagQueryStatus(
+    manager.query('', { limit: 1 }),
+    readTagQueryStatus(deps),
+  )
 }
 
 const defaultDeps: IndexCommandDeps = {
@@ -188,7 +246,7 @@ export async function handleIndexCommandBlocks(
 
   if (normalized === 'status') {
     return buildIndexStatusContentBlock(
-      setup.manager.query('', { limit: 1 }),
+      queryStatusResult(setup.manager, deps),
       setup.manager.isSemanticReady(),
       setup.semanticEnabled,
     )
@@ -198,7 +256,7 @@ export async function handleIndexCommandBlocks(
     setup.manager.markStale()
     setup.manager.ensureBuilt()
     await setup.manager.waitUntilReady(30_000)
-    const status = setup.manager.query('', { limit: 1 })
+    const status = queryStatusResult(setup.manager, deps)
     const block = buildIndexStatusContentBlock(
       status,
       setup.manager.isSemanticReady(),
@@ -237,7 +295,7 @@ export async function handleIndexCommand(
 
   if (normalized === 'status') {
     return formatIndexStatus(
-      setup.manager.query('', { limit: 1 }),
+      queryStatusResult(setup.manager, deps),
       setup.manager.isSemanticReady(),
       setup.semanticEnabled,
     )
@@ -247,7 +305,7 @@ export async function handleIndexCommand(
     setup.manager.markStale()
     setup.manager.ensureBuilt()
     await setup.manager.waitUntilReady(30_000)
-    const status = setup.manager.query('', { limit: 1 })
+    const status = queryStatusResult(setup.manager, deps)
     return [
       'Index refresh requested. Compatible caches are reconciled incrementally; incompatible caches rebuild.',
       formatIndexStatus(

@@ -1,9 +1,7 @@
 import { createHash, randomUUID } from 'crypto'
-import { isIP } from 'node:net'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import {
   CallToolResultSchema,
@@ -12,7 +10,11 @@ import {
   ToolListChangedNotificationSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { mcpToolResult } from './result'
-import { OwnedStdioTransport } from './stdio-transport'
+import {
+  CompatibilityStdioTransport,
+  OwnedStdioTransport,
+} from './stdio-transport'
+import { isBlockedHost } from '../util/ip-address-policy'
 import { jsonSchemaToZod } from '../util/json-schema'
 
 import {
@@ -36,7 +38,11 @@ import type {
   BoundResourcePort,
 } from '../types/contracts/execution-context'
 import type { CodebuffSpawn } from '../types/spawn'
-import type { McpToolCallArguments, McpToolCatalogOptions, MediatedMcpRequest } from './request'
+import type {
+  McpToolCallArguments,
+  McpToolCatalogOptions,
+  MediatedMcpRequest,
+} from './request'
 
 export type { McpToolCatalogOptions, MediatedMcpRequest } from './request'
 
@@ -55,11 +61,14 @@ let nextClientGeneration = 0
 
 type ClientState = {
   client: Client
+  transport: Transport
+  connection: ConnectionReservation
   generation: number
   origin: MCPConfigOrigin
   closed: boolean
   /** A string client ID never grants access to a mediated resource. */
   mediated?: boolean
+  disconnection: AbortController
   invalidation: AbortController
   outputContracts: Map<
     string,
@@ -67,18 +76,148 @@ type ClientState = {
   >
 }
 const clientStates = new Map<string, ClientState>()
+// Detached transports whose close rejected remain owned independently of any
+// newer connection registered under the same cache identity.
+const pendingClientCleanup = new Map<string, Set<ClientState>>()
+const clientCleanupAttempts = new WeakMap<ClientState, Promise<void>>()
 
-/**
- * Hard cap on concurrently live MCP clients. Each registry entry holds an
- * OPEN transport (a spawned stdio process or a kept-alive HTTP connection),
- * so an unbounded registry leaks processes/file descriptors for the process
- * lifetime. Eviction is LRU-by-registration: the oldest registered id is
- * closed and removed (with its tool caches) when the cap is exceeded.
- */
+/** Connecting and detached cleanup owners count until physical cleanup. */
 const maxRunningClients = 64
+type ConnectionReservation = {
+  readonly key: string
+  phase: 'connecting' | 'live' | 'closing' | 'cleanup-failed' | 'complete'
+  leases: number
+  activeUses: number
+  state?: ClientState
+  /** One successor owns the slot after this exact instance cleans up. */
+  successor?: ConnectionReservation
+}
+const physicalConnections = new Set<ConnectionReservation>()
+/** Connection instances in registration order, independent of catalog changes. */
+const runningClientOrder = new Set<ClientState>()
 
-/** Insertion-ordered registry keys mirroring runningClients, for LRU eviction. */
-const runningClientOrder = new Set<string>()
+export class McpClientCapacityError extends Error {
+  readonly name = 'McpClientCapacityError'
+  readonly code = 'MCP_CLIENT_CAPACITY'
+  readonly maxRunningClients = maxRunningClients
+  readonly occupied = physicalConnections.size
+
+  constructor(
+    readonly reason: 'all-connections-busy' | 'cleanup-failed',
+    readonly cleanupClientId?: string,
+    cause?: unknown,
+  ) {
+    super(
+      reason === 'cleanup-failed'
+        ? 'MCP capacity unavailable: physical transport cleanup failed'
+        : `MCP capacity exhausted: all ${maxRunningClients} connections are leased, active, or closing`,
+      { cause },
+    )
+  }
+}
+
+/** Counts physical reservations, including cleanup that protocol close precedes. */
+export function getMCPClientCapacity(): Readonly<{
+  limit: number
+  occupied: number
+  connecting: number
+  live: number
+  closing: number
+  cleanupFailed: number
+}> {
+  const count = (phase: ConnectionReservation['phase']) =>
+    [...physicalConnections].filter((connection) => connection.phase === phase)
+      .length
+  return {
+    limit: maxRunningClients,
+    occupied: physicalConnections.size,
+    connecting: count('connecting'),
+    live: count('live'),
+    closing: count('closing'),
+    cleanupFailed: count('cleanup-failed'),
+  }
+}
+
+function leaseClient(connection: ConnectionReservation): () => void {
+  connection.leases++
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    connection.leases--
+  }
+}
+
+function reserveConnection(pending: PendingConnection): Promise<string> {
+  const release = leaseClient(pending.connection)
+  return pending.promise.then(
+    (id) => {
+      // The compatibility string ID protects delivery, not future method use.
+      setTimeout(release, 0)
+      return id
+    },
+    (error) => {
+      release()
+      throw error
+    },
+  )
+}
+
+function withClientUse<T>(
+  state: ClientState,
+  invoke: () => Promise<T>,
+): Promise<T> {
+  if (state.closed || clientStates.get(state.connection.key) !== state)
+    throw new Error('MCP connection instance is no longer available')
+  state.connection.activeUses++
+  const release = () => state.connection.activeUses--
+  try {
+    return invoke().finally(release)
+  } catch (error) {
+    release()
+    throw error
+  }
+}
+
+function finishPhysicalConnection(connection: ConnectionReservation): void {
+  const held = physicalConnections.delete(connection)
+  connection.phase = 'complete'
+  const successor = connection.successor
+  connection.successor = undefined
+  // Move the slot before resolving cleanup, so another connect cannot steal it.
+  if (held && successor) physicalConnections.add(successor)
+}
+
+async function reservePhysicalCapacity(
+  connection: ConnectionReservation,
+): Promise<void> {
+  if (physicalConnections.size < maxRunningClients) {
+    physicalConnections.add(connection)
+    return
+  }
+  const victim = [...runningClientOrder].find(
+    (state) =>
+      !state.closed &&
+      state.connection.phase === 'live' &&
+      state.connection.leases === 0 &&
+      state.connection.activeUses === 0,
+  )
+  if (!victim) throw new McpClientCapacityError('all-connections-busy')
+  victim.connection.successor = connection
+  // Reserve close and detach before invoking any transport callback. Parallel
+  // connects can each claim one idle victim, never the same physical slot.
+  detachRunningClient(victim.connection.key, victim)
+  try {
+    await cleanupClient(victim.connection.key, victim)
+  } catch (error) {
+    victim.connection.successor = undefined
+    throw new McpClientCapacityError(
+      'cleanup-failed',
+      victim.connection.key,
+      error,
+    )
+  }
+}
 
 /**
  * In-flight connect promises memoized per cache identity (the same key
@@ -86,7 +225,44 @@ const runningClientOrder = new Set<string>()
  * ONE connect instead of racing two transports; the memo is cleared when the
  * promise settles, so a rejected connect is retried by the next call.
  */
-const pendingConnects = new Map<string, Promise<string>>()
+type PendingConnection = {
+  connection: ConnectionReservation
+  promise: Promise<string>
+}
+const pendingConnects = new Map<string, PendingConnection>()
+
+function getOrStartConnection(
+  key: string,
+  start: (connection: ConnectionReservation) => Promise<string>,
+): PendingConnection {
+  const state = clientStates.get(key)
+  if (state && !state.closed)
+    return { connection: state.connection, promise: Promise.resolve(key) }
+  const existing = pendingConnects.get(key)
+  if (existing) return existing
+  const connection: ConnectionReservation = {
+    key,
+    phase: 'connecting',
+    leases: 0,
+    activeUses: 0,
+  }
+  let pending: PendingConnection
+  // Publish the pending identity before capacity cleanup can call user/SDK
+  // callbacks reentrantly. No transport is constructed before reservation.
+  const promise = Promise.resolve()
+    .then(() => reservePhysicalCapacity(connection))
+    .then(() => start(connection))
+    .catch((error) => {
+      if (!connection.state) finishPhysicalConnection(connection)
+      throw error
+    })
+    .finally(() => {
+      if (pendingConnects.get(key) === pending) pendingConnects.delete(key)
+    })
+  pending = { connection, promise }
+  pendingConnects.set(key, pending)
+  return pending
+}
 const capturedRemoteKeys = new WeakMap<CapturedMcpConfig, string>()
 type MediatedResourceState = {
   port: BoundResourcePort
@@ -107,11 +283,11 @@ function clearClientToolCaches(key: string): void {
 }
 
 function invalidateClientState(key: string, state: ClientState): void {
+  if (clientStates.get(key) === state) clearClientToolCaches(key)
   state.generation = ++nextClientGeneration
   state.invalidation.abort(new Error('MCP tool catalog generation changed'))
   state.invalidation = new AbortController()
   state.outputContracts.clear()
-  if (clientStates.get(key) === state) clearClientToolCaches(key)
 }
 
 function observeOutputContracts(
@@ -131,12 +307,17 @@ function observeOutputContracts(
 }
 
 function detachRunningClient(key: string, state: ClientState): void {
+  if (clientStates.get(key) === state) {
+    clearClientToolCaches(key)
+    delete runningClients[key]
+    clientStates.delete(key)
+  }
+  runningClientOrder.delete(state)
+  if (state.closed) return
   state.closed = true
+  state.connection.phase = 'closing'
+  state.disconnection.abort(new Error('MCP connection closed'))
   invalidateClientState(key, state)
-  if (clientStates.get(key) !== state) return
-  delete runningClients[key]
-  clientStates.delete(key)
-  runningClientOrder.delete(key)
 }
 
 export function getMCPClientGeneration(clientId: string): number | undefined {
@@ -144,12 +325,96 @@ export function getMCPClientGeneration(clientId: string): number | undefined {
   return state && !state.closed ? state.generation : undefined
 }
 
+function cleanupClient(
+  clientId: string,
+  state: ClientState,
+  retry = false,
+): Promise<void> {
+  const existing = clientCleanupAttempts.get(state)
+  if (existing && (!retry || state.connection.phase !== 'cleanup-failed'))
+    return existing
+  let owned = pendingClientCleanup.get(clientId)
+  if (!owned) pendingClientCleanup.set(clientId, (owned = new Set()))
+  owned.add(state)
+  let resolveClose!: () => void
+  let rejectClose!: (error: unknown) => void
+  const closing = new Promise<void>((resolve, reject) => {
+    resolveClose = resolve
+    rejectClose = reject
+  })
+  const attempt = closing.then(
+    () => {
+      finishPhysicalConnection(state.connection)
+      owned.delete(state)
+      if (owned.size === 0 && pendingClientCleanup.get(clientId) === owned)
+        pendingClientCleanup.delete(clientId)
+    },
+    (error) => {
+      state.connection.phase = 'cleanup-failed'
+      throw error
+    },
+  )
+  // Reserve the promise before close may invoke onclose synchronously.
+  clientCleanupAttempts.set(state, attempt)
+  state.connection.phase = 'closing'
+  try {
+    // The SDK may clear Client's transport from its onclose callback before
+    // close rejects. Keep and retry the concrete transport for this generation.
+    const cleanup =
+      retry &&
+      (state.transport instanceof OwnedStdioTransport ||
+        state.transport instanceof CompatibilityStdioTransport)
+        ? state.transport.retryCleanup()
+        : state.transport.close()
+    cleanup.then(resolveClose, rejectClose)
+  } catch (error) {
+    rejectClose(error)
+  }
+  return attempt
+}
+
+/** Report detached transports whose close has not yet succeeded. */
+export function getPendingMCPClientCleanupCount(clientId: string): number {
+  return pendingClientCleanup.get(clientId)?.size ?? 0
+}
+
+/** Enumerate cleanup owners, including failures from background eviction. */
+export function getPendingMCPClientCleanups(): Array<{
+  clientId: string
+  count: number
+}> {
+  return [...pendingClientCleanup].map(([clientId, states]) => ({
+    clientId,
+    count: states.size,
+  }))
+}
+
+/** Retry only detached generations, never the current registered client. */
+export async function retryMCPClientCleanup(clientId: string): Promise<void> {
+  const states = [...(pendingClientCleanup.get(clientId) ?? [])]
+  const results = await Promise.allSettled(
+    states.map((state) => cleanupClient(clientId, state, true)),
+  )
+  const failures = results.flatMap((result) =>
+    result.status === 'rejected' ? [result.reason] : [],
+  )
+  if (failures.length) throw new AggregateError(failures, 'MCP cleanup failed')
+}
+
 /** Explicitly release a transport; old callbacks cannot detach its replacement. */
 export async function closeMCPClient(clientId: string): Promise<void> {
   const state = clientStates.get(clientId)
-  if (!state) return
-  detachRunningClient(clientId, state)
-  await state.client.close()
+  if (state) {
+    detachRunningClient(clientId, state)
+    await cleanupClient(clientId, state)
+    return
+  }
+  // A protocol close can detach before physical cleanup finishes.
+  await Promise.all(
+    [...(pendingClientCleanup.get(clientId) ?? [])].map((detached) =>
+      cleanupClient(clientId, detached),
+    ),
+  )
 }
 
 async function registerRunningClient(
@@ -158,12 +423,8 @@ async function registerRunningClient(
 ): Promise<void> {
   runningClients[key] = state.client
   clientStates.set(key, state)
-  runningClientOrder.add(key)
-  while (runningClientOrder.size > maxRunningClients) {
-    const oldest = runningClientOrder.values().next()
-    if (oldest.done || oldest.value === key) break
-    await closeMCPClient(oldest.value).catch(() => {})
-  }
+  state.connection.phase = 'live'
+  runningClientOrder.add(state)
 }
 
 /**
@@ -451,174 +712,23 @@ export function resolveMCPConfigOrigin(
 }
 
 /**
- * Recognizes a host written entirely as numeric IPv4 components — decimal
- * ('2130706433', '127.1'), hex ('0x7f.0.0.1'), or octal ('0177.0.0.1') — the
- * non-dotted forms that net.isIP does not recognize but that URL parsers and
- * resolvers interpret as IPv4 addresses.
- */
-function isNumericIpv4Candidate(host: string): boolean {
-  return host
-    .split('.')
-    .every(
-      (component) =>
-        /^\d+$/.test(component) || /^0[xX][0-9a-fA-F]+$/.test(component),
-    )
-}
-
-/**
- * Parses one component of a numeric IPv4 encoding. Accepts decimal ('10'),
- * hex ('0x7f'), and octal ('0177', per inet_aton leading-zero semantics);
- * returns null for a malformed component (e.g. the invalid octal '008').
- */
-function parseIpv4NumericComponent(component: string): number | null {
-  if (/^0[xX][0-9a-fA-F]+$/.test(component)) {
-    const value = parseInt(component, 16)
-    return Number.isInteger(value) ? value : null
-  }
-  if (/^0[0-9]+$/.test(component)) {
-    // A leading zero makes the component octal; digits outside 0-7 are
-    // malformed rather than decimal.
-    if (!/^[0-7]+$/.test(component.slice(1))) {
-      return null
-    }
-    const value = parseInt(component, 8)
-    return Number.isInteger(value) ? value : null
-  }
-  if (/^\d+$/.test(component)) {
-    const value = parseInt(component, 10)
-    return Number.isInteger(value) ? value : null
-  }
-  return null
-}
-
-/**
- * Canonicalizes a numeric IPv4 host written in a non-dotted or shorthand
- * form into the standard dotted-quad string, following inet_aton semantics:
- * all but the last component are single bytes and the last component carries
- * the remaining bytes ('127.1' -> 127.0.0.1, '2130706433' -> 127.0.0.1).
- * Returns null when the host is not a valid numeric IPv4 encoding.
- */
-function canonicalizeIpv4Shorthand(host: string): string | null {
-  const components = host.split('.')
-  if (components.length > 4) {
-    return null
-  }
-  const values: number[] = []
-  for (const component of components) {
-    const value = parseIpv4NumericComponent(component)
-    if (value === null) {
-      return null
-    }
-    values.push(value)
-  }
-  // The last component spans (5 - components.length) bytes of the address;
-  // every earlier component is a single byte.
-  const lastMultiplier = 256 ** (5 - components.length)
-  for (let i = 0; i < values.length - 1; i++) {
-    if (values[i] > 255) {
-      return null
-    }
-  }
-  const last = values[values.length - 1]
-  if (last >= lastMultiplier) {
-    return null
-  }
-  let address = 0
-  for (let i = 0; i < values.length - 1; i++) {
-    address = address * 256 + values[i]
-  }
-  address = address * lastMultiplier + last
-  return [
-    (address >>> 24) & 255,
-    (address >>> 16) & 255,
-    (address >>> 8) & 255,
-    address & 255,
-  ].join('.')
-}
-
-/**
  * True for a private/loopback/link-local/metadata address that a client-origin
  * (untrusted protocol peer, NEW-1) MCP server must not be allowed to reach.
  *
- * Synchronous and dependency-free (node:net only): it does NOT perform DNS
- * resolution, so a bare unresolved hostname that is not one of the blocked
- * suffixes/names returns false. DNS-rebinding hardening is a separate concern
- * (noted for P1-T2). Non-dotted/shorthand numeric IPv4 encodings
- * ('2130706433', '127.1', '0x7f.0.0.1', '0177.0.0.1') are canonicalized and
- * re-checked before the hostname fallback, and a malformed numeric host fails
- * closed. This mirrors the IPv4/IPv6 private-range shape of agent-runtime's
- * web-search-utils, re-implemented locally because common cannot depend on
- * packages/agent-runtime.
+ * Synchronous: it does NOT perform DNS resolution, so a bare unresolved
+ * hostname that is not one of the blocked names/suffixes returns false. DNS
+ * rebinding is handled by `dns-pinning.ts`, which classifies every resolved
+ * address with this same function.
+ *
+ * N05: delegates to the shared egress classifier in
+ * `common/src/util/ip-address-policy.ts`, which is also used by the web fetch
+ * tool. It canonicalizes every IPv4 spelling (decimal, octal, hex,
+ * shorthand), unmaps IPv4-mapped/compatible/NAT64/6to4 IPv6 forms (including
+ * the hex form `::ffff:7f00:1` that WHATWG URL produces), and fails closed on
+ * a malformed numeric host.
  */
 export function isBlockedMcpAddress(host: string): boolean {
-  const kind = isIP(host)
-  if (kind === 4) {
-    return isBlockedIpv4(host)
-  }
-  if (kind === 6) {
-    return isBlockedIpv6(host)
-  }
-  // Non-dotted/shorthand numeric IPv4 encodings are not recognized by isIP
-  // but resolve to IPv4 addresses when used as URL hosts. Canonicalize and
-  // re-check; a numeric host that fails canonicalization is malformed and
-  // fails closed (blocked).
-  if (isNumericIpv4Candidate(host)) {
-    const canonical = canonicalizeIpv4Shorthand(host)
-    return canonical === null ? true : isBlockedIpv4(canonical)
-  }
-  // Non-IP host: block loopback/metadata names and internal suffixes.
-  const lower = host.toLowerCase()
-  return (
-    lower === 'localhost' ||
-    lower.endsWith('.localhost') ||
-    lower.endsWith('.local') ||
-    lower.endsWith('.internal') ||
-    lower === 'metadata' ||
-    lower === 'metadata.google.internal'
-  )
-}
-
-function isBlockedIpv4(host: string): boolean {
-  const parts = host.split('.').map((p) => Number(p))
-  if (
-    parts.length !== 4 ||
-    parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
-  ) {
-    // Malformed input reaching this synchronous guard fails closed.
-    return true
-  }
-  const [a, b, c] = parts
-  if (a === 0) return true // 0.0.0.0/8
-  if (a === 10) return true // 10.0.0.0/8
-  if (a === 127) return true // 127.0.0.0/8 loopback
-  if (a === 100 && b >= 64 && b <= 127) return true // 100.64.0.0/10 CGNAT
-  if (a === 169 && b === 254) return true // 169.254.0.0/16 link-local + metadata
-  if (a === 172 && b >= 16 && b <= 31) return true // 172.16.0.0/12
-  if (a === 192 && b === 168) return true // 192.168.0.0/16
-  if (a === 192 && b === 0 && c === 0) return true // 192.0.0.0/24
-  if (a === 198 && (b === 18 || b === 19)) return true // 198.18.0.0/15 benchmarking
-  if (a >= 224) return true // 224.0.0.0/4 multicast + 240.0.0.0/4 reserved
-  return false
-}
-
-function isBlockedIpv6(host: string): boolean {
-  const lower = host.toLowerCase()
-  if (lower === '::1' || lower === '::') return true
-  // IPv4-mapped IPv6 (::ffff:a.b.c.d) defers to the IPv4 rule.
-  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
-  if (mapped) {
-    return isBlockedIpv4(mapped[1])
-  }
-  const firstHextet = lower.split(':')[0]
-  if (firstHextet) {
-    const value = parseInt(firstHextet, 16)
-    if (!Number.isNaN(value)) {
-      if ((value & 0xfe00) === 0xfc00) return true // fc00::/7 (unique-local, fc/fd)
-      if ((value & 0xffc0) === 0xfe80) return true // fe80::/10 (link-local)
-      if ((value & 0xff00) === 0xff00) return true // ff00::/8 (multicast)
-    }
-  }
-  return false
+  return isBlockedHost(host)
 }
 
 export type ResolvedMCPConfigValues =
@@ -753,24 +863,21 @@ export async function getCapturedMCPClient(
     key = `mcp-remote:${randomUUID()}`
     capturedRemoteKeys.set(captured, key)
   }
-  if (key in runningClients) return key
-  const existing = pendingConnects.get(key)
-  if (existing) return existing
   const clientId = key
-  const pending = connectMCPClient(
-    undefined,
-    captured.origin,
-    captured.allowedLoopbackMcp,
-    clientId,
-    captured.resolved,
-    undefined,
-    options.signal,
-  ).finally(() => {
-    if (pendingConnects.get(clientId) === pending)
-      pendingConnects.delete(clientId)
-  })
-  pendingConnects.set(clientId, pending)
-  return pending
+  return reserveConnection(
+    getOrStartConnection(clientId, (connection) =>
+      connectMCPClient(
+        undefined,
+        captured.origin,
+        captured.allowedLoopbackMcp,
+        clientId,
+        connection,
+        captured.resolved,
+        undefined,
+        options.signal,
+      ),
+    ),
+  )
 }
 
 /**
@@ -818,56 +925,50 @@ export async function getMediatedMCPClient(
   const requested = resourceState.port.request(options.execution)
   if (!requested.ok) throw executionError(requested)
   const access = requested.value
+  let releaseClient: (() => void) | undefined
   try {
     options.signal?.throwIfAborted()
-    if (!(clientId in runningClients)) {
-      let pending = pendingConnects.get(clientId)
-      if (!pending) {
-        // start() calls prepareLaunch after all Client callbacks are installed.
-        const transport = new OwnedStdioTransport({
-          prepareLaunch: () => access.prepareLaunch(),
-          spawn: options.spawn,
-        })
-        pending = connectMCPClient(
-          undefined,
-          captured.origin,
-          captured.allowedLoopbackMcp,
-          clientId,
-          captured.resolved,
-          transport,
-        )
-          .then(
-            (id) => {
-              resourceState.connected = true
-              return id
-            },
-            (error) => {
-              // A policy refusal is not a crash/restart signal. A later caller
-              // can renew only an attempted transport that actually failed.
-              if (
-                !(
-                  error instanceof Error &&
-                  error.name === 'ExecutionAdmissionError'
-                ) ||
-                (error as { executionRefusal?: { reason?: string } })
-                  .executionRefusal?.reason === 'dispatch-failed'
-              )
-                resourceState.restartReason = 'observed-adapter-failure'
-              throw error
-            },
+    const pending = getOrStartConnection(clientId, (connection) => {
+      // start() calls prepareLaunch after all Client callbacks are installed.
+      const transport = new OwnedStdioTransport({
+        prepareLaunch: () => access.prepareLaunch(),
+        spawn: options.spawn,
+      })
+      return connectMCPClient(
+        undefined,
+        captured.origin,
+        captured.allowedLoopbackMcp,
+        clientId,
+        connection,
+        captured.resolved,
+        transport,
+      ).then(
+        (id) => {
+          resourceState.connected = true
+          return id
+        },
+        (error) => {
+          // A policy refusal is not a crash/restart signal. A later caller
+          // can renew only an attempted transport that actually failed.
+          if (
+            !(
+              error instanceof Error && error.name === 'ExecutionAdmissionError'
+            ) ||
+            (error as { executionRefusal?: { reason?: string } })
+              .executionRefusal?.reason === 'dispatch-failed'
           )
-          .finally(() => {
-            if (pendingConnects.get(clientId) === pending)
-              pendingConnects.delete(clientId)
-          })
-        pendingConnects.set(clientId, pending)
-      }
-      await waitForMcpRequest(pending, options.signal)
-    }
+            resourceState.restartReason = 'observed-adapter-failure'
+          throw error
+        },
+      )
+    })
+    releaseClient = leaseClient(pending.connection)
+    await waitForMcpRequest(pending.promise, options.signal)
     const state = clientStates.get(clientId)
     if (
       !state ||
       state.closed ||
+      state.connection !== pending.connection ||
       !state.mediated ||
       state.origin !== captured.origin
     )
@@ -875,31 +976,50 @@ export async function getMediatedMCPClient(
     resourceState.connected = true
     let released = false
     let activeUses = 0
+    let accessReleased = false
     const releaseWhenIdle = () => {
-      if (released && activeUses === 0) access.release()
+      if (released && activeUses === 0 && !accessReleased) {
+        accessReleased = true
+        try {
+          access.release()
+        } finally {
+          releaseClient?.()
+        }
+      }
     }
     const use = async <T>(
       operation: string,
       invoke: () => Promise<T>,
     ): Promise<T> => {
       if (released) throw new Error('MCP request lease has been released')
+      if (state.closed || clientStates.get(clientId) !== state)
+        throw new Error('MCP request connection is no longer available')
       activeUses++
+      state.connection.activeUses++
       try {
         options.signal?.throwIfAborted()
-        const permit = await access.admitUse(operation)
+        const permit = await waitForMcpRequest(
+          access.admitUse(operation),
+          combineRequestSignals(options.signal, state.disconnection.signal),
+        )
         if (!permit.ok) throw executionError(permit)
+        if (state.closed || clientStates.get(clientId) !== state)
+          throw new Error('MCP request connection is no longer available')
         const started = access.useNow(permit.value, invoke)
         if (!started.ok) throw executionError(started)
         return await started.value
       } finally {
         activeUses--
+        state.connection.activeUses--
         releaseWhenIdle()
       }
     }
     return Object.freeze({
       id: clientId,
       get generation() {
-        return getMCPClientGeneration(clientId)
+        return !state.closed && clientStates.get(clientId) === state
+          ? state.generation
+          : undefined
       },
       listToolCatalog: (catalogOptions: McpToolCatalogOptions = {}) =>
         use(
@@ -932,7 +1052,11 @@ export async function getMediatedMCPClient(
       },
     })
   } catch (error) {
-    access.release()
+    try {
+      access.release()
+    } finally {
+      releaseClient?.()
+    }
     throw error
   }
 }
@@ -1055,30 +1179,17 @@ export async function getMCPClient(
   if (allowedLoopbackMcp !== undefined) {
     key += `|${stableHash(allowedLoopbackMcp)}`
   }
-  if (key in runningClients) {
-    return key
-  }
-
   // Double-connect race: concurrent getMCPClient calls for the SAME config
   // identity share one in-flight connect promise instead of each building a
   // transport (previously both raced, and the loser's transport/client was
   // discarded while its socket/process stayed open). The memo entry is
   // cleared when the promise settles, so a REJECTED connect is retried by
   // the next call rather than served from a poisoned memo.
-  const pending = pendingConnects.get(key)
-  if (pending) {
-    return pending
-  }
-  const connectPromise = connectMCPClient(
-    config,
-    origin,
-    allowedLoopbackMcp,
-    key,
-  ).finally(() => {
-    if (pendingConnects.get(key) === connectPromise) pendingConnects.delete(key)
-  })
-  pendingConnects.set(key, connectPromise)
-  return connectPromise
+  return reserveConnection(
+    getOrStartConnection(key, (connection) =>
+      connectMCPClient(config, origin, allowedLoopbackMcp, key, connection),
+    ),
+  )
 }
 
 /**
@@ -1094,6 +1205,7 @@ async function connectMCPClient(
   origin: MCPConfigOrigin,
   allowedLoopbackMcp: readonly string[] | undefined,
   key: string,
+  connection: ConnectionReservation,
   captured?: ResolvedMCPConfigValues,
   ownedTransport?: Transport,
   lifetimeSignal?: AbortSignal,
@@ -1106,11 +1218,10 @@ async function connectMCPClient(
   if (resolved.type === 'stdio') {
     transport =
       ownedTransport ??
-      new StdioClientTransport({
+      new CompatibilityStdioTransport({
         command: resolved.command,
         args: resolved.args,
         env: resolved.env,
-        stderr: 'ignore',
       })
   } else {
     const url = new URL(resolved.url)
@@ -1192,25 +1303,34 @@ async function connectMCPClient(
 
   const state: ClientState = {
     client,
+    transport,
+    connection,
     generation: ++nextClientGeneration,
     origin,
     closed: false,
     ...(ownedTransport ? { mediated: true } : {}),
+    disconnection: new AbortController(),
     invalidation: new AbortController(),
     outputContracts: new Map(),
   }
+  connection.state = state
   // Register before initialization so early notifications/disconnects fence
   // discovery too. Each callback closes over its own connection state.
   const closeForLifetime = () => {
     detachRunningClient(key, state)
-    void client.close().catch(() => {})
+    void cleanupClient(key, state).catch(() => {})
   }
   client.onclose = () => {
     lifetimeSignal?.removeEventListener('abort', closeForLifetime)
     detachRunningClient(key, state)
+    void cleanupClient(key, state).catch(() => {})
   }
   client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
-    if (!state.closed) invalidateClientState(key, state)
+    if (
+      !state.closed &&
+      (!clientStates.has(key) || clientStates.get(key) === state)
+    )
+      invalidateClientState(key, state)
   })
   lifetimeSignal?.addEventListener('abort', closeForLifetime, { once: true })
   try {
@@ -1224,7 +1344,7 @@ async function connectMCPClient(
   } catch (error) {
     lifetimeSignal?.removeEventListener('abort', closeForLifetime)
     detachRunningClient(key, state)
-    await client.close().catch(() => {})
+    await cleanupClient(key, state).catch(() => {})
     throw error
   }
 
@@ -1261,9 +1381,8 @@ function listMCPToolsInternal(
   const signal = args[1]?.signal
     ? AbortSignal.any([state.invalidation.signal, args[1].signal])
     : state.invalidation.signal
-  const pending = state.client
-    .listTools(args[0], { ...args[1], signal })
-    .then((result) => {
+  const pending = withClientUse(state, () =>
+    state.client.listTools(args[0], { ...args[1], signal }).then((result) => {
       if (
         clientStates.get(clientId) !== state ||
         state.closed ||
@@ -1277,7 +1396,8 @@ function listMCPToolsInternal(
         listToolsExpiry.set(cacheKey, Date.now() + cacheTtlMs)
       observeOutputContracts(state, result.tools)
       return result
-    })
+    }),
+  )
   if (cacheable) listToolsCache[cacheKey] = pending
   void pending.catch(() => {
     if (listToolsCache[cacheKey] === pending) {
@@ -1311,7 +1431,12 @@ function listMCPToolCatalogInternal(
     cached.expiresAt > Date.now()
   )
     return cached.promise
-  const promise = discoverMCPToolCatalog(clientId, state, options)
+  const promise =
+    state && !state.closed
+      ? withClientUse(state, () =>
+          discoverMCPToolCatalog(clientId, state, options),
+        )
+      : discoverMCPToolCatalog(clientId, state, options)
   if (cacheable && state) {
     const entry = {
       generation: state.generation,
@@ -1477,11 +1602,21 @@ async function callMCPToolInternal(
   // The vendor Client validates error structuredContent against a success
   // schema, discarding valid failure detail. Keep wire validation, and enforce
   // our generation-bound output contract only for successful peer results.
-  const callResult = await state.client.request(
-    { method: 'tools/call', params },
-    resultSchema,
-    options,
+  const signal = combineRequestSignals(
+    options?.signal,
+    state.disconnection.signal,
   )
+  const callResult = await waitForMcpRequest(
+    withClientUse(state, () =>
+      state.client.request({ method: 'tools/call', params }, resultSchema, {
+        ...options,
+        signal,
+      }),
+    ),
+    signal,
+  )
+  if (state.closed || clientStates.get(clientId) !== state)
+    throw new Error('MCP connection changed during tool call')
   if (contract && !callResult.isError) {
     if (callResult.structuredContent === undefined)
       throw new McpError(

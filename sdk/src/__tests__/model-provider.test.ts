@@ -3144,8 +3144,14 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
 
     // Fail-closed: the credential-exfiltration vector is removed.
     expect(loaded.config.providers.ancestor).toBeUndefined()
-    // Strip only the provider; the rest of the untrusted fragment still merges.
-    expect(loaded.config.defaultModel).toBe('ancestor/ancestor-model')
+    // N02: the untrusted fragment's route to a provider the user did not
+    // configure is withheld too (it previously merged).
+    expect(loaded.config.defaultModel).toBeUndefined()
+    expect(
+      loaded.projectTrust?.gated.some(
+        (item) => item.kind === 'route' && item.filePath === ancestorConfigFile,
+      ),
+    ).toBe(true)
     expect(
       loaded.diagnostics?.some(
         (diagnostic) =>
@@ -3160,6 +3166,9 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
   test('keeps apiKeyEnv providers from ancestor configs when OPENBUFF_TRUST_ANCESTOR_CONFIG=1', () => {
     const { ancestorConfigFile } = writeAncestorConfig()
     process.env.OPENBUFF_TRUST_ANCESTOR_CONFIG = '1'
+    // N02: ancestor configs are project scope, so the project must also be
+    // trusted for its credentialed providers to load.
+    process.env.OPENBUFF_TRUST_PROJECT_CONFIG = '1'
 
     const loaded = loadProviderConfigSync()
 
@@ -3174,7 +3183,10 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
     ).toBe(false)
   })
 
-  test('never strips apiKeyEnv providers from the project config inside cwd', () => {
+  test('never strips apiKeyEnv providers from a trusted project config inside cwd', () => {
+    // N02: untrusted, the project provider is withheld by the project trust
+    // gate (see project-trust-gate.test.ts); trusted, M1-T3 never strips it.
+    process.env.OPENBUFF_TRUST_PROJECT_CONFIG = '1'
     fs.writeFileSync(
       path.join(process.cwd(), 'openbuff.json'),
       JSON.stringify({

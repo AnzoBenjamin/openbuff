@@ -115,6 +115,9 @@ export const handleFindFilesMatchingContent = (async (params: {
         workspaceRevision: agentState.workspaceState?.revision,
         workspaceSnapshotId: agentState.workspaceState?.snapshotId,
         existingIndexSnapshotId: agentState.discoveryCoverage?.indexSnapshotId,
+        // Exhaustive content search: memory never short-circuits it
+        // (read-search-01), so the skip branch below cannot fire.
+        exhaustive: true,
       })
       const reuseSkip = cover.decision === 'skip' && cover.coveringExcerpts.length > 0
       recordMemoryReuse(agentState, {

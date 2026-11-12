@@ -161,14 +161,12 @@ describe('commander agent', () => {
 
       const result = generator.next()
 
-      // No default timeout: agent tasks can take arbitrarily long. An
-      // omitted timeout_seconds passes -1 (no timeout) to the underlying
-      // run_terminal_command tool.
+      // An omitted timeout_seconds stays omitted so the SDK applies its
+      // SYNC default (120 s of execution time).
       expect(result.value).toEqual({
         toolName: 'run_terminal_command',
         input: {
           command: 'ls -la',
-          timeout_seconds: -1,
         },
       })
     })
@@ -199,7 +197,7 @@ describe('commander agent', () => {
       })
     })
 
-    test('defaults to no timeout and keeps explicit callers winning', () => {
+    test('defers the default timeout to the SDK and keeps explicit callers winning', () => {
       const mockAgentState = createMockAgentState()
       const mockLogger = {
         debug: () => {},
@@ -215,7 +213,7 @@ describe('commander agent', () => {
       })
       expect(defaulted.next().value).toEqual({
         toolName: 'run_terminal_command',
-        input: { command: 'sleep 10', timeout_seconds: -1 },
+        input: { command: 'sleep 10' },
       })
 
       // An explicitly passed timeout — including -1 (no timeout) — always
@@ -336,7 +334,6 @@ describe('commander agent', () => {
         toolName: 'run_terminal_command',
         input: {
           command: 'ls -la',
-          timeout_seconds: -1,
         },
         includeToolCall: false,
       })
@@ -550,7 +547,6 @@ describe('commander agent', () => {
         input: {
           command: 'bun dev',
           process_type: 'BACKGROUND',
-          timeout_seconds: -1,
         },
         includeToolCall: false,
       })
