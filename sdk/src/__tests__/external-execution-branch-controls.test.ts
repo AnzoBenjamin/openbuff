@@ -124,7 +124,10 @@ function assertCapturedBoundary(f: BranchFixture) {
     if (call.observerMethods) {
       expect(call.observerMethods).toContain('failure')
       expect(call.observerMethods).toContain('spawnObserved')
-      expect(call.observerMethods).toEqual(['cleanupCommitted', 'failure', 'spawnObserved'])
+      expect(call.observerMethods).toEqual([
+        'cleanupCommitted', 'commitNativeTargetEntry', 'failure', 'nativePrepared',
+        'nativeTargetEntered', 'nativeTransportObserved', 'spawnObserved',
+      ])
     } else expect(call.signal).toBeInstanceOf(AbortSignal)
   }
   for (const event of f.host.events) {

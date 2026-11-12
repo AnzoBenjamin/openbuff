@@ -448,7 +448,9 @@ describe('runFinalCheckCommands', () => {
       const dir = mkdtempSync(join(tmpdir(), 'buffbench-check-output-'))
       const ready = join(dir, 'ready')
       const controller = new AbortController()
-      const script = `process.on('SIGTERM', () => require('fs').writeSync(1, Buffer.alloc(11 * 1024 * 1024, 120))); require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 30000)`
+      // A single fs.writeSync to a pipe can write only part of the buffer.
+      // stdout.write queues the remaining bytes so capture sees the full flood.
+      const script = `process.on('SIGTERM', () => process.stdout.write(Buffer.alloc(11 * 1024 * 1024, 120))); require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 30000)`
       try {
         const pending = runFinalCheckCommands(
           [`exec node -e ${JSON.stringify(script)}`],
@@ -515,28 +517,41 @@ describe('runFinalCheckCommands', () => {
   })
 
   test('runs independent object checks concurrently and preserves input order', async () => {
-    const startedAt = Date.now()
-    const results = await runFinalCheckCommands(
+    const dir = mkdtempSync(join(tmpdir(), 'buffbench-check-concurrency-'))
+    const controller = new AbortController()
+    // The first check cannot finish until the second has run. A serial
+    // scheduler times out instead of passing on a sufficiently fast machine.
+    const firstReady = JSON.stringify(join(dir, 'first-ready'))
+    const secondDone = JSON.stringify(join(dir, 'second-done'))
+    const first = `const fs = require('fs'); fs.writeFileSync(${firstReady}, 'ready'); const timer = setInterval(() => { if (fs.existsSync(${secondDone})) { clearInterval(timer); process.stdout.write('first'); } }, 5)`
+    const second = `const fs = require('fs'); const timer = setInterval(() => { if (fs.existsSync(${firstReady})) { clearInterval(timer); fs.writeFileSync(${secondDone}, 'done'); process.stdout.write('second'); } }, 5)`
+    const pending = runFinalCheckCommands(
       [
-        {
-          id: 'first',
-          command: 'node -e "setTimeout(() => {}, 250)"',
-        },
-        {
-          id: 'second',
-          command: 'node -e "setTimeout(() => {}, 250)"',
-        },
+        { id: 'first', command: `node -e ${JSON.stringify(first)}` },
+        { id: 'second', command: `node -e ${JSON.stringify(second)}` },
       ],
-      process.cwd(),
+      dir,
       undefined,
-      undefined,
-      { concurrency: 2 },
+      controller.signal,
+      { concurrency: 2, defaultTimeoutMs: 3_000 },
     )
-
-    expect(Date.now() - startedAt).toBeLessThan(450)
-    expect(results.map((result) => result.checkId)).toEqual(['first', 'second'])
-    expect(results.every((result) => result.outcome === 'passed')).toBe(true)
-  })
+    try {
+      const results = await pending
+      expect(results.map((result) => result.checkId)).toEqual([
+        'first',
+        'second',
+      ])
+      expect(results.map((result) => result.stdout)).toEqual([
+        'first',
+        'second',
+      ])
+      expect(results.every((result) => result.outcome === 'passed')).toBe(true)
+    } finally {
+      controller.abort()
+      await pending
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 10_000)
 
   test('skips dependent checks after a failed prerequisite', async () => {
     const results = await runFinalCheckCommands(

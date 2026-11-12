@@ -79,6 +79,7 @@ async function runControl(
   options: {
     variant?: 'redirected' | 'inherited'
     finite?: boolean
+    durationMs?: number
     abortAfterReady?: boolean
     quota?: number
     runtime?: 'node' | 'bun'
@@ -93,11 +94,12 @@ async function runControl(
   let leaderExitAtMs: number | undefined
   let childCloseAtMs: number | undefined
   const startedAtMs = performance.now()
+  const durationMs = options.durationMs ?? (options.finite ? 250 : undefined)
   const execution = createEvaluationExecution({
     cwd: root,
     env: {},
     inheritEnv: false,
-    ...(options.finite ? { durationMs: 250 } : {}),
+    ...(durationMs === undefined ? {} : { durationMs }),
   })
   // Attach the rejection handler before waiting for readiness: quota/deadline
   // are expected failures and must not become unhandled rejections.
@@ -159,7 +161,7 @@ async function runControl(
         ...options,
         executable,
         childRuntime: options.runtime ?? 'node',
-        selectedDeadlineMs: options.finite ? 250 : null,
+        selectedDeadlineMs: durationMs ?? null,
         termGraceMs: 200,
         killGraceMs: 200,
         observationMs: 1_000,
@@ -185,7 +187,7 @@ async function runControl(
     }
     // Persist the failing or passing observation BEFORE fallback teardown.
     save(
-      `${mode}-${options.variant ?? 'redirected'}-${options.runtime ?? 'node'}${options.finite ? '-d250' : ''}${options.abortAfterReady ? '-abort-after-ready' : ''}`,
+      `${mode}-${options.variant ?? 'redirected'}-${options.runtime ?? 'node'}${durationMs === undefined ? '' : `-d${durationMs}`}${options.abortAfterReady ? '-abort-after-ready' : ''}`,
       receipt,
     )
     expect(before!.scopePresence).toBe('living')
@@ -209,13 +211,13 @@ async function runControl(
     if (oracle.descendant) expect(oracle.descendant.living).toBe(false)
     expect(oracle.lateMarkerExists).toBe(false)
     expect(captured.outputCapture.complete).toBe(true)
-    if (options.finite) {
+    if (durationMs !== undefined) {
       expect(processCleanup.originalDeadline.kind).toBe('finite')
       expect(processCleanup.launchFacts).toBeDefined()
       expect(processCleanup.originalDeadline).toEqual(
         processCleanup.launchFacts!.deadlines.resourceLifetime,
       )
-      expect(receipt.elapsedMs).toBeLessThanOrEqual(1_650)
+      expect(receipt.elapsedMs).toBeLessThanOrEqual(durationMs + 1_400)
     }
     return { settled, captured, processCleanup, receipt }
   } finally {
@@ -341,7 +343,9 @@ describe.skipIf(process.platform !== 'linux')(
     test('quota retains bounded bytes and continues counting/draining writes through cleanup', async () => {
       const { captured, processCleanup } = await runControl('quota', {
         quota: 64 * 1024,
-        finite: true,
+        // Quota is the trigger under test; allow Node startup and readiness
+        // before competing with a deadline. The D=250 control is separate.
+        durationMs: 5_000,
       })
       expect(captured.name).toBe('EvaluationOutputLimitError')
       expect(captured.outputTruncated).toBe(true)
@@ -359,7 +363,7 @@ describe.skipIf(process.platform !== 'linux')(
     test('Bun child output quota drains continuing writes through scope cleanup', async () => {
       const { captured } = await runControl('quota', {
         quota: 64 * 1024,
-        finite: true,
+        durationMs: 5_000,
         runtime: 'bun',
       })
       expect(captured.name).toBe('EvaluationOutputLimitError')
@@ -441,7 +445,8 @@ describe.skipIf(process.platform !== 'linux')(
         cwd: root,
         env: {},
         inheritEnv: false,
-        durationMs: 250,
+        // Cancellation happens after two Node processes announce readiness.
+        durationMs: 5_000,
       })
       const pending = runInit(
         `exec ${nodeExecutable} ${fixturePath} early-leader ${root} redirected`,
@@ -475,6 +480,7 @@ describe.skipIf(process.platform !== 'linux')(
           lateMarkerExists: existsSync(join(root, 'late-marker')),
         }
         save('setup-init-abort-after-ready', {
+          selectedDeadlineMs: 5_000,
           before,
           ready,
           processCleanup: error?.processCleanup,

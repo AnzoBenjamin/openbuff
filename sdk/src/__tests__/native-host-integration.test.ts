@@ -255,8 +255,16 @@ describe('SDK native host selection and capture', () => {
         return { ok: true, basis: 'explicit-policy', decisionId: 'never' }
       },
     })
-    expect(result).toMatchObject({ ok: false, reason: 'unavailable' })
+    // Construction retains the requested profile; target preparation reports
+    // the unavailable backend without asking policy or dispatching a child.
+    const host = executionValue(result)
+    const context = executionValue(host.directOperation()).executionContext
+    expect(prepareNodeLaunch(target(context))).toMatchObject({
+      ok: false,
+      reason: 'unavailable',
+    })
     expect(approvals).toBe(0)
+    expect(host.events.some((event) => event.phase === 'dispatched')).toBe(false)
   })
 
   test('explicit fallback selects portable when native is absent', async () => {

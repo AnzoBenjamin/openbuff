@@ -20,7 +20,8 @@ describe('supplemental evaluator execution', () => {
         [
           '--no-env-file',
           '-e',
-          `process.on('SIGTERM', () => require('fs').writeSync(1, Buffer.alloc(11 * 1024 * 1024, 120))); require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 30000)`,
+          // Queue all bytes; a single fs.writeSync to a pipe may be partial.
+          `process.on('SIGTERM', () => process.stdout.write(Buffer.alloc(11 * 1024 * 1024, 120))); require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 30000)`,
         ],
         {
           branchId: 'supplemental.evaluator.resource-abort',

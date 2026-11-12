@@ -115,8 +115,6 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
       : defaultExecutionProfile)
     const profile = Object.freeze({ ...selectedProfile, required: Object.freeze([...selectedProfile.required]),
       ...(selectedProfile.optional ? { optional: Object.freeze([...selectedProfile.optional]) } : {}) })
-    if (profile.preferredBackend === 'native-exec' && !options.nativeExecution && !profile.allowBackendFallback)
-      return unavailable('The requested native backend has no verified host installation')
     const events: LaunchEvent[] = []
     const metadata = new Map<string, CapturedTerminalLaunchMetadata>()
     const runScopes = new Map<string, ExecutionScope>()
@@ -364,7 +362,13 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
     const bootstrapBudget = execution.registerHostObservation({ owner: hostOwner.value.owner, parent: rootLifetime,
       purpose: 'repository-bootstrap', limit: { kind: 'finite', durationMs: 15_000 } })
     if (!bootstrapBudget.ok) return bootstrapBudget
-    const bootstrap = contextFor(hostOwner.value.owner, bootstrapBudget.value, undefined, defaultExecutionProfile)
+    // Repository bootstrap (git identity, journal, broker) has no native adapter
+    // selection. Only a run that selected an installed native backend moves it to
+    // the portable default; every other run keeps its own profile, so the
+    // default path and an unavailable required backend behave as before B21.
+    const bootstrapProfile = profile.preferredBackend === 'native-exec' && options.nativeExecution
+      ? defaultExecutionProfile : profile
+    const bootstrap = contextFor(hostOwner.value.owner, bootstrapBudget.value, undefined, bootstrapProfile)
     if (!bootstrap.ok) return bootstrap
     const directScope: ExecutionScope = Object.freeze({ owner: hostOwner.value.owner, lifetime: rootLifetime, ...hostFactories,
       operation(p = {}) {
