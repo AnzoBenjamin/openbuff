@@ -26,7 +26,12 @@
         "sha256": "ccbb56a8f1b7da933b73fb06d953c8636b8ac518f0c91bde516a1b169ee18b19"
       },
       "requiredByCard": "B33",
-      "affectedCards": ["B19", "B20", "B28", "B33"],
+      "affectedCards": [
+        "B19",
+        "B20",
+        "B28",
+        "B33"
+      ],
       "tasks": [
         {
           "id": "RWEB-0",
@@ -36,26 +41,417 @@
         {
           "id": "RWEB-1",
           "status": "planned",
-          "prerequisites": ["RWEB-0", "B19", "B20", "B28"]
+          "prerequisites": [
+            "RWEB-0",
+            "B19",
+            "B20",
+            "B28"
+          ]
         },
         {
           "id": "RWEB-2",
           "status": "planned",
-          "prerequisites": ["RWEB-1"]
+          "prerequisites": [
+            "RWEB-1"
+          ]
         },
         {
           "id": "RWEB-3",
           "status": "planned",
-          "prerequisites": ["RWEB-2", "B03", "B05"]
+          "prerequisites": [
+            "RWEB-2",
+            "B03",
+            "B05"
+          ]
         },
         {
           "id": "RWEB-4",
           "status": "planned",
-          "prerequisites": ["RWEB-3", "B03", "B05", "B19", "B20", "B28"]
+          "prerequisites": [
+            "RWEB-3",
+            "B03",
+            "B05",
+            "B19",
+            "B20",
+            "B28"
+          ]
         }
       ],
-      "readyPreparationTasks": ["RWEB-0"],
+      "readyPreparationTasks": [
+        "RWEB-0"
+      ],
       "acceptanceRule": "B33 must bind this active addendum and pass every RWEB task and base prerequisite/oracle before acceptance; no current card acceptance is inferred."
+    },
+    {
+      "id": "PROD",
+      "requestedBy": "user",
+      "requestedDate": "2026-11-12",
+      "status": "executing",
+      "title": "Product audit fixes: security, cost, UX and parity with reference CLIs",
+      "document": {
+        "path": "docs/execution/body-roadmap/product-audit-addendum.md",
+        "sha256": "2b643e6aff5963b215253d93d47b990f0d390752d26700d865fa601069bf1684"
+      },
+      "sourceInspection": {
+        "path": ".agents/sessions/product-audit-2026-11-12/REPORT.md",
+        "sha256": "e16693b21b9be062610beaec0e197c4e555bb13443c85801c543ec2fe3bc0d12"
+      },
+      "verification": [
+        {
+          "path": ".agents/sessions/product-audit-2026-11-12/verification/trust.md",
+          "sha256": "caf206094e0a5f02a26904e5bfdbb8b8cc51653b010a5bbb17c64c16ab76e278"
+        },
+        {
+          "path": ".agents/sessions/product-audit-2026-11-12/verification/runtime.md",
+          "sha256": "ebe4f17fa687a298836a8a5f337186e9c9fef62372d00481a00862842b48364e"
+        }
+      ],
+      "amendedCards": [
+        "B09",
+        "B10",
+        "B11",
+        "B12",
+        "B13",
+        "B17",
+        "B24",
+        "B25",
+        "B26",
+        "B29",
+        "B32",
+        "B33",
+        "B34"
+      ],
+      "bindingRules": {
+        "B17": [
+          "N12"
+        ],
+        "B24": [
+          "N09"
+        ],
+        "B29": [
+          "N02"
+        ],
+        "B34": [
+          "N17"
+        ]
+      },
+      "tasks": [
+        {
+          "id": "N01",
+          "status": "implemented-partial",
+          "prerequisites": [],
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N01.md"
+        },
+        {
+          "id": "N02",
+          "status": "implemented-partial",
+          "prerequisites": [],
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N02.md"
+        },
+        {
+          "id": "N03",
+          "status": "implemented",
+          "prerequisites": [],
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N03.md"
+        },
+        {
+          "id": "N04",
+          "status": "implemented",
+          "prerequisites": [],
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N04.md"
+        },
+        {
+          "id": "N05",
+          "status": "implemented",
+          "prerequisites": [],
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N05.md"
+        },
+        {
+          "id": "N06",
+          "status": "implemented",
+          "prerequisites": [
+            "B20"
+          ],
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N06.md"
+        },
+        {
+          "id": "N07",
+          "status": "implemented",
+          "prerequisites": [
+            "B08"
+          ],
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N07.md"
+        },
+        {
+          "id": "N08",
+          "status": "implemented",
+          "prerequisites": [],
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N08.md"
+        },
+        {
+          "id": "N09",
+          "status": "implemented",
+          "prerequisites": [],
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N09.md"
+        },
+        {
+          "id": "N10",
+          "status": "implemented-partial",
+          "prerequisites": [
+            "B30"
+          ],
+          "receipt": ".agents/sessions/product-audit-2026-11-12/execution/N10.md"
+        },
+        {
+          "id": "N11",
+          "status": "planned",
+          "prerequisites": [
+            "N10"
+          ]
+        },
+        {
+          "id": "N12",
+          "status": "planned",
+          "prerequisites": [
+            "B02"
+          ]
+        },
+        {
+          "id": "N13",
+          "status": "planned",
+          "prerequisites": [
+            "N02"
+          ]
+        },
+        {
+          "id": "N14",
+          "status": "planned",
+          "prerequisites": [
+            "B18",
+            "N02"
+          ]
+        },
+        {
+          "id": "N15",
+          "status": "planned",
+          "prerequisites": []
+        },
+        {
+          "id": "N16",
+          "status": "planned",
+          "prerequisites": [
+            "B05"
+          ]
+        },
+        {
+          "id": "N17",
+          "status": "planned",
+          "prerequisites": [
+            "B04"
+          ]
+        },
+        {
+          "id": "N18",
+          "status": "planned",
+          "prerequisites": [
+            "B04"
+          ]
+        },
+        {
+          "id": "N19",
+          "status": "planned",
+          "prerequisites": [
+            "N02"
+          ]
+        },
+        {
+          "id": "N20",
+          "status": "planned",
+          "prerequisites": [
+            "N16"
+          ]
+        },
+        {
+          "id": "N21",
+          "status": "planned",
+          "prerequisites": [
+            "B05"
+          ]
+        },
+        {
+          "id": "N22",
+          "status": "planned",
+          "prerequisites": [
+            "N06"
+          ]
+        },
+        {
+          "id": "N23",
+          "status": "planned",
+          "prerequisites": [
+            "N03"
+          ]
+        },
+        {
+          "id": "N24",
+          "status": "planned",
+          "prerequisites": [
+            "B10"
+          ]
+        },
+        {
+          "id": "N25",
+          "status": "planned",
+          "prerequisites": [
+            "N07"
+          ]
+        },
+        {
+          "id": "N26",
+          "status": "planned",
+          "prerequisites": [
+            "B28",
+            "N02"
+          ]
+        },
+        {
+          "id": "N27",
+          "status": "planned",
+          "prerequisites": [
+            "N05"
+          ]
+        },
+        {
+          "id": "N28",
+          "status": "planned",
+          "prerequisites": [
+            "N06"
+          ]
+        },
+        {
+          "id": "N29",
+          "status": "planned",
+          "prerequisites": [
+            "N10"
+          ]
+        },
+        {
+          "id": "N30",
+          "status": "planned",
+          "prerequisites": [
+            "N11"
+          ]
+        },
+        {
+          "id": "N31",
+          "status": "planned",
+          "prerequisites": [
+            "B05",
+            "N10"
+          ]
+        },
+        {
+          "id": "N32",
+          "status": "planned",
+          "prerequisites": [
+            "B21",
+            "N02"
+          ]
+        }
+      ],
+      "readyPreparationTasks": [
+        "N01",
+        "N02",
+        "N03",
+        "N04",
+        "N05",
+        "N06",
+        "N07",
+        "N08",
+        "N09",
+        "N10",
+        "N12",
+        "N15",
+        "N16",
+        "N17",
+        "N18",
+        "N21"
+      ],
+      "dispatchWaves": [
+        [
+          "B21"
+        ],
+        [
+          "N02",
+          "N03",
+          "N05",
+          "N01",
+          "N04",
+          "N06",
+          "N07",
+          "N08",
+          "N09",
+          "N10"
+        ],
+        [
+          "B10",
+          "B12",
+          "B09",
+          "B11",
+          "B32",
+          "B23",
+          "N11",
+          "N12",
+          "N13",
+          "N14",
+          "N15",
+          "N16",
+          "N17",
+          "N18",
+          "N31"
+        ],
+        [
+          "B13",
+          "B14",
+          "B33",
+          "B24",
+          "B25",
+          "B26",
+          "N19",
+          "N20",
+          "N21",
+          "N22",
+          "N23",
+          "N24",
+          "N25",
+          "N26",
+          "N27",
+          "N28",
+          "N29",
+          "N30",
+          "N32"
+        ],
+        [
+          "B07",
+          "B06",
+          "B15",
+          "B17",
+          "B29",
+          "B34",
+          "B16",
+          "B27",
+          "B35"
+        ],
+        [
+          "M22-CORE",
+          "M22-TXN",
+          "M22-CHILD",
+          "B22",
+          "B31"
+        ]
+      ],
+      "acceptanceRule": "Each amended card's receipt must bind this active addendum and satisfy its Part A clauses; each N task is accepted with the same receipt discipline as a base card. The base 39-node graph, plan/spec hashes and existing receipts are unchanged; no card acceptance is inferred from this addendum.",
+      "integrationReport": ".agents/sessions/product-audit-2026-11-12/execution/INTEGRATION.md"
     }
   ]
 }
