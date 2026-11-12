@@ -79,3 +79,7 @@ openbuffissues.txt
 
 # SDK external-tool fixture scratch; maintained fixtures stay tracked.
 /sdk/src/__tests__/.external-tools-*/
+
+# Python bytecode from roadmap/fixture helper scripts
+__pycache__/
+*.pyc
