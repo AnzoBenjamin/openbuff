@@ -210,7 +210,7 @@ describe('B19 actual SDK host contract controls', () => {
     expect(fs.readFileSync(path.join(f.root, 'input.txt'), 'utf8')).toBe('before\n')
     expect(result.runOutcome?.termination).toBe('failed')
     if (result.output.type !== 'error') throw new Error('Required unavailable profile must fail the SDK run')
-    expect(result.output.message).toMatch(/execution (profile|backend) unavailable/i)
+    expect(result.output.message).toMatch(/native installation\/calibration is unavailable/i)
   }, 20_000)
 
   test('route.precedence and review.config.actual-consumers: live SDK closures consume one captured provider/hook/read/supervision snapshot', async () => {
