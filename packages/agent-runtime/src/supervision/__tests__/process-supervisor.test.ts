@@ -50,16 +50,41 @@ const descendantFixture = join(
   '../__fixtures__/b20-descendant.ts',
 )
 
-function processLiving(pid: number): boolean {
+function processLiving(
+  pid: number,
+  readStat: (pid: number) => string = pid =>
+    readFileSync(`/proc/${pid}/stat`, 'utf8'),
+): boolean {
   try {
     return !['Z', 'X', 'x'].includes(
-      parseProcStat(readFileSync(`/proc/${pid}/stat`, 'utf8')).state,
+      parseProcStat(readStat(pid)).state,
     )
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    const code = (error as NodeJS.ErrnoException).code
+    // A task can disappear after /proc/stat opens but before its read.
+    if (code === 'ENOENT' || code === 'ESRCH') return false
     throw error
   }
 }
+
+describe('process liveness oracle', () => {
+  for (const code of ['ENOENT', 'ESRCH']) {
+    it(`recognizes a vanished process reported as ${code}`, () => {
+      const readStat = () => {
+        throw Object.assign(new Error('gone'), { code })
+      }
+      expect(processLiving(123, readStat)).toBe(false)
+    })
+  }
+
+  it('preserves observation failures that do not prove disappearance', () => {
+    const error = Object.assign(new Error('denied'), { code: 'EACCES' })
+    const readStat = () => {
+      throw error
+    }
+    expect(() => processLiving(123, readStat)).toThrow(error)
+  })
+})
 
 async function waitUntil(
   predicate: () => boolean,
