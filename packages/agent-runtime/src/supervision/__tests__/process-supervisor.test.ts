@@ -1160,7 +1160,9 @@ describe('B20 owned Bun process scope', () => {
         await waitUntil(
           () =>
             existsSync(join(directory, 'leader-exit.json')) &&
-            existsSync(join(directory, 'writer-term.json')),
+            existsSync(join(directory, 'writer-term.json')) &&
+            // The marker precedes process.exit; wait for OS exit evidence too.
+            !processLiving(leaderPid),
         )
         receipt.afterLeaderClose = {
           leaderLiving: processLiving(leaderPid),

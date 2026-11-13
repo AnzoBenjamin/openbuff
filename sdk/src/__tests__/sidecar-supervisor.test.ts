@@ -104,16 +104,40 @@ async function waitUntil(
     throw new Error('Timed out waiting for supervised fixture observation')
 }
 
-function living(pid: number): boolean {
+function living(
+  pid: number,
+  readStat: (pid: number) => string = pid =>
+    readFileSync(`/proc/${pid}/stat`, 'utf8'),
+): boolean {
   try {
     return !['Z', 'X', 'x'].includes(
-      parseProcStat(readFileSync(`/proc/${pid}/stat`, 'utf8')).state,
+      parseProcStat(readStat(pid)).state,
     )
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ESRCH') return false
     throw error
   }
 }
+
+describe('sidecar process liveness oracle', () => {
+  for (const code of ['ENOENT', 'ESRCH']) {
+    test(`recognizes a vanished process reported as ${code}`, () => {
+      const readStat = () => {
+        throw Object.assign(new Error('gone'), { code })
+      }
+      expect(living(123, readStat)).toBe(false)
+    })
+  }
+
+  test('preserves observation failures that do not prove disappearance', () => {
+    const error = Object.assign(new Error('denied'), { code: 'EACCES' })
+    const readStat = () => {
+      throw error
+    }
+    expect(() => living(123, readStat)).toThrow(error)
+  })
+})
 
 function retainReceipt(name: string, receipt: unknown): void {
   const directory = process.env.B20_SUPERVISION_EVIDENCE_DIR
@@ -680,7 +704,7 @@ describe('SidecarSupervisor', () => {
       tempDirs.push(directory)
       const supervisor = new SidecarSupervisor({
         sidecarPath: nodeExecutable!,
-        args: [descendantFixture, 'ready', directory],
+        args: [descendantFixture, 'ready-delayed-exit', directory],
         protocolVersion: '1.0.0',
       })
       supervisors.push(supervisor)
@@ -723,7 +747,9 @@ describe('SidecarSupervisor', () => {
         await waitUntil(
           () =>
             existsSync(path.join(directory, 'leader-exit.json')) &&
-            existsSync(path.join(directory, 'writer-term.json')),
+            existsSync(path.join(directory, 'writer-term.json')) &&
+            // The marker precedes process.exit; wait for OS exit evidence too.
+            !living(started.pid!),
         )
         receipt.afterLeaderClose = {
           leaderLiving: living(started.pid!),

@@ -25,6 +25,7 @@
 - `sdk/src/host-execution.ts` retains the run's selected portable execution profile for repository bootstrap observations. An installed native backend uses the portable default for bootstrap; a missing required native installation is reported at target preparation before policy approval or child dispatch.
 - Launch observers include native preparation, transport and target-entry methods alongside portable spawn/failure/cleanup methods. Their presence does not grant native authority: the methods validate the captured native dispatch and bound observer receiver.
 - Full SDK CI discovery includes every non-integration `.test.ts` and `.test.tsx` file under `bun test --isolate`. Local server/IPC scenarios require a host that permits those operations. The current repaired schedule passes 5,750 tests across 194 files.
+- Real sidecar cleanup tests wait for Linux process-exit evidence as well as fixture markers before asserting that the leader is gone while its TERM-resistant writer remains. The fixture deliberately delays exit after announcing it, so marker creation cannot substitute for OS observation. Liveness reads treat ENOENT and ESRCH as disappearance; permission and malformed-observation failures still propagate.
 
 ## Filesystem sandbox configuration
 

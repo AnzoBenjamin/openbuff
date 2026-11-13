@@ -53,7 +53,9 @@ if (mode === 'writer') {
       leaderExitFile,
       JSON.stringify({ pid: process.pid, reason, atMs: performance.now() }),
     )
-    process.exit(0)
+    // Exercise the gap between announcing exit and the OS observing it.
+    if (mode === 'ready-delayed-exit') setTimeout(() => process.exit(0), 50)
+    else process.exit(0)
   }
   process.on('SIGTERM', () => exit('SIGTERM'))
   const reader = readline.createInterface({
