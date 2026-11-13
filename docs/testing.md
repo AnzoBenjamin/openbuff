@@ -22,6 +22,17 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
 
 ## Test-infra notes (bun)
 
+- **Code-map packaging tests need built grammars.** CI builds the SDK before
+  the code-map suite and sets `CODEBUFF_WASM_DIR` to `sdk/dist/wasm` so each
+  isolated test worker can load every advertised language. GDScript comes
+  from the checksum-pinned repair source rather than an installed dependency.
+  From the repository root, reproduce that prerequisite and suite with:
+
+  ```bash
+  (cd sdk && bun run build)
+  CODEBUFF_WASM_DIR="$PWD/sdk/dist/wasm" bun test --isolate packages/code-map
+  ```
+
 - **Pinned Bun and OpenTUI runtime.** Development and CI use Bun 1.4.4
   with OpenTUI 0.8.3. The runtime pin lives in `.bun-version`, workspace
   manifests and CI setup steps. OpenTUI 0.8.3 requires Bun >= 1.3.14;

@@ -240,9 +240,13 @@ jobs:
           echo "NEXT_PUBLIC_INFISICAL_UP=true" >> $GITHUB_ENV
           echo "CODEBUFF_GITHUB_TOKEN=$CODEBUFF_GITHUB_TOKEN" >> $GITHUB_ENV
 
-      - name: Build sdk dist (cli tests import @openbuff/sdk through the ESM import condition)
-        if: matrix.package == 'cli'
+      - name: Build SDK dist for CLI imports and code-map grammar coverage
+        if: matrix.package == 'cli' || matrix.package == 'packages/code-map'
         run: cd sdk && bun run build
+
+      - name: Use packaged grammars for code-map tests
+        if: matrix.package == 'packages/code-map'
+        run: echo "CODEBUFF_WASM_DIR=$GITHUB_WORKSPACE/sdk/dist/wasm" >> "$GITHUB_ENV"
 
       - name: Prebuild CLI agents
         if: matrix.package == 'cli'
