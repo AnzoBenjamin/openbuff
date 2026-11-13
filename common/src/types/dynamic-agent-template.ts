@@ -176,7 +176,7 @@ export const DynamicAgentDefinitionSchema = z.object({
   // enforces this as a hard spend ceiling — the turn ends if cumulative
   // creditsUsed exceeds it. Useful for BYOK configurations to guard against
   // runaway spend. Undefined = no cap.
-  maxCostCents: z.number().positive().optional(),
+  maxCostCents: z.number().nonnegative().optional(),
   // Optional per-step input token cap. When set, the agent runtime ends the
   // turn if a single step's total input tokens exceed this threshold.
   maxTokensPerTurn: z.number().int().positive().optional(),
@@ -188,6 +188,7 @@ export const DynamicAgentDefinitionSchema = z.object({
 
   // Tools and spawnable agents
   mcpServers: z.record(z.string(), mcpConfigSchema).default(() => ({})),
+  mcpServerReferences: z.record(z.string(), z.string()).optional(),
   toolNames: z
     .string()
     .array()

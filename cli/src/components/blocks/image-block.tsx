@@ -1,15 +1,17 @@
 import { TextAttributes } from '@opentui/core'
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useState } from 'react'
 
 import { useTheme } from '../../hooks/use-theme'
 import { calculateDisplaySize } from '../../utils/image-display'
 import {
-  renderInlineImage,
   supportsInlineImages,
   getImageSupportDescription,
 } from '../../utils/terminal-images'
 
 import type { ImageContentBlock } from '../../types/chat'
+import { Button } from '../button'
+import { createJsonDocument } from '../../utils/output-document'
+import { useOutputReaderStore } from '../../state/output-reader-store'
 
 interface ImageBlockProps {
   block: ImageContentBlock
@@ -18,9 +20,18 @@ interface ImageBlockProps {
 
 export const ImageBlock = memo(({ block, availableWidth }: ImageBlockProps) => {
   const theme = useTheme()
+  const [failedSource, setFailedSource] = useState<string | null>(null)
 
   const { image, mediaType, filename, size, width, height, imageRedacted } =
     block
+  const empty = !image.trim()
+  const unsupportedType = !/^image\/(png|jpeg|jpg|gif|webp|bmp)$/i.test(mediaType)
+  const invalidEncoding = !empty && (!/^[A-Za-z0-9+/]*={0,2}$/.test(image) || image.length % 4 === 1)
+  const unavailable = imageRedacted ? 'Image data omitted from saved chat state.'
+    : empty ? 'No image data was captured · metadata remains available.'
+    : invalidEncoding || failedSource === image ? 'Captured image could not be decoded · retained source remains available.'
+    : unsupportedType ? 'Captured image format is unsupported for inline preview.'
+    : getImageSupportDescription()
 
   // Calculate display dimensions based on actual image dimensions
   const displaySize = useMemo(
@@ -28,22 +39,18 @@ export const ImageBlock = memo(({ block, availableWidth }: ImageBlockProps) => {
     [width, height, availableWidth],
   )
 
-  // Try to render inline if supported
-  const inlineSequence = useMemo(() => {
-    if (!image.trim()) {
-      return null
+  // D47 Stage 4: gate native <image> rendering on our own protocol detection
+  // module (kept as the source of truth per the migration plan). OpenTUI
+  // 0.5.12's ImageRenderable picks the actual wire protocol itself via
+  // protocol: 'auto' (options verified against
+  // node_modules/@opentui/core/renderables/Image.d.ts).
+  const canRenderNatively = useMemo(() => {
+    if (empty || imageRedacted || unsupportedType || invalidEncoding) {
+      return false
     }
 
-    if (!supportsInlineImages()) {
-      return null
-    }
-
-    return renderInlineImage(image, {
-      width: displaySize.width,
-      height: displaySize.height,
-      filename,
-    })
-  }, [image, filename, displaySize])
+    return supportsInlineImages()
+  }, [image, empty, imageRedacted, unsupportedType, invalidEncoding])
 
   // Format file size
   const formattedSize = useMemo(() => {
@@ -64,8 +71,12 @@ export const ImageBlock = memo(({ block, availableWidth }: ImageBlockProps) => {
     return match ? match[1].toUpperCase() : null
   }, [filename, mediaType])
 
-  if (inlineSequence) {
-    // Render inline image using terminal escape sequence
+  if (canRenderNatively && failedSource !== image) {
+    // Native inline image via OpenTUI 0.5.12's <image> renderable
+    // (jsx-namespace.d.ts declares `image: ImageProps`). The source is a
+    // data-URI string — ImageSource accepts string (verified against
+    // node_modules/@opentui/core/image.d.ts) — sized in cells by
+    // calculateDisplaySize via the renderable's style width/height.
     return (
       <box style={{ flexDirection: 'column', gap: 0 }}>
         {/* Image caption/metadata */}
@@ -76,8 +87,13 @@ export const ImageBlock = memo(({ block, availableWidth }: ImageBlockProps) => {
           )}
         </text>
 
-        {/* The actual inline image - rendered via escape sequence */}
-        <text style={{ wrapMode: 'none' }}>{inlineSequence}</text>
+        {/* The actual inline image - native renderable */}
+        <image
+          source={`data:${mediaType};base64,${image}`}
+          protocol="auto"
+          onError={() => setFailedSource(image)}
+          style={{ width: displaySize.width, height: displaySize.height }}
+        />
       </box>
     )
   }
@@ -97,6 +113,7 @@ export const ImageBlock = memo(({ block, availableWidth }: ImageBlockProps) => {
       <text style={{ wrapMode: 'none', fg: theme.foreground }}>
         <span attributes={TextAttributes.BOLD}>Image attachment</span>
       </text>
+      <text fg={theme.warning} wrapMode="word">{unavailable}</text>
 
       {/* Filename */}
       {filename && (
@@ -120,21 +137,12 @@ export const ImageBlock = memo(({ block, availableWidth }: ImageBlockProps) => {
         </text>
       )}
 
-      {imageRedacted && (
-        <text style={{ wrapMode: 'word', fg: theme.muted }}>
-          Image data omitted from saved chat state.
-        </text>
-      )}
-
-      {/* Hint about terminal support */}
-      {!imageRedacted && (
-        <text
-          style={{ wrapMode: 'word', fg: theme.muted, marginTop: 1 }}
-          attributes={TextAttributes.DIM}
-        >
-          {`(${getImageSupportDescription()} - use iTerm2 or Kitty for inline display)`}
-        </text>
-      )}
+      <Button onClick={() => useOutputReaderStore.getState().open({ document: createJsonDocument(
+        `image:${filename ?? 'capture'}:${mediaType}:${size ?? image.length}`, 'Captured image details',
+        { filename, mediaType, size, width, height, availability: unavailable, imageRedacted, image },
+      ) })}>
+        <text fg={theme.link}>Inspect captured image</text>
+      </Button>
     </box>
   )
 })

@@ -20,6 +20,10 @@ const MIN_SUPPORTED_MACOS_MAJOR = 13
 const OLD_BINARY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const OLD_BINARY_MAX_COUNT = 2
 const TREE_SITTER_MANIFEST = 'tree-sitter-manifest.json'
+// N09: tag queries ship in this subdirectory next to the binary. Without them
+// the index parses files but extracts no symbols, calls or imports.
+const TREE_SITTER_QUERY_DIR = 'tree-sitter-queries'
+const TREE_SITTER_QUERY_NAME = /^tree-sitter-[a-z0-9_-]+-tags\.scm$/i
 const REQUIRED_TREE_SITTER_ASSETS = [
   'tree-sitter.wasm',
   'tree-sitter-c-sharp.wasm',
@@ -49,6 +53,29 @@ function resolveConfigDir(env, platform, homeDir) {
   return path.join(homeDir, '.config', 'openbuff')
 }
 
+function getQuerySiblingNames(dir) {
+  const queryDir = path.join(dir, TREE_SITTER_QUERY_DIR)
+  let stat
+  try {
+    stat = fs.lstatSync(queryDir)
+  } catch (error) {
+    if (error.code === 'ENOENT') return []
+    throw error
+  }
+  // A symlinked or non-directory entry could redirect the install outside
+  // the extraction directory.
+  if (!stat.isDirectory()) {
+    throw new Error(
+      `Release archive entry must be a directory: ${TREE_SITTER_QUERY_DIR}`,
+    )
+  }
+  return fs
+    .readdirSync(queryDir)
+    .filter((name) => TREE_SITTER_QUERY_NAME.test(name))
+    .sort()
+    .map((name) => `${TREE_SITTER_QUERY_DIR}/${name}`)
+}
+
 function getManagedSiblingNames(tempDir) {
   const extracted = fs.existsSync(tempDir) ? fs.readdirSync(tempDir) : []
   const wasmSiblings = extracted.filter(
@@ -59,6 +86,7 @@ function getManagedSiblingNames(tempDir) {
   return [
     ...new Set([
       ...wasmSiblings,
+      ...getQuerySiblingNames(tempDir),
       ...(extracted.includes(TREE_SITTER_MANIFEST)
         ? [TREE_SITTER_MANIFEST]
         : []),
@@ -103,6 +131,32 @@ function getTreeSitterAssetProblems(dir) {
       .update(fs.readFileSync(filePath))
       .digest('hex')
     if (actualHash !== expectedHash) problems.push(`${name}:checksum`)
+  }
+  // N09: releases that ship tag queries list them under `queries` (older
+  // manifests have no such key and are accepted unchanged, so an install from
+  // an older release is never forced into a re-download loop).
+  if (manifest.queries !== undefined) {
+    if (!manifest.queries || typeof manifest.queries !== 'object') {
+      return [...problems, `${TREE_SITTER_MANIFEST}:invalid`]
+    }
+    for (const [name, expectedHash] of Object.entries(manifest.queries)) {
+      if (!TREE_SITTER_QUERY_NAME.test(name)) {
+        problems.push(`${TREE_SITTER_QUERY_DIR}/${name}:invalid-name`)
+        continue
+      }
+      const filePath = path.join(dir, TREE_SITTER_QUERY_DIR, name)
+      if (!fs.existsSync(filePath)) {
+        problems.push(`${TREE_SITTER_QUERY_DIR}/${name}`)
+        continue
+      }
+      const actualHash = crypto
+        .createHash('sha256')
+        .update(fs.readFileSync(filePath))
+        .digest('hex')
+      if (actualHash !== expectedHash) {
+        problems.push(`${TREE_SITTER_QUERY_DIR}/${name}:checksum`)
+      }
+    }
   }
   return problems
 }
@@ -459,16 +513,26 @@ function getPlatformKey() {
   return `${process.platform}-${process.arch}`
 }
 
+function createProgressWriter(stream, now = Date.now) {
+  let lastProgressAt = -Infinity
+  return (text) => {
+    if (stream.isTTY) {
+      const width = Math.max(1, (stream.columns || 80) - 1)
+      stream.write('\r\x1b[K' + text.slice(0, width))
+    } else if (now() - lastProgressAt >= 1000) {
+      lastProgressAt = now()
+      stream.write(text + '\n')
+    }
+  }
+}
+
 const term = {
   clearLine: () => {
     if (process.stderr.isTTY) {
       process.stderr.write('\r\x1b[K')
     }
   },
-  write: (text) => {
-    term.clearLine()
-    process.stderr.write(text)
-  },
+  write: createProgressWriter(process.stderr),
   writeLine: (text) => {
     term.clearLine()
     process.stderr.write(text + '\n')
@@ -647,7 +711,9 @@ function isCheckUpdateFlag(args) {
 }
 
 function isUpdateFlag(args) {
-  return args.length === 1 && (args[0] === '--update' || args[0] === '--upgrade')
+  return (
+    args.length === 1 && (args[0] === '--update' || args[0] === '--upgrade')
+  )
 }
 
 function streamToString(stream) {
@@ -693,7 +759,7 @@ function compareVersions(v1, v2) {
   }
 
   const parseVersion = (version) => {
-    const parts = version.split('-')
+    const parts = version.split(/-(.*)/s)
     const mainParts = parts[0].split('.').map(Number)
     const prereleaseParts = parts[1] ? parts[1].split('.') : []
     return { main: mainParts, prerelease: prereleaseParts }
@@ -751,17 +817,26 @@ function compareVersions(v1, v2) {
 }
 
 function formatBytes(bytes) {
-  if (bytes === 0) return '0 B'
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
   const k = 1024
   const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  const i = Math.min(
+    sizes.length - 1,
+    Math.floor(Math.log(bytes) / Math.log(k)),
+  )
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
 
 function createProgressBar(percentage, width = 30) {
+  percentage = Number.isFinite(percentage)
+    ? Math.max(0, Math.min(100, percentage))
+    : 0
+  width = Number.isFinite(width)
+    ? Math.max(1, Math.min(30, Math.floor(width)))
+    : 30
   const filled = Math.round((width * percentage) / 100)
   const empty = width - filled
-  return '[' + '█'.repeat(filled) + '░'.repeat(empty) + ']'
+  return '[' + '#'.repeat(filled) + '.'.repeat(empty) + ']'
 }
 
 function getReleaseAssetBase(version) {
@@ -817,10 +892,19 @@ function downloadResponseToFile(response, destination, totalSize) {
       const now = Date.now()
       if (now - lastProgressTime < 100 && downloadedSize !== totalSize) return
       lastProgressTime = now
-      if (totalSize > 0) {
-        const pct = Math.round((downloadedSize / totalSize) * 100)
+      if (Number.isFinite(totalSize) && totalSize > 0) {
+        const pct = Math.min(
+          100,
+          Math.max(0, Math.round((downloadedSize / totalSize) * 100)),
+        )
+        const barWidth = Math.min(
+          30,
+          Math.max(1, (process.stderr.columns || 80) - 44),
+        )
         term.write(
-          `Downloading... ${createProgressBar(pct)} ${pct}% of ${formatBytes(totalSize)}`,
+          process.stderr.isTTY
+            ? `Downloading ${createProgressBar(pct, barWidth)} ${pct}% ${formatBytes(downloadedSize)}/${formatBytes(totalSize)}`
+            : `Downloading ${pct}% · ${formatBytes(downloadedSize)} received (${formatBytes(totalSize)} advertised)`,
         )
       } else {
         term.write(`Downloading... ${formatBytes(downloadedSize)}`)
@@ -883,7 +967,7 @@ async function downloadBinary(version, options = {}) {
     fs.rmSync(config.tempDownloadDir, { recursive: true })
   }
   fs.mkdirSync(config.tempDownloadDir, { recursive: true })
-  term.write('Downloading...')
+  term.writeLine(`Downloading Openbuff ${version}...`)
 
   try {
     let expectedChecksum
@@ -967,7 +1051,8 @@ async function downloadBinary(version, options = {}) {
     ]
     // Preserve the crash-heal budget: a fresh install must never reset the
     // bounded quarantine/re-download loop for a persistently crashing release.
-    const previousCrashHeal = readMetadata(config.metadataPath).crashHeal
+    const previousMetadata = readMetadata(config.metadataPath)
+    const previousCrashHeal = previousMetadata.crashHeal
     fs.writeFileSync(
       tempMetadataPath,
       JSON.stringify(
@@ -975,6 +1060,9 @@ async function downloadBinary(version, options = {}) {
           version,
           platformKey,
           ...(previousCrashHeal ? { crashHeal: previousCrashHeal } : {}),
+          ...(previousMetadata.updateCheck
+            ? { updateCheck: previousMetadata.updateCheck }
+            : {}),
         },
         null,
         2,
@@ -986,6 +1074,12 @@ async function downloadBinary(version, options = {}) {
       if (process.platform !== 'win32' && file.name === 'rg') {
         fs.chmodSync(file.source, 0o755)
       }
+    }
+
+    if (managedSiblings.some(({ name }) => name.startsWith(`${TREE_SITTER_QUERY_DIR}/`))) {
+      fs.mkdirSync(path.join(path.dirname(config.binaryPath), TREE_SITTER_QUERY_DIR), {
+        recursive: true,
+      })
     }
 
     const committed = []
@@ -1022,7 +1116,7 @@ async function downloadBinary(version, options = {}) {
     }
 
     term.clearLine()
-    console.log('Download complete! Starting Openbuff...')
+    term.writeLine(`Installed Openbuff ${version}.`)
   } finally {
     if (fs.existsSync(config.tempDownloadDir)) {
       fs.rmSync(config.tempDownloadDir, { recursive: true })
@@ -1030,7 +1124,55 @@ async function downloadBinary(version, options = {}) {
   }
 }
 
-function printInstallFailureGuidance(resolveProxyUrl, logError) {
+function classifyInstallFailure(error) {
+  const code = error?.code
+  const message = String(error?.message || '').toLowerCase()
+  if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS')
+    return 'permission'
+  if (message.includes('checksum')) return 'verification'
+  if (
+    message.includes('archive') ||
+    message.includes('extract') ||
+    message.includes('tree-sitter assets')
+  )
+    return 'extraction'
+  if (message.includes('unsupported platform')) return 'platform'
+  if (code === 'ENOSPC' || code === 'EDQUOT') return 'space'
+  return 'network'
+}
+
+function printInstallFailureGuidance(resolveProxyUrl, logError, error) {
+  const kind = classifyInstallFailure(error)
+  if (kind === 'permission') {
+    logError(
+      'Local installation access failed. Check ownership and write permissions for the Openbuff config directory, then retry.',
+    )
+    return
+  }
+  if (kind === 'verification') {
+    logError(
+      'Release verification failed before installation. Retry a verified release with openbuff --update.',
+    )
+    return
+  }
+  if (kind === 'extraction') {
+    logError(
+      'Release extraction failed before installation. Check local disk space and the release archive, then retry.',
+    )
+    return
+  }
+  if (kind === 'platform') {
+    logError(
+      'This platform has no supported binary. See installation requirements in openbuff --help.',
+    )
+    return
+  }
+  if (kind === 'space') {
+    logError(
+      'Local installation has insufficient disk space. Free space in the Openbuff config directory and retry.',
+    )
+    return
+  }
   logError('Please check your internet connection and try again')
   if (!resolveProxyUrl()) {
     logError(
@@ -1174,6 +1316,7 @@ async function ensureBinaryExists(options = {}) {
       logError(
         `Failed to apply update to ${version} — keeping current version ${currentVersion}. Run 'openbuff --update' to retry.`,
       )
+      printInstallFailureGuidance(resolveProxyUrl, logError, error)
       logUpdateDebug('staged update failed:', error.message)
       try {
         writeMetadataPatch(config.metadataPath, {
@@ -1189,12 +1332,19 @@ async function ensureBinaryExists(options = {}) {
       return
     }
     logError('❌ Failed to download openbuff:', error.message)
-    printInstallFailureGuidance(resolveProxyUrl, logError)
+    printInstallFailureGuidance(resolveProxyUrl, logError, error)
     exit(1)
   }
 }
 
 async function checkForUpdates(options = {}) {
+  const config = options.config || CONFIG
+  const recordCheck =
+    options.writeUpdateCheck ||
+    (options.writePendingUpdateVersion && !options.config
+      ? () => {}
+      : (check) =>
+          writeMetadataPatch(config.metadataPath, { updateCheck: check }))
   let latestVersion = null
   try {
     const currentVersion =
@@ -1202,7 +1352,9 @@ async function checkForUpdates(options = {}) {
         ? getCurrentVersion()
         : options.currentVersion
     latestVersion = await (options.getLatestVersion || getLatestVersion)()
-    if (!latestVersion) return null
+    if (!latestVersion) throw new Error('Registry lookup returned no version')
+    const checkedAt = new Date().toISOString()
+    recordCheck({ checkedAt, latestVersion, source: 'npm registry' })
 
     if (
       currentVersion === null ||
@@ -1214,16 +1366,53 @@ async function checkForUpdates(options = {}) {
     }
     return latestVersion
   } catch (error) {
+    try {
+      recordCheck({
+        ...readMetadata(config.metadataPath).updateCheck,
+        lastFailureAt: new Date().toISOString(),
+        failureKind: classifyInstallFailure(error),
+      })
+    } catch {}
     logUpdateDebug('background update check failed:', error?.message)
     trackUpdateFailed(error.message, null, { stage: 'background_check' })
     return latestVersion
   }
 }
 
+function recordSuccessfulUpdateCheck(options, latestVersion) {
+  if (
+    !options.config &&
+    (options.getLatestVersion ||
+      options.latestVersion !== undefined ||
+      options.writePendingUpdateVersion)
+  ) {
+    options.writeUpdateCheck?.({
+      checkedAt: new Date().toISOString(),
+      latestVersion,
+      source: 'npm registry',
+    })
+    return
+  }
+  try {
+    writeMetadataPatch((options.config || CONFIG).metadataPath, {
+      updateCheck: {
+        checkedAt: new Date().toISOString(),
+        latestVersion,
+        source: 'npm registry',
+      },
+    })
+  } catch (error) {
+    ;(options.consoleError || console.error)(
+      'Update lookup succeeded but freshness metadata could not be saved:',
+      error.message,
+    )
+  }
+}
+
 async function handleCheckUpdateCommand(options = {}) {
   const config = options.config || CONFIG
   void config
-  const log = options.consoleLog || console.log
+  const log = options.consoleLog || console.error
   const logError = options.consoleError || console.error
   const exit = options.exit || process.exit
   const resolveProxyUrl = options.getProxyUrl || getProxyUrl
@@ -1251,11 +1440,12 @@ async function handleCheckUpdateCommand(options = {}) {
     currentVersion === undefined ||
     compare(currentVersion, latestVersion) < 0
   ) {
+    recordSuccessfulUpdateCheck(options, latestVersion)
     try {
       persist(latestVersion)
     } catch (error) {
       logError('❌ Failed to stage update:', error.message)
-      printInstallFailureGuidance(resolveProxyUrl, logError)
+      printInstallFailureGuidance(resolveProxyUrl, logError, error)
       exit(1)
       return
     }
@@ -1264,6 +1454,7 @@ async function handleCheckUpdateCommand(options = {}) {
     )
     log('Restart to apply, or run openbuff --update now from your shell.')
   } else {
+    recordSuccessfulUpdateCheck(options, latestVersion)
     log(`Openbuff is up to date (${currentVersion}).`)
   }
   exit(0)
@@ -1271,7 +1462,7 @@ async function handleCheckUpdateCommand(options = {}) {
 
 async function handleUpdateCommand(options = {}) {
   const config = options.config || CONFIG
-  const log = options.consoleLog || console.log
+  const log = options.consoleLog || console.error
   const logError = options.consoleError || console.error
   const exit = options.exit || process.exit
   const resolveProxyUrl = options.getProxyUrl || getProxyUrl
@@ -1310,11 +1501,13 @@ async function handleUpdateCommand(options = {}) {
       currentVersion !== undefined &&
       compare(currentVersion, latestVersion) >= 0
     ) {
+      recordSuccessfulUpdateCheck(options, latestVersion)
       log(`Openbuff is up to date (${currentVersion}).`)
       exit(0)
       return
     }
     targetVersion = latestVersion
+    recordSuccessfulUpdateCheck(options, latestVersion)
   }
 
   if (!targetVersion) {
@@ -1355,7 +1548,7 @@ async function handleUpdateCommand(options = {}) {
   } catch (error) {
     term.clearLine()
     logError('❌ Failed to download openbuff:', error.message)
-    printInstallFailureGuidance(resolveProxyUrl, logError)
+    printInstallFailureGuidance(resolveProxyUrl, logError, error)
     exit(1)
   }
 }
@@ -1398,7 +1591,10 @@ function isCrashExit(code, signal) {
  * crashHeal counter bounds the loop at 3 attempts per 24h so a persistently
  * incompatible release cannot download forever.
  */
-function quarantineCrashedBinary(config = CONFIG) {
+function quarantineCrashedBinary(config = CONFIG, options = {}) {
+  const logError = options.consoleError || console.error
+  const rename = options.rename || fs.renameSync
+  const writePatch = options.writeMetadataPatch || writeMetadataPatch
   const crashHeal = readMetadata(config.metadataPath).crashHeal || {
     count: 0,
     lastAt: 0,
@@ -1408,27 +1604,37 @@ function quarantineCrashedBinary(config = CONFIG) {
     Date.now() - crashHeal.lastAt < 24 * 60 * 60 * 1000
   ) {
     logUpdateDebug('crash-heal budget exhausted; skipping quarantine')
-    return
+    logError(
+      'Openbuff crash recovery retry budget exhausted (3 attempts in 24 hours). Run openbuff --update after checking platform compatibility.',
+    )
+    return { quarantined: false, recorded: false, exhausted: true }
   }
+  let quarantined = false
+  let recorded = false
   try {
-    fs.renameSync(
+    rename(
       config.binaryPath,
       `${config.binaryPath}.crash-quarantine-${Date.now()}`,
     )
+    quarantined = true
   } catch (error) {
     logUpdateDebug('failed to quarantine crashing binary:', error?.message)
   }
   try {
-    writeMetadataPatch(config.metadataPath, {
-      version: undefined,
+    writePatch(config.metadataPath, {
+      ...(quarantined ? { version: undefined } : {}),
       crashHeal: { count: crashHeal.count + 1, lastAt: Date.now() },
     })
+    recorded = true
   } catch (error) {
     logUpdateDebug('failed to record crash heal:', error?.message)
   }
-  console.error(
-    'Openbuff crashed; quarantined the binary. The next launch will download a fresh copy.',
+  logError(
+    quarantined && recorded
+      ? 'Openbuff crashed; quarantined the binary and recorded recovery. The next launch will download a verified copy.'
+      : `Openbuff crashed; quarantine ${quarantined ? 'completed' : 'failed'}, recovery metadata ${recorded ? 'recorded' : 'failed'}. Check local installation permissions and run openbuff --update to repair.`,
   )
+  return { quarantined, recorded, exhausted: false }
 }
 
 function printCrashDiagnostics(code, signal) {
@@ -1582,6 +1788,13 @@ if (require.main === module) {
 }
 
 module.exports = {
+  createProgressWriter,
+  printInstallFailureGuidance,
+  createProgressBar,
+  formatBytes,
+  downloadResponseToFile,
+  classifyInstallFailure,
+  quarantineCrashedBinary,
   checkForUpdates,
   cleanupOldBinaryBackups,
   compareVersions,

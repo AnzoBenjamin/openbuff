@@ -1,0 +1,10 @@
+(pass) M7.1 — semantic boost is opt-in and off by default > all three gates open yields semantic search (control) [3.00ms]
+(pass) M7.2 — stale-index detection in explain > fresh index appends an "Index age: Ns (fresh)." note
+(pass) M7.2 — stale-index detection in explain > stale index appends an "Index age: Ns (stale)." note
+(pass) M7.2 — stale-index detection in explain > staleness note does not alter the result shape or score
+(pass) M7.2 — stale-index detection in explain > the staleness boundary itself (exactly MAX_INDEX_AGE_MS) reads as stale
+
+ 413 pass
+ 0 fail
+ 1577 expect() calls
+Ran 413 tests across 25 files. [42.39s]

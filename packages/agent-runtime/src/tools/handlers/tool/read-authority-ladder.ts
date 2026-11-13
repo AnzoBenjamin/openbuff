@@ -19,6 +19,8 @@
  * `grantWholeFileReadAuthorization`. Callers act on the verdict.
  */
 
+import type { RawReadBasisV1 } from '@codebuff/common/util/raw-read-basis'
+
 export type ReadBlockAuthority = 'whole_file' | 'scoped' | 'none'
 
 export type ReadBlockCoverage = {
@@ -30,6 +32,8 @@ export type ReadBlockCoverage = {
   sourceContent: string | undefined
   /** False for heuristic (non-parser-proven) symbol slices. */
   capabilityEligible?: boolean
+  /** Authenticated by the caller against the original host read. */
+  rawBasis?: RawReadBasisV1
 }
 
 export function classifyReadBlockAuthority(
@@ -38,7 +42,12 @@ export function classifyReadBlockAuthority(
   if (!c.complete) return 'none'
   if (c.capabilityEligible === false) return 'none'
   if (c.sourceContent === undefined) return 'none'
-  if (c.startLine === 1 && c.endLine === c.totalLines && c.totalLines > 0) {
+  if (!c.rawBasis) return 'none'
+  if (
+    c.rawBasis.scope === 'whole' &&
+    c.startLine === 1 &&
+    (c.endLine === c.totalLines || c.endLine === c.totalLines + 1)
+  ) {
     return 'whole_file'
   }
   return 'scoped'

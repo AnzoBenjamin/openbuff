@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 
+import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
+import {
+  buildFileMutationResultFromReceiptV1,
+  commitReceiptV1Schema,
+} from '@codebuff/common/tools/results/filesystem'
+
 import {
   collectAgentReceiptChangedFiles,
   collectToolInputFiles,
@@ -8,63 +14,36 @@ import {
   visitToolValue,
 } from '../base2/gate-files'
 
-/**
- * Canonical `file_mutation_result` receipt — the exact production edit-artifact
- * shape the editor agent uses (shared as `editReceipt` in
- * agents/e2e/gate-aux-ordering.e2e.test.ts). It must satisfy
- * fileMutationResultV1Schema exactly so `hasEditArtifact` returns true:
- * operationId/receiptId/authorityTier at the top level, a full
- * `commitReceiptV1Schema` `authorityReceipt`, actions with index/outcome
- * 'applied', matching before/after hashes across the action and its authority
- * receipt, errors: [], and freshCapabilities: [].
- */
-function editReceipt(path: string): Record<string, unknown> {
-  const operationId = `op-${path}`
-  const receiptId = `receipt-${path}`
-  const actionId = `action-${path}`
-  const hash = 'sha256:' + 'a'.repeat(64)
-  return {
-    kind: 'file_mutation_result',
-    version: 1,
-    operationId,
-    receiptId,
-    outcome: 'applied',
-    authorityTier: 'conditional_commit',
+/** Authority-backed fixtures retain exact postimages for update/move/delete. */
+function editReceipt(
+  path: string,
+  action: 'update' | 'move' | 'delete' = 'update',
+  destinationPath?: string,
+): Record<string, unknown> {
+  const update = committedMutationFixture([{ path, content: 'after' }])
+  if (action === 'update') return update
+
+  const authority = update.authorityReceipt!
+  const original = authority.actions[0]!
+  const afterHash = action === 'delete' ? null : original.afterHash
+  const afterHashes =
+    action === 'move'
+      ? { [path]: null, [destinationPath!]: afterHash }
+      : { [path]: null }
+  const receipt = commitReceiptV1Schema.parse({
+    ...authority,
     actions: [
       {
-        actionId,
-        index: 0,
-        action: 'update',
-        path,
-        outcome: 'applied',
-        beforeHash: hash,
-        afterHash: hash,
+        ...original,
+        action,
+        ...(destinationPath ? { destinationPath } : {}),
+        afterHash,
+        forward: { outcome: 'applied', afterHashes },
       },
     ],
-    authorityReceipt: {
-      kind: 'commit_receipt',
-      version: 1,
-      receiptId,
-      operationId,
-      callId: `call-${path}`,
-      authorityTier: 'conditional_commit',
-      status: 'committed',
-      actions: [
-        {
-          actionId,
-          index: 0,
-          action: 'update',
-          path,
-          status: 'committed',
-          beforeHash: hash,
-          afterHash: hash,
-        },
-      ],
-      finalHashes: { [path]: hash },
-    },
-    errors: [],
-    freshCapabilities: [],
-  }
+    finalHashes: afterHashes,
+  })
+  return buildFileMutationResultFromReceiptV1(receipt, [], [])
 }
 
 function collectToolInputs(input: unknown): string[] {
@@ -320,28 +299,41 @@ describe('visitToolValue', () => {
     expect(collectVisited(receipt)).toEqual(['src/c.ts'])
   })
 
-  test('collects the move destinationPath from a canonical move action', () => {
-    const receipt = editReceipt('src/old.ts')
-    const action = (receipt.actions as Array<Record<string, unknown>>)[0]!
-    const authorityReceipt = receipt.authorityReceipt as Record<string, unknown>
-    const authorityAction = (
-      authorityReceipt.actions as Array<Record<string, unknown>>
-    )[0]!
-    ;(receipt.actions as Array<Record<string, unknown>>)[0] = {
-      ...action,
-      action: 'move',
-      destinationPath: 'src/new.ts',
-    }
-    ;(authorityReceipt.actions as Array<Record<string, unknown>>)[0] = {
-      ...authorityAction,
-      action: 'move',
-      destinationPath: 'src/new.ts',
-    }
-    authorityReceipt.finalHashes = {
-      'src/old.ts': action.afterHash as string,
-      'src/new.ts': action.afterHash as string,
-    }
+  test('collects both move paths with a retained destination and vacated source', () => {
+    const receipt = editReceipt('src/old.ts', 'move', 'src/new.ts')
+    expect(hasEditArtifact(receipt)).toBe(true)
     expect(collectVisited(receipt)).toEqual(['src/new.ts', 'src/old.ts'])
+  })
+
+  test('collects a deletion backed by an absent postimage', () => {
+    const receipt = editReceipt('src/deleted.ts', 'delete')
+    expect(hasEditArtifact(receipt)).toBe(true)
+    expect(collectVisited(receipt)).toEqual(['src/deleted.ts'])
+  })
+
+  test('rejects a move with missing or inconsistent source-deletion evidence', () => {
+    for (const sourcePresent of [false, true]) {
+      const receipt = editReceipt('src/old.ts', 'move', 'src/new.ts')
+      const authority = receipt.authorityReceipt as {
+        finalHashes: Record<string, unknown>
+      }
+      if (sourcePresent)
+        authority.finalHashes['src/old.ts'] =
+          authority.finalHashes['src/new.ts']
+      else delete authority.finalHashes['src/old.ts']
+      expect(hasEditArtifact(receipt)).toBe(false)
+      expect(collectVisited(receipt)).toEqual([])
+    }
+  })
+
+  test('rejects deletion evidence that disagrees with the final postimage', () => {
+    const receipt = editReceipt('src/deleted.ts', 'delete')
+    const authority = receipt.authorityReceipt as {
+      finalHashes: Record<string, unknown>
+    }
+    authority.finalHashes['src/deleted.ts'] = 'sha256:' + 'a'.repeat(64)
+    expect(hasEditArtifact(receipt)).toBe(false)
+    expect(collectVisited(receipt)).toEqual([])
   })
 
   test('collects action paths nested inside a json envelope', () => {

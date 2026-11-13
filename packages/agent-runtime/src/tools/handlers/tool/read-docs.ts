@@ -22,9 +22,16 @@ export const handleReadDocs = (async (
     repoId: string | undefined
     userId: string | undefined
     userInputId: string
+    signal?: AbortSignal
+    /**
+     * Test seam: Context7 key override. Omitted in production, where the key
+     * comes from CONTEXT7_API_KEY. The runtime's provider `apiKey` is never
+     * forwarded to Context7.
+     */
+    context7ApiKey?: string
   } & ParamsExcluding<
     typeof fetchContext7LibraryDocumentation,
-    'query' | 'topic' | 'tokens'
+    'query' | 'topic' | 'tokens' | 'signal' | 'context7ApiKey'
   >,
 ): Promise<{
   output: CodebuffToolOutput<'read_docs'>
@@ -43,6 +50,7 @@ export const handleReadDocs = (async (
     userInputId,
 
     fetch,
+    signal,
   } = params
   const { libraryTitle, topic, max_tokens } = toolCall.input
 
@@ -71,14 +79,40 @@ export const handleReadDocs = (async (
       tokens: max_tokens,
       logger,
       fetch,
+      signal,
+      ...('context7ApiKey' in params
+        ? { context7ApiKey: params.context7ApiKey }
+        : {}),
     })
 
-    if (!documentationResult) {
-      const docMsg = `No documentation found for "${libraryTitle}"${topic ? ` (topic: ${topic})` : ''}`
+    if (!documentationResult.ok) {
+      // N04: keep each failure distinct. Only `not_found` means Context7 has
+      // no documentation; auth, rate limit, timeout and network failures say
+      // so and give a next step.
+      const { status, reason, nextStep, httpStatus, retryAfterSeconds } =
+        documentationResult
+      const docMsg =
+        status === 'not_found'
+          ? `No documentation found for "${libraryTitle}"${topic ? ` (topic: ${topic})` : ''}. ${reason}`
+          : `Could not fetch documentation for "${libraryTitle}" (${status}): ${reason}`
+      logger.warn(
+        {
+          ...docsContext,
+          status,
+          httpStatus,
+          durationMs: Date.now() - docsStartTime,
+        },
+        'Documentation request did not return documentation',
+      )
       return {
         output: jsonToolResult({
           documentation: docMsg,
           errorMessage: docMsg,
+          status,
+          reason,
+          nextStep,
+          ...(httpStatus !== undefined ? { httpStatus } : {}),
+          ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
         }),
         creditsUsed,
       }
@@ -131,6 +165,7 @@ export const handleReadDocs = (async (
       creditsUsed,
     }
   } catch (error) {
+    // NOTE(P2-T1): log-only duration telemetry; not persisted.
     const docsDuration = Date.now() - docsStartTime
     const errMsg = `Error fetching documentation for "${libraryTitle}": ${
       error instanceof Error ? error.message : 'Unknown error'

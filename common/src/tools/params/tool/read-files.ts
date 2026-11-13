@@ -1,10 +1,6 @@
 import z from 'zod/v4'
 
-import {
-  $getNativeToolCallExampleString,
-  coerceToArray,
-  jsonToolResultSchema,
-} from '../utils'
+import { coerceToArray, jsonToolResultSchema, parseJsonBounded } from '../utils'
 import {
   READ_FILES_BLOCK_CONTENT_MAX_BYTES,
   readFilesResultV1Schema,
@@ -30,7 +26,7 @@ export const readFilesWindowSelectorSchema = z.object({
     .string()
     .min(1)
     .describe(
-      'File path to read in contiguous line windows, relative to the project root.',
+      'File path to read in contiguous line windows, absolute or relative to the project root; access follows the configured sandbox policy.',
     ),
   windowSize: z
     .number()
@@ -56,7 +52,7 @@ export const readFilesAroundSelectorSchema = z.object({
     .string()
     .min(1)
     .describe(
-      'File path to read a content-anchored block from, relative to the project root.',
+      'File path to read a content-anchored block from, absolute or relative to the project root; access follows the configured sandbox policy.',
     ),
   match: z
     .string()
@@ -86,7 +82,7 @@ export const readFilesSymbolSelectorSchema = z.object({
     .string()
     .min(1)
     .describe(
-      'File path to extract a symbol slice from, relative to the project root.',
+      'File path to extract a symbol slice from, absolute or relative to the project root; access follows the configured sandbox policy.',
     ),
   name: z
     .string()
@@ -203,9 +199,176 @@ const inferSingleSelectorPath = (input: unknown): unknown => {
   return { ...record, paths: [], ranges, windows, around, symbol, symbols }
 }
 
+/**
+ * Upper bound for a plain-string selector anchor this repair will wrap. A
+ * longer string is almost certainly a broken payload (e.g. a truncated
+ * serialized selector), so the repair fails closed and leaves it for schema
+ * validation to reject.
+ */
+export const MAX_REPAIRABLE_SELECTOR_STRING_LENGTH = 4_096
+
+// Observability seam for the selector shape repair below: no logger exists
+// inside a Zod preprocess in common, so this exported counter is the
+// common-layer seam — every applied repair increments `total` plus its kind.
+// The runtime layer (parseRawToolCall in agent-runtime's tool-executor)
+// snapshots this counter around schema validation and emits a logger.debug
+// diagnostic per repaired call, the same counter-plus-diagnostic contract as
+// `toolArgNormalizationStats` there. Tests read/reset the counters directly
+// via the getter and the test-only reset below.
+export const readFilesSelectorRepairStats: {
+  total: number
+  byKind: Record<string, number>
+} = { total: 0, byKind: {} }
+
+export function getReadFilesSelectorRepairStats(): {
+  total: number
+  byKind: Record<string, number>
+} {
+  return readFilesSelectorRepairStats
+}
+
+export function __resetReadFilesSelectorRepairStatsForTest(): void {
+  readFilesSelectorRepairStats.total = 0
+  readFilesSelectorRepairStats.byKind = {}
+}
+
+const recordSelectorRepair = (kind: string): void => {
+  readFilesSelectorRepairStats.total += 1
+  readFilesSelectorRepairStats.byKind[kind] =
+    (readFilesSelectorRepairStats.byKind[kind] ?? 0) + 1
+}
+
+/**
+ * True only for a plain string that can be nothing but a selector anchor: it
+ * does not parse as JSON (`parseJsonBounded` returns it unchanged), it does
+ * not look like a JSON fragment (no leading `{`/`[` after trim), and it fits
+ * the repairable length bound. Serialized and fragment-looking strings stay
+ * untouched so the per-field `coerceToArray` preprocess or schema validation
+ * handles or rejects them — a fragment is never guessed into an anchor.
+ */
+const isPlainAnchorString = (value: unknown): value is string => {
+  if (typeof value !== 'string') return false
+  if (value.length > MAX_REPAIRABLE_SELECTOR_STRING_LENGTH) return false
+  if (parseJsonBounded(value) !== value) return false
+  const trimmed = value.trim()
+  return !trimmed.startsWith('{') && !trimmed.startsWith('[')
+}
+
+/** Wrapping key for a plain-string anchor, per selector field. */
+const STRING_ANCHOR_WRAP_KEYS = {
+  around: 'match',
+  symbol: 'name',
+  symbols: 'names',
+} as const
+
+const wrapPlainAnchorString = (
+  field: keyof typeof STRING_ANCHOR_WRAP_KEYS,
+  value: string,
+): Record<string, unknown> => {
+  const key = STRING_ANCHOR_WRAP_KEYS[field]
+  // `symbols` entries hold a `names` ARRAY; the singular selectors hold the
+  // anchor string directly.
+  return key === 'names' ? { names: [value] } : { [key]: value }
+}
+
+/**
+ * Clamps a 0-valued 1-indexed selector field to 1. Only the exact integer 0
+ * is clamped: negative, non-integer, and non-number values are left for
+ * schema validation to reject. Returns the original entry when unchanged.
+ */
+const withZeroIndexClamped = (
+  entry: unknown,
+  key: 'window' | 'occurrence',
+): unknown => {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry
+  const entryRecord = entry as Record<string, unknown>
+  // Object.is(-0, 0) is false, so a negative zero fails validation like
+  // every other out-of-range value instead of being silently accepted.
+  if (!Object.is(entryRecord[key], 0)) return entry
+  recordSelectorRepair(
+    key === 'window' ? 'window_zero_index' : 'occurrence_zero_index',
+  )
+  return { ...entryRecord, [key]: 1 }
+}
+
+/**
+ * Fail-closed repair of model-emitted selector SHAPE mistakes that survive
+ * fragment decoding: plain strings in `around`/`symbol`/`symbols` selector
+ * positions (which can only be the match/name anchor) and 0-valued 1-indexed
+ * `window`/`occurrence` fields. `ranges` and `windows` string entries have no
+ * unambiguous mapping and are deliberately left for schema validation to
+ * reject. Returns the ORIGINAL reference when nothing was repaired.
+ */
+const repairSelectorEntryShapes = (input: unknown): unknown => {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return input
+  const record = input as Record<string, unknown>
+  const repaired: Record<string, unknown> = { ...record }
+  let repairedAny = false
+
+  for (const field of ['around', 'symbol', 'symbols'] as const) {
+    const value = record[field]
+    if (typeof value === 'string') {
+      if (!isPlainAnchorString(value)) continue
+      repaired[field] = wrapPlainAnchorString(field, value)
+      recordSelectorRepair(`${field}_string`)
+      repairedAny = true
+      continue
+    }
+    if (!Array.isArray(value)) continue
+    let wrappedAny = false
+    const entries = value.map((entry) => {
+      if (typeof entry !== 'string' || !isPlainAnchorString(entry)) {
+        return entry
+      }
+      wrappedAny = true
+      recordSelectorRepair(`${field}_string`)
+      return wrapPlainAnchorString(field, entry)
+    })
+    if (wrappedAny) {
+      repaired[field] = entries
+      repairedAny = true
+    }
+  }
+
+  for (const [field, key] of [
+    ['windows', 'window'],
+    ['around', 'occurrence'],
+    ['symbol', 'occurrence'],
+  ] as const) {
+    const value = repaired[field]
+    if (!value || typeof value !== 'object') continue
+    if (Array.isArray(value)) {
+      let clampedAny = false
+      const entries = value.map((entry) => {
+        const clamped = withZeroIndexClamped(entry, key)
+        if (clamped === entry) return entry
+        clampedAny = true
+        return clamped
+      })
+      if (clampedAny) {
+        repaired[field] = entries
+        repairedAny = true
+      }
+      continue
+    }
+    // Single-object selector values reach coerceToArray only later, so the
+    // zero-index clamp is applied here too.
+    const clamped = withZeroIndexClamped(value, key)
+    if (clamped !== value) {
+      repaired[field] = clamped
+      repairedAny = true
+    }
+  }
+
+  return repairedAny ? repaired : input
+}
+
 const inputSchema = z
   .preprocess(
-    (input) => inferSingleSelectorPath(decodeFragmentedSelectors(input)),
+    (input) =>
+      inferSingleSelectorPath(
+        repairSelectorEntryShapes(decodeFragmentedSelectors(input)),
+      ),
     z.object({
       paths: z
         .preprocess(
@@ -215,7 +378,7 @@ const inputSchema = z
               .string()
               .min(1, 'Paths cannot be empty')
               .describe(
-                'File path relative to the project root (absolute paths fail).',
+                'File path, absolute or relative to the project root; access follows the configured sandbox policy.',
               ),
           ),
         )
@@ -227,7 +390,7 @@ const inputSchema = z
       ranges: z
         .array(
           z.object({
-            path: z.string().min(1).describe('Project-relative file path.'),
+            path: z.string().min(1).describe('File path, absolute or relative to the project root; access follows the configured sandbox policy.'),
             startLine: z
               .number()
               .int()
@@ -252,13 +415,13 @@ const inputSchema = z
         .preprocess(coerceToArray, z.array(readFilesWindowSelectorSchema))
         .optional()
         .describe(
-          'Contiguous line windows; each complete window mints a scoped cap.v3 editAnchor.',
+          'Contiguous line windows; each complete window mints a scoped cap.v4 editAnchor.',
         ),
       around: z
         .preprocess(coerceToArray, z.array(readFilesAroundSelectorSchema))
         .optional()
         .describe(
-          'Literal-anchored context blocks with a scoped cap.v3 editAnchor per block.',
+          'Literal-anchored context blocks with a scoped cap.v4 editAnchor per block.',
         ),
       symbol: z
         .preprocess(coerceToArray, z.array(readFilesSymbolSelectorSchema))
@@ -269,7 +432,7 @@ const inputSchema = z
       symbols: z
         .array(
           z.object({
-            path: z.string().min(1).describe('Project-relative file path.'),
+            path: z.string().min(1).describe('File path, absolute or relative to the project root; access follows the configured sandbox policy.'),
             names: z
               .preprocess(coerceToArray, z.array(z.string().min(1)))
               .describe('Symbol names to slice.'),
@@ -305,11 +468,12 @@ const description = `
 Read files from disk. Prefer ranges/windows/around/symbol slices over full reads before editing large files.
 
 - Selectors (combinable): \`paths\`, \`ranges\`, \`windows\`, \`around\`, \`symbol\`, \`symbols\`.
-- Complete reads return one editAnchor (startLine, endLine, contentHash, cap.v3 readCapability). Copy editAnchor.readCapability verbatim to basedOnRead/readCapability; other fields are diagnostics only.
-- Authority: whole-file-covering reads grant sticky whole-file auth; complete sub-file blocks mint a scoped cap.v3 for that block only. Partial/truncated reads mint nothing — do not edit from truncated content.
+- Complete reads return one editAnchor (startLine, endLine, contentHash, cap.v4 readCapability). Copy editAnchor.readCapability verbatim to basedOnRead/readCapability; other fields are diagnostics only.
+- Authority: authenticated complete paths reads with a whole raw basis grant whole-file auth. Ranges/windows/around/symbols retain a lines basis even when their slice covers the visible file. Partial/truncated or unverified reads mint no edit authority.
 - \`windows\`: contiguous line windows (default size 400); omit \`window\` for manifest + first window.
 - \`around\`: Nth literal \`match\` + contextLines (default 40).
 - \`symbol\` / \`symbols\`: named top-level slices (pair with read_outline). Prefer batch \`symbols\`; use \`symbol\` for a specific occurrence.
+- Batch \`symbols\` returns complete slices up to ${MAX_READ_BLOCK_BYTES} bytes in total. A partial result lists omittedSymbols; request those separately or use smaller windows for an oversized symbol.
 - Block budget: each window/around/symbol payload (decorated content and sourceContent independently) is capped at ${MAX_READ_BLOCK_BYTES} bytes; oversize blocks return \`too_large\` (shrink windowSize/contextLines).
 - Prefer replace_range with readCapability for medium/large blocks; for large-file str_replace copy readCapability into basedOnRead. Range results include sourceContent for exact oldString text.
 `.trim()

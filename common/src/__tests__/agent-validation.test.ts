@@ -1,6 +1,14 @@
 import { beforeEach, describe, expect, it, test } from 'bun:test'
 
-import { validateAgents } from '../templates/agent-validation'
+import { z } from 'zod/v4'
+
+import {
+  coerceJsonSchemaMember,
+  isDegradedZodHusk,
+  isRepresentableZodSchema,
+  serializeSchemaMemberForTransport,
+  validateAgents,
+} from '../templates/agent-validation'
 import { DynamicAgentDefinitionSchema } from '../types/dynamic-agent-template'
 import { getStubProjectFileContext } from '../util/file'
 
@@ -542,6 +550,70 @@ describe('Agent Validation', () => {
     })
 
     describe('Edge Cases', () => {
+      it('reports an unsupported schema without discarding healthy sibling agents', () => {
+        const result = validateAgents({
+          agentTemplates: {
+            'healthy.ts': {
+              ...mockAgentTemplate,
+              id: 'healthy',
+              inputSchema: { params: { type: 'object' } },
+            },
+            'unsupported.ts': {
+              ...mockAgentTemplate,
+              id: 'unsupported',
+              inputSchema: {
+                params: { type: 'object', unevaluatedProperties: false },
+              },
+            },
+          },
+          logger,
+        })
+        expect(Object.keys(result.templates)).toEqual(['healthy'])
+        expect(result.validationErrors).toHaveLength(1)
+        expect(result.validationErrors[0].message).toContain(
+          'Unsupported JSON Schema',
+        )
+        expect(result.validationErrors[0].message).toContain(
+          'unevaluatedProperties',
+        )
+      })
+      for (const promptSchema of [
+        { type: 'string', enum: ['allowed'] },
+        { type: 'string', minLength: 8 },
+        { type: 'string', pattern: '^/api/v1$' },
+        { type: 'string', allOf: [{ minLength: 8 }] },
+      ]) {
+        it(`registers a structurally valid constrained prompt ${JSON.stringify(promptSchema)}`, () => {
+          const result = validateAgents({
+            agentTemplates: {
+              'constrained.ts': {
+                ...mockAgentTemplate,
+                inputSchema: { prompt: promptSchema },
+              },
+            },
+            logger,
+          })
+          expect(result.validationErrors).toEqual([])
+          expect(
+            result.templates['test-agent'].inputSchema.prompt!.safeParse(
+              'allowed long prompt',
+            ).success,
+          ).toBe(!('enum' in promptSchema) && !('pattern' in promptSchema))
+          if ('pattern' in promptSchema)
+            expect(
+              result.templates['test-agent'].inputSchema.prompt!.safeParse(
+                '/api/v1',
+              ).success,
+            ).toBe(true)
+          if ('enum' in promptSchema)
+            expect(
+              result.templates['test-agent'].inputSchema.prompt!.safeParse(
+                'allowed',
+              ).success,
+            ).toBe(true)
+        })
+      }
+
       it('should handle git-committer agent schema correctly', async () => {
         const fileContext: ProjectFileContext = {
           ...mockFileContext,
@@ -844,5 +916,222 @@ describe('Agent Validation', () => {
       )
       expect(typeof result.templates['test-agent'].handleSteps).toBe('string')
     })
+  })
+})
+
+// Crash-hardening coverage for the agent-template schema-member transport
+// boundary (P2-T8 supervision bridge + bundled prebuilt agents). These
+// members cross JSON.stringify in both directions and must survive as live
+// zod schemas whose z.toJSONSchema does not throw — the empirical proxy for
+// the AI SDK's asSchema compatibility.
+describe('agent-template schema-member coercion (JSON spawn boundary)', () => {
+  it('serializes a live zod member over the JSON boundary and coerces it back to a live zod schema', () => {
+    const live = z.object({ name: z.string() })
+    const transported = serializeSchemaMemberForTransport(live, 'input')
+    // The transported form must be plain JSON (the spawn request file's wire
+    // format): stringify → parse round-trips byte-identically.
+    const json = JSON.parse(JSON.stringify(transported)) as unknown
+    const coerced = coerceJsonSchemaMember(json)
+    expect(typeof (coerced as { safeParse?: unknown }).safeParse).toBe(
+      'function',
+    )
+    expect((coerced as z.ZodType).safeParse({ name: 'x' }).success).toBe(true)
+    expect((coerced as z.ZodType).safeParse({ name: 42 }).success).toBe(false)
+  })
+
+  it('isDegradedZodHusk detects a ~standard-only husk and rejects plain JSON Schema', () => {
+    // zod-v4's serialized wire form carries the ~standard interface marker
+    // but no live internals (_zod/safeParse) — the crash shape for asSchema.
+    expect(isDegradedZodHusk({ '~standard': { validate: () => {} } })).toBe(
+      true,
+    )
+    // Plain JSON Schema never carries ~standard (it is not a JSON-Schema
+    // keyword), so it must NOT be classified as a husk.
+    expect(isDegradedZodHusk({ type: 'string' })).toBe(false)
+    expect(isDegradedZodHusk({ type: 'object', properties: {} })).toBe(false)
+    // A live zod member (real internals present) is not a husk either.
+    expect(isDegradedZodHusk({ '~standard': {}, _zod: {} })).toBe(false)
+    expect(isDegradedZodHusk({ '~standard': {}, safeParse: () => ({}) })).toBe(
+      false,
+    )
+    // Non-objects are never husks.
+    expect(isDegradedZodHusk(null)).toBe(false)
+    expect(isDegradedZodHusk('string')).toBe(false)
+    expect(isDegradedZodHusk([])).toBe(false)
+  })
+
+  it('restores an unconstrained object exactly and refuses degraded Zod husks', () => {
+    const coerced = coerceJsonSchemaMember({ type: 'object' }) as z.ZodType
+    expect(coerced.safeParse({ a: 1 }).success).toBe(true)
+    expect(coerced.safeParse('not an object').success).toBe(false)
+    expect(() => z.toJSONSchema(coerced, { io: 'input' })).not.toThrow()
+    expect(() => coerceJsonSchemaMember({ '~standard': {} })).toThrow(
+      'degraded Zod',
+    )
+  })
+
+  it('refuses forged members and degrades unprojectable live members', () => {
+    const fake = { _zod: {}, safeParse: () => ({ success: true }) }
+    expect(() => serializeSchemaMemberForTransport(fake, 'input')).toThrow(
+      'Cannot transport',
+    )
+    // Members z.toJSONSchema cannot project at all (z.map, z.record(z.date()))
+    // degrade to the accept-anything JSON Schema `true`: the wire copy is
+    // the provider-facing ADVERTISEMENT, never the validation authority,
+    // and a loosened member beats a dead spawn (the old refusal killed
+    // every supervised child at its first prompt, the reviewer gate
+    // included).
+    expect(
+      serializeSchemaMemberForTransport(z.map(z.string(), z.string()), 'input'),
+    ).toBe(true)
+    expect(
+      serializeSchemaMemberForTransport(
+        z.record(z.string(), z.date()),
+        'input',
+      ),
+    ).toBe(true)
+    const restored = coerceJsonSchemaMember(
+      JSON.parse(JSON.stringify(true)),
+    ) as z.ZodType
+    expect(restored.safeParse({ anything: ['goes'] }).success).toBe(true)
+  })
+
+  it('refuses forged native markers and invalid JSON schema member types', () => {
+    for (const marker of [null, false, 0, 'native', {}, { def: {} }]) {
+      const forged = {
+        type: 'object',
+        properties: { q: { type: 'string' } },
+        required: ['q'],
+        additionalProperties: false,
+        _zod: marker,
+      }
+      expect(() => coerceJsonSchemaMember(forged)).toThrow(
+        'Unsupported JSON Schema',
+      )
+      expect(() => serializeSchemaMemberForTransport(forged, 'input')).toThrow(
+        'Cannot transport',
+      )
+    }
+    for (const invalid of [null, 7, 'schema', []]) {
+      expect(() => coerceJsonSchemaMember(invalid)).toThrow(
+        'Unsupported JSON Schema',
+      )
+    }
+    const live = z.object({ q: z.string() }).strict()
+    expect(coerceJsonSchemaMember(live)).toBe(live)
+  })
+
+  it('keeps never validation across the actual JSON boundary', () => {
+    const transported = serializeSchemaMemberForTransport(z.never(), 'input')
+    const restored = coerceJsonSchemaMember(
+      JSON.parse(JSON.stringify(transported)),
+    ) as z.ZodType
+    for (const value of [null, {}, [], 'value', 1, false]) {
+      expect(restored.safeParse(value).success).toBe(false)
+    }
+  })
+
+  it('preserves raw boolean schemas and refuses unsupported schemas before transport', () => {
+    expect(serializeSchemaMemberForTransport(false, 'input')).toBe(false)
+    expect(serializeSchemaMemberForTransport(true, 'output')).toBe(true)
+    expect(() =>
+      serializeSchemaMemberForTransport(
+        { type: 'object', unevaluatedProperties: false },
+        'input',
+      ),
+    ).toThrow('Unsupported JSON Schema')
+    expect(() =>
+      serializeSchemaMemberForTransport({ '~standard': {} }, 'input'),
+    ).toThrow('degraded Zod')
+  })
+
+  it('preserves live async execution locally and degrades executable members for transport', async () => {
+    const live = z.string().refine(async (value) => value === 'allowed')
+    expect(coerceJsonSchemaMember(live)).toBe(live)
+    expect((await live.safeParseAsync('allowed')).success).toBe(true)
+    expect((await live.safeParseAsync('denied')).success).toBe(false)
+    // Executable behavior never crosses as JSON Schema — but each member
+    // now serializes to a reifiable advertisement instead of refusing the
+    // spawn (the old refusal crashed every supervised child at its first
+    // prompt, the reviewer gate included).
+    for (const schema of [
+      live,
+      z.string().default('fallback'),
+      z.string().transform((value) => value.toUpperCase()),
+      z.coerce.number(),
+    ]) {
+      const transported = serializeSchemaMemberForTransport(schema, 'input')
+      expect(() =>
+        coerceJsonSchemaMember(JSON.parse(JSON.stringify(transported))),
+      ).not.toThrow()
+    }
+  })
+
+  it('degrades length-constrained and flagged-regex members to the advisory advertisement', () => {
+    // Zod counts UTF-16 code units; JSON Schema counts code points. The
+    // advisory projection halves length bounds (ceil) so the advertised
+    // constraint accepts everything the live schema accepts and stays at
+    // least as strict for pure-ASCII inputs. The old refusal killed the
+    // spawn; validation authority stays with the live schema.
+    const utf16 = z.string().min(2)
+    expect(utf16.safeParse('🤖').success).toBe(true)
+    const transported = serializeSchemaMemberForTransport(
+      utf16,
+      'input',
+    ) as Record<string, unknown>
+    expect(transported.type).toBe('string')
+    const restored = coerceJsonSchemaMember(
+      JSON.parse(JSON.stringify(transported)),
+    ) as z.ZodType
+    expect(restored.safeParse('ok').success).toBe(true)
+    expect(restored.safeParse('').success).toBe(false)
+    // Flagged regexes drop the pattern; lazily executable schemas degrade
+    // further — both now transport as reifiable advertisements.
+    const insensitive = z.string().regex(/^allowed$/i)
+    const transportedRegex = serializeSchemaMemberForTransport(
+      insensitive,
+      'input',
+    )
+    const restoredRegex = coerceJsonSchemaMember(
+      JSON.parse(JSON.stringify(transportedRegex)),
+    ) as z.ZodType
+    expect(restoredRegex.safeParse('allowed').success).toBe(true)
+    expect(
+      serializeSchemaMemberForTransport(
+        z.lazy(() => z.string().default('fallback')),
+        'input',
+      ),
+    ).toBeDefined()
+  })
+
+  it("keeps a representable live member's full structure", () => {
+    const transported = serializeSchemaMemberForTransport(
+      z.object({ name: z.string() }),
+      'input',
+    ) as { properties?: { name?: { type?: string } } }
+    // Containment (not deep-equal): zod's exact emission details (required,
+    // additionalProperties, ...) must not make this brittle — the point is
+    // that a representable member does NOT degrade to { type: 'object' }.
+    expect(transported.properties?.name?.type).toBe('string')
+    expect(transported).not.toEqual({ type: 'object' })
+  })
+
+  it('isRepresentableZodSchema requires BOTH io modes to succeed', () => {
+    // z.string().transform(...) is the canonical dual-mode divergence: the
+    // input side is a plain string, but the output side is a Date, which zod
+    // cannot represent in JSON Schema. The inline probes document the
+    // divergence the assertion relies on — the AI SDK consumes coerced
+    // members in both modes (tool inputSchema input-mode;
+    // set_output/structuredOutput output-mode), so an input-only probe
+    // would let this shape through and crash later in output mode.
+    const transformSchema = z.string().transform((s) => new Date(s))
+    expect(() => z.toJSONSchema(transformSchema, { io: 'input' })).not.toThrow()
+    expect(() => z.toJSONSchema(transformSchema, { io: 'output' })).toThrow()
+    expect(isRepresentableZodSchema(transformSchema)).toBe(false)
+    // A schema representable in both modes passes the probe.
+    expect(isRepresentableZodSchema(z.object({ name: z.string() }))).toBe(true)
+    // z.map already throws in input mode, so the dual-mode probe rejects it
+    // as well.
+    expect(isRepresentableZodSchema(z.map(z.string(), z.string()))).toBe(false)
   })
 })

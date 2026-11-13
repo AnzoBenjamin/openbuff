@@ -41,8 +41,15 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'context',
     label: 'context',
-    description: 'Show per-turn context token budget breakdown',
+    description:
+      'Show the context token budget and the instruction files in effect',
     aliases: ['ctx'],
+  },
+  {
+    id: 'compact',
+    label: 'compact',
+    description:
+      'Summarize the conversation to free context; /compact [focus] keeps that focus',
   },
   {
     id: 'doctor',
@@ -103,6 +110,12 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     description: 'Show, add, remove, connect, or disconnect providers',
   },
   {
+    id: 'permissions',
+    label: 'permissions',
+    description: 'Command approvals: balanced, strict, or allow-all',
+    aliases: ['approvals'],
+  },
+  {
     id: 'undo',
     label: 'undo',
     description:
@@ -137,6 +150,12 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     label: 'plan-status',
     description: 'Report concise status from durable plan artifacts',
     aliases: ['ps'],
+  },
+  {
+    id: 'plan-artifact',
+    label: 'plan-artifact',
+    description:
+      'Read local artifact pages: <slug> <PLAN.md|STATUS.md|SPEC.md|LESSONS.md> [--page <n>]',
   },
   {
     id: 'lessons',
@@ -177,7 +196,8 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'feedback',
     label: 'feedback',
-    description: 'Share general feedback',
+    description:
+      'Feedback help (remote submission unavailable in local/BYOK build)',
   },
   {
     id: 'bash',
@@ -199,7 +219,7 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     id: 'image',
     label: 'image',
     description: 'Attach an image file (or Ctrl+V to paste from clipboard)',
-    aliases: ['img', 'attach'],
+    aliases: ['img'],
   },
   ...MODE_COMMANDS,
   // {
@@ -216,6 +236,35 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     id: 'theme:toggle',
     label: 'theme:toggle',
     description: 'Toggle between light and dark mode',
+  },
+  {
+    id: 'detach',
+    label: 'detach',
+    description:
+      'Detach from the attached session (it keeps running); /attach reattaches',
+  },
+  {
+    id: 'attach',
+    label: 'attach',
+    description: 'Reattach to the last detached session',
+    aliases: ['attach'],
+  },
+  {
+    id: 'undo-turn',
+    label: 'undo-turn',
+    description: 'Preview tracked-file restore to the previous turn snapshot',
+  },
+  {
+    id: 'restore',
+    label: 'restore',
+    description:
+      'Preview a turn snapshot; restore requires its exact displayed apply action',
+  },
+  {
+    id: 'bisect-turn',
+    label: 'bisect-turn',
+    description:
+      'Find the first turn snapshot that breaks the test suite (git-based)',
   },
   {
     id: 'exit',

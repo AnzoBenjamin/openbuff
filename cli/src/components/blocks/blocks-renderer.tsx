@@ -13,6 +13,12 @@ import {
   type BlockProcessorHandlers,
 } from '../../utils/block-processor'
 import { ErrorBoundary } from '../error-boundary'
+import { InlineResultScope } from '../tools/inline-results'
+import { useOutputReaderStore } from '../../state/output-reader-store'
+import {
+  createJsonDocument,
+  createTextDocument,
+} from '../../utils/output-document'
 
 import type { ContentBlock } from '../../types/chat'
 import type { MarkdownPalette } from '../../utils/markdown-renderer'
@@ -73,15 +79,43 @@ const BlockRenderFallback = memo(({ label }: { label: string }) => {
  * block would blank that session permanently. A boundary per block degrades the
  * same failure to a single visible line while the rest of the app keeps working.
  */
-const isolateBlock = (
+export const isolateBlock = (
   key: string,
   label: string,
   node: ReactNode,
+  retainedSource: ContentBlock | ContentBlock[],
 ): ReactNode => (
   <ErrorBoundary
     key={key}
     componentName={`BlocksRenderer(${label})`}
     fallback={<BlockRenderFallback label={label} />}
+    allowRetry
+    onInspect={() => {
+      const source = Array.isArray(retainedSource)
+        ? retainedSource
+        : [retainedSource]
+      const textOnly = source.every(
+        (block) => block.type === 'text' && typeof block.content === 'string',
+      )
+      const document = textOnly
+        ? createTextDocument({
+            id: `failed-view:${key}`,
+            title: `Captured ${label} source`,
+            text: source
+              .map((block) =>
+                'content' in block && typeof block.content === 'string'
+                  ? block.content
+                  : '',
+              )
+              .join('\n\n'),
+          })
+        : createJsonDocument(
+            `failed-view:${key}`,
+            `Captured ${label} source`,
+            retainedSource,
+          )
+      useOutputReaderStore.getState().open({ document })
+    }}
   >
     {node}
   </ErrorBoundary>
@@ -146,6 +180,7 @@ export const BlocksRenderer = memo(
               isNested={false}
               isMessageComplete={p.isComplete ?? false}
             />,
+            reasoningBlocks,
           )
         },
 
@@ -155,6 +190,7 @@ export const BlocksRenderer = memo(
             `${p.messageId}-image-${index}`,
             'image',
             <ImageBlock block={block} availableWidth={p.availableWidth} />,
+            block,
           )
         },
 
@@ -173,6 +209,7 @@ export const BlocksRenderer = memo(
               onToggleCollapsed={p.onToggleCollapsed}
               markdownPalette={p.markdownPalette}
             />,
+            toolBlocks,
           )
         },
 
@@ -186,6 +223,7 @@ export const BlocksRenderer = memo(
               siblingBlocks={p.sourceBlocks}
               availableWidth={p.availableWidth}
             />,
+            implementors,
           )
         },
 
@@ -212,6 +250,7 @@ export const BlocksRenderer = memo(
                 />
               )}
             />,
+            agentBlocks,
           )
         },
 
@@ -239,12 +278,17 @@ export const BlocksRenderer = memo(
                 index === p.lastTextBlockIndex ? p.contentToCopy : undefined
               }
             />,
+            block,
           )
         },
       }),
       [], // Empty deps - handlers read from propsRef.current
     )
 
-    return <>{processBlocks(sourceBlocks, handlers)}</>
+    return (
+      <InlineResultScope messageId={messageId} scope="message">
+        {processBlocks(sourceBlocks, handlers)}
+      </InlineResultScope>
+    )
   },
 )

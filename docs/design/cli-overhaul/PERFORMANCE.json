@@ -1,0 +1,91 @@
+{
+  "runtime": "1.3.5",
+  "platform": "linux",
+  "architecture": "x64",
+  "cpu": "AMD Ryzen 5 5500U with Radeon Graphics",
+  "timings": {
+    "coldProjection": {
+      "samples": 1,
+      "p95Ms": 6.399397000000022,
+      "maximumMs": 6.399397000000022
+    },
+    "cachedProjection": {
+      "samples": 100,
+      "p95Ms": 0.1449519999999893,
+      "maximumMs": 0.667872999999986
+    },
+    "ansi100kColdFind": {
+      "samples": 1,
+      "p95Ms": 19.567075000000045,
+      "maximumMs": 19.567075000000045
+    },
+    "ansi100kCachedFind": {
+      "samples": 30,
+      "p95Ms": 0.07670400000006339,
+      "maximumMs": 0.11541699999997945
+    },
+    "cachedOpen80x24": {
+      "samples": 12,
+      "p95Ms": 52.69128899999998,
+      "maximumMs": 52.69128899999998
+    },
+    "keyToFrame80x24": {
+      "samples": 60,
+      "p95Ms": 11.959660999999983,
+      "maximumMs": 14.163536000000022
+    },
+    "cachedOpen60x18": {
+      "samples": 12,
+      "p95Ms": 10.845350000000053,
+      "maximumMs": 10.845350000000053
+    },
+    "keyToFrame60x18": {
+      "samples": 60,
+      "p95Ms": 7.033317000000125,
+      "maximumMs": 10.890926000000036
+    },
+    "deepProjectionAndInspection": {
+      "samples": 1,
+      "p95Ms": 2.753256000000192,
+      "maximumMs": 2.753256000000192
+    },
+    "sharedDagDepth36": {
+      "samples": 1,
+      "p95Ms": 1.4639270000000124,
+      "maximumMs": 1.4639270000000124
+    },
+    "frozenStreamRevisionToFrame": {
+      "samples": 20,
+      "p95Ms": 30.910479000000123,
+      "maximumMs": 31.0860889999999
+    }
+  },
+  "budgets": {
+    "cachedOpen80x24": {
+      "limitMs": 300,
+      "pass": true
+    },
+    "keyToFrame80x24": {
+      "limitMs": 100,
+      "pass": true
+    },
+    "cachedOpen60x18": {
+      "limitMs": 300,
+      "pass": true
+    },
+    "keyToFrame60x18": {
+      "limitMs": 100,
+      "pass": true
+    }
+  },
+  "scenarios": {
+    "lines": 100000,
+    "sharedDagDepth": 36,
+    "sharedLeafEntries": 1,
+    "jsonDepth": 400,
+    "depthInspections": 4,
+    "frozenStreamUpdates": 20,
+    "followLatest": true
+  },
+  "scope": "Offline native OpenTUI renderer; fixture document cached before measured opens. Includes mounting/rendering and frozen stream reindexing. No emulator, provider or human timing claims."
+}

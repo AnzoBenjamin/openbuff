@@ -1,0 +1,27 @@
+{
+  "mcp": {
+    "fakeConnections": 65,
+    "closesOnEviction": 0,
+    "registryLimit": 64
+  },
+  "hook": [
+    {
+      "type": "json",
+      "value": [
+        {
+          "command": "python3 -c \"print('09_HOOK_SENTINEL')\"",
+          "errorMessage": "Command denied by harness approval policy: Action 'arbitrary-code' requires a snapshot-scoped user approval for 'python3 -c \"print('09_HOOK_SENTINEL')\"'.",
+          "permissionDenied": true,
+          "approvalRequired": true,
+          "harnessAction": "arbitrary-code",
+          "harnessTarget": "python3 -c \"print('09_HOOK_SENTINEL')\"",
+          "permissionProfile": "workspace-write",
+          "stdout": "",
+          "stderr": "",
+          "hookName": "09-harmless-one-liner"
+        }
+      ]
+    }
+  ],
+  "constraints": "MCP connect was replaced before import, so no transports/stdio processes or sockets start. Only the injected harmless hook is considered; no project/private configuration is read."
+}

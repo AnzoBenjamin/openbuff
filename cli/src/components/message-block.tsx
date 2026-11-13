@@ -1,5 +1,5 @@
 import { TextAttributes } from '@opentui/core'
-import { memo, useState } from 'react'
+import { memo } from 'react'
 
 import { BlocksRenderer } from './blocks/blocks-renderer'
 import { UserContentWithCopyButton } from './blocks/user-content-copy'
@@ -11,6 +11,7 @@ import { TextAttachmentCard } from './text-attachment-card'
 import { UserErrorBanner } from './user-error-banner'
 import { ValidationErrorPopover } from './validation-error-popover'
 import { useTheme } from '../hooks/use-theme'
+import { useMessageBlockStore } from '../state/message-block-store'
 import { useWhyDidYouUpdateById } from '../hooks/use-why-did-you-update'
 import { getCliEnv } from '../utils/env'
 import { type MarkdownPalette } from '../utils/markdown-renderer'
@@ -50,6 +51,7 @@ interface MessageBlockProps {
   onBuildFast: () => void
   onFeedback?: (messageId: string) => void
   onCloseFeedback?: () => void
+  feedbackAvailable?: boolean
   /** Pre-populate the input bar with this message's text for edit & resend. */
   onEditMessage?: (messageId: string, content: string) => void
   /** Insert a command into the input bar (without submitting) for one-click reuse. */
@@ -144,6 +146,7 @@ export const MessageBlock = memo(
     onBuildFast,
     onFeedback,
     onCloseFeedback,
+    feedbackAvailable = false,
     onEditMessage,
     onInsertCommand,
     validationErrors,
@@ -155,7 +158,11 @@ export const MessageBlock = memo(
     metadata,
     isLastMessage,
   }: MessageBlockProps) => {
-    const [showValidationPopover, setShowValidationPopover] = useState(false)
+    const showValidationPopover = useMessageBlockStore(
+      (state) => state.views[messageId]?.validation ?? false,
+    )
+    const setShowValidationPopover = (value: boolean) =>
+      useMessageBlockStore.getState().setView(messageId, 'validation', value)
 
     const bashCwd = metadata?.bashCwd ? formatCwd(metadata.bashCwd) : undefined
 
@@ -344,7 +351,7 @@ export const MessageBlock = memo(
         {/* Display runtime error banner for AI messages */}
         {isAi && userError && <UserErrorBanner error={userError} />}
 
-        {isAi && (
+        {!isUser && (
           <MessageFooter
             messageId={messageId}
             blocks={blocks}
@@ -357,6 +364,8 @@ export const MessageBlock = memo(
             timerStartTime={timerStartTime}
             onFeedback={onFeedback}
             onCloseFeedback={onCloseFeedback}
+            feedbackAvailable={feedbackAvailable}
+            copyScope={isAi ? 'answer' : 'text'}
           />
         )}
 

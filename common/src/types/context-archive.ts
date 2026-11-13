@@ -8,10 +8,18 @@ import type { Message } from './messages/codebuff-message'
  * never enters the model context. Shape lives in `common` because both the
  * persisted session state (common) and the runtime archiver/recaller
  * (agent-runtime) consume it.
+ *
+ * D26: `tool_result_eviction` snapshots record evicted tool-result segments
+ * and carry the ORIGINAL (pre-tombstone) content — in contrast to pre-
+ * compaction full-transcript archives, whose tool bodies the runtime
+ * truncation caps may trim — because the evictor's tombstone leaves no other
+ * copy of the body. They honor the SAME persisted-size contract as every
+ * snapshot on `AgentState.compactionArchive` (8 snapshots × 200 messages ×
+ * 4k chars per message): per-message truncation applies on write.
  */
 export type ContextArchiveSnapshot = {
   archivedAt: number
-  action: 'semantic_compaction' | 'mechanical_trim'
+  action: 'semantic_compaction' | 'mechanical_trim' | 'tool_result_eviction'
   /** Steps the caller pinned from eviction at archive time. */
   keepRecentSteps: number
   /**
@@ -23,5 +31,18 @@ export type ContextArchiveSnapshot = {
    * keep parsing; absent falls back to slice-local numbering.
    */
   stepBase?: number
+  /**
+   * D26 (`tool_result_eviction` snapshots only): parallel array to `messages`
+   * giving the ORIGINAL-transcript step number of each archived tool message
+   * — provenance for when the content was produced. Optional so earlier
+   * serialized snapshots keep parsing.
+   */
+  steps?: number[]
+  /**
+   * D26 (`tool_result_eviction` snapshots only): why the segment was archived,
+   * e.g. 'deterministic tool-result eviction (stale recency)'. Optional so
+   * earlier serialized snapshots keep parsing.
+   */
+  reason?: string
   messages: Message[]
 }

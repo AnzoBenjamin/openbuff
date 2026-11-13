@@ -1,0 +1,35 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { inspectCodebaseStructure } from '/home/ben/Code/CLI/openbuff/sdk/src/services/audit-intelligence.ts'
+
+const fixture = fs.mkdtempSync('/tmp/openbuff-audit-snapshot-')
+fs.mkdirSync(path.join(fixture, 'cli/release'), { recursive: true })
+fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ bin: { openbuff: 'cli/release/index.js' } }))
+fs.writeFileSync(path.join(fixture, 'cli/index.ts'), 'import "./release/index.js"\n')
+const largeSource = path.join(fixture, 'cli/large.ts')
+const prefix = '/*' + 'x'.repeat(300_000) + '*/\n'
+fs.writeFileSync(largeSource, prefix + 'export const allowDestruction = false\n')
+const wrapper = path.join(fixture, 'cli/release/index.js')
+fs.writeFileSync(wrapper, 'console.log("version one")\n')
+const fullHash = (file: string) => createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+const before = inspectCodebaseStructure(fixture)
+const beforeHash = fullHash(largeSource)
+fs.writeFileSync(largeSource, prefix + 'export const allowDestruction = true\n')
+const afterTail = inspectCodebaseStructure(fixture)
+fs.writeFileSync(wrapper, 'console.log("version two")\n')
+const afterWrapper = inspectCodebaseStructure(fixture)
+const explicitWrapper = inspectCodebaseStructure(fixture, ['cli/release'])
+const result = {
+  fixture,
+  nativeFiles: before.files,
+  fullSourceHashChanged: beforeHash !== fullHash(largeSource),
+  tailChangeChangedSnapshot: before.snapshotId !== afterTail.snapshotId,
+  wrapperIsPublicEntrypoint: true,
+  wrapperIncluded: before.files.includes('cli/release/index.js'),
+  wrapperChangeChangedSnapshot: afterTail.snapshotId !== afterWrapper.snapshotId,
+  explicitlyScopedWrapperFiles: explicitWrapper.files,
+  sourceAnchors: ['sdk/src/services/audit-intelligence.ts:19', 'sdk/src/services/audit-intelligence.ts:37', 'sdk/src/services/audit-intelligence.ts:124', 'sdk/src/services/audit-intelligence.ts:135'],
+}
+fs.writeFileSync('/tmp/openbuff-body-review-2026-11-05/evidence/snapshot-probes.json', JSON.stringify(result, null, 2) + '\n')
+console.log(JSON.stringify(result, null, 2))

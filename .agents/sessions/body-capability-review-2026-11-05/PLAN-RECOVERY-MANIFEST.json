@@ -1,0 +1,292 @@
+{
+  "schemaVersion": 1,
+  "status": "frozen-for-root-checks-and-independent-review",
+  "scope": "plan/spec/migration/inventory and first-review archives only; no source implementation",
+  "scratch": "/tmp/openbuff-plan-recovery-v2",
+  "baselineDocuments": {
+    "PLAN-DRAFT.md": {
+      "bytes": 128566,
+      "sha256": "2428b97a4fcd8fdd1fad355c829b1a97655a852052b69f4ccca6f14da731753d"
+    },
+    "SPEC.md": {
+      "bytes": 32216,
+      "sha256": "e0e3aca32e2f90e6821ffd2c4d6fe19e7473a868ff7f0f15bd6a507c3b33d0eb"
+    }
+  },
+  "literalPatchSource": "rollout-2026-11-06T02-08-44-01a1adf8-c4f8-7f60-8efd-a4619c4f5157.jsonl",
+  "literalPatchCount": 14,
+  "archives": [
+    {
+      "file": "review-rounds/01-ARCHITECT.md",
+      "bytes": 21561,
+      "sha256": "bab81c2f03fa48465c115e6a513e5c9f2ae300ed005efdc9d38bd837b827cfc4",
+      "historicalVerdict": "REVISE",
+      "basis": "exact original literal add-patch bytes verified; historical REVISE only"
+    },
+    {
+      "file": "review-rounds/01-CRITIC.md",
+      "bytes": 24468,
+      "sha256": "63b154d05816bb77ec72604888e8a3df923f6b6416a70bde1a9a79ff3551a367",
+      "historicalVerdict": "REVISE",
+      "basis": "exact original literal add-patch bytes verified; historical REVISE only"
+    }
+  ],
+  "pending": [
+    "root SOURCE-STABILITY.md and fresh current-anchor/source-binding checks",
+    "root complete catalog/coverage/link/lineage validation",
+    "fresh dedicated Architect review, then independent Critic review against the qualified hashes",
+    "final artifact/publication state; no production implementation acceptance"
+  ],
+  "frozenDocuments": {
+    "PLAN-DRAFT.md": {
+      "sha256": "e9fa084036c0b99d17b5e173afe237804ff5306c971dcb5aff780aefc6dba34e",
+      "bytes": 134283,
+      "lines": 1015,
+      "hashMatchesRecordedFrozen": true
+    },
+    "SPEC.md": {
+      "sha256": "9baced80a7ff1c35ff3e41e4fb81d4a74efa1bd93364723ed3c4c05a4b6619e3",
+      "bytes": 38141,
+      "lines": 165,
+      "hashMatchesRecordedFrozen": true
+    },
+    "OLD-TASK-MIGRATION.md": {
+      "sha256": "e227904717f54ac415d57e9b43d85a86914f9a0d031a5f1e79b088bcac548ba1",
+      "bytes": 43248,
+      "lines": 140,
+      "hashMatchesRecordedFrozen": true
+    }
+  },
+  "recordedReadOutputMetadata": {
+    "PLAN-DRAFT.md": 141206,
+    "SPEC.md": 39206,
+    "OLD-TASK-MIGRATION.md": 44104
+  },
+  "readOutputMetadataQualification": "Recorded bytes included line-number presentation prefixes; canonical recovered bytes are smaller but match all three recorded frozen SHA-256 values exactly.",
+  "reconstruction": {
+    "strategy": "JSON-decoded literal document patches in chronological order plus inspected reference/path/graph/migration data transforms; no recovery VM or stored command execution",
+    "literalPatches": [
+      {
+        "timestamp": "2026-11-05T23:18:29.567Z",
+        "callId": "call_lUn7qaazx77D6UQXXYHLdVzj",
+        "sha256": "f06436647af0a97999b233936ea50a2c89685fbea125ff41f3d65b38c2b534ff",
+        "document": "SPEC.md",
+        "bytes": 30331
+      },
+      {
+        "timestamp": "2026-11-05T23:21:54.477Z",
+        "callId": "call_4pum8fYulM1ltvHnJb72P2eI",
+        "sha256": "9a998cf4535c8ef074c1d15ea521074a7ab59ec728e15cabd519ad2b9f2e9ddb",
+        "document": "PLAN-DRAFT.md",
+        "bytes": 42868
+      },
+      {
+        "timestamp": "2026-11-05T23:28:55.471Z",
+        "callId": "call_ph4ilKMmO3jR0ZVxlbDFrRHw",
+        "sha256": "7ec80ff216bd470710b2ae98d2ec05d7148c3b399c1f32c549857e1a48d6ddab",
+        "document": "PLAN-DRAFT.md",
+        "bytes": 95382
+      },
+      {
+        "timestamp": "2026-11-05T23:30:21.202Z",
+        "callId": "call_XQwPUwnTTPZxCbbfjQDLjK4M",
+        "sha256": "89add275343000e8fa77aae791e02211e86de33938e698f20156c32cfea7e216",
+        "document": "SPEC.md",
+        "bytes": 30868
+      },
+      {
+        "timestamp": "2026-11-05T23:30:21.202Z",
+        "callId": "call_XQwPUwnTTPZxCbbfjQDLjK4M",
+        "sha256": "34418b069445f5e75d03204ed205d8b2daf618912840a059323182619877d062",
+        "document": "PLAN-DRAFT.md",
+        "bytes": 96577
+      },
+      {
+        "timestamp": "2026-11-05T23:38:36.061Z",
+        "callId": "call_booYv5HqYFJKiRhsQJL1F0CY",
+        "sha256": "1e65ddd29c9047caf3e1e7ff8e844aa0f24297264424511686acefc7f896d7d7",
+        "document": "PLAN-DRAFT.md",
+        "bytes": 97714
+      },
+      {
+        "callId": "call_booYv5HqYFJKiRhsQJL1F0CY",
+        "operation": "document reference normalization copied from inspected 0567 data transform",
+        "bytes": {
+          "SPEC.md": 30944,
+          "PLAN-DRAFT.md": 98030
+        }
+      },
+      {
+        "timestamp": "2026-11-05T23:40:42.061Z",
+        "callId": "call_q2Aif2BEfQQkJClvUJhFQYS5",
+        "sha256": "ad5d9feb0e0aa0b6d5fec845aafc47bb79ff826747cedd975a3c7372558dc75e",
+        "document": "SPEC.md",
+        "bytes": 32292
+      },
+      {
+        "callId": "call_q0U8USESR5zYH3aa8J9VVaRE",
+        "operation": "exact recorded semantic-edit-apply path correction"
+      },
+      {
+        "timestamp": "2026-11-06T00:17:14.255Z",
+        "callId": "call_phBS9PDWrMteSwXFyGJiIM9B",
+        "sha256": "f54a8cbfad8eb24c8925d2d74e3eadfb37d794497ad2e3e7e3a22476dc65c169",
+        "document": "PLAN-DRAFT.md",
+        "bytes": 101298
+      },
+      {
+        "timestamp": "2026-11-06T00:17:50.916Z",
+        "callId": "call_TGerpI5nCwsTALbDQ3Xkf13R",
+        "sha256": "c5a94aa7c45efd2842eaae1b611858de65ca744b8838e1498900954230ba51f6",
+        "document": "PLAN-DRAFT.md",
+        "bytes": 104377
+      },
+      {
+        "timestamp": "2026-11-06T00:20:22.950Z",
+        "callId": "call_YYDP7y9R0YU0bfjOCpVuEsYX",
+        "sha256": "a86cd53aeda62454aabbac2312a1fe094b7c33820017979226cb4f25ce02a889",
+        "document": "PLAN-DRAFT.md",
+        "bytes": 113856
+      },
+      {
+        "timestamp": "2026-11-06T00:22:30.846Z",
+        "callId": "call_3n0JP182lHSW2o3vfSirhn1z",
+        "sha256": "9d0d21b630975a78ec2b2d764de38c79d00ad87a12a76f1b2efba2fed6519ec6",
+        "document": "PLAN-DRAFT.md",
+        "bytes": 116030
+      },
+      {
+        "timestamp": "2026-11-06T00:24:00.566Z",
+        "callId": "call_7wcfo1xQwyGCec7xpTNplSbg",
+        "sha256": "614ef8a4fe1b55ecb96299ed3aaf3296be1ea89a7b9af4d74c554e2832ae997c",
+        "document": "SPEC.md",
+        "bytes": 38141
+      },
+      {
+        "timestamp": "2026-11-06T00:26:02.159Z",
+        "callId": "call_VxlBG0vzHLTQIWLzFddOgW9g",
+        "sha256": "f4294400e61e8a32b27258f8fd8688a433d2282ccb7a3351c3e1423ea0931edb",
+        "document": "PLAN-DRAFT.md",
+        "bytes": 124843
+      },
+      {
+        "timestamp": "2026-11-06T00:29:11.402Z",
+        "callId": "call_5ONXXaBIN6ETHT9vUkN93mPC",
+        "sha256": "1fd0e87d710f8303473de887072e0d33fb996dda7418cf7eff341eaeed2ccc5a",
+        "document": "PLAN-DRAFT.md",
+        "bytes": 128879
+      }
+    ],
+    "dataTransforms": [
+      {
+        "source": "python/0106-call_sJcZ8AET2bsptmRFgm83kgME.py",
+        "operation": "recreated exact 120-row inventory from read-only old PLAN parent declarations"
+      },
+      {
+        "source": "python/0566-call_CHevXEXZdOM1SYPNY8JBk6rv.py",
+        "operation": "AST literal extraction of 120 migration rows/header/footer; original formatting recreated"
+      },
+      {
+        "source": "python/0667-call_RUsVnfAzxVY0DSQDzlfPkfn2.py",
+        "operation": "canonical graph copied from inspected formatting/data construction; 15 migration-row updates and 5 literal text substitutions"
+      }
+    ]
+  },
+  "oldTaskInventory": {
+    "rows": 120,
+    "historicallyChecked": 58,
+    "historicallyOpen": 62,
+    "sha256": "6c801393107d81833363236bc5977e3866b551d643695ae6609a5e751d92ea05",
+    "sourceFiles": {
+      ".agents/sessions/polyglot-roadmap-v2/PLAN.md": "07b6f2cc832209fecde5f6e96d20ba3cbfa40598678ba3d3e1e37130009261aa",
+      ".agents/sessions/polyglot-roadmap-v2/SPEC.md": "723358620b95c462a2d0de1bb85b32d7f86dbb7a4523cebaabea349436e4b93b",
+      ".agents/sessions/polyglot-roadmap-v2/STATUS.md": "fec7e52aa43c6b9e4cbb80db6ff86379c87ec59451df5373e777febc004f9eba"
+    },
+    "scope": "original parent IDs, exact source line/raw declaration and checked/open history; no transferred readiness"
+  },
+  "sourceAssuranceGap": "The original 558 whole-file hash map is absent from captures. Historical unchanged-hash checkpoints are past recorded evidence, not a fresh comparison. Root owns current SOURCE-STABILITY.md and the new current source binding.",
+  "frozenAt": "2026-11-06T05:50:13.381434+00:00",
+  "recoveryQualifiedDocuments": {
+    "PLAN-DRAFT.md": {
+      "sha256": "1d075409324612e39c3753e757356465e8264642ab8079f07a35edf5f09771b6",
+      "bytes": 135134,
+      "lines": 1017,
+      "intentionallyDiffersFromOriginalFrozen": true
+    },
+    "SPEC.md": {
+      "sha256": "90f3f015b63e885c94eb5e52db9aef68627994497d9220eb9d436d8f0927076a",
+      "bytes": 38839,
+      "lines": 167,
+      "intentionallyDiffersFromOriginalFrozen": true
+    },
+    "OLD-TASK-MIGRATION.md": {
+      "sha256": "e227904717f54ac415d57e9b43d85a86914f9a0d031a5f1e79b088bcac548ba1",
+      "bytes": 43248,
+      "lines": 140,
+      "intentionallyDiffersFromOriginalFrozen": false
+    },
+    "OLD-TASK-INVENTORY.json": {
+      "sha256": "6c801393107d81833363236bc5977e3866b551d643695ae6609a5e751d92ea05",
+      "bytes": 243546,
+      "lines": 842,
+      "intentionallyDiffersFromOriginalFrozen": false
+    },
+    "review-rounds/01-ARCHITECT.md": {
+      "sha256": "bab81c2f03fa48465c115e6a513e5c9f2ae300ed005efdc9d38bd837b827cfc4",
+      "bytes": 21561,
+      "lines": 112,
+      "intentionallyDiffersFromOriginalFrozen": false
+    },
+    "review-rounds/01-CRITIC.md": {
+      "sha256": "63b154d05816bb77ec72604888e8a3df923f6b6416a70bde1a9a79ff3551a367",
+      "bytes": 24468,
+      "lines": 125,
+      "intentionallyDiffersFromOriginalFrozen": false
+    }
+  },
+  "newRevisionChanges": [
+    "PLAN/SPEC explicitly labeled recovery-qualified revision 2; header links cite preserved first REVISE reviews",
+    "PLAN/SPEC source-assurance note distinguishes original frozen artifact hashes from current qualified hashes and missing original558source map",
+    "No behavioral graph/card/fixture/migration change from the reconstructed frozen revision"
+  ],
+  "mechanicalConsistency": {
+    "graph": {
+      "cards": 36,
+      "completionNodes": 39,
+      "humanTablesEqualCanonicalJson": true,
+      "allOf": true,
+      "unknownNodes": [],
+      "cycles": [],
+      "B22Rollup": "all three native milestones",
+      "B06GatedRecovery": true,
+      "B36IndependentlyReady": true,
+      "initialDispatchQueue": [
+        "B02",
+        "B03",
+        "B04"
+      ],
+      "readyRotationQueue": [
+        "B36",
+        "B30"
+      ]
+    },
+    "cardRequiredFields": true,
+    "oldTaskHistory": {
+      "rows": 120,
+      "historicallyChecked": 58,
+      "historicallyOpen": 62,
+      "exactCurrentRawLines": true,
+      "uniqueSourceLines": true,
+      "unknownReplacementNodes": []
+    },
+    "explicitFindingIds": 118,
+    "sourceAssuranceQualificationPresent": true,
+    "commandAndCrossReferenceCorrectionsPresent": true,
+    "qualification": "Document consistency only; no implementation acceptance or independent approval; root performs source/link/catalog checks."
+  },
+  "independentApproval": {
+    "architect": "pending new review",
+    "critic": "pending completed Architect then independent Critic",
+    "historicApprovalsTransferred": false
+  }
+}

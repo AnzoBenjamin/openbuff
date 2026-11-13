@@ -11,6 +11,7 @@ import {
 } from '@codebuff/common/testing'
 import {
   configureExternalReadRoots,
+  createHostReadPolicy,
   isOwnedTempPath,
   resetExternalReadRootsForTesting,
   resolveProjectPath,
@@ -107,6 +108,18 @@ afterEach(() => {
 })
 
 describe('readLogs', () => {
+  test('a copied or wrong-project host policy cannot open even a project log', async () => {
+    const cwd = makeTempDir()
+    fs.writeFileSync(path.join(cwd, 'app.log'), 'private fixture log\n')
+    const policy = createHostReadPolicy(cwd, [])
+    const copied = { ...policy } as typeof policy
+    for (const readPolicy of [copied, createHostReadPolicy('/different/project', [])]) {
+      const result = value(await readLogs({ cwd, path: 'app.log', owner: TRUSTED_OWNER, readPolicy }))
+      expect(result.errorMessage).toContain('outside the project directory')
+      expect(result.content).toBeUndefined()
+    }
+  })
+
   test('returns the requested tail of a file inside cwd', async () => {
     const cwd = makeTempDir()
     fs.writeFileSync(path.join(cwd, 'app.log'), 'one\ntwo\nthree\nfour\n')
@@ -562,6 +575,43 @@ describeWithOutsideFixtures('readLogs — allowlisted external read roots', () =
     // `/var/folders/...` path.
     expect(result.resolvedPath).toBe(fs.realpathSync(externalLog))
     expect(result.content).toBe('two\nthree\n')
+  })
+
+  test('captured per-call roots work without adopting the process-global allowlist', async () => {
+    const cwd = makeTempDir()
+    const allowedRoot = makeOutsideRoot('read-logs-host-')
+    const legacyRoot = makeOutsideRoot('read-logs-legacy-')
+    const allowedLog = path.join(allowedRoot, 'allowed.log')
+    const legacyLog = path.join(legacyRoot, 'legacy.log')
+    fs.writeFileSync(allowedLog, 'captured boundary\n')
+    fs.writeFileSync(legacyLog, 'legacy boundary\n')
+    configureExternalReadRoots([legacyRoot])
+    const readPolicy = createHostReadPolicy(cwd, [allowedRoot])
+    const allowed = value(await readLogs({ cwd, path: allowedLog, owner: TRUSTED_OWNER, readPolicy }))
+    expect(allowed.content).toBe('captured boundary\n')
+    const refused = value(await readLogs({ cwd, path: legacyLog, owner: TRUSTED_OWNER, readPolicy }))
+    expect(refused.errorMessage).toContain('outside the project directory')
+    expect(refused.content).toBeUndefined()
+    expect(value(await readLogs({ cwd, path: legacyLog, owner: TRUSTED_OWNER })).content).toBe('legacy boundary\n')
+  })
+
+  test('retargeting a captured external root cannot expose the replacement log', async () => {
+    const cwd = makeTempDir()
+    const base = makeOutsideRoot('read-logs-retarget-')
+    const first = path.join(base, 'first')
+    const second = path.join(base, 'second')
+    const alias = path.join(base, 'alias')
+    fs.mkdirSync(first); fs.mkdirSync(second)
+    fs.writeFileSync(path.join(first, 'app.log'), 'first\n')
+    fs.writeFileSync(path.join(second, 'app.log'), 'replacement\n')
+    fs.symlinkSync(first, alias)
+    const readPolicy = createHostReadPolicy(cwd, [alias])
+    expect(value(await readLogs({ cwd, path: path.join(alias, 'app.log'), owner: TRUSTED_OWNER, readPolicy })).content).toBe('first\n')
+    fs.unlinkSync(alias)
+    fs.symlinkSync(second, alias)
+    const refused = value(await readLogs({ cwd, path: path.join(alias, 'app.log'), owner: TRUSTED_OWNER, readPolicy }))
+    expect(refused.errorMessage).toContain('outside the project directory')
+    expect(refused.content).toBeUndefined()
   })
 
   test('refuses the same log while the registry is unconfigured', async () => {

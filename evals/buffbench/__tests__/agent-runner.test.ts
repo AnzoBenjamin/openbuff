@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process'
+import { execSync, spawn } from 'node:child_process'
 import {
   chmodSync,
   existsSync,
@@ -13,12 +13,47 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   runAgentOnCommit,
+  readContextFiles,
   runFinalCheckCommands,
   runWithTimeoutSignal,
 } from '../agent-runner'
 import { executeInitCommand } from '../setup-test-repo'
 import { ClaudeRunner } from '../runners/claude'
+import { CodebuffRunner } from '../runners/codebuff'
+import { createArtifactSink } from '../evaluation-artifacts'
 import { isAbortError } from '../runners/runner'
+import { executionFixture } from '../../../common/src/mcp/__tests__/execution-fixture'
+
+import type { OpenbuffClient } from '@openbuff/sdk'
+
+test('context file read propagates resource-only cancellation', async () => {
+  const fixture = executionFixture()
+  const context = fixture.context()
+  try {
+    const pending = readContextFiles(
+      process.cwd(),
+      'HEAD',
+      ['any-file'],
+      undefined,
+      undefined,
+      {
+        ...context,
+        spawn: (_command, _args, options) => {
+          const child = spawn(
+            process.execPath,
+            ['--no-env-file', '-e', 'setTimeout(() => {}, 30000)'],
+            options ?? {},
+          )
+          child.once('spawn', () => fixture.close())
+          return child
+        },
+      },
+    )
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  } finally {
+    fixture.close()
+  }
+})
 
 async function waitForFile(path: string): Promise<void> {
   const deadline = Date.now() + 2000
@@ -143,6 +178,162 @@ describe('external runner abort handling', () => {
 })
 
 describe('runAgentOnCommit', () => {
+  test.each([
+    [
+      'thrown empty string',
+      async () => {
+        throw ''
+      },
+      'failed',
+    ],
+    [
+      'thrown empty Error',
+      async () => {
+        throw new Error('')
+      },
+      'failed',
+    ],
+    [
+      'resolved empty error',
+      async () => ({ output: { type: 'error', message: '' } }),
+      'failed',
+    ],
+    ...(['completed', 'cancelled', 'budget_exhausted', 'failed'] as const).map(
+      (termination) =>
+        [
+          `resolved empty error with ${termination}`,
+          async () => ({
+            output: { type: 'error', message: '' },
+            runOutcome: { termination },
+          }),
+          termination === 'completed' ? 'failed' : termination,
+        ] as const,
+    ),
+  ] as const)(
+    'preserves execution failure for %s',
+    async (_, run, termination) => {
+      const root = mkdtempSync(join(tmpdir(), 'buffbench-empty-error-'))
+      try {
+        const runner = new CodebuffRunner({
+          cwd: root,
+          agentId: 'fixture',
+          commitId: 'fixture',
+          parentSha: 'HEAD',
+          localAgentDefinitions: [],
+          printEvents: false,
+          client: { run } as unknown as OpenbuffClient,
+        })
+        const result = await runner.run('offline fixture')
+        expect(result.error).toBe('')
+        expect(result.runOutcome?.termination).toBe(termination)
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test('retains SDK error, cancelled and incomplete outcomes and their paid evidence', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'buffbench-outcomes-'))
+    try {
+      const artifactSink = createArtifactSink(join(root, 'artifacts'))
+      for (const termination of [
+        'failed',
+        'cancelled',
+        'budget_exhausted',
+        'step_exhausted',
+        'deadline_exhausted',
+        'resource_failure',
+        'cleanup_failure',
+      ]) {
+        const runner = new CodebuffRunner({
+          cwd: root,
+          agentId: '../../agent',
+          commitId: '../../task',
+          parentSha: 'HEAD',
+          localAgentDefinitions: [],
+          printEvents: false,
+          artifactSink,
+          client: {
+            run: async () => ({
+              output: { type: 'text', value: 'looks successful' },
+              runOutcome: { termination },
+              sessionState: { mainAgentState: { creditsUsed: 250 } },
+            }),
+          } as any,
+        })
+        const result = await runner.run('fixture')
+        expect(result.error).toContain(termination)
+        expect(result.runOutcome?.termination).toBe(termination as any)
+        expect(result.totalCostUsd).toBe(2.5)
+        expect(result.costEvidence?.status).toBe('reported')
+      }
+      const errorRunner = new CodebuffRunner({
+        cwd: root,
+        agentId: '../../agent',
+        commitId: '../../task',
+        parentSha: 'HEAD',
+        localAgentDefinitions: [],
+        printEvents: false,
+        artifactSink,
+        client: {
+          run: async () => ({
+            output: { type: 'error', message: 'SDK resolved error' },
+            sessionState: { mainAgentState: { creditsUsed: 100 } },
+          }),
+        } as any,
+      })
+      const resolvedError = await errorRunner.run('fixture')
+      expect(resolvedError.error).toBe('SDK resolved error')
+      expect(resolvedError.runOutcome?.termination).toBe('failed')
+      expect(resolvedError.totalCostUsd).toBe(1)
+      const partialRunner = new CodebuffRunner({
+        cwd: root,
+        agentId: 'agent',
+        commitId: 'task',
+        parentSha: 'HEAD',
+        localAgentDefinitions: [],
+        printEvents: false,
+        artifactSink,
+        client: {
+          run: async (input: any) => {
+            input.handleEvent({ type: 'finish', totalCost: 75 })
+            throw new Error('paid then failed')
+          },
+        } as any,
+      })
+      const partial = await partialRunner.run('fixture')
+      expect(partial.totalCostUsd).toBe(0.75)
+      expect(partial.steps).toHaveLength(1)
+      expect(partial.error).toBe('paid then failed')
+      expect(partial.costEvidence?.status).toBe('reported')
+      expect(existsSync(join(root, 'artifacts'))).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('key-free evaluation refuses injected in-process SDK clients', async () => {
+    await expect(
+      runAgentOnCommit({
+        client: { run: async () => ({}) } as any,
+        agentId: 'fixture',
+        commit: {
+          id: 'fixture',
+          sha: 'sha',
+          parentSha: 'parent',
+          spec: 'fixture',
+          prompt: 'fixture',
+          supplementalFiles: [],
+          fileDiffs: [],
+        },
+        repoUrl: 'offline',
+        localAgentDefinitions: [],
+        printEvents: false,
+        executionScope: 'key_free_environment',
+      }),
+    ).rejects.toThrow('isolated SDK adapter')
+  })
+
   test('computes cache recall eval and appends deterministic final-check output', async () => {
     const tmpRoot = mkdtempSync(
       join(tmpdir(), 'buffbench-cache-recall-runner-'),
@@ -251,49 +442,116 @@ describe('executeInitCommand', () => {
 })
 
 describe('runFinalCheckCommands', () => {
+  test.skipIf(process.platform === 'win32')(
+    'reports truncated captured output alongside cancellation',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'buffbench-check-output-'))
+      const ready = join(dir, 'ready')
+      const controller = new AbortController()
+      // A single fs.writeSync to a pipe can write only part of the buffer.
+      // stdout.write queues the remaining bytes so capture sees the full flood.
+      const script = `process.on('SIGTERM', () => process.stdout.write(Buffer.alloc(11 * 1024 * 1024, 120))); require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 30000)`
+      try {
+        const pending = runFinalCheckCommands(
+          [`exec node -e ${JSON.stringify(script)}`],
+          dir,
+          undefined,
+          controller.signal,
+        )
+        await waitForFile(ready)
+        controller.abort()
+        const [result] = await pending
+        expect(result?.outcome).toBe('cancelled')
+        expect(result?.stdout.length).toBe(10 * 1024 * 1024)
+        expect(result?.stderr.toLowerCase()).toContain('abort')
+        expect(result?.stderr).toContain('Command output truncated')
+        expect(result?.processCleanup?.status).toBe('complete')
+        expect(result?.outputCapture?.droppedBytes).toBeGreaterThan(0)
+      } finally {
+        controller.abort()
+        rmSync(dir, { recursive: true, force: true })
+      }
+    },
+    10000,
+  )
+
   test('aborts an in-flight final check command and preserves output shape', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'buffbench-check-after-ready-'))
+    const ready = join(dir, 'ready')
     const controller = new AbortController()
-    const runPromise = runFinalCheckCommands(
-      ['node -e "setTimeout(() => {}, 10000)"'],
+    try {
+      const script = `require('fs').writeFileSync(${JSON.stringify(ready)}, 'ready'); setTimeout(() => {}, 10000)`
+      const runPromise = runFinalCheckCommands(
+        [`exec node -e ${JSON.stringify(script)}`],
+        dir,
+        undefined,
+        controller.signal,
+      )
+      await waitForFile(ready)
+      controller.abort()
+      const [result] = await runPromise
+      expect(result).toBeDefined()
+      expect(result!.command).toContain('setTimeout')
+      expect(result!.exitCode).toBe(130)
+      expect(result!.outcome).toBe('cancelled')
+      expect(typeof result!.stdout).toBe('string')
+      expect(result!.stderr.toLowerCase()).toContain('abort')
+      expect(result!.processCleanup?.status).toBe('complete')
+    } finally {
+      controller.abort()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a successful check remains complete when its signal aborts later', async () => {
+    const controller = new AbortController()
+    const [result] = await runFinalCheckCommands(
+      ['node -e "process.stdout.write(\u0027complete\u0027)"'],
       process.cwd(),
       undefined,
       controller.signal,
     )
-
     controller.abort()
-    const [result] = await runPromise
-
-    expect(result).toBeDefined()
-    expect(result!.command).toContain('setTimeout')
-    expect(result!.exitCode).toBe(130)
-    expect(result!.outcome).toBe('cancelled')
-    expect(typeof result!.stdout).toBe('string')
-    expect(result!.stderr.toLowerCase()).toContain('abort')
+    expect(result?.outcome).toBe('passed')
+    expect(result?.stdout).toBe('complete')
   })
 
   test('runs independent object checks concurrently and preserves input order', async () => {
-    const startedAt = Date.now()
-    const results = await runFinalCheckCommands(
+    const dir = mkdtempSync(join(tmpdir(), 'buffbench-check-concurrency-'))
+    const controller = new AbortController()
+    // The first check cannot finish until the second has run. A serial
+    // scheduler times out instead of passing on a sufficiently fast machine.
+    const firstReady = JSON.stringify(join(dir, 'first-ready'))
+    const secondDone = JSON.stringify(join(dir, 'second-done'))
+    const first = `const fs = require('fs'); fs.writeFileSync(${firstReady}, 'ready'); const timer = setInterval(() => { if (fs.existsSync(${secondDone})) { clearInterval(timer); process.stdout.write('first'); } }, 5)`
+    const second = `const fs = require('fs'); const timer = setInterval(() => { if (fs.existsSync(${firstReady})) { clearInterval(timer); fs.writeFileSync(${secondDone}, 'done'); process.stdout.write('second'); } }, 5)`
+    const pending = runFinalCheckCommands(
       [
-        {
-          id: 'first',
-          command: 'node -e "setTimeout(() => {}, 250)"',
-        },
-        {
-          id: 'second',
-          command: 'node -e "setTimeout(() => {}, 250)"',
-        },
+        { id: 'first', command: `node -e ${JSON.stringify(first)}` },
+        { id: 'second', command: `node -e ${JSON.stringify(second)}` },
       ],
-      process.cwd(),
+      dir,
       undefined,
-      undefined,
-      { concurrency: 2 },
+      controller.signal,
+      { concurrency: 2, defaultTimeoutMs: 3_000 },
     )
-
-    expect(Date.now() - startedAt).toBeLessThan(450)
-    expect(results.map((result) => result.checkId)).toEqual(['first', 'second'])
-    expect(results.every((result) => result.outcome === 'passed')).toBe(true)
-  })
+    try {
+      const results = await pending
+      expect(results.map((result) => result.checkId)).toEqual([
+        'first',
+        'second',
+      ])
+      expect(results.map((result) => result.stdout)).toEqual([
+        'first',
+        'second',
+      ])
+      expect(results.every((result) => result.outcome === 'passed')).toBe(true)
+    } finally {
+      controller.abort()
+      await pending
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 10_000)
 
   test('skips dependent checks after a failed prerequisite', async () => {
     const results = await runFinalCheckCommands(

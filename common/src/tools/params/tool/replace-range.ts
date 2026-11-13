@@ -1,15 +1,17 @@
 import z from 'zod/v4'
 
+import { FileContentChangeSchema } from '../../../actions'
 import {
   $getNativeToolCallExampleString,
   isObviousEditPlaceholder,
-  jsonToolResultSchema,
+  editToolResultSchema,
 } from '../utils'
 import {
   decodeReadCapabilityToken,
   encodeReadCapabilityToken,
   getContentHash,
 } from '../../../util/content-hash'
+import { captureTextDocument, getRawReadBasis } from '../../../util/byte-text'
 
 import { updateFileResultSchema } from './str-replace'
 
@@ -28,7 +30,7 @@ const rawInputSchema = z
       .string()
       .min(1)
       .describe(
-        'Copy the cap.v3 readCapability verbatim from the matching fresh read_files editAnchor. The token supplies the observed line bounds and content hash.',
+        'Copy the cap.v4 readCapability verbatim from the matching fresh read_files editAnchor. The token supplies the observed line bounds and content hash.',
       ),
     startLine: z
       .number()
@@ -67,14 +69,17 @@ const rawInputSchema = z
   .strict()
   .superRefine((input, ctx) => {
     const decoded = decodeReadCapabilityToken(input.readCapability)
-    if (typeof decoded === 'string' || decoded.tokenVersion !== 'v3') {
+    if (
+      typeof decoded === 'string' ||
+      (decoded.tokenVersion !== 'v3' && decoded.tokenVersion !== 'v4')
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: ['readCapability'],
         message:
           typeof decoded === 'string'
             ? decoded
-            : 'readCapability requires an authenticated project/path/run-bound cap.v3 token.',
+            : 'readCapability requires an authenticated project/path/run-bound cap.v4 token.',
       })
       return
     }
@@ -110,7 +115,7 @@ const rawInputSchema = z
     }
   })
   .describe(
-    'Replace all of, a contained sub-range of, or the Nth literal occurrence inside content observed through one fresh cap.v3 read capability.',
+    'Replace all of, a contained sub-range of, or the Nth literal occurrence inside content observed through one fresh cap.v4 read capability.',
   )
 
 const inputSchema = rawInputSchema.transform((input) => {
@@ -138,16 +143,32 @@ const inputSchema = rawInputSchema.transform((input) => {
 
 const providerInputSchema = rawInputSchema
 
+/** Internal application payload, prepared only after runtime raw authorization. */
+export const preparedRangeMutationSchema = FileContentChangeSchema.extend({
+  type: z.literal('file'),
+  path: z.string().min(1),
+  content: FileContentChangeSchema.shape.content.refine((content) => {
+    try {
+      captureTextDocument(content)
+      return true
+    } catch {
+      return false
+    }
+  }, 'Prepared range content must be lossless UTF-8 text.'),
+  expectedHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  expectedRawHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+}).strict()
+
 const description = `
-Use this tool for reliable edits to an exact file range you have read. It mutates the range bound into a fresh cap.v3 readCapability and echoes a fresh capability for the edited state, avoiding re-read loops.
+Use this tool to replace a range observed through an authenticated cap.v4. Fresh after-edit authority is returned only when the client confirms the exact after-content.
 
 Important:
-- Copy the single cap.v3 readCapability token verbatim from the matching fresh read_files editAnchor.
+- Copy the single cap.v4 readCapability token verbatim from the matching fresh read_files editAnchor.
 - The token supplies the observed line bounds and content hash. To replace only part of the observed content, pass startLine and endLine together; they must remain inside the token's range.
 - To target one instance of a repeated literal block instead of absolute lines, pass occurrence: { match, occurrence } and omit startLine/endLine. The runtime resolves the 1-indexed occurrence (default 1) of the exact literal match inside the capability-authorized range; occurrence and startLine/endLine cannot be combined.
 - Never pass expectedHash. The runtime derives and verifies freshness from the authenticated capability.
-- Do not include a trailing phantom line beyond the visible file length; if a stale-range diagnostic reports the current file length, re-read a valid range.
-- The runtime verifies the current range hash before editing and rejects stale edits before changing the file.
+- An explicit final empty entry requires a capability that authenticates that entry and complete EOF metadata. Omitted read end bounds stay at the visible ceiling.
+- The runtime verifies exact raw bytes before editing. Whole bases require unchanged whole bytes; scoped bases can relocate only to one unchanged raw slice within the finite search budget.
 - newContent replaces the entire selected range, so include all lines that should remain in that range.
 - Never pass an out-of-band reference such as "[see patch above]"; newContent must be complete.
 
@@ -158,14 +179,20 @@ ${$getNativeToolCallExampleString({
   input: {
     path: 'path/to/large-file.ts',
     readCapability: encodeReadCapabilityToken({
-      startLine: 120,
-      endLine: 135,
+      startLine: 1,
+      endLine: 1,
       hash: getContentHash('freshly read example range'),
       scope: {
         projectId: '/example/project',
         path: 'path/to/large-file.ts',
         runId: 'example-run',
       },
+      rawBasis: getRawReadBasis(
+        captureTextDocument('freshly read example range'),
+        1,
+        1,
+        'lines',
+      ),
     }),
     newContent: 'function updated() {\n  return true\n}',
   },
@@ -179,5 +206,5 @@ export const replaceRangeParams = {
   description,
   inputSchema,
   providerInputSchema,
-  outputSchema: jsonToolResultSchema(updateFileResultSchema),
+  outputSchema: editToolResultSchema(updateFileResultSchema),
 } satisfies $ToolParams

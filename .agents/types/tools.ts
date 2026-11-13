@@ -6,14 +6,18 @@ export type ToolName =
   | 'ask_user'
   | 'check_background_agent'
   | 'check_job'
+  | 'code_action'
   | 'code_search'
   | 'end_turn'
   | 'edit_transaction'
   | 'edit_3d_asset'
+  | 'extract_symbol'
   | 'find_files'
   | 'find_files_matching_content'
+  | 'find_references'
   | 'git_status'
   | 'git_branch'
+  | 'go_to_definition'
   | 'get_task'
   | 'get_change_review_bundle'
   | 'inspect_workspace'
@@ -30,6 +34,7 @@ export type ToolName =
   | 'list_jobs'
   | 'lookup_agent_info'
   | 'query_index'
+  | 'hover_type'
   | 'recall_context'
   | 'record_decision'
   | 'read_docs'
@@ -41,6 +46,7 @@ export type ToolName =
   | 'read_subtree'
   | 'replace_range'
   | 'rewrite_symbol'
+  | 'rename_symbol'
   | 'render_ui'
   | 'run_file_change_hooks'
   | 'run_targeted_validation'
@@ -55,6 +61,7 @@ export type ToolName =
   | 'think_deeply'
   | 'update_plan_status'
   | 'web_search'
+  | 'workspace_symbol'
   | 'write_file'
   | 'write_audit_findings'
   | 'write_todos'
@@ -67,14 +74,18 @@ export interface ToolParamsMap {
   ask_user: AskUserParams
   check_background_agent: CheckBackgroundAgentParams
   check_job: CheckJobParams
+  code_action: CodeActionParams
   code_search: CodeSearchParams
   end_turn: EndTurnParams
   edit_transaction: EditTransactionParams
   edit_3d_asset: Edit3dAssetParams
+  extract_symbol: ExtractSymbolParams
   find_files: FindFilesParams
   find_files_matching_content: FindFilesMatchingContentParams
+  find_references: FindReferencesParams
   git_status: GitStatusParams
   git_branch: GitBranchParams
+  go_to_definition: GoToDefinitionParams
   get_task: GetTaskParams
   get_change_review_bundle: GetChangeReviewBundleParams
   inspect_workspace: InspectWorkspaceParams
@@ -91,6 +102,7 @@ export interface ToolParamsMap {
   list_jobs: ListJobsParams
   lookup_agent_info: LookupAgentInfoParams
   query_index: QueryIndexParams
+  hover_type: HoverTypeParams
   recall_context: RecallContextParams
   record_decision: RecordDecisionParams
   read_docs: ReadDocsParams
@@ -102,6 +114,7 @@ export interface ToolParamsMap {
   read_subtree: ReadSubtreeParams
   replace_range: ReplaceRangeParams
   rewrite_symbol: RewriteSymbolParams
+  rename_symbol: RenameSymbolParams
   render_ui: RenderUiParams
   run_file_change_hooks: RunFileChangeHooksParams
   run_targeted_validation: RunTargetedValidationParams
@@ -116,6 +129,7 @@ export interface ToolParamsMap {
   think_deeply: ThinkDeeplyParams
   update_plan_status: UpdatePlanStatusParams
   web_search: WebSearchParams
+  workspace_symbol: WorkspaceSymbolParams
   write_file: WriteFileParams
   write_audit_findings: WriteAuditFindingsParams
   write_todos: WriteTodosParams
@@ -172,7 +186,7 @@ export interface CheckBackgroundAgentParams {
   cursor?: number
   /** Optional substring to wait for in the new streamed chunks before returning (follow mode). Returns early as soon as it appears in any chunk payload. Useful for waiting until a background agent emits a specific milestone (e.g. a tool_result or a text marker). */
   wait_for?: string
-  /** Max seconds to wait for new chunks / the wait_for pattern. 0 (default) returns immediately with whatever new chunks exist (poll mode); >0 blocks up to this long (follow mode). */
+  /** Max seconds to wait for new chunks / the wait_for pattern. 0 returns immediately, even with wait_for. A positive value enables follow mode. When omitted, wait_for follows for at most 30 seconds; without wait_for the call polls immediately. */
   timeout_seconds?: number
   /** When true, explicitly cancel the running background agent before returning its final status. Defaults to false. */
   cancel?: boolean
@@ -184,7 +198,9 @@ export interface CheckBackgroundAgentParams {
 export interface CheckJobParams {
   /** The jobId returned by run_terminal_command with process_type: BACKGROUND. */
   jobId: string
-  /** Optional substring to wait for in the new output before returning (follow mode). Returns early as soon as it appears (e.g. "Listening on" / "compiled successfully"). */
+  /** Optional event sequence cursor from a previous response. Explicit cursors replay independently and do not advance the stored cursor; omit to consume new events using the job’s stored position. */
+  cursor?: number
+  /** Optional substring to match in new output. With a positive timeout_seconds, follow until it appears; with timeout_seconds 0 or omitted, check only the currently available output. */
   wait_for?: string
   /** Max seconds to wait for new output / the wait_for pattern. 0 (default) returns immediately with whatever new output exists (poll mode); >0 blocks up to this long (follow mode). */
   timeout_seconds?: number
@@ -193,12 +209,24 @@ export interface CheckJobParams {
 }
 
 /**
+ * Parameters for code_action tool
+ */
+export interface CodeActionParams {
+  /** Project-relative file path. */
+  path: string
+  line: number
+  character: number
+  /** v1 supports organize imports only; further kinds land with the extract slice. */
+  kind: 'source.organizeImports'
+}
+
+/**
  * Search for string patterns in the project's files. This tool uses ripgrep (rg), a fast line-oriented search tool. Use this tool only when read_files is not sufficient to find the files you need.
  */
 export interface CodeSearchParams {
   /** The pattern to search for. */
   pattern: string
-  /** Optional safe ripgrep flags as one string or argv tokens (e.g., "-i -g *.ts -A 2" or ["-i", "-g", "*.ts", "-A", "2"]). Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not, plus context -A/-B/-C (and long forms). JSON quotes delimit the string; do not embed another quote pair around the entire expression. Line numbers are automatic; -n/--line-number are ignored. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, -r/--replace, --exec, and -z/--null are rejected. */
+  /** Optional safe ripgrep flags as one string or argv tokens (e.g., "-i -g *.ts -A 2" or ["-i", "-g", "*.ts", "-A", "2"]). Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not, context -A/-B/-C (and long forms), and -l/--files-with-matches to list matching paths. JSON quotes delimit the string; do not embed another quote pair around the entire expression. Line numbers are automatic; -n/--line-number are ignored. Flags such as -c/--count, --count-matches, -v/--invert-match, -r/--replace, --exec, and -z/--null are rejected. */
   flags?: string | string[]
   /** Optional working directory or single file to search within, relative to the project root or absolute. Absolute paths may be outside the project. A directory becomes ripgrep's cwd and scopes the search under that path (plus existing blessed hidden dirs when no paths are given); a file scopes the search to that file only (process cwd = project root when the file is under the project, else the file's parent). Defaults to searching the entire project root. */
   cwd?: string
@@ -217,131 +245,133 @@ export interface EndTurnParams {}
  * Parameters for edit_transaction tool
  */
 export interface EditTransactionParams {
-  edits: (
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'str_replace'
-        replacements: {
-          oldString: string
-          newString: string
-          allowMultiple?: boolean
-          occurrenceIndex?: number
-          /** Optional authenticated cap.v3 readCapability copied verbatim from the matching fresh read_files editAnchor. */
-          basedOnRead?: string
-          /** For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied. Only valid when newString is empty; both the input and provider schemas reject any other combination. */
-          skipIfMissing?: boolean
-        }[]
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        /** A structured edit dispatched by operation kind. */
-        type: 'structured'
-        /** Structured edit operation to apply to this file. */
-        operation:
-          | {
-              /** Deterministic text insertion. */
-              kind: 'insert_text'
-              /** 1-indexed insertion position. */
-              position: {
-                /** 1-indexed target line. */
-                line: number
-                /** 1-indexed target column. */
-                column: number
-              }
-              text: string
+  edits:
+    | string
+    | (
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'str_replace'
+            replacements: {
+              oldString: string
+              newString: string
+              allowMultiple?: boolean
+              occurrenceIndex?: number
+              /** Optional authenticated cap.v4 readCapability copied verbatim from the matching fresh read_files editAnchor. */
+              basedOnRead?: string
+              /** For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied. Only valid when newString is empty; both the input and provider schemas reject any other combination. */
+              skipIfMissing?: boolean
+            }[]
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            /** A structured edit dispatched by operation kind. */
+            type: 'structured'
+            /** Structured edit operation to apply to this file. */
+            operation:
+              | {
+                  /** Deterministic text insertion. */
+                  kind: 'insert_text'
+                  /** 1-indexed insertion position. */
+                  position: {
+                    /** 1-indexed target line. */
+                    line: number
+                    /** 1-indexed target column. */
+                    column: number
+                  }
+                  text: string
+                }
+              | {
+                  /** Language-aware import insertion. */
+                  kind: 'insert_import'
+                  /** Complete language-native import statement to add, e.g. "import { foo } from 'bar'", "from app import value", or "use crate::value". */
+                  importStatement: string
+                }
+              | {
+                  /** Language-aware import removal. */
+                  kind: 'remove_import'
+                  /** Complete language-native import statement to remove. Required unless moduleSpecifier is provided. */
+                  importStatement?: string
+                  /** Module specifier to remove imports from, e.g. "react" or "./helper". */
+                  moduleSpecifier?: string
+                }
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'create'
+            /** Exact bytes to write to the new file. */
+            content: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'delete'
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'move'
+            /** New project-relative path. The destination must be absent. */
+            destinationPath: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'replace_range'
+            readCapability: string
+            startLine?: number
+            endLine?: number
+            occurrence?: {
+              match: string
+              occurrence?: number
             }
-          | {
-              /** Language-aware import insertion. */
-              kind: 'insert_import'
-              /** Complete language-native import statement to add, e.g. "import { foo } from 'bar'", "from app import value", or "use crate::value". */
-              importStatement: string
-            }
-          | {
-              /** Language-aware import removal. */
-              kind: 'remove_import'
-              /** Complete language-native import statement to remove. Required unless moduleSpecifier is provided. */
-              importStatement?: string
-              /** Module specifier to remove imports from, e.g. "react" or "./helper". */
-              moduleSpecifier?: string
-            }
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'create'
-        /** Exact bytes to write to the new file. */
-        content: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'delete'
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'move'
-        /** New project-relative path. The destination must be absent. */
-        destinationPath: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'replace_range'
-        readCapability: string
-        startLine?: number
-        endLine?: number
-        occurrence?: {
-          match: string
-          occurrence?: number
-        }
-        newContent: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'rewrite_symbol'
-        symbol: string
-        content: string
-        occurrence?: number
-        /** Optional cap.v3 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block. */
-        readCapability?: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'patch'
-        diff: string
-      }
-    | {
-        /** Optional stable edit identifier echoed in diagnostics. */
-        id?: string
-        /** The file to edit. */
-        path: string
-        type: 'write_file'
-        content: string
-        /** Optional whole-file-covering cap.v3 from a fresh complete whole-file read. Only a full-file capability with a hash matching current content may authorize overwrite; partial ranges never authorize write_file. */
-        basedOnRead?: string
-      }
-  )[]
+            newContent: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'rewrite_symbol'
+            symbol: string
+            content: string
+            occurrence?: number
+            /** Optional cap.v4 copied from the matching read_files symbol slice. It authorizes exactly the symbol and its contiguous preceding comment block. */
+            readCapability?: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'patch'
+            diff: string
+          }
+        | {
+            /** Optional stable edit identifier echoed in diagnostics. */
+            id?: string
+            /** The file to edit. */
+            path: string
+            type: 'write_file'
+            content: string
+            /** Optional cap.v4 with an explicit whole raw basis from a complete read_files.paths read. Its exact bytes must match the current file; line and structural capabilities cannot authorize a whole-file overwrite. */
+            basedOnRead?: string
+          }
+      )[]
 }
 
 /**
@@ -361,9 +391,9 @@ export interface Edit3dAssetParams {
     | {
         type: 'set_object_transform'
         object: string
-        location?: any[]
-        rotation_degrees?: any[]
-        scale?: any[]
+        location?: [number, number, number]
+        rotation_degrees?: [number, number, number]
+        scale?: [number, number, number]
       }
     | {
         type: 'set_render_resolution'
@@ -377,6 +407,20 @@ export interface Edit3dAssetParams {
         end: number
       }
   )[]
+}
+
+/**
+ * Parameters for extract_symbol tool
+ */
+export interface ExtractSymbolParams {
+  /** Project-relative file path. */
+  path: string
+  line: number
+  character: number
+  /** Project-relative NEW file path for the extracted code; must not exist yet. */
+  destination_path: string
+  /** Name for the extracted symbol in the destination file (advisory-only: currently ignored — the language server picks its own name). */
+  symbol_name: string
 }
 
 /**
@@ -394,7 +438,7 @@ export interface FindFilesMatchingContentParams {
   /** Regex pattern (ripgrep syntax) to match file content against. */
   pattern: string
   /** Optional safe ripgrep flags as one string or argv tokens. Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. Examples: "-g *.ts -g *.tsx" or ["-g", "*.ts", "-g", "*.tsx"]. Do not quote the entire expression inside the JSON string. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, context -A/-B/-C, -r/--replace, --exec, and -z/--null are rejected (this tool forces -l or --json itself). Redundant -n/--line-number inputs are ignored. */
-  flags?: string | string[]
+  flags?: string[]
   /** Optional working directory or single file to search within, relative to the project root or absolute. Absolute paths may be outside the project. A directory becomes ripgrep's cwd and scopes the search under that path (plus existing blessed hidden dirs); a file scopes the search to that file only (process cwd = project root when the file is under the project, else the file's parent). Defaults to the project root. */
   cwd?: string
   /** Maximum number of unique files to return. Defaults to 100. */
@@ -403,6 +447,18 @@ export interface FindFilesMatchingContentParams {
   groupBySymbol?: boolean
   /** Maximum seconds to let ripgrep run before returning partial results. Defaults to 15. */
   timeoutSeconds?: number
+}
+
+/**
+ * Parameters for find_references tool
+ */
+export interface FindReferencesParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
 }
 
 /**
@@ -429,6 +485,18 @@ export interface GitBranchParams {
   switch?: boolean
   /** When true, skip the dirty-tree refusal check. Defaults to false — the tool refuses to branch when the working tree has uncommitted changes. */
   allow_dirty?: boolean
+}
+
+/**
+ * Parameters for go_to_definition tool
+ */
+export interface GoToDefinitionParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
 }
 
 /**
@@ -521,6 +589,16 @@ export interface EvaluateAuditCoverageParams {
     snapshot_id: string
     feature: string
     evidence_kind: 'heuristic' | 'verified'
+    maturity?: 'unknown' | 'absent' | 'partial' | 'unwired'
+    status?:
+      | 'complete'
+      | 'partial'
+      | 'implemented_but_unreachable'
+      | 'documented_but_unimplemented'
+      | 'tested_without_runtime_wiring'
+      | 'runtime_wired_without_failure_coverage'
+      | 'unknown'
+    missing?: string[]
     evidence: {
       entrypoints: string[]
       implementation: string[]
@@ -543,7 +621,7 @@ export interface EvaluateAuditCoverageParams {
 export interface GlobParams {
   /** Glob pattern to match files against (e.g., *.js, src/glob/*.ts, glob/test/glob/*.go). */
   pattern: string
-  /** Optional working directory or file path, relative to project root. If a directory, the glob pattern is matched against paths relative to this cwd, while returned files remain project-relative. If a file path, the pattern is matched against that file only (full path or basename). If not provided, searches from project root. */
+  /** Optional working directory or file path, absolute or relative to project root; access follows the configured sandbox policy. If a directory, the glob pattern is matched against paths relative to this cwd, while returned files are project-relative inside the project and absolute outside it. If a file path, the pattern is matched against that file only (full path or basename). If not provided, searches from project root. */
   cwd?: string
 }
 
@@ -561,8 +639,12 @@ export interface KillJobParams {
  * List files and directories in the specified path. Returns separate arrays of file names and directory names.
  */
 export interface ListDirectoryParams {
-  /** Directory path to list, relative to the project root. */
+  /** Directory path to list, absolute or relative to the project root; access follows the configured sandbox policy. */
   path: string
+  /** Continue a listing using the previous nextOffset. Defaults to 0. */
+  offset?: number
+  /** Maximum entries per page, defaults to 5000. */
+  limit?: number
 }
 
 /**
@@ -599,11 +681,25 @@ export interface QueryIndexParams {
 }
 
 /**
- * Search archived pre-compaction transcripts for verbatim facts a compaction pass removed from visible context.
+ * Parameters for hover_type tool
+ */
+export interface HoverTypeParams {
+  /** Project-relative file path. */
+  path: string
+  /** 1-based line number (as shown in editors and read_files). */
+  line: number
+  /** 0-based character offset within the line (LSP convention). */
+  character: number
+}
+
+/**
+ * Search archived pre-compaction transcripts for verbatim conversation or tool facts a compaction pass removed from visible context.
  */
 export interface RecallContextParams {
-  /** Case-insensitive search terms for archived pre-compaction transcripts. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching. */
-  query: string
+  /** Case-insensitive search terms for archived pre-compaction transcript content. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching. Pass toolCallId instead to retrieve one archived tool result by its exact call id. */
+  query?: string
+  /** Exact retrieval: the toolCallId of an archived tool result (the id an eviction tombstone names). Returns the archived original pre-eviction body for that exact call. */
+  toolCallId?: string
 }
 
 /**
@@ -642,25 +738,25 @@ export interface ReadFilesParams {
   paths?: string[]
   /** 1-indexed inclusive line ranges. Sole `paths` entry infers missing path. */
   ranges?: {
-    /** Project-relative file path. */
+    /** File path, absolute or relative to the project root; access follows the configured sandbox policy. */
     path: string
     /** 1-indexed inclusive start line. Defaults to 1. */
     startLine?: number
     /** 1-indexed inclusive end line. Defaults to the last line. */
     endLine?: number
   }[]
-  /** Contiguous line windows; each complete window mints a scoped cap.v3 editAnchor. */
+  /** Contiguous line windows; each complete window mints a scoped cap.v4 editAnchor. */
   windows?: {
-    /** File path to read in contiguous line windows, relative to the project root. */
+    /** File path to read in contiguous line windows, absolute or relative to the project root; access follows the configured sandbox policy. */
     path: string
     /** Lines per window. Defaults to 400, capped at 5000. */
     windowSize?: number
     /** 1-indexed window number to return. Omit to get the window manifest (totalLines, windowSize, windowCount) plus the first window. */
     window?: number
   }[]
-  /** Literal-anchored context blocks with a scoped cap.v3 editAnchor per block. */
+  /** Literal-anchored context blocks with a scoped cap.v4 editAnchor per block. */
   around?: {
-    /** File path to read a content-anchored block from, relative to the project root. */
+    /** File path to read a content-anchored block from, absolute or relative to the project root; access follows the configured sandbox policy. */
     path: string
     /** Exact literal string to anchor on. Robust to line-number drift. */
     match: string
@@ -671,7 +767,7 @@ export interface ReadFilesParams {
   }[]
   /** Nth top-level symbol by name (rewrite_symbol occurrence semantics); prefer batch `symbols` when possible. */
   symbol?: {
-    /** File path to extract a symbol slice from, relative to the project root. */
+    /** File path to extract a symbol slice from, absolute or relative to the project root; access follows the configured sandbox policy. */
     path: string
     /** Top-level symbol name (function, class, interface, method) to pull, as shown by read_outline. */
     name: string
@@ -680,7 +776,7 @@ export interface ReadFilesParams {
   }[]
   /** Named symbol slices with editAnchors; prefer over full reads when names are known. */
   symbols?: {
-    /** Project-relative file path. */
+    /** File path, absolute or relative to the project root; access follows the configured sandbox policy. */
     path: string
     /** Symbol names to slice. */
     names: string[]
@@ -725,7 +821,7 @@ export interface ReadLogsParams {
  * Generate an outline of imports, exports, classes, methods, and function signatures in a source file without reading the entire implementation.
  */
 export interface ReadOutlineParams {
-  /** File path to generate the AST-like outline for, relative to the project root. */
+  /** File path to generate the AST-like outline for, absolute or relative to the project root; access follows the configured sandbox policy. */
   path: string
 }
 
@@ -733,19 +829,19 @@ export interface ReadOutlineParams {
  * Read one or more directory subtrees (as a blob including subdirectories, file names, and parsed variables within each source file) or return parsed variable names for files. If no paths are provided, returns the entire project tree.
  */
 export interface ReadSubtreeParams {
-  /** List of paths to directories or files. Relative to the project root. If omitted, the entire project tree is used. */
+  /** List of paths to directories or files. Absolute or relative to the project root; access follows the configured sandbox policy. If omitted, the entire project tree is used. */
   paths?: string[]
   /** Maximum token budget for the subtree blob; the tree will be truncated to fit within this budget by first dropping file variables and then removing the most-nested files and directories. */
   maxTokens?: number
 }
 
 /**
- * Replace all of, a contained sub-range of, or the Nth literal occurrence inside content observed through one fresh cap.v3 read capability.
+ * Replace all of, a contained sub-range of, or the Nth literal occurrence inside content observed through one fresh cap.v4 read capability.
  */
 export interface ReplaceRangeParams {
   /** The path to the file to edit. */
   path: string
-  /** Copy the cap.v3 readCapability verbatim from the matching fresh read_files editAnchor. The token supplies the observed line bounds and content hash. */
+  /** Copy the cap.v4 readCapability verbatim from the matching fresh read_files editAnchor. The token supplies the observed line bounds and content hash. */
   readCapability: string
   /** Optional 1-indexed target start within the capability-covered range. Omit with endLine to replace the complete observed range. */
   startLine?: number
@@ -772,8 +868,20 @@ export interface RewriteSymbolParams {
   content: string
   /** When multiple top-level symbols share this name, the 1-indexed one to replace. */
   occurrence?: number
-  /** Optional cap.v3 copied from the matching read_files symbol slice. Under strict read-before-edit this authorizes exactly the symbol and its contiguous preceding comment block. */
+  /** Optional cap.v4 copied from the matching read_files symbol slice. Under strict read-before-edit this authorizes exactly the symbol and its contiguous preceding comment block. */
   readCapability?: string
+}
+
+/**
+ * Parameters for rename_symbol tool
+ */
+export interface RenameSymbolParams {
+  /** Project-relative file path. */
+  path: string
+  line: number
+  character: number
+  /** New name for the symbol. */
+  new_name: string
 }
 
 /**
@@ -807,6 +915,7 @@ export interface RunFileChangeHooksParams {
 export interface RunTargetedValidationParams {
   snapshot_id: string
   files: string[]
+  /** Optional labels echoed in the result; hook selection depends on files, not these labels. */
   artifact_kinds?: string[]
 }
 
@@ -818,11 +927,11 @@ export interface RunTerminalCommandParams {
   command: string
   /** SYNC (default) for finite commands that exit: waits and returns output. BACKGROUND only for long-running or never-exiting processes (dev servers, watchers, log tails): starts a detached job and returns a jobId immediately so the turn is not blocked. Live job_update already drives the user UI; use check_job for agent-side readiness/exitCode/join, not solely for user progress. */
   process_type?: 'SYNC' | 'BACKGROUND'
-  /** For BACKGROUND commands only: keep the job running if the owning request is cancelled. Defaults to false. */
+  /** For BACKGROUND commands only: transfer the job to the registered session receiver so request cancellation does not stop it. A finite timeout remains in force. Defaults to false. */
   detach?: boolean
   /** The working directory to run the command in. Default is the project root. */
   cwd?: string
-  /** Wall-clock bound in seconds for SYNC commands. Omit or use -1 for no timeout (the default). Does not apply to BACKGROUND commands. */
+  /** Wall-clock bound in seconds, including startup and approval waits. If omitted, SYNC commands get 120 s of execution time (approval waits excluded) and BACKGROUND jobs have no local timeout. Raise it for long builds or test suites. -1 means no local timeout where the host allows it; a host cap and any finite parent deadline still apply. */
   timeout_seconds?: number
   /** Runtime-managed background job owner; agents must omit. */
   owner?: {
@@ -870,6 +979,7 @@ export interface SetMessagesParams {
       verifiedAt?: number
       supersedes?: string[]
       stale?: boolean
+      sessionScoped?: boolean
     }[]
     workspaceRevision?: number
     workspaceSnapshotId?: string
@@ -960,6 +1070,10 @@ export interface SpawnAgentsParams {
             files: string[]
             snapshotFingerprint: string
             reviewer?: string
+            severity?: string
+            dimension?: string
+            evidence?: string[]
+            correction?: string
           }[]
           permissions: {
             readablePaths: string[]
@@ -1049,7 +1163,7 @@ export interface StrReplaceParams {
     newString: string
     allowMultiple?: boolean
     occurrenceIndex?: number
-    /** Optional authenticated cap.v3 readCapability copied verbatim from the matching fresh read_files editAnchor. */
+    /** Optional authenticated cap.v4 readCapability copied verbatim from the matching fresh read_files editAnchor. */
     basedOnRead?: string
     /** For deletion replacements only (newString is empty): treat a missing oldString as an already-applied no-op. Use only for explicit idempotent cleanup retries, never for ordinary edits. When every requested change resolves to such a no-op - every replacement of a standalone str_replace call, or every edit of an edit_transaction - the call succeeds with zero file changes and the skip messages rather than failing. When combined with occurrenceIndex, a partially-applied cleanup also skips: fewer remaining exact occurrences than the requested index means that occurrence is treated as already applied. Only valid when newString is empty; both the input and provider schemas reject any other combination. */
     skipIfMissing?: boolean
@@ -1125,7 +1239,7 @@ export interface UpdatePlanStatusParams {
     | 'paused'
     | 'completed'
     | 'archived'
-  /** Optional current-task pointer written as a `<!-- current-task: <task> -->` annotation in PLAN.md. Pass an empty string or omit to clear the pointer. Only takes effect when path targets PLAN.md. */
+  /** Optional current-task pointer written as a `<!-- current-task: <task> -->` annotation in PLAN.md. Pass an empty string to clear the pointer. When omitted, an update that starts a task selects it; otherwise the pointer is preserved. Only takes effect when path targets PLAN.md. */
   currentTask?: string
   /** Optional STATE.json compare-and-swap revision. The update fails without writing when the current revision differs. */
   expectedRevision?: number
@@ -1158,16 +1272,24 @@ export interface WebSearchParams {
 }
 
 /**
+ * Parameters for workspace_symbol tool
+ */
+export interface WorkspaceSymbolParams {
+  /** Symbol name (or substring) to search for, e.g. "createUser". */
+  query: string
+}
+
+/**
  * Create or overwrite a file with the given content.
  */
 export interface WriteFileParams {
-  /** Path to the file relative to the **project root** */
+  /** Path to the file absolute or relative to the **project root**; access follows the configured sandbox policy */
   path: string
   /** What the change is intended to do in only one sentence. */
   instructions: string
   /** Complete file content to write to the file. */
   content: string
-  /** Optional whole-file-covering cap.v3 from a fresh complete whole-file read (paths or full-file range). Only a capability that covers the entire current file (startLine=1 through the current line count) with a hash matching current content may authorize overwrite; partial range capabilities never authorize write_file. */
+  /** Optional cap.v4 with an explicit whole raw basis from a complete read_files.paths read. Its exact bytes must match the current file. Line and structural capabilities stay scoped even when their slice covers the visible file. */
   basedOnRead?: string
 }
 

@@ -73,10 +73,23 @@ export interface ComparisonResult {
  * the "before" run for an agent that appears only in "after" is treated as
  * "new agent" rather than a regression.
  */
+export interface CompareRunsOptions {
+  /**
+   * Score drop (in score points, 0-10 scale) treated as noise. Defaults to
+   * 0.01, the original strict threshold.
+   */
+  scoreNoise?: number
+  /** Extra errored runs treated as noise. Defaults to 0. */
+  errorNoise?: number
+}
+
 export function compareRuns(
   before: AgentEvalResults[],
   after: AgentEvalResults[],
+  options: CompareRunsOptions = {},
 ): ComparisonResult {
+  const scoreNoise = options.scoreNoise ?? 0.01
+  const errorNoise = options.errorNoise ?? 0
   const beforeById = new Map(before.map((r) => [r.agentId, r]))
   const afterById = new Map(after.map((r) => [r.agentId, r]))
   const allAgentIds = new Set([...beforeById.keys(), ...afterById.keys()])
@@ -124,8 +137,8 @@ export function compareRuns(
         ? false
         : !afterResult && !!beforeResult // agent disappeared = regression
           ? true
-          : scoreDelta < -0.01 ||
-            errorCountDelta > 0 ||
+          : scoreDelta < -scoreNoise ||
+            errorCountDelta > errorNoise ||
             (costIncreasePct > 20 && scoreDelta <= 0)
 
     // Improvement: score increased without a cost explosion.

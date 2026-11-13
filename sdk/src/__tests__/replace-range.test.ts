@@ -1,13 +1,35 @@
 import { describe, expect, test } from 'bun:test'
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
 
 import { MAX_TRANSACTION_FILE_BYTES } from '@codebuff/common/actions'
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
+import { fileMutationResultV1Schema } from '@codebuff/common/tools/results/filesystem'
 import {
+  decodeReadCapabilityToken,
   encodeReadCapabilityToken,
   getContentHash,
+  getExactContentHash,
+  readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 import { replaceRange } from '../tools/replace-range'
+import { createNodeFileSystem } from '../tools/node-filesystem'
+import { getDefaultFilesystemAuthority } from '../tools/filesystem-authority'
+import { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
 
 const capabilityIssuer = { projectId: '/repo', runId: 'replace-range-test' }
 
@@ -16,12 +38,20 @@ function capability(params: {
   startLine: number
   endLine: number
   content: string
+  source: string
+  scope?: 'whole' | 'lines'
   runId?: string
 }): string {
   return encodeReadCapabilityToken({
     startLine: params.startLine,
     endLine: params.endLine,
     hash: getContentHash(params.content),
+    rawBasis: getRawReadBasis(
+      captureTextDocument(params.source),
+      params.startLine,
+      params.endLine,
+      params.scope ?? 'lines',
+    ),
     scope: {
       projectId: '/repo',
       path: params.path ?? 'src/file.ts',
@@ -30,8 +60,23 @@ function capability(params: {
   })
 }
 
+function preparedMutation(
+  before: string,
+  after: string,
+  filePath = 'src/file.ts',
+) {
+  const document = captureTextDocument(before)
+  return {
+    type: 'file' as const,
+    path: filePath,
+    content: after,
+    expectedHash: document.observationHash,
+    expectedRawHash: document.rawHash,
+  }
+}
+
 describe('replaceRange', () => {
-  test('replaces a cap.v3-verified line range', async () => {
+  test('replaces a cap.v4-verified line range', async () => {
     const fs = createMockFs({
       files: { '/repo/src/file.ts': 'line 1\nline 2\nline 3\n' },
     })
@@ -40,6 +85,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 1\nline 2\nline 3\n',
           startLine: 2,
           endLine: 2,
           content: 'line 2',
@@ -79,6 +125,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 1\nline 2\nline 3\n',
           startLine: 2,
           endLine: 2,
           content: 'line 2',
@@ -139,6 +186,8 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 1\nline 2\nline 3\n',
+          scope: 'whole',
           startLine: 1,
           endLine: 3,
           content: 'line 1\nline 2\nline 3',
@@ -168,6 +217,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 1\nline 2\nline 3\n',
           startLine: 2,
           endLine: 2,
           content: 'line 2',
@@ -199,6 +249,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 1\nline 2\nline 3\n',
           startLine: 2,
           endLine: 2,
           content: 'line 2',
@@ -223,6 +274,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 2\n',
           startLine: 1,
           endLine: 1,
           content: 'line 2',
@@ -238,9 +290,7 @@ describe('replaceRange', () => {
       type: 'json',
       value: {
         file: 'src/file.ts',
-        errorMessage: expect.stringContaining(
-          '2 identical candidate spans, so the target is ambiguous',
-        ),
+        errorMessage: expect.stringContaining('2 identical candidate spans'),
       },
     })
     expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(original)
@@ -255,6 +305,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 1\nold line 2\nline 3\n',
           startLine: 2,
           endLine: 2,
           content: 'old line 2',
@@ -285,6 +336,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 1\nline 2\nline 3\nline 4\nline 5\n',
           startLine: 1,
           endLine: 5,
           content: 'line 1\nline 2\nline 3\nline 4\nline 5',
@@ -322,6 +374,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'a\nb\nc\nd\ne\n',
           startLine: 5,
           endLine: 5,
           content: 'e',
@@ -350,6 +403,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'a\nb\nc\nd\ne\n',
           startLine: 5,
           endLine: 5,
           content: 'e',
@@ -383,6 +437,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'a\nb\nc\nd\ne\n',
           startLine: 5,
           endLine: 5,
           content: 'e',
@@ -413,9 +468,10 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: '\n',
           startLine: 1,
           endLine: 2,
-          content: '',
+          content: '\n',
         }),
         newContent: 'replacement',
       },
@@ -444,6 +500,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: '',
           startLine: 1,
           endLine: 1,
           content: '',
@@ -469,6 +526,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: '',
           startLine: 1,
           endLine: 1,
           content: '',
@@ -502,6 +560,7 @@ describe('replaceRange', () => {
       parameters: {
         path: longPath,
         readCapability: capability({
+          source: original,
           path: longPath,
           startLine: 1,
           endLine: 2,
@@ -540,6 +599,7 @@ describe('replaceRange', () => {
       parameters: {
         path: outsidePath,
         readCapability: capability({
+          source: original,
           path: outsidePath,
           startLine: 1,
           endLine: 2,
@@ -579,6 +639,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: original,
           startLine: 1,
           endLine: 2,
           content: 'line 1\nline 2',
@@ -608,6 +669,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 1\nline 2\n',
           startLine: 1,
           endLine: 1,
           content: 'line 1',
@@ -639,6 +701,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 1\nline 2\n',
           startLine: 1,
           endLine: 1,
           content: 'line 1',
@@ -667,6 +730,8 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'old content\n',
+          scope: 'whole',
           startLine: 1,
           endLine: 2,
           content: 'old content\n',
@@ -698,6 +763,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 1\r\nline 2\r\nline 3\r\n',
           startLine: 2,
           endLine: 2,
           content: 'line 2',
@@ -723,6 +789,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'a\r\nb\nc\n',
           startLine: 2,
           endLine: 2,
           content: 'b',
@@ -751,6 +818,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'a\r\nb\nc\n',
           startLine: 2,
           endLine: 2,
           content: 'b',
@@ -782,6 +850,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'a\nb\r\nc\n',
           startLine: 2,
           endLine: 2,
           content: 'b',
@@ -807,6 +876,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'a\r\nb',
           startLine: 1,
           endLine: 2,
           content: 'a\nb',
@@ -841,6 +911,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'a\nb',
           startLine: 1,
           endLine: 2,
           content: 'a\nb',
@@ -872,6 +943,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'a\r\nb\nc\r\n',
           startLine: 2,
           endLine: 2,
           content: 'b',
@@ -907,6 +979,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'a\rb\rc',
           startLine: 1,
           endLine: 1,
           content: 'a\rb\rc',
@@ -939,6 +1012,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: original,
           startLine: 1,
           endLine: 5,
           content:
@@ -986,6 +1060,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: original,
           startLine: 1,
           endLine: 5,
           content:
@@ -1021,6 +1096,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: original,
           startLine: 1,
           endLine: 5,
           content:
@@ -1055,6 +1131,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 42,
         readCapability: capability({
+          source: original,
           startLine: 1,
           endLine: 2,
           content: 'line 1\nline 2',
@@ -1085,6 +1162,7 @@ describe('replaceRange', () => {
     const result = await replaceRange({
       parameters: {
         readCapability: capability({
+          source: original,
           startLine: 1,
           endLine: 2,
           content: 'line 1\nline 2',
@@ -1141,6 +1219,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: original,
           startLine: 1,
           endLine: 6,
           content:
@@ -1176,6 +1255,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'a\nb\nc\nd\n',
           startLine: 2,
           endLine: 3,
           content: 'b\nc',
@@ -1204,6 +1284,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: original,
           path: 'src/other.ts',
           startLine: 1,
           endLine: 1,
@@ -1268,6 +1349,7 @@ describe('replaceRange', () => {
       parameters: {
         path: injectedPath,
         readCapability: capability({
+          source: original,
           path: injectedPath,
           startLine: 1,
           endLine: 2,
@@ -1310,6 +1392,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: original,
           startLine: 1,
           endLine: 2,
           content: 'line 1\nline 2',
@@ -1338,6 +1421,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: original,
           startLine: 1,
           endLine: 2,
           content: 'a\n',
@@ -1390,6 +1474,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: crlf,
           startLine: 2,
           endLine: 2,
           content: 'line 2',
@@ -1431,6 +1516,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: 'line 1\n',
           startLine: 1,
           endLine: 1,
           content: 'line 1',
@@ -1457,6 +1543,187 @@ describe('replaceRange', () => {
     expect(files['/repo/src/file.ts']).toBe(original)
   })
 
+  test('[B05] scoped edits preserve a leading BOM and final-empty entry bytes', async () => {
+    const raw = '\uFEFFa\r\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': raw } })
+    const first = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          source: raw,
+          startLine: 1,
+          endLine: 1,
+          content: 'a',
+        }),
+        newContent: 'b',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+    expect(first[0]).toMatchObject({
+      type: 'json',
+      value: { outcome: 'applied' },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf8')).toBe('\uFEFFb\r\n')
+    const nextRaw = '\uFEFFb\r\n'
+    const second = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          source: nextRaw,
+          startLine: 2,
+          endLine: 2,
+          content: '',
+        }),
+        newContent: 'c\nd',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+    expect(second[0]).toMatchObject({
+      type: 'json',
+      value: { outcome: 'applied' },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf8')).toBe(
+      '\uFEFFb\r\nc\r\nd',
+    )
+  })
+
+  test('[B05] whole raw drift and inside-scope EOL drift refuse before editing', async () => {
+    const source = 'a\nb\n'
+    for (const [current, scope, startLine, endLine, content] of [
+      ['\uFEFFa\nb\n', 'whole', 1, 2, 'a\nb'],
+      ['a\nb\r\n', 'lines', 2, 2, 'b'],
+      ['a\nb', 'whole', 1, 2, 'a\nb'],
+    ] as const) {
+      const fs = createMockFs({ files: { '/repo/src/file.ts': current } })
+      const result = await replaceRange({
+        parameters: {
+          path: 'src/file.ts',
+          readCapability: capability({
+            source,
+            scope,
+            startLine,
+            endLine,
+            content,
+          }),
+          newContent: 'updated',
+        },
+        cwd: '/repo',
+        fs,
+        capabilityIssuer,
+      })
+      expect(result[0]).toMatchObject({
+        type: 'json',
+        value: { errorMessage: expect.stringContaining('changed after') },
+      })
+      expect(await fs.readFile('/repo/src/file.ts', 'utf8')).toBe(current)
+    }
+  })
+
+  test('[B05] scoped relocation tolerates outside-scope BOM/EOL drift and preserves its raw prefix/suffix', async () => {
+    const source = 'a\r\nb\nc\r\n'
+    const current = '\uFEFFinserted\r\na\nb\nc\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': current } })
+    const result = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          source,
+          startLine: 2,
+          endLine: 2,
+          content: 'b',
+        }),
+        newContent: '\uFEFFupdated',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+    expect(result[0]).toMatchObject({
+      type: 'json',
+      value: { outcome: 'applied' },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf8')).toBe(
+      '\uFEFFinserted\r\na\n\uFEFFupdated\nc\n',
+    )
+  })
+
+  test('[B05] document drift requires uniqueness even when the old bounds still match', async () => {
+    const source = 'a\nb\nc\n'
+    const current = 'a\nb\nb\nc\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': current } })
+    const result = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          source,
+          startLine: 2,
+          endLine: 2,
+          content: 'b',
+        }),
+        newContent: 'updated',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+    expect(result[0]).toMatchObject({
+      type: 'json',
+      value: {
+        errorMessage: expect.stringContaining('2 identical candidate spans'),
+      },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf8')).toBe(current)
+  })
+
+  test('[B05] historical v3 tokens and unpaired replacements supply no fresh raw edit authority', async () => {
+    const source = 'a\nb\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': source } })
+    const token = encodeReadCapabilityToken({
+      startLine: 2,
+      endLine: 2,
+      hash: getContentHash('b'),
+      scope: { ...capabilityIssuer, path: 'src/file.ts' },
+    })
+    const legacy = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: token,
+        newContent: 'updated',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+    expect(legacy[0]).toMatchObject({
+      type: 'json',
+      value: { errorMessage: expect.any(String) },
+    })
+    const invalid = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          source,
+          startLine: 2,
+          endLine: 2,
+          content: 'b',
+        }),
+        newContent: '\ud800',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+    expect(invalid[0]).toMatchObject({
+      type: 'json',
+      value: { errorMessage: expect.stringContaining('valid lossless UTF-8') },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf8')).toBe(source)
+  })
+
   test('rejects an oversize result with the declared error shape and leaves the file unchanged', async () => {
     // `newContent` is unbounded in the schema, so without the applicator's own
     // byte check `changeFile`'s per-file refine would throw a ZodError and the
@@ -1468,6 +1735,7 @@ describe('replaceRange', () => {
       parameters: {
         path: 'src/file.ts',
         readCapability: capability({
+          source: original,
           startLine: 1,
           endLine: 1,
           content: 'line 1',
@@ -1489,5 +1757,309 @@ describe('replaceRange', () => {
       },
     })
     expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(original)
+  })
+})
+
+describe('replaceRange prepared raw mutation handoff', () => {
+  const guardCases: Array<[string, Record<string, unknown>]> = [
+    ['a missing normalized guard', { expectedHash: undefined }],
+    ['a missing raw guard', { expectedRawHash: undefined }],
+    ['a null normalized guard', { expectedHash: null }],
+    ['a null raw guard', { expectedRawHash: null }],
+    ['an invalid normalized hash', { expectedHash: 'not-a-hash' }],
+    ['an invalid raw hash', { expectedRawHash: `sha256:${'a'.repeat(63)}` }],
+    ['a non-string normalized guard', { expectedHash: 7 }],
+    ['a non-string raw guard', { expectedRawHash: 7 }],
+    ['an empty path', { path: '' }],
+    ['a patch mutation', { type: 'patch' }],
+    ['a capability field', { readCapability: 'cap.v4.untrusted' }],
+    [
+      'a provider occurrence field',
+      { occurrence: { match: 'body', occurrence: 2 } },
+    ],
+    ['a provider replacement field', { newContent: 'changed' }],
+  ]
+
+  test.each(guardCases)(
+    'refuses %s before filesystem access',
+    async (_label, overrides) => {
+      const before = 'head\nbody\ntail\n'
+      const fs = createMockFs({ files: { '/repo/src/file.ts': before } })
+      const parameters: Record<string, unknown> = {
+        ...preparedMutation(before, 'head\nchanged\ntail\n'),
+        ...overrides,
+      }
+      for (const key of Object.keys(parameters)) {
+        if (parameters[key] === undefined) delete parameters[key]
+      }
+      const result = await replaceRange({
+        parameters,
+        cwd: '/repo',
+        fs,
+        capabilityIssuer,
+      })
+
+      expect(result[0]).toMatchObject({
+        type: 'json',
+        value: { errorMessage: expect.stringContaining('invalid') },
+      })
+      expect(fs.realpath).not.toHaveBeenCalled()
+      expect(fs.stat).not.toHaveBeenCalled()
+      expect(fs.readFile).not.toHaveBeenCalled()
+      expect(fs.writeFile).not.toHaveBeenCalled()
+      expect(await fs.readFile('/repo/src/file.ts', 'utf8')).toBe(before)
+    },
+  )
+
+  test.each([
+    ['high', '\ud800'],
+    ['low', '\udc00'],
+  ])(
+    '[B05 SR5] refuses an internal prepared file with an unpaired %s surrogate without adapter calls or authority',
+    async (_kind, surrogate) => {
+      const directory = await mkdtemp(
+        path.join(os.tmpdir(), 'openbuff-prepared-range-scalar-'),
+      )
+      const cwd = path.join(directory, 'workspace')
+      const file = path.join(cwd, 'file.ts')
+      const before = '\uFEFFhead 😀\r\nbody\n尾\r\n'
+      try {
+        await mkdir(cwd)
+        await writeFile(file, Buffer.from(before, 'utf8'))
+        await chmod(file, 0o751)
+        const preimageBytes = await readFile(file)
+        const preimageMode = (await stat(file)).mode
+        const document = captureTextDocument(preimageBytes)
+        const broker = await WorkspaceMutationBroker.create({
+          cwd,
+          stateDir: path.join(directory, 'state'),
+        })
+        const fs = createNodeFileSystem({ mutationBroker: broker })
+        const adapterCalls: string[] = []
+        const countedFs = new Proxy(fs, {
+          get(target, property, receiver) {
+            const value = Reflect.get(target, property, receiver)
+            if (typeof value !== 'function') return value
+            return (...args: unknown[]) => {
+              adapterCalls.push(String(property))
+              return Reflect.apply(value, target, args)
+            }
+          },
+        })
+        const parameters = preparedMutation(
+          before,
+          `updated ${surrogate}\n`,
+          'file.ts',
+        )
+        expect(parameters).toMatchObject({
+          type: 'file',
+          expectedHash: document.observationHash,
+          expectedRawHash: document.rawHash,
+        })
+        const result = await replaceRange({
+          parameters,
+          cwd,
+          fs: countedFs,
+          capabilityIssuer: { projectId: cwd, runId: 'prepared-range-sr5' },
+        })
+
+        expect(result).toEqual([
+          {
+            type: 'json',
+            value: {
+              file: 'file.ts',
+              errorMessage:
+                'Missing or invalid prepared replace_range parameters.',
+            },
+          },
+        ])
+        expect(adapterCalls).toHaveLength(0)
+        expect(await readFile(file)).toEqual(preimageBytes)
+        expect((await stat(file)).mode).toBe(preimageMode)
+        const value = result[0]?.type === 'json' ? result[0].value : undefined
+        expect(value).not.toHaveProperty('freshCapabilities')
+        expect(value).not.toHaveProperty('editAnchor')
+        expect(value).not.toHaveProperty('authorityReceipt')
+      } finally {
+        await rm(directory, { recursive: true, force: true })
+      }
+    },
+  )
+
+  test('rejects raw-only drift after runtime preparation before staging a mutation', async () => {
+    const observed = '\uFEFFhead\r\nbody\r\ntail\r\n'
+    const current = 'head\nbody\ntail\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': current } })
+    let commitCalls = 0
+    const conditionalCommit = fs.conditionalCommit!
+    fs.conditionalCommit = async (...args) => {
+      commitCalls += 1
+      return conditionalCommit(...args)
+    }
+    expect(captureTextDocument(current).observationHash).toBe(
+      captureTextDocument(observed).observationHash,
+    )
+    const result = await replaceRange({
+      parameters: preparedMutation(
+        observed,
+        '\uFEFFhead\r\nchanged\r\ntail\r\n',
+      ),
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+
+    expect(result[0]).toMatchObject({
+      type: 'json',
+      value: {
+        outcome: 'not_applied',
+        errors: [
+          expect.objectContaining({
+            code: 'stale_state',
+            requiresFreshRead: true,
+          }),
+        ],
+        freshCapabilities: [],
+      },
+    })
+    expect(commitCalls).toBe(0)
+    expect(await fs.readFile('/repo/src/file.ts', 'utf8')).toBe(current)
+  })
+
+  test('commits the prepared BOM, mixed-EOL and Unicode bytes with mode and independent receipt confirmation', async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-prepared-range-'),
+    )
+    const cwd = path.join(directory, 'workspace')
+    const stateDir = path.join(directory, 'state')
+    const file = path.join(cwd, 'mixed.ts')
+    const before =
+      '\uFEFFhead 😀\r\nrepeat();\nkeep \uFEFFx\r\nrepeat();\nlast \rtail 😀'
+    const after =
+      '\uFEFFhead 😀\r\nrepeat();\nkeep \uFEFFx\r\nreplacement 😎\nextra\nlast \rtail 😀'
+    const callId = 'prepared-range-node-confirmed'
+    const issuer = { projectId: cwd, runId: callId }
+    try {
+      await mkdir(cwd)
+      await writeFile(file, before)
+      await chmod(file, 0o751)
+      const broker = await WorkspaceMutationBroker.create({ cwd, stateDir })
+      const fs = createNodeFileSystem({ mutationBroker: broker })
+      const result = await replaceRange({
+        parameters: preparedMutation(before, after, 'mixed.ts'),
+        cwd,
+        fs,
+        capabilityIssuer: issuer,
+        callId,
+      })
+      const value = fileMutationResultV1Schema.parse(
+        result[0]?.type === 'json' ? result[0].value : null,
+      )
+
+      expect(value).toMatchObject({
+        outcome: 'applied',
+        authorityTier: 'conditional_commit',
+        actions: [
+          expect.objectContaining({
+            path: 'mixed.ts',
+            outcome: 'applied',
+            beforeHash: getExactContentHash(before),
+            afterHash: getExactContentHash(after),
+            afterContent: after,
+          }),
+        ],
+        authorityReceipt: {
+          status: 'committed',
+          actions: [
+            expect.objectContaining({
+              path: 'mixed.ts',
+              status: 'committed',
+              beforeHash: getExactContentHash(before),
+              afterHash: getExactContentHash(after),
+            }),
+          ],
+        },
+      })
+      expect(await readFile(file)).toEqual(Buffer.from(after, 'utf8'))
+      expect((await stat(file)).mode & 0o777).toBe(0o751)
+      const receipt = getDefaultFilesystemAuthority(
+        cwd,
+        fs,
+      ).getCanonicalReceipt(value.operationId, callId)
+      expect(receipt).toMatchObject({
+        receiptId: value.receiptId,
+        status: 'committed',
+        finalHashes: { 'mixed.ts': getExactContentHash(after) },
+      })
+      const fresh = value.freshCapabilities[0]
+      if (!fresh || fresh.kind !== 'whole_file')
+        throw new Error('Missing confirmed whole-file authority')
+      const decoded = decodeReadCapabilityToken(fresh.token)
+      expect(decoded).toMatchObject({
+        tokenVersion: 'v4',
+        hash: captureTextDocument(after).observationHash,
+        rawBasis: { scope: 'whole', rawHash: getExactContentHash(after) },
+      })
+      if (typeof decoded === 'string') throw new Error(decoded)
+      expect(
+        readCapabilityMatchesScope(decoded, { ...issuer, path: 'mixed.ts' }),
+      ).toBe(true)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  test('refuses a conditional commit when raw bytes change after SDK preparation', async () => {
+    const directory = await mkdtemp(
+      path.join(os.tmpdir(), 'openbuff-prepared-range-cas-'),
+    )
+    const cwd = path.join(directory, 'workspace')
+    const file = path.join(cwd, 'file.ts')
+    const before = '\uFEFFhead\r\nbody\r\ntail\r\n'
+    const drifted = 'head\nbody\ntail\n'
+    try {
+      await mkdir(cwd)
+      await writeFile(file, before)
+      const broker = await WorkspaceMutationBroker.create({
+        cwd,
+        stateDir: path.join(directory, 'state'),
+      })
+      const fs = createNodeFileSystem({ mutationBroker: broker })
+      const conditionalCommit = fs.conditionalCommit!
+      let commitCalls = 0
+      fs.conditionalCommit = async (filePath, data, options) => {
+        commitCalls += 1
+        expect(options.expectedHash).toBe(getExactContentHash(before))
+        await writeFile(file, drifted)
+        return conditionalCommit(filePath, data, options)
+      }
+      const result = await replaceRange({
+        parameters: preparedMutation(
+          before,
+          '\uFEFFhead\r\nchanged\r\ntail\r\n',
+          'file.ts',
+        ),
+        cwd,
+        fs,
+        capabilityIssuer: { projectId: cwd, runId: 'prepared-range-node-cas' },
+      })
+      expect(result[0]).toMatchObject({
+        type: 'json',
+        value: {
+          outcome: 'not_applied',
+          errors: [
+            expect.objectContaining({
+              code: 'stale_state',
+              requiresFreshRead: true,
+            }),
+          ],
+          freshCapabilities: [],
+        },
+      })
+      expect(commitCalls).toBe(1)
+      expect(await readFile(file)).toEqual(Buffer.from(drifted, 'utf8'))
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 })

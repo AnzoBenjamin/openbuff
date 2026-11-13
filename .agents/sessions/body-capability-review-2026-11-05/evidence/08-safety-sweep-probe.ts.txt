@@ -1,0 +1,42 @@
+import * as fs from 'node:fs'
+import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { IndexManager } from '/home/ben/Code/CLI/openbuff/packages/indexer/src/index-manager.ts'
+
+const evidenceRoot = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const root = fs.mkdtempSync(join(evidenceRoot, '08-fixtures/sweep-cadence-'))
+fs.writeFileSync(join(root, 'target.md'), '# Target\nOriginal\n')
+fs.writeFileSync(join(root, 'unwatched.md'), '# Old sibling\nOriginal\n')
+const originalNow = Date.now
+const initialClock = 1700000000000
+let clock = initialClock
+Date.now = () => clock
+let result: Record<string, unknown>
+try {
+  const manager = IndexManager.getInstance(root)
+  await manager.waitUntilReady(10_000)
+  const oldSiblingHash = manager.getSnapshot()!.files['unwatched.md'].hash
+  fs.writeFileSync(join(root, 'unwatched.md'), '# External sibling change\nMissed watcher event\n')
+  const revisions: unknown[] = []
+  for (let n = 1; n <= 3; n++) {
+    clock = initialClock + n * 4 * 60_000
+    fs.writeFileSync(join(root, 'target.md'), '# Target\n' + 'new implementation '.repeat(n + 1))
+    manager.markPathsChanged({ changedPaths: ['target.md'], complete: true, revision: n })
+    await manager.waitUntilReady(10_000)
+    const snapshot = manager.getSnapshot()!
+    revisions.push({ elapsedSinceFullBuildMs: clock - initialClock, snapshotBuiltAt: snapshot.builtAt, indexAge: manager.getStatus().indexAge, siblingHash: snapshot.files['unwatched.md'].hash })
+  }
+  const final = manager.getSnapshot()!
+  result = {
+    runtime: { bun: Bun.version, platform: process.platform },
+    snapshotId: 'ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0',
+    root, elapsedClockMs: clock - initialClock, safetyAgeMs: 300000, oldSiblingHash,
+    diskSiblingHash: createHash('sha256').update(fs.readFileSync(join(root, 'unwatched.md'))).digest('hex'),
+    finalSiblingHash: final.files['unwatched.md'].hash,
+    finalStatus: manager.getStatus().state, revisions,
+  }
+} finally {
+  Date.now = originalNow
+}
+fs.writeFileSync(join(evidenceRoot, '08-safety-sweep-probe.json'), JSON.stringify(result!, null, 2) + '\n')
+console.log(JSON.stringify(result!, null, 2))

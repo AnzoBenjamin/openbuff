@@ -1,0 +1,18 @@
+Run 1: /tmp/openbuff-body-review-2026-11-05/evidence/11-compare-before
+Run 2: /tmp/openbuff-body-review-2026-11-05/evidence/11-compare-after
+
+Total tasks in Run 1: 2
+  - With errors: 0
+  - With scores ≤1.0: 0
+  - Excluded (errors OR low scores): 0
+  - Valid: 2
+
+Total tasks in Run 2: 2
+  - With errors: 0
+  - With scores ≤1.0: 2
+  - Excluded (errors OR low scores): 2
+  - Valid: 0
+
+Common tasks (both completed successfully with scores >1.0): 0
+
+No common successfully-completed tasks with scores >1.0 found between the two runs!

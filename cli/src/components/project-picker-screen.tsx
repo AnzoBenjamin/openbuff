@@ -1,514 +1,361 @@
+import { realpathSync } from 'fs'
 import os from 'os'
-
-import React, { useCallback, useMemo, useState } from 'react'
-
+import path from 'path'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from './button'
 import { MultilineInput } from './multiline-input'
 import { SelectableList } from './selectable-list'
-import { TerminalLink } from './terminal-link'
-import { useDirectoryBrowser } from '../hooks/use-directory-browser'
-import { useLogo } from '../hooks/use-logo'
+import { OutputReaderScreen } from './output-reader-screen'
+import {
+  useDirectoryBrowser,
+  type UseDirectoryBrowserOptions,
+} from '../hooks/use-directory-browser'
 import { usePathTabCompletion } from '../hooks/use-path-tab-completion'
-import { useSearchableList } from '../hooks/use-searchable-list'
-import { useSheenAnimation } from '../hooks/use-sheen-animation'
 import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
+import { isDirectoryPathQuery } from '../utils/directory-browser'
+import { createTextDocument } from '../utils/output-document'
 import { formatCwd } from '../utils/path-helpers'
 import { loadRecentProjects } from '../utils/recent-projects'
 import { createTextPasteHandler } from '../utils/strings'
-import { isPlainEnterKey } from '../utils/terminal-enter-detection'
-import { getLogoBlockColor, getLogoAccentColor } from '../utils/theme-system'
-import { BORDER_CHARS } from '../utils/ui-constants'
-
-import type { SelectableListItem } from './selectable-list'
-
-// Layout constants for responsive breakpoints
-const LAYOUT = {
-  // Content width constraints
-  MAX_CONTENT_WIDTH: 80,
-  PREFERRED_CONTENT_WIDTH: 60,
-  CONTENT_PADDING: 4,
-
-  // Essential element heights (always shown)
-  INPUT_HEIGHT: 1,
-  BOTTOM_BAR_HEIGHT: 2,
-  MIN_LIST_HEIGHT: 2, // Minimum rows to show in file picker
-  MAX_LIST_HEIGHT: 12,
-
-  // Compact mode threshold - below this, remove padding/margins
-  COMPACT_MODE_THRESHOLD: 12,
-
-  // Decorative element heights
-  LOGO_HEIGHT: 8,
-  HELP_TEXT_HEIGHT: 2,
-
-  // Spacing constants (used in normal mode)
-  MAIN_CONTENT_PADDING: 2,
-  LOGO_MARGIN_TOP: 1,
-  LOGO_MARGIN_BOTTOM: 1,
-  HELP_TEXT_MARGIN_BOTTOM: 1,
-  RECENTS_MARGIN_TOP: 1,
-  RECENTS_PADDING_LEFT: 1,
-} as const
+import { sliceTextCells } from '../utils/text-boundaries'
 
 interface ProjectPickerScreenProps {
-  /** Called when user selects a directory to open as project */
-  onSelectProject: (projectPath: string) => void
-  /** Initial path to browse from */
+  onSelectProject: (projectPath: string) => void | Promise<void>
+  error?: string
+  busy?: boolean
   initialPath?: string
+  initialQuery?: string
+  browserDependencies?: UseDirectoryBrowserOptions['dependencies']
+  recentProjects?: ReturnType<typeof loadRecentProjects>
 }
 
 export const ProjectPickerScreen: React.FC<ProjectPickerScreenProps> = ({
   onSelectProject,
   initialPath,
+  initialQuery = '',
+  error,
+  busy = false,
+  browserDependencies,
+  recentProjects: suppliedRecents,
 }) => {
   const theme = useTheme()
-  const [sheenPosition, setSheenPosition] = useState(0)
-
-  // Directory browsing state and navigation
+  const { terminalWidth, terminalHeight } = useTerminalLayout()
+  const width = Math.max(1, terminalWidth - 2)
+  const [query, setQuery] = useState(initialQuery)
+  const [cursor, setCursor] = useState(initialQuery.length)
+  const [focus, setFocus] = useState(0)
+  const [view, setView] = useState<'directories' | 'recents'>('directories')
+  const [localError, setLocalError] = useState<string>()
+  const [selecting, setSelecting] = useState(false)
+  const selectingRef = useRef(false)
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const [inspectedText, setInspectedText] = useState<string | null>(null)
+  const browser = useDirectoryBrowser({
+    initialPath,
+    dependencies: browserDependencies,
+  })
   const {
     currentPath,
     setCurrentPath,
-    directories,
     expandPath,
     tryNavigateToPath,
     navigateToDirectory,
-  } = useDirectoryBrowser({ initialPath })
-
-  // Convert directories to SelectableListItem format
-  const directoryItems: SelectableListItem[] = useMemo(
+  } = browser
+  const recents = useMemo(
     () =>
-      directories.map((entry) => ({
-        id: entry.path,
-        label: entry.name,
-        icon: entry.isParent ? '📂' : '📁',
-        accent: entry.isGitRepo,
-      })),
-    [directories],
+      (suppliedRecents ?? loadRecentProjects()).filter(
+        (project) => project.path !== os.homedir(),
+      ),
+    [suppliedRecents],
   )
-
-  // Search filtering and focus management
-  const {
-    searchQuery,
-    setSearchQuery,
-    focusedIndex,
-    setFocusedIndex,
-    filteredItems: filteredDirectoryItems,
-    handleFocusChange,
-  } = useSearchableList({
-    items: directoryItems,
-    resetKey: currentPath,
-  })
-
-  // Track the input cursor so paste inserts at the cursor (not always the end).
-  const [searchCursor, setSearchCursor] = useState(0)
-
-  // Load recent projects, excluding the home directory
-  const recentProjects = useMemo(() => {
-    const homeDir = os.homedir()
-    return loadRecentProjects().filter((project) => project.path !== homeDir)
-  }, [])
-
-  // Use the terminal layout hook for responsive breakpoints
-  const { terminalWidth, terminalHeight } = useTerminalLayout()
-  const contentMaxWidth = Math.min(
-    terminalWidth - LAYOUT.CONTENT_PADDING,
-    LAYOUT.MAX_CONTENT_WIDTH,
-  )
-  const contentWidth = Math.min(LAYOUT.PREFERRED_CONTENT_WIDTH, contentMaxWidth)
-
-  // Compact mode: remove padding/margins when space is tight
-  const isCompactMode = terminalHeight < LAYOUT.COMPACT_MODE_THRESHOLD
-  const mainPadding = isCompactMode ? 0 : LAYOUT.MAIN_CONTENT_PADDING
-
-  // Calculate essential height first (these always show)
-  // Essential = input (1) + file picker border (2) + bottom bar (2) + minimal padding
-  const essentialHeight =
-    LAYOUT.INPUT_HEIGHT + 2 + LAYOUT.BOTTOM_BAR_HEIGHT + (isCompactMode ? 0 : 2)
-
-  // Calculate remaining height for file picker and optional elements
-  const remainingHeight = terminalHeight - essentialHeight
-
-  // File picker gets priority - calculate how much space it needs
-  const filePickerHeight = Math.max(
-    LAYOUT.MIN_LIST_HEIGHT,
-    Math.min(remainingHeight, LAYOUT.MAX_LIST_HEIGHT),
-  )
-
-  // After file picker, calculate space for optional elements
-  const spaceAfterFilePicker = remainingHeight - filePickerHeight
-
-  // Determine which optional elements can fit (priority: recents first, then logo, then help text)
-  const logoHeightNeeded =
-    LAYOUT.LOGO_HEIGHT +
-    (isCompactMode ? 0 : LAYOUT.LOGO_MARGIN_TOP + LAYOUT.LOGO_MARGIN_BOTTOM)
-  const helpTextHeightNeeded =
-    LAYOUT.HELP_TEXT_HEIGHT +
-    (isCompactMode ? 0 : LAYOUT.HELP_TEXT_MARGIN_BOTTOM)
-
-  // Allocate space for optional elements based on available space
-  let availableForOptional = spaceAfterFilePicker
-
-  // Try to fit recents first (most useful)
-  let recentsToShow = 0
-  if (recentProjects.length > 0 && availableForOptional >= 2) {
-    // Calculate how many recents fit
-    const baseRecentsHeight =
-      1 + (isCompactMode ? 0 : LAYOUT.RECENTS_MARGIN_TOP) // header + margin
-    const remainingForRecents = availableForOptional - baseRecentsHeight
-    recentsToShow = Math.min(
-      recentProjects.length,
-      Math.max(0, remainingForRecents),
-      3,
-    )
-    if (recentsToShow > 0) {
-      availableForOptional -=
-        recentsToShow + 1 + (isCompactMode ? 0 : LAYOUT.RECENTS_MARGIN_TOP)
-    }
-  }
-
-  // Try to fit logo (decorative but nice)
-  const canShowLogo = !isCompactMode && availableForOptional >= logoHeightNeeded
-  if (canShowLogo) {
-    availableForOptional -= logoHeightNeeded
-  }
-
-  // Try to fit help text (least important)
-  const canShowHelpText =
-    !isCompactMode && availableForOptional >= helpTextHeightNeeded
-
-  const canShowRecents = recentsToShow > 0
-  const maxRecentsToShow = recentsToShow
-
-  // File picker is always shown if there's any space
-  const canShowFilePicker = remainingHeight >= LAYOUT.MIN_LIST_HEIGHT
-  const maxListHeight = filePickerHeight
-
-  // Center content only in non-compact mode when there's extra space
-  const shouldCenterContent = !isCompactMode && spaceAfterFilePicker > 10
-
-  // Logo setup
-  const blockColor = getLogoBlockColor(theme.name)
-  const accentColor = getLogoAccentColor(theme.name)
-  const { applySheenToChar } = useSheenAnimation({
-    logoColor: theme.foreground,
-    accentColor,
-    blockColor,
-    terminalWidth,
-    sheenPosition,
-    setSheenPosition,
-    enabled: canShowLogo,
-  })
-
-  const { component: logoComponent } = useLogo({
-    availableWidth: contentMaxWidth,
-    applySheenToChar,
-    textColor: theme.foreground,
-  })
-
-  // Handle directory selection from SelectableList
-  const handleDirectorySelect = useCallback(
-    (item: SelectableListItem) => {
-      const entry = directories.find((d) => d.path === item.id)
-      if (entry) {
-        navigateToDirectory(entry)
+  const selectProject = useCallback(
+    async (projectPath: string) => {
+      if (busy || selectingRef.current) return
+      selectingRef.current = true
+      setSelecting(true)
+      setLocalError(undefined)
+      try {
+        await onSelectProject(realpathSync(projectPath))
+      } catch (cause) {
+        if (mounted.current)
+          setLocalError(
+            `Could not open ${projectPath}: ${cause instanceof Error ? cause.message : String(cause)}`,
+          )
+      } finally {
+        selectingRef.current = false
+        if (mounted.current) setSelecting(false)
       }
     },
-    [directories, navigateToDirectory],
+    [busy, onSelectProject],
   )
-
-  // Select current directory as project
-  const selectCurrentDirectory = useCallback(() => {
-    onSelectProject(currentPath)
-  }, [currentPath, onSelectProject])
-
-  const setSearchQueryWithCursorAtEnd = useCallback(
-    (query: string) => {
-      setSearchQuery(query)
-      setSearchCursor(query.length)
-    },
-    [setSearchQuery],
+  const items = useMemo(() => {
+    if (view === 'recents')
+      return recents
+        .filter((entry) =>
+          `${entry.path}`.toLowerCase().includes(query.toLowerCase()),
+        )
+        .map((entry) => ({ id: entry.path, label: formatCwd(entry.path) }))
+    const text = query.trim().toLowerCase()
+    return browser.directories
+      .filter(
+        (entry) =>
+          !text ||
+          isDirectoryPathQuery(query) ||
+          (!entry.isParent && entry.name.toLowerCase().includes(text)),
+      )
+      .map((entry) => ({
+        id: entry.path,
+        label: `${entry.name}${entry.isGitRepo ? ' · git' : ''}${entry.isSymlink ? ' · link' : ''}`,
+      }))
+  }, [browser.directories, query, recents, view])
+  const safeFocus = Math.min(Math.max(0, focus), Math.max(0, items.length - 1))
+  const size = Math.max(
+    1,
+    terminalHeight - (error || localError || browser.error ? 7 : 6),
   )
-
-  // Tab completion for path input
+  const start = Math.max(
+    0,
+    Math.min(safeFocus - Math.floor(size / 2), items.length - size),
+  )
+  const setQueryAndCursor = (text: string) => {
+    setQuery(text)
+    setCursor(text.length)
+    setFocus(0)
+  }
   const { handleTabCompletion } = usePathTabCompletion({
-    searchQuery,
-    setSearchQuery: setSearchQueryWithCursorAtEnd,
+    searchQuery: query,
+    setSearchQuery: setQueryAndCursor,
     currentPath,
     setCurrentPath,
     expandPath,
   })
-
-  // Handle search input keyboard intercept
-  const handleSearchKeyIntercept = useCallback(
-    (key: {
-      name?: string
-      sequence?: string
-      shift?: boolean
-      ctrl?: boolean
-      meta?: boolean
-      option?: boolean
-    }) => {
-      if (key.name === 'escape') {
-        if (searchQuery.length > 0) {
-          setSearchQuery('')
-        }
-        return true
-      }
-      if (key.name === 'tab') {
-        return handleTabCompletion()
-      }
-      if ((key.name === 'return' || key.name === 'enter') && key.ctrl) {
-        selectCurrentDirectory()
-        return true
-      }
-      if (key.name === 'up') {
-        setFocusedIndex((prev) => Math.max(0, prev - 1))
-        return true
-      }
-      if (key.name === 'down') {
-        setFocusedIndex((prev) =>
-          Math.min(filteredDirectoryItems.length - 1, prev + 1),
-        )
-        return true
-      }
-      if (isPlainEnterKey(key)) {
-        // If search looks like a path, try to navigate there directly
-        if (searchQuery.startsWith('/') || searchQuery.startsWith('~')) {
-          if (tryNavigateToPath(searchQuery)) {
-            return true
-          }
-        }
-        // Otherwise, navigate to the focused directory
-        const focused = filteredDirectoryItems[focusedIndex]
-        if (focused) {
-          const entry = directories.find((d) => d.path === focused.id)
-          if (entry) {
-            navigateToDirectory(entry)
-          }
-        }
-        return true
-      }
-      // Ctrl+C always quits
-      if (key.name === 'c' && key.ctrl) {
-        process.exit(0)
-        return true
-      }
-      // All other single-character keys should go to the input for typing
-      return false
-    },
-    [
-      searchQuery,
-      setSearchQuery,
-      handleTabCompletion,
-      setFocusedIndex,
-      filteredDirectoryItems,
-      focusedIndex,
-      tryNavigateToPath,
-      directories,
-      navigateToDirectory,
-      selectCurrentDirectory,
-    ],
-  )
-
+  const enter = (submittedQuery = query, itemId = items[safeFocus]?.id) => {
+    if (busy || selecting) return
+    setLocalError(undefined)
+    if (view === 'recents') {
+      if (itemId) void selectProject(itemId)
+      return
+    }
+    if (isDirectoryPathQuery(submittedQuery)) {
+      if (tryNavigateToPath(submittedQuery)) setQueryAndCursor('')
+      return
+    }
+    if (browser.loadState === 'loading' || browser.loadState === 'error') return
+    const candidates = browser.directories.filter(
+      (entry) =>
+        !submittedQuery.trim() ||
+        (!entry.isParent &&
+          entry.name
+            .toLowerCase()
+            .includes(submittedQuery.trim().toLowerCase())),
+    )
+    const entry =
+      candidates.find((entry) => entry.path === itemId) ??
+      (submittedQuery !== query ? candidates[0] : undefined)
+    if (entry) {
+      navigateToDirectory(entry)
+      setQueryAndCursor('')
+    }
+  }
+  const intercept = (key: {
+    name?: string
+    ctrl?: boolean
+    shift?: boolean
+  }) => {
+    if (key.name === 'escape') {
+      if (view === 'recents') setView('directories')
+      setQueryAndCursor('')
+      setLocalError(undefined)
+      browser.clearError()
+      return true
+    }
+    if (key.ctrl && key.name === 'o') {
+      setInspectedText(
+        view === 'recents'
+          ? (items[safeFocus]?.id ?? currentPath)
+          : currentPath,
+      )
+      return true
+    }
+    if (key.ctrl && key.name === 'p') {
+      setView((value) => (value === 'directories' ? 'recents' : 'directories'))
+      setQueryAndCursor('')
+      return true
+    }
+    if (key.ctrl && key.name === 'r') {
+      browser.retry()
+      setLocalError(undefined)
+      return true
+    }
+    if (key.ctrl && key.name === 'u') {
+      setCurrentPath(path.dirname(currentPath))
+      setQueryAndCursor('')
+      return true
+    }
+    if (key.name === 'tab') return handleTabCompletion()
+    if ((key.name === 'return' || key.name === 'enter') && key.ctrl) {
+      void selectProject(currentPath)
+      return true
+    }
+    if (key.name === 'up') {
+      setFocus((value) => Math.max(0, value - 1))
+      return true
+    }
+    if (key.name === 'down') {
+      setFocus((value) => Math.min(Math.max(0, items.length - 1), value + 1))
+      return true
+    }
+    return false
+  }
+  if (inspectedText !== null)
+    return (
+      <OutputReaderScreen
+        messages={[]}
+        initialDocument={createTextDocument({
+          id: 'project-path',
+          title: 'Project folder',
+          text: inspectedText,
+        })}
+        onClose={() => setInspectedText(null)}
+      />
+    )
+  const shownPath = formatCwd(currentPath)
+  const clippedPath =
+    sliceTextCells(shownPath, 0, width) === shownPath
+      ? shownPath
+      : `…${sliceTextCells(path.basename(currentPath), 0, width - 1)}`
   return (
     <box
       style={{
         width: '100%',
         height: '100%',
         backgroundColor: theme.surface,
-        padding: 0,
+        paddingLeft: 1,
+        paddingRight: 1,
         flexDirection: 'column',
       }}
     >
-      {/* Main content area - fills available space */}
-      <box
-        style={{
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: shouldCenterContent ? 'center' : 'flex-start',
-          width: '100%',
-          padding: mainPadding,
-          gap: isCompactMode ? 0 : 1,
-          flexGrow: 1,
-          flexShrink: 1,
+      <text fg={theme.foreground} style={{ flexShrink: 0 }} wrapMode="none">
+        <span fg={theme.primary}>Openbuff</span>
+        <span>
+          {view === 'recents' ? ' · Recent projects' : ' · Choose project'}
+        </span>
+      </text>
+      <MultilineInput
+        value={query}
+        onChange={({ text, cursorPosition }) => {
+          setQuery(text)
+          setCursor(cursorPosition)
+          setFocus(0)
         }}
+        onSubmit={(input) => enter(input?.text)}
+        onPaste={createTextPasteHandler(
+          query,
+          cursor,
+          ({ text, cursorPosition }) => {
+            setQuery(text)
+            setCursor(cursorPosition)
+            setFocus(0)
+          },
+        )}
+        onKeyIntercept={intercept}
+        placeholder={
+          view === 'recents'
+            ? 'Search recent projects…'
+            : 'Search folders or enter a path…'
+        }
+        focused
+        cursorPosition={cursor}
+        minHeight={1}
+        maxHeight={1}
+      />
+      <text
+        fg={browser.loadState === 'error' ? theme.error : theme.muted}
+        wrapMode="none"
+        style={{ flexShrink: 0 }}
       >
-        {/* Logo - show when there's enough space after essentials */}
-        {canShowLogo && (
-          <box
-            style={{
-              flexDirection: 'column',
-              alignItems: 'center',
-              width: '100%',
-              marginTop: isCompactMode ? 0 : LAYOUT.LOGO_MARGIN_TOP,
-              marginBottom: isCompactMode ? 0 : LAYOUT.LOGO_MARGIN_BOTTOM,
-              flexShrink: 0,
-            }}
-          >
-            <box style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
-              {logoComponent}
-            </box>
-          </box>
+        {sliceTextCells(
+          view === 'recents'
+            ? `${items.length} recent projects`
+            : browser.loadState === 'loading'
+              ? `Loading ${currentPath}`
+              : browser.loadState === 'error'
+                ? 'Folder unavailable · Ctrl+R retry'
+                : `${items.length} folders · ${browser.loadState === 'partial' ? 'Partial results / checking git' : 'Ready'}`,
+          0,
+          width,
         )}
-
-        {/* Help text - show only when there's plenty of space */}
-        {canShowHelpText && (
-          <box
-            style={{
-              flexDirection: 'column',
-              alignItems: 'center',
-              maxWidth: contentMaxWidth,
-              marginBottom: isCompactMode ? 0 : LAYOUT.HELP_TEXT_MARGIN_BOTTOM,
-              flexShrink: 0,
-            }}
-          >
-            <text style={{ fg: theme.muted, wrapMode: 'word' }}>
-              Navigate to your project folder and press Open.
-            </text>
-          </box>
-        )}
-
-        {/* Search/filter input - always visible, high priority */}
-        <box
-          style={{
-            width: contentWidth,
-            flexShrink: 0,
-            marginBottom: 0,
-          }}
-        >
-          <MultilineInput
-            value={searchQuery}
-            onChange={({ text, cursorPosition }) => {
-              setSearchQuery(text)
-              setSearchCursor(cursorPosition)
-            }}
-            onSubmit={() => {}} // Enter key handled by onKeyIntercept
-            onPaste={createTextPasteHandler(
-              searchQuery,
-              Math.min(searchCursor, searchQuery.length),
-              ({ text, cursorPosition }) => {
-                setSearchQuery(text)
-                setSearchCursor(cursorPosition)
-              },
-            )}
-            onKeyIntercept={handleSearchKeyIntercept}
-            placeholder="Select project directory..."
-            focused={true}
-            maxHeight={1}
-            minHeight={1}
-            cursorPosition={Math.min(searchCursor, searchQuery.length)}
-          />
-        </box>
-
-        {/* Directory list - only show if we have enough space */}
-        {canShowFilePicker && (
-          <box
-            style={{
-              flexDirection: 'column',
-              width: contentWidth,
-              borderStyle: 'single',
-              borderColor: theme.muted,
-              customBorderChars: BORDER_CHARS,
-              flexShrink: 0,
-            }}
-            border={['top', 'bottom', 'left', 'right']}
-          >
-            <SelectableList
-              items={filteredDirectoryItems}
-              focusedIndex={focusedIndex}
-              maxHeight={maxListHeight}
-              onSelect={handleDirectorySelect}
-              onFocusChange={handleFocusChange}
-              emptyMessage={
-                searchQuery ? 'No matching directories' : 'No subdirectories'
-              }
-            />
-          </box>
-        )}
-
-        {/* Recent Projects - show when there's space after file picker */}
-        {canShowRecents && (
-          <box
-            style={{
-              flexDirection: 'column',
-              width: contentWidth,
-              marginTop: isCompactMode ? 0 : LAYOUT.RECENTS_MARGIN_TOP,
-              flexShrink: 0,
-              gap: 0,
-            }}
-          >
-            <text style={{ fg: theme.muted, height: 1 }}>Recent:</text>
-            {recentProjects.slice(0, maxRecentsToShow).map((project, idx) => (
-              <box
-                key={project.path}
-                style={{
-                  flexDirection: 'row',
-                  gap: 1,
-                  paddingLeft: isCompactMode ? 0 : LAYOUT.RECENTS_PADDING_LEFT,
-                  height: 1,
-                }}
-              >
-                <text style={{ fg: theme.secondary }}>[{idx + 1}]</text>
-                <TerminalLink
-                  text={formatCwd(project.path)}
-                  onActivate={() => onSelectProject(project.path)}
-                  underlineOnHover={true}
-                  containerStyle={{ width: 'auto' }}
-                />
-              </box>
-            ))}
-          </box>
-        )}
+      </text>
+      <box style={{ flexGrow: 1, flexShrink: 1, overflow: 'hidden' }}>
+        <SelectableList
+          items={items.slice(start, start + size)}
+          focusedIndex={safeFocus - start}
+          onSelect={(item) => enter(query, item.id)}
+          onFocusChange={(index) => setFocus(index + start)}
+          emptyMessage={
+            browser.loadState === 'loading'
+              ? 'Loading folders…'
+              : browser.loadState === 'error'
+                ? 'Folder unavailable · Ctrl+R retry · Ctrl+U up'
+                : query
+                  ? 'No matching directories'
+                  : view === 'recents'
+                    ? 'No recent projects'
+                    : 'No child folders'
+          }
+        />
       </box>
-
-      {/* Bottom bar - fixed at bottom with Open button */}
+      {(error || localError || browser.error || busy || selecting) && (
+        <text
+          fg={error || localError || browser.error ? theme.error : theme.muted}
+          style={{ flexShrink: 0 }}
+          wrapMode="none"
+        >
+          {sliceTextCells(
+            error || localError || browser.error || 'Opening project…',
+            0,
+            width,
+          )}
+        </text>
+      )}
+      <text fg={theme.muted} wrapMode="none" style={{ flexShrink: 0 }}>
+        {clippedPath}
+      </text>
       <box
         style={{
           flexDirection: 'row',
-          alignItems: 'center',
-          justifyContent: 'center',
-          width: '100%',
-          paddingTop: 0,
-          paddingBottom: 0,
-          borderStyle: 'single',
-          borderColor: theme.border,
           flexShrink: 0,
-          backgroundColor: theme.surface,
+          justifyContent: 'space-between',
         }}
-        border={['top']}
       >
-        <box
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            width: contentWidth,
-          }}
-        >
-          {/* Current directory path */}
-          <box style={{ flexGrow: 1, flexShrink: 1, overflow: 'hidden' }}>
-            <text style={{ fg: theme.muted }}>{formatCwd(currentPath)}</text>
-          </box>
-
-          {/* Open button */}
+        <Button onClick={() => void selectProject(currentPath)}>
+          <text fg={theme.primary}>Open (Ctrl+Enter)</text>
+        </Button>
+        {terminalWidth >= 50 && (
           <Button
-            onClick={selectCurrentDirectory}
-            style={{
-              paddingLeft: 2,
-              paddingRight: 2,
-              paddingTop: 0,
-              paddingBottom: 0,
-              borderStyle: 'single',
-              borderColor: theme.primary,
-              customBorderChars: BORDER_CHARS,
+            onClick={() => {
+              setView((value) =>
+                value === 'directories' ? 'recents' : 'directories',
+              )
+              setQueryAndCursor('')
             }}
-            border={['top', 'bottom', 'left', 'right']}
           >
-            <text style={{ fg: theme.primary }}>Open (Ctrl+Enter)</text>
+            <text fg={theme.primary}>Recent (Ctrl+P)</text>
           </Button>
-        </box>
+        )}
       </box>
+      <text fg={theme.muted} wrapMode="none" style={{ flexShrink: 0 }}>
+        {terminalWidth < 45
+          ? 'Enter browse · Ctrl+P recents'
+          : 'Enter browses folders · Open uses current folder · Ctrl+O full path'}
+      </text>
     </box>
   )
 }

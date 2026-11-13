@@ -8,6 +8,9 @@ import { MAX_COLLAPSED_LINES, truncateToLines } from '../../utils/strings'
 import { wrapTextPreservingNewlines } from '../../utils/text-layout'
 import { BORDER_CHARS } from '../../utils/ui-constants'
 import { Button } from '../button'
+import { ContentWithMarkdown } from './content-with-markdown'
+import { createMarkdownPalette } from '../../utils/theme-system'
+import { hasMarkdown } from '../../utils/markdown-renderer'
 import { CollapseButton } from '../collapse-button'
 import { ShimmerText } from '../shimmer-text'
 
@@ -56,13 +59,17 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
   const truncatedPreview = truncateToLines(preview, MAX_COLLAPSED_LINES) ?? ''
   const wrappedPreview =
     truncatedPreview.length > 0
-      ? wrapTextPreservingNewlines(truncatedPreview, innerColWidth)
+      ? (truncateToLines(
+          wrapTextPreservingNewlines(truncatedPreview, innerColWidth),
+          MAX_COLLAPSED_LINES,
+        ) ?? '')
       : ''
   // Prompt sits next to a 1-col vertical line plus 1 col of padding inside
   // the expanded card body, so it gets a slightly tighter budget.
-  const wrappedPrompt = prompt
-    ? wrapTextPreservingNewlines(prompt, Math.max(10, innerColWidth - 2))
-    : ''
+  const wrappedPrompt =
+    !isCollapsed && prompt
+      ? wrapTextPreservingNewlines(prompt, Math.max(10, innerColWidth - 2))
+      : ''
   useWhyDidYouUpdateById('AgentBranchItem', agentId ?? '', props, {
     logLevel: 'debug',
     enabled: getCliEnv().CODEBUFF_PERF_TEST === 'true',
@@ -76,7 +83,7 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
   }
 
   const isExpanded = !isCollapsed
-  const toggleFrameColor = isExpanded ? theme.secondary : theme.muted
+  const toggleFrameColor = isExpanded ? theme.primary : theme.border
   const toggleIconColor = isStreaming ? theme.primary : theme.foreground
   const bulletChar = '• '
   const toggleIndicator = onToggle ? (isCollapsed ? '▸ ' : '▾ ') : ''
@@ -318,7 +325,7 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
                 <box
                   style={{
                     width: 1,
-                    backgroundColor: theme.aiLine,
+                    backgroundColor: theme.primary,
                     marginTop: 0,
                     marginBottom: 0,
                   }}
@@ -332,13 +339,22 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
                     overflow: 'hidden',
                   }}
                 >
-                  <text
-                    fg={theme.foreground}
-                    style={{ wrapMode: 'word' }}
-                    attributes={getAttributes(TextAttributes.ITALIC)}
-                  >
-                    {wrappedPrompt}
-                  </text>
+                  <box flexDirection="column" width="100%" gap={0}>
+                    <text fg={theme.muted}>Task</text>
+                    {hasMarkdown(prompt) ? (
+                      <ContentWithMarkdown
+                        content={prompt}
+                        isStreaming={false}
+                        eagerProse
+                        codeBlockWidth={Math.max(10, innerColWidth - 2)}
+                        palette={createMarkdownPalette(theme)}
+                      />
+                    ) : (
+                      <text fg={theme.foreground} wrapMode="word">
+                        {wrappedPrompt}
+                      </text>
+                    )}
+                  </box>
                 </box>
               </box>
             )}
@@ -360,7 +376,7 @@ export const AgentBranchItem = memo((props: AgentBranchItemProps) => {
               <ShimmerText
                 text="working..."
                 interval={160}
-                primaryColor={theme.secondary}
+                primaryColor={theme.primary}
               />
             </text>
           </box>

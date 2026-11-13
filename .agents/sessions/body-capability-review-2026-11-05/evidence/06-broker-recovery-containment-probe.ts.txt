@@ -1,0 +1,40 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { WorkspaceMutationBroker } from '/home/ben/Code/CLI/openbuff/sdk/src/services/workspace-mutation-broker.ts'
+
+const evidenceDir = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixtureRoot = await fs.mkdtemp(path.join(evidenceDir, '06-recovery-containment-fixture-'))
+const cwd = path.join(fixtureRoot, 'workspace')
+const src = path.join(cwd, 'src')
+await fs.mkdir(src, { recursive: true })
+const stateDir = path.join(fixtureRoot, 'state')
+const broker = await WorkspaceMutationBroker.create({ cwd, stateDir })
+const bytes = 'fixture-only deletion preimage\n'
+await fs.writeFile(path.join(src, 'victim.txt'), bytes)
+const expectedHash = `sha256:${createHash('sha256').update(bytes).digest('hex')}`
+const originalFsync = (broker as any).fsyncDirectory.bind(broker)
+let armed = true
+;(broker as any).fsyncDirectory = async (directory: string) => {
+  if (armed && directory === src) {
+    armed = false
+    throw new Error('fixture crash after tombstone rename')
+  }
+  return originalFsync(directory)
+}
+let firstError: string | undefined
+try { await broker.conditionalDelete(path.join(src, 'victim.txt'), expectedHash) }
+catch (error) { firstError = (error as Error).message }
+const pendingDir = (broker as any).pendingDir as string
+const names = await fs.readdir(pendingDir)
+const pending = JSON.parse(await fs.readFile(path.join(pendingDir, names[0]), 'utf8'))
+const outsideDir = path.join(fixtureRoot, 'outside-original-src')
+await fs.rename(src, outsideDir)
+await fs.symlink(outsideDir, src, 'dir')
+const tombstoneOutside = path.join(outsideDir, path.basename(pending.stagingPath))
+const existedBefore = await fs.stat(tombstoneOutside).then(() => true, () => false)
+const recovered = await WorkspaceMutationBroker.create({ cwd, stateDir })
+const existsAfter = await fs.stat(tombstoneOutside).then(() => true, () => false)
+const report = { fixtureRoot, firstError, persistedAction: pending.action, persistedStagingPath: pending.stagingPath, outsideDir, tombstoneExistedOutsideBeforeRecovery: existedBefore, tombstoneExistsOutsideAfterRecovery: existsAfter, finalReceipts: await recovered.listReceipts() }
+await fs.writeFile(path.join(evidenceDir, '06-broker-recovery-containment-probe.json'), `${JSON.stringify(report, null, 2)}\n`)
+console.log(JSON.stringify(report, null, 2))

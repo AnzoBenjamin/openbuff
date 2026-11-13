@@ -6,11 +6,15 @@ import { IndexManager } from '@codebuff/indexer'
 import { loadProviderConfigSync } from '@openbuff/sdk'
 
 import { getProjectRoot } from '../project-files'
+import { getCliEnv } from './env'
+import { notifyTerminal } from './terminal-notify'
+import { writeToTty } from './terminal-title'
 import {
   createEventHandler,
   createStreamChunkHandler,
 } from './sdk-event-handlers'
 import { ensureIndexWorkspaceWatcher } from './index-workspace-watcher'
+import { resolveCommandApprovalMode } from './command-approvals'
 
 import type { EventHandlerState } from './sdk-event-handlers'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -126,6 +130,32 @@ function resolveMaxAgentSteps(): number {
   return MAX_AGENT_STEPS_DEFAULT
 }
 
+/**
+ * Resolve the optional missing-output retry cap. Unlike maxAgentSteps there
+ * is no -1 sentinel: omitted (or invalid) means unlimited retries, so
+ * returning undefined keeps the runtime's unlimited-by-default contract.
+ * Config wins over the env fallback, mirroring the OPENBUFF_MAX_*_REPAIR_ROUNDS
+ * convention (explicit option values win over the env).
+ */
+function resolveMaxMissingOutputRetries(): number | undefined {
+  try {
+    const configured = loadProviderConfigSync().config.maxMissingOutputRetries
+    if (typeof configured === 'number' && configured > 0) {
+      return Math.floor(configured)
+    }
+  } catch {
+    // Best-effort; never let config loading break run creation.
+  }
+  const envRaw = getCliEnv().OPENBUFF_MAX_MISSING_OUTPUT_RETRIES
+  if (envRaw !== undefined && envRaw.trim() !== '') {
+    const parsed = Number(envRaw.trim())
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return Math.floor(parsed)
+    }
+  }
+  return undefined
+}
+
 const HARNESS_APPROVAL_TARGET_DISPLAY_MAX = 200
 
 export type HarnessApprovalRequest = {
@@ -149,13 +179,15 @@ function truncateForApprovalDisplay(
  */
 export function buildHarnessApprovalPrompt(request: HarnessApprovalRequest) {
   const displayTarget = truncateForApprovalDisplay(request.target)
+  const truncated = displayTarget !== request.target
   const isHighRisk = request.risk === 'high'
 
   return {
     header: isHighRisk ? 'High-risk action' : 'Confirm action',
     question: isHighRisk
-      ? `This may destroy data, deploy, or run eval code.\nAllow ${request.action}: ${displayTarget}?`
-      : `Allow ${request.action}?\n${displayTarget}`,
+      ? `This may destroy data, deploy, or run eval code.\nAllow ${request.action}: ${displayTarget}?${truncated ? '\nI: full target' : ''}`
+      : `Allow ${request.action}?\n${displayTarget}${truncated ? '\nI: full target' : ''}`,
+    inspectionText: `Action: ${request.action}\nRisk: ${request.risk}\nReason: ${request.reason}\n\nComplete target (${request.target.length} characters):\n${request.target}\n\nAllow once authorizes this exact target once. Deny or skip blocks execution.`,
     options: [
       {
         label: 'Allow once',
@@ -202,8 +234,9 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     // Best-effort; age-based index integrity sweeps remain available.
   }
 
-  const approvalMode =
-    loadProviderConfigSync().config.approvalMode ?? 'balanced'
+  const loadedConfig = loadProviderConfigSync().config
+  const approvalMode = resolveCommandApprovalMode(loadedConfig.approvalMode)
+  const sandboxMode = loadedConfig.sandbox?.mode ?? 'unrestricted'
 
   return {
     logger,
@@ -211,8 +244,12 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     prompt,
     content,
     previousRun: previousRunState ?? undefined,
+    // The CLI has on-demand query_index/read_subtree retrieval. Parsing every
+    // source file before every prompt adds seconds before provider dispatch.
+    projectContextMode: 'paths' as const,
     agentDefinitions,
     maxAgentSteps: resolveMaxAgentSteps(),
+    maxMissingOutputRetries: resolveMaxMissingOutputRetries(),
     handleStreamChunk: createStreamChunkHandler(eventHandlerState),
     handleEvent: createEventHandler(eventHandlerState),
     signal: params.signal,
@@ -222,9 +259,22 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     resumeInterruptedTurn,
     approvalMode,
     requestApproval: async (request: HarnessApprovalRequest) => {
-      const response = (await AskUserBridge.request('harness-approval', [
-        buildHarnessApprovalPrompt(request),
-      ])) as {
+      // P1-T7: Fire-and-forget terminal notification so the user knows the
+      // run is paused awaiting approval. Never blocks the approval flow.
+      notifyTerminal(
+        { body: `Approval needed: ${request.target.slice(0, 80)}` },
+        {
+          write: (sequence) => {
+            writeToTty(sequence)
+          },
+        },
+      )
+      const response = (await AskUserBridge.request(
+        'harness-approval',
+        [buildHarnessApprovalPrompt(request)],
+        params.signal,
+        request,
+      )) as {
         answers?: Array<{ selectedOption?: string }>
         skipped?: boolean
       }
@@ -274,7 +324,7 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
       }
     },
     fileFilter: ((filePath: string) => {
-      if (isSensitiveFile(filePath)) return { status: 'blocked' }
+      if (sandboxMode === 'project' && isSensitiveFile(filePath)) return { status: 'blocked' }
       if (isEnvTemplateFile(filePath)) return { status: 'allow-example' }
       return { status: 'allow' }
     }) satisfies FileFilter,

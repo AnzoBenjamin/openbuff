@@ -44,7 +44,7 @@ const TOP_BANNER_REGISTRY: Record<NonNullable<TopBannerType>, BannerConfig> = {
     textColorKey: 'foreground',
     relatedInputMode: 'homeDir',
     content:
-      'You are currently in your home directory.\nSelect a project folder to get started, or choose "Start here".',
+      'Choose a project folder to get started, or select "Start here" to work in your home directory.',
   },
   gitRoot: {
     borderColorKey: 'warning',
@@ -55,11 +55,11 @@ const TOP_BANNER_REGISTRY: Record<NonNullable<TopBannerType>, BannerConfig> = {
       return (
         <>
           <text style={{ wrapMode: 'word', fg: textColor }}>
-            You started Openbuff in a subdirectory of a git repo.
+            Working in a project subfolder.
           </text>
           {gitRoot && onSwitchToGitRoot ? (
             <TerminalLink
-              text={`Switch to git root (${displayGitRoot})`}
+              text={`Open project root (${displayGitRoot})`}
               onActivate={onSwitchToGitRoot}
               underlineOnHover={true}
               lineWrap={true}
@@ -130,7 +130,7 @@ export const TopBanner = ({
         style={{
           flexDirection: 'column',
           flexShrink: 1,
-          marginRight: 3,
+          marginRight: 1,
         }}
       >
         {content}
@@ -141,7 +141,7 @@ export const TopBanner = ({
           fg: textColor,
           wrapMode: 'word',
           flexShrink: 1,
-          marginRight: 3,
+          marginRight: 1,
         }}
       >
         {content}
@@ -165,12 +165,12 @@ export const TopBanner = ({
         marginBottom: 0,
         flexShrink: 0,
       }}
-      border={['top', 'bottom', 'left', 'right']}
+      border={['left']}
       customBorderChars={BORDER_CHARS}
     >
       {contentNode}
-      <Button onClick={handleClose}>
-        <text style={{ fg: borderColor }}>x</text>
+      <Button onClick={handleClose} style={{ flexShrink: 0 }}>
+        <text style={{ fg: theme.muted }}>Dismiss</text>
       </Button>
     </box>
   )

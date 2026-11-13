@@ -60,6 +60,18 @@ describe('isStructuredEditErrorCode', () => {
 })
 
 describe('getErrorObject secret redaction', () => {
+  it('can report provider failures without accessing request bodies, including nested causes', () => {
+    const cause = Object.assign(new Error('cause'), { statusCode: 503 })
+    Object.defineProperty(cause, 'requestBodyValues', { get() { throw new Error('body visited') } })
+    const error = Object.assign(new Error('unavailable'), { cause, statusCode: 503 })
+    Object.defineProperty(error, 'requestBodyValues', { get() { throw new Error('body visited') } })
+    const result = getErrorObject(error, { includeRequestBody: false })
+    expect(result.statusCode).toBe(503)
+    expect(result.requestBodyValues).toBeUndefined()
+    expect(result.cause?.statusCode).toBe(503)
+    expect(result.cause?.requestBodyValues).toBeUndefined()
+  })
+
   it('redacts API-key assignments and sk- tokens in responseBody', () => {
     // M1-T5: API error bodies can echo request secrets (API keys in
     // headers/body), so getErrorObject must redact them before they reach any

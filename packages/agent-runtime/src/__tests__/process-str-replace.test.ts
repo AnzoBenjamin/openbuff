@@ -1,5 +1,16 @@
-import { describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import { applyPatch } from 'diff'
+
+import * as codeMap from '@codebuff/code-map'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+  spliceDocumentRange,
+} from '@codebuff/common/util/byte-text'
+import {
+  getLineCoordinates,
+  getRangeSlice,
+} from '@codebuff/common/util/line-coordinates'
 
 import {
   encodeReadCapabilityToken,
@@ -30,13 +41,37 @@ const readCapability = (params: {
   startLine: number
   endLine: number
   content: string
-}) =>
-  encodeReadCapabilityToken({
+  sourceContent: string
+}) => {
+  // Reconstruct the actual observed prior source from the full fixture and its
+  // known read slice. Raw offsets, terminators and hashes come from that source.
+  const document = captureTextDocument(
+    spliceDocumentRange(
+      captureTextDocument(params.sourceContent),
+      params.startLine,
+      params.endLine,
+      params.content,
+    ),
+  )
+  return encodeReadCapabilityToken({
     startLine: params.startLine,
     endLine: params.endLine,
-    hash: getContentHash(params.content),
+    hash: getContentHash(
+      getRangeSlice(
+        getLineCoordinates(document.observation),
+        params.startLine,
+        params.endLine,
+      ),
+    ),
     scope: readScope(params.path),
+    rawBasis: getRawReadBasis(
+      document,
+      params.startLine,
+      params.endLine,
+      'lines',
+    ),
   })
+}
 
 describe('processStrReplace', () => {
   it('should replace exact string matches', async () => {
@@ -387,6 +422,60 @@ describe('processStrReplace', () => {
       expect(result.error).toContain('const w = 4;')
       expect(result.error).not.toContain('+const x = 10;')
       expect(result.error).not.toContain('+const z = 30;')
+    }
+  })
+
+  it('reports recovery ranges against the unchanged snapshot after an earlier insertion', async () => {
+    const initialContent =
+      'const header = 1;\nconst targetValue = 123;\nconst tail = 3;\n'
+    const result = await processStrReplace({
+      path: 'test.ts',
+      replacements: [
+        {
+          oldString: 'const header = 1;',
+          newString: 'const header = 1;\nconst inserted = true;',
+          allowMultiple: false,
+        },
+        {
+          oldString: 'const targetValue = 999;',
+          newString: 'const targetValue = 456;',
+          allowMultiple: false,
+        },
+      ],
+      atomic: true,
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('unchanged file snapshot')
+      expect(result.error).toContain('startLine: 2, endLine: 2')
+      expect(result.error).not.toContain('const inserted = true;')
+    }
+  })
+
+  it('distinguishes missing anchors in unanchored large files', async () => {
+    const initialContent = Array.from({ length: 1001 }, (_, index) =>
+      index === 500
+        ? 'export const distinctiveTargetValue = makeValue(123);'
+        : `const filler${index} = ${index};`,
+    ).join('\n')
+    const result = await processStrReplace({
+      path: 'large.ts',
+      replacements: [
+        {
+          oldString: 'export const distinctiveTargetValue = makeValue(999);',
+          newString: 'export const distinctiveTargetValue = makeValue(456);',
+          allowMultiple: false,
+        },
+      ],
+      initialContentPromise: Promise.resolve(initialContent),
+      logger,
+    })
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('no exact match')
+      expect(result.error).toContain('startLine: 501, endLine: 501')
     }
   })
 
@@ -1228,11 +1317,14 @@ function test3() {
   })
 
   it('should reject a near-match auto-correction that would leave unbalanced brackets (Fix B)', async () => {
-    // Regression test for Fix B (isResultDelimiterBalanced): a near-match that
-    // meets the 0.92 threshold must still be rejected when the newStr drops a
-    // closing brace (net bracket delta != 0). The file has a balanced
-    // switch/case structure; the oldString is a near-match to one case body,
-    // and the newString removes the case's closing `}`.
+    // Regression test for Fix B / EV-3: a near-match that meets the 0.92
+    // threshold must still be rejected when the newStr drops a closing brace.
+    // The file has a balanced switch/case structure; the oldString is a
+    // near-match to one case body, and the newString removes the case's
+    // closing `}`. Since EV-3 the rejection comes from the tree-sitter
+    // ERROR-node gate when a grammar is available, and from the bracket
+    // fallback (isResultDelimiterBalanced) otherwise — both reject this
+    // candidate, so the test passes in either environment.
     const initialContent = [
       'switch (status) {',
       '  case "open": {',
@@ -1273,10 +1365,314 @@ function test3() {
     expect('error' in result).toBe(true)
     if ('error' in result) {
       expect(result.error).toContain('The old string')
-      // The delimiter-balance check makes tryNearMatchAutoCorrect return null,
-      // so the rich diagnostic error (with candidate ranges) is emitted.
+      // The EV-3 syntax gate (tree-sitter when available, bracket fallback
+      // otherwise) makes tryNearMatchAutoCorrect return null, so the rich
+      // diagnostic error (with candidate ranges) is emitted.
       expect(result.error).toContain('Closest candidate ranges')
     }
+  })
+
+  describe('near-match auto-correct syntax gate (EV-3)', () => {
+    afterEach(() => {
+      mock.restore()
+    })
+
+    type TreeSitterDetection = Awaited<
+      ReturnType<typeof codeMap.detectSyntaxErrorViaTreeSitter>
+    >
+    const mockTreeSitterDetection = (result: {
+      available: boolean
+      hasError: boolean
+    }) => {
+      spyOn(codeMap, 'detectSyntaxErrorViaTreeSitter').mockImplementation(
+        async () => result as TreeSitterDetection,
+      )
+    }
+
+    it('accepts an auto-correct whose candidate content parses clean', async () => {
+      // No mock: with a grammar available the FULL candidate content parses
+      // clean and the gate accepts; without one, the bracket fallback runs on
+      // a bracket-balanced candidate and accepts too. Either way the
+      // auto-correct lands.
+      const initialContent = [
+        'export function formatGreeting(name: string) {',
+        '  const greeting = `Hello, ${name}!`',
+        '  return greeting',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function formatGreeting(name: string) {',
+        '  const greating = `Hello, ${name}!`',
+        '  return greeting',
+        '}',
+      ].join('\n')
+      const newStr = [
+        'export function formatGreeting(name: string) {',
+        '  const greeting = `Hello, ${name}!`',
+        '  return greeting.toUpperCase()',
+        '}',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('content' in result).toBe(true)
+      if ('content' in result) {
+        expect(result.content).toBe(newStr)
+        expect(
+          result.messages.some((msg) =>
+            msg.includes('auto-corrected a near-match edit'),
+          ),
+        ).toBe(true)
+      }
+    })
+
+    it('rejects an auto-correct whose candidate has a real syntax error even though bracket counts stay balanced', async () => {
+      // The `}{` swap keeps every naive bracket count identical (the old Fix B
+      // char-counting gate would pass this candidate) but breaks the AST, so
+      // the tree-sitter ERROR-node gate must reject it.
+      mockTreeSitterDetection({ available: true, hasError: true })
+
+      const initialContent = [
+        'export function render(value: number) {',
+        '  const payload = { id: value }',
+        '  return payload',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function render(value: number) {',
+        '  const payload = { id: value }',
+        '  retunr payload',
+        '}',
+      ].join('\n')
+      const newStr = [
+        'export function render(value: number) {',
+        '  const payload = } id: value {',
+        '  return payload',
+        '}',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('The old string')
+        expect(result.error).toContain('Closest candidate ranges')
+      }
+    })
+
+    it('accepts an auto-correct the naive bracket check would wrongly reject (tree-sitter gate is primary)', async () => {
+      // The extra `}` lives inside a string literal: the char-counting
+      // bracket check would reject this candidate, but the FULL candidate
+      // content parses clean, so the tree-sitter gate (now primary) accepts
+      // it. Proves the bracket check is no longer the primary gate.
+      mockTreeSitterDetection({ available: true, hasError: false })
+
+      const initialContent = [
+        'export function describeState(open: boolean) {',
+        '  const label = "open"',
+        '  return label',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function describeState(open: boolean) {',
+        '  const labe1 = "open"',
+        '  return label',
+        '}',
+      ].join('\n')
+      const newStr = [
+        'export function describeState(open: boolean) {',
+        '  const label = "close}"',
+        '  return label',
+        '}',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('content' in result).toBe(true)
+      if ('content' in result) {
+        expect(result.content).toBe(newStr)
+        expect(
+          result.messages.some((msg) =>
+            msg.includes('auto-corrected a near-match edit'),
+          ),
+        ).toBe(true)
+      }
+    })
+
+    it('fails open to the bracket-balance fallback when the grammar is unavailable', async () => {
+      // available:false (Node runtime / missing grammar / init error) must
+      // keep the cheap Fix B bracket check as the fallback: the candidate
+      // drops the closing brace, so the fallback rejects it exactly as
+      // before EV-3.
+      mockTreeSitterDetection({ available: false, hasError: false })
+
+      const initialContent = [
+        'export function renderTotals(items: Item[]) {',
+        '  const total = items.length',
+        '  return total',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function renderTotals(items: Item[]) {',
+        '  const totl = items.length',
+        '  return total',
+        '}',
+      ].join('\n')
+      const newStr = [
+        'export function renderTotals(items: Item[]) {',
+        '  const total = items.length',
+        '  return total',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('The old string')
+        expect(result.error).toContain('Closest candidate ranges')
+      }
+    })
+  })
+
+  describe('near-match oracle agreement (preflight veto)', () => {
+    afterEach(() => {
+      mock.restore()
+    })
+
+    type TreeSitterDetection = Awaited<
+      ReturnType<typeof codeMap.detectSyntaxErrorViaTreeSitter>
+    >
+    const mockTreeSitterDetection = (result: {
+      available: boolean
+      hasError: boolean
+    }) => {
+      spyOn(codeMap, 'detectSyntaxErrorViaTreeSitter').mockImplementation(
+        async () => result as TreeSitterDetection,
+      )
+    }
+
+    it('refuses a near-match candidate the preflight oracle rejects even when tree-sitter accepts it', async () => {
+      // Tree-sitter is mocked clean, so the ONLY gate that can refuse this
+      // candidate is the preflight oracle veto: Bun.Transpiler genuinely
+      // rejects the injected `const broken = :` line while the mocked
+      // tree-sitter call cannot see it. Two oracles disagreeing about the
+      // same file must resolve toward rejection — the near-match falls
+      // through to the rich diagnostic error instead of auto-correcting
+      // bytes the edit tools' preflight would reject moments later.
+      mockTreeSitterDetection({ available: true, hasError: false })
+
+      const initialContent = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subtotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subTotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal',
+        '}',
+      ].join('\n')
+      // Same shape as the accepted single-winner fixture, but the return
+      // line additionally injects a genuine Bun parse error that rides past
+      // every similarity/uniqueness gate (which never look at newStr) and
+      // past the bracket-balanced structural checks.
+      const newStr = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subtotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal',
+        'const broken = :',
+        '}',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('error' in result).toBe(true)
+      if ('error' in result) {
+        expect(result.error).toContain('The old string')
+      }
+    })
+
+    it('still auto-corrects when both oracles accept the candidate', async () => {
+      // Both oracles agree the candidate parses clean: the mocked
+      // tree-sitter gate accepts and the real Bun.Transpiler preflight
+      // accepts too, so the veto must not narrow legitimate
+      // auto-corrections.
+      mockTreeSitterDetection({ available: true, hasError: false })
+
+      const initialContent = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subtotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal',
+        '}',
+      ].join('\n')
+      const oldStr = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subTotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal',
+        '}',
+      ].join('\n')
+      const newStr = [
+        'export function calculateTotal(items: Item[]) {',
+        '  const subtotal = items.reduce((sum, item) => sum + item.price, 0)',
+        '  return subtotal * 1.0825',
+        '}',
+      ].join('\n')
+
+      const result = await processStrReplace({
+        path: 'test.ts',
+        replacements: [
+          { oldString: oldStr, newString: newStr, allowMultiple: false },
+        ],
+        initialContentPromise: Promise.resolve(initialContent),
+        logger,
+      })
+
+      expect('content' in result).toBe(true)
+      if ('content' in result) {
+        expect(result.content).toBe(newStr)
+        expect(
+          result.messages.some((msg) =>
+            msg.includes('auto-corrected a near-match edit'),
+          ),
+        ).toBe(true)
+      }
+    })
   })
 
   it('should not auto-correct a short oldString below the autocorrect min length (Fix E)', async () => {
@@ -1518,6 +1914,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const rangeContent = lines.slice(500, 501).join('\n')
     const token = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 501,
@@ -1561,6 +1958,7 @@ function test3() {
     // Lines 1-10 are fresh, but the target lives at line 1001.
     const windowContent = lines.slice(0, 10).join('\n')
     const token = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 1,
       endLine: 10,
@@ -1616,6 +2014,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const windowContent = lines.slice(0, 10).join('\n')
     const token = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 1,
       endLine: 10,
@@ -1658,6 +2057,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const windowContent = lines.slice(0, 10).join('\n')
     const token = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 1,
       endLine: 10,
@@ -1713,6 +2113,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const rangeContent = lines.slice(500, 505).join('\n')
     const token = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 505,
@@ -1788,7 +2189,7 @@ function test3() {
     }
   })
 
-  it('accepts a strict cap.v3 token only for its bound project, path, and run', async () => {
+  it('accepts a strict cap.v4 token only for its bound project, path, and run', async () => {
     const initialContent = 'const target = 1;\n'
     const scope = {
       projectId: '/project',
@@ -1800,6 +2201,12 @@ function test3() {
       endLine: 1,
       hash: getContentHash('const target = 1;'),
       scope,
+      rawBasis: getRawReadBasis(
+        captureTextDocument(initialContent),
+        1,
+        1,
+        'lines',
+      ),
     })
 
     const result = await processStrReplace({
@@ -1821,7 +2228,7 @@ function test3() {
     expect(result).toHaveProperty('content', 'const target = 2;\n')
   })
 
-  it('rejects cross-path replay of a strict cap.v3 token even for identical content', async () => {
+  it('rejects cross-path replay of a strict cap.v4 token even for identical content', async () => {
     const sourceScope = {
       projectId: '/project',
       path: 'src/source.ts',
@@ -1832,6 +2239,12 @@ function test3() {
       endLine: 1,
       hash: getContentHash('const target = 1;'),
       scope: sourceScope,
+      rawBasis: getRawReadBasis(
+        captureTextDocument('const target = 1;\n'),
+        1,
+        1,
+        'lines',
+      ),
     })
 
     const result = await processStrReplace({
@@ -1867,12 +2280,111 @@ function test3() {
     }
   })
 
+  it('refuses legacy and malformed supplied tokens before unique edits or idempotent skips', async () => {
+    const source = 'const target = 1;\n'
+    const legacy = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: 1,
+      hash: getContentHash('const target = 1;'),
+      scope: readScope('legacy.ts'),
+    })
+    for (const token of [legacy, 'dummy']) {
+      for (const requireFreshReadCapability of [false, true]) {
+        for (const deletion of [false, true]) {
+          const result = await processStrReplace({
+            path: 'legacy.ts',
+            readCapabilityScope: readScope('legacy.ts'),
+            requireFreshReadCapability,
+            replacements: [
+              {
+                oldString: deletion ? 'already absent' : 'const target = 1;',
+                newString: deletion ? '' : 'const target = 2;',
+                allowMultiple: false,
+                skipIfMissing: deletion,
+                basedOnRead: token,
+              },
+            ],
+            initialContentPromise: Promise.resolve(source),
+            logger,
+          })
+          expect(result).toHaveProperty('failureKind', 'capability_invalid')
+          expect(result).not.toHaveProperty('content')
+        }
+      }
+    }
+  })
+
+  it('preserves unrelated BOM, mixed terminators and Unicode bytes in a scoped edit', async () => {
+    const source = '\uFEFFheader\r\nconst target = "😀e\u0301";\nuntouched\r\n'
+    const oldString = 'const target = "😀e\u0301";'
+    const newString = 'const target = "😀e\u0301 changed";'
+    const result = await processStrReplace({
+      path: 'bytes.ts',
+      readCapabilityScope: readScope('bytes.ts'),
+      requireFreshReadCapability: true,
+      replacements: [
+        {
+          oldString,
+          newString,
+          allowMultiple: false,
+          basedOnRead: readCapability({
+            path: 'bytes.ts',
+            startLine: 2,
+            endLine: 2,
+            content: oldString,
+            sourceContent: source,
+          }),
+        },
+      ],
+      initialContentPromise: Promise.resolve(source),
+      logger,
+    })
+    const expected =
+      '\uFEFFheader\r\nconst target = "😀e\u0301 changed";\nuntouched\r\n'
+    expect(result).toHaveProperty('content', expected)
+    if ('content' in result)
+      expect(applyPatch(source, result.patch)).toBe(expected)
+  })
+
+  it('refuses raw-only scope drift and duplicated scopes after document drift', async () => {
+    const observed = 'header\nTARGET\nfooter\n'
+    const token = readCapability({
+      path: 'drift.txt',
+      startLine: 2,
+      endLine: 2,
+      content: 'TARGET',
+      sourceContent: observed,
+    })
+    for (const current of [
+      'header\nTARGET\r\nfooter\n',
+      'header\nTARGET\nTARGET\nfooter\n',
+    ]) {
+      const result = await processStrReplace({
+        path: 'drift.txt',
+        readCapabilityScope: readScope('drift.txt'),
+        replacements: [
+          {
+            oldString: 'TARGET',
+            newString: 'CHANGED',
+            allowMultiple: false,
+            basedOnRead: token,
+          },
+        ],
+        initialContentPromise: Promise.resolve(current),
+        logger,
+      })
+      expect(result).toHaveProperty('failureKind', 'capability_stale')
+      expect(result).not.toHaveProperty('content')
+    }
+  })
+
   it('rejects a stale readCapability token on large files even when oldString is unique', async () => {
     const lines = Array.from({ length: 1_001 }, (_, index) =>
       index === 500 ? 'const target = 1;' : `const filler${index} = ${index};`,
     )
     const initialContent = lines.join('\n')
     const staleToken = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 501,
@@ -1911,6 +2423,7 @@ function test3() {
     )
     const initialContent = lines.join('\n')
     const staleToken = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 301,
       endLine: 301,
@@ -1945,12 +2458,14 @@ function test3() {
   it('does not mint authorization from a strict stale-capability failure', async () => {
     const initialContent = 'const first = 1;\nconst second = 1;\n'
     const broadCapability = readCapability({
+      sourceContent: initialContent,
       path: 'strict.ts',
       startLine: 1,
       endLine: 2,
       content: 'const first = 1;\nconst second = 1;',
     })
     const staleNestedCapability = readCapability({
+      sourceContent: initialContent,
       path: 'strict.ts',
       startLine: 2,
       endLine: 2,
@@ -1982,7 +2497,8 @@ function test3() {
 
     expect('error' in result).toBe(true)
     if ('error' in result) {
-      expect(result.error).toContain('Strict read-before-edit blocked')
+      expect(result.error).toContain('supplied basedOnRead range is stale')
+      expect(result.failureKind).toBe('capability_stale')
       expect(result.error).toContain('read_files')
       expect(result.error).not.toContain('cap.v3.')
       expect(result.error).not.toMatch(/readCapability\s*=/)
@@ -2006,6 +2522,7 @@ function test3() {
           newString: 'const target = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2042,6 +2559,7 @@ function test3() {
           newString: 'const target = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2069,6 +2587,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const rangeContent = lines.slice(500, 501).join('\n')
     const basedOnRead = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 502,
@@ -2111,6 +2630,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const rangeContent = lines.slice(500, 501).join('\n')
     const basedOnRead = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 502,
@@ -2172,6 +2692,7 @@ function test3() {
             'const first = 2;\nconst inserted = true;\nconst second = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 502,
@@ -2212,6 +2733,7 @@ function test3() {
           newString: 'const first = 2;\nconst inserted = true;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 101,
             endLine: 101,
@@ -2223,6 +2745,7 @@ function test3() {
           newString: 'const second = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2252,6 +2775,7 @@ function test3() {
     const initialContent = lines.join('\n')
     const rangeContent = lines.slice(500, 501).join('\n')
     const basedOnRead = readCapability({
+      sourceContent: initialContent,
       path: 'large.ts',
       startLine: 501,
       endLine: 503,
@@ -2310,6 +2834,7 @@ function test3() {
           newString: 'const repeated = 2;\nconst inserted = true;',
           allowMultiple: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 101,
             endLine: 501,
@@ -2321,6 +2846,7 @@ function test3() {
           newString: 'const target = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 301,
             endLine: 301,
@@ -2364,6 +2890,7 @@ function test3() {
           allowMultiple: false,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2375,6 +2902,7 @@ function test3() {
           newString: 'const target = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2416,6 +2944,7 @@ function test3() {
           allowMultiple: false,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2580,6 +3109,7 @@ function test3() {
           allowMultiple: false,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -2633,6 +3163,7 @@ function test3() {
           occurrenceIndex: 3,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 2,
             endLine: 2,
@@ -2690,6 +3221,7 @@ function test3() {
           allowMultiple: false,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -2729,6 +3261,7 @@ function test3() {
           occurrenceIndex: 2,
           skipIfMissing: true,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -2856,6 +3389,7 @@ function test3() {
           newString: 'const target = 2;\r\nconst neighbor = 1;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 502,
@@ -2913,6 +3447,7 @@ function test3() {
           newString: 'const target = 2;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'large.ts',
             startLine: 501,
             endLine: 501,
@@ -2932,7 +3467,7 @@ function test3() {
     }
   })
 
-  it('auto-strips stale basedOnRead on small files when oldString is unique', async () => {
+  it('rejects a supplied stale capability even when the small-file target is unique', async () => {
     const initialContent = 'const x = 1;\nconst y = 2;\n'
 
     const result = await processStrReplace({
@@ -2944,6 +3479,7 @@ function test3() {
           newString: 'const y = 3;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -2955,12 +3491,10 @@ function test3() {
       logger,
     })
 
-    expect('error' in result).toBe(false)
-    if (!('error' in result)) {
-      expect(result.content).toContain('const y = 3;')
-      expect(
-        result.messages.some((msg) => msg.includes('stale basedOnRead')),
-      ).toBe(true)
+    expect('error' in result).toBe(true)
+    if ('error' in result) {
+      expect(result.error).toContain('supplied basedOnRead range is stale')
+      expect(result.failureKind).toBe('capability_stale')
     }
   })
 
@@ -2976,6 +3510,7 @@ function test3() {
           newString: 'const y = 3;',
           allowMultiple: false,
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -3008,6 +3543,7 @@ function test3() {
           allowMultiple: false,
           // Bounds point at a different region than where the match lives.
           basedOnRead: readCapability({
+            sourceContent: initialContent,
             path: 'small.ts',
             startLine: 1,
             endLine: 1,
@@ -3047,6 +3583,7 @@ function test3() {
       )
       const initialContent = lines.join('\n')
       const token = readCapability({
+        sourceContent: initialContent,
         path: 'large.ts',
         startLine: 501,
         endLine: 501,
@@ -3216,10 +3753,11 @@ function test3() {
 
   describe('fresh range capability scoping', () => {
     it('keeps a fresh small-file edit inside the proven range', async () => {
-      // The capability was minted before an unrelated later line changed. The
-      // target range itself is still fresh, so the scoped edit remains safe.
+      // The authenticated whole raw hash is unchanged, so the original bounds
+      // remain usable even when another line contains identical text.
       const initialContent = 'same\nkeep\nsame\nunrelated post-read edit\n'
       const capability = readCapability({
+        sourceContent: initialContent,
         path: 'PLAN.md',
         startLine: 3,
         endLine: 3,
@@ -3250,8 +3788,10 @@ function test3() {
     })
 
     it('rejects a stale supplied range instead of guessing across the file', async () => {
-      const initialContent = 'same\nkeep\nsame changed formatting\n'
+      const initialContent =
+        'same changed elsewhere\nkeep\nsame changed formatting\n'
       const staleCapability = readCapability({
+        sourceContent: initialContent,
         path: 'PLAN.md',
         startLine: 3,
         endLine: 3,

@@ -11,6 +11,10 @@ import {
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
 import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
+import {
   describe,
   test,
   expect,
@@ -38,10 +42,11 @@ function createMockFs(config: {
   files?: Record<string, { content: string | Uint8Array; size?: number }>
   errors?: Record<string, { code?: string; message?: string }>
   capabilities?: Partial<CodebuffFileSystem>
+  boundedReads?: boolean
 }): CodebuffFileSystem {
   const { files = {}, errors = {}, capabilities = {} } = config
 
-  return {
+  const fs = {
     readFile: async (filePath: PathLike) => {
       const pathStr = String(filePath)
       if (errors[pathStr]) {
@@ -84,6 +89,59 @@ function createMockFs(config: {
     writeFile: async () => undefined,
     ...capabilities,
   } as unknown as CodebuffFileSystem
+  if (config.boundedReads !== false && !capabilities.readTextFile) {
+    fs.readTextFile = Object.assign(
+      async (filePath: PathLike, maxBytes: number) => {
+        const raw = await fs.readFile(filePath)
+        let document
+        try {
+          document = captureTextDocument(
+            typeof raw === 'string'
+              ? raw
+              : new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength),
+            {
+              view: typeof raw === 'string' ? 'text_view' : 'adapter_bytes',
+            },
+          )
+        } catch {
+          if (typeof raw === 'string') {
+            throw Object.assign(new TypeError('Invalid lossless text'), {
+              code: 'UNSUPPORTED_ENCODING',
+            })
+          }
+          return {
+            data: new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength),
+            startLine: 1,
+            endLine: 1,
+            totalLines: 1,
+            complete: true,
+            metadataComplete: true,
+          }
+        }
+        const complete = document.byteLength <= maxBytes
+        return {
+          data: complete ? Buffer.from(document.rawText) : new Uint8Array(0),
+          startLine: 1,
+          endLine: complete ? document.maxCapabilityLine : 0,
+          totalLines: document.visibleLineCount,
+          complete,
+          metadataComplete: true,
+          ...(complete
+            ? {
+                rawBasis: getRawReadBasis(
+                  document,
+                  1,
+                  document.maxCapabilityLine,
+                  'whole',
+                ),
+              }
+            : {}),
+        }
+      },
+      { readFileView: fs.readFile },
+    )
+  }
+  return fs
 }
 
 describe('getFilesStructured', () => {
@@ -211,7 +269,8 @@ describe('getFilesStructured', () => {
         startLine: 1,
         endLine: 1,
         hash: getContentHash('A=example'),
-        tokenVersion: 'v3',
+        tokenVersion: 'v4',
+        rawBasis: { scope: 'whole', documentBytes: 9 },
       })
       // A ~100k-char file is now under the 10MB read ceiling, so it renders
       // fully as a complete (non-truncated) result rather than a partial.
@@ -591,7 +650,12 @@ describe('getFilesStructured', () => {
       })
 
       expect(wholeReads).toBe(0)
-      expect(rangeArgs?.slice(1)).toEqual([20, 21, MAX_RANGE_READ_BYTES])
+      expect(rangeArgs?.slice(1)).toEqual([
+        20,
+        21,
+        MAX_RANGE_READ_BYTES,
+        { signal: undefined },
+      ])
       expect(result.results[0]).toMatchObject({
         selector: 'range',
         status: 'ok',
@@ -641,7 +705,7 @@ describe('getFilesStructured', () => {
       expect(result.results.every((item) => item.status === 'ok')).toBe(true)
     })
 
-    test('mints scoped v3 capabilities when the runtime supplies an issuer', async () => {
+    test('mints authenticated v4 capabilities when the bounded view supplies raw basis', async () => {
       const capabilityIssuer = {
         projectId: '/project',
         runId: 'run-123',
@@ -659,7 +723,7 @@ describe('getFilesStructured', () => {
       const item = result.results[0]
       expect(item?.status).toBe('ok')
       if (item?.status !== 'error' && item.selector === 'file') {
-        expect(item.editAnchor?.readCapability).toMatch(/^cap\.v3\./)
+        expect(item.editAnchor?.readCapability).toMatch(/^cap\.v4\./)
         expect(item).not.toHaveProperty('readCapability')
         const decoded = decodeReadCapabilityToken(
           item.editAnchor?.readCapability ?? '',
@@ -693,7 +757,7 @@ describe('getFilesStructured', () => {
       const item = result.results[0]
       expect(item?.status).toBe('ok')
       if (item?.status !== 'error' && item.selector === 'range') {
-        expect(item.editAnchor?.readCapability).toMatch(/^cap\.v3\./)
+        expect(item.editAnchor?.readCapability).toMatch(/^cap\.v4\./)
         expect('wholeFileReadCapability' in item).toBe(false)
         const decoded = decodeReadCapabilityToken(
           item.editAnchor?.readCapability ?? '',
@@ -728,7 +792,7 @@ describe('getFilesStructured', () => {
       const item = result.results[0]
       expect(item?.status).toBe('ok')
       if (item?.status !== 'error' && item.selector === 'range') {
-        expect(item.editAnchor?.readCapability).toMatch(/^cap\.v3\./)
+        expect(item.editAnchor?.readCapability).toMatch(/^cap\.v4\./)
         expect('wholeFileReadCapability' in item).toBe(false)
         const decoded = decodeReadCapabilityToken(
           item.editAnchor?.readCapability ?? '',
@@ -742,23 +806,31 @@ describe('getFilesStructured', () => {
 
     test('oversized range-window read exposes only its bounded capability', async () => {
       const capabilityIssuer = { projectId: '/project', runId: 'run-range-3' }
+      const source = captureTextDocument(
+        Array.from({ length: 50_000 }, (_, index) => `line ${index + 1}`).join(
+          '\n',
+        ),
+      )
       const mockFs = createMockFs({
         files: {
           '/project/huge.ts': { content: '', size: 20 * 1024 * 1024 },
         },
         capabilities: {
           readTextRange: async () => ({
-            data: Buffer.from('line 20\nline 21'),
+            data: Buffer.from('line 20\nline 21\n'),
             startLine: 20,
             endLine: 21,
             totalLines: 50_000,
             complete: true,
+            metadataComplete: true,
+            rawBasis: getRawReadBasis(source, 20, 21, 'lines'),
           }),
         },
       })
       mockFs.readFile = (async () => {
         throw new Error('whole-file read must not run for oversized range read')
       }) as CodebuffFileSystem['readFile']
+      mockFs.readTextRange!.readFileView = mockFs.readFile
 
       const result = await getFilesStructured({
         filePaths: [],
@@ -770,7 +842,7 @@ describe('getFilesStructured', () => {
       const item = result.results[0]
       expect(item?.status).toBe('ok')
       if (item?.status !== 'error' && item.selector === 'range') {
-        expect(item.editAnchor?.readCapability).toMatch(/^cap\.v3\./)
+        expect(item.editAnchor?.readCapability).toMatch(/^cap\.v4\./)
         expect('wholeFileReadCapability' in item).toBe(false)
       }
     })
@@ -801,7 +873,7 @@ describe('getFilesStructured', () => {
       expect(item?.status).toBe('ok')
       if (item?.status !== 'error' && item.selector === 'range') {
         expect(item.complete).toBe(true)
-        expect(item.editAnchor?.readCapability).toMatch(/^cap\.v3\./)
+        expect(item.editAnchor?.readCapability).toMatch(/^cap\.v4\./)
         expect('wholeFileReadCapability' in item).toBe(false)
       }
     })
@@ -836,6 +908,273 @@ describe('getFilesStructured', () => {
     })
   })
 
+  test('keeps a BOM and later U+FEFF in the verified raw source while rendering observation text', async () => {
+    const raw = '\uFEFFfirst\r\n\uFEFFsecond\rlast\n'
+    const fs = createMockFs({
+      files: { '/project/bom.txt': { content: Buffer.from(raw) } },
+    })
+    const result = await getFilesStructured({
+      filePaths: ['bom.txt'],
+      cwd: '/project',
+      fs,
+      capabilityIssuer: { projectId: '/project', runId: 'bom-read' },
+    })
+    expect(result.results[0]).toMatchObject({
+      content: 'first\n\uFEFFsecond\rlast\n',
+      rawSourceContent: raw,
+      metadataComplete: true,
+      editAnchor: {
+        rawBasis: { scope: 'whole', includesBom: true, documentBom: 'utf8' },
+      },
+    })
+    expect(
+      await getFileForEditResult({ filePath: 'bom.txt', cwd: '/project', fs }),
+    ).toMatchObject({
+      status: 'found',
+      content: raw,
+      metadataComplete: true,
+      rawBasis: { scope: 'whole', includesBom: true },
+    })
+  })
+
+  test('unbounded custom views remain display-only and reject unpaired string surrogates', async () => {
+    const raw = '\uFEFFa\r\nb\n'
+    const fs = createMockFs({
+      boundedReads: false,
+      files: { '/project/raw.txt': { content: raw } },
+    })
+    const result = await getFilesStructured({
+      filePaths: ['raw.txt'],
+      ranges: [{ path: 'raw.txt', startLine: 2, endLine: 2 }],
+      cwd: '/project',
+      fs,
+      capabilityIssuer: { projectId: '/project', runId: 'legacy-view' },
+    })
+    for (const item of result.results) {
+      expect(item).toMatchObject({ status: 'ok', metadataComplete: false })
+      expect(item).not.toHaveProperty('editAnchor')
+      expect(item).not.toHaveProperty('rawSourceContent')
+    }
+    expect(
+      await getFileForEditResult({ filePath: 'raw.txt', cwd: '/project', fs }),
+    ).toMatchObject({ content: raw })
+    const invalid = await getFilesStructured({
+      filePaths: ['bad.txt'],
+      cwd: '/project',
+      fs: createMockFs({
+        boundedReads: false,
+        files: { '/project/bad.txt': { content: '\ud800' } },
+      }),
+    })
+    expect(invalid.results[0]).toMatchObject({
+      status: 'error',
+      error: { code: 'unsupported_encoding' },
+    })
+  })
+
+  test('an explicitly incomplete bounded window cannot acquire authority from covering numeric bounds', async () => {
+    const source = captureTextDocument('a\nb\nc\n')
+    const fs = createMockFs({
+      files: {
+        '/project/large.txt': {
+          content: source.rawText,
+          size: 20 * 1024 * 1024,
+        },
+      },
+    })
+    const controller = new AbortController()
+    let observedSignal: AbortSignal | undefined
+    fs.readTextRange = Object.assign(
+      async (
+        _path: PathLike,
+        _start: number,
+        _end: number,
+        _budget: number,
+        options?: { signal?: AbortSignal },
+      ) => {
+        observedSignal = options?.signal
+        return {
+          data: Buffer.from('a\nb\n'),
+          startLine: 1,
+          endLine: 2,
+          totalLines: 3,
+          complete: false,
+          metadataComplete: true,
+          rawBasis: getRawReadBasis(source, 1, 2, 'lines'),
+        }
+      },
+      { readFileView: fs.readFile },
+    )
+    const result = await getFilesStructured({
+      filePaths: [],
+      ranges: [{ path: 'large.txt', startLine: 1, endLine: 2 }],
+      cwd: '/project',
+      fs,
+      signal: controller.signal,
+      capabilityIssuer: { projectId: '/project', runId: 'incomplete' },
+    })
+    expect(observedSignal).toBe(controller.signal)
+    expect(result.results[0]).toMatchObject({
+      status: 'partial',
+      complete: false,
+    })
+    expect(result.results[0]).not.toHaveProperty('editAnchor')
+    expect(result.results[0]).not.toHaveProperty('sourceContent')
+  })
+
+  test('legacy or missing bounded basis grants no authority and explicit unknown EOF is unsupported', async () => {
+    for (const metadataComplete of [undefined, true, false]) {
+      const fs = createMockFs({
+        files: {
+          '/project/large.txt': { content: 'a\nb\n', size: 20 * 1024 * 1024 },
+        },
+      })
+      fs.readTextRange = Object.assign(
+        async () => ({
+          data: Buffer.from('a\n'),
+          startLine: 1,
+          endLine: 1,
+          totalLines: 2,
+          complete: true,
+          ...(metadataComplete === undefined ? {} : { metadataComplete }),
+        }),
+        { readFileView: fs.readFile },
+      )
+      const result = await getFilesStructured({
+        filePaths: [],
+        ranges: [{ path: 'large.txt', startLine: 1, endLine: 1 }],
+        cwd: '/project',
+        fs,
+        capabilityIssuer: { projectId: '/project', runId: 'no-basis' },
+      })
+      expect(result.results[0]).not.toHaveProperty('editAnchor')
+      expect(result.results[0]).toMatchObject(
+        metadataComplete === false
+          ? { status: 'error', error: { code: 'unsupported' } }
+          : { status: 'ok', complete: true },
+      )
+    }
+  })
+
+  test('decorating readFile prevents both inherited bounded readers from serving host bytes', async () => {
+    const base = createMockFs({
+      files: { '/project/view.txt': { content: 'host\n' } },
+    })
+    let hostCalls = 0
+    base.readTextFile = Object.assign(
+      async () => {
+        hostCalls++
+        throw new Error('host whole read')
+      },
+      { readFileView: base.readFile },
+    )
+    base.readTextRange = Object.assign(
+      async () => {
+        hostCalls++
+        throw new Error('host range read')
+      },
+      { readFileView: base.readFile },
+    )
+    const fs = Object.assign(Object.create(base), {
+      readFile: async () => 'virtual\n',
+    }) as CodebuffFileSystem
+    const whole = await getFilesStructured({
+      filePaths: ['view.txt'],
+      cwd: '/project',
+      fs,
+    })
+    expect(whole.results[0]).toMatchObject({
+      content: 'virtual\n',
+      metadataComplete: false,
+    })
+    fs.stat = (async (filePath: PathLike) => ({
+      ...(await base.stat(filePath)),
+      size: 20 * 1024 * 1024,
+    })) as CodebuffFileSystem['stat']
+    const range = await getFilesStructured({
+      filePaths: [],
+      ranges: [{ path: 'view.txt', startLine: 1, endLine: 1 }],
+      cwd: '/project',
+      fs,
+    })
+    expect(range.results[0]).toMatchObject({
+      status: 'error',
+      error: { code: 'unsupported' },
+    })
+    expect(hostCalls).toBe(0)
+  })
+
+  test('a bounded whole-read overflow after a small stat never calls unbounded readFile', async () => {
+    const fs = createMockFs({
+      files: { '/project/growing.txt': { content: 'a', size: 1 } },
+    })
+    let unboundedReads = 0
+    fs.readFile = (async () => {
+      unboundedReads++
+      throw new Error('unbounded growth read')
+    }) as CodebuffFileSystem['readFile']
+    fs.readTextFile = Object.assign(
+      async () => ({
+        data: new Uint8Array(0),
+        startLine: 1,
+        endLine: 0,
+        totalLines: 1,
+        complete: false,
+        metadataComplete: true,
+      }),
+      { readFileView: fs.readFile },
+    )
+    const result = await getFilesStructured({
+      filePaths: ['growing.txt'],
+      cwd: '/project',
+      fs,
+      capabilityIssuer: { projectId: '/project', runId: 'growth' },
+    })
+    expect(result.results[0]).toMatchObject({
+      status: 'error',
+      error: { code: 'too_large' },
+    })
+    expect(unboundedReads).toBe(0)
+  })
+
+  test('explicit final-empty ranges stay addressable while omitted ends use visible lines', async () => {
+    const fs = createMockFs({
+      files: { '/project/final.txt': { content: 'a\r\n' } },
+    })
+    const result = await getFilesStructured({
+      filePaths: [],
+      ranges: [
+        { path: 'final.txt', startLine: 2, endLine: 2 },
+        { path: 'final.txt' },
+      ],
+      cwd: '/project',
+      fs,
+      capabilityIssuer: { projectId: '/project', runId: 'final-entry' },
+    })
+    expect(result.results[0]).toMatchObject({
+      status: 'ok',
+      startLine: 2,
+      endLine: 2,
+      totalLines: 1,
+      sourceContent: '',
+      editAnchor: {
+        rawBasis: {
+          scope: 'lines',
+          startByte: 3,
+          endByteExclusive: 3,
+          endTerminator: 'none',
+        },
+      },
+    })
+    expect(result.results[1]).toMatchObject({
+      status: 'ok',
+      startLine: 1,
+      endLine: 1,
+      sourceContent: 'a',
+      editAnchor: { rawBasis: { scope: 'lines', endTerminator: 'crlf' } },
+    })
+  })
+
   test('[SEC-H02] optional file reads preserve not-found, blocked, and I/O states', async () => {
     const missing = await getFileForEditResult({
       filePath: 'missing.ts',
@@ -859,6 +1198,63 @@ describe('getFilesStructured', () => {
     expect(missing).toMatchObject({ status: 'not_found' })
     expect(blocked).toMatchObject({ status: 'blocked' })
     expect(ioError).toMatchObject({ status: 'io_error' })
+  })
+
+  test('optional file reads forward cancellation and reject before opening or returning a cancelled source', async () => {
+    const controller = new AbortController()
+    const document = captureTextDocument('\uFEFFone\r\n')
+    let boundedReads = 0
+    let observedSignal: AbortSignal | undefined
+    const fs = createMockFs({
+      files: { '/project/raw.ts': { content: document.rawText } },
+    })
+    fs.readTextFile = Object.assign(
+      async (
+        _path: PathLike,
+        _budget: number,
+        options?: { signal?: AbortSignal },
+      ) => {
+        boundedReads += 1
+        observedSignal = options?.signal
+        controller.abort(new Error('cancelled optional read'))
+        return {
+          data: Buffer.from(document.rawText),
+          startLine: 1,
+          endLine: document.maxCapabilityLine,
+          totalLines: document.visibleLineCount,
+          complete: true,
+          metadataComplete: true,
+          rawBasis: getRawReadBasis(
+            document,
+            1,
+            document.maxCapabilityLine,
+            'whole',
+          ),
+        }
+      },
+      { readFileView: fs.readFile },
+    )
+    const preAborted = new AbortController()
+    preAborted.abort(new Error('pre-aborted optional read'))
+    await expect(
+      getFileForEditResult({
+        filePath: 'raw.ts',
+        cwd: '/project',
+        fs,
+        signal: preAborted.signal,
+      }),
+    ).rejects.toThrow('pre-aborted optional read')
+    expect(boundedReads).toBe(0)
+    await expect(
+      getFileForEditResult({
+        filePath: 'raw.ts',
+        cwd: '/project',
+        fs,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('cancelled optional read')
+    expect(boundedReads).toBe(1)
+    expect(observedSignal).toBe(controller.signal)
   })
 
   test('[COR-M06] preserves returned v1 successes and fills one result per missing selector', async () => {

@@ -99,6 +99,26 @@ export const readDocsParams = {
             .optional(),
         })
         .optional(),
+      errorMessage: z.string().optional(),
+      status: z
+        .enum([
+          'auth_required',
+          'rate_limited',
+          'timeout',
+          'cancelled',
+          'network_error',
+          'unavailable',
+          'invalid_response',
+          'not_found',
+        ])
+        .optional()
+        .describe(
+          "Set on failure. Only 'not_found' means Context7 has no docs for the library.",
+        ),
+      reason: z.string().optional(),
+      nextStep: z.string().optional(),
+      httpStatus: z.number().optional(),
+      retryAfterSeconds: z.number().optional(),
     }),
   ),
 } satisfies $ToolParams

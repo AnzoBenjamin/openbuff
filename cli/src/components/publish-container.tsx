@@ -23,6 +23,7 @@ import {
 import { createTextPasteHandler } from '../utils/strings'
 import { isPlainEnterKey } from '../utils/terminal-enter-detection'
 import { BORDER_CHARS } from '../utils/ui-constants'
+import { whenRegistriesReady } from '../services/deferred-registries'
 
 interface PublishContainerProps {
   inputRef: React.MutableRefObject<MultilineInputHandle | null>
@@ -88,10 +89,30 @@ export const PublishContainer: React.FC<PublishContainerProps> = ({
 
   const inputFocused = useChatStore((state) => state.inputFocused)
 
+  // P1-T9: the agent/skill registries load asynchronously after startup
+  // (services/deferred-registries). The reads below happen at mount, so gate
+  // them on `registriesLoaded`: BOTH mount-time useMemos below (`agents` via
+  // loadLocalAgents().filter(!isBundled), and `agentDefinitions` via
+  // loadAgentDefinitions()) depend on [registriesLoaded] and re-run when the
+  // deferred loads settle — without this gate the publishable agent list
+  // would observe the (still-empty or partial) registry if the user enters
+  // publish mode before the deferred disk scans finish, and stay empty/stale
+  // for the lifetime of the component.
+  const [registriesLoaded, setRegistriesLoaded] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    void whenRegistriesReady().then(() => {
+      if (!cancelled) setRegistriesLoaded(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   // Load agents data - filter out bundled agents (they shouldn't be publishable by users)
   const agents = useMemo(
     () => loadLocalAgents().filter((a) => !a.isBundled),
-    [],
+    [registriesLoaded],
   )
   const agentDefinitions = useMemo(() => {
     const defs = loadAgentDefinitions()
@@ -100,7 +121,7 @@ export const PublishContainer: React.FC<PublishContainerProps> = ({
       map.set(def.id, { spawnableAgents: def.spawnableAgents })
     }
     return map
-  }, [])
+  }, [registriesLoaded])
 
   // Filter agents based on search
   const filteredAgents = useMemo(() => {

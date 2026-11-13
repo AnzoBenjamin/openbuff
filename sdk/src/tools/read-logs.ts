@@ -1,5 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import { getFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
 
 import { FILE_READ_STATUS } from '@codebuff/common/old-constants'
 import { jobRegistry } from '@codebuff/common/util/job-registry'
@@ -13,6 +14,7 @@ import { isReadPathBlocked } from './read-policy'
 
 import type { BackgroundJobOwner } from './background-jobs'
 import type { FileFilter } from './read-files'
+import type { HostReadPolicy } from '@codebuff/common/util/project-path-containment'
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
 
 const DEFAULT_LINES = 200
@@ -55,6 +57,8 @@ type ReadLogsParams = {
    * branch (see the filter block below).
    */
   fileFilter?: FileFilter
+  /** Captured host boundary for the path branch; never supplied by tool JSON. */
+  readPolicy?: HostReadPolicy
 }
 
 export async function readLogs(
@@ -145,7 +149,7 @@ export async function readLogs(
   // paths strictly inside an explicitly allowlisted external read root) pass;
   // traversal, sibling-prefix and escaping-symlink paths are refused. This is a
   // read-only tool, so it uses the read-only resolver.
-  const resolved = resolveFilePathForReadOperation(params.cwd, requested)
+  const resolved = resolveFilePathForReadOperation(params.cwd, requested, params.readPolicy)
   if (!resolved) {
     return [
       {
@@ -173,7 +177,7 @@ export async function readLogs(
     ...getScopedReadPolicyAliases(resolved.scope, resolved.operationPath),
   ]
   if (
-    policyAliases.some((alias) => isReadPathBlocked(alias, params.fileFilter))
+    policyAliases.some((alias) => isReadPathBlocked(alias, params.fileFilter, params.readPolicy))
   ) {
     return [
       {
@@ -197,7 +201,7 @@ export async function readLogs(
   const jobFileMatch = path
     .basename(resolved.operationPath)
     .match(BACKGROUND_JOB_FILE_PATTERN)
-  if (jobFileMatch) {
+  if (jobFileMatch && getFilesystemSandbox(params.readPolicy).mode === 'project') {
     const jobId = jobFileMatch[1]
     const job = getBackgroundJob(jobId)
     if (job && !jobRegistry.assertOwned(job.jobId, params.owner).ok) {

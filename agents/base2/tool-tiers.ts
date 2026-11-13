@@ -48,8 +48,9 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'end_turn',
   'find_files',
   'find_files_matching_content',
+  'find_references',
   'git_status',
-  'git_branch',
+  'go_to_definition',
   'get_task',
   'get_change_review_bundle',
   'inspect_workspace',
@@ -61,11 +62,11 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'inspect_feature_completeness',
   'evaluate_audit_coverage',
   'glob',
-  'kill_job',
   'list_directory',
   'list_jobs',
   'lookup_agent_info',
   'query_index',
+  'hover_type',
   'recall_context',
   'record_decision',
   'read_docs',
@@ -75,23 +76,21 @@ export const MODE_NEUTRAL_TOOL_NAMES = [
   'read_logs',
   'read_outline',
   'read_subtree',
-  'replace_range',
-  'rewrite_symbol',
   'render_ui',
-  'run_file_change_hooks',
   'set_messages',
   'set_output',
   'skill',
   'spawn_agents',
   'spawn_agent_inline',
-  'str_replace',
   'suggest_followups',
   'task_completed',
   'think_deeply',
   'update_plan_status',
   'update_subgoal',
   'web_search',
-  'write_file',
+  'workspace_symbol',
+  // Plan artifact sink (runtime-derived .agents/sessions/*/findings path),
+  // allowed in plan mode like create_plan.
   'write_audit_findings',
 ] as const satisfies readonly AllToolNames[]
 
@@ -107,6 +106,19 @@ export const MODE_GATED_TOOL_NAMES = [
   'edit_3d_asset',
   'run_targeted_validation',
   'run_terminal_command',
+  // Plan mode is read-only (N03): every plan-refused tool from
+  // common/src/tools/plan-mode-policy.ts, plus kill_job (the plan root starts
+  // no jobs, and the runtime refuses killing jobs outside the plan lineage).
+  'code_action',
+  'extract_symbol',
+  'git_branch',
+  'kill_job',
+  'replace_range',
+  'rename_symbol',
+  'rewrite_symbol',
+  'run_file_change_hooks',
+  'str_replace',
+  'write_file',
 ] as const satisfies readonly AllToolNames[]
 
 const MODE_NEUTRAL_ALLOWED: ReadonlySet<AllToolNames> = new Set(
@@ -126,6 +138,17 @@ export function modeAllowsTool(name: AllToolNames, gates: ModeGates): boolean {
       return !gates.planOnly
     case 'run_terminal_command':
       return !gates.planOnly && gates.executePlan
+    case 'code_action':
+    case 'extract_symbol':
+    case 'git_branch':
+    case 'kill_job':
+    case 'replace_range':
+    case 'rename_symbol':
+    case 'rewrite_symbol':
+    case 'run_file_change_hooks':
+    case 'str_replace':
+    case 'write_file':
+      return !gates.planOnly
     // M1-T6 fail-closed default: only names with an explicit MODE_NEUTRAL
     // policy pass. An unlisted tool (e.g. a future ToolName added to common
     // without updating this policy) is denied in every mode.
@@ -177,14 +200,18 @@ export function resolveModelToolNames(
   }
   const unlocked = new Set<UnlockedToolTier>(unlockedTiers)
   // Deduped so a name listed in both CORE and a tier surfaces exactly once.
-  return [
-    ...new Set<AllToolNames>([
-      ...BASE2_CORE_TOOL_NAMES,
-      // Single pass over the canonical tier order: no intermediate filtered
-      // array, and locked tiers contribute nothing.
-      ...NON_CORE_TIERS.flatMap((tier) =>
-        unlocked.has(tier) ? BASE2_TIER_TOOL_NAMES[tier] : [],
-      ),
-    ]),
-  ].filter((name) => modeAllowsTool(name, gates))
+  // The source name arrays are `as const` readonly literal tuples; a readonly
+  // array cannot spread into a mutable AllToolNames[], and the flatMap union
+  // defeats the Set constructor overload. Concatenate instead: concat widens
+  // each readonly ToolName tuple to AllToolNames cleanly, and Set dedupes.
+  const combined = (BASE2_CORE_TOOL_NAMES as readonly AllToolNames[]).concat(
+    // Single pass over the canonical tier order: no intermediate filtered
+    // array, and locked tiers contribute nothing.
+    ...NON_CORE_TIERS.flatMap((tier): readonly AllToolNames[] =>
+      unlocked.has(tier) ? BASE2_TIER_TOOL_NAMES[tier] : [],
+    ),
+  )
+  return [...new Set<AllToolNames>(combined)].filter((name): name is AllToolNames =>
+    modeAllowsTool(name, gates),
+  )
 }

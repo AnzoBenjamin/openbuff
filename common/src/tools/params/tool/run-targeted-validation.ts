@@ -11,11 +11,17 @@ export const runTargetedValidationParams = {
   toolName,
   endsAgentStep,
   description:
-    'Runs validation selected for an explicit file/artifact scope and expected change-review snapshot. Fails closed when the snapshot is stale or changes during validation, and returns structured scoped evidence.',
+    'Runs configured validation hooks selected by the supplied files against an expected change-review snapshot. artifact_kinds are labels returned in the evidence; they do not select or filter hooks. Fails closed when the snapshot is stale or changes during validation, and returns structured scoped evidence.',
   inputSchema: z.object({
     snapshot_id: z.string().min(1),
     files: z.array(z.string().min(1)).min(1),
-    artifact_kinds: z.array(z.string().min(1)).default([]).optional(),
+    artifact_kinds: z
+      .array(z.string().min(1))
+      .default([])
+      .optional()
+      .describe(
+        'Optional labels echoed in the result; hook selection depends on files, not these labels.',
+      ),
   }),
   outputSchema: jsonToolResultSchema(
     z.object({

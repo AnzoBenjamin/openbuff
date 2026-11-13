@@ -5,6 +5,11 @@ import {
   getContentHash,
 } from '@codebuff/common/util/content-hash'
 import { describe, expect, it } from 'bun:test'
+import {
+  captureTextDocument,
+  getRawLineSpan,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 import { processEditTransaction } from '../process-edit-transaction'
 import { resolveOccurrenceRangeInCapabilityRange } from '../structural-read'
@@ -27,6 +32,7 @@ function readAuthorization(params: {
   path: string
   startLine: number
   endLine: number
+  /** Complete exact source; offsets and hashes must come from the real document. */
   content: string
   issuer?: { projectId: string; runId: string }
 }) {
@@ -37,7 +43,14 @@ function readAuthorization(params: {
     content,
     issuer = defaultReadCapabilityIssuer,
   } = params
-  const capabilityHash = getContentHash(content)
+  const document = captureTextDocument(content)
+  const span = getRawLineSpan(document, startLine, endLine)
+  const capabilityHash = getContentHash(
+    document.observation.slice(
+      span.startObservationOffset,
+      span.endObservationOffset,
+    ),
+  )
   return {
     capabilityStartLine: startLine,
     capabilityEndLine: endLine,
@@ -47,6 +60,7 @@ function readAuthorization(params: {
       endLine,
       hash: capabilityHash,
       scope: { ...issuer, path },
+      rawBasis: getRawReadBasis(document, startLine, endLine, 'lines'),
     }),
   }
 }
@@ -292,7 +306,7 @@ describe('occurrence-scoped replace_range in processEditTransaction', () => {
             path: 'src/other.ts',
             startLine: 1,
             endLine: 1,
-            content: 'unchanged',
+            content: 'unchanged\n',
             issuer,
           }),
           startLine: 1,
@@ -367,7 +381,7 @@ describe('occurrence-scoped replace_range in processEditTransaction', () => {
       path: 'src/file.ts',
       startLine: 3,
       endLine: 5,
-      content: ['y', 'target', 'z'].join('\n'),
+      content: initial,
       issuer,
     })
 

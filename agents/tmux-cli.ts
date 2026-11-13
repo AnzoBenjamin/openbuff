@@ -153,7 +153,7 @@ const definition: AgentDefinition = {
         command: {
           type: 'string',
           description:
-            'The CLI command to start in the tmux session (e.g., "python app.py", "node server.js", "my-cli --interactive")',
+            'REQUIRED. The CLI command to start in the tmux session (e.g., "python app.py", "node server.js", "my-cli --interactive"). Omitting it fails the run with overallStatus failure.',
         },
       },
     },
@@ -393,7 +393,7 @@ case "$CMD" in
     SEQ_FILE="$CAPTURE_DIR/.seq"
     # The counter file is untrusted input: bash arithmetic evaluates command
     # substitution inside array subscripts, so validate before any arithmetic.
-    SEQ=$(cat "$SEQ_FILE" 2>/dev/null)
+    SEQ=$(cat "$SEQ_FILE" 2>/dev/null || echo 0)
     [[ $SEQ =~ ^[0-9]+$ ]] || SEQ=0
     SEQ=$((SEQ + 1))
     echo "$SEQ" > "$SEQ_FILE"
@@ -466,7 +466,7 @@ esac
         input: {
           overallStatus: 'failure',
           summary:
-            'No command provided. Pass params.command with the CLI command to start.',
+            'No command provided. params.command is REQUIRED: pass the CLI command to start in the tmux session (e.g. "bun run dev") and re-spawn.',
           sessionName: '',
           scriptIssues: [],
           captures: [],
@@ -762,7 +762,7 @@ esac
             sessionName +
             "' >/dev/null 2>&1; rm -f '" +
             helperPath +
-            "'>",
+            "'",
           timeout_seconds: 15,
         },
         includeToolCall: false,

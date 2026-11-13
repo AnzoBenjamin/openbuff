@@ -4,6 +4,8 @@ import { immer } from 'zustand/middleware/immer'
 
 import { AGENT_MODES } from '../utils/constants'
 import { clamp } from '../utils/math'
+import { RunStateSnapshot } from '../utils/conversation-fork'
+import { useOutputReaderStore } from './output-reader-store'
 import { loadModePreference, saveModePreference } from '../utils/settings'
 
 import type { ChatMessage, ContentBlock } from '../types/chat'
@@ -56,6 +58,7 @@ export type ChatStoreState = {
   streamingAgents: Set<string>
   focusedAgentId: string | null
   inputValue: string
+  inputRevision: number
   cursorPosition: number
   lastEditDueToNav: boolean
   inputFocused: boolean
@@ -84,6 +87,8 @@ export type ChatStoreState = {
   pastMessageSnapshots: ChatMessage[][]
   /** Snapshots captured by undoing, available for /redo */
   futureMessageSnapshots: ChatMessage[][]
+  pastRunStates: RunStateSnapshot[]
+  futureRunStates: RunStateSnapshot[]
 }
 
 const findLatestFollowupInBlocks = (
@@ -156,6 +161,12 @@ type ChatStoreActions = {
   addPendingAttachment: (attachment: PendingAttachment) => void
   removePendingAttachment: (id: string) => void
   clearPendingAttachments: () => void
+  /**
+   * Atomic drain: returns the queued attachments and clears them inside a
+   * single store transaction (reliability finding
+   * pending-attachments-and-bash-messages-non-atomic-drain).
+   */
+  drainPendingAttachments: () => PendingAttachment[]
   // Convenience aliases for backwards compatibility
   addPendingImage: (image: Omit<PendingImageAttachment, 'kind'>) => void
   removePendingImage: (path: string) => void
@@ -175,6 +186,12 @@ type ChatStoreActions = {
   ) => void
   removePendingBashMessage: (id: string) => void
   clearPendingBashMessages: () => void
+  /**
+   * Atomic drain: returns the queued bash messages and clears them inside a
+   * single store transaction (reliability finding
+   * pending-attachments-and-bash-messages-non-atomic-drain).
+   */
+  drainPendingBashMessages: () => PendingBashMessage[]
   setSuggestedFollowups: (state: SuggestedFollowupsState | null) => void
   markFollowupClicked: (toolCallId: string, index: number) => void
   pushMessageSnapshot: () => void
@@ -188,15 +205,37 @@ type ChatStore = ChatStoreState & ChatStoreActions
 const generateSessionId = () => crypto.randomUUID()
 
 /**
+ * Retention bound for past message snapshots. Mirrors the drop-oldest
+ * mechanism of turn-snapshots.ts MAX_RETAINED_SNAPSHOTS (50), scaled down for
+ * message snapshots because each entry holds a deep-cloned message list in
+ * memory rather than a git ref.
+ */
+export const MAX_PAST_MESSAGE_SNAPSHOTS = 20
+
+/**
  * Deep-clone the current message list so subsequent immer mutations on the live
  * `messages` array cannot mutate a stored snapshot. Uses structuredClone
  * (available on Node 17+/Bun) with a JSON fallback for older runtimes.
+ *
+ * metadata.runState is REPLACED with undefined rather than cloned: a completed
+ * message's RunState body is the transcript-sized tree this clone exists to
+ * avoid copying, and undo/redo restore message lists for rendering only —
+ * anything that needs the run state reads the live session state
+ * (store.runState / previousRunState), never a snapshot.
  */
 const cloneMessageSnapshot = (messages: ChatMessage[]): ChatMessage[] => {
-  if (typeof structuredClone === 'function') {
-    return structuredClone(messages) as ChatMessage[]
-  }
-  return JSON.parse(JSON.stringify(messages)) as ChatMessage[]
+  // Project the large per-message historical run states out before cloning.
+  // Undo uses the store's current runState, not these historical copies.
+  const projected = messages.map((message) => {
+    if (message.metadata?.runState === undefined) return message
+    const { runState: _strippedRunState, ...restMetadata } = message.metadata
+    return { ...message, metadata: restMetadata }
+  })
+  const cloned =
+    typeof structuredClone === 'function'
+      ? (structuredClone(projected) as ChatMessage[])
+      : (JSON.parse(JSON.stringify(projected)) as ChatMessage[])
+  return cloned
 }
 
 const initialState: ChatStoreState = {
@@ -205,6 +244,7 @@ const initialState: ChatStoreState = {
   streamingAgents: new Set<string>(),
   focusedAgentId: null,
   inputValue: '',
+  inputRevision: 0,
   cursorPosition: 0,
   lastEditDueToNav: false,
   inputFocused: true, // Cursor visible by default
@@ -228,6 +268,8 @@ const initialState: ChatStoreState = {
   clickedFollowupsMap: new Map<string, Set<number>>(),
   pastMessageSnapshots: [],
   futureMessageSnapshots: [],
+  pastRunStates: [],
+  futureRunStates: [],
 }
 
 export const useChatStore = create<ChatStore>()(
@@ -241,14 +283,22 @@ export const useChatStore = create<ChatStore>()(
       }),
 
     pushMessageSnapshot: () => {
-      const { messages, pastMessageSnapshots } = useChatStore.getState()
+      const { messages, pastMessageSnapshots, runState } =
+        useChatStore.getState()
       const snapshot = cloneMessageSnapshot(messages)
+      const continuation = new RunStateSnapshot(runState)
       set((state) => {
-        state.pastMessageSnapshots = castDraft([
-          ...pastMessageSnapshots,
-          snapshot,
-        ])
+        const next = [...pastMessageSnapshots, snapshot]
+        // Drop-oldest bound: only the newest MAX_PAST_MESSAGE_SNAPSHOTS
+        // entries stay undoable;
+        state.pastMessageSnapshots = castDraft(
+          next.slice(-MAX_PAST_MESSAGE_SNAPSHOTS),
+        )
         state.futureMessageSnapshots = []
+        state.pastRunStates = [...state.pastRunStates, continuation].slice(
+          -MAX_PAST_MESSAGE_SNAPSHOTS,
+        )
+        state.futureRunStates = []
       })
     },
 
@@ -257,6 +307,9 @@ export const useChatStore = create<ChatStore>()(
         useChatStore.getState()
       if (pastMessageSnapshots.length === 0) return
       const futureSnapshot = cloneMessageSnapshot(messages)
+      const continuation = new RunStateSnapshot(
+        useChatStore.getState().runState,
+      )
       const restored = cloneMessageSnapshot(
         pastMessageSnapshots[pastMessageSnapshots.length - 1],
       )
@@ -269,6 +322,11 @@ export const useChatStore = create<ChatStore>()(
           pastMessageSnapshots.slice(0, -1),
         )
         state.messages = castDraft(restored)
+        state.futureRunStates = [...state.futureRunStates, continuation]
+        state.runState = castDraft(
+          state.pastRunStates.at(-1)?.getState() ?? null,
+        )
+        state.pastRunStates = state.pastRunStates.slice(0, -1)
       })
     },
 
@@ -277,6 +335,9 @@ export const useChatStore = create<ChatStore>()(
         useChatStore.getState()
       if (futureMessageSnapshots.length === 0) return
       const pastSnapshot = cloneMessageSnapshot(messages)
+      const continuation = new RunStateSnapshot(
+        useChatStore.getState().runState,
+      )
       const restored = cloneMessageSnapshot(
         futureMessageSnapshots[futureMessageSnapshots.length - 1],
       )
@@ -289,6 +350,13 @@ export const useChatStore = create<ChatStore>()(
           futureMessageSnapshots.slice(0, -1),
         )
         state.messages = castDraft(restored)
+        state.pastRunStates = [...state.pastRunStates, continuation].slice(
+          -MAX_PAST_MESSAGE_SNAPSHOTS,
+        )
+        state.runState = castDraft(
+          state.futureRunStates.at(-1)?.getState() ?? null,
+        )
+        state.futureRunStates = state.futureRunStates.slice(0, -1)
       })
     },
 
@@ -314,8 +382,15 @@ export const useChatStore = create<ChatStore>()(
                 lastEditDueToNav: state.lastEditDueToNav,
               })
             : value
+        const cursor = clamp(cursorPosition, 0, text.length)
+        if (
+          state.inputValue !== text ||
+          state.cursorPosition !== cursor ||
+          state.lastEditDueToNav !== lastEditDueToNav
+        )
+          state.inputRevision++
         state.inputValue = text
-        state.cursorPosition = clamp(cursorPosition, 0, text.length)
+        state.cursorPosition = cursor
         state.lastEditDueToNav = lastEditDueToNav
       }),
 
@@ -436,6 +511,23 @@ export const useChatStore = create<ChatStore>()(
         state.pendingAttachments = []
       }),
 
+    /**
+     * Atomic drain: returns the queued attachments and clears them inside
+     * one set() transaction (reliability finding
+     * pending-attachments-and-bash-messages-non-atomic-drain), so a
+     * concurrent reader can never observe the same pending item twice nor
+     * a read-then-cleared gap between the read and the clear.
+     */
+    drainPendingAttachments: () => {
+      let drained: PendingAttachment[] = []
+      set((state) => {
+        if (state.pendingAttachments.length === 0) return
+        drained = state.pendingAttachments.map((a) => ({ ...a }))
+        state.pendingAttachments = []
+      })
+      return drained
+    },
+
     // Backwards-compatible convenience methods that delegate to canonical functions
     addPendingImage: (image) => {
       useChatStore.getState().addPendingAttachment({ ...image, kind: 'image' })
@@ -550,6 +642,23 @@ export const useChatStore = create<ChatStore>()(
         state.pendingBashMessages = []
       }),
 
+    /**
+     * Atomic drain: returns the queued bash messages and clears them inside
+     * one set() transaction (reliability finding
+     * pending-attachments-and-bash-messages-non-atomic-drain), so a
+     * concurrent reader can never observe the same pending item twice nor
+     * a read-then-cleared gap between the read and the clear.
+     */
+    drainPendingBashMessages: () => {
+      let drained: PendingBashMessage[] = []
+      set((state) => {
+        if (state.pendingBashMessages.length === 0) return
+        drained = state.pendingBashMessages.map((m) => ({ ...m }))
+        state.pendingBashMessages = []
+      })
+      return drained
+    },
+
     setSuggestedFollowups: (suggestedFollowups) =>
       set((state) => {
         state.suggestedFollowups = suggestedFollowups
@@ -569,13 +678,15 @@ export const useChatStore = create<ChatStore>()(
         }
       }),
 
-    reset: () =>
+    reset: () => {
+      useOutputReaderStore.getState().close()
       set((state) => {
         state.chatSessionId = generateSessionId()
         state.messages = initialState.messages.slice()
         state.streamingAgents = new Set(initialState.streamingAgents)
         state.focusedAgentId = initialState.focusedAgentId
         state.inputValue = initialState.inputValue
+        state.inputRevision++
         state.cursorPosition = initialState.cursorPosition
         state.lastEditDueToNav = initialState.lastEditDueToNav
         state.inputFocused = initialState.inputFocused
@@ -601,6 +712,9 @@ export const useChatStore = create<ChatStore>()(
         state.clickedFollowupsMap = new Map<string, Set<number>>()
         state.pastMessageSnapshots = []
         state.futureMessageSnapshots = []
-      }),
+        state.pastRunStates = []
+        state.futureRunStates = []
+      })
+    },
   })),
 )

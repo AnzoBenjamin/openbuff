@@ -1,0 +1,1203 @@
+{
+  "shardId": "03-orchestration",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "03-orchestration",
+    "subsystemIds": [
+      "agents",
+      "packages",
+      "common",
+      "sdk",
+      "docs"
+    ],
+    "files": [
+      "agents/base2/base2.ts",
+      "agents/base2/gate-concurrency.ts",
+      "agents/base2/gate-reviewer.ts",
+      "agents/base2/gate-state.ts",
+      "agents/e2e/gate-lifecycle.e2e.test.ts",
+      "agents/general-agent/general-agent.ts",
+      "agents/package.json",
+      "agents/patterns/audit-codebase.md",
+      "common/src/testing/fixtures/agent-runtime.ts",
+      "common/src/types/agent-handoff.ts",
+      "common/src/types/orchestration-ledger.ts",
+      "docs/agents-and-tools.md",
+      "docs/request-flow.md",
+      "packages/agent-runtime/package.json",
+      "packages/agent-runtime/src/__tests__/budget-enforcement.test.ts",
+      "packages/agent-runtime/src/__tests__/loop-agent-steps-abort.test.ts",
+      "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts",
+      "packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts",
+      "packages/agent-runtime/src/__tests__/test-utils.ts",
+      "packages/agent-runtime/src/main-prompt.ts",
+      "packages/agent-runtime/src/run-agent-step.ts",
+      "packages/agent-runtime/src/run-programmatic-step.ts",
+      "packages/agent-runtime/src/supervision/__tests__/supervised-bridge-e2e.test.ts",
+      "packages/agent-runtime/src/supervision/child-entry.ts",
+      "packages/agent-runtime/src/supervision/process-supervisor.ts",
+      "packages/agent-runtime/src/supervision/supervised-spawn.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-output.test.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/task-completed.ts",
+      "packages/agent-runtime/src/util/agent-output.ts",
+      "packages/agent-runtime/src/util/background-agent-jobs.ts",
+      "packages/agent-runtime/src/util/budget-enforcement.ts",
+      "packages/agent-runtime/src/util/orchestration-ledger.ts",
+      "sdk/src/impl/agent-runtime.ts"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 450,
+      "to": 562
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 1150,
+      "to": 1205
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 1760,
+      "to": 2010
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 2438,
+      "to": 2489
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 2510,
+      "to": 2555
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 2678,
+      "to": 2764
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 5460,
+      "to": 5600
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 6220,
+      "to": 6380
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 7700,
+      "to": 7910
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 7990,
+      "to": 8140
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 12076,
+      "to": 12205
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 13220,
+      "to": 13365
+    },
+    {
+      "path": "agents/base2/gate-concurrency.ts",
+      "from": 1,
+      "to": 31
+    },
+    {
+      "path": "agents/base2/gate-reviewer.ts",
+      "from": 214,
+      "to": 315
+    },
+    {
+      "path": "agents/base2/gate-reviewer.ts",
+      "from": 630,
+      "to": 736
+    },
+    {
+      "path": "agents/base2/gate-state.ts",
+      "from": 210,
+      "to": 252
+    },
+    {
+      "path": "agents/base2/gate-state.ts",
+      "from": 327,
+      "to": 355
+    },
+    {
+      "path": "agents/base2/gate-state.ts",
+      "from": 380,
+      "to": 405
+    },
+    {
+      "path": "agents/e2e/gate-lifecycle.e2e.test.ts",
+      "from": 134,
+      "to": 310
+    },
+    {
+      "path": "agents/e2e/gate-lifecycle.e2e.test.ts",
+      "from": 1084,
+      "to": 1259
+    },
+    {
+      "path": "agents/general-agent/general-agent.ts",
+      "from": 1,
+      "to": 165
+    },
+    {
+      "path": "agents/package.json",
+      "from": 1,
+      "to": 11
+    },
+    {
+      "path": "agents/patterns/audit-codebase.md",
+      "from": 1,
+      "to": 296
+    },
+    {
+      "path": "common/src/testing/fixtures/agent-runtime.ts",
+      "from": 1,
+      "to": 331
+    },
+    {
+      "path": "common/src/types/agent-handoff.ts",
+      "from": 1,
+      "to": 250
+    },
+    {
+      "path": "common/src/types/orchestration-ledger.ts",
+      "from": 1,
+      "to": 96
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 509,
+      "to": 697
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 118,
+      "to": 157
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 258,
+      "to": 301
+    },
+    {
+      "path": "packages/agent-runtime/package.json",
+      "from": 1,
+      "to": 42
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/budget-enforcement.test.ts",
+      "from": 1,
+      "to": 27
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/budget-enforcement.test.ts",
+      "from": 300,
+      "to": 410
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/loop-agent-steps-abort.test.ts",
+      "from": 1,
+      "to": 176
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts",
+      "from": 1,
+      "to": 122
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts",
+      "from": 2573,
+      "to": 2643
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts",
+      "from": 1035,
+      "to": 1077
+    },
+    {
+      "path": "packages/agent-runtime/src/__tests__/test-utils.ts",
+      "from": 1,
+      "to": 74
+    },
+    {
+      "path": "packages/agent-runtime/src/main-prompt.ts",
+      "from": 1,
+      "to": 155
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 469,
+      "to": 535
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 590,
+      "to": 695
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 1220,
+      "to": 1348
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 1570,
+      "to": 1685
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 2300,
+      "to": 2385
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 2495,
+      "to": 2515
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 2820,
+      "to": 2920
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 3180,
+      "to": 3368
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 3560,
+      "to": 3730
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 3810,
+      "to": 3856
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 210,
+      "to": 307
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 388,
+      "to": 421
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 505,
+      "to": 526
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 580,
+      "to": 823
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 932,
+      "to": 960
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/__tests__/supervised-bridge-e2e.test.ts",
+      "from": 1,
+      "to": 143
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/child-entry.ts",
+      "from": 572,
+      "to": 605
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/child-entry.ts",
+      "from": 970,
+      "to": 1000
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/process-supervisor.ts",
+      "from": 225,
+      "to": 261
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/process-supervisor.ts",
+      "from": 305,
+      "to": 330
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/process-supervisor.ts",
+      "from": 365,
+      "to": 490
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/supervised-spawn.ts",
+      "from": 1,
+      "to": 160
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/supervised-spawn.ts",
+      "from": 350,
+      "to": 488
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/supervised-spawn.ts",
+      "from": 518,
+      "to": 720
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/supervised-spawn.ts",
+      "from": 722,
+      "to": 784
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-output.test.ts",
+      "from": 1063,
+      "to": 1187
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-output.test.ts",
+      "from": 1558,
+      "to": 1685
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts",
+      "from": 235,
+      "to": 291
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+      "from": 312,
+      "to": 460
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+      "from": 500,
+      "to": 618
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+      "from": 2405,
+      "to": 2538
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+      "from": 2614,
+      "to": 2801
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+      "from": 2973,
+      "to": 3100
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+      "from": 4189,
+      "to": 4264
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+      "from": 141,
+      "to": 320
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+      "from": 500,
+      "to": 605
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+      "from": 916,
+      "to": 1150
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/task-completed.ts",
+      "from": 1,
+      "to": 15
+    },
+    {
+      "path": "packages/agent-runtime/src/util/agent-output.ts",
+      "from": 1,
+      "to": 102
+    },
+    {
+      "path": "packages/agent-runtime/src/util/background-agent-jobs.ts",
+      "from": 377,
+      "to": 449
+    },
+    {
+      "path": "packages/agent-runtime/src/util/background-agent-jobs.ts",
+      "from": 802,
+      "to": 856
+    },
+    {
+      "path": "packages/agent-runtime/src/util/budget-enforcement.ts",
+      "from": 1,
+      "to": 127
+    },
+    {
+      "path": "packages/agent-runtime/src/util/orchestration-ledger.ts",
+      "from": 1,
+      "to": 137
+    },
+    {
+      "path": "sdk/src/impl/agent-runtime.ts",
+      "from": 52,
+      "to": 107
+    },
+    {
+      "path": "sdk/src/impl/agent-runtime.ts",
+      "from": 285,
+      "to": 341
+    }
+  ],
+  "capabilities": [
+    {
+      "id": "main-agent-selection-and-resumed-orchestration",
+      "maturity": "usable",
+      "assurance": "static trace",
+      "trace": {
+        "entrypoint": "mainPrompt(action)",
+        "implementation": "agentId/costMode template selection and loopAgentSteps",
+        "consumer": "SDK prompt action passes the existing mainAgentState",
+        "tests": "resumed loop setup in loop-agent-steps.test.ts; selection-specific cases not inspected",
+        "docs": "docs/request-flow.md:118-157"
+      },
+      "states": {
+        "failure": "unknown explicit agent and missing selected template throw actionable errors",
+        "loading": "loop rebuilds the prompt on agent-type change",
+        "empty": "optional prompt is passed through; no separate empty-objective contract inspected",
+        "cancellation": "same caller signal passes into loopAgentSteps",
+        "retry": "no silent agent substitution for invalid explicit agent",
+        "permission": "template resolution determines the tool/spawn surface"
+      },
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/main-prompt.ts",
+          "line": 93,
+          "detail": "Explicit agent selection precedes cost-mode routing."
+        },
+        {
+          "path": "packages/agent-runtime/src/main-prompt.ts",
+          "line": 127,
+          "detail": "Changing the selected type clears the cached system prompt."
+        },
+        {
+          "path": "packages/agent-runtime/src/main-prompt.ts",
+          "line": 141,
+          "detail": "The existing mainAgentState enters the real agent loop."
+        }
+      ],
+      "gaps": [
+        "Full SDK resume/replay and provider selection are assigned elsewhere."
+      ],
+      "strengths": [
+        "The model choice and orchestrator identity are separate; max mode keeps base2 rather than inventing a best-of-N control loop."
+      ]
+    },
+    {
+      "id": "programmatic-generator-lifecycle",
+      "maturity": "partial",
+      "assurance": "static trace + 2 DI/stub-only runtime failure probes",
+      "trace": {
+        "entrypoint": "loopAgentSteps -> runProgrammaticStep",
+        "implementation": "persistent per-run generator, STEP/STEP_ALL/GENERATE_N and tool yields",
+        "consumer": "base2 and general-agent handleSteps; the next LLM step consumes yielded context",
+        "tests": "run-programmatic-step.test.ts:1035-1077; evidence/03-orchestration-probes.test.ts",
+        "docs": "docs/request-flow.md:131-154 and docs/agents-and-tools.md:515"
+      },
+      "states": {
+        "failure": "invalid yields, generator exceptions, and tool errors are caught but lose their failed terminal status (03-F2)",
+        "loading": "generator is retained across STEP/STEP_ALL instead of restarted",
+        "empty": "missing structured output is corrected only for prompt-only templates",
+        "cancellation": "ordinary loop abort is recognized; generator-caught AbortError can falsely complete (03-F2)",
+        "retry": "programmatic iterations have a local guard; generators are not restarted by output-schema correction",
+        "permission": "untrusted stored executable strings are refused; yielded tools must be declared"
+      },
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+          "line": 388,
+          "detail": "Executable strings with untrusted executionSource are rejected before evaluation."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+          "line": 596,
+          "detail": "A bounded per-invocation iteration count rejects tool-only runaway generators."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 3842,
+          "detail": "Outer finally clears the retained generator on every exit."
+        }
+      ],
+      "gaps": [
+        "03-F2: errors are turned into endTurn=true and then a normal completed run.",
+        "A generator execution cap does not bound loops that repeatedly yield STEP after a budget stop."
+      ],
+      "strengths": [
+        "The generator continues from the prior yield and tool context is delivered to the model; outer cleanup covers failures that never return to the generator."
+      ]
+    },
+    {
+      "id": "foreground-and-background-delegation",
+      "maturity": "usable",
+      "assurance": "static trace; cited existing tests inspected, not executed in this shard",
+      "trace": {
+        "entrypoint": "spawn_agents and spawn_agent_inline",
+        "implementation": "whole-batch prevalidation; foreground allSettled; detached jobs and reconciliation",
+        "consumer": "base2 reviewer/repair/writer spawns and model-issued discovery work",
+        "tests": "spawn-process-supervision.test.ts and spawn-settle-fault-injection.test.ts were located; output/abort tests and inline consumer were read",
+        "docs": "docs/agents-and-tools.md:517 and concurrent gate isolation section"
+      },
+      "states": {
+        "failure": "invalid later batch entry is rejected before detached children launch; failed children retain failed receipts",
+        "loading": "subagent start/tool/result chunks carry nesting identity",
+        "empty": "empty child output is a retryable typed miss; zero-child batch behavior was not probed",
+        "cancellation": "background job controller and combined parent signal are wired",
+        "retry": "scheduler explains bounded capacity rejection; caller joins/cancels before more launches",
+        "permission": "template prevalidation and workspace path leases precede launch"
+      },
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+          "line": 223,
+          "detail": "Every child is validated before any launch."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+          "line": 514,
+          "detail": "Background batch capacity and job IDs are allocated atomically."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+          "line": 916,
+          "detail": "Foreground work uses allSettled before per-child settlement."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts",
+          "line": 262,
+          "detail": "Inline path lease is acquired before the spawn_started event."
+        }
+      ],
+      "gaps": [
+        "Foreground/background full success and fault-injection suites were not executed here. Receipt fidelity inherits 03-F2 for caught generator failures.",
+        "Terminal-process broker/workspace lane isolation and background resume delivery are outside this shard."
+      ],
+      "strengths": [
+        "One malformed child cannot silently launch only the earlier detached children; lease/evidence/ledger settlement is visibly designed to be exception-safe."
+      ]
+    },
+    {
+      "id": "typed-handoffs-and-child-receipts",
+      "maturity": "partial",
+      "assurance": "static trace + DI/stub-only receipt probe",
+      "trace": {
+        "entrypoint": "versioned handoff on spawn tools",
+        "implementation": "strict v1 schema, capability derivation, normalized runtime receipt",
+        "consumer": "spawn settle reconciles task memory and spawn_finished/receipt_reconciled ledger events",
+        "tests": "spawn-agent-utils-output.test.ts:1063-1187,1558-1685; diagnostic generator-error receipt probe",
+        "docs": "docs/agents-and-tools.md:579-695"
+      },
+      "states": {
+        "failure": "missing_output/schema_invalid/truncated/crashed are distinguished, but caught handleSteps failure becomes completed/ok (03-F2)",
+        "loading": "receipt appears when child settles; interim chunks are observational",
+        "empty": "null/no harvested answer is downgraded to partial with retryable error",
+        "cancellation": "schema supports cancelled; aborted generator can bypass that status",
+        "retry": "retryability is explicit for missing output/schema rejection",
+        "permission": "claims of changed files are compared with runtime mutation attestations"
+      },
+      "evidence": [
+        {
+          "path": "common/src/types/agent-handoff.ts",
+          "line": 89,
+          "detail": "A handoff is a strict schemaVersion 1 envelope, separate from free-form prompt params."
+        },
+        {
+          "path": "common/src/types/agent-handoff.ts",
+          "line": 137,
+          "detail": "Receipts encode five lifecycle states and optional typed transport outcome."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+          "line": 2693,
+          "detail": "Runtime derives missing-output evidence rather than trusting completion prose."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+          "line": 2989,
+          "detail": "Receipts enter task memory and paired orchestration events."
+        }
+      ],
+      "gaps": [
+        "03-F2 means the status contract is not authoritative on every runtime exit.",
+        "General-agent can be credited from a non-empty final answer without task_completed; task completion remains model judgment except strict audit persistence."
+      ],
+      "strengths": [
+        "Audit shards need a successful snapshot-bound findings artifact even when their final prose is non-empty; reviewer attestation core can survive transport truncation."
+      ]
+    },
+    {
+      "id": "child-permission-and-path-narrowing",
+      "maturity": "usable",
+      "assurance": "static trace; cited existing tests inspected, not executed in this shard",
+      "trace": {
+        "entrypoint": "validateVersionedAgentHandoff -> deriveSpawnTemplateCapabilities",
+        "implementation": "tool ceiling, filesystem-pattern narrowing and plan-only inheritance",
+        "consumer": "foreground/inline templates and tool execution checks",
+        "tests": "capability tests were not expanded beyond the selected output tests; static consumers were read",
+        "docs": "docs/agents-and-tools.md:579-595 describes reviewer contracts; selected gate-lifecycle.e2e.test.ts:288-310 supplies the least-privilege repair example. Full permission documentation was not traced."
+      },
+      "states": {
+        "failure": "legacy/incomplete handoff and attempted tool widening fail with actionable messages",
+        "loading": "narrowing occurs before launch; no partially launched child",
+        "empty": "empty permissions preserve static scope by explicit convention; they do not mean deny-all",
+        "cancellation": "no independent permission-cancellation policy",
+        "retry": "same invalid request cannot widen authority through retry",
+        "permission": "model-visible tools and requested file paths narrow; static hidden programmatic tools retain their own ceiling"
+      },
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+          "line": 449,
+          "detail": "Versioned envelope is validated with agentHandoffSchema."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+          "line": 507,
+          "detail": "Parent planOnly propagates into the child config and read-only terminal profile."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+          "line": 541,
+          "detail": "Only a closed read-only tool grant list may add tools outside the static set."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+          "line": 606,
+          "detail": "Static hidden programmatic tools are retained separately from model-visible tools."
+        }
+      ],
+      "gaps": [
+        "This is template and handoff authority, not a complete operating-system or terminal-sandbox security review.",
+        "Empty lists mean preserve authority; callers that need deny-all require an explicit contract."
+      ],
+      "strengths": [
+        "Repairs receive finding-file write paths and scoped reads; authority is established before child dispatch rather than delegated to model prose."
+      ]
+    },
+    {
+      "id": "process-supervision-and-bounded-crash-restarts",
+      "maturity": "partial",
+      "assurance": "static trace; cited existing tests inspected, not executed in this shard",
+      "trace": {
+        "entrypoint": "SDK getAgentRuntimeImpl default-supervision policy",
+        "implementation": "buildDefaultSpawnSupervised -> process supervisor -> child-entry with parent RPC bridge",
+        "consumer": "executeSubagent selects supervised or in-process route; validated supervised receipt enters existing settle chains",
+        "tests": "real-process supervised-bridge-e2e.test.ts:1-143 inspected; routing tests located; not executed here",
+        "docs": "SDK source comments and supervised-spawn module contract"
+      },
+      "states": {
+        "failure": "unsupported bridge deps and invalid/missing child envelopes settle honestly; transport crashes may restart",
+        "loading": "fresh owner-only sandbox, ready bridge, then process launch",
+        "empty": "missing_output/schema_invalid/truncated are not transport-crash restarts",
+        "cancellation": "parent signal kills the child process group; pruner deliberately stays in-process",
+        "retry": "SDK requests up to three restarts; backoff and fresh per-attempt sandbox are real; explicit deadline restarts can multiply spend",
+        "permission": "allowlisted child environment, 0700 directory, 0600 request file and parent-owned tool/LLM bridge"
+      },
+      "evidence": [
+        {
+          "path": "sdk/src/impl/agent-runtime.ts",
+          "line": 94,
+          "detail": "Default supervision is enabled only where launch support is present."
+        },
+        {
+          "path": "sdk/src/impl/agent-runtime.ts",
+          "line": 330,
+          "detail": "Production SDK supplies an explicit maxAttempts:3 restart policy."
+        },
+        {
+          "path": "packages/agent-runtime/src/supervision/supervised-spawn.ts",
+          "line": 417,
+          "detail": "Compiled Bun binary self-exec is supported on POSIX; the old compiled-CLI exclusion comments are stale."
+        },
+        {
+          "path": "packages/agent-runtime/src/supervision/supervised-spawn.ts",
+          "line": 654,
+          "detail": "Real launch uses self-exec or child-entry and the sanitized environment."
+        },
+        {
+          "path": "packages/agent-runtime/src/supervision/supervised-spawn.ts",
+          "line": 763,
+          "detail": "The bounded restart loop reruns full attempts and stops on an aborted parent signal."
+        }
+      ],
+      "gaps": [
+        "Node and Windows use the in-process fallback; this is an intentional runtime capability boundary, not an unwired Linux implementation.",
+        "No default wall-clock deadline is imposed. Explicit bounds are supported. No real process/compiled-binary/grandchild-reaping tests ran in this shard.",
+        "Context-pruner requires shared in-memory state and is explicitly exempt from process isolation."
+      ],
+      "strengths": [
+        "Supervision is production-wired, including compiled POSIX self-exec, rather than a named supervisor utility with no caller."
+      ]
+    },
+    {
+      "id": "parent-and-user-cancellation",
+      "maturity": "partial",
+      "assurance": "static trace + DI/stub-only cancellation probe",
+      "trace": {
+        "entrypoint": "loopAgentSteps.signal and background-agent cancel operation",
+        "implementation": "loop abort checkpoints, background controller, supervised process-group teardown",
+        "consumer": "SDK turn cancellation and nested child execution",
+        "tests": "loop-agent-steps-abort.test.ts:1-176 inspected; generator-abort diagnostic probe executed",
+        "docs": "supervised-spawn.ts module contract and background-job cancellation comments"
+      },
+      "states": {
+        "failure": "normal AbortError uses cancelled; caught programmatic AbortError follows completed path (03-F2)",
+        "loading": "running child/job remains visible and has a cancellation target",
+        "empty": "unknown job cancellation returns actionable error; already settled cancel is idempotent",
+        "cancellation": "parent and job signals combine; supervisor uses SIGTERM then SIGKILL; listeners removed at settlement",
+        "retry": "aborted parent prevents normal crash restart loop continuation",
+        "permission": "job cancellation is owner-scoped in the surrounding API; full ownership handler was not inspected"
+      },
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 2503,
+          "detail": "Abort is checked at loop entry."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 3697,
+          "detail": "Thrown aborts go through the cancellation finish path."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/background-agent-jobs.ts",
+          "line": 825,
+          "detail": "Cancel changes job state and aborts the owned controller."
+        },
+        {
+          "path": "packages/agent-runtime/src/supervision/process-supervisor.ts",
+          "line": 442,
+          "detail": "Parent abort commits process-group teardown; cleanup removes the listener."
+        }
+      ],
+      "gaps": [
+        "03-F2: cancellation raised from inside the active generator can be misclassified.",
+        "Real shell-grandchild cleanup and terminal job cancellation are outside executed evidence."
+      ],
+      "strengths": [
+        "Abort propagation is a real signal/process contract, with idempotent teardown and listener cleanup, not solely an instruction telling the child to stop."
+      ]
+    },
+    {
+      "id": "cost-token-and-fixed-step-budgets",
+      "maturity": "partial",
+      "assurance": "static trace + DI/stub-only cost-stop probe",
+      "trace": {
+        "entrypoint": "template maxCostCents/maxTokensPerTurn and AgentState.stepsRemaining",
+        "implementation": "pre-provider cumulative cost check, post-step cost/input check and explicit step-cap signal",
+        "consumer": "runAgentStep -> loopAgentSteps -> handleSteps and structured-output correction",
+        "tests": "budget-enforcement.test.ts:1-27,300-410 are helper tests; loop-agent-steps.test.ts:2573-2643 tests ordinary step-cap retry; diagnostic budget probe executes actual loop",
+        "docs": "budget-enforcement.ts:88-124 describes actual semantics and incomplete-stop message"
+      },
+      "states": {
+        "failure": "cost stop is folded into generic turn-complete; missing-output correction can spin (03-F1)",
+        "loading": "near-step-cap checkpoint nudge is emitted once",
+        "empty": "unset output with cost budget 0 triggered repeated stops without provider calls or step consumption",
+        "cancellation": "external abort terminates the demonstrated loop; a natural budget termination did not",
+        "retry": "step-cap stops are guarded; budget stops are not guarded in generic correction",
+        "permission": "limits are caller/template controls; no hidden default hard repair cap"
+      },
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 595,
+          "detail": "Fixed step cap persists a resumable assistant checkpoint and returns hitStepCap."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 663,
+          "detail": "Pre-call cost enforcement avoids spending one more provider call after the cumulative cap."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 1320,
+          "detail": "Post-step checks use accumulated cost and this step input tokens."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/budget-enforcement.ts",
+          "line": 95,
+          "detail": "maxTokensPerTurn is documented and implemented as per-step input size, not cumulative run tokens."
+        }
+      ],
+      "gaps": [
+        "03-F1: stop cause must be preserved through the output-correction and programmatic layers.",
+        "Cost is checked after a step has spent it and therefore is a soft cap. Input-size cap does not measure cumulative run tokens.",
+        "No shared pre-spend reservation across concurrent children or supervised crash attempts was established in this shard."
+      ],
+      "strengths": [
+        "Budget reasons are user-visible and explicitly say the task may be incomplete; step caps preserve resumable work and do not masquerade as absent assistant output."
+      ]
+    },
+    {
+      "id": "dirty-scope-and-content-bound-final-review",
+      "maturity": "usable",
+      "assurance": "static trace; cited existing tests inspected, not executed in this shard",
+      "trace": {
+        "entrypoint": "base2 sees completed model STEP after edits",
+        "implementation": "validation hooks, frozen dirty scope, reviewer attestation, repair, live content check",
+        "consumer": "canSuggestFollowups/final-response state and commit guard for task-owned dirty files",
+        "tests": "gate-lifecycle.e2e.test.ts:134-310; deterministic gen.next tests, not full provider E2E",
+        "docs": "docs/request-flow.md:258-301; docs/agents-and-tools.md:531-597"
+      },
+      "states": {
+        "failure": "hook/reviewer/attestation problems keep work pending; infrastructure bypass is explicit snapshot-bound user authority",
+        "loading": "gate progress is durable and published before reviewer launch",
+        "empty": "no reviewable sources gets an explicit skip; unreadable content never grants durable credit",
+        "cancellation": "pending state survives an interrupted turn, subject to the terminal-state bug in the runtime kernel",
+        "retry": "one reviewer-protocol repair retry; source repair uses progress/cycle guards and optional caps",
+        "permission": "concurrent foreign dirty paths are not absorbed solely because a terminal command ran"
+      },
+      "evidence": [
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 6295,
+          "detail": "Gate spawns the actual required reviewer with frozen files and fingerprint."
+        },
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 6340,
+          "detail": "Protocol mismatch causes one bounded reviewer-only retry, not source edits."
+        },
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 7718,
+          "detail": "Final scope and bytes must still equal the frozen reviewed snapshot or the gate reopens."
+        },
+        {
+          "path": "agents/base2/gate-concurrency.ts",
+          "line": 26,
+          "detail": "Dirty-path absorption requires task ownership/self mutation and excludes initial dirt and prior pass credit."
+        }
+      ],
+      "gaps": [
+        "A review is still model attestation; static file-byte matching is not semantic proof that a requirement was implemented.",
+        "Full bypass parser, auxiliary specialist waves, hook executor, and filesystem broker were not fully audited here."
+      ],
+      "strengths": [
+        "Current code defends against approving stale bytes, losing credited deleted files, and absorbing unrelated concurrent work. The pass is narrower and more trustworthy than a completion sentence."
+      ]
+    },
+    {
+      "id": "requirements-coverage-and-model-task-autonomy",
+      "maturity": "partial",
+      "assurance": "static trace; cited existing tests inspected, not executed in this shard",
+      "trace": {
+        "entrypoint": "structured reviewer fields and declared workflow todos",
+        "implementation": "hard in-scope requirement/coverage rules and soft parent workflow continuation notice",
+        "consumer": "base2 chooses repair/re-review versus current-edit finalization; intelligent model owns remaining parent duties",
+        "tests": "gate-lifecycle.e2e.test.ts:1084-1259 explicitly distinguishes parent-owned and in-scope gaps",
+        "docs": "docs/agents-and-tools.md:599-686"
+      },
+      "states": {
+        "failure": "in-scope missing requirements, blocked dimensions and missing coverage remain blockers regardless of LOOKS_GOOD",
+        "loading": "remaining declared workflow appears in pinned state and gate-pass message",
+        "empty": "no declared todos leaves the normal finalization message",
+        "cancellation": "model may stop with a stated concrete reason; no whole-objective completion oracle was established",
+        "retry": "remaining implementation causes further edits and rearmed gates; parent-only duties are not sent to repair-editor",
+        "permission": "commit/push/operator work is left to the parent and applicable user authority"
+      },
+      "evidence": [
+        {
+          "path": "agents/e2e/gate-lifecycle.e2e.test.ts",
+          "line": 1125,
+          "detail": "Parent-owned Commit/push/CI gaps do not trigger source repair."
+        },
+        {
+          "path": "agents/e2e/gate-lifecycle.e2e.test.ts",
+          "line": 1216,
+          "detail": "An in-scope compatibility gap does remain blocking."
+        },
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 8110,
+          "detail": "Declared-work continuation is deliberately advisory, not a hard completion gate."
+        },
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 2517,
+          "detail": "Automatic test-writer now requires a test request as well as relevant source files."
+        },
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 2686,
+          "detail": "Doc-writer likewise requires a documentation request rather than firing for every source edit."
+        }
+      ],
+      "gaps": [
+        "The gate proves approval of the current edit set, not completion of every user objective. This distinction should remain visible in API status.",
+        "Selected docs still describe unconditional writer predicates and an old default docs target; the current source uses request-conditioned writers and source_files only.",
+        "Project command fallback has language heuristics; manifest/environment command-quality evidence belongs to the polyglot/environment shard."
+      ],
+      "strengths": [
+        "Parent workflow obligations are separated from source defects, so model autonomy is not replaced by repair loops that try to fix Git delivery duties in code."
+      ]
+    },
+    {
+      "id": "durable-gate-credit-and-pinned-open-work",
+      "maturity": "usable",
+      "assurance": "static trace; cited existing tests inspected, not executed in this shard",
+      "trace": {
+        "entrypoint": "resumed base2ActiveWork on a new turn",
+        "implementation": "JSON-safe state, per-file markers, exact fingerprint reuse and pinned unresolved snapshot",
+        "consumer": "next base2 loop and model context following compaction/resume",
+        "tests": "selected gate lifecycle asserts durable blocker state; full serialization/replay tests were not expanded",
+        "docs": "docs/request-flow.md:264-296 and docs/agents-and-tools.md:527-529"
+      },
+      "states": {
+        "failure": "legacy/missing fingerprint and unreadable markers refuse reuse; pass resets retry and specialist ledgers",
+        "loading": "pinned gate progress sends deltas when only the progress line changes",
+        "empty": "clean idle/no unresolved work emits no pinned block",
+        "cancellation": "pending file and blocker state survives turn interruption; journal replay engine is out of scope",
+        "retry": "same-files reuse requires exact fresh content fingerprint; new bytes reopen",
+        "permission": "commit/follow-up affordances stay blocked while task-owned dirty reviewable work remains unvalidated"
+      },
+      "evidence": [
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 13267,
+          "detail": "Durable reuse checks exact file set and attestable current fingerprint."
+        },
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 13340,
+          "detail": "Pending files, blockers, next action and active gate phase all force a pending pin."
+        },
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 7807,
+          "detail": "A gate pass clears old specialist completion credit rather than growing stale state forever."
+        },
+        {
+          "path": "agents/base2/gate-state.ts",
+          "line": 225,
+          "detail": "Credit markers remain JSON-serializable per-file data and missing markers fail closed."
+        }
+      ],
+      "gaps": [
+        "Full memory compaction/retrieval and durable journal replay were assigned elsewhere.",
+        "Pinned state makes required work available to the model; it cannot guarantee the model semantically uses it."
+      ],
+      "strengths": [
+        "Gate evidence is durable and content-aware; stale same-path reuse and transcript compaction do not automatically erase required repair work."
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "03-F1",
+      "title": "Cost-budget stops reenter missing-output correction without consuming the step cap",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "performance",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 681,
+          "detail": "Pre-budget return sets shouldEndTurn=true without hitStepCap or consuming stepsRemaining."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 3291,
+          "detail": "Non-reviewers default to no maximum missing-output retries."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 3309,
+          "detail": "Correction suppresses only hitStepCap stops; it cannot distinguish budget termination."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 3348,
+          "detail": "Correction resets shouldEndTurn=false, causing another pre-budget short circuit."
+        },
+        {
+          "path": "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts",
+          "line": 2573,
+          "detail": "Existing test explains why step-cap retries must not be resurrected, but covers ordinary provider steps rather than cost stop."
+        },
+        {
+          "path": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/03-orchestration-probes.json",
+          "line": 8,
+          "detail": "DI probe observed 3 cost-stop messages, 2 correction messages, zero provider calls, and stepsRemaining still 1; only probe-supplied abort ended it."
+        }
+      ],
+      "trigger": "Run a prompt-only non-reviewer template with outputSchema, no output, default maxMissingOutputRetries, maxCostCents=0 (or an already exhausted cost cap), and stepsRemaining>0.",
+      "consequence": "The intended terminal budget stop becomes an unbounded retry cycle with no LLM call and no step consumption. It repeatedly grows/compacts message history and occupies the run until cancellation; a fixed step cap does not bound it.",
+      "suggestedFix": "Carry a typed terminal reason from runAgentStep through loopAgentSteps and programmatic steps. Treat budget/step/cancellation stops as terminal incomplete outcomes and run schema correction only after model-requested completion; do not merely add another arbitrary retry limit.",
+      "acceptanceProbe": "Run the provider-free probe setup with one available step, unset output and maxCostCents=0, remove its observation-triggered abort, and assert one budget stop, zero provider calls, bounded messages, a naturally returned incomplete result and no successful terminal marker. Also cover a cap crossed after one real DI provider step and reviewer/non-reviewer variants."
+    },
+    {
+      "id": "03-F2",
+      "title": "Caught handleSteps errors and aborts are journaled and receipted as completed",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "error-handling",
+        "state-mutation",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+          "line": 749,
+          "detail": "Catch sets endTurn=true for all errors, appends an assistant error string and stores output.error."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+          "line": 794,
+          "detail": "It returns the normal programmatic result without propagating a failed/cancelled terminal reason."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 2855,
+          "detail": "The caller interprets endTurn as normal shouldEndTurn."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 3352,
+          "detail": "The loop breaks normally on that flag, bypassing failure/abort catch."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 3664,
+          "detail": "Normal exit writes a terminal completed step boundary."
+        },
+        {
+          "path": "packages/agent-runtime/src/run-agent-step.ts",
+          "line": 3678,
+          "detail": "Normal finishAgentRun is status completed."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+          "line": 2772,
+          "detail": "Without an explicit terminal failure, a non-mutation child defaults to completed."
+        },
+        {
+          "path": "packages/agent-runtime/src/supervision/child-entry.ts",
+          "line": 987,
+          "detail": "Supervised successful-loop settlement uses the same runtime receipt derivation."
+        },
+        {
+          "path": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/03-orchestration-probes.json",
+          "line": 25,
+          "detail": "DI exception probe observed completed finish, terminal completed journal, and completed/ok/errors=[] child receipt; abort probe observed the same successful finish with parent signal aborted."
+        }
+      ],
+      "trigger": "A programmatic generator throws, yields an invalid operation, or encounters an execution rejection inside the main runProgrammaticStep catch. A genuine parent abort thrown there follows the same path.",
+      "consequence": "The error text is visible, but the machine contract says success: journal replay treats the run as cleanly complete and the parent can receive a completed/ok receipt with no errors. A cancellation can likewise be recorded as completed, undermining task continuation and supervision decisions.",
+      "suggestedFix": "Use an explicit programmatic success/failure/cancellation result or rethrow into the loop terminal handler after preserving current state. The loop must finish as failed/cancelled, preserve pending work, avoid a successful terminal journal marker, and make runtime child receipts derive from that authoritative outcome.",
+      "acceptanceProbe": "Change the diagnostic exception/abort probes to require failed/cancelled finish statuses, no terminal completed boundary, and child receipts with failed/cancelled status and a typed error. Extend to a rejected awaited tool, partial edits before error, and real supervised bridge settlement; keep an ordinary successful generator control case."
+    }
+  ],
+  "domainAssessment": {
+    "security": "Inspected strict handoff validation, template ceilings, read-only plan inheritance, executable-string trust gate, owner-only supervision files/environment, and cancellation cleanup. No concrete exploit is established. Static hidden programmatic authority remains separate from handoff model-visible tools; broker/sandbox enforcement and full RPC attack surface were not audited.",
+    "correctness": "03-F1 and 03-F2 are dynamically confirmed on the real loop with injected dependencies. Current final-review scope/byte checks and strict missing-output receipt classification are substantial correctness strengths.",
+    "state-mutation": "Generator and signal cleanup, atomic batch job allocation, path-lease ordering, event reconciliation, per-file pass state and ledger resets were inspected. 03-F2 creates incorrect completed journal/state transitions on failures. No broader race claim or full workspace-lane verification is made.",
+    "error-handling": "Actionable prevalidation and typed child transport failures are wired. 03-F1 misroutes terminal budget stops into correction; 03-F2 consumes programmatic exceptions before failed/cancelled handling. Real retry backoff and explicit optional deadlines exist; default unbounded child lifetime is intentional.",
+    "performance": "Batch clone caching, bounded background concurrency, bounded receipt/ledger mechanisms, progress-delta pinning, parallel foreground settlement and marker reuse were observed. 03-F1 can grow history and keep CPU/context work alive without provider progress. No latency, throughput or memory benchmark was performed.",
+    "dependency-hygiene": "Read agent-runtime and agents manifests. Bun 1.3.5 is declared and used for the probes; runtime dependencies include workspace common, ai range, tokenizer ranges and pinned schema bridge library. Lockfile/advisory/pruned-install auditing was not done, so no package vulnerability or isolated-install claim is made.",
+    "test-coverage": "Existing typed receipt, step-cap output correction, abort and deterministic generator gate tests were read; real-process bridge tests were inspected but not run. The selected budget suite is helper-only, despite its picker label. New /tmp DI probes reproduce the missing budget-stop discriminator and failure-to-completion propagation; normal gateway/provider end-to-end assurance remains separate.",
+    "api-contract": "Strict v1 handoffs/receipts and additive optional fields preserve explicit wire shapes. 03-F1 violates the terminal budget control contract and 03-F2 violates completed/failed/cancelled meaning, even while schemas parse. Default Bun POSIX self-exec support is current; stale SDK/docs wording and request-conditioned writer semantics should be aligned with source."
+  },
+  "coverageLimits": [
+    "This is an orchestration vertical slice, not a full-line audit of base2.ts (15396 lines), run-agent-step.ts (3905 lines) or spawn-agent-utils.ts (4566 lines). Exact observed windows are listed; unobserved specialist waves, writer target/command selectors, bypass parsing, output compaction and mutation extraction remain limits.",
+    "All picker-selected ranges were inspected. Adjacent implementation and tests were read only to resolve the terminal-state and wiring hypotheses. Search-only test paths are not treated as full test inspection.",
+    "No provider request, network call, source fix, destructive action or project gate test execution was performed. Three /tmp DI/stub-only diagnostic tests ran on cached Bun 1.3.5 and passed their defect-observation assertions; this does not validate production happy paths.",
+    "The budget probe deliberately supplied cancellation after the third repeated stop to remain bounded. It demonstrates repeatability without step consumption; infinite duration and memory impact are inferred from the unbounded retry condition, not measured.",
+    "Native query_index/read_files audit tools were unavailable in this Codex session. The pinned native inventory and saved picker were used with rg and exact line reads; no unavailable tool call is claimed.",
+    "Provider adapters, context/memory quality, terminal/OS sandbox enforcement, SDK durable replay engine/workspace lanes, external model reliability, release performance and broad dependency advisories were assigned elsewhere or excluded.",
+    "Capability maturity describes implemented current paths, while assurance describes what was actually inspected/executed. Structural receipts do not prove semantic feature completeness or test adequacy."
+  ],
+  "recommendedPlanWork": [
+    {
+      "priority": "P0",
+      "work": "Define one authoritative terminal-outcome contract for the loop, programmatic steps, journals and child receipts; fix 03-F1 and 03-F2 through it.",
+      "acceptance": "Natural budget return is bounded without an injected abort; generator exceptions/aborts cannot publish completed journal/receipt status; pending task state remains resumable.",
+      "rationale": "A model needs trustworthy body state to decide whether to continue, retry or delegate. Parsing schemas cannot recover a terminal reason that the runtime discarded."
+    },
+    {
+      "priority": "P1",
+      "work": "Promote the /tmp probes into targeted runtime regressions and add a provider-free vertical generator -> tool -> spawn -> parent receipt matrix.",
+      "acceptance": "Cover successful generator, thrown/rejected tool, failure after an edit, unset/schema-invalid/truncated output, zero/crossed budget, user abort while awaiting work, foreground/background and supervised settlement.",
+      "rationale": "Helper checks and gen.next gate tests are useful but missed the cross-layer terminal-state contract."
+    },
+    {
+      "priority": "P1",
+      "work": "Make budget semantics and supervision support machine-readable and consistent with documentation. Decide explicitly whether a configured cost limit is a soft post-step cap or a shared pre-spend reservation.",
+      "acceptance": "The API reports per-step input versus cumulative tokens, per-attempt timeout/restart multiplication and Bun/POSIX versus Node/Windows process support; if hard aggregate limits are offered, concurrent children and restarts share measured reservations.",
+      "rationale": "Do not promise run-wide cost/token/isolation properties from limits that currently mean something narrower."
+    },
+    {
+      "priority": "P2",
+      "work": "Keep semantic task decisions in the model, while separating current-edit gate credit, remaining declared workflow and authoritative runtime termination in the control plane.",
+      "acceptance": "A green edit gate does not imply every user objective completed; outstanding model-declared work remains visible without converting parent Git/operator duties into source-repair blockers.",
+      "rationale": "The existing soft continuation notice is an appropriate autonomy boundary, but runtime status must describe it faithfully."
+    },
+    {
+      "priority": "P2",
+      "work": "Reduce orchestration maintenance coupling by extracting pure state transitions and generated adapters without changing first-party behavior. Align writer/routing documentation with current request-conditioned source.",
+      "acceptance": "Parity and generation freshness remain checked; the same vertical probes pass across base2 modes and custom programmatic agents; docs stop claiming unconditional writers or exclusion of compiled POSIX self-exec.",
+      "rationale": "The current large inline generator and several return/status surfaces made otherwise strong safeguards inconsistent. This is a maintainability recommendation, not a measured performance claim."
+    }
+  ],
+  "validation": {
+    "probeSource": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/03-orchestration-probes.test.ts",
+    "probeResult": "/home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/03-orchestration-probes.json",
+    "command": "/home/ben/.cache/openbuff-bun-1.3.5/bun test /home/ben/Code/CLI/openbuff/.omx/drafts/openbuff-body-review-2026-11-05/evidence/03-orchestration-probes.test.ts --timeout 15000",
+    "workingDirectory": "/tmp",
+    "testsPassed": 3,
+    "testsFailed": 0,
+    "providerRequests": 0,
+    "externalNetworkCalls": 0,
+    "sourceChanges": 0
+  }
+}

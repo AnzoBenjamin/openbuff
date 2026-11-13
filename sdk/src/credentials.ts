@@ -135,7 +135,7 @@ const writeCredentialsFileAtomic = (
  * Get the config directory path based on the environment.
  * Uses the clientEnv to determine the environment suffix.
  */
-type ConfigPathEnv = ClientEnv & {
+export type ConfigPathEnv = Partial<ClientEnv> & {
   OPENBUFF_CONFIG_DIR?: string
   XDG_CONFIG_HOME?: string
   APPDATA?: string
@@ -163,7 +163,7 @@ export const getHarnessStateDir = (
 /**
  * Get the credentials file path based on the environment.
  */
-export const getCredentialsPath = (clientEnv?: ClientEnv): string => {
+export const getCredentialsPath = (clientEnv?: ConfigPathEnv): string => {
   return path.join(getConfigDir(clientEnv), 'credentials.json')
 }
 
@@ -205,10 +205,10 @@ export interface ChatGptOAuthCredentials {
  * Environment variable takes precedence.
  */
 export const getChatGptOAuthCredentials = (
-  clientEnv?: ClientEnv,
+  clientEnv?: ConfigPathEnv,
 ): ChatGptOAuthCredentials | null => {
   // 1. Environment variable takes highest precedence
-  const envToken = getChatGptOAuthTokenFromEnv()
+  const envToken = getChatGptOAuthTokenFromEnv(clientEnv)
   if (envToken) {
     return {
       accessToken: envToken,
@@ -239,7 +239,7 @@ export const getChatGptOAuthCredentials = (
 
 export const saveChatGptOAuthCredentials = (
   credentials: ChatGptOAuthCredentials,
-  clientEnv?: ClientEnv,
+  clientEnv?: ConfigPathEnv,
 ): void => {
   const configDir = getConfigDir(clientEnv)
   const credentialsPath = getCredentialsPath(clientEnv)
@@ -307,7 +307,7 @@ const REFRESH_FAILURE_TTL_MS = 45_000
 const chatGptRefreshFailureAt = new Map<string, number>()
 
 export const refreshChatGptOAuthToken = (
-  clientEnv?: ClientEnv,
+  clientEnv?: ConfigPathEnv,
 ): Promise<ChatGptOAuthCredentials | null> => {
   // Compute the config-dir key FIRST so every map slot and the negative
   // cache are keyed consistently, before any credentials read/write (M2-T5).
@@ -399,7 +399,7 @@ export const refreshChatGptOAuthToken = (
 }
 
 export const getValidChatGptOAuthCredentials = async (
-  clientEnv?: ClientEnv,
+  clientEnv?: ConfigPathEnv,
 ): Promise<ChatGptOAuthCredentials | null> => {
   const credentials = getChatGptOAuthCredentials(clientEnv)
   if (!credentials) {

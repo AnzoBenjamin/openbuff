@@ -1,4 +1,12 @@
-import { convertJsonSchemaToZod } from 'zod-from-json-schema'
+import { z } from 'zod/v4'
+
+import {
+  assertZodSchemaTransportable,
+  jsonSchemaAllowsString,
+  jsonSchemaToZod,
+  projectHostToolInputSchema,
+  projectZodSchema,
+} from '../util/json-schema'
 
 import {
   DynamicAgentDefinitionSchema,
@@ -228,7 +236,7 @@ export function validateSingleAgent(params: {
     let outputSchema: AgentTemplate['outputSchema']
     if (validatedConfig.outputSchema) {
       try {
-        outputSchema = convertJsonSchemaToZod(validatedConfig.outputSchema)
+        outputSchema = jsonSchemaToZod(validatedConfig.outputSchema)
       } catch (error) {
         // Try to extract agent context for better error messages
         const agentContext = validatedConfig.id
@@ -304,7 +312,7 @@ function isValidGeneratorFunction(code: string): boolean {
 }
 
 /**
- * Convert JSON schema to Zod schema format using json-schema-to-zod.
+ * Compile JSON Schema into exact, nonmutating Zod validators.
  * This is done once during loading to avoid repeated conversions.
  * Throws descriptive errors for validation failures.
  */
@@ -327,18 +335,10 @@ function convertInputSchema(
           `Invalid inputSchema.prompt${fileContext}: Schema must be a valid non-empty JSON schema object. Found: ${typeof inputPromptSchema}`,
         )
       }
-      const promptZodSchema = convertJsonSchemaToZod(inputPromptSchema)
-      // Validate that the schema results in string or undefined
-      const testResult = promptZodSchema.safeParse('test')
-      const testUndefined = promptZodSchema.safeParse(undefined)
-
-      if (!testResult.success && !testUndefined.success) {
-        const errorDetails =
-          testResult.error?.issues?.[0]?.message || 'validation failed'
+      const promptZodSchema = jsonSchemaToZod(inputPromptSchema)
+      if (!jsonSchemaAllowsString(inputPromptSchema)) {
         throw new Error(
-          `Invalid inputSchema.prompt${fileContext}: Schema must allow string or undefined values. ` +
-            `Current schema validation error: ${errorDetails}. ` +
-            `Please ensure your JSON schema accepts string types.`,
+          `Invalid inputSchema.prompt${fileContext}: Schema must allow string values. Please ensure your JSON schema accepts string types.`,
         )
       }
 
@@ -349,7 +349,7 @@ function convertInputSchema(
         throw error
       }
 
-      // Handle json-schema-to-zod conversion errors
+      // Handle unsupported or invalid JSON Schema
       const errorMessage =
         error instanceof Error ? error.message : 'Unknown error'
       throw new Error(
@@ -370,7 +370,7 @@ function convertInputSchema(
           `Invalid inputSchema.params${fileContext}: Schema must be a valid non-empty JSON schema object. Found: ${typeof paramsSchema}`,
         )
       }
-      const paramsZodSchema = convertJsonSchemaToZod(paramsSchema)
+      const paramsZodSchema = jsonSchemaToZod(paramsSchema)
       result.params = paramsZodSchema
     } catch (error) {
       const errorMessage =
@@ -382,4 +382,286 @@ function convertInputSchema(
     }
   }
   return result
+}
+
+/**
+ * Detect a degraded zod-v4 "husk": an object that crossed a JSON.stringify
+ * boundary carrying zod's `~standard` standard-schema interface marker but
+ * none of the live internals (`_zod`, `safeParse`). `~standard` is zod-v4's
+ * runtime interface marker, not a JSON-Schema keyword, so a plain
+ * JSON-Schema object never carries it — keying detection on `~standard`
+ * (never on `def`, which legitimate JSON Schemas may contain) keeps real
+ * JSON Schema out of this path. A husk is neither a live schema nor
+ * trustworthy JSON Schema, and feeding it to the AI SDK's `asSchema` routes
+ * it to the zod-v3 converter, which reads `def.typeName` on undefined and
+ * crashes the spawn with "undefined is not an object (evaluating
+ * 'H.typeName')".
+ */
+export function isDegradedZodHusk(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const record = value as {
+    '~standard'?: unknown
+    _zod?: unknown
+    safeParse?: unknown
+  }
+  return (
+    Object.prototype.hasOwnProperty.call(record, '~standard') &&
+    record._zod === undefined &&
+    typeof record.safeParse !== 'function'
+  )
+}
+
+/** Whether both input and output projections can be represented as JSON Schema. */
+export function isRepresentableZodSchema(value: unknown): boolean {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  try {
+    z.toJSONSchema(value as z.ZodType, { io: 'input' })
+    z.toJSONSchema(value as z.ZodType, { io: 'output' })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Restore JSON Schema exactly; refuse degraded Zod internals explicitly. */
+export function coerceJsonSchemaMember(value: unknown): unknown {
+  if (isLiveZodSchema(value)) return value
+  if (isDegradedZodHusk(value)) {
+    throw new Error(
+      'Cannot restore degraded Zod schema: transport the original JSON Schema instead',
+    )
+  }
+  return jsonSchemaToZod(value)
+}
+
+/**
+ * Ensure every schema member of a resolved agent template is a zod schema
+ * (see coerceJsonSchemaMember). Runtime template resolution applies this so
+ * bundled, database, and bridged templates all reach the model surface with
+ * zod inputSchema.prompt / inputSchema.params / outputSchema members — the
+ * spawn tool input schema, structured output, and set-output parsing all read
+ * these members. Returns the original template when no member needs coercion.
+ */
+export function ensureAgentTemplateZodSchemas(
+  template: AgentTemplate,
+): AgentTemplate {
+  const inputSchema = template.inputSchema
+  const prompt =
+    inputSchema?.prompt !== undefined
+      ? (coerceJsonSchemaMember(
+          inputSchema.prompt,
+        ) as AgentTemplate['inputSchema']['prompt'])
+      : undefined
+  const params =
+    inputSchema?.params !== undefined
+      ? (coerceJsonSchemaMember(
+          inputSchema.params,
+        ) as AgentTemplate['inputSchema']['params'])
+      : undefined
+  const outputSchema =
+    template.outputSchema !== undefined
+      ? (coerceJsonSchemaMember(
+          template.outputSchema,
+        ) as AgentTemplate['outputSchema'])
+      : undefined
+  if (
+    prompt === inputSchema?.prompt &&
+    params === inputSchema?.params &&
+    outputSchema === template.outputSchema
+  ) {
+    return template
+  }
+  return {
+    ...template,
+    inputSchema: {
+      ...(prompt !== undefined ? { prompt } : {}),
+      ...(params !== undefined ? { params } : {}),
+    },
+    ...(outputSchema !== undefined ? { outputSchema } : {}),
+  }
+}
+
+/**
+ * Detects the AI SDK's `jsonSchema()` wrapper: `{_type: 'jsonSchema',
+ * jsonSchema: <schema>, validate?: <fn>}`. `validate` is undefined in the
+ * default wrapper and none of the marker members survives a JSON round trip
+ * except `jsonSchema` — so over a JSON transport the envelope collapses to
+ * `{jsonSchema: <schema>}`, whose literal `jsonSchema` key Ajv's strict
+ * keywords reject as `unknown keyword: jsonSchema` (crashing every
+ * supervised spawn whose tool set crosses the bridge). Detection requires
+ * every own enumerable key to be one of the three envelope members (and
+ * `_type`, when present, to be exactly `'jsonSchema'`) so ordinary data that
+ * merely carries a property named `jsonSchema` is never mistaken for an
+ * envelope.
+ */
+export function isAiSdkJsonSchemaEnvelope(
+  value: unknown,
+): value is {
+  _type?: unknown
+  jsonSchema: Record<string, unknown>
+  validate?: unknown
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  // The LIVE wrapper carries `_type` (and `validate`) as own keys whose
+  // values are `undefined` — only the JSON wire form collapses them away.
+  // Accept the live shape too so detection fires BEFORE the walk (a plain
+  // walk of the live envelope would leave `_type`/`validate` holes and
+  // deliver the inner schema nested under a literal `jsonSchema` key).
+  if (
+    '_type' in record &&
+    record._type !== 'jsonSchema' &&
+    record._type !== undefined
+  )
+    return false
+  const inner = record.jsonSchema
+  if (!inner || typeof inner !== 'object' || Array.isArray(inner)) return false
+  for (const key of Object.keys(record)) {
+    if (key !== '_type' && key !== 'jsonSchema' && key !== 'validate')
+      return false
+  }
+  return true
+}
+
+export function isLiveZodSchema(value: unknown): value is z.ZodType {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+  const record = value as { _zod?: { run?: unknown }; safeParse?: unknown }
+  return (
+    typeof record.safeParse === 'function' &&
+    typeof record._zod?.run === 'function'
+  )
+}
+
+/**
+ * Serializes one schema member for a JSON transport boundary (the supervised
+ * spawn request file and the bridge wire copy).
+ *
+ * Fail-closed is reserved for CORRUPT shapes: degraded zod husks (their
+ * executable internals must never be walked across) and values that are
+ * not valid JSON Schema. Live zod members instead degrade TIER-FIRST,
+ * because every transported copy in these pipelines is the
+ * provider-facing ADVERTISEMENT — execution stays authoritative against
+ * each side's own live schemas (the same contract
+ * `projectHostToolInputSchema` already publishes for host-validated tools):
+ *   1. EXACT: `assertZodSchemaTransportable` plus a projection that
+ *      round-trips back to an equivalent validator.
+ *   2. ADVISORY: `projectHostToolInputSchema` strips semantics JSON Schema
+ *      cannot carry faithfully (UTF-16 length units, coercion/overwrites,
+ *      flagged regexes) but must itself reify.
+ *   3. `true`: a member whose projection cannot reify at all (e.g.
+ *      recursive schemas) advertises unconstrained rather than killing the
+ *      spawn — refusing here crashed every supervised child at its first
+ *      prompt, the reviewer gate included.
+ */
+export function serializeSchemaMemberForTransport(
+  value: unknown,
+  io: 'input' | 'output',
+): unknown {
+  if (value === undefined) return value
+  if (!isLiveZodSchema(value)) {
+    if (isDegradedZodHusk(value))
+      throw new Error('Cannot transport degraded Zod schema internals')
+    try {
+      jsonSchemaToZod(value)
+    } catch (error) {
+      throw new Error(
+        `Cannot transport ${io} schema: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      )
+    }
+    return value
+  }
+  try {
+    assertZodSchemaTransportable(value as z.ZodType)
+    const converted = projectZodSchema(value as z.ZodType, io)
+    jsonSchemaToZod(converted)
+    return converted
+  } catch {
+    // Tier 2: the in-process advisory advertisement; it must still REIFY so
+    // the receiving side never refuses the prompt over this member.
+    try {
+      const advisory = projectHostToolInputSchema(value as z.ZodType)
+      jsonSchemaToZod(advisory)
+      return advisory
+    } catch {
+      // Tier 3: accept-anything advertisement (tradeoff documented above).
+      return true
+    }
+  }
+}
+
+/** Serialize schema members faithfully and refuse unrepresentable behavior. */
+export function serializeAgentTemplatesForTransport(
+  templates: Record<string, AgentTemplate>,
+): Record<string, AgentTemplate> {
+  const transported: Record<string, AgentTemplate> = {}
+  // Null-safe: an unset localAgentTemplates (top-level orchestrators, tests,
+  // some programmatic spawns) must not crash the transport serializer — an
+  // absent catalog is an empty one.
+  if (templates == null) {
+    return transported
+  }
+  for (const [id, template] of Object.entries(templates)) {
+    const inputSchema = template.inputSchema
+    const serializeMember = (
+      value: unknown,
+      io: 'input' | 'output',
+      member: string,
+    ) => {
+      try {
+        return serializeSchemaMemberForTransport(value, io)
+      } catch (error) {
+        throw new Error(
+          `Agent "${id}" ${member}: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        )
+      }
+    }
+    const prompt = serializeMember(
+      inputSchema?.prompt,
+      'input',
+      'inputSchema.prompt',
+    ) as AgentTemplate['inputSchema']['prompt']
+    const params = serializeMember(
+      inputSchema?.params,
+      'input',
+      'inputSchema.params',
+    ) as AgentTemplate['inputSchema']['params']
+    const outputSchema = serializeMember(
+      template.outputSchema,
+      'output',
+      'outputSchema',
+    ) as AgentTemplate['outputSchema']
+    const handleSteps =
+      typeof template.handleSteps === 'function'
+        ? template.handleSteps.toString()
+        : template.handleSteps
+    const changed =
+      prompt !== inputSchema?.prompt ||
+      params !== inputSchema?.params ||
+      outputSchema !== template.outputSchema ||
+      handleSteps !== template.handleSteps
+    if (!changed) {
+      transported[id] = template
+      continue
+    }
+    transported[id] = {
+      ...template,
+      inputSchema: {
+        ...(prompt !== undefined ? { prompt } : {}),
+        ...(params !== undefined ? { params } : {}),
+      },
+      ...(outputSchema !== undefined ? { outputSchema } : {}),
+      ...(handleSteps !== undefined ? { handleSteps } : {}),
+    }
+  }
+  return transported
 }

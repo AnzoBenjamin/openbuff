@@ -1,17 +1,20 @@
-import { expect, test, beforeEach, afterEach } from 'bun:test'
+import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   writeFileSync,
   rmSync,
   existsSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { execSync } from 'node:child_process'
 
 import {
   runMemoryDriftGuard,
+  buildMarkdownSnapshot,
   formatMemoryDriftReport,
   checkPath,
   checkEdges,
@@ -25,6 +28,10 @@ import {
   checkTodoFixme,
   checkBrokenLink,
   checkTaskMemory,
+  loadReviewReceipt,
+  verifyReceiptCoversPair,
+  sha256FileHash,
+  setGitCommandForTest,
 } from '../memory-drift-guard'
 
 /**
@@ -138,6 +145,107 @@ afterEach(() => {
   }
 })
 
+test('B05 preimages and the closed failed-path diagnosis do not suppress adjacent live references', () => {
+  const evidence = 'docs/execution/body-roadmap/evidence'
+  const excludedPaths = [
+    `${evidence}/B05/implementation/description-preimages-1/docs/architecture.md`,
+    `${evidence}/B05/implementation/description-preimages-2/source/docs/request-flow.md`,
+    `${evidence}/B05/root-development/format-root-01/preimages/docs/architecture.md`,
+    `${evidence}/B05/root-development/format-root-02/preimages/docs/request-flow.md`,
+    `${evidence}/B05/root-development/format-root-03/preimages/docs/architecture.md`,
+    `${evidence}/B05/resume-20261108/root-repair-preimages/common/knowledge.md`,
+    `${evidence}/B05/resume-20261108/architect-review/runtime-ci-diagnosis-1.md`,
+  ]
+  const activePaths = [
+    `${evidence}/B05/implementation/REVIEW.md`,
+    `${evidence}/B05/implementation/description-preimages-3/docs/architecture.md`,
+    `${evidence}/B05/implementation/description-preimages-2-active/docs/architecture.md`,
+    `${evidence}/B05/root-development/format-root-03/preimages-active/docs/architecture.md`,
+    `${evidence}/B05/resume-20261108/root-repair-preimages-active/common/knowledge.md`,
+    `${evidence}/B05/resume-20261108/architect-review/runtime-ci-diagnosis-2.md`,
+    `${evidence}/B06/implementation/description-preimages-1/docs/architecture.md`,
+    'docs/preimages/docs/architecture.md',
+  ]
+  for (const path of [...excludedPaths, ...activePaths]) {
+    mkdirSync(dirname(join(tmpRoot, path)), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, path),
+      'See `sdk/src/missing.ts` and [missing](./missing.md).\n',
+    )
+  }
+  const snapshot = buildMarkdownSnapshot(tmpRoot)
+  for (const path of excludedPaths) {
+    expect(snapshot.files).not.toContain(join(tmpRoot, path))
+  }
+  for (const supplied of [undefined, snapshot]) {
+    for (const check of [checkPath, checkCrossFile, checkBrokenLink]) {
+      expect(check(tmpRoot, supplied).map((finding) => finding.path).sort()).toEqual(
+        [...activePaths].sort(),
+      )
+    }
+  }
+})
+
+test('B19 exact historical inputs preserve their bytes without suppressing active reference checks', () => {
+  const evidence = 'docs/execution/body-roadmap/evidence'
+  const archive = `${evidence}/B19/implementation/design-input-preimages`
+  const recovery = `${evidence}/B19/continuation-20261111/canonical-input-recovery-r1/files`
+  const excludedPaths = [
+    `${recovery}/docs/architecture.md`,
+    `${archive}/docs/architecture.md`,
+    `${archive}/docs/execution/body-roadmap/evidence/B19/design-20261108/DESIGN.md`,
+    `${evidence}/B19/design-20261108/DESIGN.md`,
+    `${evidence}/B19/design-review-20261108/review-r1.md`,
+    `${evidence}/B19/design-review-20261108/r2/review.md`,
+    `${evidence}/B19/implementation/checkpoints/state-before-preflight-11.md`,
+    `${evidence}/B19/implementation/independent-architecture-20261109/r3-preflight-11-v2/precheck.md`,
+  ]
+  const activePaths = [
+    `${recovery}-active/docs/architecture.md`,
+    `${evidence}/B19/continuation-20261111/canonical-input-recovery-r2/files/docs/architecture.md`,
+    `${evidence}/B20/continuation-20261111/canonical-input-recovery-r1/files/docs/architecture.md`,
+    `${evidence}/B19/implementation/REVIEW.md`,
+    `${archive}-active/docs/architecture.md`,
+    `${archive}-newer/docs/architecture.md`,
+    `${archive}-2/docs/architecture.md`,
+    `${archive}.md`,
+    `${evidence}/B20/implementation/design-input-preimages/docs/architecture.md`,
+    `${evidence}/B19/design-20261108-active/DESIGN.md`,
+    `${evidence}/B19/design-20261108/DESIGN-newer.md`,
+    `${evidence}/B19/design-revision-20261108-r2/DESIGN.md`,
+    `${evidence}/B19/design-review-20261108/review-r1-active.md`,
+    `${evidence}/B19/design-review-20261108/review-r2.md`,
+    `${evidence}/B19/design-review-20261108/r2/review-active.md`,
+    `${evidence}/B19/design-review-20261108/r3/review.md`,
+    `${evidence}/B19/implementation/checkpoints/state-before-preflight-11-active.md`,
+    `${evidence}/B19/implementation/checkpoints/state-before-preflight-12.md`,
+    `${evidence}/B19/implementation/independent-architecture-20261109/r3-preflight-11-v2/precheck-active.md`,
+    `${evidence}/B19/implementation/independent-architecture-20261109/r3-preflight-12-v2/precheck.md`,
+  ]
+  const text = 'See `sdk/src/missing.ts` and [missing](./missing.md).\n'
+  for (const path of [...excludedPaths, ...activePaths]) {
+    mkdirSync(dirname(join(tmpRoot, path)), { recursive: true })
+    writeFileSync(join(tmpRoot, path), text)
+  }
+  const snapshot = buildMarkdownSnapshot(tmpRoot)
+  for (const path of excludedPaths) {
+    expect(snapshot.files).not.toContain(join(tmpRoot, path))
+  }
+  for (const path of activePaths) {
+    expect(snapshot.files).toContain(join(tmpRoot, path))
+  }
+  for (const supplied of [undefined, snapshot]) {
+    for (const check of [checkPath, checkCrossFile, checkBrokenLink]) {
+      expect(check(tmpRoot, supplied).map((finding) => finding.path).sort()).toEqual(
+        [...activePaths].sort(),
+      )
+    }
+  }
+  for (const path of excludedPaths) {
+    expect(readFileSync(join(tmpRoot, path), 'utf8')).toBe(text)
+  }
+})
+
 /** Initialize a temp git repo with a deterministic identity for commits. */
 function initGitRepo(root: string): void {
   execSync('git init -q', { cwd: root })
@@ -179,6 +287,59 @@ test('path checker flags missing backtick-quoted repo-relative path', () => {
   const findings = checkPath(tmpRoot)
   expect(findings.length).toBeGreaterThanOrEqual(1)
   expect(findings.some((f) => f.message.includes('src/missing.ts'))).toBe(true)
+})
+
+test('path checker accepts declared build outputs before generation and checks neighboring paths', () => {
+  mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
+  mkdirSync(join(tmpRoot, 'cli/scripts'), { recursive: true })
+  mkdirSync(join(tmpRoot, 'sdk/scripts'), { recursive: true })
+  writeFileSync(
+    join(tmpRoot, 'cli/scripts/prebuild-agents.ts'),
+    '// producer\n',
+  )
+  writeFileSync(join(tmpRoot, 'sdk/scripts/build.ts'), '// producer\n')
+  const generated = [
+    'cli/src/agents/bundled-agents.generated.ts',
+    'sdk/dist/index.mjs',
+    'sdk/dist/index.d.ts',
+  ]
+  const missing = [
+    'cli/src/agents/unknown.generated.ts',
+    'sdk/dist/unknown.mjs',
+    'sdk/src/missing.ts',
+  ]
+  writeFileSync(
+    join(tmpRoot, 'docs/notes.md'),
+    [...generated, ...missing].map((path) => `See \`${path}\`.\n`).join(''),
+  )
+
+  const findings = checkPath(tmpRoot)
+  expect(findings.map((finding) => finding.message)).toEqual(
+    missing.map((path) => `referenced path \`${path}\` does not exist`),
+  )
+  for (const path of generated) {
+    expect(existsSync(join(tmpRoot, path))).toBe(false)
+  }
+})
+
+test('path checker flags declared outputs when their producer is absent or a directory', () => {
+  mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
+  const generated = [
+    'cli/src/agents/bundled-agents.generated.ts',
+    'sdk/dist/index.mjs',
+    'sdk/dist/index.d.ts',
+  ]
+  writeFileSync(
+    join(tmpRoot, 'docs/notes.md'),
+    generated.map((path) => `See \`${path}\`.\n`).join(''),
+  )
+  expect(checkPath(tmpRoot)).toHaveLength(3)
+
+  mkdirSync(join(tmpRoot, 'cli/scripts/prebuild-agents.ts'), {
+    recursive: true,
+  })
+  mkdirSync(join(tmpRoot, 'sdk/scripts/build.ts'), { recursive: true })
+  expect(checkPath(tmpRoot)).toHaveLength(3)
 })
 
 test('edges checker flags missing architectural directory', () => {
@@ -750,6 +911,22 @@ test('memory-drift guard skips .bun-install cache directories', () => {
   expect(brokenFindings.some(touched)).toBe(false)
 })
 
+test('memory-drift guard does not flag links into gitignored roadmap evidence', () => {
+  // Expanded evidence is gitignored and only restored into disposable
+  // checkouts, so status docs may link to it without a local copy.
+  mkdirSync(join(tmpRoot, 'docs', 'execution', 'body-roadmap'), {
+    recursive: true,
+  })
+  writeFileSync(
+    join(tmpRoot, 'docs', 'execution', 'body-roadmap', 'STATE.md'),
+    '[receipt](evidence/B99/receipt.json) and [gone](./gone.md).\n',
+  )
+  const findings = checkBrokenLink(tmpRoot).filter((f) =>
+    f.path.endsWith('body-roadmap/STATE.md'),
+  )
+  expect(findings.map((f) => f.message)).toEqual(['broken link ./gone.md'])
+})
+
 test('memory-drift guard skips .agents/sessions plan-session markdown', () => {
   // Session plan artifacts under `.agents/sessions/` are local/runtime state
   // and must not be treated as repo knowledge (task commits exclude them).
@@ -788,6 +965,144 @@ test('memory-drift guard skips other SKIP_PATH_PREFIXES like evals/test-repos', 
   expect(pathFindings.some(touched)).toBe(false)
   expect(brokenFindings.some(touched)).toBe(false)
 })
+
+test('memory-drift guard skips the exact raw B30 snapshot while checking active neighboring docs', () => {
+  const archive =
+    'docs/execution/body-roadmap/evidence/B30/independent-review/source-snapshot'
+  const archivedPath = `${archive}/.agents/sessions/example/PLAN.md`
+  const activePaths = [
+    'docs/session-state.md',
+    'common/knowledge.md',
+    'docs/execution/body-roadmap/evidence/B30/independent-review/README.md',
+    `${archive}-active/PLAN.md`,
+    'docs/execution/body-roadmap/evidence/B31/independent-review/source-snapshot/PLAN.md',
+  ]
+  for (const path of [archivedPath, ...activePaths]) {
+    mkdirSync(join(tmpRoot, path, '..'), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, path),
+      'See `src/missing.ts` and [gone](./gone.md).\nTODO: unresolved\n',
+    )
+  }
+  const snapshot = buildMarkdownSnapshot(tmpRoot)
+  expect(snapshot.files).not.toContain(join(tmpRoot, archivedPath))
+  for (const suppliedSnapshot of [undefined, snapshot]) {
+    for (const checker of [checkPath, checkBrokenLink, checkTodoFixme]) {
+      const findings = checker(tmpRoot, suppliedSnapshot)
+      expect(findings.map((finding) => finding.path).sort()).toEqual(
+        [...activePaths].sort(),
+      )
+    }
+  }
+})
+
+test('memory-drift guard skips exact RWEB snapshots while checking active neighboring docs', () => {
+  const archivedPaths = [
+    'docs/execution/body-roadmap/evidence/RWEB/planning-review/initial-addendum.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility/commands-reference.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility/session-management-reference.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility/trust-boundaries-reference.md',
+  ]
+  const activePaths = [
+    'docs/execution/body-roadmap/researcher-web-agent-browser.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility/FEASIBILITY.md',
+    'docs/execution/body-roadmap/evidence/RWEB/planning-review/initial-addendum-active.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility/commands-reference-active.md',
+    'docs/execution/body-roadmap/evidence/RWEB/feasibility-independent-review/REVIEW.md',
+    'common/knowledge.md',
+  ]
+  for (const path of [...archivedPaths, ...activePaths]) {
+    mkdirSync(join(tmpRoot, path, '..'), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, path),
+      'See `src/missing.ts` and [gone](./gone.md).\nTODO: unresolved\n',
+    )
+  }
+  const snapshot = buildMarkdownSnapshot(tmpRoot)
+  for (const path of archivedPaths) {
+    expect(snapshot.files).not.toContain(join(tmpRoot, path))
+  }
+  for (const suppliedSnapshot of [undefined, snapshot]) {
+    for (const checker of [
+      checkPath,
+      checkCrossFile,
+      checkBrokenLink,
+      checkTodoFixme,
+    ]) {
+      expect(
+        checker(tmpRoot, suppliedSnapshot)
+          .map((finding) => finding.path)
+          .sort(),
+      ).toEqual([...activePaths].sort())
+    }
+  }
+})
+
+test('broken-link checker resolves positive Markdown source-line citations without hiding missing files', () => {
+  mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
+  writeFileSync(join(tmpRoot, 'docs', 'guide.md'), '# Guide\n')
+  writeFileSync(join(tmpRoot, 'docs', 'session.mdx'), '# Session\n')
+  writeFileSync(
+    join(tmpRoot, 'docs', 'citations.md'),
+    [
+      '[guide](./guide.md:668)',
+      '[session](./session.mdx:84#state)',
+      '[missing](./missing.md:10)',
+      '[invalid](./guide.md:not-a-line)',
+      '[zero](./guide.md:0)',
+      '[non-markdown](./script.ts:10)',
+    ].join('\n'),
+  )
+  for (const snapshot of [undefined, buildMarkdownSnapshot(tmpRoot)]) {
+    expect(
+      checkBrokenLink(tmpRoot, snapshot).map((finding) => finding.message),
+    ).toEqual([
+      'broken link ./missing.md:10',
+      'broken link ./guide.md:not-a-line',
+      'broken link ./guide.md:0',
+      'broken link ./script.ts:10',
+    ])
+  }
+})
+
+// chmod 0o000 does not block reads for the superuser (or on Windows), so the
+// unreadable-file fixture cannot be reproduced there.
+const canTestUnreadableFile =
+  process.platform !== 'win32' &&
+  !(typeof process.getuid === 'function' && process.getuid() === 0)
+
+test.skipIf(!canTestUnreadableFile)(
+  'unreadable markdown file is skipped instead of crashing the guard',
+  () => {
+    mkdirSync(join(tmpRoot, 'docs'), { recursive: true })
+    const unreadable = join(tmpRoot, 'docs', 'secret.md')
+    writeFileSync(unreadable, 'See `src/missing.ts`.\n')
+    const readable = join(tmpRoot, 'docs', 'open.md')
+    writeFileSync(readable, 'See `src/missing.ts`.\n')
+    chmodSync(unreadable, 0o000)
+
+    // The snapshot drops files whose read fails, so the CI-blocking gate must
+    // skip the unreadable file rather than re-reading it per checker and
+    // crashing runMemoryDriftGuard.
+    expect(() => runMemoryDriftGuard(tmpRoot)).not.toThrow()
+
+    const snapshot = buildMarkdownSnapshot(tmpRoot)
+    expect(snapshot.files.some((p) => p.includes('docs/secret.md'))).toBe(false)
+    expect(snapshot.linesByFile.has(unreadable)).toBe(false)
+    // No checker emits findings for the unreadable file.
+    expect(
+      checkPath(tmpRoot, snapshot).some((f) =>
+        f.path.includes('docs/secret.md'),
+      ),
+    ).toBe(false)
+    // Control: the readable twin with identical content still flags.
+    expect(
+      checkPath(tmpRoot, snapshot).some((f) => f.path.includes('docs/open.md')),
+    ).toBe(true)
+
+    chmodSync(unreadable, 0o644)
+  },
+)
 
 test('formatMemoryDriftReport reports clean pass when score is zero', () => {
   const report = formatMemoryDriftReport({
@@ -1043,4 +1358,400 @@ test('integration: runMemoryDriftGuard returns sum score and 11 checkers in orde
   }
   const report = formatMemoryDriftReport(result)
   expect(report.startsWith('Memory drift guard:')).toBe(true)
+})
+
+describe('staleness checker review-receipt suppression', () => {
+  /** Canonical stale fixture: knowledge.md committed before sibling src/. */
+  function seedStalePair(): {
+    knowledgePath: string
+    srcFile: string
+    srcRel: string
+    /** Project-relative path of the committed src file (receipt hash key). */
+    srcFileKey: string
+    mdRel: string
+  } {
+    initGitRepo(tmpRoot)
+    mkdirSync(join(tmpRoot, 'packages', 'demo', 'src'), { recursive: true })
+    const knowledgePath = join(tmpRoot, 'packages', 'demo', 'knowledge.md')
+    writeFileSync(knowledgePath, '# demo\n')
+    gitCommit(
+      tmpRoot,
+      ['packages/demo/knowledge.md'],
+      'add knowledge',
+      '2023-01-01T00:00:00',
+    )
+    const srcFile = join(tmpRoot, 'packages', 'demo', 'src', 'index.ts')
+    writeFileSync(srcFile, 'export const x = 1\n')
+    gitCommit(
+      tmpRoot,
+      ['packages/demo/src/index.ts'],
+      'add src',
+      '2024-06-01T00:00:00',
+    )
+    return {
+      knowledgePath,
+      srcFile,
+      srcRel: 'packages/demo/src',
+      srcFileKey: 'packages/demo/src/index.ts',
+      mdRel: 'packages/demo/knowledge.md',
+    }
+  }
+
+  /** Write a receipt-shaped JSON object to the receipt file. */
+  function writeReceiptObject(receipt: Record<string, unknown>): void {
+    mkdirSync(join(tmpRoot, '.openbuff', 'memory'), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, '.openbuff', 'memory', 'review-receipt.json'),
+      JSON.stringify(receipt),
+    )
+  }
+
+  /** Write raw (possibly malformed) receipt file content. */
+  function writeRawReceipt(text: string): void {
+    mkdirSync(join(tmpRoot, '.openbuff', 'memory'), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, '.openbuff', 'memory', 'review-receipt.json'),
+      text,
+    )
+  }
+
+  const staleFindingFor =
+    (mdRel: string) =>
+    (finding: { path: string }): boolean =>
+      finding.path === mdRel
+
+  test('a valid receipt with matching hashes suppresses the stale finding', () => {
+    const pair = seedStalePair()
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+    // fileHashes keys are INDIVIDUAL committed file paths (what the guard
+    // verifies against `git log -1 --name-only` output), not directory
+    // pathspecs.
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: [pair.srcRel],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(
+      false,
+    )
+  })
+
+  test('a receipt with a stale/mismatched hash for one file does NOT suppress', () => {
+    const pair = seedStalePair()
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: [pair.srcRel],
+      fileHashes: { [pair.srcFileKey]: `sha256:${'0'.repeat(64)}` },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+  })
+
+  test('a receipt stops suppressing once the attested source bytes change', () => {
+    const pair = seedStalePair()
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: [pair.srcRel],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(
+      false,
+    )
+    // The source bytes drift after the review: the receipt no longer attests
+    // the current bytes, so the finding stands again (fail closed).
+    writeFileSync(pair.srcFile, 'export const x = 2\n')
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+  })
+
+  test('a receipt with no hash entry for a committed src file does not suppress', () => {
+    const pair = seedStalePair()
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: [],
+      fileHashes: {},
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+  })
+
+  test('malformed or missing receipt behaves as absent (finding stands)', () => {
+    const pair = seedStalePair()
+    // Missing receipt.
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+    // Malformed JSON.
+    writeRawReceipt('{ not json')
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+  })
+
+  test('a non-LOOKS_GOOD verdict does not suppress', () => {
+    const pair = seedStalePair()
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'NON_BLOCKING',
+      reviewedFiles: [pair.srcRel],
+      fileHashes: { [pair.srcRel]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(checkStaleness(tmpRoot).some(staleFindingFor(pair.mdRel))).toBe(true)
+  })
+
+  test('loadReviewReceipt is fail-open and verifyReceiptCoversPair verifies current bytes', () => {
+    const pair = seedStalePair()
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    writeReceiptObject({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: [pair.srcRel],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    const receipt = loadReviewReceipt(tmpRoot)
+    expect(receipt?.verdict).toBe('LOOKS_GOOD')
+    expect(receipt?.fileHashes[pair.srcFileKey]).toBe(
+      sha256FileHash(pair.srcFile),
+    )
+    const files = ['packages/demo/src/index.ts']
+    expect(verifyReceiptCoversPair(tmpRoot, receipt!, files)).toBe(true)
+    // Current bytes only: drift, absence, and a wrong verdict all fail.
+    writeFileSync(pair.srcFile, 'export const x = 2\n')
+    expect(verifyReceiptCoversPair(tmpRoot, receipt!, files)).toBe(false)
+    expect(
+      verifyReceiptCoversPair(tmpRoot, receipt!, ['packages/demo/src/gone.ts']),
+    ).toBe(false)
+    expect(
+      verifyReceiptCoversPair(
+        tmpRoot,
+        { ...receipt!, verdict: 'NON_BLOCKING' },
+        files,
+      ),
+    ).toBe(false)
+  })
+})
+
+describe('review receipt strict validation (forgery resistance)', () => {
+  /** Canonical stale fixture: knowledge.md committed before sibling src/. */
+  function seedStalePairStrict(): {
+    srcFile: string
+    srcFileKey: string
+    mdRel: string
+  } {
+    initGitRepo(tmpRoot)
+    mkdirSync(join(tmpRoot, 'packages', 'demo', 'src'), { recursive: true })
+    writeFileSync(join(tmpRoot, 'packages', 'demo', 'knowledge.md'), '# demo\n')
+    gitCommit(
+      tmpRoot,
+      ['packages/demo/knowledge.md'],
+      'add knowledge',
+      '2023-01-01T00:00:00',
+    )
+    const srcFile = join(tmpRoot, 'packages', 'demo', 'src', 'index.ts')
+    writeFileSync(srcFile, 'export const x = 1\n')
+    gitCommit(
+      tmpRoot,
+      ['packages/demo/src/index.ts'],
+      'add src',
+      '2024-06-01T00:00:00',
+    )
+    return {
+      srcFile,
+      srcFileKey: 'packages/demo/src/index.ts',
+      mdRel: 'packages/demo/knowledge.md',
+    }
+  }
+
+  function writeReceiptStrict(receipt: Record<string, unknown>): void {
+    mkdirSync(join(tmpRoot, '.openbuff', 'memory'), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, '.openbuff', 'memory', 'review-receipt.json'),
+      JSON.stringify(receipt),
+    )
+  }
+
+  test('a wrong schemaVersion is treated as ABSENT (never suppressive)', () => {
+    const pair = seedStalePairStrict()
+    writeReceiptStrict({
+      schemaVersion: 2,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    expect(checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel)).toBe(
+      true,
+    )
+  })
+
+  test('an unknown verdict string is treated as ABSENT', () => {
+    const pair = seedStalePairStrict()
+    writeReceiptStrict({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'SURE_FINE_TRUST_ME',
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    expect(checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel)).toBe(
+      true,
+    )
+  })
+
+  test('a fileHashes value that is not 64-hex sha256 is treated as ABSENT', () => {
+    const pair = seedStalePairStrict()
+    for (const badHash of [
+      `sha256:${'a'.repeat(64)}`,
+      'a'.repeat(63),
+      'a'.repeat(65),
+      'zzzz-not-hex-at-all-just-a-forgeable-string!!',
+      '',
+    ]) {
+      writeReceiptStrict({
+        schemaVersion: 1,
+        reviewer: 'code-reviewer',
+        verdict: 'LOOKS_GOOD',
+        reviewedFiles: ['packages/demo/src'],
+        fileHashes: { [pair.srcFileKey]: badHash },
+        recordedAt: '2025-01-01T00:00:00.000Z',
+      })
+      expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    }
+    expect(checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel)).toBe(
+      true,
+    )
+  })
+
+  test('an empty reviewer name is treated as ABSENT', () => {
+    const pair = seedStalePairStrict()
+    writeReceiptStrict({
+      schemaVersion: 1,
+      reviewer: '   ',
+      verdict: 'LOOKS_GOOD',
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+  })
+
+  test('an empty optional receiptId/agentId is treated as ABSENT', () => {
+    const pair = seedStalePairStrict()
+    writeReceiptStrict({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      receiptId: '',
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    writeReceiptStrict({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      agentId: 42,
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    expect(loadReviewReceipt(tmpRoot)).toBeNull()
+    expect(checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel)).toBe(
+      true,
+    )
+  })
+
+  test('a valid receipt carries receiptId/agentId and still suppresses', () => {
+    const pair = seedStalePairStrict()
+    writeReceiptStrict({
+      schemaVersion: 1,
+      reviewer: 'code-reviewer',
+      verdict: 'LOOKS_GOOD',
+      receiptId: 'review-run-1234',
+      agentId: 'agent-code-reviewer-9',
+      reviewedFiles: ['packages/demo/src'],
+      fileHashes: { [pair.srcFileKey]: sha256FileHash(pair.srcFile) },
+      recordedAt: '2025-01-01T00:00:00.000Z',
+    })
+    const receipt = loadReviewReceipt(tmpRoot)
+    expect(receipt?.receiptId).toBe('review-run-1234')
+    expect(receipt?.agentId).toBe('agent-code-reviewer-9')
+    expect(checkStaleness(tmpRoot).some((f) => f.path === pair.mdRel)).toBe(
+      false,
+    )
+  })
+
+  test('checkStaleness degrades visibly when git fails during the per-pair work', () => {
+    const pair = seedStalePairStrict()
+    // The initial probe (`rev-parse --git-dir`) must SUCCEED so the guard
+    // enters the per-pair section; every other git spawn fails. Before the
+    // fail-visible wrap, such a mid-work git failure (batched last-commit
+    // lookup, receipt hash cross-check) was swallowed into a silent
+    // zero-findings result (fail-open). The shim inspects its first argument
+    // to pass only the probe.
+    const fakeBin = join(tmpRoot, 'probe-only-bin')
+    mkdirSync(fakeBin, { recursive: true })
+    const gitShim = join(fakeBin, 'git')
+    writeFileSync(
+      gitShim,
+      '#!/bin/sh\nif [ "$1" = "rev-parse" ]; then exit 0; fi\nexit 1\n',
+    )
+    chmodSync(gitShim, 0o755)
+    setGitCommandForTest(gitShim)
+    try {
+      const findings = checkStaleness(tmpRoot)
+      expect(
+        findings.some(
+          (f) => f.path === pair.mdRel && f.message.includes('degraded'),
+        ),
+      ).toBe(true)
+      expect(
+        findings.some(
+          (f) =>
+            f.path === pair.mdRel &&
+            f.message.includes('git failure during staleness check'),
+        ),
+      ).toBe(true)
+      expect(findings.some((f) => f.message.includes('UNVERIFIED'))).toBe(true)
+    } finally {
+      setGitCommandForTest(null)
+    }
+  })
+
+  test('checkStaleness degrades visibly (not silently clean) when git cannot run', () => {
+    const pair = seedStalePairStrict()
+    // Mutating process.env.PATH does NOT change child-process resolution
+    // under Bun (the real git keeps running), so a PATH-shim fixture can never
+    // reach the degraded path. Instead use the module's TEST-ONLY git command
+    // seam: /bin/false exits non-zero for every spawn, so the initial probe
+    // itself fails and the guard must report UNVERIFIED findings instead of
+    // silently reading as a clean pass.
+    setGitCommandForTest('/bin/false')
+    try {
+      const findings = checkStaleness(tmpRoot)
+      expect(
+        findings.some(
+          (f) => f.path === pair.mdRel && f.message.includes('degraded'),
+        ),
+      ).toBe(true)
+      expect(findings.some((f) => f.message.includes('UNVERIFIED'))).toBe(true)
+    } finally {
+      setGitCommandForTest(null)
+    }
+  })
 })

@@ -227,8 +227,9 @@ export const AGENT_NAME_TO_TYPES = Object.entries(AGENT_NAMES).reduce(
 
 /**
  * Sentinel used when no explicit maxAgentSteps cap is configured. Productive
- * runs are unlimited by default; repeated identical steps are handled by the
- * runtime loop watchdog instead of an unconditional counter.
+ * runs are unlimited by default; a configured maxAgentSteps fixed cap and
+ * budget enforcement are what bound runaway runs — no runtime loop watchdog
+ * exists.
  */
 export const MAX_AGENT_STEPS_DEFAULT = -1
 

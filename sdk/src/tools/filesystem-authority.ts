@@ -14,7 +14,7 @@ import type {
   CodebuffFileContent,
   CodebuffFileSystem,
 } from '@codebuff/common/types/filesystem'
-import { isMandatorySensitiveReadPath } from '@codebuff/common/util/sensitive-paths'
+import { getFilesystemSandbox, isSandboxSensitivePath } from '@codebuff/common/util/filesystem-sandbox'
 
 import {
   isSafeProjectRelativePath,
@@ -71,7 +71,8 @@ function win32NormalizeSegments(value: string): string {
  * policy to catch them later.
  *
  * This is now the ONLY defense against a file-changing tool staging a script
- * anywhere under an OS temp root for a later command to execute. Containment
+ * or natively-executable binary anywhere under an OS temp root for a later
+ * command to execute. Containment
  * in `common/src/util/project-path-containment.ts` admits the whole temp root
  * and no longer excludes any name — including the chmod +x'd tmux helper
  * script `tmux-helper-<session>.sh`, which run_terminal_command executes.
@@ -110,6 +111,19 @@ const OWNED_TEMP_REFUSED_EXTENSIONS = new Set([
   '.r',
   '.jl',
   '.tcl',
+  // Natively-executable binaries and loadable images need no interpreter
+  // invocation step for a policy to catch: direct exec, `java -jar`,
+  // `dlopen`, and wasm runtimes all execute a staged file of one of these
+  // shapes.
+  '.exe',
+  '.dll',
+  '.so',
+  '.dylib',
+  '.com',
+  '.msi',
+  '.jar',
+  '.wasm',
+  '.appimage',
 ])
 
 /**
@@ -202,7 +216,7 @@ export type AuthorizedFilesystemPath = Readonly<{
   portablePath: string
   operationPath: string
   redactPath: boolean
-  scope: 'project' | 'owned-temp'
+  scope: 'project' | 'owned-temp' | 'host'
 }>
 
 export type PathAuthorizationResult =
@@ -292,7 +306,7 @@ export class FilesystemAuthority {
     operation: FilesystemOperationKind,
     phase: FilesystemPolicyPhase = 'resolve',
   ): Promise<PathAuthorizationResult> {
-    if (!isSafeProjectRelativePath(input)) {
+    if (!isSafeProjectRelativePath(input, this.fileSystem.hostReadPolicy)) {
       return { allowed: false, code: 'path_outside_project' }
     }
     const followFinalSymlink = operation !== 'create' && operation !== 'delete'
@@ -335,7 +349,7 @@ export class FilesystemAuthority {
     source: AuthorizedFilesystemPath,
     destination: AuthorizedFilesystemPath,
   ): { allowed: true } | { allowed: false; code: string } {
-    if (source.scope !== destination.scope) {
+    if (getFilesystemSandbox(this.fileSystem.hostReadPolicy).mode === 'project' && source.scope !== destination.scope) {
       return { allowed: false, code: 'move_crosses_scope_boundary' }
     }
     return { allowed: true }
@@ -452,6 +466,8 @@ export class FilesystemAuthority {
   async issueCommittedReceipt(input: {
     operationId: string
     callId: string
+    /** P2-T5: durable transaction-intent id stamped on the receipt when set. */
+    transactionId?: string
     authorityTier: CommitReceiptV1['authorityTier']
     actions: readonly Omit<CommitActionReceiptV1, 'status' | 'afterHash'>[]
     expectedFinalHashes: Readonly<Record<string, string | null>>
@@ -486,6 +502,9 @@ export class FilesystemAuthority {
       receiptId: crypto.randomUUID(),
       operationId: input.operationId,
       callId: input.callId,
+      ...(input.transactionId !== undefined
+        ? { transactionId: input.transactionId }
+        : {}),
       authorityTier: input.authorityTier,
       status: 'committed',
       actions: input.actions.map((action) => ({
@@ -507,6 +526,8 @@ export class FilesystemAuthority {
   issueNotStartedReceipt(input: {
     operationId: string
     callId: string
+    /** P2-T5: durable transaction-intent id stamped on the receipt when set. */
+    transactionId?: string
     authorityTier: CommitReceiptV1['authorityTier']
     actions: readonly Omit<CommitActionReceiptV1, 'status' | 'afterHash'>[]
   }): CommitReceiptV1 {
@@ -516,6 +537,9 @@ export class FilesystemAuthority {
       receiptId: crypto.randomUUID(),
       operationId: input.operationId,
       callId: input.callId,
+      ...(input.transactionId !== undefined
+        ? { transactionId: input.transactionId }
+        : {}),
       authorityTier: input.authorityTier,
       status: 'not_started',
       actions: input.actions.map((action) => ({
@@ -532,6 +556,8 @@ export class FilesystemAuthority {
   async issueObservedFailureReceipt(input: {
     operationId: string
     callId: string
+    /** P2-T5: durable transaction-intent id stamped on the receipt when set. */
+    transactionId?: string
     authorityTier: CommitReceiptV1['authorityTier']
     status: 'rolled_back' | 'rollback_incomplete' | 'failed'
     actions: readonly Omit<CommitActionReceiptV1, 'afterHash'>[]
@@ -552,6 +578,9 @@ export class FilesystemAuthority {
       receiptId: crypto.randomUUID(),
       operationId: input.operationId,
       callId: input.callId,
+      ...(input.transactionId !== undefined
+        ? { transactionId: input.transactionId }
+        : {}),
       authorityTier: input.authorityTier,
       status: input.status,
       actions: input.actions.map((action) => ({
@@ -981,13 +1010,19 @@ export function getDefaultFilesystemAuthority(
   )
   if (existing) return existing.authority
 
-  const authorityFileSystem = Object.assign(Object.create(fs), {
-    createFileExclusive:
-      fs.createFileExclusive ??
-      ((
-        filePath: Parameters<CodebuffFileSystem['writeFile']>[0],
-        data: Parameters<CodebuffFileSystem['writeFile']>[1],
-      ) => fs.writeFile(filePath, data, { flag: 'wx' })),
+  // A frozen host adapter may expose a nonwritable inherited method.
+  const authorityFileSystem = Object.create(fs, {
+    createFileExclusive: {
+      value:
+        fs.createFileExclusive ??
+        ((
+          filePath: Parameters<CodebuffFileSystem['writeFile']>[0],
+          data: Parameters<CodebuffFileSystem['writeFile']>[1],
+        ) => fs.writeFile(filePath, data, { flag: 'wx' })),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    },
   }) as CodebuffFileSystem
   const mandatoryMutationPolicy: FilesystemAuthorityPolicy = {
     name: 'mandatory-mutation-policy',
@@ -1000,7 +1035,7 @@ export function getDefaultFilesystemAuthority(
         context.portablePath,
         canonicalRelative.split(path.sep).join('/'),
       ].flatMap((alias) => [alias, alias.toLowerCase()])
-      if (aliases.some(isMandatorySensitiveReadPath)) {
+      if (aliases.some(alias => isSandboxSensitivePath(alias, fs.hostReadPolicy))) {
         return { allowed: false, code: 'sensitive_path', redactPath: true }
       }
       if (

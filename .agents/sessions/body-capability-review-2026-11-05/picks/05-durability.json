@@ -1,0 +1,637 @@
+{
+  "shardId": "05-durability",
+  "question": "Where are durable run journals/checkpoints, own-journal resume/replay, turn snapshots/undo, persisted workflow/task state, ACP serve/attach sessions, dashboard/daemon and workspace leases/lanes wired into real runs, and what do existing crash/restart/cancel/effect-replay tests actually exercise?",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "subsystemIds": [
+    "cli",
+    "sdk",
+    "packages",
+    "common",
+    "docs",
+    "scripts",
+    "agents"
+  ],
+  "selectedFiles": [
+    {
+      "path": "cli/src/index.tsx",
+      "from": 546,
+      "to": 697,
+      "reason": "Root attach-target setup and serve/run/replay/dash command dispatch before the TUI."
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 294,
+      "to": 327,
+      "reason": "Restored chat checkpoint acceptance by turn/message identity and stale-checkpoint clearing."
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 650,
+      "to": 851,
+      "reason": "Live TUI journal open, interrupted-turn prompt matching, checkpoint callback, SDK run handoff, and checkpoint clear."
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "from": 913,
+      "to": 933,
+      "reason": "Run-end journal connection ownership and close."
+    },
+    {
+      "path": "cli/src/utils/run-state-storage.ts",
+      "from": 698,
+      "to": 730,
+      "reason": "Checkpoint envelope, per-chat checkpoint path, and persisted session identity."
+    },
+    {
+      "path": "cli/src/utils/run-state-storage.ts",
+      "from": 1001,
+      "to": 1168,
+      "reason": "Atomic queued checkpoint writes, dead-process temp sweep, load validation, and clear-versus-in-flight-write serialization."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 664,
+      "to": 704,
+      "reason": "Committed task-memory persistence through the resolved run filesystem on success or abort."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1020,
+      "to": 1155,
+      "reason": "Workspace-journal construction, task-memory hydration/reconciliation, and persisted workspace state."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1370,
+      "to": 1401,
+      "reason": "Composition root for journal writer/reader and production resumeDriver injection."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1898,
+      "to": 1917,
+      "reason": "Actual post-run call to persistRunTaskMemory; inspect the persistence edge only, with terminal-state ownership assigned to pair 03."
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "from": 1577,
+      "to": 1968,
+      "reason": "Loop-entry lease reconciliation, resume-report handling, own-journal background re-drive/settlement, injected resume driver, and original-run-ID pin; excludes provider/generator finalization analysis."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 50,
+      "to": 114,
+      "reason": "Journal reader/writer contracts and durability/retention guarantees."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 201,
+      "to": 226,
+      "reason": "Journal event and run-resume classification shapes."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 520,
+      "to": 615,
+      "reason": "SQLite composition, connection durability settings, WAL/schema reopen gate, and batching configuration."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 1350,
+      "to": 1449,
+      "reason": "Closed-writer behavior, timer ownership, append durability, and flush."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 1655,
+      "to": 1933,
+      "reason": "Force-flush, completed tool-result lookup by input/occurrence, close-on-failure cleanup, and interrupted-tail classification."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-journal.ts",
+      "from": 2290,
+      "to": 2425,
+      "reason": "Unified run-resume report and pure replay-action planning."
+    },
+    {
+      "path": "sdk/src/services/run-resume-driver.ts",
+      "from": 1,
+      "to": 227,
+      "reason": "Production adapter from resume reports to child/background replay seams and durable attempt markers."
+    },
+    {
+      "path": "cli/src/utils/turn-snapshots.ts",
+      "from": 91,
+      "to": 213,
+      "reason": "Restore preview scope/token binding and revalidation at apply time."
+    },
+    {
+      "path": "cli/src/utils/turn-snapshots.ts",
+      "from": 412,
+      "to": 567,
+      "reason": "Git-plumbing snapshot construction, tracked-tree scope, retention handoff, and pre-dispatch timeout."
+    },
+    {
+      "path": "cli/src/utils/turn-snapshots.ts",
+      "from": 622,
+      "to": 768,
+      "reason": "Snapshot chain listing, tracked-tree checkout, undo, and restore."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/workspace-path-leases.ts",
+      "from": 1,
+      "to": 177,
+      "reason": "Cooperative path ownership, lease TTL, durable AgentState records, heartbeat, release, and interrupted-process reconciliation."
+    },
+    {
+      "path": "cli/src/serve-command.ts",
+      "from": 101,
+      "to": 219,
+      "reason": "Real CLI service entry builds a journal-backed AcpSessionData/client and dispatches stdio or authenticated socket transport."
+    },
+    {
+      "path": "sdk/src/serve/bridge.ts",
+      "from": 145,
+      "to": 216,
+      "reason": "Bridge lifetime/dependency composition and durable-capability posture."
+    },
+    {
+      "path": "sdk/src/serve/bridge.ts",
+      "from": 735,
+      "to": 820,
+      "reason": "Real per-prompt client.run call, mutation receipt consumer, cancellation handoff, teardown, and return behavior."
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 780,
+      "to": 933,
+      "reason": "Per-connection session ownership, capability advertisement, session/load registration, receipt restore, and optional chat-history loader."
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 995,
+      "to": 1075,
+      "reason": "Concurrent prompt guard, per-turn abort controller, prompt dispatch, cancellation, and controller release."
+    },
+    {
+      "path": "sdk/src/services/acp/acp-agent.ts",
+      "from": 1205,
+      "to": 1345,
+      "reason": "Extension dispatcher including lane operations and auto-derived journal restore handler used by stdio serving."
+    },
+    {
+      "path": "sdk/src/services/acp/session-data.ts",
+      "from": 695,
+      "to": 808,
+      "reason": "Actual ACP durable store contents, serialized append/rewrite queue, journal path gate, and write strategy."
+    },
+    {
+      "path": "sdk/src/services/acp/session-data.ts",
+      "from": 878,
+      "to": 1011,
+      "reason": "Receipt storage, gate-state snapshots, capability persistence, workspace revision tracking, and main-lane projection."
+    },
+    {
+      "path": "sdk/src/services/acp/session-data.ts",
+      "from": 1017,
+      "to": 1189,
+      "reason": "Journal restore validation and merge with concurrently recorded live state."
+    },
+    {
+      "path": "sdk/src/client/acp-client.ts",
+      "from": 274,
+      "to": 513,
+      "reason": "Actual remote backend connection, run/session creation or load, cancel, detach/attach, and transport teardown."
+    },
+    {
+      "path": "cli/src/commands/dash-command.ts",
+      "from": 84,
+      "to": 299,
+      "reason": "Real dashboard journal opener/provider/server or export wiring, empty/unavailable source states, and shutdown ownership."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/run-journal.test.ts",
+      "from": 664,
+      "to": 793,
+      "reason": "Side-effect replay fixture labeled kill-9; inspect what it actually executes versus a killed/restarted process."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/run-journal.test.ts",
+      "from": 2621,
+      "to": 2718,
+      "reason": "Append batching, flush/close reopen durability, and interrupted-call tail fixture."
+    },
+    {
+      "path": "cli/src/utils/__tests__/turn-checkpoint.test.ts",
+      "from": 1,
+      "to": 233,
+      "reason": "Disk checkpoint round-trip, malformed input, atomic temp cleanup, in-flight-clear ordering, and archive persistence."
+    },
+    {
+      "path": "sdk/src/__tests__/acp-session-data.test.ts",
+      "from": 735,
+      "to": 830,
+      "reason": "ACP on-disk receipt/gate journal, redaction, malformed-line restore, and replay behavior."
+    },
+    {
+      "path": "sdk/src/__tests__/acp-session-data.test.ts",
+      "from": 1161,
+      "to": 1240,
+      "reason": "ACP restore-versus-live-recording merge and duplicate suppression."
+    }
+  ],
+  "secondaryFiles": [
+    {
+      "path": "cli/src/commands/run-command.ts",
+      "from": 1,
+      "to": 261,
+      "reason": "Headless default journal open/SDK handoff, deadline/cancel, and connection cleanup."
+    },
+    {
+      "path": "cli/src/commands/replay-command.ts",
+      "from": 1,
+      "to": 254,
+      "reason": "Recorded-event replay/filter/export consumer; compare against runtime resume semantics."
+    },
+    {
+      "path": "cli/src/utils/run-journal-path.ts",
+      "from": 1,
+      "to": 320,
+      "reason": "Canonical journal location, fail-open opener, retention defaults, and startup maintenance."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/run-replay-driver.ts",
+      "from": 1,
+      "to": 295,
+      "reason": "Injected handler executor and outcome semantics beneath the SDK resume adapter."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/background-resume.ts",
+      "from": 1,
+      "to": 357,
+      "reason": "Own-journal linkage/history reconstruction, original child run ID, re-drive reservations, and launch marker engine."
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 970,
+      "to": 1058,
+      "reason": "Actual completed-tool replay short circuit, occurrence consumption, and pre-effect journal boundary; inspect this persistence edge only."
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 1132,
+      "to": 1158,
+      "reason": "Post-effect tool_result journaling edge."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts",
+      "from": 420,
+      "to": 482,
+      "reason": "Real lease acquisition/release on batch delegation; pair 03 owns overall child orchestration."
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-inline.ts",
+      "from": 247,
+      "to": 283,
+      "reason": "Alternate lease consumer during inline delegation."
+    },
+    {
+      "path": "packages/agent-runtime/src/orchestration/workflow-engine.ts",
+      "from": 1,
+      "to": 212,
+      "reason": "Advisory workflow transition implementation and documented authority boundary."
+    },
+    {
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 448,
+      "to": 490,
+      "reason": "Control-plane member export that supplies workflow transition helpers to shipped generators."
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 8524,
+      "to": 8574,
+      "reason": "Actual workflow transition lookup and AgentState.workflowStates writes; reference the gate-authority review from pair 03."
+    },
+    {
+      "path": "sdk/src/services/task-memory-store.ts",
+      "from": 542,
+      "to": 825,
+      "reason": "Cross-session task-memory merge, atomic save, filesystem lock, and revision commitment."
+    },
+    {
+      "path": "sdk/src/services/workspace-journal.ts",
+      "from": 1,
+      "to": 100,
+      "reason": "Workspace revision/change persistence service consumed by sdk/run.ts."
+    },
+    {
+      "path": "sdk/src/services/local-harness-store.ts",
+      "from": 1,
+      "to": 396,
+      "reason": "Backing record-store locking, owner verification, compare-and-swap, and atomic persistence."
+    },
+    {
+      "path": "sdk/src/tools/get-task.ts",
+      "from": 1,
+      "to": 67,
+      "reason": "Actual durable plan-session task read, ACTIVE_SESSION pointer, and missing/invalid state outcomes."
+    },
+    {
+      "path": "common/src/util/plan-artifacts.ts",
+      "reason": "Plan revision/status persistence implementation consumed by get_task/create_plan/update_plan_status; coordinate broad control-plane claims with pair 12."
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2955,
+      "to": 2975,
+      "reason": "Real get_task dispatch edge."
+    },
+    {
+      "path": "common/src/types/session-state.ts",
+      "from": 590,
+      "to": 635,
+      "reason": "Persisted workflow/path-lease fields and state compatibility contract."
+    },
+    {
+      "path": "cli/src/hooks/helpers/send-message.ts",
+      "from": 486,
+      "to": 565,
+      "reason": "Real successful-turn snapshot producer and queue-release ordering."
+    },
+    {
+      "path": "cli/src/commands/router.ts",
+      "from": 84,
+      "to": 125,
+      "reason": "Pre-effect snapshot producer for user shell commands."
+    },
+    {
+      "path": "cli/src/commands/snapshot-commands.ts",
+      "from": 1,
+      "to": 121,
+      "reason": "User restore/bisect entrypoints and preview/apply control."
+    },
+    {
+      "path": "cli/src/utils/attach-session.ts",
+      "from": 1,
+      "to": 130,
+      "reason": "CLI detach/attach session-ID lifecycle and exit path."
+    },
+    {
+      "path": "cli/src/utils/codebuff-client.ts",
+      "from": 153,
+      "to": 205,
+      "reason": "Real attach-target to AcpRemoteBackend/client construction."
+    },
+    {
+      "path": "sdk/src/serve/serve.ts",
+      "from": 1,
+      "to": 157,
+      "reason": "CLI service-to-bridge-to-stdio/socket composition."
+    },
+    {
+      "path": "sdk/src/serve/socket-listener.ts",
+      "from": 1,
+      "to": 511,
+      "reason": "Authenticated socket lifetime, per-connection agent construction, disconnect, and listener cleanup."
+    },
+    {
+      "path": "sdk/src/dash/provider.ts",
+      "from": 1,
+      "to": 249,
+      "reason": "Live run-journal adapter for run/event listings, receipts, and gate state."
+    },
+    {
+      "path": "sdk/src/dash/server.ts",
+      "from": 576,
+      "to": 690,
+      "reason": "HTTP listener/token checks/API provider consumers and shutdown."
+    },
+    {
+      "path": "common/src/protocol/acp-ext-v1.ts",
+      "from": 213,
+      "to": 303,
+      "reason": "Published lanes and capability map baseline."
+    },
+    {
+      "path": "sdk/src/services/acp/ext-methods.ts",
+      "from": 25,
+      "to": 121,
+      "reason": "Negotiated lane methods and result/error schemas."
+    },
+    {
+      "path": "sdk/src/__tests__/run-journal-wiring.test.ts",
+      "from": 1,
+      "to": 491,
+      "reason": "Client/run DI wiring and production resume-adapter outcome tests; distinguish captured runtime stubs from a resumed live loop."
+    },
+    {
+      "path": "cli/src/hooks/__tests__/use-send-message-journal.test.ts",
+      "from": 1,
+      "to": 226,
+      "reason": "TUI run-journal wiring, shared location, fail-open, and close tests."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/background-resume.test.ts",
+      "from": 267,
+      "to": 565,
+      "reason": "Own-journal mid-tool/mid-LLM, no-linkage/unrecoverable, and repeated-pass tests."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/run-replay-driver.test.ts",
+      "reason": "Injected child/background executor tests and skip/failure outcomes."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/run-journal.test.ts",
+      "from": 3134,
+      "to": 3195,
+      "reason": "Force-flush before effect and close-on-final-drain-throw tests."
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/workspace-path-leases.test.ts",
+      "from": 1,
+      "to": 207,
+      "reason": "Conflict, release, interrupted recovery, heartbeat, and lost-runtime-map tests."
+    },
+    {
+      "path": "packages/agent-runtime/src/orchestration/__tests__/workflow-engine.test.ts",
+      "from": 1,
+      "to": 162,
+      "reason": "Revision, illegal-transition, and injected-clock tests."
+    },
+    {
+      "path": "cli/src/utils/__tests__/turn-snapshots.test.ts",
+      "from": 336,
+      "to": 420,
+      "reason": "Real Git undo/restore, deleted tracked files, and index/HEAD/untracked preservation."
+    },
+    {
+      "path": "cli/src/utils/__tests__/turn-snapshots.test.ts",
+      "from": 557,
+      "to": 625,
+      "reason": "Bisection cancellation and concurrent-call rejection."
+    },
+    {
+      "path": "cli/src/utils/__tests__/turn-snapshots.test.ts",
+      "from": 669,
+      "to": 850,
+      "reason": "Cross-process snapshot/bisection lock, stale owner, and concurrent snapshot tests."
+    },
+    {
+      "path": "sdk/src/__tests__/task-memory-store.test.ts",
+      "from": 553,
+      "to": 754,
+      "reason": "Owner-only task-state file, concurrent writers, live/orphan lock, and missing atomic-write capabilities."
+    },
+    {
+      "path": "sdk/src/__tests__/task-memory-store.test.ts",
+      "from": 1239,
+      "to": 1416,
+      "reason": "Actual post-run persistence gate, aborted-run data, and injected filesystem tests."
+    },
+    {
+      "path": "sdk/src/__tests__/serve.test.ts",
+      "from": 1,
+      "to": 294,
+      "reason": "runServe transport composition and containment wiring."
+    },
+    {
+      "path": "sdk/src/__tests__/serve-socket.test.ts",
+      "from": 111,
+      "to": 234,
+      "reason": "Actual authenticated socket and prompt-through-bridge tests."
+    },
+    {
+      "path": "sdk/src/__tests__/serve-socket.test.ts",
+      "from": 235,
+      "to": 419,
+      "reason": "Auth rejection, line limits, bind permissions, and idempotent socket/lock cleanup."
+    },
+    {
+      "path": "sdk/src/__tests__/acp-client.test.ts",
+      "reason": "Remote run, load/reattach, cancel, disconnect, and SDK/TUI event-contract tests."
+    },
+    {
+      "path": "cli/src/utils/__tests__/attach-session.test.ts",
+      "from": 1,
+      "to": 197,
+      "reason": "CLI attach/detach/exit delegation and unavailable/no-session/error outcomes."
+    },
+    {
+      "path": "sdk/src/dash/__tests__/dash-server.test.ts",
+      "reason": "Actual dashboard listener, auth, API, export, and cleanup tests."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 85,
+      "to": 115,
+      "reason": "Current durable-task/control-plane product claims."
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 1776,
+      "to": 1840,
+      "reason": "Typed task-memory persistence and checkpoint claims."
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 20,
+      "to": 99,
+      "reason": "Current CLI-to-SDK-to-runtime lifecycle documentation."
+    },
+    {
+      "path": "scripts/harness-smoke.mjs",
+      "reason": "Optional existing CLI harness smoke path; inspect for genuine restart/attach coverage, without executing it in this picker."
+    }
+  ],
+  "capabilityCandidates": [
+    "default TUI/headless run journaling and journal lifecycle",
+    "mid-turn checkpoint save/load/acceptance/clear and restart continuation",
+    "completed tool-result replay and uncertain external-effect recovery",
+    "own-journal background child reconstruction and original-run-ID re-drive",
+    "resume adapter attempts versus actual child/background execution",
+    "durable workflow telemetry and task/plan revision state",
+    "cross-session committed task-memory and workspace-journal persistence",
+    "tracked-tree turn/shell snapshots, undo/restore, and cancellable bisection",
+    "ACP stdio/socket service session load and persistent receipt/gate state",
+    "ACP attach/detach and prompt continuity across clients or process restart",
+    "live dashboard journal consumer, source availability, and listener lifetime",
+    "cooperative workspace path leases, heartbeat, release, and interrupted ownership",
+    "workspace lane capability negotiation and create/land implementation status",
+    "daemon/service supervision and genuine killed-process recovery coverage"
+  ],
+  "searchCoverage": {
+    "method": "Pinned native INVENTORY.json and saved query_index results, followed by rg filename/symbol/consumer searches and exact bounded source/test reads. Native retrieval tools are unavailable in this Codex session; no unavailable tool calls are claimed. Only the assigned pick artifact is written; no tests, private local state, credentials, or old logs are read/executed.",
+    "roots": [
+      "cli/src",
+      "sdk/src",
+      "packages/agent-runtime/src",
+      "common/src",
+      "agents/base2",
+      "docs",
+      "scripts"
+    ],
+    "queryIndexQueries": [
+      "session journal resume cancellation",
+      "commands build test typecheck smoke release"
+    ],
+    "sourceFamiliesSearched": [
+      "journal/checkpoint/resume/replay",
+      "snapshots/undo/restore/bisection",
+      "workflow/task-memory/plan state",
+      "ACP serve/socket/client/attach",
+      "dashboard/daemon",
+      "workspace lease/lane consumers"
+    ],
+    "entrypointConsumerTraces": [
+      "cli/index.tsx -> runHeadlessCommand or useSendMessage -> shared journal opener -> OpenbuffClient.run -> sdk/run.ts -> loopAgentSteps",
+      "CLI restored state -> checkpoint turn/message acceptance -> onCheckpoint/saveCheckpoint -> queued atomic disk write -> load/clear",
+      "sdk/run.ts journalReader -> createRunResumeDriver -> loop-entry report; loop-entry own-journal background resume -> pinned child loop",
+      "run-programmatic-step executeSingleToolCall -> toolResultForInput -> journal pre/post-effect boundaries",
+      "cli/index.tsx replay dispatch -> runReplayCommand -> journal event re-emission",
+      "successful turn or user shell dispatch -> snapshot helper -> private Git ref -> restore preview/apply",
+      "cli/index.tsx serve -> runAcpServeCommand -> runServe -> createServeBridge -> ACP prompt handler -> client.run",
+      "attach target -> getCodebuffClient -> AcpRemoteBackend -> authenticated socket initialize/session load/prompt/cancel",
+      "ACP session/load -> derived loadHandler -> AcpSessionData.restoreFromJournal; optional historyLoader is an adjacent contract to verify",
+      "cli/index.tsx dash -> runDashCommand -> real journal opener -> createDashProviderFromJournal -> HTTP server/export",
+      "spawn handlers -> workspace-path-leases -> AgentState lease records -> loop-entry reconcileInterruptedPathLeases",
+      "base2 telemetry -> control-plane transition member -> workflowStates; broad completion authority remains assigned to pair 03",
+      "sdk/run.ts -> WorkspaceJournalService and task-memory hydrate/persist; get_task dispatch -> plan artifacts"
+    ],
+    "selectedDistinctFileCount": 18,
+    "selectedRangeCount": 38,
+    "selectedLineCount": 4930,
+    "secondaryPolicy": "Expansion candidates are explicitly adjacent source/test/doc edges, not a claim that each entire secondary file was audited. Large suites have bounded high-value windows; unbounded entries are discovery pointers only.",
+    "testSurfacesDiscovered": [
+      "journal completed-effect replay fixtures",
+      "SQLite flush/close/reopen",
+      "checkpoint atomicity and clear/write race",
+      "own-journal background mid-tool/mid-LLM",
+      "ACP journal replay/live merge",
+      "authenticated socket prompt/cancel/close",
+      "lease interrupted-memory recovery",
+      "Git restore and cancelled/concurrent bisection",
+      "concurrent task-state commits"
+    ],
+    "failureStatesToVerify": [
+      "journal unavailable/closed/busy",
+      "crash after effect before result receipt",
+      "checkpoint stale/malformed/queued during clear",
+      "child link/history absent and interrupted resume retries",
+      "cancel/detach/disconnect while prompt runs",
+      "missing ACP journal versus session/load success",
+      "concurrent writers and expired/lost lease ownership",
+      "dashboard absent/unavailable data",
+      "lane negotiation with disabled operations"
+    ],
+    "scopeBoundaries": [
+      "Do not re-audit provider routing or generator terminal-state ownership; pair 03 supplies those conclusions. Read only their journal/lease/serialization edges here.",
+      "Pair 04 owns memory quality, compaction/recall, and memory-v2 retention; this shard owns disk persistence and restart edges.",
+      "Mutation broker/transaction exact-byte authority belongs to pair 06; process/sandbox execution authority belongs to pair 09.",
+      "Pair 12 owns broad task/control-plane completeness; get_task/plan persistence edges are included here.",
+      "Named kill-9/recovery tests must be classified by actual behavior (fixture, reopen, runtime integration, or real process kill), without inferring assurance from their titles.",
+      "Dedicated daemon/lane services must be traced to actual consumers; names, capability maps, and helper tests alone do not establish runtime wiring."
+    ]
+  }
+}

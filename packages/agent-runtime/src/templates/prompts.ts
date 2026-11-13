@@ -2,6 +2,7 @@ import { coerceToObject } from '@codebuff/common/tools/params/utils'
 import { agentHandoffSchema } from '@codebuff/common/tools/params/tool/spawn-agents'
 import { buildArray } from '@codebuff/common/util/array'
 import { schemaToJsonStr } from '@codebuff/common/util/zod-schema'
+import { coerceJsonSchemaMember } from '@codebuff/common/templates/agent-validation'
 import { z } from 'zod/v4'
 
 import { getAgentTemplate } from './agent-registry'
@@ -22,13 +23,14 @@ export type ResolveModelContextWindow = NonNullable<
   AgentRuntimeDeps['resolveModelContextWindow']
 >
 
-function ensureJsonSchemaCompatible(schema: z.ZodType): z.ZodType {
+function ensureJsonSchemaCompatible(schema: z.ZodType, agentType: string): z.ZodType {
   try {
     z.toJSONSchema(schema, { io: 'input' })
     return schema
-  } catch {
-    const fallback = z.object({}).passthrough()
-    return schema.description ? fallback.describe(schema.description) : fallback
+  } catch (error) {
+    throw new Error(`Cannot publish spawn input schema for agent ${agentType}`, {
+      cause: error,
+    })
   }
 }
 
@@ -102,6 +104,82 @@ function formatRequiredSpawnContractHint(
   return `Required params: ${missing.map((key) => '`' + key + '`').join(', ')}.`
 }
 
+/**
+ * Upper bound on the optional-params summary (before the ` Optional params: `
+ * wrapper) so one exotic schema cannot bloat the compact catalog line.
+ */
+const OPTIONAL_PARAMS_SUMMARY_MAX_LENGTH = 240
+
+/**
+ * One-key summary of an optional param: enum values inline when present
+ * (`depth (enum: "shallow"|"deep")`), otherwise the schema type name
+ * (`outputSchemaHint (string)`). Enum values are JSON.stringify'd so string
+ * values stay quoted and non-string values render readably.
+ */
+function formatOptionalParamSummary(
+  memberSchema: unknown,
+  key: string,
+): string {
+  if (!memberSchema || typeof memberSchema !== 'object') return key
+  const { type, enum: enumValues } = memberSchema as {
+    type?: unknown
+    enum?: unknown
+  }
+  if (Array.isArray(enumValues) && enumValues.length > 0) {
+    return `${key} (enum: ${enumValues
+      .map((value) => JSON.stringify(value))
+      .join('|')})`
+  }
+  if (typeof type === 'string') return `${key} (${type})`
+  return key
+}
+
+/**
+ * Compact hint for a child's OPTIONAL `inputSchema.params` members that the
+ * spawnerPrompt does not already name (e.g. thinker's `depth` enum), so the
+ * parent stops guessing param shapes and burning a failed spawn + retry.
+ * Additive to and separate from the required-params hint. Mirrors
+ * getRequiredAgentParamKeys' dual handling: runtime templates store zod
+ * (`z.toJSONSchema(..., { io: 'input' })`), agent definitions use plain
+ * JSON-Schema objects. Any conversion failure yields '' so catalog rendering
+ * can never throw.
+ */
+function formatOptionalParamsHint(agentTemplate: AgentTemplate): string {
+  const prompt = agentTemplate.spawnerPrompt ?? ''
+  const paramsSchema = agentTemplate.inputSchema?.params
+  if (!paramsSchema) return ''
+
+  let jsonSchema: unknown = paramsSchema
+  if (paramsSchema instanceof z.ZodType) {
+    try {
+      jsonSchema = z.toJSONSchema(paramsSchema, { io: 'input' })
+    } catch {
+      return ''
+    }
+  }
+  if (!jsonSchema || typeof jsonSchema !== 'object') return ''
+  const properties = (jsonSchema as { properties?: unknown }).properties
+  if (!properties || typeof properties !== 'object') return ''
+
+  const required = new Set(getRequiredAgentParamKeys(paramsSchema))
+  const optionalSummaries = Object.keys(properties)
+    .filter((key) => !required.has(key) && !promptNamesParamKey(prompt, key))
+    .map((key) =>
+      formatOptionalParamSummary(
+        (properties as Record<string, unknown>)[key],
+        key,
+      ),
+    )
+  if (optionalSummaries.length === 0) return ''
+
+  const summary = optionalSummaries.join(', ')
+  const bounded =
+    summary.length > OPTIONAL_PARAMS_SUMMARY_MAX_LENGTH
+      ? `${summary.slice(0, OPTIONAL_PARAMS_SUMMARY_MAX_LENGTH - 1)}…`
+      : summary
+  return ` Optional params: ${bounded}.`
+}
+
 /** Compact token rendering for catalog lines: `200_000` -> `200k`. */
 function formatContextWindowTokens(tokens: number): string {
   return tokens >= 1_000
@@ -112,7 +190,9 @@ function formatContextWindowTokens(tokens: number): string {
 /**
  * Compact catalog line for the "You can spawn the following agents" addendum.
  * Appends a one-line required-params/handoff hint when the child's contract
- * is not already named in `spawnerPrompt`, then the child's context window as
+ * is not already named in `spawnerPrompt`, plus a one-line optional-params
+ * hint for optional params the prompt does not name (so the parent stops
+ * guessing param shapes), then the child's context window as
  * ` [context ~200k]` when the caller resolved one, so the parent can size
  * delegated work. An unknown window appends nothing, keeping the catalog
  * byte-identical for callers that inject no resolver.
@@ -132,13 +212,15 @@ export function formatCompactAgentCatalogLine(
 
   const prompt = agentTemplate.spawnerPrompt
   const hint = formatRequiredSpawnContractHint(agentType, agentTemplate)
-  if (prompt) {
-    return hint
-      ? `- ${agentType}: ${prompt} ${hint}${windowSuffix}`
-      : `- ${agentType}: ${prompt}${windowSuffix}`
-  }
-  if (hint) return `- ${agentType}: ${hint}${windowSuffix}`
-  return `- ${agentType}${windowSuffix}`
+  const optionalHint = formatOptionalParamsHint(agentTemplate)
+  const base = prompt
+    ? hint
+      ? `- ${agentType}: ${prompt} ${hint}`
+      : `- ${agentType}: ${prompt}`
+    : hint
+      ? `- ${agentType}: ${hint}`
+      : `- ${agentType}`
+  return `${base}${optionalHint}${windowSuffix}`
 }
 
 /**
@@ -169,11 +251,22 @@ export function buildAgentToolInputSchema(
   let schemaFields: Record<string, z.ZodType> = {}
 
   if (inputSchema?.prompt) {
-    schemaFields.prompt = inputSchema.prompt
+    // Defensive: a template that crossed a JSON boundary (bundled agents,
+    // parent→child bridge) can still carry a plain JSON-Schema object here;
+    // asSchema would route it to the zod-v3 converter and crash, so coerce
+    // before wrapping.
+    schemaFields.prompt = coerceJsonSchemaMember(
+      inputSchema.prompt,
+    ) as z.ZodType
   }
 
   if (inputSchema?.params) {
-    schemaFields.params = z.preprocess(coerceToObject, inputSchema.params)
+    // Same JSON-boundary hazard as `prompt` above: the inner schema must be
+    // zod before z.preprocess wraps it.
+    schemaFields.params = z.preprocess(
+      coerceToObject,
+      coerceJsonSchemaMember(inputSchema.params) as z.ZodType,
+    )
   }
 
   schemaFields.handoff = agentHandoffSchema
@@ -192,6 +285,29 @@ export function buildAgentToolInputSchema(
       agentTemplate.spawnerPrompt ||
         `Spawn the ${agentTemplate.displayName} agent`,
     )
+}
+
+/** Exact child-specific portion of a generic spawn entry, rendered from the
+ * same input schemas used for direct agent tools. The shared `agent_type`,
+ * `handoff`, and `background` fields are already described by spawn_agents. */
+export function formatGenericAgentInputContract(
+  agentType: AgentTemplateType,
+  agentTemplate: AgentTemplate,
+): string {
+  const fields: Record<string, z.ZodType> = {}
+  if (agentTemplate.inputSchema?.prompt) {
+    fields.prompt = coerceJsonSchemaMember(agentTemplate.inputSchema.prompt) as z.ZodType
+  }
+  if (agentTemplate.inputSchema?.params) {
+    fields.params = coerceJsonSchemaMember(agentTemplate.inputSchema.params) as z.ZodType
+  }
+  try {
+    const schema = z.toJSONSchema(z.object(fields), { io: 'input' })
+    delete schema.$schema
+    return `Spawn input for ${agentType} (native JSON; merge these fields into the agent entry): ${JSON.stringify(schema)}`
+  } catch (error) {
+    throw new Error(`Cannot publish spawn input schema for agent ${agentType}`, { cause: error })
+  }
 }
 
 /**
@@ -236,6 +352,7 @@ export async function buildAgentToolSet(
     const toolName = getAgentToolName(agentType)
     const inputSchema = ensureJsonSchemaCompatible(
       buildAgentToolInputSchema(agentTemplate),
+      agentType,
     )
 
     // Use the same structure as other tools in toolParams
@@ -284,6 +401,7 @@ params: None`
     agentTemplate.inheritParentSystemPrompt &&
       "This agent inherits the parent's system prompt for prompt caching.",
     inputSchemaStr,
+    formatGenericAgentInputContract(agentType, agentTemplate),
   ).join('\n')
 }
 

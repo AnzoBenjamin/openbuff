@@ -1,0 +1,189 @@
+{
+  "runtime": "1.3.5",
+  "nodeVersion": "v26.1.0",
+  "fixture": "/tmp/openbuff-body-review-2026-11-05/evidence/07-assets-OJ1sve",
+  "offlinePinnedLocalGrammarEvidence": [
+    {
+      "path": "demo.php",
+      "wasm": "tree-sitter-php.wasm",
+      "parser": true,
+      "query": true,
+      "structure": {
+        "symbols": [
+          {
+            "name": "phpDemo",
+            "kind": "function",
+            "startLine": 1,
+            "endLine": 1,
+            "depth": 0,
+            "startCol": 7,
+            "endCol": 28,
+            "startByte": 6,
+            "endByte": 27,
+            "language": "php",
+            "signatureText": "<?php function phpDemo() {}",
+            "signatureStartLine": 1,
+            "signatureEndLine": 1,
+            "typeInfo": {
+              "params": [],
+              "detail": "()"
+            }
+          }
+        ],
+        "diagnostics": []
+      }
+    },
+    {
+      "path": "App.swift",
+      "wasm": "tree-sitter-swift.wasm",
+      "parser": true,
+      "query": true,
+      "structure": {
+        "symbols": [
+          {
+            "name": "swiftDemo",
+            "kind": "function",
+            "startLine": 1,
+            "endLine": 1,
+            "depth": 0,
+            "startCol": 1,
+            "endCol": 20,
+            "startByte": 0,
+            "endByte": 19,
+            "language": "swift",
+            "signatureText": "func swiftDemo() {}",
+            "signatureStartLine": 1,
+            "signatureEndLine": 1
+          }
+        ],
+        "diagnostics": []
+      }
+    },
+    {
+      "path": "Main.kt",
+      "wasm": "tree-sitter-kotlin.wasm",
+      "parser": true,
+      "query": true,
+      "structure": {
+        "symbols": [
+          {
+            "name": "kotlinDemo",
+            "kind": "function",
+            "startLine": 1,
+            "endLine": 1,
+            "depth": 0,
+            "startCol": 1,
+            "endCol": 20,
+            "startByte": 0,
+            "endByte": 19,
+            "language": "kotlin",
+            "signatureText": "fun kotlinDemo() {}",
+            "signatureStartLine": 1,
+            "signatureEndLine": 1
+          }
+        ],
+        "diagnostics": []
+      }
+    },
+    {
+      "path": "Player.gd",
+      "wasm": "tree-sitter-gdscript.wasm",
+      "parser": true,
+      "query": true,
+      "structure": {
+        "symbols": [
+          {
+            "name": "Player",
+            "kind": "class",
+            "startLine": 2,
+            "endLine": 2,
+            "depth": 0,
+            "startCol": 1,
+            "endCol": 18,
+            "startByte": 13,
+            "endByte": 30,
+            "language": "gdscript",
+            "signatureText": "class_name Player",
+            "signatureStartLine": 2,
+            "signatureEndLine": 2
+          },
+          {
+            "name": "speed",
+            "kind": "variable",
+            "startLine": 3,
+            "endLine": 3,
+            "depth": 0,
+            "startCol": 1,
+            "endCol": 23,
+            "startByte": 31,
+            "endByte": 53,
+            "language": "gdscript",
+            "signatureText": "var speed: float = 3.0",
+            "signatureStartLine": 3,
+            "signatureEndLine": 3
+          },
+          {
+            "name": "move",
+            "kind": "function",
+            "startLine": 4,
+            "endLine": 5,
+            "depth": 0,
+            "startCol": 1,
+            "endCol": 9,
+            "startByte": 54,
+            "endByte": 83,
+            "language": "gdscript",
+            "signatureText": "func move() -> void:",
+            "signatureStartLine": 4,
+            "signatureEndLine": 4,
+            "typeInfo": {
+              "params": [],
+              "returnType": "void",
+              "detail": "() -> void"
+            }
+          },
+          {
+            "name": "health_changed",
+            "kind": "signal",
+            "startLine": 6,
+            "endLine": 6,
+            "depth": 0,
+            "startCol": 1,
+            "endCol": 35,
+            "startByte": 84,
+            "endByte": 118,
+            "language": "gdscript",
+            "signatureText": "signal health_changed(amount: int)",
+            "signatureStartLine": 6,
+            "signatureEndLine": 6,
+            "typeInfo": {
+              "params": [
+                {
+                  "name": "amount",
+                  "type": "int"
+                }
+              ],
+              "detail": "(amount: int)"
+            }
+          }
+        ],
+        "diagnostics": []
+      }
+    }
+  ],
+  "stagedCurrentSourceComponentBundles": [
+    {
+      "format": "cjs",
+      "status": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "format": "esm",
+      "status": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "assuranceLimit": "Current source code-map component built with SDK format/loader/external treatment; not a full SDK release build or installed binary. Existing grammar bytes accepted only after matching current source SHA-256 pins. No download or source/build-output mutation."
+}

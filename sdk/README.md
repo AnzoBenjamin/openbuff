@@ -4,6 +4,17 @@ Openbuff is a local-first, BYOK coding-agent SDK. Filesystem tools run against
 the host-provided `CodebuffFileSystem`; provider credentials and model routing
 remain under the host's control.
 
+Agent runs have unrestricted filesystem access by default. To opt into
+tool-level containment, configure `openbuff.json`:
+
+```json
+{ "sandbox": { "mode": "project" } }
+```
+
+See [sandbox configuration](../docs/configuration.md#filesystem-sandbox) for
+additional allowed paths. The portable backend applies tool path checks; it
+does not provide OS process or network isolation.
+
 ## Recommended filesystem setup
 
 New runs default to structured `read_files` v1 results. Use
@@ -103,16 +114,109 @@ does not represent the same workspace.
 
 ## High-impact action approvals
 
+Each SDK run captures its host configuration, provider credentials and read
+roots before setup. `env` and `inheritEnv` control child commands; an explicit
+`undefined` value removes a child environment entry. They do not select a
+different provider config or alter provider credentials. A host can supply
+`hostConfiguration` and `configReadFs` to select all configuration inputs
+explicitly. Disabled global discovery reads no global config or OAuth store;
+an explicit required config that cannot be read makes the run unavailable.
+
+The run timeout starts before configuration capture. Terminal timeouts also
+cover approval and startup, and apply to both synchronous and background
+commands. Configured hooks default to 300 seconds; `timeoutSeconds: -1`
+selects no local cap. A finite parent cap still applies. Hook inference runs
+only when `autoFileChangeHooks` is explicitly true.
+
+To include work before `client.run()` in the same timeout, capture a deadline
+with `captureRunDeadline(timeoutMs)` before awaiting setup and pass its value
+as `runDeadline`. The CLI uses this handoff for `--timeout`. A concurrent
+`runTimeoutMs` can shorten the captured expiry. Seeds must come from the same
+loaded SDK clock instance; expired, malformed or foreign-clock seeds refuse
+before configuration and native setup. A seed carries clock coordinates and
+is not an authorization token.
+
+```ts
+import { captureRunDeadline } from '@openbuff/sdk'
+
+const deadline = captureRunDeadline(30_000)
+if (!deadline.ok) throw new Error(deadline.cause)
+await prepareProject()
+const result = await client.run({
+  agent: 'base2', prompt: 'Check the project', runDeadline: deadline.value,
+})
+```
+
+Process helpers called directly require a registered host context. Create one
+once at the host boundary and pass its facade and captured shell:
+
+```ts
+import { createDirectHostExecution, runTerminalCommand } from '@openbuff/sdk'
+
+const host = createDirectHostExecution({ cwd: '/path/to/project' })
+if (!host.ok) throw new Error(host.cause)
+const result = await runTerminalCommand({
+  command: 'git status --short', process_type: 'SYNC', timeout_seconds: 30,
+  cwd: '/path/to/project',
+  executionContext: host.value.executionContext,
+  terminalShell: host.value.hostServices.terminalShell,
+  getTerminalLaunchMetadata: host.value.hostServices.getTerminalLaunchMetadata,
+})
+```
+
+SYNC commands run with stdin closed, so a prompt reads EOF instead of
+waiting. When `timeout_seconds` is omitted, a SYNC command gets 120 s of
+execution time (approval waits excluded); pass a larger value or `-1` for
+longer runs, and pass `timeoutPolicy` (`defaultSyncSeconds`, `maxSeconds`,
+`allowUnbounded`) to set host limits. A SYNC result carries `idleOutputHint`
+after 30 s without output, and a cancelled or timed-out command keeps its
+partial output. Attached BACKGROUND jobs (`detach: false`) end with the host
+process: on natural exit, `process.exit()`, SIGINT, SIGTERM and SIGHUP their
+process groups are terminated. When nothing else handles SIGINT/SIGTERM, the
+SDK exits after that cleanup with 128 + the signal number. Transferred
+(`detach: true`) jobs keep their receiver lifetime and survive the host.
+
+The portable backend passes an exact scrubbed child environment and supports
+cooperative cancellation. `executionProfile` declares the policy, preferred
+backend and required capabilities; a missing required backend returns
+unavailable. These facts do not certify OS isolation or process-tree death.
+`recordExecution` reports planned, admitted, dispatched and observed starts
+separately. An observed start requires the runtime PID/event; dispatch and
+cache reuse do not invent one. Standalone helpers with no context return a
+structured refusal.
+
+Workspace broker and journal factories support legacy direct callers by
+capturing a bootstrap host context once before asynchronous work. Their
+`identitySource` reports observed Git identity or an observed non-Git
+filesystem fallback. Permission, I/O, empty Git responses and execution
+refusals cannot silently choose a different identity. Direct calls and runs
+therefore address the same journal and mutation broker for a Git workspace.
+
+Background detachment transfers ownership to a registered session receiver
+before binding and admission. It preserves a finite original deadline.
+Run-owned LSP/MCP resources have separate request leases: cancelling a waiter
+releases that lease while the registered run still controls the process.
+Every terminal run path ends that lifetime and closes its captured MCP clients.
+Transferred background jobs retain their receiver lifetime and original cap.
+Sharing is confined to the same host, owner, configuration and lifetime. A
+direct host operation uses the caller's signal and selected lifetime.
+
 Approval behavior is controlled by `approvalMode`:
 
 - `balanced` (default) allows routine dependency changes, commits, feature
   branch pushes, pull requests, ordinary downloads, normal pipelines/tests, and
-  staged-only `git restore --staged` without prompting. It asks only for truly
+  staged-only `git restore --staged` without prompting. Git status/diff/log
+  queries, project scripts/modules, builds, and login-shell command payloads
+  also run without approval; Git's implicit repository helpers alone do not
+  make a read query high-impact. It asks only for truly
   destructive workspace/history shapes (for example `git reset --hard`,
   `git clean -fd`, worktree-mutating restore, recursive deletes), default-branch
   pushes, deployments, releases, migrations, uploads/remote shells, and
   interpreter-eval / detached-process shapes — not ordinary pipes, command
-  substitution in project scripts, or background jobs.
+  substitution in project scripts, or background jobs. Unknown executable
+  adapters and explicit programmable read helpers still require approval.
+  Client-origin MCP process startup also needs separate approval after tool
+  approval.
 - `strict` asks for every classified package, Git, remote, or destructive
   effect.
 - `allow-all` auto-approves classified effects while retaining non-negotiable
@@ -132,22 +236,23 @@ approval.
 
 ## Terminal command permission profiles
 
-**Note:** In the bundled runtime, all agents currently execute their terminal
-commands under the `full-access` profile. The runtime handler
+**Note:** The runtime handler
 (`packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts`)
-hardcodes `permission_profile: 'full-access'` for every agent, so the per-agent
-profile gates described below (`read-only`, `workspace-write`, `git-commit`,
-`dependency-mutation`, `validation-diagnosis`, `tmux-test`,
-`librarian-read-only`) are **not** enforced for bundled agents. Under
-`full-access`, `evaluateTerminalCommandPolicy` bypasses every policy gate: no
-path-containment/traversal checks, no temp restriction, no
-read-only/env-dump/shell-indirection/sed/dependency/git denials, and no
-per-profile allowlists. The profile catalog below is therefore the SDK helper's
-contract, not the bundled per-agent enforcement: the profiles still exist in the
-policy code and remain callable via the exported `evaluateTerminalCommandPolicy`
-helper, so SDK hosts can still invoke any profile directly. The separate
-high-impact-action approval gate (previous section) is UNCHANGED and still
-applies on top of `full-access`.
+forwards each agent's declared `terminalPermissionProfile` as
+`permission_profile`. Agents that declare none are forwarded as `full-access`,
+and every agent in a plan-mode lineage is forwarded as `read-only`. The host
+execution context keeps its own profile (`full-access` when the sandbox is
+`unrestricted`, otherwise `workspace-write`), which also selects sandbox and
+network behaviour. A declared `read-only` or `workspace-write` profile is an
+extra upper bound: the command must pass that profile's policy and the host
+profile's (`sdk/src/tools/terminal-profile-bound.ts`). The task-specific
+profiles (`git-commit`, `dependency-mutation`, `validation-diagnosis`,
+`tmux-test`, `librarian-read-only`) do not bind yet, so those agents still run
+under the host profile alone. Under `full-access`,
+`evaluateTerminalCommandPolicy` bypasses every policy gate. The
+high-impact-action approval gate (previous section) applies on top of every
+profile. Hosts that override `run_terminal_command` now receive the declared
+profile instead of a constant `full-access`.
 
 `run_terminal_command` is gated by the exported
 `evaluateTerminalCommandPolicy` helper, which decides whether a command may

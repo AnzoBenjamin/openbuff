@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 
 import {
+  MemoryPlaybookSchema,
+  type MemoryPlaybook,
+} from '@codebuff/common/types/memory-playbook'
+import {
   MemoryAppendRequestSchema,
   MemoryEventIdSchema,
   MemoryQueryOutcomeSchema,
@@ -154,12 +158,18 @@ class RepositoryStub implements MemoryRepositoryV2 {
     if (this.claimDedupFailure === 'reject') {
       return {
         status: 'error',
-        error: { kind: 'unavailable', message: 'dedup offline', retryable: true },
+        error: {
+          kind: 'unavailable',
+          message: 'dedup offline',
+          retryable: true,
+        },
       }
     }
     const requested = params.claimIds
     const entries = requested
-      ? this.claimDedupEntries.filter((entry) => requested.includes(entry.claimId))
+      ? this.claimDedupEntries.filter((entry) =>
+          requested.includes(entry.claimId),
+        )
       : this.claimDedupEntries
     return { status: 'ok', entries }
   }
@@ -265,6 +275,60 @@ class RepositoryWithoutClaimDedup extends RepositoryStub {
     // through to the normal observation.recorded path.
     const legacy: { getClaimDedup?: unknown } = this
     legacy.getClaimDedup = undefined
+  }
+}
+
+/**
+ * Schema-valid active playbook used as the single installed fixture for the
+ * playbook-context tests below.
+ */
+const seedPlaybook = MemoryPlaybookSchema.parse({
+  schemaVersion: 1,
+  playbookId: 'playbook:ci-before-commit',
+  workspaceId: projectId,
+  title: 'Run targeted tests before committing',
+  instruction: 'Always run the targeted test suite before a git commit.',
+  trigger: { tool: 'run_terminal_command', terminalAction: 'git-commit' },
+  scope: { repos: [] },
+  status: 'active',
+  enforcement: 'block',
+  counters: {
+    fired: 0,
+    blocked: 0,
+    compliedAfterBlock: 0,
+    falsePositives: 0,
+    bypassed: 0,
+  },
+  provenance: {
+    origin: 'derived',
+    recordedBy: 'test',
+    sourceEventIds: [],
+    metadata: {},
+  },
+  triggerSignature: 'trigger-signature:ci-before-commit',
+  createdAt: Date.parse(generatedAt),
+  updatedAt: Date.parse(generatedAt),
+})
+
+/**
+ * Fake that adds the optional procedural-memory (playbook) surface so the
+ * coordinator's install branch runs. Only the two playbook reads are added;
+ * tests that need a repository without them keep using RepositoryStub.
+ */
+class RepositoryWithPlaybooks extends RepositoryStub {
+  readonly ensureSeedRequests: string[] = []
+  readonly listPlaybooksRequests: string[] = []
+  playbooks: MemoryPlaybook[] = []
+  listPlaybooksThrows = false
+
+  async ensureSeedPlaybooks(workspaceId: string): Promise<void> {
+    this.ensureSeedRequests.push(workspaceId)
+  }
+
+  async listPlaybooks(workspaceId: string): Promise<MemoryPlaybook[]> {
+    this.listPlaybooksRequests.push(workspaceId)
+    if (this.listPlaybooksThrows) throw new Error('playbook index offline')
+    return this.playbooks
   }
 }
 
@@ -501,8 +565,8 @@ describe('MemoryV2Coordinator lifecycle', () => {
     expect(repository.queryRequests).toHaveLength(queriesBeforeResume + 1)
     expect(repository.queryRequests.at(-1)).toMatchObject({
       queryId: first.turn.queryId,
-      taskId: first.activeTask.taskId,
     })
+    expect(repository.queryRequests.at(-1)?.taskId).toBeUndefined()
   })
 
   test('passes reconciled workspace state and injects only successful inject-mode results', async () => {
@@ -529,6 +593,7 @@ describe('MemoryV2Coordinator lifecycle', () => {
       workspaceRevision: 9,
       workspaceSnapshotId: 'snapshot:9',
     })
+    expect(repository.queryRequests.at(-1)?.taskId).toBeUndefined()
     expect(state.memoryV2Context).toMatchObject({
       schemaVersion: 2,
       userInputId: 'input:inject',
@@ -1023,6 +1088,12 @@ describe('MemoryV2Coordinator lifecycle', () => {
 
   test.each([
     {
+      name: 'completed',
+      output: { type: 'structuredOutput' as const, value: {} },
+      signal: undefined,
+      expected: 'completed' as const,
+    },
+    {
       name: 'failed',
       output: { type: 'error' as const, message: 'run failed' },
       signal: undefined,
@@ -1052,6 +1123,10 @@ describe('MemoryV2Coordinator lifecycle', () => {
       await coordinator.finishTurn({ agentState: state, output, signal })
 
       expect(state.memoryV2!.turn.status).toBe(expected)
+      const events = allEvents(repository)
+      expect(new Set(events.map((event) => event.eventId)).size).toBe(
+        events.length,
+      )
       expect(allEvents(repository).at(-1)).toMatchObject({
         eventType: 'session.ended',
         payload: { status: expected },
@@ -1092,7 +1167,10 @@ describe('MemoryV2Coordinator lifecycle', () => {
       expect(observationEvent.payload.observation.evidence[0]).toMatchObject({
         selector: { kind: 'file', path: 'src/good.ts' },
       })
-      expect(observationEvent.payload.observation.evidence[0]?.contentDigest).toMatch(/^sha256:/)
+      // Discovery metadata has no authenticated file-content digest.
+      expect(
+        observationEvent.payload.observation.evidence[0]?.contentDigest,
+      ).toBeUndefined()
       expect(
         observationEvent.payload.observation.provenance?.metadata.outputDigest,
       ).toMatch(/^sha256:[a-f0-9]{64}$/)
@@ -1555,7 +1633,9 @@ describe('MemoryV2Coordinator lifecycle', () => {
       )
       expect(chunkEvidence.length).toBeGreaterThan(0)
       for (const item of chunkEvidence) {
-        expect(item.excerpt === undefined || item.excerpt.length <= 1024).toBe(true)
+        expect(item.excerpt === undefined || item.excerpt.length <= 1024).toBe(
+          true,
+        )
         expect(item.contentDigest).toMatch(/^sha256:/)
       }
       expect(event.payload.observation.confidence).toBe(0.5)
@@ -1633,9 +1713,7 @@ describe('MemoryV2Coordinator lifecycle', () => {
     if (event.eventType === 'observation.recorded') {
       const selectors = event.payload.observation.selectors ?? []
       expect(selectors).toContainEqual({ kind: 'file', path: 'src/good.ts' })
-      expect(
-        selectors.filter((s) => s.kind === 'chunk'),
-      ).toHaveLength(2)
+      expect(selectors.filter((s) => s.kind === 'chunk')).toHaveLength(2)
       expect(selectors).toContainEqual({
         kind: 'chunk',
         path: 'src/good.ts',
@@ -1661,7 +1739,10 @@ describe('MemoryV2Coordinator lifecycle', () => {
         (e) => e.selector.kind === 'chunk',
       )
       expect(chunkEvidence?.contentDigest).toBe(validDigest)
-      expect(chunkEvidence?.excerpt === undefined || chunkEvidence?.excerpt.length <= 1024).toBe(true)
+      expect(
+        chunkEvidence?.excerpt === undefined ||
+          chunkEvidence?.excerpt.length <= 1024,
+      ).toBe(true)
     }
     expect(verifyRequests).toHaveLength(1)
     expect(verifyRequests[0]).toMatchObject({
@@ -1818,20 +1899,44 @@ describe('MemoryV2Coordinator lifecycle', () => {
       eventId: futureTailId,
     })
     expect(attempts[1]!.events).toEqual(attempts[0]!.events)
-    expect(state.memoryV2!.lastEventId).toBe(attempts[1]!.events.at(-1)!.eventId)
+    expect(state.memoryV2!.lastEventId).toBe(
+      attempts[1]!.events.at(-1)!.eventId,
+    )
   })
 
   test('classifies decision tools deterministically', () => {
-    expect(classifyObservationKind('create_plan', [{ plan: 'x' }])).toBe('decision')
-    expect(classifyObservationKind('architect', [{ conclusion: 'We decided ok' }])).toBe('decision')
-    expect(classifyObservationKind('thinker', [{ summary: 'plain notes' }])).toBe('fact')
-    expect(classifyObservationKind('think_deeply', [{ text: 'the service must not delete data' }])).toBe('constraint')
-    expect(classifyObservationKind('think_deeply', [{ summary: 'plain notes' }])).toBe('fact')
-    expect(classifyObservationKind('architect', [{ constraint: 'must use sqlite' }])).toBe('constraint')
-    expect(classifyObservationKind('get_change_review_bundle', [{ status: 'ok' }])).toBe('discovery')
-    expect(classifyObservationKind('run_targeted_validation', [{ passed: true }])).toBe('discovery')
-    expect(classifyObservationKind('write_file', [{ ok: true }])).toBe('outcome')
-    expect(classifyObservationKind('code_search', [{ ok: true }])).toBe('discovery')
+    expect(classifyObservationKind('create_plan', [{ plan: 'x' }])).toBe(
+      'decision',
+    )
+    expect(
+      classifyObservationKind('architect', [{ conclusion: 'We decided ok' }]),
+    ).toBe('decision')
+    expect(
+      classifyObservationKind('thinker', [{ summary: 'plain notes' }]),
+    ).toBe('fact')
+    expect(
+      classifyObservationKind('think_deeply', [
+        { text: 'the service must not delete data' },
+      ]),
+    ).toBe('constraint')
+    expect(
+      classifyObservationKind('think_deeply', [{ summary: 'plain notes' }]),
+    ).toBe('fact')
+    expect(
+      classifyObservationKind('architect', [{ constraint: 'must use sqlite' }]),
+    ).toBe('constraint')
+    expect(
+      classifyObservationKind('get_change_review_bundle', [{ status: 'ok' }]),
+    ).toBe('discovery')
+    expect(
+      classifyObservationKind('run_targeted_validation', [{ passed: true }]),
+    ).toBe('discovery')
+    expect(classifyObservationKind('write_file', [{ ok: true }])).toBe(
+      'outcome',
+    )
+    expect(classifyObservationKind('code_search', [{ ok: true }])).toBe(
+      'discovery',
+    )
   })
 
   test('records decision-classified tool output as kind=decision', async () => {
@@ -1853,7 +1958,9 @@ describe('MemoryV2Coordinator lifecycle', () => {
       callId: 'call:plan-decision',
       userInputId: 'input:decision-capture',
       input: {},
-      output: [{ type: 'json', value: { plan: 'migrate to sqlite', status: 'ok' } }],
+      output: [
+        { type: 'json', value: { plan: 'migrate to sqlite', status: 'ok' } },
+      ],
       native: true,
     })
     expect(allEvents(repository).length).toBe(before + 1)
@@ -2026,7 +2133,9 @@ describe('MemoryV2Coordinator lifecycle', () => {
       expect(String(event.payload.observationId)).toBe('observation:existing-1')
     }
     expect(
-      newEvents.some((candidate) => candidate.eventType === 'observation.recorded'),
+      newEvents.some(
+        (candidate) => candidate.eventType === 'observation.recorded',
+      ),
     ).toBe(false)
   })
 
@@ -2148,7 +2257,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
         text: 'Use Postgres because durability',
         kind: 'decision',
         evidenceSelectors: ['docs/architecture.md'],
-        supersedes: ['observation:old-b', 'observation:old-a', 'observation:old-b'],
+        supersedes: [
+          'observation:old-b',
+          'observation:old-a',
+          'observation:old-b',
+        ],
       },
       output: [
         {
@@ -2159,7 +2272,11 @@ describe('MemoryV2Coordinator lifecycle', () => {
             evidenceCount: 1,
             text: 'Use Postgres because durability',
             evidenceSelectors: ['docs/architecture.md'],
-            supersedes: ['observation:old-b', 'observation:old-a', 'observation:old-b'],
+            supersedes: [
+              'observation:old-b',
+              'observation:old-a',
+              'observation:old-b',
+            ],
           },
         },
       ],
@@ -2171,18 +2288,28 @@ describe('MemoryV2Coordinator lifecycle', () => {
     if (recorded.eventType !== 'observation.recorded') return
     const capturedObservationId = recorded.payload.observation.observationId
     const superseded = newEvents.filter(
-      (candidate): candidate is Extract<MemoryEventDraft, { eventType: 'claim.superseded' }> =>
-        candidate.eventType === 'claim.superseded',
+      (
+        candidate,
+      ): candidate is Extract<
+        MemoryEventDraft,
+        { eventType: 'claim.superseded' }
+      > => candidate.eventType === 'claim.superseded',
     )
     expect(
       superseded.map((draft) => String(draft.payload.observationId)),
     ).toEqual(['observation:old-a', 'observation:old-b'])
     for (const draft of superseded) {
-      expect(draft.payload.supersededByObservationId).toBe(capturedObservationId)
+      expect(draft.payload.supersededByObservationId).toBe(
+        capturedObservationId,
+      )
     }
     const reused = newEvents.filter(
-      (candidate): candidate is Extract<MemoryEventDraft, { eventType: 'observation.reused' }> =>
-        candidate.eventType === 'observation.reused',
+      (
+        candidate,
+      ): candidate is Extract<
+        MemoryEventDraft,
+        { eventType: 'observation.reused' }
+      > => candidate.eventType === 'observation.reused',
     )
     expect(reused).toHaveLength(1)
     expect(reused[0]!.payload.used).toEqual([
@@ -2211,15 +2338,31 @@ describe('MemoryV2Coordinator lifecycle', () => {
         // Both targets exist on the ACTIVE task but their stored claim
         // lifecycle is retracted, so only the status check can exclude them.
         repository.observationStatusEntries = [
-          { observationId: 'observation:old-a', taskId: activeTaskId, status: 'retracted' },
-          { observationId: 'observation:old-b', taskId: activeTaskId, status: 'retracted' },
+          {
+            observationId: 'observation:old-a',
+            taskId: activeTaskId,
+            status: 'retracted',
+          },
+          {
+            observationId: 'observation:old-b',
+            taskId: activeTaskId,
+            status: 'retracted',
+          },
         ]
       } else if (mode === 'foreign-task') {
         // Both targets are active but belong to another task, so only the
         // taskId check can exclude them.
         repository.observationStatusEntries = [
-          { observationId: 'observation:old-a', taskId: 'task:foreign', status: 'active' },
-          { observationId: 'observation:old-b', taskId: 'task:foreign', status: 'active' },
+          {
+            observationId: 'observation:old-a',
+            taskId: 'task:foreign',
+            status: 'active',
+          },
+          {
+            observationId: 'observation:old-b',
+            taskId: 'task:foreign',
+            status: 'active',
+          },
         ]
       } else {
         repository.observationStatusFailure = 'reject'
@@ -2287,7 +2430,9 @@ describe('MemoryV2Coordinator lifecycle', () => {
       callId: 'call:constraint',
       userInputId: 'input:constraint-capture',
       input: {},
-      output: [{ type: 'json', value: { text: 'the service must not delete data' } }],
+      output: [
+        { type: 'json', value: { text: 'the service must not delete data' } },
+      ],
       native: true,
     })
     expect(allEvents(repository).length).toBe(before + 1)
@@ -2296,6 +2441,126 @@ describe('MemoryV2Coordinator lifecycle', () => {
     if (event.eventType === 'observation.recorded') {
       expect(event.payload.observation.kind).toBe('constraint')
     }
+  })
+})
+
+describe('MemoryV2Coordinator playbook context', () => {
+  test('installs seeded playbooks into agentState.playbookContext during prepareTurn', async () => {
+    const repository = new RepositoryWithPlaybooks()
+    repository.playbooks = [seedPlaybook]
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:playbook-install',
+      query: 'playbook install',
+    })
+
+    expect(repository.ensureSeedRequests).toEqual([projectId])
+    expect(repository.listPlaybooksRequests).toEqual([projectId])
+    expect(state.playbookContext).toEqual([seedPlaybook])
+    expect(
+      state.playbookContext?.map((playbook) => playbook.playbookId),
+    ).toEqual([seedPlaybook.playbookId])
+    expect(state.memoryAuthority).toMatchObject({
+      requested: 'sqlite-v2-opt-in',
+      active: 'sqlite-v2-opt-in',
+      fallbackOccurred: false,
+    })
+  })
+
+  test('clears playbookContext when the turn degrades', async () => {
+    const repository = new RepositoryWithPlaybooks()
+    repository.playbooks = [seedPlaybook]
+    repository.queryFailure = 'failed'
+    const state = getInitialAgentState()
+    state.playbookContext = [seedPlaybook]
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:playbook-degraded',
+      query: 'playbook degraded',
+    })
+
+    expect(state.playbookContext).toEqual([])
+    expect(state.memoryAuthority).toMatchObject({
+      requested: 'sqlite-v2-opt-in',
+      active: 'sqlite-v2-opt-in',
+      fallbackOccurred: false,
+      reason: 'query-failed',
+    })
+    // The degraded path must short-circuit before any playbook load runs.
+    expect(repository.ensureSeedRequests).toEqual([])
+    expect(repository.listPlaybooksRequests).toEqual([])
+  })
+
+  test('clears playbookContext on the json-v1 authority path without repository playbook work', async () => {
+    const repository = new RepositoryWithPlaybooks()
+    const state = getInitialAgentState()
+    state.playbookContext = [seedPlaybook]
+    const coordinator = new MemoryV2Coordinator({
+      ...config(repository, 'inject'),
+      authority: 'json-v1',
+    })
+
+    await coordinator.prepareTurn({
+      agentState: state,
+      trustedUserInputId: 'input:playbook-json-v1',
+      query: 'playbook json-v1',
+    })
+
+    expect(state.playbookContext).toEqual([])
+    expect(state.memoryAuthority).toMatchObject({
+      requested: 'json-v1',
+      active: 'json-v1',
+      fallbackOccurred: false,
+    })
+    expect(repository.requests).toHaveLength(0)
+    expect(repository.queryRequests).toHaveLength(0)
+    expect(repository.ensureSeedRequests).toEqual([])
+    expect(repository.listPlaybooksRequests).toEqual([])
+  })
+
+  test('installs an empty playbookContext and completes the turn when listPlaybooks throws', async () => {
+    const repository = new RepositoryWithPlaybooks()
+    repository.playbooks = [seedPlaybook]
+    repository.listPlaybooksThrows = true
+    const state = getInitialAgentState()
+    const coordinator = new MemoryV2Coordinator(
+      config(repository, 'inject'),
+      undefined,
+      () => generatedAt,
+    )
+
+    await expect(
+      coordinator.prepareTurn({
+        agentState: state,
+        trustedUserInputId: 'input:playbook-throw',
+        query: 'playbook throw',
+      }),
+    ).resolves.toBeUndefined()
+
+    // The install branch must actually have run: ensureSeedPlaybooks is
+    // awaited before listPlaybooks, so a missed narrowing would leave zero
+    // calls and the empty context would pass for the wrong reason.
+    expect(repository.ensureSeedRequests).toEqual([projectId])
+    expect(state.playbookContext).toEqual([])
+    expect(state.memoryAuthority).toMatchObject({
+      requested: 'sqlite-v2-opt-in',
+      active: 'sqlite-v2-opt-in',
+      fallbackOccurred: false,
+    })
+    expect(state.memoryV2Context).toBeDefined()
   })
 })
 

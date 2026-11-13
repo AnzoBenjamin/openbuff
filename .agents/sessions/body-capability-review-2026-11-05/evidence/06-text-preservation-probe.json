@@ -1,0 +1,29 @@
+{
+  "fixtureRoot": "/tmp/openbuff-body-review-2026-11-05/evidence/06-preservation-fixture-P9bsk8",
+  "rangePreservation": {
+    "original": "const keep = 1;\r\nconst target = 2;\r\nconst final = 3;\r\n",
+    "final": "const keep = 1;\nconst target = 4;\nconst final = 3;\n",
+    "originalCrlfCount": 3,
+    "finalCrlfCount": 0,
+    "finalLfCount": 3,
+    "preflight": {
+      "message": "edit_transaction preflight prepared 1 coordinated file change(s).",
+      "files": [
+        {
+          "path": "a.ts",
+          "content": "const keep = 1;\nconst target = 4;\nconst final = 3;\n"
+        }
+      ]
+    },
+    "mutationOutcome": "applied"
+  },
+  "boundedReadMemory": {
+    "fileBytes": 25165824,
+    "maxBytes": 1024,
+    "returnedBytes": 0,
+    "complete": false,
+    "totalLines": 1,
+    "largestConcatBytes": 25165824,
+    "concatCalls": 2
+  }
+}

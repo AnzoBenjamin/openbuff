@@ -102,11 +102,11 @@ export function getLogoAccentColor(
   env: CliEnv = getCliEnv(),
 ): string {
   const isTruecolor = supportsTruecolor(env)
-  // The primary green color - 'lime' is CSS bright green
+  // Match the historical green used for focus and primary actions.
   if (themeName === 'dark') {
     return isTruecolor ? '#9EFC62' : 'lime'
   }
-  return isTruecolor ? '#65A83E' : 'green'
+  return isTruecolor ? '#33721e' : 'green'
 }
 
 const IDE_THEME_INFERENCE = {
@@ -857,124 +857,106 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
     // Core semantic colors
     primary: '#9EFC62',
     secondary: '#a3aed0',
-    success: '#22c55e',
-    error: '#ef4444',
-    warning: '#FFA500',
+    success: '#85d69b',
+    error: '#ef9696',
+    warning: '#e6be7e',
     info: '#9EFC62',
-    link: '#3B82F6',
-    directory: '#9CA3AF',
+    link: '#a7c6ef',
+    directory: '#acb3bf',
 
     // Neutral scale
     foreground: '#f1f5f9',
     background: 'transparent',
     muted: '#acb3bf',
-    border: '#536175',
+    border: '#858e9b',
     surface: '#202327',
     surfaceHover: '#334155',
 
     // Context-specific
-    aiLine: '#6b7280',
+    aiLine: '#858e9b',
     userLine: '#9EFC62',
 
     // Agent backgrounds
-    agentToggleHeaderBg: '#f97316',
-    agentToggleExpandedBg: '#1d4ed8',
+    agentToggleHeaderBg: '#202327',
+    agentToggleExpandedBg: '#334155',
     agentFocusedBg: '#334155',
-    agentContentBg: '#000000',
+    agentContentBg: 'transparent',
     inputFg: '#f5f5f5',
     inputFocusedFg: '#ffffff',
 
     // Mode toggles
-    modeFastBg: '#f97316',
-    modeFastText: '#f97316',
-    modePlanBg: '#1e40af',
-    modePlanText: '#1e40af',
+    modeFastBg: '#202327',
+    modeFastText: '#f1f5f9',
+    modePlanBg: '#202327',
+    modePlanText: '#9EFC62',
 
     // Image card
-    imageCardBorder: '#6B7280',
+    imageCardBorder: '#858e9b',
 
     // Markdown
     markdown: {
-      // Dark mode: slightly darker gray for less brightness
       codeBackground: '#374151',
-      codeHeaderFg: '#5b647a',
-      inlineCodeFg: '#FF8534',
+      codeHeaderFg: '#cbd5e1',
+      inlineCodeFg: '#ff944d',
       codeTextFg: '#f1f5f9',
-      headingFg: {
-        1: '#facc15',
-        2: '#facc15',
-        3: '#facc15',
-        4: '#facc15',
-        5: '#facc15',
-        6: '#facc15',
-      },
       listBulletFg: '#a3aed0',
-      blockquoteBorderFg: '#334155',
+      blockquoteBorderFg: '#858e9b',
       blockquoteTextFg: '#e2e8f0',
-      dividerFg: '#283042',
+      dividerFg: '#858e9b',
       codeMonochrome: false,
     },
   },
   light: {
     name: 'light',
     // Core semantic colors
-    primary: '#65A83E',
-    secondary: '#6b7280',
-    success: '#059669',
-    error: '#ef4444',
-    warning: '#F59E0B',
-    info: '#65A83E',
-    link: '#2563EB',
-    directory: '#6B7280',
+    primary: '#33721e',
+    secondary: '#616873',
+    success: '#087448',
+    error: '#bf2934',
+    warning: '#8a5300',
+    info: '#33721e',
+    link: '#315da8',
+    directory: '#616873',
 
     // Neutral scale
     foreground: '#111827',
     background: 'transparent',
-    muted: '#6b7280',
-    border: '#d1d5db',
+    muted: '#616873',
+    border: '#7a8492',
     surface: '#f3f4f6',
     surfaceHover: '#e5e7eb',
 
     // AI/User context
-    aiLine: '#6b7280',
-    userLine: '#65A83E',
+    aiLine: '#7a8492',
+    userLine: '#33721e',
 
     // Agent context
-    agentToggleHeaderBg: '#ea580c',
-    agentToggleExpandedBg: '#1d4ed8',
-    agentFocusedBg: '#f3f4f6',
-    agentContentBg: '#ffffff',
+    agentToggleHeaderBg: '#f3f4f6',
+    agentToggleExpandedBg: '#e5e7eb',
+    agentFocusedBg: '#e5e7eb',
+    agentContentBg: 'transparent',
     inputFg: '#111827',
     inputFocusedFg: '#000000',
 
     // Mode toggles
-    modeFastBg: '#f97316',
-    modeFastText: '#f97316',
-    modePlanBg: '#1e40af',
-    modePlanText: '#1e40af',
+    modeFastBg: '#f3f4f6',
+    modeFastText: '#111827',
+    modePlanBg: '#f3f4f6',
+    modePlanText: '#33721e',
 
     // Image card
-    imageCardBorder: '#6B7280',
+    imageCardBorder: '#7a8492',
 
     // Markdown
     markdown: {
-      // Light mode: lighter gray background so inline code feels airy
       codeBackground: '#f3f4f6',
-      codeHeaderFg: '#6b7280',
-      inlineCodeFg: '#C45A00',
+      codeHeaderFg: '#616873',
+      inlineCodeFg: '#aa4b00',
       codeTextFg: '#111827',
-      headingFg: {
-        1: '#dc2626',
-        2: '#dc2626',
-        3: '#dc2626',
-        4: '#dc2626',
-        5: '#dc2626',
-        6: '#dc2626',
-      },
-      listBulletFg: '#6b7280',
-      blockquoteBorderFg: '#d1d5db',
-      blockquoteTextFg: '#374151',
-      dividerFg: '#e5e7eb',
+      listBulletFg: '#616873',
+      blockquoteBorderFg: '#7a8492',
+      blockquoteTextFg: '#616873',
+      dividerFg: '#7a8492',
       codeMonochrome: false,
     },
   },
@@ -989,10 +971,10 @@ export const createMarkdownPalette = (theme: ChatTheme): MarkdownPalette => {
   const headingDefaults: Record<MarkdownHeadingLevel, string> = {
     1: theme.primary,
     2: theme.primary,
-    3: theme.primary,
-    4: theme.primary,
-    5: theme.primary,
-    6: theme.primary,
+    3: theme.foreground,
+    4: theme.foreground,
+    5: theme.foreground,
+    6: theme.foreground,
   }
 
   const overrides = theme.markdown?.headingFg ?? {}

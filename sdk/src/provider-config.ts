@@ -4,11 +4,30 @@ import path from 'path'
 
 import { z } from 'zod/v4'
 
+import { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES } from '@codebuff/common/actions'
 import { CHATGPT_OAUTH_OPENAI_MODEL_ALLOWLIST } from '@codebuff/common/constants/chatgpt-oauth'
 
 import { getConfigDir } from './credentials'
 import { getSystemProcessEnv } from './env'
+import {
+  PROJECT_TRUST_ENV_VAR,
+  canonicalProjectRoot,
+  computeProjectConfigHash,
+  describeProjectTrustOverride,
+  getProjectTrustOverride,
+  getProjectTrustStorePath,
+  parseProjectTrustStore,
+  readProjectTrustStoreSync,
+  resolveStoredProjectTrust,
+} from './project-trust'
+import { hostExecutionConfigSchema } from './services/host-execution-config'
 
+import type {
+  ProjectTrustDecision,
+  ProjectTrustGatedItem,
+  ProjectTrustState,
+  ProjectTrustStore,
+} from './project-trust'
 import type { FileChangeHook } from './tools/file-change-hooks'
 
 export const PROVIDER_CONFIG_ENV_VAR = 'OPENBUFF_PROVIDER_CONFIG'
@@ -100,6 +119,8 @@ const providerCompatibilitySchema = z
     supportsStopSequences: z.boolean().default(false),
     /** If true, Openbuff omits non-provider request metadata for this provider. */
     stripProviderMetadata: z.boolean().default(true),
+    /** Replay assistant reasoning on providers that require it. */
+    reasoningReplay: z.enum(['required', 'none']).optional(),
   })
   .default(DEFAULT_PROVIDER_COMPATIBILITY)
 
@@ -121,6 +142,25 @@ export const providerDiscoverySchema = z.object({
 export type ProviderDiscovery = z.infer<typeof providerDiscoverySchema>
 export type ProviderDiscoveryInput = z.input<typeof providerDiscoverySchema>
 
+/**
+ * Default transport-safe byte band for a single assistant response / tool-call
+ * payload.
+ *
+ * Deliberately far below any provider's real output budget (a maxed-out token
+ * budget is orders of magnitude larger) while comfortably above real tool-call
+ * payloads, so it marks a response as truncated without constraining a
+ * legitimate one. Models whose transport band differs declare their own
+ * `maxOutputBytes`; this is only the fallback.
+ *
+ * DERIVED, never restated: this is not a copy of the common transport band
+ * `MAX_TRANSPORT_SAFE_PAYLOAD_BYTES` (`common/src/actions.ts`) — it republishes
+ * that binding under the provider-config name (a live ESM alias), so there is no
+ * second value to keep in sync and no edit path that can leave the SDK default
+ * behind when the common band changes. See {@link getMaxOutputBytesForModel} for
+ * the resolution order.
+ */
+export { MAX_TRANSPORT_SAFE_PAYLOAD_BYTES as DEFAULT_MAX_OUTPUT_BYTES }
+
 export const modelCapabilitiesSchema = z.object({
   input: z
     .object({
@@ -134,6 +174,22 @@ export const modelCapabilitiesSchema = z.object({
       outputTokens: positiveIntSchema.optional(),
     })
     .optional(),
+  /**
+   * Transport-safe byte band for a single assistant response / tool-call
+   * payload: how many bytes one response may occupy on the wire before a
+   * provider or intermediary is expected to cut it. Undefined means "use
+   * DEFAULT_MAX_OUTPUT_BYTES", so only a model with a known different ceiling
+   * needs to declare it.
+   *
+   * This is the SAME band as the common `MAX_TRANSPORT_SAFE_PAYLOAD_BYTES`
+   * (`DEFAULT_MAX_OUTPUT_BYTES` republishes that binding), optionally tuned per
+   * model — not a separate concept. The band is a config-side envelope: its
+   * runtime consumer is the sdk stream's band diagnostic, not the marker
+   * setter — the stream-only `ToolCallStreamChunk.transportTruncated` marker
+   * (`common/src/types/contracts/llm.ts`) is set solely by the provider's
+   * `finishReason === 'length'` report.
+   */
+  maxOutputBytes: z.number().int().positive().optional(),
   reasoning: z
     .object({
       supported: z.boolean().optional(),
@@ -191,11 +247,24 @@ const modelCapabilitiesByModelSchema = z.record(
   modelCapabilitiesSchema,
 )
 
-function isLocalHttpUrl(value: string): boolean {
+/**
+ * Hosts that may be reached over plain http. WHATWG `URL.hostname` keeps the
+ * brackets on IPv6 literals, so IPv6 loopback is `[::1]`, never `::1`.
+ * `host.docker.internal` is Docker's name for the host machine, used to reach
+ * a local Ollama/vLLM server from inside a container.
+ */
+export const LOCAL_HTTP_HOSTNAMES: ReadonlySet<string> = new Set([
+  'localhost',
+  '127.0.0.1',
+  '[::1]',
+  'host.docker.internal',
+])
+
+export function isLocalHttpUrl(value: string): boolean {
   const url = new URL(value)
   return (
     url.protocol === 'http:' &&
-    ['localhost', '127.0.0.1', '::1'].includes(url.hostname)
+    LOCAL_HTTP_HOSTNAMES.has(url.hostname.toLowerCase())
   )
 }
 
@@ -264,6 +333,7 @@ const anthropicCompatibilitySchema = z
     supportsRequiredToolChoice: z.boolean().default(true),
     supportsStopSequences: z.boolean().default(true),
     stripProviderMetadata: z.boolean().default(false),
+    reasoningReplay: z.enum(['required', 'none']).optional(),
   })
   .default(DEFAULT_ANTHROPIC_COMPATIBILITY)
 
@@ -466,7 +536,7 @@ export const providerConfigFileSchema = z
           command: z.string().min(1),
           filePattern: z.string().min(1).optional(),
           /** Optional per-hook wall-clock bound in seconds. Omitted means no timeout. */
-          timeoutSeconds: z.number().int().positive().max(3600).optional(),
+          timeoutSeconds: z.union([z.literal(-1), z.number().int().positive().max(3600)]).optional(),
           /** Run the command once per matching changed file instead of project-wide (FileChangeHook.runPerFile). */
           runPerFile: z.boolean().optional(),
         }),
@@ -475,7 +545,12 @@ export const providerConfigFileSchema = z
     /** Explicit trust boundary for manifest-inferred commands. These may execute repository-controlled build scripts/plugins. Default is disabled; set true only for trusted projects. */
     autoFileChangeHooks: z.boolean().optional(),
     /** Approval UX for classified terminal effects. */
-    approvalMode: z.enum(['balanced', 'strict', 'allow-all']).optional(),
+    approvalMode: z
+      .enum(['balanced', 'strict', 'allow-all'])
+      .optional()
+      .describe(
+        'Command approvals: balanced permits routine development and asks for high-impact or unclassified effects; strict asks for every classified effect; allow-all disables command approval prompts. Independent of the filesystem sandbox.',
+      ),
     /**
      * Additional roots OUTSIDE the project that read-only tools may reach
      * (read_files, read_logs, read_image, list_directory).
@@ -492,12 +567,35 @@ export const providerConfigFileSchema = z
      */
     readableRoots: z.array(z.string().min(1)).default([]),
     /**
+     * Optional opt-in sandbox policy. An absent block (the default) means
+     * fully unrestricted filesystem and terminal access; see the schema
+     * `.describe` for the full contract.
+     */
+    execution: hostExecutionConfigSchema.optional(),
+    sandbox: z
+      .object({
+        mode: z.enum(['unrestricted', 'project']).optional(),
+        allowPaths: z.array(z.string().min(1)).default([]),
+      })
+      .describe(
+        'Opt-in sandbox policy. When ABSENT (the default) the run has unrestricted filesystem and terminal access. mode: "project" enables tool-level containment to the project root, OS temp roots, and allowPaths, with sensitive-file filtering. This is an application policy, not OS process isolation. allowPaths entries must be absolute paths or they are dropped at the trust gate.',
+      )
+      .optional(),
+    /**
      * Optional fixed agent-step cap. Unset or -1 means unlimited productive
-     * steps; a repeated-step watchdog still stops identical no-progress loops.
+     * steps; the configured cap and budget enforcement are what bound runaway
+     * runs.
      */
     maxAgentSteps: z
       .union([z.literal(-1), z.number().int().positive().max(100000)])
       .optional(),
+    /**
+     * Optional cap on the missing-output retry loop for structured-output
+     * agents. Unset means unlimited retries (bounded only by the configured
+     * step cap); a positive integer caps the retries before the parent
+     * receives a null structured value.
+     */
+    maxMissingOutputRetries: z.number().int().positive().max(100000).optional(),
   })
   .transform((config) => {
     const agents: Record<string, string> = {}
@@ -575,13 +673,25 @@ export const providerConfigFileSchema = z
       ...(config.approvalMode !== undefined && {
         approvalMode: config.approvalMode,
       }),
+      // OPTIONAL in the parsed output on purpose: `sandbox` stays ABSENT
+      // unless the fragment explicitly declares it, so the per-fragment
+      // merge can distinguish an override that omits the block (inherits
+      // the base block wholesale) from one that sets it (override wins).
+      ...(config.sandbox !== undefined && { sandbox: config.sandbox }),
+      ...(config.execution !== undefined && { execution: config.execution }),
       // Always present thanks to `.default([])`, so downstream code (the
       // run-start registry wiring) never has to handle `undefined`.
       readableRoots: config.readableRoots,
       // Optional in the resolved config: omitted unless explicitly set, so
-      // callers use the unlimited default plus the no-progress watchdog.
+      // callers use the unlimited default, bounded only by budget enforcement.
       ...(config.maxAgentSteps !== undefined && {
         maxAgentSteps: config.maxAgentSteps,
+      }),
+      // Same optional-spread contract as maxAgentSteps: the field stays
+      // absent when unset so consumers see unlimited retries, never an
+      // implicit cap.
+      ...(config.maxMissingOutputRetries !== undefined && {
+        maxMissingOutputRetries: config.maxMissingOutputRetries,
       }),
     }
   })
@@ -615,6 +725,11 @@ export type ResolvedProviderModel = {
   compatibility: ProviderCompatibility
 }
 
+export type ResolvedProviderModelMetadata = Omit<
+  ResolvedProviderModel,
+  'apiKey'
+>
+
 export type LoadedProviderConfig = {
   config: ProviderConfigFile
   sourceFilePaths: string[]
@@ -629,6 +744,17 @@ export type LoadedProviderConfig = {
    * CLOSED when an effective root has no recorded source here.
    */
   readableRootsSources?: Record<string, string>
+  /**
+   * Trust-gate provenance for `sandbox.allowPaths`, mirroring
+   * `readableRootsSources` above: `path.resolve(<sandbox.allowPaths entry>)`
+   * -> the absolute path of the config FILE that declared it. Only ABSOLUTE
+   * entries are recorded.
+   *
+   * Deliberately kept OUTSIDE the parsed `config` object (and OPTIONAL) for
+   * the same fixture-stability reason as `readableRootsSources`; consumers
+   * must fail CLOSED when an allow path has no recorded source here.
+   */
+  sandboxAllowPathsSources?: Record<string, string>
   diagnostics?: Array<{
     filePath: string
     message: string
@@ -642,10 +768,43 @@ export type LoadedProviderConfig = {
       agents?: Record<string, string>
     }
     indexing?: string
+    execution?: string
   }
+  /**
+   * N02 project trust gate. Present whenever the loader classified fragments
+   * as project scope (anything outside the user config dir and not the
+   * explicit OPENBUFF_PROVIDER_CONFIG selection). `gated` lists what the
+   * project config would enable; it is withheld unless status is 'trusted'.
+   * Kept out of `diagnostics` on purpose: withheld items are not config
+   * errors and must not block runs.
+   */
+  projectTrust?: ProjectTrustState
 }
 
 type ProviderConfigLoadResult = LoadedProviderConfig
+
+/** Explicit sync read port for a per-run configuration capture. */
+export interface ConfigReadFs {
+  readFile(filePath: string): Uint8Array
+  stat(
+    filePath: string,
+  ): Readonly<{
+    kind: 'file' | 'directory' | 'other'
+    size: number
+    revision: string
+  }>
+  readDirectory(directory: string): readonly string[]
+  realpath(filePath: string): string
+}
+
+function optionalConfigStat(reader: ConfigReadFs, filePath: string) {
+  try { return reader.stat(filePath) }
+  catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined
+    throw error
+  }
+}
 
 const emptyProviderConfig = (): ProviderConfigFile => ({
   providers: {},
@@ -692,6 +851,7 @@ function resolveConfigFragmentPath(
 function expandFragmentPaths(
   resolvedConfigPath: string,
   fragmentPaths: string[],
+  reader?: ConfigReadFs,
 ): string[] {
   const expanded: string[] = []
   for (const fragmentPath of fragmentPaths) {
@@ -699,6 +859,40 @@ function expandFragmentPaths(
       resolvedConfigPath,
       fragmentPath,
     )
+    if (reader) {
+      const stat = optionalConfigStat(reader, resolvedPath)
+      if (!stat)
+        throw new Error(
+          `Required provider config include is absent: ${resolvedPath}`,
+        )
+      if (stat.kind === 'directory') {
+        const names = reader.readDirectory(resolvedPath)
+        if (
+          names.some(
+            (name) =>
+              !name ||
+              name.includes('\0') ||
+              /[\\/]/.test(name) ||
+              name === '..' ||
+              name === '.',
+          )
+        )
+          throw new Error(
+            `Invalid provider config directory entry: ${resolvedPath}`,
+          )
+        expanded.push(
+          ...names
+            .filter((name) => name.endsWith('.json'))
+            .sort()
+            .map((name) => path.join(resolvedPath, name)),
+        )
+      } else if (stat.kind === 'file') expanded.push(resolvedPath)
+      else
+        throw new Error(
+          `Provider config include is not a file or directory: ${resolvedPath}`,
+        )
+      continue
+    }
     if (!fs.existsSync(resolvedPath)) {
       continue
     }
@@ -775,6 +969,9 @@ function getSourceFilesFromRawConfig(
   if (rawConfig?.indexing !== undefined) {
     sourceFiles.indexing = resolvedConfigPath
   }
+  if (rawConfig?.execution !== undefined) {
+    sourceFiles.execution = resolvedConfigPath
+  }
 
   return sourceFiles
 }
@@ -801,6 +998,7 @@ function mergeSourceFiles(
       },
     },
     indexing: override.indexing ?? base.indexing,
+    execution: override.execution ?? base.execution,
   }
 }
 
@@ -810,8 +1008,10 @@ function readProviderConfigFile(
     stack: Set<string>
     cache: Map<string, ProviderConfigLoadResult>
   } = { stack: new Set(), cache: new Map() },
+  reader?: ConfigReadFs,
 ): ProviderConfigLoadResult {
-  const resolvedConfigPath = path.resolve(configPath)
+  const resolvedConfigPath = reader ? reader.realpath(configPath) : path.resolve(configPath)
+  if (reader && !path.isAbsolute(resolvedConfigPath)) throw new Error('Config realpath must be absolute')
   const cached = state.cache.get(resolvedConfigPath)
   if (cached) return cached
   if (state.stack.has(resolvedConfigPath)) {
@@ -822,7 +1022,13 @@ function readProviderConfigFile(
 
   state.stack.add(resolvedConfigPath)
   try {
-    const rawConfig = JSON.parse(fs.readFileSync(resolvedConfigPath, 'utf8'))
+    const rawConfig = JSON.parse(
+      reader
+        ? new TextDecoder('utf-8', { fatal: true }).decode(
+            reader.readFile(resolvedConfigPath),
+          )
+        : fs.readFileSync(resolvedConfigPath, 'utf8'),
+    )
     const fragmentPaths = [
       ...normalizeConfigFragmentPaths(rawConfig?.extends),
       ...normalizeConfigFragmentPaths(rawConfig?.include),
@@ -832,7 +1038,7 @@ function readProviderConfigFile(
     // Automatically look for openbuff.d next to any config file (like openbuff.json)
     const configDir = path.dirname(resolvedConfigPath)
     const implicitDir = path.join(configDir, 'openbuff.d')
-    if (fs.existsSync(implicitDir) && fs.statSync(implicitDir).isDirectory()) {
+    if (reader ? optionalConfigStat(reader, implicitDir)?.kind === 'directory' : fs.existsSync(implicitDir) && fs.statSync(implicitDir).isDirectory()) {
       if (
         !fragmentPaths.includes('openbuff.d') &&
         !fragmentPaths.includes('./openbuff.d')
@@ -841,11 +1047,18 @@ function readProviderConfigFile(
       }
     }
 
-    const expandedPaths = expandFragmentPaths(resolvedConfigPath, fragmentPaths)
+    const expandedPaths = expandFragmentPaths(
+      resolvedConfigPath,
+      fragmentPaths,
+      reader,
+    )
 
-    let config = emptyProviderConfig()
+    // approvalMode starts undefined so a fragment that omits it never
+    // overrides an earlier file (the loaders' empty base supplies 'balanced').
+    let config: ProviderConfigFile = { ...emptyProviderConfig(), approvalMode: undefined }
     const sourceFilePaths: string[] = []
     const readableRootsSources: Record<string, string> = {}
+    const sandboxAllowPathsSources: Record<string, string> = {}
     let sourceFiles: NonNullable<LoadedProviderConfig['sourceFiles']> = {
       providers: {},
       routes: {
@@ -855,8 +1068,12 @@ function readProviderConfigFile(
     }
 
     for (const resolvedPath of expandedPaths) {
-      const loadedFragment = readProviderConfigFile(resolvedPath, state)
-      config = mergeProviderConfigs(config, loadedFragment.config)
+      const loadedFragment = readProviderConfigFile(resolvedPath, state, reader)
+      config = mergeProviderConfigs(
+        config,
+        loadedFragment.config,
+        loadedFragment.sourceFiles?.indexing !== undefined,
+      )
       sourceFilePaths.push(...loadedFragment.sourceFilePaths)
       sourceFiles = mergeSourceFiles(
         sourceFiles,
@@ -869,6 +1086,10 @@ function readProviderConfigFile(
         readableRootsSources,
         loadedFragment.readableRootsSources ?? {},
       )
+      Object.assign(
+        sandboxAllowPathsSources,
+        loadedFragment.sandboxAllowPathsSources ?? {},
+      )
     }
 
     const parseResult = providerConfigFileSchema.safeParse(rawConfig)
@@ -877,12 +1098,24 @@ function readProviderConfigFile(
         `Invalid provider config at ${resolvedConfigPath}: ${parseResult.error.message}`,
       )
     }
-    config = mergeProviderConfigs(config, parseResult.data)
+    config = mergeProviderConfigs(
+      config,
+      parseResult.data,
+      rawConfig.indexing !== undefined,
+    )
 
     // This file's own declarations win over any fragment it included, matching
     // the override-wins `readableRoots` merge in mergeProviderConfigs.
     for (const entry of parseResult.data.readableRoots) {
-      readableRootsSources[path.resolve(entry)] = resolvedConfigPath
+      readableRootsSources[reader ? entry : path.resolve(entry)] = resolvedConfigPath
+    }
+    // Parallel provenance for `sandbox.allowPaths`: only ABSOLUTE entries are
+    // recorded — a relative entry in a possibly-global config is ambiguous,
+    // so it is dropped rather than anchored to a guessed directory, and the
+    // trust gate fails closed on any entry with no recorded source.
+    for (const entry of parseResult.data.sandbox?.allowPaths ?? []) {
+      if (!path.isAbsolute(entry)) continue
+      sandboxAllowPathsSources[reader ? entry : path.resolve(entry)] = resolvedConfigPath
     }
 
     const currentSourceFiles = getSourceFilesFromRawConfig(
@@ -898,6 +1131,7 @@ function readProviderConfigFile(
       ),
       sourceFiles,
       readableRootsSources,
+      sandboxAllowPathsSources,
     }
     state.cache.set(resolvedConfigPath, result)
     return result
@@ -950,6 +1184,7 @@ export function mergeFileChangeHooks(
 function mergeProviderConfigs(
   base: ProviderConfigFile,
   override: ProviderConfigFile,
+  hasIndexingOverride = true,
 ): ProviderConfigFile {
   return {
     providers: {
@@ -978,13 +1213,15 @@ function mergeProviderConfigs(
       ...(base.agentReasoningEfforts ?? {}),
       ...(override.agentReasoningEfforts ?? {}),
     },
-    indexing: override.indexing ?? base.indexing,
+    // Schema defaults in unrelated fragments must not turn embeddings off.
+    indexing: hasIndexingOverride ? override.indexing : base.indexing,
     fileChangeHooks: mergeFileChangeHooks(
       base.fileChangeHooks,
       override.fileChangeHooks,
     ),
     autoFileChangeHooks:
       override.autoFileChangeHooks ?? base.autoFileChangeHooks,
+    adaptiveReasoning: override.adaptiveReasoning ?? base.adaptiveReasoning,
     approvalMode: override.approvalMode ?? base.approvalMode,
     // An override fragment that simply omits `readableRoots` parses to `[]`
     // (schema default), so a plain override would silently erase a base
@@ -992,8 +1229,335 @@ function mergeProviderConfigs(
     readableRoots: override.readableRoots?.length
       ? override.readableRoots
       : (base.readableRoots ?? []),
+    // `sandbox` is absent from a fragment that omits it (the schema keeps it
+    // optional in the parsed output), so an override without a block inherits
+    // the base block wholesale; a present override replaces it wholesale.
+    sandbox: override.sandbox ?? base.sandbox,
+    execution: override.execution ?? base.execution,
     failoverModels: override.failoverModels ?? base.failoverModels,
     maxAgentSteps: override.maxAgentSteps ?? base.maxAgentSteps,
+    maxMissingOutputRetries:
+      override.maxMissingOutputRetries ?? base.maxMissingOutputRetries,
+  }
+}
+
+// ----------------------------------------------------------------------------
+// N02 project trust gate. Fragments selected from outside the user config dir
+// (project and ancestor `openbuff.json` / `openbuff.d/`) are project scope.
+// Until the project is trusted they may only tighten policy: no credentialed
+// or redefined providers, no routes to project providers, no hooks, no looser
+// approvalMode or sandbox, no semantic indexing opt-in. Execution, readable
+// roots and sandbox.allowPaths keep their existing, separate gates.
+// ----------------------------------------------------------------------------
+
+const APPROVAL_STRICTNESS = { 'allow-all': 0, balanced: 1, strict: 2 } as const
+
+function providerEndpoint(provider: ProviderConfig): string {
+  return 'baseURL' in provider ? provider.baseURL : provider.type
+}
+
+/** Tighten-only view of one untrusted project fragment against the config merged so far. */
+export function restrictUntrustedProjectFragment(params: {
+  current: ProviderConfigFile
+  fragment: ProviderConfigLoadResult
+  selectedPath: string
+  hasIndexingOverride: boolean
+  gated: ProjectTrustGatedItem[]
+}): ProviderConfigFile {
+  const { current, fragment, selectedPath, gated } = params
+  const config = fragment.config
+  const origin = (providerId: string) =>
+    fragment.sourceFiles?.providers?.[providerId] ?? selectedPath
+  const providers: ProviderConfigFile['providers'] = {}
+  for (const [providerId, provider] of Object.entries(config.providers)) {
+    if (providerId in current.providers) {
+      gated.push({ kind: 'provider', filePath: origin(providerId),
+        summary: `redefine provider "${providerId}" (${providerEndpoint(provider)})` })
+      continue
+    }
+    if (provider.type === 'chatgpt-oauth') {
+      gated.push({ kind: 'provider', filePath: origin(providerId),
+        summary: `add provider "${providerId}" using your ChatGPT OAuth credentials` })
+      continue
+    }
+    if (provider.apiKeyEnv) {
+      gated.push({ kind: 'provider', filePath: origin(providerId),
+        summary: `add provider "${providerId}" that sends ${provider.apiKeyEnv} to ${provider.baseURL}` })
+      continue
+    }
+    providers[providerId] = provider
+  }
+  const restricted: ProviderConfigFile = { ...config, providers }
+  if (config.fileChangeHooks.length > 0) {
+    for (const hook of config.fileChangeHooks)
+      gated.push({ kind: 'fileChangeHooks', filePath: selectedPath,
+        summary: `run fileChangeHook${hook.name ? ` "${hook.name}"` : ''}: ${hook.command}` })
+    restricted.fileChangeHooks = []
+  }
+  if (config.autoFileChangeHooks === true && current.autoFileChangeHooks !== true) {
+    gated.push({ kind: 'autoFileChangeHooks', filePath: selectedPath,
+      summary: 'run manifest-inferred build scripts as fileChangeHooks (autoFileChangeHooks)' })
+    restricted.autoFileChangeHooks = undefined
+  }
+  if (config.approvalMode !== undefined &&
+    APPROVAL_STRICTNESS[config.approvalMode] < APPROVAL_STRICTNESS[current.approvalMode ?? 'balanced']) {
+    gated.push({ kind: 'approvalMode', filePath: selectedPath,
+      summary: `set approvalMode "${config.approvalMode}" (yours: "${current.approvalMode ?? 'balanced'}")` })
+    restricted.approvalMode = undefined
+  }
+  if (config.sandbox !== undefined &&
+    (config.sandbox.mode ?? 'unrestricted') === 'unrestricted' && current.sandbox?.mode === 'project') {
+    gated.push({ kind: 'sandbox', filePath: selectedPath,
+      summary: 'turn off the project sandbox (sandbox.mode "unrestricted")' })
+    restricted.sandbox = undefined
+  }
+  if (params.hasIndexingOverride && config.indexing.semantic.enabled && !current.indexing.semantic.enabled) {
+    gated.push({ kind: 'semanticIndexing', filePath: fragment.sourceFiles?.indexing ?? selectedPath,
+      summary: `enable semantic indexing (sends file samples to ${config.indexing.semantic.model ?? 'an embedding model'})` })
+    restricted.indexing = { ...config.indexing, semantic: current.indexing.semantic }
+  }
+  return restricted
+}
+
+/**
+ * Revert project-set routes that resolve to a provider the user did not
+ * configure. Routes to the user's own providers are kept.
+ */
+export function restrictUntrustedProjectRoutes(params: {
+  base: ProviderConfigFile
+  merged: ProviderConfigFile
+  trustedProviderIds: ReadonlySet<string>
+  /** Providers the project declared, including withheld ones (for attribution only). */
+  declaredProjectProviders?: ProviderConfigFile['providers']
+  sourceFiles: NonNullable<LoadedProviderConfig['sourceFiles']>
+  fallbackPath: string
+  gated: ProjectTrustGatedItem[]
+}): ProviderConfigFile {
+  const { base, merged, trustedProviderIds, sourceFiles, gated } = params
+  // Effective providers first (real resolution order), then withheld ones.
+  const candidates: ProviderConfigFile['providers'] = { ...merged.providers }
+  for (const [providerId, provider] of Object.entries(params.declaredProjectProviders ?? {}))
+    if (!(providerId in candidates)) candidates[providerId] = provider
+  // Kept only when the model resolves to a provider the user configured. A
+  // route that names a withheld or unknown provider is withheld too.
+  const untrustedTarget = (model: string | undefined): string | null | undefined => {
+    if (!model) return undefined
+    for (const [providerId, provider] of Object.entries(candidates))
+      if (getModelMapping(providerId, model, provider) !== undefined)
+        return trustedProviderIds.has(providerId) && providerId in merged.providers ? undefined : providerId
+    return null
+  }
+  const routeGate = (label: string, model: string | undefined, filePath: string | undefined) => {
+    const target = untrustedTarget(model)
+    if (target === undefined) return false
+    gated.push({ kind: 'route', filePath: filePath ?? params.fallbackPath,
+      summary: target === null
+        ? `route ${label} to "${model}" (not served by a provider you configured)`
+        : `route ${label} to "${model}" on project provider "${target}"` })
+    return true
+  }
+  const result: ProviderConfigFile = { ...merged, modes: { ...merged.modes }, agents: { ...merged.agents } }
+  if (merged.defaultModel !== base.defaultModel &&
+    routeGate('defaultModel', merged.defaultModel, sourceFiles.routes?.defaultModel)) {
+    result.defaultModel = base.defaultModel
+    result.defaultReasoningEffort = base.defaultReasoningEffort
+  }
+  if (merged.visionModel !== base.visionModel &&
+    routeGate('visionModel', merged.visionModel, sourceFiles.routes?.visionModel))
+    result.visionModel = base.visionModel
+  for (const [mode, model] of Object.entries(merged.modes ?? {})) {
+    const baseModel = (base.modes as Record<string, string | undefined>)[mode]
+    if (model !== baseModel && routeGate(`mode "${mode}"`, model, sourceFiles.routes?.modes?.[mode])) {
+      if (baseModel === undefined) delete (result.modes as Record<string, string>)[mode]
+      else (result.modes as Record<string, string>)[mode] = baseModel
+    }
+  }
+  for (const [agentId, model] of Object.entries(merged.agents ?? {})) {
+    const baseModel = base.agents?.[agentId]
+    if (model !== baseModel && routeGate(`agent "${agentId}"`, model, sourceFiles.routes?.agents?.[agentId])) {
+      if (baseModel === undefined) delete result.agents![agentId]
+      else result.agents![agentId] = baseModel
+    }
+  }
+  if (merged.failoverModels !== base.failoverModels && merged.failoverModels) {
+    const kept = merged.failoverModels.filter(model => !routeGate('failoverModels', model, undefined))
+    if (kept.length !== merged.failoverModels.length) result.failoverModels = kept.length ? kept : base.failoverModels
+  }
+  const semantic = merged.indexing.semantic
+  if (semantic.enabled && semantic.model !== base.indexing.semantic.model &&
+    routeGate('semantic indexing', semantic.model, sourceFiles.indexing))
+    result.indexing = { ...merged.indexing, semantic: base.indexing.semantic }
+  return result
+}
+
+type ScopedFragment = {
+  selectedPath: string
+  parsed: ProviderConfigLoadResult
+  /** User config dir or explicit selection: never gated. */
+  userScope: boolean
+}
+
+/** Shared fold for both loaders: merge in order, gating project scope unless trusted. */
+function mergeScopedFragments(fragments: readonly ScopedFragment[], projectTrusted: boolean) {
+  let config = emptyProviderConfig()
+  let base: ProviderConfigFile | undefined
+  const sourceFilePaths: string[] = []
+  const readableRootsSources: Record<string, string> = {}
+  const sandboxAllowPathsSources: Record<string, string> = {}
+  let sourceFiles: NonNullable<LoadedProviderConfig['sourceFiles']> = {
+    providers: {},
+    routes: { modes: {}, agents: {} },
+  }
+  let baseSourceFiles = sourceFiles
+  const gated: ProjectTrustGatedItem[] = []
+  const declaredProjectProviders: ProviderConfigFile['providers'] = {}
+  for (const fragment of fragments) {
+    const hasIndexingOverride = fragment.parsed.sourceFiles?.indexing !== undefined
+    let fragmentConfig = fragment.parsed.config
+    if (!fragment.userScope) {
+      if (base === undefined) { base = config; baseSourceFiles = sourceFiles }
+      Object.assign(declaredProjectProviders, fragment.parsed.config.providers)
+      const restricted = restrictUntrustedProjectFragment({ current: config, fragment: fragment.parsed,
+        selectedPath: fragment.selectedPath, hasIndexingOverride, gated })
+      if (!projectTrusted) fragmentConfig = restricted
+    }
+    config = mergeProviderConfigs(config, fragmentConfig, hasIndexingOverride)
+    sourceFilePaths.push(...fragment.parsed.sourceFilePaths)
+    sourceFiles = mergeSourceFiles(sourceFiles, fragment.parsed.sourceFiles ?? {})
+    Object.assign(readableRootsSources, fragment.parsed.readableRootsSources ?? {})
+    Object.assign(sandboxAllowPathsSources, fragment.parsed.sandboxAllowPathsSources ?? {})
+  }
+  if (base !== undefined) {
+    const firstProject = fragments.find(fragment => !fragment.userScope)!.selectedPath
+    const routed = restrictUntrustedProjectRoutes({ base, merged: config,
+      trustedProviderIds: new Set(Object.keys(base.providers)), declaredProjectProviders, sourceFiles,
+      fallbackPath: firstProject, gated })
+    if (!projectTrusted) {
+      // Attribution follows the value that took effect.
+      const routes = sourceFiles.routes ?? {}
+      const baseRoutes = baseSourceFiles.routes ?? {}
+      if (routed.defaultModel !== config.defaultModel) routes.defaultModel = baseRoutes.defaultModel
+      if (routed.visionModel !== config.visionModel) routes.visionModel = baseRoutes.visionModel
+      for (const mode of Object.keys(config.modes ?? {}))
+        if ((routed.modes as Record<string, string>)[mode] !== (config.modes as Record<string, string>)[mode])
+          routes.modes![mode] = baseRoutes.modes?.[mode] as string
+      for (const agentId of Object.keys(config.agents ?? {}))
+        if (routed.agents?.[agentId] !== config.agents?.[agentId])
+          routes.agents![agentId] = baseRoutes.agents?.[agentId] as string
+      for (const map of [routes.modes, routes.agents])
+        for (const [key, value] of Object.entries(map ?? {})) if (value === undefined) delete map![key]
+      for (const providerId of Object.keys(sourceFiles.providers ?? {}))
+        if (!(providerId in routed.providers)) delete sourceFiles.providers![providerId]
+      config = routed
+    }
+  }
+  return { config, sourceFilePaths: [...new Set(sourceFilePaths)], sourceFiles,
+    readableRootsSources, sandboxAllowPathsSources, gated, hasProjectScope: base !== undefined }
+}
+
+/** Resolve the trust decision for the project-scope files of one load. */
+function resolveLoadProjectTrust(params: {
+  projectRoot: string
+  files: readonly string[]
+  readBytes: (filePath: string) => Uint8Array
+  explicit: ProjectTrustDecision | undefined
+  readStore: () => ProjectTrustStore
+}): Omit<ProjectTrustState, 'gated'> {
+  const files = [...new Set(params.files)].sort()
+  const configHash = computeProjectConfigHash(params.projectRoot,
+    files.map(filePath => ({ path: filePath, bytes: params.readBytes(filePath) })))
+  if (params.explicit)
+    return { projectRoot: params.projectRoot, configHash, files, status: params.explicit, reason: 'explicit' }
+  const stored = resolveStoredProjectTrust(params.readStore(), params.projectRoot, configHash)
+  return { projectRoot: params.projectRoot, configHash, files, ...stored }
+}
+
+/** Project-scope executable config outside openbuff.json that the trust hash also covers. */
+function projectTrustExtraFiles(projectRoot: string): string[] {
+  return [path.join(projectRoot, '.agents', 'mcp.json')]
+}
+
+/** Strict capture path: no ambient paths, shared cache, swallowed read errors or optional includes. */
+export function loadProviderConfigForHost(params: {
+  configPaths: readonly Readonly<{ path: string; required: boolean }>[]
+  reader: ConfigReadFs
+  isTrustedPath: (filePath: string) => boolean
+  /** N02 project trust gate inputs. Every production caller supplies them. */
+  projectTrust: Readonly<{
+    /** Canonical project root the decision is keyed by. */
+    projectRoot: string
+    /** True for the user config dir and the explicit selection; never gated. */
+    isUserScope: (selectedPath: string) => boolean
+    /** Host decision (SDK option, CLI flag, env opt-in); undefined consults the store. */
+    explicit?: ProjectTrustDecision
+    /** Directory holding project-trust.json; undefined means no stored decisions. */
+    storeDir?: string
+  }>
+}): LoadedProviderConfig {
+  const diagnostics: NonNullable<LoadedProviderConfig['diagnostics']> = []
+  const state = {
+    stack: new Set<string>(),
+    cache: new Map<string, ProviderConfigLoadResult>(),
+  }
+  const fragments: ScopedFragment[] = []
+  for (const selected of params.configPaths) {
+    if (!path.isAbsolute(selected.path)) throw new Error('Selected host config path must be absolute')
+    const stat = optionalConfigStat(params.reader, selected.path)
+    if (!stat) {
+      if (selected.required) throw new Error(`Required provider config is absent: ${selected.path}`)
+      continue
+    }
+    if (stat.kind !== 'file')
+      throw new Error(
+        `Selected provider config is not a file: ${selected.path}`,
+      )
+    const parsed = readProviderConfigFile(selected.path, state, params.reader)
+    // Trust every declaring fragment, including an include outside a trusted base.
+    const fragment = {
+      ...parsed,
+      config: { ...parsed.config, providers: { ...parsed.config.providers } },
+    }
+    for (const [providerId, provider] of Object.entries(
+      fragment.config.providers,
+    )) {
+      const origin = parsed.sourceFiles?.providers?.[providerId]
+      if ('apiKeyEnv' in provider && provider.apiKeyEnv && (!origin || !params.isTrustedPath(origin))) {
+        delete fragment.config.providers[providerId]
+        diagnostics.push({
+          filePath: origin ?? selected.path,
+          message: `Untrusted apiKeyEnv provider excluded: ${providerId}`,
+        })
+      }
+    }
+    fragments.push({ selectedPath: selected.path, parsed: fragment,
+      userScope: params.projectTrust.isUserScope(selected.path) })
+  }
+  const projectRoot = params.projectTrust.projectRoot
+  // No selected paths means the host disabled config discovery: read nothing more.
+  const extraFiles = params.configPaths.length === 0 ? [] : projectTrustExtraFiles(projectRoot)
+    .filter(filePath => optionalConfigStat(params.reader, filePath)?.kind === 'file')
+  const trust = resolveLoadProjectTrust({
+    projectRoot,
+    files: [...fragments.filter(f => !f.userScope).flatMap(f => f.parsed.sourceFilePaths), ...extraFiles],
+    readBytes: filePath => params.reader.readFile(filePath),
+    explicit: params.projectTrust.explicit,
+    readStore: () => {
+      if (!params.projectTrust.storeDir) return parseProjectTrustStore('')
+      const storePath = getProjectTrustStorePath(params.projectTrust.storeDir)
+      if (optionalConfigStat(params.reader, storePath)?.kind !== 'file') return parseProjectTrustStore('')
+      try { return parseProjectTrustStore(new TextDecoder('utf-8', { fatal: true }).decode(params.reader.readFile(storePath))) }
+      catch (error) { if (error instanceof TypeError) return parseProjectTrustStore(''); throw error }
+    },
+  })
+  const merged = mergeScopedFragments(fragments, trust.status === 'trusted')
+  return {
+    config: merged.config,
+    sourceFilePaths: merged.sourceFilePaths,
+    sourceFiles: merged.sourceFiles,
+    readableRootsSources: merged.readableRootsSources,
+    sandboxAllowPathsSources: merged.sandboxAllowPathsSources,
+    diagnostics,
+    projectTrust: { ...trust, gated: merged.gated },
   }
 }
 
@@ -1047,9 +1611,7 @@ export function getAncestorProviderConfigPaths(startDir: string): string[] {
 }
 
 function isAncestorTrustEnabled(): boolean {
-  return (
-    (getSystemProcessEnv().OPENBUFF_TRUST_ANCESTOR_CONFIG ?? '') === '1'
-  )
+  return (getSystemProcessEnv().OPENBUFF_TRUST_ANCESTOR_CONFIG ?? '') === '1'
 }
 
 /**
@@ -1126,7 +1688,7 @@ function stripApiKeyEnvProvidersFromFragment(
  */
 function warnIfAncestorConfigHasApiKeyEnv(
   config: ProviderConfigFile,
-  sourceFilePaths: string[],
+  sourceFiles: LoadedProviderConfig['sourceFiles'],
   cwd: string,
 ): void {
   // Honor this function's own advertised opt-out: with the trust flag set the
@@ -1136,34 +1698,27 @@ function warnIfAncestorConfigHasApiKeyEnv(
   if (isAncestorTrustEnabled()) {
     return
   }
-  const projectRoot = path.resolve(cwd)
-  const ancestorPaths = sourceFilePaths.filter((p) => {
-    const resolved = path.resolve(p)
-    return (
-      resolved !== projectRoot && !resolved.startsWith(projectRoot + path.sep)
-    )
-  })
-  if (ancestorPaths.length === 0) {
+  // N02: attribute by the file that actually declared each provider. The
+  // previous check fired whenever ANY source file lay outside cwd (always
+  // true for the user's global config dir) and blamed that global file,
+  // never the file that took effect.
+  const declaringFiles = new Set<string>()
+  for (const [providerId, provider] of Object.entries(config.providers ?? {})) {
+    if (!('apiKeyEnv' in provider) || !provider.apiKeyEnv) continue
+    const origin = sourceFiles?.providers?.[providerId]
+    if (origin && !isTrustedProviderConfigPath(origin, { projectRoot: cwd }))
+      declaringFiles.add(origin)
+  }
+  if (declaringFiles.size === 0) {
     return
   }
-
-  for (const provider of Object.values(config.providers ?? {})) {
-    if (
-      provider &&
-      typeof provider === 'object' &&
-      'apiKeyEnv' in provider &&
-      provider.apiKeyEnv
-    ) {
-      console.warn(
-        `[openbuff] A provider config loaded from a non-project ancestor ` +
-          `(${ancestorPaths.join(', ')}) declares an apiKeyEnv provider. ` +
-          `An ancestor config can route API requests to untrusted endpoints ` +
-          `and leak secrets sourced from env vars. ` +
-          `Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.`,
-      )
-      return
-    }
-  }
+  console.warn(
+    `[openbuff] A provider config loaded from a non-project ancestor ` +
+      `(${[...declaringFiles].join(', ')}) declares an apiKeyEnv provider. ` +
+      `An ancestor config can route API requests to untrusted endpoints ` +
+      `and leak secrets sourced from env vars. ` +
+      `Set OPENBUFF_TRUST_ANCESTOR_CONFIG=1 to acknowledge and suppress this warning.`,
+  )
 }
 
 // ----------------------------------------------------------------------------
@@ -1308,6 +1863,7 @@ function resolveProviderConfigDependencyPaths(
 function buildProviderConfigCacheKey(
   configPaths: string[],
   explicitConfigPath: string | undefined,
+  env: NodeJS.ProcessEnv = getSystemProcessEnv(),
 ): string {
   // The ancestor-trust opt-in changes whether apiKeyEnv providers are
   // stripped from untrusted ancestor fragments, so it must be part of the
@@ -1317,7 +1873,22 @@ function buildProviderConfigCacheKey(
     `trustAncestorConfig=${
       getSystemProcessEnv().OPENBUFF_TRUST_ANCESTOR_CONFIG ?? ''
     }`,
+    // N02: the project trust decision changes which project fragments apply.
+    `cwd=${process.cwd()}`,
+    `trustProjectConfig=${env[PROJECT_TRUST_ENV_VAR] ?? ''}`,
+    `trustOverride=${describeProjectTrustOverride()}`,
   ]
+  for (const trustPath of [
+    ...getOpenbuffConfigDirs().map((configDir) => getProjectTrustStorePath(configDir)),
+    ...projectTrustExtraFiles(process.cwd()),
+  ]) {
+    try {
+      const stat = fs.statSync(trustPath)
+      parts.push(`${trustPath}:${stat.mtimeMs}:${stat.size}`)
+    } catch {
+      parts.push(`${trustPath}:missing`)
+    }
+  }
   if (explicitConfigPath) {
     parts.push(`env=${explicitConfigPath}`)
   }
@@ -1358,21 +1929,18 @@ export function loadProviderConfigSync(
     : getDefaultProviderConfigPaths()
 
   // Fast path: return the memoized config if no underlying file changed.
-  const cacheKey = buildProviderConfigCacheKey(configPaths, explicitConfigPath)
+  const cacheKey = buildProviderConfigCacheKey(configPaths, explicitConfigPath, env)
   if (providerConfigCache && providerConfigCache.key === cacheKey) {
     return providerConfigCache.config
   }
 
-  let config = emptyProviderConfig()
-  const sourceFilePaths: string[] = []
-  const readableRootsSources: Record<string, string> = {}
   const diagnostics: NonNullable<LoadedProviderConfig['diagnostics']> = []
-  let sourceFiles: NonNullable<LoadedProviderConfig['sourceFiles']> = {
-    providers: {},
-    routes: {
-      modes: {},
-      agents: {},
-    },
+  const fragments: ScopedFragment[] = []
+  const configDirs = getOpenbuffConfigDirs().map((configDir) => path.resolve(configDir))
+  const isUserScope = (configPath: string) => {
+    if (explicitConfigPath) return true
+    const resolved = path.resolve(configPath)
+    return configDirs.some((configDir) => resolved === configDir || resolved.startsWith(configDir + path.sep))
   }
 
   for (const configPath of configPaths) {
@@ -1388,7 +1956,8 @@ export function loadProviderConfigSync(
       // env-var secrets. Strip such providers from the FRAGMENT before the
       // merge (stripping after the merge could not attribute providers to
       // files) unless the user opted in via OPENBUFF_TRUST_ANCESTOR_CONFIG=1.
-      // Project configs, global config-dir configs, and the explicit
+      // Project configs additionally pass the N02 project trust gate in
+      // mergeScopedFragments; global config-dir configs and the explicit
       // OPENBUFF_PROVIDER_CONFIG override are always trusted.
       if (
         !isTrustedProviderConfigPath(configPath, {
@@ -1410,24 +1979,16 @@ export function loadProviderConfigSync(
           })
         }
       }
-      config = mergeProviderConfigs(config, parsedConfig.config)
-      sourceFilePaths.push(...parsedConfig.sourceFilePaths)
-      sourceFiles = mergeSourceFiles(
-        sourceFiles,
-        parsedConfig.sourceFiles ?? {},
-      )
       // ER-1 provenance: every fragment already attributes its own
-      // `readableRoots` entries to the exact file that declared them, so this
-      // merge just folds those maps together — later config paths overwrite
-      // earlier ones for the same root, matching the override-wins merge
-      // above. Deliberately NO fallback to `configPath` for an unattributed
-      // root: an unrecorded root must stay unrecorded so the trust gate fails
-      // CLOSED rather than inheriting this file's trust. Purely in-memory — no
-      // extra filesystem work on this hot path.
-      Object.assign(
-        readableRootsSources,
-        parsedConfig.readableRootsSources ?? {},
-      )
+      // `readableRoots` entries to the exact file that declared them, and
+      // mergeScopedFragments folds those maps with no fallback to
+      // `configPath`, so an unrecorded root stays unrecorded and the trust
+      // gate fails CLOSED.
+      fragments.push({
+        selectedPath: configPath,
+        parsed: parsedConfig,
+        userScope: isUserScope(configPath),
+      })
     } catch (error) {
       if (explicitConfigPath) {
         throw error
@@ -1439,7 +2000,24 @@ export function loadProviderConfigSync(
     }
   }
 
-  warnIfAncestorConfigHasApiKeyEnv(config, sourceFilePaths, process.cwd())
+  const projectRoot = canonicalProjectRoot(process.cwd())
+  const trustEnv = env[PROJECT_TRUST_ENV_VAR]
+  const trust = resolveLoadProjectTrust({
+    projectRoot,
+    files: [
+      ...fragments.filter((f) => !f.userScope).flatMap((f) => f.parsed.sourceFilePaths),
+      ...projectTrustExtraFiles(projectRoot).filter((filePath) => fs.existsSync(filePath)),
+    ],
+    readBytes: (filePath) => {
+      try { return new Uint8Array(fs.readFileSync(filePath)) } catch { return new Uint8Array() }
+    },
+    explicit: getProjectTrustOverride(projectRoot) ?? (trustEnv === '1' ? 'trusted' : undefined),
+    readStore: () => readProjectTrustStoreSync(configDirs[0]!),
+  })
+  const merged = mergeScopedFragments(fragments, trust.status === 'trusted')
+  const { config, sourceFilePaths, sourceFiles, readableRootsSources, sandboxAllowPathsSources } = merged
+
+  warnIfAncestorConfigHasApiKeyEnv(config, sourceFiles, process.cwd())
 
   if (!hasLoggedConfigPaths) {
     hasLoggedConfigPaths = true
@@ -1455,7 +2033,9 @@ export function loadProviderConfigSync(
     sourceFilePaths,
     sourceFiles,
     readableRootsSources,
+    sandboxAllowPathsSources,
     diagnostics,
+    projectTrust: { ...trust, gated: merged.gated },
   }
   providerConfigCache = { key: cacheKey, config: result }
   return result
@@ -1531,6 +2111,7 @@ function mergeModelCapabilities(
     )
     merged.pricing = mergeDefined(merged.pricing, capability.pricing)
     merged.quality = mergeDefined(merged.quality, capability.quality)
+    merged.maxOutputBytes = capability.maxOutputBytes ?? merged.maxOutputBytes
   }
 
   return merged
@@ -1540,6 +2121,9 @@ function compactCapability(capabilities: ModelCapabilities): ModelCapabilities {
   return Object.fromEntries(
     Object.entries(capabilities).filter(([, value]) => {
       if (!value) return false
+      // Scalar capabilities (e.g. maxOutputBytes) are their own value; only
+      // object-shaped capabilities are compacted based on their fields.
+      if (typeof value !== 'object') return true
       return Object.values(value).some((field) => field !== undefined)
     }),
   ) as ModelCapabilities
@@ -1600,6 +2184,50 @@ export function resolveModelCapabilities(params: {
       provider.defaultCapabilities,
       ...modelCapabilityOverrides,
     ),
+  )
+}
+
+/**
+ * Transport-safe output-byte band for one model, resolved in the same order
+ * `resolveModelCapabilities` uses: the per-model
+ * `modelCapabilities.<model>.maxOutputBytes` override wins over the
+ * provider-level `defaultCapabilities.maxOutputBytes`, which falls back to
+ * `DEFAULT_MAX_OUTPUT_BYTES`.
+ *
+ * `providerId` is optional. When given, the model key is resolved through the
+ * same candidate order `resolveModelCapabilities` uses
+ * (`capabilityModelKeyCandidates`: provider-mapped id, provider-qualified
+ * mapped id, unprefixed requested id, raw requested id), and a LATER
+ * candidate's `maxOutputBytes` wins, matching `mergeModelCapabilities`'
+ * sequential merge — so a per-model override keyed by the provider-mapped or
+ * unprefixed id is honored for a provider-qualified request. Omitting it
+ * keeps the exact single-key lookup on `model`, the historical behavior
+ * callers and fixtures that hold no provider id rely on.
+ *
+ * The fallback reads the common `MAX_TRANSPORT_SAFE_PAYLOAD_BYTES` binding
+ * directly — the single source that `DEFAULT_MAX_OUTPUT_BYTES`
+ * alias-republishes — so every branch of this function returns the same concept
+ * (the band above which a response is expected to be cut in transport), and a
+ * config that declares no `maxOutputBytes` at all always keeps the common
+ * default.
+ */
+export function getMaxOutputBytesForModel(
+  provider: ProviderConfig,
+  model: string,
+  providerId?: string,
+): number {
+  const modelKeys = providerId
+    ? capabilityModelKeyCandidates({ providerId, model, provider })
+    : [model]
+  let modelOverride: number | undefined
+  for (const key of modelKeys) {
+    const candidateOverride = provider.modelCapabilities?.[key]?.maxOutputBytes
+    if (candidateOverride !== undefined) modelOverride = candidateOverride
+  }
+  if (modelOverride !== undefined) return modelOverride
+  return (
+    provider.defaultCapabilities?.maxOutputBytes ??
+    MAX_TRANSPORT_SAFE_PAYLOAD_BYTES
   )
 }
 
@@ -1905,13 +2533,13 @@ export function resolveConfiguredAgentModel(params: {
   return resolveConfiguredAgentModelConfig(params).model
 }
 
-export function resolveConfiguredProviderModel(params: {
+/** Map a route and its capabilities without reading any provider credential. */
+export function resolveConfiguredProviderModelMetadata(params: {
   model: string
-  env?: NodeJS.ProcessEnv
   loadedConfig?: LoadedProviderConfig
-}): ResolvedProviderModel | undefined {
-  const { model, env = getSystemProcessEnv() } = params
-  const loadedConfig = params.loadedConfig ?? loadProviderConfigSync({ env })
+}): ResolvedProviderModelMetadata | undefined {
+  const { model } = params
+  const loadedConfig = params.loadedConfig ?? loadProviderConfigSync()
 
   for (const [providerId, provider] of Object.entries(
     loadedConfig.config.providers,
@@ -1921,33 +2549,70 @@ export function resolveConfiguredProviderModel(params: {
       continue
     }
 
-    const providerHasApiKeyEnv =
-      provider.type === 'openai-compatible' ||
-      provider.type === 'anthropic-compatible'
-    const apiKey =
-      providerHasApiKeyEnv && provider.apiKeyEnv
-        ? env[provider.apiKeyEnv]
-        : undefined
-    if (providerHasApiKeyEnv && provider.apiKeyEnv && !apiKey) {
-      throw new Error(
-        `Missing environment variable '${provider.apiKeyEnv}' required for configured provider '${providerId}' and model '${model}'.`,
-      )
-    }
-
     return {
       providerId,
       provider,
       requestedModel: model,
       providerModel,
-      apiKey,
       compatibility: {
         ...DEFAULT_PROVIDER_COMPATIBILITY,
         ...(provider.compatibility ?? {}),
+        ...(provider.type === 'openai-compatible' &&
+        provider.compatibility.reasoningReplay === undefined &&
+        new URL(provider.baseURL).hostname.toLowerCase() === 'api.ifm.ai'
+          ? { reasoningReplay: 'required' as const }
+          : {}),
+        ...(isOpenRouterAnthropicRoute(provider, providerModel)
+          ? { stripCacheControl: false }
+          : {}),
       },
     }
   }
 
   return undefined
+}
+
+/**
+ * N01: OpenRouter forwards `cache_control` content-part markers to Anthropic
+ * models, so `anthropic/*` routes on openrouter.ai send prompt-cache markers
+ * by default. Other OpenRouter models and other OpenAI-compatible endpoints
+ * keep the strict default (`stripCacheControl: true`).
+ */
+export function isOpenRouterAnthropicRoute(
+  provider: ProviderConfig,
+  providerModel: string,
+): boolean {
+  if (provider.type !== 'openai-compatible') return false
+  if (!providerModel.toLowerCase().startsWith('anthropic/')) return false
+  const hostname = new URL(provider.baseURL).hostname.toLowerCase()
+  return hostname === 'openrouter.ai' || hostname.endsWith('.openrouter.ai')
+}
+
+/** Construct only the selected route, preserving the public missing-key error. */
+export function resolveConfiguredProviderModel(params: {
+  model: string
+  env?: NodeJS.ProcessEnv
+  loadedConfig?: LoadedProviderConfig
+}): ResolvedProviderModel | undefined {
+  const env = params.env ?? getSystemProcessEnv()
+  const metadata = resolveConfiguredProviderModelMetadata({
+    model: params.model,
+    loadedConfig: params.loadedConfig ?? loadProviderConfigSync({ env }),
+  })
+  if (!metadata) return undefined
+  const provider = metadata.provider
+  const credentialEnv =
+    provider.type === 'openai-compatible' ||
+    provider.type === 'anthropic-compatible'
+      ? provider.apiKeyEnv
+      : undefined
+  const apiKey = credentialEnv ? env[credentialEnv] : undefined
+  if (credentialEnv && !apiKey) {
+    throw new Error(
+      `Missing environment variable '${credentialEnv}' required for configured provider '${metadata.providerId}' and model '${params.model}'.`,
+    )
+  }
+  return { ...metadata, apiKey }
 }
 
 /**
@@ -1979,7 +2644,7 @@ export function resolveContextWindowTokens(params: {
     model,
     loadedConfig,
   }).model
-  const configuredProviderModel = resolveConfiguredProviderModel({
+  const configuredProviderModel = resolveConfiguredProviderModelMetadata({
     model: effectiveModel,
     loadedConfig,
   })
@@ -2016,7 +2681,6 @@ export function resolveContextWindowTokens(params: {
   }
   return legacyTokens
 }
-
 
 export type OpenbuffProviderPreset = {
   id: string
@@ -2781,6 +3445,9 @@ export function writeProviderConfigFile(params: {
         existingConfig.autoFileChangeHooks ?? newConfig.autoFileChangeHooks,
       failoverModels: existingConfig.failoverModels ?? newConfig.failoverModels,
       maxAgentSteps: existingConfig.maxAgentSteps ?? newConfig.maxAgentSteps,
+      maxMissingOutputRetries:
+        existingConfig.maxMissingOutputRetries ??
+        newConfig.maxMissingOutputRetries,
       // Preserve the user's existing allowlist; /setup only adds providers.
       readableRoots: existingConfig.readableRoots?.length
         ? existingConfig.readableRoots

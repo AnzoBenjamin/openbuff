@@ -1,0 +1,56 @@
+{
+  "recordedAt": "2026-11-02T21:41:49.225Z",
+  "cwd": "/home/ben/Code/CLI/openbuff",
+  "runtime": "1.3.5",
+  "note": "Local session preparation only; excludes provider latency, TUI rendering, and memory hydration.",
+  "samples": [
+    {
+      "projectContextMode": "symbols",
+      "phase": "initial",
+      "milliseconds": 7588.925238,
+      "fileReads": 2103,
+      "scoredFiles": 2085,
+      "maxEventLoopDelayMs": 153.996736
+    },
+    {
+      "projectContextMode": "symbols",
+      "phase": "continued-1",
+      "milliseconds": 7335.828643999999,
+      "fileReads": 2103,
+      "scoredFiles": 2085,
+      "maxEventLoopDelayMs": 145.996906
+    },
+    {
+      "projectContextMode": "symbols",
+      "phase": "continued-2",
+      "milliseconds": 7285.968732999998,
+      "fileReads": 2103,
+      "scoredFiles": 2085,
+      "maxEventLoopDelayMs": 144.996939
+    },
+    {
+      "projectContextMode": "paths",
+      "phase": "initial",
+      "milliseconds": 146.10880299999917,
+      "fileReads": 18,
+      "scoredFiles": 0,
+      "maxEventLoopDelayMs": 4.999704
+    },
+    {
+      "projectContextMode": "paths",
+      "phase": "continued-1",
+      "milliseconds": 122.85061599999972,
+      "fileReads": 18,
+      "scoredFiles": 0,
+      "maxEventLoopDelayMs": 0.999784
+    },
+    {
+      "projectContextMode": "paths",
+      "phase": "continued-2",
+      "milliseconds": 117.4482259999968,
+      "fileReads": 18,
+      "scoredFiles": 0,
+      "maxEventLoopDelayMs": 0.999784
+    }
+  ]
+}

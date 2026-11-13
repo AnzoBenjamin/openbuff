@@ -1,22 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRenderer } from '@opentui/react'
 import { useShallow } from 'zustand/react/shallow'
 
 import { Chat } from './chat'
 import { ChatHistoryScreen } from './components/chat-history-screen'
 import { ProjectPickerScreen } from './components/project-picker-screen'
 import { TerminalLink } from './components/terminal-link'
-import { useLogo } from './hooks/use-logo'
-import { useTerminalDimensions } from './hooks/use-terminal-dimensions'
 import { useTerminalFocus } from './hooks/use-terminal-focus'
 import { useTheme } from './hooks/use-theme'
-import { getProjectRoot } from './project-files'
+import { getProjectRoot, startNewChat } from './project-files'
+import { useOutputReaderStore } from './state/output-reader-store'
 import { useChatHistoryStore } from './state/chat-history-store'
 import { useChatStore } from './state/chat-store'
 import type { TopBannerType } from './types/store'
 import { findGitRoot } from './utils/git'
+import { createLaunchIntent, type LaunchIntent } from './utils/launch-intent'
 import { openFileAtPath } from './utils/open-file'
 import { formatCwd } from './utils/path-helpers'
-import { getLogoBlockColor, getLogoAccentColor } from './utils/theme-system'
+import { consumeCapturedEarlyInput } from './utils/early-input-capture'
 
 import type { MultilineInputHandle } from './components/multiline-input'
 import type { AgentMode } from './utils/constants'
@@ -27,34 +28,56 @@ interface AppProps {
   initialPrompt: string | null
   agentId?: string
   fileTree: FileTreeNode[]
+  fileInventoryState?: 'loading' | 'loaded' | 'unavailable'
   continueChat: boolean
   continueChatId?: string
   initialMode?: AgentMode
   showProjectPicker: boolean
-  onProjectChange: (projectPath: string) => void
+  onProjectChange: (projectPath: string) => void | Promise<void>
+  launchIntent?: LaunchIntent
+  projectSwitchError?: string
+  switchingProject?: boolean
 }
 
 export const App = ({
   initialPrompt,
   agentId,
   fileTree,
+  fileInventoryState,
   continueChat,
   continueChatId,
   initialMode,
   showProjectPicker,
   onProjectChange,
+  launchIntent,
+  projectSwitchError,
+  switchingProject,
 }: AppProps) => {
-  const { contentMaxWidth } = useTerminalDimensions()
+  const [projectLaunchQuery, setProjectLaunchQuery] = useState(() =>
+    showProjectPicker ? (consumeCapturedEarlyInput() ?? '') : '',
+  )
+  useEffect(() => {
+    if (!showProjectPicker && projectLaunchQuery) setProjectLaunchQuery('')
+  }, [showProjectPicker, projectLaunchQuery])
+  const fallbackIntent = useRef<LaunchIntent | null>(null)
+  if (!fallbackIntent.current)
+    fallbackIntent.current = createLaunchIntent(
+      initialPrompt,
+      continueChat,
+      continueChatId,
+    )
+  const intent = launchIntent ?? fallbackIntent.current
+  const [continuation, setContinuation] = useState(intent.peekContinuation)
+  useEffect(() => {
+    if (!showProjectPicker) intent.consumeContinuation()
+  }, [intent, showProjectPicker])
   const theme = useTheme()
-
-  const blockColor = getLogoBlockColor(theme.name)
-  const accentColor = getLogoAccentColor(theme.name)
-
-  const { component: logoComponent } = useLogo({
-    availableWidth: contentMaxWidth,
-    accentColor,
-    blockColor,
-  })
+  const renderer = useRenderer()
+  useEffect(() => {
+    // Alpha-zero backgrounds emit the terminal's default background (SGR 49).
+    // Keep the canvas native to the terminal instead of painting an opaque fill.
+    renderer.setBackgroundColor(theme.background)
+  }, [renderer, theme.background])
 
   const inputRef = useRef<MultilineInputHandle | null>(null)
   const {
@@ -144,23 +167,29 @@ export const App = ({
 
   const handleResumeChat = useCallback(
     (chatId: string) => {
+      intent.discard()
+      setContinuation({ enabled: false, id: undefined })
       closeChatHistory()
       // Reset chat store to clear previous messages before loading the selected chat
       resetChatStore()
       setResumeChatId(chatId)
     },
-    [closeChatHistory, resetChatStore],
+    [closeChatHistory, resetChatStore, intent],
   )
 
   const handleNewChat = useCallback(() => {
+    intent.discard()
+    setContinuation({ enabled: false, id: undefined })
     closeChatHistory()
+    startNewChat()
+    useOutputReaderStore.getState().close()
     resetChatStore()
     setResumeChatId(null)
-  }, [closeChatHistory, resetChatStore])
+  }, [closeChatHistory, resetChatStore, intent])
 
   // Determine effective continueChat values
-  const effectiveContinueChat = continueChat || resumeChatId !== null
-  const effectiveContinueChatId = resumeChatId ?? continueChatId
+  const effectiveContinueChat = continuation.enabled || resumeChatId !== null
+  const effectiveContinueChatId = resumeChatId ?? continuation.id
 
   const headerContent = useMemo(() => {
     const displayPath = formatCwd(projectRoot)
@@ -172,26 +201,15 @@ export const App = ({
           gap: 0,
           paddingLeft: 1,
           paddingRight: 1,
+          marginTop: 1,
+          marginBottom: 1,
         }}
       >
-        <box
-          style={{
-            flexDirection: 'column',
-            marginBottom: 1,
-            marginTop: 2,
-          }}
-        >
-          {logoComponent}
-        </box>
-        <text
-          style={{ wrapMode: 'word', marginBottom: 1, fg: theme.foreground }}
-        >
-          The CLI will run commands on your behalf to help you build.
+        <text fg={theme.primary}>
+          <b>Openbuff</b>
         </text>
-        <text
-          style={{ wrapMode: 'word', marginBottom: 1, fg: theme.foreground }}
-        >
-          Directory{' '}
+        <text style={{ wrapMode: 'word', fg: theme.muted }}>
+          Project{' '}
           <TerminalLink
             text={displayPath}
             color={theme.muted}
@@ -202,7 +220,7 @@ export const App = ({
         </text>
       </box>
     )
-  }, [logoComponent, projectRoot, theme])
+  }, [projectRoot, theme])
 
   // Auth status is always 'ok' in local/BYOK mode — no cloud backend to query
   const authStatus: AuthStatus = 'ok'
@@ -213,6 +231,9 @@ export const App = ({
       <ProjectPickerScreen
         onSelectProject={onProjectChange}
         initialPath={projectRoot}
+        initialQuery={projectLaunchQuery}
+        error={projectSwitchError}
+        busy={switchingProject}
       />
     )
   }
@@ -224,9 +245,11 @@ export const App = ({
     <AuthedSurface
       chatKey={chatKey}
       headerContent={headerContent}
-      initialPrompt={initialPrompt}
+      initialPrompt={intent.peekPrompt()}
+      claimInitialPrompt={intent.claimPrompt}
       agentId={agentId}
       fileTree={fileTree}
+      fileInventoryState={fileInventoryState}
       inputRef={inputRef}
       continueChat={effectiveContinueChat}
       continueChatId={effectiveContinueChatId}
@@ -246,8 +269,10 @@ interface AuthedSurfaceProps {
   chatKey: string
   headerContent: React.ReactNode
   initialPrompt: string | null
+  claimInitialPrompt?: (prompt: string) => boolean
   agentId?: string
   fileTree: FileTreeNode[]
+  fileInventoryState?: 'loading' | 'loaded' | 'unavailable'
   inputRef: React.MutableRefObject<MultilineInputHandle | null>
   continueChat: boolean
   continueChatId: string | undefined
@@ -265,8 +290,10 @@ const AuthedSurface = ({
   chatKey,
   headerContent,
   initialPrompt,
+  claimInitialPrompt,
   agentId,
   fileTree,
+  fileInventoryState,
   inputRef,
   continueChat,
   continueChatId,
@@ -295,8 +322,10 @@ const AuthedSurface = ({
       key={chatKey}
       headerContent={headerContent}
       initialPrompt={initialPrompt}
+      claimInitialPrompt={claimInitialPrompt}
       agentId={agentId}
       fileTree={fileTree}
+      fileInventoryState={fileInventoryState}
       inputRef={inputRef}
       continueChat={continueChat}
       continueChatId={continueChatId}

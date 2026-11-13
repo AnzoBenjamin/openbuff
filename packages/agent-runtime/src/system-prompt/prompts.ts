@@ -78,6 +78,48 @@ export const additionalSystemPrompts = {
   compact: compactPrompt,
 } as const
 
+/** Upper bound on the `/compact [focus]` text carried into the summary. */
+export const COMPACT_FOCUS_MAX_CHARS = 1_000
+
+/**
+ * Parses a manual compaction request. Accepts the bare `compact`/`/compact`
+ * forms and `/compact <focus>`. A slashless `compact <words>` is NOT a
+ * compaction request: it is an ordinary prompt such as "compact the JSON".
+ * Returns undefined when the prompt is not a compaction request.
+ */
+export function parseCompactCommand(
+  prompt: string | undefined,
+): { focus?: string } | undefined {
+  if (!prompt) return undefined
+  const trimmed = prompt.trim()
+  if (/^\/?compact$/i.test(trimmed)) return {}
+  const match = trimmed.match(/^\/compact\s+([\s\S]+)$/i)
+  if (!match) return undefined
+  const focus = match[1].trim().slice(0, COMPACT_FOCUS_MAX_CHARS)
+  return focus ? { focus } : {}
+}
+
+/**
+ * The extra system instruction appended after a user prompt that triggers a
+ * built-in flow (`/init`, `/export`, `/compact [focus]`).
+ */
+export function getAdditionalSystemPrompt(
+  prompt: string | undefined,
+): string | undefined {
+  if (!prompt) return undefined
+  const compact = parseCompactCommand(prompt)
+  if (compact) {
+    if (!compact.focus) return compactPrompt
+    return [
+      compactPrompt,
+      `5. The user asked this compaction to focus on: "${compact.focus}". Keep every detail relevant to that focus in full (do not shorten it), and add a "Focus:" heading at the top restating it.`,
+    ].join('\n')
+  }
+  return prompt in additionalSystemPrompts
+    ? additionalSystemPrompts[prompt as keyof typeof additionalSystemPrompts]
+    : undefined
+}
+
 export const getProjectFileTreePrompt = (params: {
   fileContext: ProjectFileContext
   fileTreeTokenBudget: number

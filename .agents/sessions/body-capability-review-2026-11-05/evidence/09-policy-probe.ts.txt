@@ -1,0 +1,43 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { spawn } from 'node:child_process'
+import { classifyTerminalHarnessAction, evaluateHarnessActionPolicy, hashCommand } from '/home/ben/Code/CLI/openbuff/sdk/src/services/harness-enforcement.ts'
+import { runTerminalCommand } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/run-terminal-command.ts'
+import { createDiagnosticCommandRunner } from '/home/ben/Code/CLI/openbuff/sdk/src/services/diagnostic-delta-runner.ts'
+
+const base = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const cwd = path.join(base, '09-work')
+fs.mkdirSync(cwd, { recursive: true })
+const commands = [
+  "printf safe\npython3 -c \"print('secondary')\"",
+  'npm install harmless-fixture && rm -rf harmless-fixture',
+  'git push origin feature && terraform apply',
+  'git push --force origin feature',
+  'git push --delete origin feature',
+  "node -e \"process.stdout.write('a  b')\"",
+  "node -e \"process.stdout.write('a b')\"",
+]
+const classified = commands.map(command => {
+  const action = classifyTerminalHarnessAction(command)
+  return { command, action: action ?? null, balancedDecision: action ? evaluateHarnessActionPolicy({ ...action, hasMatchingApproval: false, defaultBranch: 'main', approvalMode: 'balanced' }) : null }
+})
+let approvalCalls = 0
+const newlineRun = await runTerminalCommand({
+  command: commands[0], process_type: 'SYNC', mode: 'assistant', permission_profile: 'full-access', cwd, projectRoot: cwd, timeout_seconds: 5,
+  authorizeHighImpactAction: async () => { approvalCalls++; return { allowed: false, approvalRequired: true, reason: 'Probe denies every classified action.' } },
+})
+
+// Known harmless sentinel only: never print or inspect existing secret values.
+process.env.OPENAI_API_KEY = '09_ENV_SENTINEL'
+const envProbe = path.join(cwd, '09-env-child.py')
+fs.writeFileSync(envProbe, "import os,json\nprint(json.dumps({'sentinelPresent':os.environ.get('OPENAI_API_KEY')=='09_ENV_SENTINEL','overridePresent':os.environ.get('OPENAI_API_KEY')=='09_OVERRIDE_SENTINEL'}))\n")
+const terminalEnv = await runTerminalCommand({
+  command: `python3 '${envProbe}'`, process_type: 'SYNC', mode: 'assistant', permission_profile: 'full-access', cwd, projectRoot: cwd, timeout_seconds: 5,
+  env: { OPENAI_API_KEY: '09_OVERRIDE_SENTINEL' },
+})
+const runner = createDiagnosticCommandRunner({ spawn: spawn as any, sigtermGraceMs: 50 })
+const diagnosticInherited = await runner({command: `python3 ${envProbe}`, cwd, timeoutSeconds: 5})
+const diagnosticOverride = await runner({command: `python3 ${envProbe}`, cwd, timeoutSeconds: 5, env: {OPENAI_API_KEY: '09_OVERRIDE_SENTINEL'}})
+const result = {runtime: process.version, classified, quotedHashCollision: hashCommand(commands[5]) === hashCommand(commands[6]), newlineRun: {approvalCalls, result: newlineRun}, terminalEnv, diagnosticInherited, diagnosticOverride, constraints: 'No external requests; all executed commands only print synthetic text. All created files are in evidence/09-work.'}
+fs.writeFileSync(path.join(base, '09-policy-probe.json'), JSON.stringify(result, null, 2))
+console.log(JSON.stringify(result, null, 2))

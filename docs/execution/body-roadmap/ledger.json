@@ -1,0 +1,2167 @@
+{
+  "schemaVersion": 1,
+  "plan": ".agents/sessions/body-capability-review-2026-11-05/PLAN.md",
+  "specification": ".agents/sessions/body-capability-review-2026-11-05/SPEC.md",
+  "planSha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241",
+  "specificationSha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31",
+  "baselineHead": "03a1c562717b1794c898510c694db6d6f5b485d9",
+  "startedAt": "2026-11-06T10:29:53Z",
+  "evidenceDirectory": "docs/execution/body-roadmap/evidence",
+  "completionGraph": {
+    "schemaVersion": 2,
+    "cardCount": 36,
+    "nodeCount": 39,
+    "dependencySemantics": "all-of",
+    "initialDispatchQueue": [
+      "B02",
+      "B03",
+      "B04"
+    ],
+    "readyRotationQueue": [
+      "B36",
+      "B30"
+    ],
+    "rollups": {
+      "B22": [
+        "M22-CORE",
+        "M22-TXN",
+        "M22-CHILD"
+      ]
+    },
+    "ledgerRequiredFields": [
+      "nodeId",
+      "parentCardId",
+      "acceptedPrerequisites",
+      "sourceContractHashes",
+      "repositoryId",
+      "backend",
+      "epoch",
+      "coverageTier",
+      "evidenceManifest"
+    ],
+    "nodes": [
+      {
+        "id": "B01",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B02",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B03",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B04",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B05",
+        "kind": "card",
+        "prerequisites": [
+          "B03"
+        ]
+      },
+      {
+        "id": "B06",
+        "kind": "card",
+        "prerequisites": [
+          "B03",
+          "B04",
+          "B05",
+          "B07"
+        ]
+      },
+      {
+        "id": "B07",
+        "kind": "card",
+        "prerequisites": [
+          "B03",
+          "B04",
+          "B05"
+        ]
+      },
+      {
+        "id": "B08",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B09",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B08"
+        ]
+      },
+      {
+        "id": "B10",
+        "kind": "card",
+        "prerequisites": [
+          "B02"
+        ]
+      },
+      {
+        "id": "B11",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B12",
+        "kind": "card",
+        "prerequisites": [
+          "B02"
+        ]
+      },
+      {
+        "id": "B13",
+        "kind": "card",
+        "prerequisites": [
+          "B12"
+        ]
+      },
+      {
+        "id": "B14",
+        "kind": "card",
+        "prerequisites": [
+          "B12"
+        ]
+      },
+      {
+        "id": "B15",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B03",
+          "B04"
+        ]
+      },
+      {
+        "id": "B16",
+        "kind": "card",
+        "prerequisites": [
+          "B04",
+          "B15"
+        ]
+      },
+      {
+        "id": "B17",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B15"
+        ]
+      },
+      {
+        "id": "B18",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B19",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B18"
+        ]
+      },
+      {
+        "id": "B20",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B19"
+        ]
+      },
+      {
+        "id": "B21",
+        "kind": "card",
+        "prerequisites": [
+          "B19",
+          "B20"
+        ]
+      },
+      {
+        "id": "B22",
+        "kind": "card",
+        "prerequisites": [
+          "M22-CORE",
+          "M22-TXN",
+          "M22-CHILD"
+        ]
+      },
+      {
+        "id": "B23",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B24",
+        "kind": "card",
+        "prerequisites": [
+          "B23"
+        ]
+      },
+      {
+        "id": "B25",
+        "kind": "card",
+        "prerequisites": [
+          "B05",
+          "B19",
+          "B20",
+          "B23"
+        ]
+      },
+      {
+        "id": "B26",
+        "kind": "card",
+        "prerequisites": [
+          "B04",
+          "B23"
+        ]
+      },
+      {
+        "id": "B27",
+        "kind": "card",
+        "prerequisites": [
+          "B06",
+          "B19",
+          "B23",
+          "B24",
+          "B25",
+          "B26",
+          "B36"
+        ]
+      },
+      {
+        "id": "B28",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B29",
+        "kind": "card",
+        "prerequisites": [
+          "B15",
+          "B19",
+          "B28"
+        ]
+      },
+      {
+        "id": "B30",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B31",
+        "kind": "card",
+        "prerequisites": [
+          "B02",
+          "B09",
+          "B12",
+          "B13",
+          "B14",
+          "B27",
+          "B30"
+        ]
+      },
+      {
+        "id": "B32",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "B33",
+        "kind": "card",
+        "prerequisites": [
+          "B03",
+          "B05",
+          "B19",
+          "B20",
+          "B28"
+        ]
+      },
+      {
+        "id": "B34",
+        "kind": "card",
+        "prerequisites": [
+          "B06",
+          "B07",
+          "B16",
+          "B17",
+          "B22",
+          "B27"
+        ]
+      },
+      {
+        "id": "B35",
+        "kind": "card",
+        "prerequisites": [
+          "B03",
+          "B05",
+          "B19",
+          "B20"
+        ]
+      },
+      {
+        "id": "B36",
+        "kind": "card",
+        "prerequisites": []
+      },
+      {
+        "id": "M22-CORE",
+        "kind": "milestone",
+        "prerequisites": [
+          "B04",
+          "B15",
+          "B21"
+        ],
+        "parentCardId": "B22"
+      },
+      {
+        "id": "M22-TXN",
+        "kind": "milestone",
+        "prerequisites": [
+          "M22-CORE",
+          "B05",
+          "B07"
+        ],
+        "parentCardId": "B22"
+      },
+      {
+        "id": "M22-CHILD",
+        "kind": "milestone",
+        "prerequisites": [
+          "M22-CORE",
+          "M22-TXN",
+          "B16"
+        ],
+        "parentCardId": "B22"
+      }
+    ]
+  },
+  "status": "executing",
+  "nodes": [
+    {
+      "nodeId": "B01",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {
+        "agents/__tests__/base2-writer-spawn-rules.test.ts": "4a9881a9b62abd7e14da46ab020f8916fe65bcd0accb4eedf047fe7000249471",
+        "agents/__tests__/base2.test.ts": "69d90a077219a5ba5a339b62e5d620c1fe0d31f47e25f3c6cf36f6775d1702dd",
+        "agents/__tests__/code-reviewer.test.ts": "0e3e04b1907b792df775e38622ec49c0c30d7e197c9510599db0e6005de53fb2",
+        "agents/__tests__/gate-reviewer.test.ts": "9fbfe08552b19307bfc2c954209fea90252cede07ed1d1dddd360da7548bed19",
+        "agents/base2/base2.ts": "db89fd9013ffdca6f168db047b72dce9f883769c5ca0a28c79899b4adb119c1b",
+        "agents/base2/gate-reviewer.ts": "8b9a8020f3311048b4cd58aa1e9ce406398c0f5df107188350c031e70c503d34",
+        "agents/reviewer/code-reviewer.ts": "622a1635cdc5b9f34ad822ee9a93833b27578d63bb86073f3976027abe2afb0c",
+        "common/src/tools/params/tool/audit-intelligence.ts": "486661533aa57b7b05d11f3956a8acfa812824dca182331f318b2929a7f13fcf",
+        "common/src/tools/params/tool/get-change-review-bundle.ts": "d257e3ee83eb29091076a3198d845f49f8ecba376f72651490db58f966f37965",
+        "common/src/tools/params/tool/run-file-change-hooks.ts": "5a84898741718a712695580e556a0ab99e15ad3f5785f0009c8904bb6a12ac55",
+        "common/src/tools/params/tool/run-targeted-validation.ts": "ec01c7aa92c59c8cd1a07b4a139b2127ba265a09ee2057a5a4d6cb8450db3e05",
+        "common/src/types/workspace-state.ts": "06f075a0ba73e4645dc7ba9536fb5f88b4b997b57c00c1911957c3c3b498e9ec",
+        "scripts/__tests__/byok-wording-guard.test.ts": "47045a09753b12e34d3966125e50b5e274345631a453814f1950c76fb292a391",
+        "scripts/__tests__/memory-drift-guard.test.ts": "de8b3293b797f942e0440ddf815cabb0826477501d99815d38e8e341ccb6ec55",
+        "scripts/byok-wording-guard.ts": "2c0ac81433437286716493fd2be5a31404581f6db79b1b0b1fdf9baa44749d25",
+        "scripts/lib/historical-source-copies.ts": "a83936d97ae28d1f604c8d54e78313eee8117cd172d5031273f124715e016fb0",
+        "scripts/memory-drift-guard.ts": "026295fe66406737410e767e5d109a94dca6017b1261b618b081262d1443113f",
+        "sdk/src/__tests__/audit-intelligence.test.ts": "64bf7f70c704a00c5dc72928aa0081eea54ca6b0ba9fe4a1f478e0d4c56bafa4",
+        "sdk/src/__tests__/get-change-review-bundle.test.ts": "4660687f206537e03e7cea84e87bc33d1379fb2df3dc9d937239f1bb6e2430d2",
+        "sdk/src/__tests__/local-harness-store.test.ts": "34b9bca73ee997e3adaa93509e79944306ce81dca27ff67e50c7b7a07b09e6f3",
+        "sdk/src/__tests__/run-git-bounded.test.ts": "0c5f2106f84027bbda57e6fcfd8c0ed73804db9caacd014f2af5d0426fd02d45",
+        "sdk/src/__tests__/run-targeted-validation.test.ts": "255e5cdf0649893a829154e644883587697363339831d73088c084ce1f56feee",
+        "sdk/src/services/audit-intelligence.ts": "fcdc495c769dbfb00d97205b9ef2dbf0d1c70837529ea3236dc660f23529c1d7",
+        "sdk/src/services/local-harness-store.ts": "390668ee7b67ed33d830e72c714ea66d7e43339d78f80a852942af9b0e506ba2",
+        "sdk/src/services/repository-identity.ts": "040789e343e505e286a7415b5e28c88946fb7a950d7097aeccdc7a28f6a86135",
+        "sdk/src/services/semgrep-baseline.ts": "8cab20d4c9e7155ce07e8c3de4141cb3a4be9329b40f88ba93f43d8b96af4632",
+        "sdk/src/tools/audit-intelligence.ts": "bc2f387028e79f54467eccd71628ae5d24ef390c8e87e390e361881e14ec9874",
+        "sdk/src/tools/file-change-hooks.ts": "17f651276f0ec71405c62649a21dda9a36fc6468e3ea2b41ef9a8ca0d9427a20",
+        "sdk/src/tools/get-change-review-bundle.ts": "bb241a07257164601e8ab763893b676b9bae719ba4a8971cca5b1b1dd2b152e7",
+        "sdk/src/tools/git-status.ts": "582a002f1a96d51701268f4e7ae3c7d922bd18128830af6a7fcc92e55321229b",
+        "sdk/src/tools/path-utils.ts": "a69ef82b2aa3bc9ae9d9eeab3812795372b02dceed1dbd1ee939524d2a830f6d",
+        "sdk/src/tools/run-targeted-validation.ts": "88d7fccd2f5ff28b52afeb9203a7bb28c8692e402c55d2b238b9c083d427bcd2"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "Current frozen TypeScript source, original complete behavior/command obligations with independently reviewed explicit host/representation adaptations, current exact CI/typecheck/repair evidence.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B01/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_current_review",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b20_linux_driver",
+              "historical Openbuff implementation agents"
+            ],
+            "scope": "Fresh B01 semantic renewal on exact current source scope (32 contracts), all 22 retained command obligations and all 5 original criterion labels; cooperative TypeScript source tier.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/renewal-intake-r1/final-node-renewal-review-r1/B01/implementation-review.json",
+              "sha256": "f5c6d268a7dcfc56507fa020df3ef4e205532b93f4b80224c15dd600dd0aeb2f"
+            }
+          }
+        ],
+        "requiredCommandCount": 22
+      },
+      "risks": [
+        "Observed cooperative TypeScript behavior with explicitly reviewed injected host setup and original assertion-preserving adapters; no native containment or external-writer exclusion claim.",
+        "Shared current CI observations retain original discovery/rosters and skip counts; repeated slots are not extra executions.",
+        "Historical acceptance is used to recover obligations and key rosters, with fresh original assertion executions and inspected current sources supplying renewal credit.",
+        "No installed/native, live-provider, billing, external-writer fencing or empirical capability improvement is asserted by this renewal."
+      ],
+      "acceptedAt": "2026-11-11T23:58:10.616767+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B01/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "01f0664a904cde3b1ad39a6126e20d80560ce0fef20cef5245125c479046b0e7"
+      }
+    },
+    {
+      "nodeId": "B02",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {
+        "agents/base2/base2.ts": "db89fd9013ffdca6f168db047b72dce9f883769c5ca0a28c79899b4adb119c1b",
+        "cli/src/__tests__/run-command.test.ts": "eb626659c7fbfbc3fa3a77a34fab527c27e854e6f0ca48fad20b62ed75a14c56",
+        "cli/src/commands/run-command.ts": "1101c7f4c2ccc29f98238980175ed9c36ea505bcc6f47696e4732e2b0a6f640d",
+        "cli/src/hooks/helpers/__tests__/send-message.test.ts": "10342dd06657b84e248086332d19325a229ffcbd5a97f329889051c99610ccb0",
+        "cli/src/hooks/helpers/send-message.ts": "95e97799598d0c4e43752088ddf7f7d2745d3b2de3077c191f8550caf59ad8bf",
+        "cli/src/types/chat.ts": "7992abfd4988dc1da67b5ef79104e3cb27ce356a6e5f15916fcad0000219b436",
+        "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "e8b7d57647c884525be4f6ca117772601bac42cc62082362905512e6513ad5b9",
+        "cli/src/utils/output-outcome.ts": "2d2238fe9b16daff45a6fce0dea09666adba0ee41a7831440afc26acc29bdabd",
+        "cli/src/utils/sdk-event-handlers.ts": "a458c790ffee9b97df126b6571eaf9d46200cd0e81c0b23051dfbbfb41ce96bb",
+        "common/src/types/agent-handoff.ts": "f02d9d198e92faa11da37827c535d714174c8d92ccfa114267fe6973fd72fef9",
+        "common/src/types/contracts/database.ts": "82d1532ebf1e4d9db8d423f1b97e762aaa80441ce9789b900a44c6bb1e5947a0",
+        "common/src/types/dynamic-agent-template.ts": "6401783af251770c7c9498b0fd59217870cdda765439967e8ec7a2af47ca4404",
+        "common/src/types/print-mode.ts": "64edf6e5bacd3aaec9c3213d1221866dbd322e68caa3cd97a1458c62d6b0728b",
+        "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
+        "common/src/types/session-state.ts": "6528469c982bdd741f3361cf6623b51d435a4979f454c3d099ac04900ef78436",
+        "common/src/util/__tests__/action-outcomes.test.ts": "6ad7eb58f254061d8ae8257cc2fa1dc2780a89d41dd290e85994e1b2420deacb",
+        "common/src/util/action-outcomes.ts": "772eb4702b8c53b0eea7b50360bfa6384e4fafd87ea9b69de0ed1ce29da6f20f",
+        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "27d9e177fd7f67bf5059d9358d9a36800ddbe28be64b93cbe69c6dc1cb28c994",
+        "packages/agent-runtime/src/__tests__/budget-enforcement.test.ts": "a3318eb09907e8417f5452922ff90eee67b43c6a6bc9ceacedcf8b82449c81fb",
+        "packages/agent-runtime/src/__tests__/loop-agent-steps-abort.test.ts": "fb9994f0737ce5af7e68d3d586cbef0e6d7ecbb86a263ac6dcfcc7a0511f40da",
+        "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts": "b6d878112cf7b3fb31f2dc96663768551f5a869c30f35075f77690b8e0b345db",
+        "packages/agent-runtime/src/__tests__/run-agent-step-tools.test.ts": "1ded4ac4e2ffdd96b61ec06507e8da45dadfc9a3aaf8840e4d175db3840e18b3",
+        "packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts": "88806fcb16e75add2637475a4339324fa0f1feb071ee75d7143e7bfccae35dec",
+        "packages/agent-runtime/src/__tests__/spawn-agents-image-content.test.ts": "5f9fb7d2a47ec53d520642cb04c4bde6a909799c77b1c8846f774f144a3bfaf4",
+        "packages/agent-runtime/src/__tests__/spawn-agents-message-history.test.ts": "2bff4f4b05ee02a2df4604c3c4e843f862157b9288e77c3b6d6acc09a4de3bcf",
+        "packages/agent-runtime/src/__tests__/spawn-agents-permissions.test.ts": "8fdb2fb2a7f6cfce3fc2a23193b2553428248fc2d7e4981a91728927a58abffa",
+        "packages/agent-runtime/src/main-prompt.ts": "e90f7953181a6b3e1650bf69c00524bfb5abaf5dbc6ab897d1c659e5fffbcb76",
+        "packages/agent-runtime/src/run-agent-step.ts": "e127c93b4486c5a42e18cfcd348fac6b4dddd690279275e1ec1cf4b78aa0a3b2",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "ed800416219d1be020e0202ab51536f4e8af37b52801a714991e32cd0370aee9",
+        "packages/agent-runtime/src/supervision/child-entry.ts": "29cc050cf29bdd0e71f1b03f77d036d9b8766fb7b8f05191117257bc02dd08cb",
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-output.test.ts": "9e6d17b1039e193bee3891bfa1b65323acbb3285486b11462ecef31dc6f1746c",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "3a6d4967bda81c26e47cbdcdd1ebcfce86dc4396a22aed678099909a1870c005",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts": "3b7e63acd059f2f4122fd4d88a56851ef4f95323a90eb531802b4c18eeea9703",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "4abd5d3b3ee3964b99bdf8eba69888059cb1998928564b3aebd768e9ced62b9b",
+        "packages/agent-runtime/src/util/__tests__/run-outcome-replay.test.ts": "e237cfa8a75d311f69f98b58384fdc014c2aea7aa0f56ab9c2132c3a034ce8fb",
+        "packages/agent-runtime/src/util/background-agent-jobs.ts": "fd30c145fd41b7f12d6597e8877063f318f23de5f528108ae6ecba20b9beeac2",
+        "packages/agent-runtime/src/util/run-journal.ts": "45af7fbb3646e28d508154f2b7816da883df13d5f5a58114774d98fd38982aa6",
+        "packages/agent-runtime/src/util/run-replay-driver.ts": "e86f6bafeed30a333afb0c3f55dd3a48c0125d49cdbbde468cacda323c9c6f66",
+        "scripts/body-fixtures/sdk-terminal-approval-identity.ts": "e3d93cb297c6dfa13988a5c9a8410acb816951f43925c4d83ca613c2a78eaf4a",
+        "sdk/src/__tests__/acp-outcomes.test.ts": "afef7a65bb163d70a41d95a64c0c82eac5cc1501690a498b415328740fe243e5",
+        "sdk/src/__tests__/run-programmatic-outcomes.test.ts": "34b98add791ba3d6f489078b25dee48cd97e4a5db1f1205d7590f3a3d15cb9a0",
+        "sdk/src/__tests__/serve-approval-bridge.test.ts": "bab102f79495970c142384153f67123246e37a5fa46765177868be395a5467ca",
+        "sdk/src/__tests__/serve-bridge.test.ts": "930442f30f6c2924129dcd607b3fea3d9bd6c8bd8bd94dfe0db8581af9bcbb6c",
+        "sdk/src/client.ts": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7",
+        "sdk/src/client/acp-client.ts": "117452e520084f72791314bc23d39f96e38d121044b5445dc3e24722c1ca03d8",
+        "sdk/src/run-state.ts": "a24a11f4e77533bd76cd720bf68b36d2106dbf0eeb155f865c06e2e3fa83edd2",
+        "sdk/src/run.ts": "e36e15725f83cd81a83c7cc4b954c34af208068ff188974d36abc691b9c3249d",
+        "sdk/src/serve/__tests__/event-bridge.test.ts": "88f9dfeedb7cf25f8433f6afb209eb9dcf722fc3fa535d95a7bb8dbdb314b693",
+        "sdk/src/serve/bridge.ts": "7e77aac98fde3882aa471dfa0e897acdc3de8098a0f6eebc7286f9f8ccc2560d",
+        "sdk/src/serve/event-bridge.ts": "a8fbddf5a1c387f0ac29ef14ddad35c420eaeb9f9f792a514057bf2b001106fb",
+        "sdk/src/services/acp/acp-agent.ts": "14c57e87b3f57412be8cbc90a7c94e16558cef50ac5b69b0e0e3228687dd656a",
+        "sdk/src/services/harness-enforcement.ts": "9e20db9c7912e7866947ed0fbdce539c285eb8d6f9e20fa95f58355a13f929ed",
+        "sdk/src/services/local-harness-store.ts": "390668ee7b67ed33d830e72c714ea66d7e43339d78f80a852942af9b0e506ba2",
+        "sdk/src/tools/run-terminal-command.ts": "133b84ece998b046cfbfef7ba357b8caa21ce730d6d4a786cb000ae09e654508",
+        "test/fixtures/body/runtime-outcomes.ts": "34b1c669212736852173513269e22d2b465facc26f48a8d1ee38f8a02d07d198"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "Current frozen TypeScript source, original complete behavior/command obligations with independently reviewed explicit host/representation adaptations, current exact CI/typecheck/repair evidence.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B02/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_current_review",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b20_linux_driver",
+              "historical Openbuff implementation agents"
+            ],
+            "scope": "Fresh B02 semantic renewal on exact current source scope (55 contracts), all 17 retained command obligations and all 5 original criterion labels; cooperative TypeScript source tier.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/renewal-intake-r1/final-node-renewal-review-r1/B02/implementation-review.json",
+              "sha256": "2da9c74b6cf7a3ac172ee849513f8ca9790ae0d9ba1bb7639d2eb67543c65971"
+            }
+          }
+        ],
+        "requiredCommandCount": 17
+      },
+      "risks": [
+        "Observed cooperative TypeScript behavior with explicitly reviewed injected host setup and original assertion-preserving adapters; no native containment or external-writer exclusion claim.",
+        "Shared current CI observations retain original discovery/rosters and skip counts; repeated slots are not extra executions.",
+        "Historical acceptance is used to recover obligations and key rosters, with fresh original assertion executions and inspected current sources supplying renewal credit.",
+        "No installed/native, live-provider, billing, external-writer fencing or empirical capability improvement is asserted by this renewal."
+      ],
+      "acceptedAt": "2026-11-11T23:58:10.807205+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B02/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "5c8cd38d31c159b431c1a217e539471197546ced9eb65c67b06843f7f2be14b3"
+      }
+    },
+    {
+      "nodeId": "B03",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {
+        "bun.lock": "0671009aeff3a7a04044da7d78035ddb795a065c8b3bafb813df6f034bf4e567",
+        "cli/package.json": "c3f7dc4a26e8409f9011e627cf19377ac5173526065cb7c4354e77a511b22b46",
+        "cli/scripts/preload-opentui.ts": "61321edda85e92351d5fde14a82e78c7e5a377509566c7d5fbae65aac905e283",
+        "cli/src/components/__tests__/completion-summary-box.test.tsx": "ccaca73eb12b6874983e62e782ef133e553bc1e07364834d0f3050ee9afe90de",
+        "cli/src/components/tools/__tests__/apply-patch.test.tsx": "5a2b9048cf4445ee82714065e944521d00dd75030b18e0fb19d76ab19d0b0e5a",
+        "cli/src/components/tools/__tests__/edit-transaction.test.ts": "8e1059145af472fc4eb5e572a64cf89ec58693432795021691fe16d9cc234d31",
+        "cli/src/components/tools/__tests__/edit-transaction.test.tsx": "34b020ba23faa10e8b4fcd55e4be8640ce50d0637fc0d9dd74cbeb0e8f34faf0",
+        "cli/src/components/tools/__tests__/str-replace.test.tsx": "d40c66290287e4cdde2f6058f320b40832d4d7fc866e0e6d0533146f6917d283",
+        "cli/src/components/tools/apply-patch.tsx": "dbca8b26f17bebac700184ec56c17b4d97685a76a24ec00c0bfbdfcfdf8ebbcd",
+        "cli/src/components/tools/edit-transaction.tsx": "f4e0876e20c545859a61de3c76cb5c8d33dd925d1c6946f5a37f418fc83af159",
+        "cli/src/components/tools/str-replace.tsx": "df4c99647f8a08e93dfc765c3999d92f94fdbad713fd49c42460bebf791e86f7",
+        "cli/src/types/chat.ts": "7992abfd4988dc1da67b5ef79104e3cb27ce356a6e5f15916fcad0000219b436",
+        "cli/src/utils/__tests__/completion-summary.test.ts": "1c99e3d334bf60cd87d343e7ab44c08838ec6e1d01f11474c89669a71fcf3489",
+        "cli/src/utils/__tests__/implementor-helpers.test.ts": "5bdd986ce0fa09e442c301fd356fb682b49026736d102a5520077877d4fe6a94",
+        "cli/src/utils/__tests__/output-outcome.test.ts": "6841d88d75227291c3a253210d85117da03cd896026fa765c3ef33c3c8ab07a4",
+        "cli/src/utils/__tests__/sdk-event-handlers.test.ts": "e8b7d57647c884525be4f6ca117772601bac42cc62082362905512e6513ad5b9",
+        "cli/src/utils/__tests__/tool-result-normalizer.test.ts": "47909dc00c902c92a16ad723e6f235e64789e559c9f2443e65474e124b08f34a",
+        "cli/src/utils/completion-summary.ts": "4bab8611ffbc7437beb9dfc13d1062582d5be3d378c4ec01852f8aa4ddadf551",
+        "cli/src/utils/implementor-helpers.ts": "89c1364732ccbe9ee0f7788b0a6ba27ec371aae6c93f8570cc20fa16b27f47d4",
+        "cli/src/utils/output-outcome.ts": "2d2238fe9b16daff45a6fce0dea09666adba0ee41a7831440afc26acc29bdabd",
+        "cli/src/utils/sdk-event-handlers.ts": "a458c790ffee9b97df126b6571eaf9d46200cd0e81c0b23051dfbbfb41ce96bb",
+        "cli/src/utils/tool-result-normalizer.ts": "9e108810743a2883bb69e46097cfcd001cd88c42adab3090017d1dfaca9978a4",
+        "cli/tsconfig.json": "ac970656163e4a82300b0bce1d19260654eaf2876ff983e3559c654014dd4c3f",
+        "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+        "common/src/protocol/__tests__/acp-ext-v1.golden.test.ts": "718b0cd2ea4da8c813035408dceb4482403cb9f19c407327a14a0b2eb41c8ab5",
+        "common/src/protocol/acp-ext-v1.ts": "7e5c4922e5c46101a4da2aaa17f61881493cbe023337154f62d0bd7ed3ee7b27",
+        "common/src/testing/fixtures/file-mutation.ts": "037b7af51cd940d804ac873500cc5b781a11a3f4a8290f27148ca7b421a76e7d",
+        "common/src/testing/mocks/filesystem.ts": "34887e3ebce8aebb09821a3c74ebb579599ec222a7f9a4f2c98779fddd716f50",
+        "common/src/tools/params/tool/edit-transaction.ts": "6cc5ce68dcedd4940774b031e76b30be47b08d6992ab16b177c4e670c3122408",
+        "common/src/tools/params/tool/str-replace.ts": "044802c878bc3093414bc5c29f0e6781b1e9b0fa7030444424c6a4085c52e059",
+        "common/src/tools/results/__tests__/filesystem.test.ts": "33676729233808c83c9ad7a96db2a6fcbbccc16f923dc4fac61353ab399face5",
+        "common/src/tools/results/filesystem.ts": "f784e0072793952697fd8ce0194805851bb309813e6be75767d6ec9b0a85a206",
+        "common/src/types/dynamic-agent-template.ts": "6401783af251770c7c9498b0fd59217870cdda765439967e8ec7a2af47ca4404",
+        "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
+        "common/src/util/__tests__/action-outcomes.test.ts": "6ad7eb58f254061d8ae8257cc2fa1dc2780a89d41dd290e85994e1b2420deacb",
+        "common/src/util/action-outcomes.ts": "772eb4702b8c53b0eea7b50360bfa6384e4fafd87ea9b69de0ed1ce29da6f20f",
+        "common/src/util/content-hash.ts": "a3748f1905babc3301b9d8c222cb39e01008e46ecdb72799d6745a90db222f58",
+        "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
+        "evals/buffbench/evaluation-environment.ts": "c708d689465bb853e5c806452efe13e52d4647f2671802dadb45a45d7c9082cf",
+        "package.json": "101b258e97f09fe4c93edc7265fae3a51c5f11663935136eba0735763751054b",
+        "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
+        "packages/agent-runtime/src/__tests__/tool-validation-error.test.ts": "6738400f6aebbe7f03755e2df3340c3b670d40ede4d906b66855bd469fc45baf",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "ed800416219d1be020e0202ab51536f4e8af37b52801a714991e32cd0370aee9",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "4abd5d3b3ee3964b99bdf8eba69888059cb1998928564b3aebd768e9ced62b9b",
+        "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
+        "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts": "58fbe85769982c8be114fa457a509df15477e5ebcf119101f4997d24d26fabaf",
+        "packages/internal/src/openai-compatible/openai-compatible-error.ts": "a696f1cfeafb07fa10dea86e4b41fb11d15e87d484d0445668a2195233f3daca",
+        "sdk/package.json": "a4dcb2194937c7108329d6ca2db3de4f1369a8ea8b5debfa9174d79fc08c4dd6",
+        "sdk/src/__tests__/acp-outcomes.test.ts": "afef7a65bb163d70a41d95a64c0c82eac5cc1501690a498b415328740fe243e5",
+        "sdk/src/__tests__/change-file.test.ts": "94f6f574681a68f9fe0c8ffae3003d2dd8ab258a10806a66a53ac90666622b9c",
+        "sdk/src/__tests__/filesystem-authority.test.ts": "3843376251f7550f33005ef6bd436133740d974828762f3bf320d376b7b18e7f",
+        "sdk/src/__tests__/language-intelligence.test.ts": "2b24b4be9f3dbf45b43b3e616ff280902712e571ec7857ef3d8d5a9cf8dc6f33",
+        "sdk/src/__tests__/mutation-capabilities.test.ts": "b4cbc78520012f380dfa8a78f2a13ef457302f366dad3612b6c5e652d1836eac",
+        "sdk/src/__tests__/provider-contract-regressions.test.ts": "904140141f77414577f46b498c71c64dca1c83dfd1a44eb1d559b7c23fde323b",
+        "sdk/src/__tests__/run-mutation-dispatch.test.ts": "5774cb9385cb226daa75c187e22d7bdf8f28acdd0ff4381c47dc606048f0fe1f",
+        "sdk/src/client.ts": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7",
+        "sdk/src/client/acp-client.ts": "117452e520084f72791314bc23d39f96e38d121044b5445dc3e24722c1ca03d8",
+        "sdk/src/error-utils.ts": "11565db8d9f430fcbb617f040a7807beafac0e521dd2ec9341bf35a371743b29",
+        "sdk/src/impl/failover.ts": "62930f709bc5be8975375b50ec1e200eec7dd46ce4df5482da4c46ba06b2e793",
+        "sdk/src/impl/llm.ts": "25e4a1a73977f13edcbd45e3aa15e16d76bc1917105606ef6a5507cf6a7692cc",
+        "sdk/src/impl/model-provider.ts": "58b159d7be96e17fd08ab2a5f90ac1195dcfb2c9bdc0ec935fc9336db082c546",
+        "sdk/src/index.ts": "f56631bfb077d94cf3735efd9430c22f0db35719493380923dbc00f9decd24e1",
+        "sdk/src/provider-config.ts": "439ac26094af9de40f652915e80f46bc5af81f8a9441b11ad90b3eff0a022cb5",
+        "sdk/src/retry-config.ts": "fab975fea396f8333ca7ed9787515dfa858a445056409daffee5ea0f6f50c91b",
+        "sdk/src/run-state.ts": "a24a11f4e77533bd76cd720bf68b36d2106dbf0eeb155f865c06e2e3fa83edd2",
+        "sdk/src/run.ts": "e36e15725f83cd81a83c7cc4b954c34af208068ff188974d36abc691b9c3249d",
+        "sdk/src/serve/__tests__/event-bridge.test.ts": "88f9dfeedb7cf25f8433f6afb209eb9dcf722fc3fa535d95a7bb8dbdb314b693",
+        "sdk/src/serve/bridge.ts": "7e77aac98fde3882aa471dfa0e897acdc3de8098a0f6eebc7286f9f8ccc2560d",
+        "sdk/src/serve/event-bridge.ts": "a8fbddf5a1c387f0ac29ef14ddad35c420eaeb9f9f792a514057bf2b001106fb",
+        "sdk/src/services/diagnostic-baseline.ts": "a4b1a4c3447dfb315b0fae4ebcd2eb12140619a41ce1aa9685d9db82a1c49015",
+        "sdk/src/services/harness-enforcement.ts": "9e20db9c7912e7866947ed0fbdce539c285eb8d6f9e20fa95f58355a13f929ed",
+        "sdk/src/services/language-intelligence.ts": "841470ce8b3c5986cb610ae73841e9e06dd2c7802ca84a75f1cb4c1c572b21a4",
+        "sdk/src/tools/change-file.ts": "415e501433ac20e50d985b95a666487640da20421ece2a512937b95fd8599bb1",
+        "sdk/src/tools/filesystem-authority.ts": "6fedc5d7abfc6e178d60193e63fc6fae2e6f9ea0fe7bbde9406ac1c6ac487427",
+        "sdk/src/tools/node-filesystem.ts": "eb73c817b4f6ae536649e2e567a7293d0b680d3994a574940e98fe4b4734701e",
+        "sdk/src/tools/run-terminal-command.ts": "133b84ece998b046cfbfef7ba357b8caa21ce730d6d4a786cb000ae09e654508",
+        "sdk/src/tools/semantic-edit-apply.ts": "db96219babbd190dbea0ffe4ec62aae8d11b1374893612978f4d3d2ad1e07df0",
+        "sdk/src/tools/transaction-intent-log.ts": "b8d477968c7761f04dfe63050ae1d7044ddd46192f833b712222c4235dd17539",
+        "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
+        "test/fixtures/body/mutation-evidence.ts": "96876b4629678eb33a439ac26f0a7364d7d795975f8f7ab661557b478979352e",
+        "tsconfig.base.json": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "Current frozen TypeScript source, original complete behavior/command obligations with independently reviewed explicit host/representation adaptations, current exact CI/typecheck/repair evidence.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B03/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_current_review",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b20_linux_driver",
+              "historical Openbuff implementation agents"
+            ],
+            "scope": "Fresh B03 semantic renewal on exact current source scope (81 contracts), all 18 retained command obligations and all 3 original criterion labels; cooperative TypeScript source tier.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/renewal-intake-r1/final-node-renewal-review-r1/B03/implementation-review.json",
+              "sha256": "24dece9e7a72ea98ef05af4acd1ad1aff58bda7a8e2bbb185b7fe9e40845b0ef"
+            }
+          }
+        ],
+        "requiredCommandCount": 18
+      },
+      "risks": [
+        "Observed cooperative TypeScript behavior with explicitly reviewed injected host setup and original assertion-preserving adapters; no native containment or external-writer exclusion claim.",
+        "Shared current CI observations retain original discovery/rosters and skip counts; repeated slots are not extra executions.",
+        "Historical acceptance is used to recover obligations and key rosters, with fresh original assertion executions and inspected current sources supplying renewal credit.",
+        "No installed/native, live-provider, billing, external-writer fencing or empirical capability improvement is asserted by this renewal."
+      ],
+      "acceptedAt": "2026-11-11T23:58:11.004223+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B03/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "7e80a191ab1475f3cf125a8d05e871fedafe99d4e4044e43f1dbda4aa8d16c38"
+      }
+    },
+    {
+      "nodeId": "B04",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {
+        "bun.lock": "0671009aeff3a7a04044da7d78035ddb795a065c8b3bafb813df6f034bf4e567",
+        "cli/src/project-files.ts": "0fd152870a583e4df147cc928d9be7adde06819cbaf91795f8a9edae55ed035c",
+        "cli/src/utils/__tests__/turn-snapshots.test.ts": "1b32d756e592b62b224250ea0dee30e15154af8229cad4d9e0fd41b4737bbb8a",
+        "cli/src/utils/env.ts": "029b7c4d309803b7cfc867d835808e7478fd297ab949e8659f26ee756952d4c5",
+        "cli/src/utils/logger.ts": "8f695de8fd69a87d8f234a9e90891fb64157c79bf727a9c4d54179c26e7d4297",
+        "cli/src/utils/turn-snapshots.ts": "2729f329316f138dd1c213b1e02a641c25854c5b22f452355ea4821e37683e43",
+        "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+        "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
+        "package.json": "101b258e97f09fe4c93edc7265fae3a51c5f11663935136eba0735763751054b",
+        "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
+        "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
+        "packages/indexer/src/index-manager-semantic.test.ts": "609c9ee5bf379917bb9d04e818a43986a90fae75b84ae4f99aa610d860a522a6",
+        "packages/indexer/src/index-manager.test.ts": "d0ec0dd05db32e71b7d60de1547a4b93dd8f05b4d4658df9ed16e17a524a2cf0",
+        "packages/indexer/src/index-manager.ts": "7a0bf0a0dfad8597378ca82c1f30b29760f1aaa6644a686654723a985975ac75",
+        "packages/indexer/src/index-store.test.ts": "145bf6492f4b1b2f8495d14b5c1a549b1de6f7cb633cb63221e8cc7b42fab123",
+        "packages/indexer/src/index-store.ts": "773242747855e16e0e296934ec1d4d482c0666ccbb2c884d4b0f9eb106308b6f",
+        "sdk/package.json": "a4dcb2194937c7108329d6ca2db3de4f1369a8ea8b5debfa9174d79fc08c4dd6",
+        "sdk/src/__tests__/workspace-mutation-broker.test.ts": "b3376e829a9c9a9f1961d3c5afc840175f2970113f6116ef29c90c1435f0b683",
+        "sdk/src/services/repository-identity.ts": "040789e343e505e286a7415b5e28c88946fb7a950d7097aeccdc7a28f6a86135",
+        "sdk/src/services/workspace-mutation-broker.ts": "365a7901a6acdf679b28158842cd7e127de710c46d7790b3d3d396ed67034155",
+        "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
+        "tsconfig.base.json": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "Current frozen TypeScript source, original complete behavior/command obligations with independently reviewed explicit host/representation adaptations, current exact CI/typecheck/repair evidence.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B04/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_current_review",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b20_linux_driver",
+              "historical Openbuff implementation agents"
+            ],
+            "scope": "Fresh B04 semantic renewal on exact current source scope (22 contracts), all 10 retained command obligations and all 2 original criterion labels; cooperative TypeScript source tier.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/renewal-intake-r1/final-node-renewal-review-r1/B04/implementation-review.json",
+              "sha256": "9296c184e899d6a1baf56132a887d55f3e75d985360057f491226826d4dffbca"
+            }
+          }
+        ],
+        "requiredCommandCount": 10
+      },
+      "risks": [
+        "Observed cooperative TypeScript behavior with explicitly reviewed injected host setup and original assertion-preserving adapters; no native containment or external-writer exclusion claim.",
+        "Shared current CI observations retain original discovery/rosters and skip counts; repeated slots are not extra executions.",
+        "Historical acceptance is used to recover obligations and key rosters, with fresh original assertion executions and inspected current sources supplying renewal credit.",
+        "No installed/native, live-provider, billing, external-writer fencing or empirical capability improvement is asserted by this renewal."
+      ],
+      "acceptedAt": "2026-11-11T23:58:11.140096+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B04/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "3c74eec4d7af5d14a24d19c0f47217ed4617b7400daf2e934179dafa63cb0f2f"
+      }
+    },
+    {
+      "nodeId": "B05",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [
+        "B03"
+      ],
+      "acceptedPrerequisites": [
+        "B03"
+      ],
+      "sourceContractHashes": {
+        "common/src/tools/params/based-on-read.ts": "681ab79beebd6580d2cf7d0aefae96f5ac44453e3bbff3e2ff6ea1dec9ad5234",
+        "common/src/tools/params/tool/replace-range.ts": "89681af454236ebdc659ea37692dd34559df0c06dff7fdab184de3da9c443009",
+        "common/src/tools/results/__tests__/filesystem-raw-authority.test.ts": "6945c8ff48be19711f2517262b4d5de78e6bae3a8f483b27be44fe477ca28e84",
+        "common/src/tools/results/filesystem.ts": "f784e0072793952697fd8ce0194805851bb309813e6be75767d6ec9b0a85a206",
+        "common/src/types/contracts/client.ts": "038ab57b88e3d407745292d3a47bb980c13f1a83d64eef2a37d8167b2b39fbfc",
+        "common/src/types/filesystem.ts": "8cad9c3a6817c3eb7f72ac1183096f8df0604d0e52cb30d04106542efaed2762",
+        "common/src/types/session-state.ts": "6528469c982bdd741f3361cf6623b51d435a4979f454c3d099ac04900ef78436",
+        "common/src/util/__tests__/byte-text.test.ts": "69b2289190892be8ca3a3dbdbbdf9c8276773bbd8c4ebad7a95f90fe115554ce",
+        "common/src/util/__tests__/content-hash.test.ts": "938a88c9cc666203ae713a9b3cccc46ac223da0dc18e825070333d37e415c483",
+        "common/src/util/byte-text.ts": "f142c9636c4bc3cfeaca2a985b12c3298e615ca3267d7ee43d5830a040e8dc5c",
+        "common/src/util/content-hash.ts": "a3748f1905babc3301b9d8c222cb39e01008e46ecdb72799d6745a90db222f58",
+        "common/src/util/line-coordinates.ts": "bf9cb0c582988ce116388753e94347e1f281b3ecb3d08a016a30374a57d15cda",
+        "common/src/util/raw-read-basis.ts": "817b499da208dc0a18d76be7970c011d63709f501bea7e5c218d3419492d22d5",
+        "packages/agent-runtime/src/__tests__/edit-transaction-multi-file-recovery.e2e.test.ts": "7d77749ab8dfa81b963524a77073b604c550839af906d9664a956d6bc3f5e6dc",
+        "packages/agent-runtime/src/__tests__/post-edit-output-publication.test.ts": "e00542925ce052914ca6d7b03f444e3a89ade9c78504d95febc7900026802795",
+        "packages/agent-runtime/src/__tests__/process-str-replace.test.ts": "4ac3fd2899a2d817ec17d3a1eae66b8aa564271a73a132e9332d57941801dabe",
+        "packages/agent-runtime/src/__tests__/read-authority-ladder.test.ts": "81d065c12a8d99839d7f2444a277f5ff3aa07955deb8ab5401eefd5ca1b7e26d",
+        "packages/agent-runtime/src/__tests__/read-files-capability-authorization.test.ts": "d8c6c6920ef1f91406faceb90c6eece197d58ee4aff22c702e12cd9d4ad2e528",
+        "packages/agent-runtime/src/__tests__/read-outline-slices.test.ts": "c96d9066d43b2ff5f0e3ab0590744c1d7c1b0bed30ee4e6cab83504fc91237d6",
+        "packages/agent-runtime/src/__tests__/replace-range-occurrence.test.ts": "9cac403c722f3d3be7e76108c5458b0a446350bb53d3f631a1d48249186a5888",
+        "packages/agent-runtime/src/__tests__/rewrite-symbol.test.ts": "6ba697c7820f677dc550aeb275cb4bc5d41f1218de59a5fb5c8e1eb20f54cb08",
+        "packages/agent-runtime/src/__tests__/tool-validation-error.test.ts": "6738400f6aebbe7f03755e2df3340c3b670d40ede4d906b66855bd469fc45baf",
+        "packages/agent-runtime/src/get-file-reading-updates.ts": "aa658806e3d9866dae6a0da3194ce477c02df05bd8eec91eedfb31a83884850c",
+        "packages/agent-runtime/src/process-edit-transaction.ts": "39044a3039efe53cf89b064c39783f17e5c81b41a2bcc344dee38d2539fac836",
+        "packages/agent-runtime/src/process-str-replace.ts": "90dc1a5386367bbf698b431719f328fa71dad4e0fbf22e694e5715e7b40efabc",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "ed800416219d1be020e0202ab51536f4e8af37b52801a714991e32cd0370aee9",
+        "packages/agent-runtime/src/structural-read.ts": "f1e13ac91b97d462a82ed1a33960fd27d5b91f41835660d71421a62950563e52",
+        "packages/agent-runtime/src/supervision/__tests__/raw-read-handoff-b05.test.ts": "facf3dfb4a5cae04ddc587a258dafe294d587e99f24a39d8dacdc130a2e8aa82",
+        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "5eeba6dcbbb3fd629fa9aee22178ae3da0f228917a71c82fa60631f26511064a",
+        "packages/agent-runtime/src/supervision/child-bridge-client.ts": "643f174e34f5e78604e8d06742a407c7878a1df1e831c1db2f6cc0c4efc52f04",
+        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "4096070bea8d4d9c6c53ad93228dc27d57ec8e47801f8cb05d9e932a5cbaac30",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-application-coordinator.ts": "f7f91de82778237e3fde7dc0dbb2b30d1d137f59c05e10876f89f1b1677688d3",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-read-state.ts": "3de5e7c03195d3a9b2e9ef45bebf8be956e71bb6704eeb44991998dcce0311a6",
+        "packages/agent-runtime/src/tools/handlers/tool/edit-transaction.ts": "130b241ea397b306590dab3089b1d7cc4546460f552ec0d6d0173aa5a78b07fa",
+        "packages/agent-runtime/src/tools/handlers/tool/read-authority-ladder.ts": "e3a8d30bef3340932cc6eab21f48cdab5c55eadaf57444f24c3b8b0c0416d39a",
+        "packages/agent-runtime/src/tools/handlers/tool/read-files.ts": "1643b5ac7c734e9f2795b5d89dd5790b72b765b1e44a6b329fc54855912e6392",
+        "packages/agent-runtime/src/tools/handlers/tool/replace-range.ts": "98cc61c66277c791785f0a61aaadb7c1469e8c934f4bd3163f3c76a11be6d19f",
+        "packages/agent-runtime/src/tools/handlers/tool/rewrite-symbol.ts": "21f1e47141c52b2482ffec4a110f79c0120f442b3ec00175d369090079f68455",
+        "packages/agent-runtime/src/tools/handlers/tool/str-replace.ts": "8a36ea4e5c1b3c139220a00b4a857c09caf67266fc5420b65b81d1941dd01439",
+        "packages/agent-runtime/src/tools/handlers/tool/write-file.ts": "d1423c7aac62b521115bc25fb1b570c855de15de61cd245b2042a75ddad4493a",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "4abd5d3b3ee3964b99bdf8eba69888059cb1998928564b3aebd768e9ced62b9b",
+        "packages/agent-runtime/src/util/authenticated-read-source.ts": "83872133a901ab39bff0693cfe96b1e14f25047ef2a003dff079f57eb144f214",
+        "packages/agent-runtime/src/util/read-authorization.ts": "d0643e1d3cfcf394acde126995585f664448a222edebc00a85d03e41cce163b2",
+        "sdk/scripts/build.ts": "215cafb2d1ab78c098808dbf3f07dd79bd12d899f382de37be817f082ca7018d",
+        "sdk/src/__tests__/change-file.test.ts": "94f6f574681a68f9fe0c8ffae3003d2dd8ab258a10806a66a53ac90666622b9c",
+        "sdk/src/__tests__/mcp-server.test.ts": "14072124d8010a3995148f16011c6633c5e93fa130711cedb936a6864d1ad4d5",
+        "sdk/src/__tests__/node-filesystem.test.ts": "5cbc03e60eb9a04f8e93360f15a9c3e31408cc52e95ea5ca38ad156eed228665",
+        "sdk/src/__tests__/outbound-filter.test.ts": "0b9701dd901f2daa0fd9559caf3f50f002d8208f51763b0cc88267c7df4c6840",
+        "sdk/src/__tests__/read-files.test.ts": "0c0eef10f162c3d725f1b8a0fd3f68f9c43d6e8d5fc4f46eb83b0ce3789dd31a",
+        "sdk/src/__tests__/replace-range.test.ts": "8956856be13f2af72de954d9df4dfe67fe3e2912cc07b2c238f706a97e2fb35f",
+        "sdk/src/__tests__/run-mutation-dispatch.test.ts": "5774cb9385cb226daa75c187e22d7bdf8f28acdd0ff4381c47dc606048f0fe1f",
+        "sdk/src/impl/agent-runtime.ts": "b774d1fff245e01555c63956fe5519862805ccf121776ab22090df330d99bc84",
+        "sdk/src/index.ts": "f56631bfb077d94cf3735efd9430c22f0db35719493380923dbc00f9decd24e1",
+        "sdk/src/run.ts": "e36e15725f83cd81a83c7cc4b954c34af208068ff188974d36abc691b9c3249d",
+        "sdk/src/serve/outbound-filter.ts": "f8586bac8a8ecc2c04009c3c8db2c526e9d2fa935dc2816bf8f215b84e805ca3",
+        "sdk/src/tools/change-file.ts": "415e501433ac20e50d985b95a666487640da20421ece2a512937b95fd8599bb1",
+        "sdk/src/tools/concurrency.ts": "d3154988c171b59da65e938c3c1539fb1a96f6fbf1795d913d23b8b1863c7560",
+        "sdk/src/tools/mutation-capabilities.ts": "c69cf2abfd82e4f44fbba5221e510121eb49a0cc5a8ca8a992ba5dd75ed4a767",
+        "sdk/src/tools/node-filesystem.ts": "eb73c817b4f6ae536649e2e567a7293d0b680d3994a574940e98fe4b4734701e",
+        "sdk/src/tools/read-files.ts": "6ee867f3fae975f5c02f02e981106e08a346d01ffe7cd81957464ba0d261f1c8",
+        "sdk/src/tools/replace-range.ts": "13b421fc65d123282abfc7469a03b3398243265f6019d20818b21bedc6a138cd",
+        "test/fixtures/body/byte-observation-edit.ts": "ea3b1d382a0c174464ec4709009c3aebe993736b9d4407685a47d7b5d27d4684"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "Current frozen TypeScript source, original complete behavior/command obligations with independently reviewed explicit host/representation adaptations, current exact CI/typecheck/repair evidence.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B05/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_current_review",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b20_linux_driver",
+              "historical Openbuff implementation agents"
+            ],
+            "scope": "Fresh B05 semantic renewal on exact current source scope (62 contracts), all 29 retained command obligations and all 10 original criterion labels; cooperative TypeScript source tier.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/renewal-intake-r1/final-node-renewal-review-r1/B05/implementation-review.json",
+              "sha256": "cd4b2da51534c8b74b7f19cf024cf14bb7257b89f7af63c471f00c7e73b310e1"
+            }
+          }
+        ],
+        "requiredCommandCount": 29
+      },
+      "risks": [
+        "Observed cooperative TypeScript behavior with explicitly reviewed injected host setup and original assertion-preserving adapters; no native containment or external-writer exclusion claim.",
+        "Shared current CI observations retain original discovery/rosters and skip counts; repeated slots are not extra executions.",
+        "Historical acceptance is used to recover obligations and key rosters, with fresh original assertion executions and inspected current sources supplying renewal credit.",
+        "No installed/native, live-provider, billing, external-writer fencing or empirical capability improvement is asserted by this renewal."
+      ],
+      "startedAt": "2026-11-07T17:48:32.351884+00:00",
+      "implementationActivation": {
+        "path": "docs/execution/body-roadmap/evidence/B05/implementation/activation.json",
+        "sha256": "50461c356c916b92e846e5cff496c6b32559303a1af87949dd44acf90c0bfaaa"
+      },
+      "acceptedAt": "2026-11-11T23:58:11.447764+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B05/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "f18b81a8198735ffbeb3fcdc4fb55375e36be0a8039e0c962aa6a93df340d408"
+      }
+    },
+    {
+      "nodeId": "B06",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B03",
+        "B04",
+        "B05",
+        "B07"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B07",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B03",
+        "B04",
+        "B05"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B08",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {
+        "bun.lock": "0671009aeff3a7a04044da7d78035ddb795a065c8b3bafb813df6f034bf4e567",
+        "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+        "common/src/constants/chatgpt-oauth.ts": "639d8588df5410689cffec29efdb08d8e700a96c63812d02ecceeb9a8c7f2a58",
+        "common/src/old-constants.ts": "bff89d506a20df1c1948ac67c325c537c29f840e3611ae3e11f4375441d877e1",
+        "common/src/tools/constants.ts": "8064a62829d99bb3276de0b38d9a32cfc0137fb40596a819b3202629642b83b0",
+        "common/src/types/contracts/llm.ts": "5f4a39d3d236fe6f8c616d8d14cd1034fbbb7dd7a6b295e7ab4508128ffefad0",
+        "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
+        "common/src/util/error.ts": "dd3d74dabd8f602db319dce3ba2cee93ccf7d6c46cd7098734b74ce5f6c8c9bc",
+        "common/src/util/messages.ts": "d6e18a6cdc9f6fe66332bc14e8acfcb83c19ec99c3e40237a7c8b5280bf0d864",
+        "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
+        "evals/buffbench/isolated-sdk-client.ts": "5d342c5e01987e047319b041f4f881a1ed40b7cf2c6ee26df32d4c80172fec89",
+        "evals/buffbench/isolated-sdk-worker.ts": "185f58d9f7a59ce9776586a07a6cd83bb66b6d322ddf82d9bf4359341656b15f",
+        "package.json": "101b258e97f09fe4c93edc7265fae3a51c5f11663935136eba0735763751054b",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "ed800416219d1be020e0202ab51536f4e8af37b52801a714991e32cd0370aee9",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "4abd5d3b3ee3964b99bdf8eba69888059cb1998928564b3aebd768e9ced62b9b",
+        "packages/agent-runtime/src/util/context-pruning.ts": "e626ed6dcc282e0e0baf6acc0546b5d11f372b660bb55836e649f73b7dd72a78",
+        "packages/agent-runtime/src/util/messages.ts": "168ec2675888bc712dcffb62508352d6444990df7e1e86cfb3544b20a32ca605",
+        "packages/agent-runtime/src/util/parse-tool-calls-from-text.ts": "fa47ed268c911b2ec525a732f90110f21190c2ee433fd6fbd19e1e3c28b3ed76",
+        "packages/agent-runtime/src/util/token-counter.ts": "39db966fdbe308e95d11cd2dad11a462cce53d27df31f6894b96d75e179af127",
+        "packages/internal/package.json": "88dea8252826d8558402f4b5be575a384b391c98028a822200e4943bbe5bae11",
+        "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.test.ts": "0b87f3dc063f43801979b4b42bfc7295f6bdf016bc621188ea39dba663b7d701",
+        "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts": "58fbe85769982c8be114fa457a509df15477e5ebcf119101f4997d24d26fabaf",
+        "packages/internal/src/openai-compatible/openai-compatible-error.ts": "a696f1cfeafb07fa10dea86e4b41fb11d15e87d484d0445668a2195233f3daca",
+        "packages/internal/tsconfig.json": "fc5a4782a724725b8bccf080a1bb69df84ddda28f573ba2cf76a364d745dc9fe",
+        "scripts/body-fixtures/evaluator-isolation.ts": "267f0d4c8f8734182bbd38eff146805e72320543b0e78797ba4c96a3abaec377",
+        "sdk/package.json": "a4dcb2194937c7108329d6ca2db3de4f1369a8ea8b5debfa9174d79fc08c4dd6",
+        "sdk/src/__tests__/error-utils.test.ts": "db88099c212ddf0379a0b019b29dcb055e87587e658b9a02e673de2a977d05ba",
+        "sdk/src/__tests__/model-provider.test.ts": "6a5f369acb41492fa4af7e1bd2251f1fe11e0b2a5b7a6a151790cb40ff70e3fb",
+        "sdk/src/__tests__/provider-config-band.test.ts": "1de2f4c0bfba9d9042148c99fb4fca44a8a0b205b8e580a6ac1a71ed1bc6e01d",
+        "sdk/src/__tests__/provider-config.test.ts": "aeb1233f72d48e71d74c523e8469408fe760be40e70f8e4a14173a5ad5368b8b",
+        "sdk/src/__tests__/provider-contract-regressions.test.ts": "904140141f77414577f46b498c71c64dca1c83dfd1a44eb1d559b7c23fde323b",
+        "sdk/src/__tests__/retry-config.test.ts": "a8bd0c3812f16939e3cf4e2ede9d631292f8e42e274c0e13c26d76901af3462e",
+        "sdk/src/client.ts": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7",
+        "sdk/src/credentials.ts": "356b103842fafb5e6daeeb015e21b37945461c867f5a026c867994d565ee9bd3",
+        "sdk/src/env.ts": "9556e0e6cacbbb2f6657dcc3c7fc9da4b7bdbce41cc9c1be51258b51d5e6c700",
+        "sdk/src/error-utils.ts": "11565db8d9f430fcbb617f040a7807beafac0e521dd2ec9341bf35a371743b29",
+        "sdk/src/impl/__tests__/error-utils.test.ts": "37c6c4e29bd7b6463cfc8b17e475acc14313488e195ac56847cf88c6fed2d509",
+        "sdk/src/impl/__tests__/failover-integration.test.ts": "621d779b3cfacadc130311b9f59fc1ef99a534430895eda79e6e2357d9de2428",
+        "sdk/src/impl/__tests__/failover.test.ts": "9f604d7d936a428416109f33f23618e2b29ae9bd4b4ba69c30365772c3d610cd",
+        "sdk/src/impl/__tests__/llm-chatgpt-oauth-policy.test.ts": "c435f046772b0f29f6b2bd37be0a64440656e247790dfdc725381ea3e250ad78",
+        "sdk/src/impl/__tests__/llm-context-window.test.ts": "4356a8919cf4ed7e99b36ef2821ce94c518718195a1276c304e7f26131e9a7fd",
+        "sdk/src/impl/__tests__/llm-cost.test.ts": "0cd127b06e174742266698aeb2dc44b91a349c107bd2dded610a250d4ce284b9",
+        "sdk/src/impl/__tests__/llm-ontrim-retry.test.ts": "fa757140c7a0fd1827c956a54f16721c06c921dae19e8bb84002c1bba4f8b5a5",
+        "sdk/src/impl/__tests__/llm-repair-tool-input.test.ts": "fd7acc32588a993da76fe2e6b903bf1e6c590dd69027900bc6cc777c132a7b49",
+        "sdk/src/impl/__tests__/llm-tool-call-buffer.test.ts": "7e91de9ef8080225665efd2a69a362b1e642263e4613ccffade235a740bfd49b",
+        "sdk/src/impl/chatgpt-backend-fetch.ts": "4fe53976e121fc76a5aa344ecf92a9ce430899ced646b08ec300d29255388a28",
+        "sdk/src/impl/direct-agent-tool-repair.ts": "25e8e5e83c1148592f0c4e6f5fdf2de8be9f707fe5e80f1cb62d863c16c04690",
+        "sdk/src/impl/failover.ts": "62930f709bc5be8975375b50ec1e200eec7dd46ce4df5482da4c46ba06b2e793",
+        "sdk/src/impl/llm.ts": "25e4a1a73977f13edcbd45e3aa15e16d76bc1917105606ef6a5507cf6a7692cc",
+        "sdk/src/impl/model-provider.ts": "58b159d7be96e17fd08ab2a5f90ac1195dcfb2c9bdc0ec935fc9336db082c546",
+        "sdk/src/impl/opencode-go-responses-fetch.ts": "613beb8bfe008368aa8e68d692c0bbcace004054e2ef4f788be39d39b17040ca",
+        "sdk/src/index.ts": "f56631bfb077d94cf3735efd9430c22f0db35719493380923dbc00f9decd24e1",
+        "sdk/src/provider-config.ts": "439ac26094af9de40f652915e80f46bc5af81f8a9441b11ad90b3eff0a022cb5",
+        "sdk/src/retry-config.ts": "fab975fea396f8333ca7ed9787515dfa858a445056409daffee5ea0f6f50c91b",
+        "sdk/src/run-state.ts": "a24a11f4e77533bd76cd720bf68b36d2106dbf0eeb155f865c06e2e3fa83edd2",
+        "sdk/src/run.ts": "e36e15725f83cd81a83c7cc4b954c34af208068ff188974d36abc691b9c3249d",
+        "sdk/src/tools/run-terminal-command.ts": "133b84ece998b046cfbfef7ba357b8caa21ce730d6d4a786cb000ae09e654508",
+        "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
+        "test/fixtures/body/provider-retry.ts": "d306802367c40f470e9c36cca42c12793091250036dc36498b3c3ea781bad896",
+        "tsconfig.base.json": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "Current frozen TypeScript source, original complete behavior/command obligations with independently reviewed explicit host/representation adaptations, current exact CI/typecheck/repair evidence.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B08/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_current_review",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b20_linux_driver",
+              "historical Openbuff implementation agents"
+            ],
+            "scope": "Fresh B08 semantic renewal on exact current source scope (60 contracts), all 16 retained command obligations and all 4 original criterion labels; cooperative TypeScript source tier.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/renewal-intake-r1/final-node-renewal-review-r1/B08/implementation-review.json",
+              "sha256": "6151515ed46b9df6a37d9e486a8e37d44c7d9707fb5231ef1b9c52f8f4a937f8"
+            }
+          }
+        ],
+        "requiredCommandCount": 16
+      },
+      "risks": [
+        "Observed cooperative TypeScript behavior with explicitly reviewed injected host setup and original assertion-preserving adapters; no native containment or external-writer exclusion claim.",
+        "Shared current CI observations retain original discovery/rosters and skip counts; repeated slots are not extra executions.",
+        "Historical acceptance is used to recover obligations and key rosters, with fresh original assertion executions and inspected current sources supplying renewal credit.",
+        "No installed/native, live-provider, billing, external-writer fencing or empirical capability improvement is asserted by this renewal."
+      ],
+      "acceptedAt": "2026-11-11T23:58:11.648731+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B08/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "af918c3e65dd73c41b7a9292200dace73f70c9b814b4eb86ad212173cfe99cc7"
+      }
+    },
+    {
+      "nodeId": "B09",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02",
+        "B08"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B10",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B11",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B12",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B13",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B12"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B14",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B12"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B15",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02",
+        "B03",
+        "B04"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B16",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B04",
+        "B15"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B17",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02",
+        "B15"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B18",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {
+        "bun.lock": "0671009aeff3a7a04044da7d78035ddb795a065c8b3bafb813df6f034bf4e567",
+        "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+        "common/src/tools/params/tool/run-terminal-command.ts": "75b2bbb0e220f58c229c9a8bcbaa53c8dbe8d303809233c801695c01d531fb5f",
+        "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
+        "package.json": "101b258e97f09fe4c93edc7265fae3a51c5f11663935136eba0735763751054b",
+        "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
+        "packages/agent-runtime/src/__tests__/run-agent-step-tools.test.ts": "1ded4ac4e2ffdd96b61ec06507e8da45dadfc9a3aaf8840e4d175db3840e18b3",
+        "packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts": "88806fcb16e75add2637475a4339324fa0f1feb071ee75d7143e7bfccae35dec",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "ed800416219d1be020e0202ab51536f4e8af37b52801a714991e32cd0370aee9",
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/run-terminal-command.test.ts": "dc494c21606234b7bf9c509db2664234b1645667e81caf4cad611f4e438e6bef",
+        "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts": "0822ce4f15f2eed194401619439f563cab834d7c0e189b84ff4d21bb42672554",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "4abd5d3b3ee3964b99bdf8eba69888059cb1998928564b3aebd768e9ced62b9b",
+        "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
+        "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts": "58fbe85769982c8be114fa457a509df15477e5ebcf119101f4997d24d26fabaf",
+        "packages/internal/src/openai-compatible/openai-compatible-error.ts": "a696f1cfeafb07fa10dea86e4b41fb11d15e87d484d0445668a2195233f3daca",
+        "scripts/body-fixtures/sdk-terminal-approval-identity.ts": "e3d93cb297c6dfa13988a5c9a8410acb816951f43925c4d83ca613c2a78eaf4a",
+        "scripts/body-fixtures/terminal-approval-identity.ts": "83733545f0a53c4f09c431d5a360ad8266cb77c406ac7a3f14679cccd96fec08",
+        "sdk/package.json": "a4dcb2194937c7108329d6ca2db3de4f1369a8ea8b5debfa9174d79fc08c4dd6",
+        "sdk/src/__tests__/harness-command-identity.test.ts": "1d7a5107c04cef3add8ba0f7966d7d8fc68d09901ee2c56580093dea88fb3545",
+        "sdk/src/__tests__/harness-enforcement.test.ts": "f1ca092fa20b83d8398f5be41c6e8c924e81b6b838b27f281af75704efb91276",
+        "sdk/src/__tests__/local-harness-store.test.ts": "34b9bca73ee997e3adaa93509e79944306ce81dca27ff67e50c7b7a07b09e6f3",
+        "sdk/src/__tests__/provider-contract-regressions.test.ts": "904140141f77414577f46b498c71c64dca1c83dfd1a44eb1d559b7c23fde323b",
+        "sdk/src/__tests__/run-terminal-command.test.ts": "06636c8bcf66e3e053a6ca426d90ee00109cb1bfa484ce8d3dd83f83a1bcd8a4",
+        "sdk/src/__tests__/serve-approval-bridge.test.ts": "bab102f79495970c142384153f67123246e37a5fa46765177868be395a5467ca",
+        "sdk/src/__tests__/terminal-command-policy.test.ts": "f8be87356b121f337da6e13561b0c47765e5d0b9807505f988493993eae363dc",
+        "sdk/src/client.ts": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7",
+        "sdk/src/env.ts": "9556e0e6cacbbb2f6657dcc3c7fc9da4b7bdbce41cc9c1be51258b51d5e6c700",
+        "sdk/src/error-utils.ts": "11565db8d9f430fcbb617f040a7807beafac0e521dd2ec9341bf35a371743b29",
+        "sdk/src/impl/failover.ts": "62930f709bc5be8975375b50ec1e200eec7dd46ce4df5482da4c46ba06b2e793",
+        "sdk/src/impl/llm.ts": "25e4a1a73977f13edcbd45e3aa15e16d76bc1917105606ef6a5507cf6a7692cc",
+        "sdk/src/impl/model-provider.ts": "58b159d7be96e17fd08ab2a5f90ac1195dcfb2c9bdc0ec935fc9336db082c546",
+        "sdk/src/index.ts": "f56631bfb077d94cf3735efd9430c22f0db35719493380923dbc00f9decd24e1",
+        "sdk/src/provider-config.ts": "439ac26094af9de40f652915e80f46bc5af81f8a9441b11ad90b3eff0a022cb5",
+        "sdk/src/retry-config.ts": "fab975fea396f8333ca7ed9787515dfa858a445056409daffee5ea0f6f50c91b",
+        "sdk/src/run-state.ts": "a24a11f4e77533bd76cd720bf68b36d2106dbf0eeb155f865c06e2e3fa83edd2",
+        "sdk/src/run.ts": "e36e15725f83cd81a83c7cc4b954c34af208068ff188974d36abc691b9c3249d",
+        "sdk/src/serve/bridge.ts": "7e77aac98fde3882aa471dfa0e897acdc3de8098a0f6eebc7286f9f8ccc2560d",
+        "sdk/src/services/harness-enforcement.ts": "9e20db9c7912e7866947ed0fbdce539c285eb8d6f9e20fa95f58355a13f929ed",
+        "sdk/src/services/local-harness-store.ts": "390668ee7b67ed33d830e72c714ea66d7e43339d78f80a852942af9b0e506ba2",
+        "sdk/src/services/repository-identity.ts": "040789e343e505e286a7415b5e28c88946fb7a950d7097aeccdc7a28f6a86135",
+        "sdk/src/services/workspace-journal.ts": "9463530c876cc6cc8e222b47391c4d5b90e014bb6743c1a03c00ebe8839c8def",
+        "sdk/src/services/workspace-mutation-broker.ts": "365a7901a6acdf679b28158842cd7e127de710c46d7790b3d3d396ed67034155",
+        "sdk/src/tools/background-jobs.ts": "8985d2aea9881635729b60b1bc981ccc9890545b7f12bff1e5b98f1883489e79",
+        "sdk/src/tools/concurrency.ts": "d3154988c171b59da65e938c3c1539fb1a96f6fbf1795d913d23b8b1863c7560",
+        "sdk/src/tools/path-utils.ts": "a69ef82b2aa3bc9ae9d9eeab3812795372b02dceed1dbd1ee939524d2a830f6d",
+        "sdk/src/tools/run-terminal-command.ts": "133b84ece998b046cfbfef7ba357b8caa21ce730d6d4a786cb000ae09e654508",
+        "sdk/src/tools/terminal-command-policy.ts": "84d3bfb7babd51d02b0e3491133b4f5a9b3f1ee9999af1e8c2b8d6f619c7fa4d",
+        "sdk/src/tools/terminal-output-spool.ts": "3f49c98f621fe326476304982a015a640d44cb4222196fcfd8b732e0ce3123ec",
+        "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
+        "tsconfig.base.json": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "Current frozen TypeScript source, original complete behavior/command obligations with independently reviewed explicit host/representation adaptations, current exact CI/typecheck/repair evidence.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B18/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_current_review",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b20_linux_driver",
+              "historical Openbuff implementation agents"
+            ],
+            "scope": "Fresh B18 semantic renewal on exact current source scope (50 contracts), all 16 retained command obligations and all 5 original criterion labels; cooperative TypeScript source tier.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/renewal-intake-r1/final-node-renewal-review-r1/B18/implementation-review.json",
+              "sha256": "9e7d5e7f8f5095fa54bae55d4577a2db6cc67f6b55343af9db84a17b3cdc3cdd"
+            }
+          }
+        ],
+        "requiredCommandCount": 16
+      },
+      "risks": [
+        "Observed cooperative TypeScript behavior with explicitly reviewed injected host setup and original assertion-preserving adapters; no native containment or external-writer exclusion claim.",
+        "Shared current CI observations retain original discovery/rosters and skip counts; repeated slots are not extra executions.",
+        "Historical acceptance is used to recover obligations and key rosters, with fresh original assertion executions and inspected current sources supplying renewal credit.",
+        "No installed/native, live-provider, billing, external-writer fencing or empirical capability improvement is asserted by this renewal."
+      ],
+      "acceptedAt": "2026-11-11T23:58:11.824699+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B18/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "478176170acac72b3e1ac3476afd87cc66485f4fcdca204dc3e6e63bbc58a8fb"
+      }
+    },
+    {
+      "nodeId": "B19",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [
+        "B02",
+        "B18"
+      ],
+      "acceptedPrerequisites": [
+        "B02",
+        "B18"
+      ],
+      "sourceContractHashes": {
+        "cli/src/commands/__tests__/index-execution-branch-controls.test.ts": "4e727704ae1414e6e44930d9f74a3e013f1914020f717b85a03499e4cff290f0",
+        "cli/src/commands/index-command.ts": "10bdc358e5245103af66b51521fa64410e382560e5cde7794f83f555cbd2e4d6",
+        "cli/src/hooks/helpers/send-message.ts": "95e97799598d0c4e43752088ddf7f7d2745d3b2de3077c191f8550caf59ad8bf",
+        "cli/src/hooks/use-send-message.ts": "5d890dc8f3f7f10ddb49280047c99b3a3da6154fd779ead610621f0cbb30bfef",
+        "cli/src/index.tsx": "fcb8d8ffb3696c167e127b456485b56c5ad3bb610ddc5eb5dc78eb6f670070b8",
+        "cli/src/utils/codebuff-client.ts": "146b46b9c363d4d24065a149b9cb4cd010d55b61e9360278a3ae962a3d2b0794",
+        "cli/src/utils/env.ts": "029b7c4d309803b7cfc867d835808e7478fd297ab949e8659f26ee756952d4c5",
+        "common/src/mcp/client.ts": "5396f14b2a439c97f570c67f94b91bc181955fde2ef833d998fee960db8985f7",
+        "common/src/tools/params/__tests__/execution-output.test.ts": "17c96c21fffa26c555e94f1d47ac71bf76e101d8bb2a9ce5ba9953e1715d3b84",
+        "common/src/tools/params/execution-refusal.ts": "dac72ca9e1237d1506d7b1085b8de8ba49f855022f9d09b469a66e572fe8721f",
+        "common/src/types/contracts/agent-runtime.ts": "b4d38e037bc7d12bbe3cf17303c60034136c831dbeeeb090baf032311cc8a76c",
+        "common/src/types/contracts/client.ts": "038ab57b88e3d407745292d3a47bb980c13f1a83d64eef2a37d8167b2b39fbfc",
+        "common/src/types/contracts/execution-context.ts": "b6bd741ddbfac51d2d7ee23da5f942010d69ab980dbe51ebb9b11b9df0eeffba",
+        "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
+        "common/src/types/spawn.ts": "c1674839b92b9957b7e723fb64f966d9162b2ed0c250ec6f78c25c459cdec6df",
+        "common/src/util/__tests__/action-outcomes.test.ts": "6ad7eb58f254061d8ae8257cc2fa1dc2780a89d41dd290e85994e1b2420deacb",
+        "common/src/util/__tests__/execution-context-oracles.test.ts": "2ea8d9ba329976c4946a5a2e54be9ee62dc2df2efb6ac28e1dfc67b20b947467",
+        "common/src/util/__tests__/execution-context.test.ts": "aabcca1f79304cbc15b0ed414b27ed2813ecd5f2ded3639c4a980a15afba827c",
+        "common/src/util/action-outcomes.ts": "772eb4702b8c53b0eea7b50360bfa6384e4fafd87ea9b69de0ed1ce29da6f20f",
+        "common/src/util/execution-context.ts": "375c056ec0a69befb78b5d0242f4d0398456e4e98bf614239f9c33146938b228",
+        "common/src/util/job-registry.ts": "43a9fe994a662e2e4504325df4fb2dbc4d3887f6f5cd64adf0653cc8791ba0f2",
+        "common/src/util/project-path-containment.ts": "5d30e21ee5d7d919184505c6ed5ab589a5533b8054c22a6aae105c366cde115f",
+        "docs/execution/body-roadmap/run-b19-checks.py": "b773b5375aa6cd2d67fc3ea4456654013b867e3e52a0503841df40b2ce2a88a9",
+        "docs/execution/body-roadmap/run-b19-compiled-checks.py": "9409580b047a14c3bbd4ae100c83c8c674c56056b4941c90e331d4f6fcf04ca1",
+        "packages/agent-runtime/src/__tests__/execution-identity.test.ts": "7f89b8d608a256386e0150618c8e3f9272f26ef18360b53a0251aacb7c9f3e02",
+        "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts": "b6d878112cf7b3fb31f2dc96663768551f5a869c30f35075f77690b8e0b345db",
+        "packages/agent-runtime/src/__tests__/main-prompt.test.ts": "3cbc21601ba3140aaf3e327870d04a29974aa2350fc5e779e8470b5e5b3bcb8f",
+        "packages/agent-runtime/src/main-prompt.ts": "e90f7953181a6b3e1650bf69c00524bfb5abaf5dbc6ab897d1c659e5fffbcb76",
+        "packages/agent-runtime/src/run-agent-step.ts": "e127c93b4486c5a42e18cfcd348fac6b4dddd690279275e1ec1cf4b78aa0a3b2",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "ed800416219d1be020e0202ab51536f4e8af37b52801a714991e32cd0370aee9",
+        "packages/agent-runtime/src/supervision/bridge-protocol.ts": "5eeba6dcbbb3fd629fa9aee22178ae3da0f228917a71c82fa60631f26511064a",
+        "packages/agent-runtime/src/supervision/child-bridge-client.ts": "643f174e34f5e78604e8d06742a407c7878a1df1e831c1db2f6cc0c4efc52f04",
+        "packages/agent-runtime/src/supervision/child-entry.ts": "29cc050cf29bdd0e71f1b03f77d036d9b8766fb7b8f05191117257bc02dd08cb",
+        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "4096070bea8d4d9c6c53ad93228dc27d57ec8e47801f8cb05d9e932a5cbaac30",
+        "packages/agent-runtime/src/supervision/process-supervisor.ts": "41fe9ab9357632a90d2c49ec11199260d695e55c6f2e10afdc89e6fff3b7ca9d",
+        "packages/agent-runtime/src/supervision/self-exec-flag.ts": "510d496b6475c1d0bf743630ad50eeef7aeedcc7bf299a2044dd75ac3195568c",
+        "packages/agent-runtime/src/supervision/supervised-child-env-keys.ts": "5479b918983b9b156fe0333247eb2a36f0a46a9281b9ec5f7c325e6e08410988",
+        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "50873c7053e5554bdd793641c91d24dcf0e7c3d67607c2fc28e38e753e063914",
+        "packages/agent-runtime/src/tools/handlers/tool/run-file-change-hooks.ts": "5896f9ab373f8f84c05b38d9ed96a248a284a4db353ade300dd30d20af1a3189",
+        "packages/agent-runtime/src/tools/handlers/tool/run-targeted-validation.ts": "6ff1f090111f2f01f1a4afe6f1a2697f1d087e318c1f09e46dbcc191b4bf78a4",
+        "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts": "0822ce4f15f2eed194401619439f563cab834d7c0e189b84ff4d21bb42672554",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "3a6d4967bda81c26e47cbdcdd1ebcfce86dc4396a22aed678099909a1870c005",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agents.ts": "3b7e63acd059f2f4122fd4d88a56851ef4f95323a90eb531802b4c18eeea9703",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "4abd5d3b3ee3964b99bdf8eba69888059cb1998928564b3aebd768e9ced62b9b",
+        "packages/indexer/src/scip-execution-branch-controls.test.ts": "08405a504c576f2d169c9d496b4081ddce73c265b0e174d9b04f460d88a65d63",
+        "packages/indexer/src/scip-runner.ts": "68c6caa762a560f0b1ebe54db71f1503c5b3236cb6ad71207f071066358b4258",
+        "scripts/body-fixtures/sdk-terminal-approval-identity.ts": "e3d93cb297c6dfa13988a5c9a8410acb816951f43925c4d83ca613c2a78eaf4a",
+        "scripts/body-fixtures/terminal-approval-identity.ts": "83733545f0a53c4f09c431d5a360ad8266cb77c406ac7a3f14679cccd96fec08",
+        "sdk/scripts/fixtures/b19-package-consumers/consumer-cjs.cjs": "8ebaea702732d89fd530035c14dca0b8f546dd7ded5e0c80d61ac69e61a333f7",
+        "sdk/scripts/fixtures/b19-package-consumers/consumer-common.cjs": "715d9cbde0667f84815e9897726d126390a16513025251d4a53b4084bf649cb4",
+        "sdk/scripts/fixtures/b19-package-consumers/consumer-esm.mjs": "4442d03dccaaa68da31c59cd6ee7c5891d88344253665b4a3a9f99c8dcba85ce",
+        "sdk/scripts/fixtures/b19-package-consumers/peer.cjs": "a8325f26f7dbbc4bfc1da57599f59121b3405e9d6ad00da573a65cc40dc911a9",
+        "sdk/scripts/fixtures/b19-package-consumers/prepare-build.py": "91531c03dd0384620f2b9749c72d4bf0bb951d981e0d719503e5b84335f97e43",
+        "sdk/scripts/fixtures/b19-package-consumers/reject-workspace-loader.mjs": "76352b9f63b422fd80f61f137333950eba826fe7fc9ced2f3190d059a866b09d",
+        "sdk/scripts/fixtures/b19-package-consumers/run-consumers.py": "51fe62bb2d89cf706e5b3faee5941d8667e87b8f3914c5bc3b846ae7a2a68d2c",
+        "sdk/src/__tests__/blender-sdk-execution-branch-controls.test.ts": "bea6a21810c1fd3665b39d62b51bc63f00a2b13c421076effcbd13807070cc44",
+        "sdk/src/__tests__/bootstrap-execution-authority.test.ts": "e47b32e2c65edc807c5dd7e8778a822c0f2c374f2d203bac7229cfc15e167a27",
+        "sdk/src/__tests__/browser-logs-sandbox.test.ts": "7a6a992a6fa4121d5db531d4726a570e660d428966d0056c3ee2fb03613396ae",
+        "sdk/src/__tests__/chrome-sdk-execution-branch-controls.test.ts": "550c26b31ccfaa891170af17e343f9513dbe4adc7c1f6b5fe597bf7e329ea1ed",
+        "sdk/src/__tests__/diagnostic-delta.test.ts": "5537d704c5d742bc90ffeec48779ca2f660d0923daacd7b865c6282fdab3bc44",
+        "sdk/src/__tests__/env.test.ts": "04f03de477e89871e40193c9ea1d64e9ade78cac487173dca8ebeff878491ff1",
+        "sdk/src/__tests__/execution-approval.test.ts": "032ba969c60a63babd97adef5659636e41f790a3da4f2b938b523e10b38bbdb9",
+        "sdk/src/__tests__/execution-launch-oracles.test.ts": "16a2b99221ce9415623bb6187e0ac3bcfaaed4472ff945f9b0f49cfd1d406b1b",
+        "sdk/src/__tests__/execution-launch-timers.test.ts": "1a2991d33f9f002524776031d26fd694bd97d0fbf8e1a0b3df58b9a69170792d",
+        "sdk/src/__tests__/execution-launch.test.ts": "54da55da462e7c52c4cd76fa2ca79a4f625ddd5aa55e1841d5f780f397a712fd",
+        "sdk/src/__tests__/execution-scope-registry.test.ts": "c6e4d999e5e7da42ead6bab59924a8895ec89fc3e9853cb35e4c7d6575f347cb",
+        "sdk/src/__tests__/external-execution-branch-controls.test.ts": "a7d93532dc1b1f016492593c2d95509ff3f154ab8eacf900238184ca937c4f55",
+        "sdk/src/__tests__/file-change-hooks.test.ts": "b723f742968beb0acdae4949f20b815414fa8b3a90793b2ed5326b18fc7faeef",
+        "sdk/src/__tests__/fixtures/b19-blender-sdk-branch-controls.ts": "bb2437ab8cafcff2eecf9205cce05548ed71a9ea33ae5aa6a49b610acb5d5b3d",
+        "sdk/src/__tests__/fixtures/b19-chrome-sdk-branch-controls.ts": "16f8c8db667e55046b16d73eba5b27194e1263677c5f350b18942223a655f794",
+        "sdk/src/__tests__/fixtures/b19-launch-oracles.ts": "035d06d2481949f61731595eca56823837f4822a8b9701d88ade79268352def4",
+        "sdk/src/__tests__/fixtures/b19-node-env-recorder.cjs": "d25922511f8a18e76aeca2bb60309f1c728e373f0bf7ab671415d9d7107f8385",
+        "sdk/src/__tests__/fixtures/b19-r3-sdk-contract-peer.cjs": "bba7a8c74449d6f2db4eafe9ccb6287381038d81973f75bba7fab340926284b2",
+        "sdk/src/__tests__/fixtures/b19-resource-peer.cjs": "23ae180aad44b96801c65099c314bd45bd0e3cff3bf9e11e9232e92b9a78fbf3",
+        "sdk/src/__tests__/fixtures/b19-supervision-sdk-branch-controls.ts": "52ce0af36dcea3a89a8966fc3c38c72ae1c07bef7086d3e2d7b59caddbf890ad",
+        "sdk/src/__tests__/fixtures/b19-supervision-sdk-compiled-entry.ts": "ee873da098b3f08e1e78d48cb6685f255cfd12d187c606cd0686148b55f80d12",
+        "sdk/src/__tests__/fixtures/b19-terminal-branch-authority-r3.ts": "1c7d98a0ea4ff8147aea52d06e732cfed9c4d570647edd86902563efec17b226",
+        "sdk/src/__tests__/fixtures/b19-terminal-branch-process-r3.ts": "e17848f8dab43630bf509fa18d4330e7be81c06738180adcb1a4512cf44b07b4",
+        "sdk/src/__tests__/fixtures/b19-terminal-execution.ts": "ae21c7a260bbf63fc05cb2366a496c577f722b81e926a0ee2c160e53eec1c59b",
+        "sdk/src/__tests__/fixtures/external-branch-compiled-entry.ts": "3501d6b6b3e776c3bf8eb11c2141c039afb3b7ee066b0753f0402d0965129293",
+        "sdk/src/__tests__/fixtures/external-branch-controls.ts": "c82ddfcc25d3cbbca9a64f951ce2d5d13192680cd6903310ed63ded9d3555fd0",
+        "sdk/src/__tests__/fixtures/external-branch-mcp-server.cjs": "bfc8d0c0e27276e84664d7fbbb965b663e096d3f6f04f42fd79f51f4f74c1670",
+        "sdk/src/__tests__/fixtures/external-branch-run-client.ts": "721107f4f1a87790fb0fc94c5d5972149195bd44260904192eaa56d7e007fdad",
+        "sdk/src/__tests__/fixtures/toolchain-branch-authority.ts": "a8a38b2b052950877023744aa0a38ec3c07003de8d01aca725a56309172aa390",
+        "sdk/src/__tests__/fixtures/toolchain-branch-lsp-peer.ts": "405580b34b06eaf6640a54bdcf2ba98aeceae688b151c68a76a4c5cc8c4a2adf",
+        "sdk/src/__tests__/fixtures/toolchain-branch-peer.cjs": "23d02ba31c6f039f1fd89a35fb385a02d26f2227b8b21800a333126fd5390ac2",
+        "sdk/src/__tests__/fixtures/toolchain-branch-sdk-client.ts": "65582a56b4ffc9f6458d21b4caed3f5d7885c2645bbabdc7af8d20f409061f1c",
+        "sdk/src/__tests__/get-change-review-bundle.test.ts": "4660687f206537e03e7cea84e87bc33d1379fb2df3dc9d937239f1bb6e2430d2",
+        "sdk/src/__tests__/harness-enforcement.test.ts": "f1ca092fa20b83d8398f5be41c6e8c924e81b6b838b27f281af75704efb91276",
+        "sdk/src/__tests__/host-config.test.ts": "3e0554e38f385aac8ad81838b11be6aa38b4d9e4ae5dc7f9836ed0639e0a1361",
+        "sdk/src/__tests__/inprocess-execution-lifetime.test.ts": "82a1bf75a53b08ef2d2887dc0ad0e3a78a4dedb4223a017e1acee658d5a6329d",
+        "sdk/src/__tests__/lsp-execution-branch-controls.test.ts": "8092bfb4dbc33a24e9e40b05807b42e03467f789da748686ea30ce6b10117bed",
+        "sdk/src/__tests__/run-host-contract-controls.test.ts": "b16334f70cf765c4207110a74188fb0dd071cd87edd4692bd05c2b2f9a5b8683",
+        "sdk/src/__tests__/run-host-execution.test.ts": "5b9154df4be33f2803d0978ed1191fd5f9c3132e0e6cb6c0de619ac73f3378ed",
+        "sdk/src/__tests__/run-mcp-execution.test.ts": "2fa7ec774db22fd5c96a68461a46369b939dff5cd1181382f4931327487b1de8",
+        "sdk/src/__tests__/run-targeted-validation.test.ts": "255e5cdf0649893a829154e644883587697363339831d73088c084ce1f56feee",
+        "sdk/src/__tests__/run-terminal-command.test.ts": "06636c8bcf66e3e053a6ca426d90ee00109cb1bfa484ce8d3dd83f83a1bcd8a4",
+        "sdk/src/__tests__/session-git-execution-branch-controls.test.ts": "df127134787cf605f1e62c0e5f37aa86296fa0df96d68004536e52b19f719ec3",
+        "sdk/src/__tests__/supervised-execution-identity.test.ts": "f32990d1d335282b427f369952ab338d2760969e40aed9552722f98b9c929063",
+        "sdk/src/__tests__/supervision-sdk-execution-branch-controls.test.ts": "8c38c416617c179e4781ff438aff3c3701a3805bfbd7a6e0121e7fc4372f2635",
+        "sdk/src/__tests__/terminal-execution-branch-controls.test.ts": "36cccc9b2e8412d3e3c6ce3625a6612127064924ef021ab0e9aa24a768034fa0",
+        "sdk/src/__tests__/toolchain-execution-branch-controls.test.ts": "eb9030542776dc8dc84647056603f9df264bdf470b251184debc979f41d68d1f",
+        "sdk/src/__tests__/toolchain-execution-fixture.ts": "5e272d35c0f8d7a4a195f5522f414d094b66c60d43455d2ebb03972fdd91b3ce",
+        "sdk/src/__tests__/toolchain-execution.test.ts": "7d72ad60160ca08c8b33a05b4c26a4263c854c797489007f505a9cc204256f96",
+        "sdk/src/client.ts": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7",
+        "sdk/src/client/backend.ts": "0831c9b2a447cf359f702fbeac75de3a0ee0d32f0259e11a7c2cd259e80e5b31",
+        "sdk/src/credential-env-keys.ts": "ca28c8a84827d3a9b23505324ecb90fc7a24bdd64ce9bc5ac1cf8c0cdf313be6",
+        "sdk/src/credentials.ts": "356b103842fafb5e6daeeb015e21b37945461c867f5a026c867994d565ee9bd3",
+        "sdk/src/env.ts": "9556e0e6cacbbb2f6657dcc3c7fc9da4b7bdbce41cc9c1be51258b51d5e6c700",
+        "sdk/src/host-config.ts": "ae94669b0fe99fe79e8e184e92870c6f8fb0000f1072574827c6b3530a3e34bd",
+        "sdk/src/host-execution.ts": "de027d1844bd7c53f192f5e15ab5b44c2d9fba1e25ceccb1b4622708e0f57444",
+        "sdk/src/impl/agent-runtime.ts": "b774d1fff245e01555c63956fe5519862805ccf121776ab22090df330d99bc84",
+        "sdk/src/impl/llm.ts": "25e4a1a73977f13edcbd45e3aa15e16d76bc1917105606ef6a5507cf6a7692cc",
+        "sdk/src/impl/model-provider.ts": "58b159d7be96e17fd08ab2a5f90ac1195dcfb2c9bdc0ec935fc9336db082c546",
+        "sdk/src/index.ts": "f56631bfb077d94cf3735efd9430c22f0db35719493380923dbc00f9decd24e1",
+        "sdk/src/provider-config.ts": "439ac26094af9de40f652915e80f46bc5af81f8a9441b11ad90b3eff0a022cb5",
+        "sdk/src/run-state.ts": "a24a11f4e77533bd76cd720bf68b36d2106dbf0eeb155f865c06e2e3fa83edd2",
+        "sdk/src/run.ts": "e36e15725f83cd81a83c7cc4b954c34af208068ff188974d36abc691b9c3249d",
+        "sdk/src/services/action-workspace-basis.ts": "e1dbe0bba7afab1e3b2301474a0e0c9391aec18bf512b3f436d733b394837d5a",
+        "sdk/src/services/build-graph.ts": "87e0a5905db47c11ed649ac7ade9c73c9927ede6b8bf873b89dea9351dc556ed",
+        "sdk/src/services/diagnostic-delta-runner.ts": "b1fdf476a776b7685d8f0edd1df47820952d62ade459521d90da00d2a37b3686",
+        "sdk/src/services/diagnostic-delta.ts": "1aeb2fa1b0b3f911bb6053ec9b2e6f89958fc95cb6bdda4a48a4b0aea54f3794",
+        "sdk/src/services/execution-launch.ts": "507a319f0b0542b2a9de865e5f3e79f491a3ff08f2e427a1d32dbf7e91b356df",
+        "sdk/src/services/execution-scope-registry.ts": "23804b112098478ba84c24784b4a770d53f7731d84a02e9172040514c178961c",
+        "sdk/src/services/harness-enforcement.ts": "9e20db9c7912e7866947ed0fbdce539c285eb8d6f9e20fa95f58355a13f929ed",
+        "sdk/src/services/harness-intelligence.ts": "037af36a4afef4531a2cfe6cf88e06f598e82ea72583b8bfbb21336b5f7bacb9",
+        "sdk/src/services/language-intelligence.ts": "841470ce8b3c5986cb610ae73841e9e06dd2c7802ca84a75f1cb4c1c572b21a4",
+        "sdk/src/services/local-harness-store.ts": "390668ee7b67ed33d830e72c714ea66d7e43339d78f80a852942af9b0e506ba2",
+        "sdk/src/services/lsp-multiplexer.ts": "9c3df6f99afd54c13faf695d5e6c260d0aba8eb36884ad156aa0eed39d2fceae",
+        "sdk/src/services/repository-identity.ts": "040789e343e505e286a7415b5e28c88946fb7a950d7097aeccdc7a28f6a86135",
+        "sdk/src/services/run-mcp-execution.ts": "1a99d1dadbba16ccbd1b7aecd156b109a0f191928a96a7c6134a2fc7f07a9105",
+        "sdk/src/services/semgrep-baseline.ts": "8cab20d4c9e7155ce07e8c3de4141cb3a4be9329b40f88ba93f43d8b96af4632",
+        "sdk/src/services/toolchain-execution.ts": "83d8f4233f6e2f6a46d41c7ef6796774e1fe4bd8240094e1dbca72c987adc2db",
+        "sdk/src/services/workspace-journal.ts": "9463530c876cc6cc8e222b47391c4d5b90e014bb6743c1a03c00ebe8839c8def",
+        "sdk/src/services/workspace-mutation-broker.ts": "365a7901a6acdf679b28158842cd7e127de710c46d7790b3d3d396ed67034155",
+        "sdk/src/tools/3d-assets.ts": "d3531588a17201f9bc9b70b3a67291fee02718ecc56e95ec165850e1a554c278",
+        "sdk/src/tools/background-jobs.ts": "8985d2aea9881635729b60b1bc981ccc9890545b7f12bff1e5b98f1883489e79",
+        "sdk/src/tools/browser-logs.ts": "2de00c7f58e9560b26ea98af0d8f3b16c3eb47260c0534c4226689fe0abe6aed",
+        "sdk/src/tools/change-file.ts": "415e501433ac20e50d985b95a666487640da20421ece2a512937b95fd8599bb1",
+        "sdk/src/tools/concurrency.ts": "d3154988c171b59da65e938c3c1539fb1a96f6fbf1795d913d23b8b1863c7560",
+        "sdk/src/tools/file-change-hooks.ts": "17f651276f0ec71405c62649a21dda9a36fc6468e3ea2b41ef9a8ca0d9427a20",
+        "sdk/src/tools/filesystem-authority.ts": "6fedc5d7abfc6e178d60193e63fc6fae2e6f9ea0fe7bbde9406ac1c6ac487427",
+        "sdk/src/tools/get-build-targets.ts": "7679f2b368f634f3ec5357dc79284c510f099adc23e0f78641c331aee4efc052",
+        "sdk/src/tools/get-change-review-bundle.ts": "bb241a07257164601e8ab763893b676b9bae719ba4a8971cca5b1b1dd2b152e7",
+        "sdk/src/tools/git-branch.ts": "a27f46e8eac25d70dd5ba6a5e1093fdf18d8baa916d17267e5985c5421416946",
+        "sdk/src/tools/git-status.ts": "582a002f1a96d51701268f4e7ae3c7d922bd18128830af6a7fcc92e55321229b",
+        "sdk/src/tools/inspect-environment.ts": "04ebfa20e343c00228932dbf708984fef16b8a621e14aaf654541f8d9ade4338",
+        "sdk/src/tools/inspect-workspace.ts": "03e6915e7f395c6ea1dd217793b6fb374160db52de126c2425e3fa1581f7e048",
+        "sdk/src/tools/node-filesystem.ts": "eb73c817b4f6ae536649e2e567a7293d0b680d3994a574940e98fe4b4734701e",
+        "sdk/src/tools/read-files.ts": "6ee867f3fae975f5c02f02e981106e08a346d01ffe7cd81957464ba0d261f1c8",
+        "sdk/src/tools/run-targeted-validation.ts": "88d7fccd2f5ff28b52afeb9203a7bb28c8692e402c55d2b238b9c083d427bcd2",
+        "sdk/src/tools/run-terminal-command.ts": "133b84ece998b046cfbfef7ba357b8caa21ce730d6d4a786cb000ae09e654508",
+        "sdk/src/tools/terminal-command-policy.ts": "84d3bfb7babd51d02b0e3491133b4f5a9b3f1ee9999af1e8c2b8d6f619c7fa4d",
+        "test/fixtures/body/runtime-outcomes.ts": "34b1c669212736852173513269e22d2b465facc26f48a8d1ee38f8a02d07d198"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "Current frozen B19 effective execution context across the finite 26 present producers, 136 branches and 251 matrix edges: 196 applicable declared consumer boundaries, 55 source N/A declarations, 32 complete controls and 72 clauses; exact retained 154-source contract and 108 current command receipts, including actual SDK/compiled/packed/rebuilt CLI consumers and original PLAN/CI/repair selectors. Physical lifetime acceptance remains a separate B20 gate.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B19/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_final_composition_r2",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b19_original_replay_lane_resume",
+              "/root/b19_sdk_oracle_resume"
+            ],
+            "scope": "Current frozen B19 effective execution context across the finite 26 present producers, 136 branches and 251 matrix edges: 196 applicable declared consumer boundaries, 55 source N/A declarations, 32 complete controls and 72 clauses; exact retained 154-source contract and 108 current command receipts, including actual SDK/compiled/packed/rebuilt CLI consumers and original PLAN/CI/repair selectors. Physical lifetime acceptance remains a separate B20 gate.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/final-composition-verifier-r2/b19-final-body-review-r1/implementation-review.json",
+              "sha256": "771559865db4d0058d41df85d56e242400a58dd14324a5a442fab89343d0df34"
+            }
+          }
+        ],
+        "requiredCommandCount": 108
+      },
+      "risks": [
+        "The 2503 frozen inputs are dispatch/source validation provenance. Only the explicit retained154sourceContractHashes union defines B19 acceptance scope; historical fixture aliases and recovered declarations remain context with no new dispatch credit.",
+        "B19 covers execution context, admission, phase and ownership contracts at finite declared consumers. Actual descendant termination/cleanup belongs to B20; native selected OS enforcement remains a B21gate.",
+        "Portable TypeScript exact environment and cooperative cancellation establish no OS filesystem/network isolation, cgroup/native containment, process-group escape prevention, atomic numeric signaling or nonchild-grandchild reaping.",
+        "Direct-child, injected, SDK, factory, compiled, actual-peer and synthetic-frame routes retain their individual boundaries. Upstream refusal does not establish selected callback/target entry, and empty resolverCalls does not prove zero resolver callback entry.",
+        "Three selector aliases retain zero canonical-edge credit. Historical supporting oracles, failed/overlapped invocations and the preserved31of32oracle predecessor receive no final dispatch credit.",
+        "The187CLI skips provide no coverage. The rebuilt CLI proof covers the observed headless read/edit/command/help/version fixture and discloses unavailable run-journal storage; it gives no journaling or globally installed-current-CLI assurance.",
+        "Synthetic Node/Chrome/LSP/source-supervision observations do not establish real OS starts/death or persistent resource lifetime. Compiled unavailable-agent outcomes remain tested failed outcomes rather than agent success.",
+        "No live-model-provider call, billing, fresh dependency installation, publication, CI event-range provenance, universal arbitrary-JavaScript replay or universal filesystem fencing is inferred.",
+        "Original historical oracles-r11/current-r10criterion labels are retained and mapped to fresh selector/control/assertion joins; those historical labels do not convert old supporting receipts into current dispatches.",
+        "This independent B19 body renewal is conditional on the exact final candidate binding fresh accepted B02andB18prerequisite receipts. It is no standalone ledger/card promotion."
+      ],
+      "acceptedAt": "2026-11-11T23:58:12.649916+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B19/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "c11e5f078717b1c33fd0061d9ba486eaa8cbfeb351d6afe3f2afd9fee8e37b4b"
+      }
+    },
+    {
+      "nodeId": "B20",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [
+        "B02",
+        "B19"
+      ],
+      "acceptedPrerequisites": [
+        "B02",
+        "B19"
+      ],
+      "sourceContractHashes": {
+        "common/src/mcp/__tests__/catalog.test.ts": "a7b62d272b5fb8664bc292c5c8bb3c687bc1bbaa0d74c41e6dd0372969d23921",
+        "common/src/mcp/__tests__/client.test.ts": "e6dcdc5d84365fb40f0f1e3d10321701e57f9d71b644c45aa215d93e725f785f",
+        "common/src/mcp/__tests__/dns-pinning.test.ts": "bfa00d677ea928f591f7387305b3ff2df37addb968c5ccea3f5adf34e92363f9",
+        "common/src/mcp/__tests__/eviction.test.ts": "b919538616c4cdf3c0788b421ed7e1cc0a5caef9e7a79692b15c14989cfa2111",
+        "common/src/mcp/__tests__/provenance.test.ts": "9f20d841930b2723e7285dac291efdad1d7657614c4cd6142aecfde6e359888a",
+        "common/src/mcp/__tests__/result-client.test.ts": "2e3b86748a9a49565e791cffd657720084d1fb2a4bac40c411c173c6c18d3b9e",
+        "common/src/mcp/__tests__/result.test.ts": "b5e27f9f1058d6a52607d2b79213d23507ddfd61c2bbbb2bebcbca8cbac61b4a",
+        "common/src/mcp/__tests__/stdio-transport.test.ts": "4d0e3aa2937e8958d61e99a7902a3e9b5bd95c456ede2546594511ae1efc95a7",
+        "common/src/mcp/client.ts": "5396f14b2a439c97f570c67f94b91bc181955fde2ef833d998fee960db8985f7",
+        "common/src/mcp/stdio-transport.ts": "a42bbec709e62b9d2449a37110b9a5dbf3269314e5d9f81206b83957cc05200f",
+        "common/src/tools/params/process-cleanup.ts": "dfc5e9da4baf10cb8c9c598f6ddd5a003cef3d640c38466cb360f7d0945619aa",
+        "common/src/tools/params/tool/check-job.ts": "9a35ccb9816b1c7fddb2564a80901f26fb06a51c0da889171ebe806385a7c8e4",
+        "common/src/tools/params/tool/run-terminal-command.ts": "75b2bbb0e220f58c229c9a8bcbaa53c8dbe8d303809233c801695c01d531fb5f",
+        "common/src/types/contracts/agent-runtime.ts": "b4d38e037bc7d12bbe3cf17303c60034136c831dbeeeb090baf032311cc8a76c",
+        "common/src/types/contracts/execution-context.ts": "b6bd741ddbfac51d2d7ee23da5f942010d69ab980dbe51ebb9b11b9df0eeffba",
+        "common/src/types/contracts/process-scope.ts": "a19be97d72c8e79b06f098b46e6772aa8e870cfd0d3e500f5b0f2b08f2915a51",
+        "common/src/util/__tests__/execution-context-oracles.test.ts": "2ea8d9ba329976c4946a5a2e54be9ee62dc2df2efb6ac28e1dfc67b20b947467",
+        "common/src/util/__tests__/execution-context.test.ts": "aabcca1f79304cbc15b0ed414b27ed2813ecd5f2ded3639c4a980a15afba827c",
+        "common/src/util/__tests__/linux-process-scope.test.ts": "eac4d4eca10711ba8fdee1dfbb5e11e6c3a4905bc6c6d4dbad415c6f1fd0754a",
+        "common/src/util/__tests__/owned-process-scope.test.ts": "42387f8b3e88f2543a98ee037c824b348231a714a528062a064485ae2de63b75",
+        "common/src/util/execution-context.ts": "375c056ec0a69befb78b5d0242f4d0398456e4e98bf614239f9c33146938b228",
+        "common/src/util/linux-process-scope.ts": "55ba6377c23a28044228c558ca98c1c1dd86c8ed49a771c12194e642093c3093",
+        "common/src/util/node-process-scope.ts": "4f37545c0d546ec647d3ffaa9c2a31671e3c683d7ba0e6e22797a2078a98f98f",
+        "common/src/util/owned-process-scope.ts": "04a37cac2cac2ba29285fadc80d414ef418521433324b76971723d95ee29fcb4",
+        "evals/buffbench/__tests__/agent-runner.test.ts": "9b8df16255ccd4879228c046fa48bfd2798d7459c98602b4cc4f77bda2097054",
+        "evals/buffbench/__tests__/evaluation-environment.test.ts": "3b18f75450bc59bbe789fe1f89d52aec29879ab6966bbbfa479f7fa4799d43c7",
+        "evals/buffbench/__tests__/execution-scope.test.ts": "749cc321bba320f18d7da760de326ed7a525a0035bab936d76d229c96c6c9eed",
+        "evals/buffbench/__tests__/fixtures/b20-evaluator-process.mjs": "3041d4fc51b973d98a705c1f1a94e0497ab97823d2f3469488ddc19e7e0f3138",
+        "evals/buffbench/__tests__/isolated-sdk-client.test.ts": "2b74563566a0d06292874b8452dde17f739c7637e75fa067adc7cb0af4d6b5f2",
+        "evals/buffbench/agent-runner.ts": "28245646993c09e59fd7254e30ff99270535953ff623660cf4ca3dfac0b26228",
+        "evals/buffbench/evaluation-environment.ts": "c708d689465bb853e5c806452efe13e52d4647f2671802dadb45a45d7c9082cf",
+        "evals/buffbench/execution.test.ts": "c387a89b30d64682524b6e3bf545fb347414d698ecd8d631c04a7701dee842f4",
+        "evals/buffbench/execution.ts": "d0da3f7982662d2c2a5ba8c057b205790f2a06465477b3545e1b49c51505b010",
+        "evals/buffbench/isolated-sdk-client.ts": "5d342c5e01987e047319b041f4f881a1ed40b7cf2c6ee26df32d4c80172fec89",
+        "evals/buffbench/types.ts": "4ff716bca900f1c66416a16bed6dec192fb81f1745db13e1982adb64cc63efa6",
+        "packages/agent-runtime/src/supervision/__fixtures__/b20-descendant.ts": "d582e5b8a33a59a40d33753c2170a9e84c1179e3029af5bd7b78011eec567657",
+        "packages/agent-runtime/src/supervision/__tests__/execution.test.ts": "e2fb1c6caeab1df4b94cc87efdde5ae9f6557f3d3a3d3422df05441dae5c614f",
+        "packages/agent-runtime/src/supervision/__tests__/process-supervisor.test.ts": "bc5ff8b83c39d257d6eb24c37923c84c5c7e4e079ab89f47b39518afb77c9a55",
+        "packages/agent-runtime/src/supervision/__tests__/supervised-restart.test.ts": "90742b2c58c7fa9a11c0368556052d4cc1143bc8ba708bdcfa97f56f24d07874",
+        "packages/agent-runtime/src/supervision/process-supervisor.ts": "41fe9ab9357632a90d2c49ec11199260d695e55c6f2e10afdc89e6fff3b7ca9d",
+        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "50873c7053e5554bdd793641c91d24dcf0e7c3d67607c2fc28e38e753e063914",
+        "scripts/body-fixtures/b20-process-tree.mjs": "f7b2e227e4a4df580bf22e9fbeea7f3f76f22d471f0a07ca04f9cf2e70f83880",
+        "sdk/src/__tests__/diagnostic-delta.test.ts": "5537d704c5d742bc90ffeec48779ca2f660d0923daacd7b865c6282fdab3bc44",
+        "sdk/src/__tests__/execution-launch-timers.test.ts": "1a2991d33f9f002524776031d26fd694bd97d0fbf8e1a0b3df58b9a69170792d",
+        "sdk/src/__tests__/execution-launch.test.ts": "54da55da462e7c52c4cd76fa2ca79a4f625ddd5aa55e1841d5f780f397a712fd",
+        "sdk/src/__tests__/fixtures/b20-sidecar-descendants.mjs": "75346aa9903397903603623b56a44f99d343942ac201d98aa4fed7d9e2ac7d07",
+        "sdk/src/__tests__/git-status.test.ts": "1c59f683a42f783427de30d76f6961f67dae806568bb60b101bf9455e017357e",
+        "sdk/src/__tests__/kill-job.test.ts": "f14fcb9ccebb7ef8619e9b2d221d04a75519fc72d8403d41705adb9a594adf99",
+        "sdk/src/__tests__/process-scope-cleanup.test.ts": "8ecb1b9b5a19822bcde7d55320f0c4d4ca5897f764e69515e02824ede6627cb8",
+        "sdk/src/__tests__/process-scope-transfer.test.ts": "11bf3defea7e948bd1b58e4aabdb0c814a931e7b1d79403a06d85769074bde7f",
+        "sdk/src/__tests__/run-host-execution.test.ts": "5b9154df4be33f2803d0978ed1191fd5f9c3132e0e6cb6c0de619ac73f3378ed",
+        "sdk/src/__tests__/run-mcp-execution.test.ts": "2fa7ec774db22fd5c96a68461a46369b939dff5cd1181382f4931327487b1de8",
+        "sdk/src/__tests__/run-terminal-command.test.ts": "06636c8bcf66e3e053a6ca426d90ee00109cb1bfa484ce8d3dd83f83a1bcd8a4",
+        "sdk/src/__tests__/sidecar-supervisor.test.ts": "e771a0ac38ee886d23c1c1af5fb830094f3a207c398d1ab7c6d892f9b7d98d83",
+        "sdk/src/host-execution.ts": "de027d1844bd7c53f192f5e15ab5b44c2d9fba1e25ceccb1b4622708e0f57444",
+        "sdk/src/impl/agent-runtime.ts": "b774d1fff245e01555c63956fe5519862805ccf121776ab22090df330d99bc84",
+        "sdk/src/run.ts": "e36e15725f83cd81a83c7cc4b954c34af208068ff188974d36abc691b9c3249d",
+        "sdk/src/services/diagnostic-delta-runner.ts": "b1fdf476a776b7685d8f0edd1df47820952d62ade459521d90da00d2a37b3686",
+        "sdk/src/services/execution-launch.ts": "507a319f0b0542b2a9de865e5f3e79f491a3ff08f2e427a1d32dbf7e91b356df",
+        "sdk/src/services/run-mcp-execution.ts": "1a99d1dadbba16ccbd1b7aecd156b109a0f191928a96a7c6134a2fc7f07a9105",
+        "sdk/src/services/sidecar-supervisor.ts": "8a7f19a42778a6ae46baa013e253f9a6f6cac45433475b43f99004ef551694df",
+        "sdk/src/tools/background-jobs.ts": "8985d2aea9881635729b60b1bc981ccc9890545b7f12bff1e5b98f1883489e79",
+        "sdk/src/tools/check-job.ts": "36800f3eab7b143940f8f7db7ce0586e16f79c38436cade72411b8ee738c4416",
+        "sdk/src/tools/git-status.ts": "582a002f1a96d51701268f4e7ae3c7d922bd18128830af6a7fcc92e55321229b",
+        "sdk/src/tools/run-terminal-command.ts": "133b84ece998b046cfbfef7ba357b8caa21ce730d6d4a786cb000ae09e654508",
+        "sdk/src/tools/terminal-output-spool.ts": "3f49c98f621fe326476304982a015a640d44cb4222196fcfd8b732e0ce3123ec"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "B20 finite cooperative Linux owned-process-group cleanup across common lifetime, SDK terminal/background/explicit owner transfer, owned MCPstdio leases/eviction, generation-owned sidecar/Bun supervision and evaluator command/init consumers; exact66source contracts and ten recorded command packets,50original host receipts (37physical-positive/13qualified),13original D250timing controls, SDK700mswindows, separate evaluator43check marker-horizon proof and four actual packed SDK CJS/ESM cancellation/deadline cases. Action/output outcomes and cleanup liveness remain separate.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B20/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_final_composition_r2",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b20_linux_driver",
+              "root-assigned B20 consumer lanes (MCP/supervision/evaluator; exact prior IDs unavailable)"
+            ],
+            "scope": "B20 finite cooperative Linux owned-process-group cleanup across common lifetime, SDK terminal/background/explicit owner transfer, owned MCPstdio leases/eviction, generation-owned sidecar/Bun supervision and evaluator command/init consumers; exact66source contracts and ten recorded command packets,50original host receipts (37physical-positive/13qualified),13original D250timing controls, SDK700mswindows, separate evaluator43check marker-horizon proof and four actual packed SDK CJS/ESM cancellation/deadline cases. Action/output outcomes and cleanup liveness remain separate.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/final-composition-verifier-r2/b20-final-body-review-r1/implementation-review.json",
+              "sha256": "d1cf6c261627fad0b2e97ddeab1f5505a1511d5a0fc6013186b0243f5ffd08fd"
+            }
+          }
+        ],
+        "requiredCommandCount": 10
+      },
+      "risks": [
+        "Finite cooperative Linux POSIX owned-process-group tier only. No cgroup/native containment, arbitrary group/session escape prevention, atomic numeric PID signaling, nonchild-grandchild reaping or universal hard-deadline guarantee is established.",
+        "Synchronous procfs inventory/signaling and event-loop scheduling cannot be preempted by JavaScript timers. The original observed1650msand captured-expiry+1400msbounds are separate from later windows or cleanup retries; later success cannot redeem a missed original bound.",
+        "Leader reap, complete verified membership and zero living/unknown owned members are required for physical cleanup. Descendant zombies are nonliving and provide no grandchild-reaping credit. Initial/intermediate incomplete inventories do not supply final completeness credit.",
+        "The37physical-positive and13injected/adverse/intermediate original receipt classifications remain exact. Injected/direct-child/HTTP-SSE/protocol controls cannot borrow actual owned-group credit; post-test process checks do not redeem original failures.",
+        "Output quota and inherited-pipe closed-incomplete states, original action failures and selectedLimitSatisfied false/null remain unchanged. Physical death does not imply complete output or successful action/run/task acceptance.",
+        "SDK13original fixtures have source-declared700msdelayed marker windows. MCP/supervision have settlement observations without retained delayed windows. Earlier evaluator host checks remain immediate-only; the43of43horizon successor is separately sealed and preserves the earlier42of43attempt.",
+        "Physical scope, logical B19resource/owner generation, sidecar generation and MCPconnection/catalog generation are distinct identities. Explicit administrative shutdown may terminate a resource; idle eviction alone protects active leases/uses until release.",
+        "Packed SDK uses an additive full2503source batch guard; original1231before map and omitted original after map stay preserved. Missing per-inner-command phase/timestamp/PID/environment fields are not synthesized.",
+        "Persistent LSP/Chrome/Blender/native resource lifetimes and globally installed-current-CLI assurance remain outside this B20scope. No live-provider, billing, publication or network/filesystem isolation claim follows.",
+        "Known implementation owners are root, consumer-regressions and linux-driver. Historical MCP/supervision/evaluator delegated responsibility is explicitly declared, but exact prior agent IDs are unavailable; no identities are invented. This reviewer authored no product, test, fixture, formatter, assembler or raw receipt material under review.",
+        "B20body approval still requires exact candidate closure to fresh independently renewed B02andB19receipts, all11predecessor renewals, unchanged-sealer/validator zero-error validation and independent consistency review of these authored approval wrappers before root ledger promotion."
+      ],
+      "acceptedAt": "2026-11-11T23:58:13.370999+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B20/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "74107dfa18d5fceda71efcf333ef8439bc084bf5963f81f751e6783aecd9bae3"
+      }
+    },
+    {
+      "nodeId": "B21",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B19",
+        "B20"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B22",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "M22-CORE",
+        "M22-TXN",
+        "M22-CHILD"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B23",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B24",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B23"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B25",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B05",
+        "B19",
+        "B20",
+        "B23"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B26",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B04",
+        "B23"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B27",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B06",
+        "B19",
+        "B23",
+        "B24",
+        "B25",
+        "B26",
+        "B36"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B28",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {
+        ".github/workflows/ci.yml": "5b7de0a511764cc6e974ecfea08e3d45e378f9f6f84ef58850c5140563f48d66",
+        "bun.lock": "0671009aeff3a7a04044da7d78035ddb795a065c8b3bafb813df6f034bf4e567",
+        "cli/src/__tests__/unit/openbuff-provider-readiness.test.ts": "51f1a05fda781d9c92a1c3f1c868dc2e04dd3d5537b451d25959ce33fce5ccca",
+        "cli/src/data/initial-agent-type-sources.generated.ts": "6b506d21af8f5ae90430c826ed52c5ba0f24330100de94a3dc2cbfc0feaee7c3",
+        "cli/src/utils/__tests__/mcp-result-projection.test.ts": "4a86ab6c753fb805193c0bb04865022d138266da0f355237acecab9ee40d5cc3",
+        "cli/src/utils/__tests__/openbuff-provider.test.ts": "6030c47f76935782d3ed197a545c9d6936ed4570e0513455989a0901d718ff1e",
+        "cli/src/utils/message-block-helpers.ts": "f7197d167d2aa95cbf04b059395400db4834096fe4b6578ab8938339fdc87c61",
+        "cli/src/utils/output-outcome.ts": "2d2238fe9b16daff45a6fce0dea09666adba0ee41a7831440afc26acc29bdabd",
+        "cli/src/utils/payload-sanitizer.ts": "2434e3d1a9f2e95de08bfbc4bce221ae89eb8922250ee17cedd438a94cb99b24",
+        "cli/src/utils/tool-result-normalizer.ts": "9e108810743a2883bb69e46097cfcd001cd88c42adab3090017d1dfaca9978a4",
+        "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+        "common/src/__tests__/agent-validation.test.ts": "7ae80e88ee620a91e246d81412655bdd5e63d9e22ec43a3cb01cbb44a3ddc4fa",
+        "common/src/__tests__/json-schema.test.ts": "5a6a6953f46e7a9c2e3ece3e659d75f21942402413427ca6c6b67f31ffb49780",
+        "common/src/actions.ts": "c56ed46e6fcfe914d84c3caf9b99d08a97f46cc6f62e5f81916bd42affbd0a4f",
+        "common/src/mcp/__tests__/catalog.test.ts": "a7b62d272b5fb8664bc292c5c8bb3c687bc1bbaa0d74c41e6dd0372969d23921",
+        "common/src/mcp/__tests__/fixtures/mcp-catalog-server.mjs": "64369b3a9a209308c1c00e5ed567e043f3c32672b878a494f7a29efd64f7ddb2",
+        "common/src/mcp/__tests__/fixtures/mcp-empty-server.mjs": "e96383b8c1949aa7e9dd6ed8afdc960fc45e5d4622d86009d2633277882fc940",
+        "common/src/mcp/__tests__/fixtures/mcp-result-server.mjs": "451029fad60f16de763a159fc9e31e5119103d07dafe8806dcad8d9ae9232f1b",
+        "common/src/mcp/__tests__/provenance.test.ts": "9f20d841930b2723e7285dac291efdad1d7657614c4cd6142aecfde6e359888a",
+        "common/src/mcp/__tests__/result-client.test.ts": "2e3b86748a9a49565e791cffd657720084d1fb2a4bac40c411c173c6c18d3b9e",
+        "common/src/mcp/__tests__/result.test.ts": "b5e27f9f1058d6a52607d2b79213d23507ddfd61c2bbbb2bebcbca8cbac61b4a",
+        "common/src/mcp/client.ts": "5396f14b2a439c97f570c67f94b91bc181955fde2ef833d998fee960db8985f7",
+        "common/src/mcp/provenance.ts": "378b7158c82821092bba9eec0cbb03bf4ec31a2e7e65aa4a8a94b9c54d317304",
+        "common/src/mcp/result.ts": "b71fd7715290edb972bf0166b22702a423c96c8f32f214dff6519c4e14e679bf",
+        "common/src/templates/agent-validation.ts": "e5a94d5f79ab3c0f9d15c38b3eaf26be0472381ee3e4a1d88da218507b8a7d9b",
+        "common/src/templates/initial-agents-dir/types/agent-definition.ts": "58c68f27b510fe246b82e0e52917804b7cd71c2fd6d02e9ff7777b0d8100e19a",
+        "common/src/tools/compile-tool-definitions.ts": "a8f547ab5de0b6c81f1b45c295cfaf2cb4e9b20acc8d98b475dcd1b2c59269c9",
+        "common/src/tools/external-tool.ts": "5cfd57405d96ea49e244a458b952cff3c26e0fbce3bfef065b902ac0abe659f6",
+        "common/src/types/agent-template.ts": "5773dfc72ba5993f12b5ed65b1f330b56979194dd559307c3988b85a7ad02a33",
+        "common/src/types/contracts/client.ts": "038ab57b88e3d407745292d3a47bb980c13f1a83d64eef2a37d8167b2b39fbfc",
+        "common/src/types/dynamic-agent-template.ts": "6401783af251770c7c9498b0fd59217870cdda765439967e8ec7a2af47ca4404",
+        "common/src/types/mcp.ts": "508f214feb3c32cebed9160f8f0649b0aa367d6e1d4f137c084f0f45ec2527a3",
+        "common/src/util/action-outcomes.ts": "772eb4702b8c53b0eea7b50360bfa6384e4fafd87ea9b69de0ed1ce29da6f20f",
+        "common/src/util/file.ts": "98f8ad86d09c856b118b9e9ec380847daa9c31626f4b1fb2db6e8f8710428cf5",
+        "common/src/util/json-schema.ts": "fc8509c1c32f1c1f2630e161fbf8ce94b965b05c157ac0a11db4c9d6481dabfc",
+        "common/src/util/messages.ts": "d6e18a6cdc9f6fe66332bc14e8acfcb83c19ec99c3e40237a7c8b5280bf0d864",
+        "packages/agent-runtime/src/__tests__/background-agent-jobs.test.ts": "27d9e177fd7f67bf5059d9358d9a36800ddbe28be64b93cbe69c6dc1cb28c994",
+        "packages/agent-runtime/src/__tests__/loop-agent-steps-abort.test.ts": "fb9994f0737ce5af7e68d3d586cbef0e6d7ecbb86a263ac6dcfcc7a0511f40da",
+        "packages/agent-runtime/src/__tests__/prompts-schema-handling.test.ts": "064d87501cfe29e40e58c21b86310bb968151453890be619fdf588a922be3771",
+        "packages/agent-runtime/src/__tests__/provider-tool-contracts.test.ts": "e0619b208997e149262a1d497e41dba58d275785c1b202ffd46cc70e785321b1",
+        "packages/agent-runtime/src/__tests__/spawn-agent-inline-nesting.test.ts": "4e1afc56d6cba6f16a6d39ba160cf9321d737ed7611fc1afccf65d9232fa2fdf",
+        "packages/agent-runtime/src/__tests__/spawn-agents-message-history.test.ts": "2bff4f4b05ee02a2df4604c3c4e843f862157b9288e77c3b6d6acc09a4de3bcf",
+        "packages/agent-runtime/src/__tests__/spawn-agents-permissions.test.ts": "8fdb2fb2a7f6cfce3fc2a23193b2553428248fc2d7e4981a91728927a58abffa",
+        "packages/agent-runtime/src/__tests__/spawn-process-supervision.test.ts": "6fd72619ffdbdfea524e401cf1afb578e443bb390ade1e6421db5d560bbc09d9",
+        "packages/agent-runtime/src/__tests__/spawn-settle-fault-injection.test.ts": "3cc6af945a0cec58c6a4245e9f3741f78c469e6b473cc4569cf1b6298f65877c",
+        "packages/agent-runtime/src/__tests__/subagent-streaming.test.ts": "366d0785d9527024e19972d572527310e3607b9c3fc437e912d3803ee824bd61",
+        "packages/agent-runtime/src/__tests__/tool-validation-error.test.ts": "6738400f6aebbe7f03755e2df3340c3b670d40ede4d906b66855bd469fc45baf",
+        "packages/agent-runtime/src/mcp.ts": "2ec70b2acb04f4653221c41bab61499a7065da087b306ee2e4fbb4b54bf5bb1c",
+        "packages/agent-runtime/src/run-agent-step.ts": "e127c93b4486c5a42e18cfcd348fac6b4dddd690279275e1ec1cf4b78aa0a3b2",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "ed800416219d1be020e0202ab51536f4e8af37b52801a714991e32cd0370aee9",
+        "packages/agent-runtime/src/supervision/__tests__/bridge.test.ts": "9d75eeb1d3bf88ad4419203d1c660efeb9ed8ed0257a490925e8e780f75e911e",
+        "packages/agent-runtime/src/supervision/__tests__/child-entry.test.ts": "dc4d6ddd1a5534711e0d103af0b119964e49ec07b1348ac3efc64e0d38b794a4",
+        "packages/agent-runtime/src/supervision/parent-bridge-server.ts": "4096070bea8d4d9c6c53ad93228dc27d57ec8e47801f8cb05d9e932a5cbaac30",
+        "packages/agent-runtime/src/supervision/supervised-spawn.ts": "50873c7053e5554bdd793641c91d24dcf0e7c3d67607c2fc28e38e753e063914",
+        "packages/agent-runtime/src/templates/__tests__/agent-registry.test.ts": "4c5b006746836cdd1957aff5d53e583f9917b1bf6fccf29d861b4100d5d64c1e",
+        "packages/agent-runtime/src/templates/agent-registry.ts": "1548265b451c6628524b2d6cde7c8a50753b381b37ba7945e4955e1f3bb2dbd3",
+        "packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-cancel.test.ts": "3eb0db5899f46e4547ba9ebdd14c80f7a327d9a7cc047b069f61db10e4c81b1b",
+        "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts": "3a6d4967bda81c26e47cbdcdd1ebcfce86dc4396a22aed678099909a1870c005",
+        "packages/agent-runtime/src/tools/prompts.ts": "5364bbc1ccea5b0a2466c2e488a63cd8c50e130c3633e46f7c66ea2d03338fab",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "4abd5d3b3ee3964b99bdf8eba69888059cb1998928564b3aebd768e9ced62b9b",
+        "scripts/__tests__/ci-workflow.test.ts": "222a20ae8b3deef4ce2d8c753d247da7a48dedc600def2113715ae63752b7ee7",
+        "scripts/__tests__/provenance-change-guard.test.ts": "2a04b075f0414a5f4ea87df736c95e8792f86efd24e268dff974c1a3361d2025",
+        "scripts/dependency-provenance.json": "7e8305700425e6b5e3006e0a4b8417169d9d6c4e6f036b56609faa9641dd3de4",
+        "scripts/provenance-change-guard.ts": "badc1f654dad7ef62ec989a3ab5574809636cfbb59a6459ad481ab2db5bf7ab3",
+        "sdk/package.json": "a4dcb2194937c7108329d6ca2db3de4f1369a8ea8b5debfa9174d79fc08c4dd6",
+        "sdk/scripts/build.ts": "215cafb2d1ab78c098808dbf3f07dd79bd12d899f382de37be817f082ca7018d",
+        "sdk/scripts/fixtures/custom-tool-consumer.ts": "e3ab16aa1ed405eb67c9b140e7d0026d0ebc73255ff30b63f161c7e305d07df6",
+        "sdk/scripts/verify-public-declarations.ts": "c66c4a360ac2ed930f42f00c9046dcd79758b5faa94c1b128b374ce1395f21cd",
+        "sdk/src/__tests__/custom-tool-dispatch.test.ts": "92bf709b6ebbf7c4dbdd593f94e115056acbdba7cc116bb0507ef961cd2d6e7d",
+        "sdk/src/__tests__/custom-tool-types.test.ts": "bc20f7b74b17d6ce85b59b0c325405c3984d70349256e12fc8ca706f1f8678d3",
+        "sdk/src/__tests__/external-tool-consumers.test.ts": "112179717e7247c9e4d04b31528d5d5ee2bf7457e6a1be2c7a26def71cc8ff70",
+        "sdk/src/__tests__/fixtures/mcp-external-tool-server.mjs": "38278a8ce1f29aa3473ca61f420dd3a71de4b2ada31c4f82297207d23e5304ef",
+        "sdk/src/__tests__/mcp-origin-continuation.test.ts": "b5bcd393cf9960c976d2ecd3077ae3b95b08d1f94b76fdedf40a8fcf9c353b9a",
+        "sdk/src/__tests__/mcp-server.test.ts": "14072124d8010a3995148f16011c6633c5e93fa130711cedb936a6864d1ad4d5",
+        "sdk/src/__tests__/run-mcp-tool-filter.test.ts": "9e0012a1366e0687e220b52f2c4d05474c4374065bf52141a08b242d6eaaa349",
+        "sdk/src/custom-tool.ts": "3ebb3190fc42d9c8e044c5fa5a6cb95a225195420c7a33c7d723174a0f27bd1b",
+        "sdk/src/impl/agent-runtime.ts": "b774d1fff245e01555c63956fe5519862805ccf121776ab22090df330d99bc84",
+        "sdk/src/mcp/server.ts": "bc60c5f045db1f3dd5e5a4d659da876c33b5ab9cccb6ef2149cb266c7ab498e2",
+        "sdk/src/run-state.ts": "a24a11f4e77533bd76cd720bf68b36d2106dbf0eeb155f865c06e2e3fa83edd2",
+        "sdk/src/run.ts": "e36e15725f83cd81a83c7cc4b954c34af208068ff188974d36abc691b9c3249d",
+        "sdk/src/serve/__tests__/event-bridge.test.ts": "88f9dfeedb7cf25f8433f6afb209eb9dcf722fc3fa535d95a7bb8dbdb314b693",
+        "sdk/src/serve/event-bridge.ts": "a8fbddf5a1c387f0ac29ef14ddad35c420eaeb9f9f792a514057bf2b001106fb"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "Current frozen TypeScript source, original complete behavior/command obligations with independently reviewed explicit host/representation adaptations, current exact CI/typecheck/repair evidence.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B28/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_current_review",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b20_linux_driver",
+              "historical Openbuff implementation agents"
+            ],
+            "scope": "Fresh B28 semantic renewal on exact current source scope (82 contracts), all 38 retained command obligations and all 14 original criterion labels; cooperative TypeScript source tier.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/renewal-intake-r1/final-node-renewal-review-r1/B28/implementation-review.json",
+              "sha256": "e6986c4922ede9985613597fe8b7fa3838a3bd9110237f51843c6c240611c6f2"
+            }
+          }
+        ],
+        "requiredCommandCount": 38
+      },
+      "risks": [
+        "Observed cooperative TypeScript behavior with explicitly reviewed injected host setup and original assertion-preserving adapters; no native containment or external-writer exclusion claim.",
+        "Shared current CI observations retain original discovery/rosters and skip counts; repeated slots are not extra executions.",
+        "Historical acceptance is used to recover obligations and key rosters, with fresh original assertion executions and inspected current sources supplying renewal credit.",
+        "No installed/native, live-provider, billing, external-writer fencing or empirical capability improvement is asserted by this renewal."
+      ],
+      "acceptedAt": "2026-11-11T23:58:13.026336+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B28/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "cf62cedc29070da4056bda76202f15669dc03691d4900095cd37ef00e05376d8"
+      }
+    },
+    {
+      "nodeId": "B29",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B15",
+        "B19",
+        "B28"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B30",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {
+        "bun.lock": "0671009aeff3a7a04044da7d78035ddb795a065c8b3bafb813df6f034bf4e567",
+        "common/package.json": "1d91d39d907a30c9c3a760efd38d6594a3e9a37ed2b69481d07ef6108c7b40d1",
+        "common/src/types/run-outcome.ts": "0d591006c34d116747a291249fcf9ba8170de214887a36fdef2c996512427054",
+        "common/src/util/promise.ts": "827dfea95828d72c186f56d6ef26da8e7a5e2a9813fe1a2b345bc0f24b9cb2d2",
+        "common/tsconfig.json": "b98a47dc4d009f4aeddec1b2a651634b2a2442a0f0826fa4a32652962183aa20",
+        "evals/buffbench/__tests__/agent-runner.test.ts": "9b8df16255ccd4879228c046fa48bfd2798d7459c98602b4cc4f77bda2097054",
+        "evals/buffbench/__tests__/evaluation-artifacts.test.ts": "7238cacf2c8db8ea8a216fc7311d7cf9f14349bf56075f4da73be6483b064202",
+        "evals/buffbench/__tests__/isolated-sdk-client.test.ts": "2b74563566a0d06292874b8452dde17f739c7637e75fa067adc7cb0af4d6b5f2",
+        "evals/buffbench/__tests__/proposals.test.ts": "bffdd93f1a979761163760b2bd71396f8b57cde0fc29106ed3844b41756b4e9a",
+        "evals/buffbench/__tests__/run-buffbench.test.ts": "5034b02f85ebd1e575a1c575cf69ba892eb918e06b15615ebd686cd08b1551a6",
+        "evals/buffbench/__tests__/statistics.test.ts": "18c9a791107aea8c072243505bc8d7adb4104e8b12bd18c58d8a1aab862237e8",
+        "evals/buffbench/agent-runner.ts": "28245646993c09e59fd7254e30ff99270535953ff623660cf4ca3dfac0b26228",
+        "evals/buffbench/evaluation-artifacts.ts": "938a83d24a62b256c83b807f820b5ca034d67919d6cb308e35417c250e5ae3b1",
+        "evals/buffbench/evaluation-environment.ts": "c708d689465bb853e5c806452efe13e52d4647f2671802dadb45a45d7c9082cf",
+        "evals/buffbench/evaluation-model-attempts.ts": "450f5cfff96c3d5102ec5d3b242a051216a9b70aca464626fcb82897248f4f79",
+        "evals/buffbench/isolated-sdk-client.ts": "5d342c5e01987e047319b041f4f881a1ed40b7cf2c6ee26df32d4c80172fec89",
+        "evals/buffbench/isolated-sdk-worker.ts": "185f58d9f7a59ce9776586a07a6cd83bb66b6d322ddf82d9bf4359341656b15f",
+        "evals/buffbench/judge.ts": "f2de569ba8d5b06af0e6e49febe122d3b704c7ce7198a98dcf61bf764445dddb",
+        "evals/buffbench/lessons-extractor.ts": "c3a61383df248aa97a53ff61a7d304b5b98c2f5a32b71f87e6afc4545f6e3c16",
+        "evals/buffbench/meta-analyzer.ts": "7207d97a1743f3ae4fe836c80baa61376e51183a10cfbe305475d9b202377a8a",
+        "evals/buffbench/proposals.ts": "6bb090fa498d4cda5a373b17ec3b29a7feb3c11c6ddbdf2d15a7e05b30b1bf0a",
+        "evals/buffbench/run-buffbench.ts": "02a6b88f1a0bd2dedfbd0697142ffbad3531f72a96ab32a8e5dc681bc870edc3",
+        "evals/buffbench/runners/codebuff.ts": "29dafb0e1de91426c633f782030116c9c260052ef32b3ddffd9d0967992a4f8b",
+        "evals/buffbench/runners/runner.ts": "6ce3d563c581180a7417cb73aef2124c0f55fab7d9a5bf05b15f8e25f0aee6a2",
+        "evals/buffbench/statistics.ts": "88405ca40b68dcb496b5a6bfeea5350fdf713bfd86c0a46aabdfac7009781210",
+        "evals/buffbench/trace-analyzer.ts": "a6e02367c43f21f7ee18fe2186c3e1eece2a3dd99af83d82ecb27fbba485adaf",
+        "evals/buffbench/types.ts": "4ff716bca900f1c66416a16bed6dec192fb81f1745db13e1982adb64cc63efa6",
+        "evals/package.json": "098a91603af07e1a23322a576ef0b355c674dc8e29d8c45960a44594704cc5f5",
+        "evals/subagents/test-repo-utils.ts": "45a10dffcded4d7fd4e6eb9e2376fad054732811e07ab85676035a1068d9f8a6",
+        "evals/tsconfig.json": "a2ed752ea995d7c86c22165a2d6e69cc2e0748abff95401cdb20032443a9b75a",
+        "package.json": "101b258e97f09fe4c93edc7265fae3a51c5f11663935136eba0735763751054b",
+        "packages/agent-runtime/package.json": "83c372831ef34d63494b2298ce722a22fb8b18bad2fef632866af6f4b372a24f",
+        "packages/agent-runtime/src/run-programmatic-step.ts": "ed800416219d1be020e0202ab51536f4e8af37b52801a714991e32cd0370aee9",
+        "packages/agent-runtime/src/tools/tool-executor.ts": "4abd5d3b3ee3964b99bdf8eba69888059cb1998928564b3aebd768e9ced62b9b",
+        "packages/agent-runtime/tsconfig.json": "2691c405941a3001cc26fa63e558623d509a3836876994ab4dab785f708789d4",
+        "packages/internal/src/openai-compatible/chat/openai-compatible-chat-language-model.ts": "58fbe85769982c8be114fa457a509df15477e5ebcf119101f4997d24d26fabaf",
+        "packages/internal/src/openai-compatible/openai-compatible-error.ts": "a696f1cfeafb07fa10dea86e4b41fb11d15e87d484d0445668a2195233f3daca",
+        "scripts/__tests__/compare-buffbench-runs.test.ts": "db623b0771a918a5157e0c71e210994aa5aae4c14ab3e2505b87977f91561acd",
+        "scripts/body-fixtures/evaluator-isolation.ts": "267f0d4c8f8734182bbd38eff146805e72320543b0e78797ba4c96a3abaec377",
+        "scripts/compare-buffbench-runs.ts": "e069312c7ef8f6f090f22c6833376ece5442028f0eba384ad7dbda3d1d1ef561",
+        "sdk/package.json": "a4dcb2194937c7108329d6ca2db3de4f1369a8ea8b5debfa9174d79fc08c4dd6",
+        "sdk/src/__tests__/provider-contract-regressions.test.ts": "904140141f77414577f46b498c71c64dca1c83dfd1a44eb1d559b7c23fde323b",
+        "sdk/src/__tests__/terminal-environment.test.ts": "e1e7e0577219834d290ed3d0e99a4ec3983baea276c67d1b647bf5f912dd7d82",
+        "sdk/src/client.ts": "110a6b94617f4023294aa871efc9820bff594685a458cd9cea6e9e5b806068a7",
+        "sdk/src/error-utils.ts": "11565db8d9f430fcbb617f040a7807beafac0e521dd2ec9341bf35a371743b29",
+        "sdk/src/impl/failover.ts": "62930f709bc5be8975375b50ec1e200eec7dd46ce4df5482da4c46ba06b2e793",
+        "sdk/src/impl/llm.ts": "25e4a1a73977f13edcbd45e3aa15e16d76bc1917105606ef6a5507cf6a7692cc",
+        "sdk/src/impl/model-provider.ts": "58b159d7be96e17fd08ab2a5f90ac1195dcfb2c9bdc0ec935fc9336db082c546",
+        "sdk/src/index.ts": "f56631bfb077d94cf3735efd9430c22f0db35719493380923dbc00f9decd24e1",
+        "sdk/src/provider-config.ts": "439ac26094af9de40f652915e80f46bc5af81f8a9441b11ad90b3eff0a022cb5",
+        "sdk/src/retry-config.ts": "fab975fea396f8333ca7ed9787515dfa858a445056409daffee5ea0f6f50c91b",
+        "sdk/src/run-state.ts": "a24a11f4e77533bd76cd720bf68b36d2106dbf0eeb155f865c06e2e3fa83edd2",
+        "sdk/src/run.ts": "e36e15725f83cd81a83c7cc4b954c34af208068ff188974d36abc691b9c3249d",
+        "sdk/src/serve/bridge.ts": "7e77aac98fde3882aa471dfa0e897acdc3de8098a0f6eebc7286f9f8ccc2560d",
+        "sdk/src/serve/event-bridge.ts": "a8fbddf5a1c387f0ac29ef14ddad35c420eaeb9f9f792a514057bf2b001106fb",
+        "sdk/src/services/harness-enforcement.ts": "9e20db9c7912e7866947ed0fbdce539c285eb8d6f9e20fa95f58355a13f929ed",
+        "sdk/src/tools/run-terminal-command.ts": "133b84ece998b046cfbfef7ba357b8caa21ce730d6d4a786cb000ae09e654508",
+        "sdk/tsconfig.json": "b383ab694863a1e6601b4461a26c8b6f0bddb432c07e09efb2fce0af49c2de21",
+        "test/fixtures/body/evaluation-artifacts.ts": "0548f2415238ee3f76d5025501bb7f1b77f329426ce86d5750a90a3e27308056",
+        "tsconfig.base.json": "e17e8954e5c6d836cf4f43443aef2e99566da3b40b74953053749764792b874d"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "Current frozen TypeScript source, original complete behavior/command obligations with independently reviewed explicit host/representation adaptations, current exact CI/typecheck/repair evidence.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B30/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_current_review",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b20_linux_driver",
+              "historical Openbuff implementation agents"
+            ],
+            "scope": "Fresh B30 semantic renewal on exact current source scope (60 contracts), all 14 retained command obligations and all 4 original criterion labels; cooperative TypeScript source tier.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/renewal-intake-r1/final-node-renewal-review-r1/B30/implementation-review.json",
+              "sha256": "d42aac55088596541bf87ab7ee2171f555dd6dbf45275dd820819ca71e7e9c44"
+            }
+          }
+        ],
+        "requiredCommandCount": 14
+      },
+      "risks": [
+        "Observed cooperative TypeScript behavior with explicitly reviewed injected host setup and original assertion-preserving adapters; no native containment or external-writer exclusion claim.",
+        "Shared current CI observations retain original discovery/rosters and skip counts; repeated slots are not extra executions.",
+        "Historical acceptance is used to recover obligations and key rosters, with fresh original assertion executions and inspected current sources supplying renewal credit.",
+        "No installed/native, live-provider, billing, external-writer fencing or empirical capability improvement is asserted by this renewal."
+      ],
+      "acceptedAt": "2026-11-11T23:58:13.177863+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B30/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "80cd4ec83a84891be0ab914d07a6155cc8109753e401ca6d9251e152bb0b9c2b"
+      }
+    },
+    {
+      "nodeId": "B31",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B02",
+        "B09",
+        "B12",
+        "B13",
+        "B14",
+        "B27",
+        "B30"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B32",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B33",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B03",
+        "B05",
+        "B19",
+        "B20",
+        "B28"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B34",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B06",
+        "B07",
+        "B16",
+        "B17",
+        "B22",
+        "B27"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B35",
+      "parentCardId": null,
+      "status": "pending",
+      "prerequisites": [
+        "B03",
+        "B05",
+        "B19",
+        "B20"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "B36",
+      "parentCardId": null,
+      "status": "accepted",
+      "prerequisites": [],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {
+        "cli/src/utils/output-outcome.ts": "2d2238fe9b16daff45a6fce0dea09666adba0ee41a7831440afc26acc29bdabd",
+        "common/src/tools/params/tool/run-file-change-hooks.ts": "5a84898741718a712695580e556a0ab99e15ad3f5785f0009c8904bb6a12ac55",
+        "scripts/body-fixtures/diagnostic-outcomes.ts": "0f7716a61985910a93ef75942de7c61504e02e05c0bde64084589d9b6bc1424b",
+        "sdk/src/__tests__/diagnostic-delta.test.ts": "5537d704c5d742bc90ffeec48779ca2f660d0923daacd7b865c6282fdab3bc44",
+        "sdk/src/__tests__/file-change-hooks.test.ts": "b723f742968beb0acdae4949f20b815414fa8b3a90793b2ed5326b18fc7faeef",
+        "sdk/src/__tests__/language-diagnostics.test.ts": "31dd6282a75b2e6c4caaa47f7fe2be7393bc85c6694335e706da45eadcf44dc2",
+        "sdk/src/__tests__/node-filesystem.test.ts": "5cbc03e60eb9a04f8e93360f15a9c3e31408cc52e95ea5ca38ad156eed228665",
+        "sdk/src/__tests__/run-mutation-dispatch.test.ts": "5774cb9385cb226daa75c187e22d7bdf8f28acdd0ff4381c47dc606048f0fe1f",
+        "sdk/src/run.ts": "e36e15725f83cd81a83c7cc4b954c34af208068ff188974d36abc691b9c3249d",
+        "sdk/src/services/diagnostic-baseline.ts": "a4b1a4c3447dfb315b0fae4ebcd2eb12140619a41ce1aa9685d9db82a1c49015",
+        "sdk/src/services/diagnostic-delta-runner.ts": "b1fdf476a776b7685d8f0edd1df47820952d62ade459521d90da00d2a37b3686",
+        "sdk/src/services/diagnostic-delta.ts": "1aeb2fa1b0b3f911bb6053ec9b2e6f89958fc95cb6bdda4a48a4b0aea54f3794",
+        "sdk/src/tools/file-change-hooks.ts": "17f651276f0ec71405c62649a21dda9a36fc6468e3ea2b41ef9a8ca0d9427a20",
+        "sdk/src/tools/language-diagnostics.ts": "18f40cbf0180b6fbc97b54a67d572be37bceaf5e8faae4fb44182d5f3204b461",
+        "sdk/src/tools/node-filesystem.ts": "eb73c817b4f6ae536649e2e567a7293d0b680d3994a574940e98fe4b4734701e"
+      },
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": "f5aba489df28311b09fa53babb99f7cca94a0865",
+      "coverageTier": "Current frozen TypeScript source, original complete behavior/command obligations with independently reviewed explicit host/representation adaptations, current exact CI/typecheck/repair evidence.",
+      "evidenceManifest": "docs/execution/body-roadmap/evidence/B36/accepted/20261111T235810377611Z-manifest.json",
+      "verification": {
+        "independentReviews": [
+          {
+            "reviewer": "/root/b20_current_review",
+            "implementationOwners": [
+              "/root",
+              "/root/b20_consumer_regressions",
+              "/root/b20_linux_driver",
+              "historical Openbuff implementation agents"
+            ],
+            "scope": "Fresh B36 semantic renewal on exact current source scope (15 contracts), all 9 retained command obligations and all 1 original criterion labels; cooperative TypeScript source tier.",
+            "decision": "approve",
+            "evidence": {
+              "path": "docs/execution/body-roadmap/evidence/B20/continuation-20261111/renewal-intake-r1/final-node-renewal-review-r1/B36/implementation-review.json",
+              "sha256": "826d03d2beb39895547e50b9e4bb88e341a6b868fcc4aab9717dcb42c060be7c"
+            }
+          }
+        ],
+        "requiredCommandCount": 9
+      },
+      "risks": [
+        "Observed cooperative TypeScript behavior with explicitly reviewed injected host setup and original assertion-preserving adapters; no native containment or external-writer exclusion claim.",
+        "Shared current CI observations retain original discovery/rosters and skip counts; repeated slots are not extra executions.",
+        "Historical acceptance is used to recover obligations and key rosters, with fresh original assertion executions and inspected current sources supplying renewal credit.",
+        "No installed/native, live-provider, billing, external-writer fencing or empirical capability improvement is asserted by this renewal."
+      ],
+      "acceptedAt": "2026-11-11T23:58:13.277981+00:00",
+      "acceptanceReceipt": {
+        "path": "docs/execution/body-roadmap/evidence/B36/accepted/20261111T235810377611Z-acceptance.json",
+        "sha256": "a6861bd8569137ae6dc8cf6957ddd3c3eff60dad131f1a5987876ab728a0e269"
+      }
+    },
+    {
+      "nodeId": "M22-CORE",
+      "parentCardId": "B22",
+      "status": "pending",
+      "prerequisites": [
+        "B04",
+        "B15",
+        "B21"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "M22-TXN",
+      "parentCardId": "B22",
+      "status": "pending",
+      "prerequisites": [
+        "M22-CORE",
+        "B05",
+        "B07"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    },
+    {
+      "nodeId": "M22-CHILD",
+      "parentCardId": "B22",
+      "status": "pending",
+      "prerequisites": [
+        "M22-CORE",
+        "M22-TXN",
+        "B16"
+      ],
+      "acceptedPrerequisites": [],
+      "sourceContractHashes": {},
+      "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
+      "backend": "ts",
+      "epoch": null,
+      "coverageTier": null,
+      "evidenceManifest": null,
+      "verification": null,
+      "risks": []
+    }
+  ],
+  "updatedAt": "2026-11-11T23:58:13.398721+00:00"
+}

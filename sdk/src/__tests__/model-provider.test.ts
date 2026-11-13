@@ -178,6 +178,37 @@ describe('model-provider', () => {
       ).toBe(false)
     })
 
+    test('validates and flows maxMissingOutputRetries through the schema transform', () => {
+      // A positive integer cap parses and flows through the transform.
+      const parsed = providerConfigFileSchema.parse({
+        maxMissingOutputRetries: 3,
+      })
+      expect(parsed.maxMissingOutputRetries).toBe(3)
+
+      // Zero is not a positive integer: unset means unlimited, so a
+      // zero "cap" is ambiguous and must be rejected.
+      expect(
+        providerConfigFileSchema.safeParse({ maxMissingOutputRetries: 0 })
+          .success,
+      ).toBe(false)
+      // Negative values can never mean "cap the retries".
+      expect(
+        providerConfigFileSchema.safeParse({ maxMissingOutputRetries: -1 })
+          .success,
+      ).toBe(false)
+      // Fractional retry counts are not meaningful.
+      expect(
+        providerConfigFileSchema.safeParse({ maxMissingOutputRetries: 2.5 })
+          .success,
+      ).toBe(false)
+
+      // Unset stays absent after the transform: consumers see unlimited
+      // retries, never an implicit cap (same contract as maxAgentSteps).
+      expect(
+        providerConfigFileSchema.parse({}).maxMissingOutputRetries,
+      ).toBeUndefined()
+    })
+
     test('recommends only empirically measured models for the requested coding context', () => {
       const parsed = providerConfigFileSchema.parse({
         providers: {
@@ -531,7 +562,7 @@ describe('model-provider', () => {
     })
 
     test('strips stop sequences for providers that opt out', () => {
-      const transformed = applyConfiguredProviderRequestCompatibility(
+      const transformedOpenAI = applyConfiguredProviderRequestCompatibility(
         {
           model: 'custom-coder',
           messages: [{ role: 'user', content: 'hello' }],
@@ -545,7 +576,23 @@ describe('model-provider', () => {
         },
       )
 
-      expect(transformed.stop).toBeUndefined()
+      expect(transformedOpenAI.stop).toBeUndefined()
+
+      const transformedAnthropic = applyConfiguredProviderRequestCompatibility(
+        {
+          model: 'custom-coder',
+          messages: [{ role: 'user', content: 'hello' }],
+          stop_sequences: ['"cb_easp"'],
+        },
+        {
+          providerModel: 'custom-coder',
+          compatibility: {
+            supportsStopSequences: false,
+          },
+        },
+      )
+
+      expect(transformedAnthropic.stop_sequences).toBeUndefined()
     })
 
     test('keeps stop sequences when providers opt in', () => {
@@ -2084,6 +2131,7 @@ describe('model-provider', () => {
           agents: { thinker: 'custom/thinker' },
           failoverModels: ['custom/backup-a', 'custom/backup-b'],
           maxAgentSteps: 42,
+          maxMissingOutputRetries: 3,
           providers: {
             custom: {
               type: 'openai-compatible',
@@ -2118,6 +2166,7 @@ describe('model-provider', () => {
         'custom/backup-b',
       ])
       expect(mergedConfig.maxAgentSteps).toBe(42)
+      expect(mergedConfig.maxMissingOutputRetries).toBe(3)
     })
 
     test('updates fragmented provider config without flattening the root', () => {
@@ -3095,8 +3144,14 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
 
     // Fail-closed: the credential-exfiltration vector is removed.
     expect(loaded.config.providers.ancestor).toBeUndefined()
-    // Strip only the provider; the rest of the untrusted fragment still merges.
-    expect(loaded.config.defaultModel).toBe('ancestor/ancestor-model')
+    // N02: the untrusted fragment's route to a provider the user did not
+    // configure is withheld too (it previously merged).
+    expect(loaded.config.defaultModel).toBeUndefined()
+    expect(
+      loaded.projectTrust?.gated.some(
+        (item) => item.kind === 'route' && item.filePath === ancestorConfigFile,
+      ),
+    ).toBe(true)
     expect(
       loaded.diagnostics?.some(
         (diagnostic) =>
@@ -3111,6 +3166,9 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
   test('keeps apiKeyEnv providers from ancestor configs when OPENBUFF_TRUST_ANCESTOR_CONFIG=1', () => {
     const { ancestorConfigFile } = writeAncestorConfig()
     process.env.OPENBUFF_TRUST_ANCESTOR_CONFIG = '1'
+    // N02: ancestor configs are project scope, so the project must also be
+    // trusted for its credentialed providers to load.
+    process.env.OPENBUFF_TRUST_PROJECT_CONFIG = '1'
 
     const loaded = loadProviderConfigSync()
 
@@ -3125,7 +3183,10 @@ describe('ancestor config trust gate (M1-T3, fail-closed apiKeyEnv strip)', () =
     ).toBe(false)
   })
 
-  test('never strips apiKeyEnv providers from the project config inside cwd', () => {
+  test('never strips apiKeyEnv providers from a trusted project config inside cwd', () => {
+    // N02: untrusted, the project provider is withheld by the project trust
+    // gate (see project-trust-gate.test.ts); trusted, M1-T3 never strips it.
+    process.env.OPENBUFF_TRUST_PROJECT_CONFIG = '1'
     fs.writeFileSync(
       path.join(process.cwd(), 'openbuff.json'),
       JSON.stringify({
@@ -3251,6 +3312,127 @@ describe('readableRoots provenance (ER-1)', () => {
     expect(
       loaded.readableRootsSources?.[path.resolve('/opt/project-notes')],
     ).toBe(projectConfigFile)
+  })
+})
+
+describe('sandbox block (opt-in policy)', () => {
+  const tempDirs: string[] = []
+
+  const makeTempDir = (prefix: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+    tempDirs.push(dir)
+    return dir
+  }
+
+  beforeEach(() => {
+    resetEnv()
+    delete process.env[PROVIDER_CONFIG_ENV_VAR]
+    clearProviderConfigCacheForTest()
+  })
+
+  afterEach(() => {
+    process.chdir(originalCwd)
+    resetEnv()
+    clearProviderConfigCacheForTest()
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('parsing an empty config leaves sandbox undefined (absent-vs-present contract)', () => {
+    // The per-fragment merge distinguishes a fragment that omits the block
+    // (inherits the base block wholesale) from one that sets it (override
+    // wins), so the parsed output must stay ABSENT, never defaulted.
+    expect(providerConfigFileSchema.parse({}).sandbox).toBeUndefined()
+  })
+
+  test('parsing a sandbox block passes it through and defaults allowPaths to []', () => {
+    // allowPaths defaults INSIDE the block; the block itself stays optional.
+    expect(
+      providerConfigFileSchema.parse({ sandbox: { mode: 'project' } })
+        .sandbox,
+    ).toEqual({ mode: 'project', allowPaths: [] })
+
+    expect(
+      providerConfigFileSchema.parse({
+        sandbox: { mode: 'unrestricted', allowPaths: ['/opt/scratch'] },
+      }).sandbox,
+    ).toEqual({ mode: 'unrestricted', allowPaths: ['/opt/scratch'] })
+  })
+
+  test('records allowPaths provenance for absolute entries only', () => {
+    // Mirrors the ER-1 readableRoots provenance tests: a config-dir file
+    // declares the block so the trust gate can attribute each allow path.
+    const configDir = makeTempDir('openbuff-config-dir-')
+    process.env.OPENBUFF_CONFIG_DIR = configDir
+    const configFile = path.join(configDir, 'openbuff.json')
+    fs.writeFileSync(
+      configFile,
+      JSON.stringify({
+        sandbox: {
+          mode: 'project',
+          allowPaths: ['/opt/global-scratch', 'relative/scratch'],
+        },
+      }),
+    )
+    process.chdir(makeTempDir('openbuff-project-'))
+
+    const loaded = loadProviderConfigSync()
+
+    expect(loaded.config.sandbox).toEqual({
+      mode: 'project',
+      allowPaths: ['/opt/global-scratch', 'relative/scratch'],
+    })
+    // Absolute entry -> attributed to the exact declaring file.
+    expect(
+      loaded.sandboxAllowPathsSources?.[path.resolve('/opt/global-scratch')],
+    ).toBe(configFile)
+    // Relative entry -> no provenance record, so the trust gate drops it
+    // (fail closed) rather than anchoring it to a guessed directory.
+    expect(
+      loaded.sandboxAllowPathsSources?.[path.resolve('relative/scratch')],
+    ).toBeUndefined()
+  })
+
+  test('an override fragment with a sandbox block replaces the base; without one it inherits', () => {
+    const tempDir = makeTempDir('openbuff-provider-')
+    const basePath = path.join(tempDir, 'base.json')
+    fs.writeFileSync(
+      basePath,
+      JSON.stringify({
+        sandbox: { mode: 'project', allowPaths: ['/opt/base-scratch'] },
+      }),
+    )
+
+    // The root config's own block is the override; the include is the base.
+    const overridingRoot = path.join(tempDir, 'overriding.json')
+    fs.writeFileSync(
+      overridingRoot,
+      JSON.stringify({
+        include: ['base.json'],
+        sandbox: {
+          mode: 'unrestricted',
+          allowPaths: ['/opt/override-scratch'],
+        },
+      }),
+    )
+    process.env[PROVIDER_CONFIG_ENV_VAR] = overridingRoot
+    expect(loadProviderConfigSync().config.sandbox).toEqual({
+      mode: 'unrestricted',
+      allowPaths: ['/opt/override-scratch'],
+    })
+
+    // A root that omits the block inherits the fragment's block wholesale.
+    const inheritingRoot = path.join(tempDir, 'inheriting.json')
+    fs.writeFileSync(
+      inheritingRoot,
+      JSON.stringify({ include: ['base.json'] }),
+    )
+    process.env[PROVIDER_CONFIG_ENV_VAR] = inheritingRoot
+    expect(loadProviderConfigSync().config.sandbox).toEqual({
+      mode: 'project',
+      allowPaths: ['/opt/base-scratch'],
+    })
   })
 })
 

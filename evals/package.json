@@ -1,39 +1,28 @@
 {
   "name": "@codebuff/evals",
   "version": "1.0.0",
-  "description": "Evaluation scripts for Codebuff",
+  "description": "Evaluation scripts for Openbuff (buffbench and scenario evals)",
   "private": true,
   "type": "module",
-  "exports": {
-    ".": {
-      "bun": "./src/index.ts",
-      "types": "./src/index.ts"
-    }
-  },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
     "test": "bun test",
     "test:memory-retention": "bun test memory-retention/scenario.test.ts",
-    "test:manifold": "bun test manifold.test.ts",
-    "test:pglite": "bun test pglite-demo.test.ts",
-    "test:swe-bench": "bun test swe-bench.test.ts",
-    "test:e2e-cat-app": "bun run e2e-cat-app-script.ts",
-    "gen-repo-eval": "bun run git-evals/gen-repo-eval.ts",
-    "run-single-eval": "bun run git-evals/run-single-eval.ts --eval-file git-evals/eval-manifold.json --commit-sha ebabf7796a92ce8ece8e2452b0f3f896a513ba0e",
-    "run-git-evals": "bun run git-evals/run-git-evals.ts",
-    "run-eval-set": "bun run git-evals/run-eval-set.ts",
+    "gen-repo-eval": "bun run buffbench/gen-repo-eval.ts",
+    "run-single-eval": "bun run buffbench/main-single-eval.ts",
     "run-buffbench": "bun run buffbench/main.ts",
     "main": "bun run buffbench/main.ts",
     "main-openbuff": "bun run buffbench/main-openbuff.ts",
-    "run-buffbench-nightly": "bun run buffbench/main-nightly.ts",
+    "run-buffbench-nightly": "bun run buffbench/main-nightly.ts --subset nightly",
+    "run-buffbench-pr-subset": "bun run buffbench/main-nightly.ts --subset pr",
+    "eval-gate": "bun run buffbench/regression-gate.ts",
     "trigger-buffbench": "bun run scripts/trigger-buffbench.ts",
-    "setup-codebuff-repo": "bun run setup-codebuff-repo.ts",
     "harness:ablation": "bun run buffbench/run-coding-harness-ablation.ts",
     "harness:cross-model": "bun run buffbench/run-cross-model-experiment.ts"
   },
   "sideEffects": false,
   "engines": {
-    "bun": "1.3.11"
+    "bun": "1.4.4"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.0.56",

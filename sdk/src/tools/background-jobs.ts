@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'child_process'
+import { type ChildProcess } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -10,6 +10,19 @@ import {
   jobRegistry,
   type JobOwner,
 } from '@codebuff/common/util/job-registry'
+import {
+  dispatchNodeLaunch,
+  executionRefusal,
+  ExecutionRefusalError,
+  refusalForSignal,
+  trustedNodeSpawn,
+} from '../services/execution-launch'
+import { registerAttachedJob } from './attached-job-lifetime'
+
+import type { AdmittedNodeLaunch, NodeDispatchHandle } from '../services/execution-launch'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
+import type { CleanupResult } from '@codebuff/common/types/contracts/process-scope'
+import type { NativeFinalResult } from '../services/native-exec'
 
 /**
  * Thin ProcessJobAdapter over the shared `jobRegistry` core (M2). The
@@ -53,7 +66,8 @@ export function isProcessTreeAlive(child: Pick<ChildProcess, 'pid'>): boolean {
 }
 
 export function terminateProcessTree(
-  child: Pick<ChildProcess, 'pid' | 'kill'>,
+  child: Pick<ChildProcess, 'pid' | 'kill'> &
+    Partial<Pick<ChildProcess, 'exitCode' | 'signalCode'>>,
   signal: 'SIGTERM' | 'SIGKILL',
 ): boolean {
   if (!child.pid) return false
@@ -66,6 +80,9 @@ export function terminateProcessTree(
       // available (for example, recovered legacy jobs).
     }
   }
+  // The group may still contain descendants after the parent exits. Preserve
+  // that attempt, but do not trust a closed child's kill() return value.
+  if (child.exitCode != null || child.signalCode != null) return false
   try {
     return child.kill(signal)
   } catch {
@@ -77,6 +94,13 @@ export interface BackgroundJob {
   jobId: string
   command: string
   child: ChildProcess
+  /** In-process launch capability/state; never reconstructed from metadata. */
+  nodeLaunch?: NodeDispatchHandle
+  executionContext?: ExecutionAdapterContext
+  processCleanup?: CleanupResult
+  failureReason?: string
+  /** Private finalizer retained with the log owner until physical cleanup. */
+  finalizeCleanup?: (result: CleanupResult) => void
   logFile: string
   metadataFile: string
   /**
@@ -86,6 +110,11 @@ export interface BackgroundJob {
    */
   status: BackgroundJobStatus
   exitCode: number | null
+  executionUsage?: Readonly<{ cpuMicros: number; maxRssKiB: number; scope: string }>
+  executionSignal?: number
+  executionWaitStatusSource?: NativeFinalResult['waitStatusSource']
+  nativeWrapperExitCode?: number
+  nativeWrapperSignal?: number
   startedAt: number
   /** Bytes of the log file already returned by check_job. */
   readOffset: number
@@ -165,6 +194,16 @@ export interface BackgroundJob {
  * lifecycle state and events live in the shared `jobRegistry`.
  */
 const jobs = new Map<string, BackgroundJob>()
+const terminationInProgress = new WeakSet<BackgroundJob>()
+
+function signalLiveJob(job: BackgroundJob, signal: 'SIGTERM' | 'SIGKILL'): boolean {
+  terminationInProgress.add(job)
+  try {
+    return terminateProcessTree(job.child, signal)
+  } finally {
+    terminationInProgress.delete(job)
+  }
+}
 const metadataFilesCreatedByThisProcess = new Set<string>()
 
 /**
@@ -175,7 +214,7 @@ const metadataFilesCreatedByThisProcess = new Set<string>()
  */
 const ORPHANED_JOB_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const MAX_BACKGROUND_LOG_BYTES = 10 * 1024 * 1024
-export const MAX_BACKGROUND_READ_BYTES = 100_000
+export const MAX_BACKGROUND_READ_BYTES = 1_000_000
 /**
  * Max bytes emitJobOutputLines retains in `lineCarry` without seeing a newline
  * before it force-emits the carry as a single event. This bounds carry growth
@@ -379,6 +418,7 @@ function shouldPreserveJobMetadata(metadataFile: string): boolean {
     } catch {
       return true
     }
+    if (metadata.status === 'stopping' || metadata.cleanupPending) return true
     if (metadata.status !== 'running') return false
     if (metadata.processId === null || metadata.processId === undefined) {
       // Be conservative when we cannot verify liveness.
@@ -458,6 +498,8 @@ type BackgroundJobMetadata = {
   settledAt?: number
   owner?: BackgroundJobOwner
   childProcessStartTime?: string
+  failureReason?: string
+  cleanupPending?: boolean
 }
 
 function writeBackgroundJobMetadata(job: BackgroundJob): void {
@@ -473,6 +515,8 @@ function writeBackgroundJobMetadata(job: BackgroundJob): void {
     ...(job.settledAt !== undefined ? { settledAt: job.settledAt } : {}),
     owner: job.owner,
     childProcessStartTime: job.childProcessStartTime,
+    ...(job.failureReason ? { failureReason: job.failureReason } : {}),
+    cleanupPending: job.nodeLaunch ? job.processCleanup?.status !== 'complete' : job.status === 'stopping',
   }
   try {
     safeWriteJobMetadata(job.metadataFile, metadata)
@@ -497,7 +541,7 @@ function settleBackgroundJob(
   // M2-T4 (Fix 3): a pending SIGKILL escalation no longer matters once the job
   // settled (child exit, error, or direct settle) — clear the unref'd timer so
   // a kill never leaks one per attempt.
-  if (job.killEscalationTimer) {
+  if (job.killEscalationTimer && !job.nodeLaunch) {
     clearTimeout(job.killEscalationTimer)
     job.killEscalationTimer = undefined
   }
@@ -588,6 +632,8 @@ export function pruneSettledJobs(now: number = Date.now()): void {
   for (const [jobId, record] of jobs) {
     if (
       record.settledAt !== undefined &&
+      (!record.nodeLaunch || record.processCleanup?.status === 'complete') &&
+      record.status !== 'stopping' &&
       now - record.settledAt > SETTLED_JOB_TTL_MS
     ) {
       jobs.delete(jobId)
@@ -673,17 +719,29 @@ function isUsableRecoveredLogFile(logFile: string): boolean {
  */
 export function startBackgroundJob(params: {
   command: string
-  shell: string
-  shellArgs: string[]
-  cwd: string
-  env: NodeJS.ProcessEnv
+  /** Legacy descriptive inputs carry no launch authority. */
+  shell?: string
+  shellArgs?: readonly string[]
+  cwd?: string
+  env?: NodeJS.ProcessEnv
+  admittedLaunch?: AdmittedNodeLaunch
+  executionContext?: ExecutionAdapterContext
   owner?: BackgroundJob['owner']
   /** Project root for settlement dirty-delta attribution (in-memory only). */
   projectRoot?: string
   /** Pre-start dirty paths snapshot; omitted when git unavailable. */
   dirtyBeforePaths?: string[]
+  /**
+   * Attached jobs (`detach: false`) end with this process: they are
+   * terminated by process group on normal exit, SIGINT, SIGTERM and SIGHUP.
+   * Transferred jobs omit this and keep their receiver lifetime.
+   */
+  attached?: boolean
 }): BackgroundJob {
-  const { command, shell, shellArgs, cwd, env } = params
+  const { command } = params
+  if (!params.admittedLaunch) {
+    throw new ExecutionRefusalError(executionRefusal('unavailable', 'Admitted background execution is unavailable'))
+  }
   const owner = params.owner ?? UNKNOWN_JOB_OWNER
   sweepOrphanedJobFiles()
   // Bound the Map at every spawn to the jobs settled within the TTL window,
@@ -708,17 +766,27 @@ export function startBackgroundJob(params: {
   // foreign/pre-existing file this process must never delete.
   let logFileCreatedByThisSpawn = false
   let child: ChildProcess
+  let nodeLaunch: NodeDispatchHandle
+  let stdoutSeenBytes = 0
+  let stderrSeenBytes = 0
+  let retainedBytes = 0
   try {
     rejectIfSymlink(logFile)
     rejectIfSymlink(metadataFile)
     outFd = safeCreateJobLogFile(logFile)
     logFileCreatedByThisSpawn = true
-    child = spawn(shell, [...shellArgs, command], {
-      cwd,
-      env,
-      stdio: ['ignore', outFd, outFd],
-      detached: os.platform() !== 'win32',
-    })
+    const spawn = trustedNodeSpawn(params.executionContext)
+    const dispatched = dispatchNodeLaunch(params.admittedLaunch, (input) => spawn(input.executable, input.argv, {
+      cwd: input.cwd, env: input.env, signal: input.resourceSignal,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: input.adapterOptions.detached === true,
+      shell: false, windowsHide: false,
+    }), { output: () => ({ stdoutSeenBytes, stderrSeenBytes,
+      retainedBytes, droppedBytes: stdoutSeenBytes + stderrSeenBytes - retainedBytes,
+      complete: retainedBytes === stdoutSeenBytes + stderrSeenBytes }) })
+    if (!dispatched.ok) throw new ExecutionRefusalError(dispatched)
+    nodeLaunch = dispatched.value
+    child = nodeLaunch.child
   } catch (error) {
     // If safeCreateJobLogFile succeeded but spawn threw, the already-opened
     // log fd would otherwise leak. Close it best-effort before folding the
@@ -755,6 +823,8 @@ export function startBackgroundJob(params: {
     jobId,
     command,
     child,
+    nodeLaunch,
+    executionContext: params.executionContext,
     logFile,
     metadataFile,
     status: 'running',
@@ -779,6 +849,45 @@ export function startBackgroundJob(params: {
   jobRegistry.start(jobId)
 
   let quotaExceeded = false
+  let resourceDeadlineExpired = false
+  let processError: string | undefined
+  let errorTerminationRequested = false
+  let spawnObserved = false
+  child.once('spawn', () => { spawnObserved = true })
+  const resourceSignal = nodeLaunch.input.resourceSignal
+  const capture = (name: 'stdout' | 'stderr', chunk: Buffer | string) => {
+    const bytes = typeof chunk === 'string' ? Buffer.from(chunk) : chunk
+    if (name === 'stdout') stdoutSeenBytes += bytes.length
+    else stderrSeenBytes += bytes.length
+    const keep = Math.min(bytes.length, MAX_BACKGROUND_LOG_BYTES - retainedBytes)
+    if (keep > 0) {
+      try { retainedBytes += fs.writeSync(outFd!, bytes, 0, keep) }
+      catch (error) { processError ??= `Background log write failed: ${String(error)}` }
+    }
+    if (!quotaExceeded && stdoutSeenBytes + stderrSeenBytes > MAX_BACKGROUND_LOG_BYTES) {
+      quotaExceeded = true
+      job.failureReason = `background job exceeded the ${MAX_BACKGROUND_LOG_BYTES}-byte log quota`
+      errorTerminationRequested = true
+      void nodeLaunch.scope.requestStop('output-limit')
+      if (job.status === 'running') {
+        jobRegistry.emit(jobId, { type: 'lifecycle', state: 'stopping' })
+        job.status = 'stopping'
+      }
+      writeBackgroundJobMetadata(job)
+    }
+    if (processError && !errorTerminationRequested) {
+      errorTerminationRequested = true
+      job.failureReason = processError
+      void nodeLaunch.scope.requestStop('adapter-error')
+    }
+  }
+  child.stdout?.on('data', chunk => capture('stdout', chunk))
+  child.stderr?.on('data', chunk => capture('stderr', chunk))
+  const onResourceAbort = () => {
+    resourceDeadlineExpired ||= refusalForSignal(resourceSignal).reason === 'deadline-exhausted'
+    errorTerminationRequested = true
+    killBackgroundJob(jobId, resourceDeadlineExpired ? 'SIGKILL' : 'SIGTERM')
+  }
   const logQuotaTimer = setInterval(() => {
     try {
       // Job-owned drainer: drain newly-written log bytes into the registry as
@@ -792,16 +901,10 @@ export function startBackgroundJob(params: {
       if (size <= MAX_BACKGROUND_LOG_BYTES) return
       if (!quotaExceeded) {
         quotaExceeded = true
-        // Quota termination is an error: emit the terminal lifecycle now so
-        // the registry settles even if the child hangs on SIGTERM. The later
-        // exit event is ignored by the registry (terminal states absorb).
-        settleBackgroundJob(
-          job,
-          'error',
-          job.exitCode,
-          `background job exceeded the ${MAX_BACKGROUND_LOG_BYTES}-byte log quota`,
-        )
-        terminateProcessTree(child, 'SIGTERM')
+        // Quota failure is recorded on exit; until then retain the job and
+        // its escalation timer so a TERM-resistant leader remains killable.
+        errorTerminationRequested = true
+        killBackgroundJob(jobId, 'SIGTERM')
       }
       // Keep trimming while the process is unwinding so a chatty child cannot
       // regrow a sparse/oversized log between SIGTERM and exit.
@@ -820,23 +923,63 @@ export function startBackgroundJob(params: {
 
   const closeLog = () => {
     clearInterval(logQuotaTimer)
+    resourceSignal.removeEventListener('abort', onResourceAbort)
     try {
       fs.closeSync(outFd)
     } catch {
       // already closed
     }
   }
+  let exitOutcome: { status: BackgroundJobStatus; code: number | null } | undefined
+  let finalized = false
+  job.finalizeCleanup = cleanup => {
+    job.processCleanup = cleanup
+    if (cleanup.status !== 'complete') {
+      job.failureReason ??= cleanup.cause
+      writeBackgroundJobMetadata(job)
+      return
+    }
+    if (!exitOutcome || finalized) { writeBackgroundJobMetadata(job); return }
+    finalized = true
+    // Drain the bounded retained sink, including bytes captured after leader
+    // exit while its owned descendants were being stopped.
+    while (job.readOffset < retainedBytes) {
+      const offset = job.readOffset
+      readNewJobOutput(job)
+      if (offset === job.readOffset) break
+    }
+    flushJobLineCarry(job)
+    settleBackgroundJob(job, job.failureReason ? 'error' : exitOutcome.status, exitOutcome.code, job.failureReason)
+    closeLog()
+    job.hasLiveDrainer = false
+    job.finalizeCleanup = undefined
+  }
   writeBackgroundJobMetadata(job)
-  child.on('exit', (code) => {
+  child.on('exit', async (code) => {
+    const native = await nodeLaunch.nativeResult
+    if (native?.ok) {
+      code = native.value.exitCode; job.executionUsage = native.value.targetUsage ?? native.value.usage
+      job.executionWaitStatusSource = native.value.waitStatusSource
+      if (native.value.wrapperExitCode !== null) job.nativeWrapperExitCode = native.value.wrapperExitCode
+      if (native.value.wrapperSignal !== null) job.nativeWrapperSignal = native.value.wrapperSignal
+      if (native.value.cause) processError ??= native.value.cause
+      if (native.value.signal !== null) { job.executionSignal = native.value.signal; processError ??= `Background target terminated by signal ${native.value.signal}` }
+    }
+    else if (native) processError ??= native.cause
+    resourceDeadlineExpired ||= nodeLaunch.resourceRefusal()?.reason === 'deadline-exhausted'
     // A prior killBackgroundJob call folds the registry into the NON-terminal
     // 'stopping' state when the signal is delivered (M2-T4, Fix 3) and only
     // THIS exit handler settles 'stopped'. SIGTERM produces a non-zero exit
     // code, so treat an already-stopped/stopping job as an intentional stop
     // rather than an error and preserve the documented 'stopped' contract.
-    // Quota termination still wins (the job already settled as 'error').
+    // Quota termination still wins once the leader's exit is observed.
     const intentionallyStopped =
       job.status === 'stopped' || job.status === 'stopping'
-    const status = quotaExceeded
+    if (job.status === 'running') {
+      jobRegistry.emit(jobId, { type: 'lifecycle', state: 'stopping' })
+      job.status = 'stopping'
+    }
+    const status = quotaExceeded || resourceDeadlineExpired || processError !== undefined
       ? 'error'
       : intentionallyStopped
         ? 'stopped'
@@ -863,10 +1006,42 @@ export function startBackgroundJob(params: {
     // Terminal lifecycle is emitted exactly once per job: the registry folds
     // the first transition in and ignores this one when kill/quota already
     // settled the job, keeping the final state/exit code servable after exit.
-    settleBackgroundJob(job, status, code)
-    closeLog()
+    const failures = [
+      quotaExceeded ? `background job exceeded the ${MAX_BACKGROUND_LOG_BYTES}-byte log quota` : undefined,
+      resourceDeadlineExpired ? 'Background resource deadline exhausted' : undefined,
+      processError,
+    ].filter((failure): failure is string => failure !== undefined)
+    job.failureReason = failures.length ? failures.join('; ') : job.failureReason
+    exitOutcome = { status, code }
+    const cleanup = await nodeLaunch.scope.requestStop('normal-leader-exit')
+    job.finalizeCleanup?.(cleanup)
   })
   child.on('error', (error) => {
+    const refusal = nodeLaunch.resourceRefusal()
+    if (refusal && nodeLaunch.facts().profile.active !== null &&
+      (refusal.reason === 'cancelled' || refusal.reason === 'deadline-exhausted')) {
+      // Native AbortError reports cancellation, not an observed exit. Keep
+      // the job stopping and its log drainer alive until the exit handler.
+      resourceDeadlineExpired ||= refusal.reason === 'deadline-exhausted'
+      if (!errorTerminationRequested && !terminationInProgress.has(job)) {
+        errorTerminationRequested = true
+        killBackgroundJob(jobId, resourceDeadlineExpired ? 'SIGKILL' : 'SIGTERM')
+      }
+      return
+    }
+    if (spawnObserved || child.pid !== undefined) {
+      // An error on a spawned child is not proof of exit. Keep its log
+      // drainer and handle alive; settlement belongs to the exit event.
+      processError ??= error.message
+      if (child.pid && !errorTerminationRequested && !terminationInProgress.has(job)) {
+        errorTerminationRequested = true
+        killBackgroundJob(jobId, 'SIGTERM')
+      } else if (!child.pid) {
+        jobRegistry.emit(jobId, { type: 'lifecycle', state: 'stopping', exitCode: job.exitCode })
+        job.status = 'stopping'
+      }
+      return
+    }
     // Final drain + carry flush before settle (same ordering as exit above).
     readNewJobOutput(job)
     flushJobLineCarry(job)
@@ -875,6 +1050,29 @@ export function startBackgroundJob(params: {
   })
 
   jobs.set(jobId, job)
+  if (params.attached) {
+    registerAttachedJob({
+      jobId, child,
+      // Same cooperative scope stop as kill_job, with the owner-shutdown reason.
+      stop: () => {
+        if (job.processCleanup?.status === 'complete') return Promise.resolve(job.processCleanup)
+        if (job.status === 'running') {
+          jobRegistry.emit(jobId, { type: 'lifecycle', state: 'stopping' })
+          job.status = 'stopping'
+        }
+        return nodeLaunch.scope.requestStop('owner-shutdown').then(result => {
+          if (job.finalizeCleanup) job.finalizeCleanup(result)
+          else { job.processCleanup = result; writeBackgroundJobMetadata(job) }
+          return result
+        })
+      },
+    })
+  }
+  // The registered Node/native adapter owns the original resource deadline
+  // and records its refusal before stopping the scope. A second job timer can
+  // kill the leader first and lose that deadline provenance.
+  resourceSignal.addEventListener('abort', onResourceAbort, { once: true })
+  if (resourceSignal.aborted) onResourceAbort()
   return job
 }
 
@@ -960,7 +1158,7 @@ export function getBackgroundJob(
     // fresh registry row (that would reset completedAt and defeat pruning).
     // Leave orphan disk files for the existing 24h orphan sweep.
     if (
-      recovered.status !== 'running' &&
+      recovered.status !== 'running' && recovered.status !== 'stopping' &&
       recovered.settledAt !== undefined &&
       Date.now() - recovered.settledAt > SETTLED_JOB_TTL_MS
     ) {
@@ -1036,7 +1234,7 @@ function recoverBackgroundJob(jobId: string): BackgroundJob | undefined {
     // Disk may still say 'running' while the process is gone; promote to
     // 'lost' at recovery time. That promotion is a *new* terminal discovery,
     // not an old settle — see settledAt below.
-    const wasRunningOnDisk = metadata.status === 'running'
+    const wasRunningOnDisk = metadata.status === 'running' || metadata.status === 'stopping'
     const status =
       wasRunningOnDisk &&
       (metadata.processId === null || !isProcessAlive(metadata.processId))
@@ -1066,7 +1264,7 @@ function recoverBackgroundJob(jobId: string): BackgroundJob | undefined {
     // - Still-running recoveries leave settledAt undefined so they stay
     //   cacheable.
     const settledAt =
-      status === 'running'
+      status === 'running' || status === 'stopping'
         ? undefined
         : typeof metadata.settledAt === 'number' &&
             Number.isFinite(metadata.settledAt)
@@ -1092,6 +1290,7 @@ function recoverBackgroundJob(jobId: string): BackgroundJob | undefined {
         typeof metadata.childProcessStartTime === 'string'
           ? metadata.childProcessStartTime
           : undefined,
+      failureReason: typeof metadata.failureReason === 'string' ? metadata.failureReason : undefined,
       // Observation-time liveness re-check marker (M2-T4, Fix 2): only
       // recovered jobs have no exit listeners on their fake child.
       recovered: true,
@@ -1192,6 +1391,10 @@ function scheduleKillEscalation(job: BackgroundJob, recovered: boolean): void {
     if (job.status !== 'stopping' && job.status !== 'running') return
     const pid = job.child.pid
     if (!pid) return
+    // A leader exit invalidates this timer's authority over its numeric group.
+    if (!recovered && (job.child.exitCode != null || job.child.signalCode != null)) return
+    if (!recovered && job.childProcessStartTime !== undefined &&
+        readProcessStartTime(pid) !== job.childProcessStartTime) return
     const alreadyDead =
       typeof job.child.kill === 'function'
         ? !isProcessTreeAlive(job.child)
@@ -1205,7 +1408,7 @@ function scheduleKillEscalation(job: BackgroundJob, recovered: boolean): void {
     }
     const escalated =
       typeof job.child.kill === 'function'
-        ? terminateProcessTree(job.child, 'SIGKILL')
+        ? signalLiveJob(job, 'SIGKILL')
         : killProcess(os.platform() === 'win32' ? pid : -pid, 'SIGKILL')
     if (!escalated) {
       // Could not escalate: leave 'stopping' and let the observation-time
@@ -1254,7 +1457,22 @@ export function killBackgroundJob(
     }
   }
 
-  if (job.status !== 'running') {
+  if (job.nodeLaunch && job.processCleanup?.status !== 'complete' && job.child.pid) {
+    if (job.status === 'running') {
+      jobRegistry.emit(jobId, { type: 'lifecycle', state: 'stopping' })
+      job.status = 'stopping'
+    }
+    const cleanup = job.processCleanup
+      ? job.nodeLaunch.scope.retryCleanup(signal === 'SIGKILL')
+      : job.nodeLaunch.scope.requestStop('job-kill', signal === 'SIGKILL')
+    void cleanup.then(result => {
+      if (job.finalizeCleanup) job.finalizeCleanup(result)
+      else { job.processCleanup = result; writeBackgroundJobMetadata(job) }
+    })
+    return { jobId, status: job.status, killed: true, signal, exitCode: job.exitCode }
+  }
+
+  if (job.status !== 'running' && job.status !== 'stopping') {
     return {
       jobId,
       status: job.status,
@@ -1266,6 +1484,13 @@ export function killBackgroundJob(
 
   const pid = job.child.pid
   if (!pid) {
+    if (job.hasLiveDrainer) {
+      if (job.status === 'running') {
+        jobRegistry.emit(jobId, { type: 'lifecycle', state: 'stopping', exitCode: job.exitCode })
+        job.status = 'stopping'
+      }
+      return { jobId, errorMessage: `Background job "${jobId}" has no process id; exit remains unconfirmed.` }
+    }
     settleBackgroundJob(
       job,
       'error',
@@ -1278,9 +1503,22 @@ export function killBackgroundJob(
     }
   }
 
+  if (typeof job.child.kill === 'function' &&
+      (job.child.exitCode != null || job.child.signalCode != null)) {
+    return { jobId, status: job.status, killed: false, signal, exitCode: job.exitCode }
+  }
+
   let killed: boolean
   if (typeof job.child.kill === 'function') {
-    killed = terminateProcessTree(job.child, signal)
+    // A custom spawn seam may emit exit synchronously from kill(). Record the
+    // stop intent before signaling so that exit is classified correctly.
+    if (job.status === 'running') {
+      jobRegistry.emit(job.jobId, {
+        type: 'lifecycle', state: 'stopping', exitCode: job.exitCode,
+      })
+      job.status = 'stopping'
+    }
+    killed = signalLiveJob(job, signal)
   } else {
     // A recovered job has no live ChildProcess handle, so the only way to
     // stop it is a pid(-group) signal. Verify the pid still belongs to the
@@ -1309,7 +1547,12 @@ export function killBackgroundJob(
     }
     killed = killProcess(os.platform() === 'win32' ? pid : -pid, signal)
   }
-  if (killed) {
+  // Injected transports can report exit synchronously during signaling.
+  // Never replace the terminal state established by that exit handler.
+  if (job.status !== 'running' && job.status !== 'stopping') {
+    return { jobId, status: job.status, killed, signal, exitCode: job.exitCode }
+  }
+  if (killed || typeof job.child.kill === 'function') {
     // M2-T4 (Fix 3): signal DELIVERY is not an exit. Fold the registry's
     // documented NON-terminal 'stopping' state (running -> stopping) so a
     // SIGTERM-ignoring child can no longer be reported as 'stopped' while it
@@ -1318,12 +1561,14 @@ export function killBackgroundJob(
     // for a recovered job — which has no exit event — the escalation callback
     // below is its sole settle path.
     const recovered = typeof job.child.kill !== 'function'
-    jobRegistry.emit(job.jobId, {
-      type: 'lifecycle',
-      state: 'stopping',
-      exitCode: job.exitCode,
-    })
-    job.status = 'stopping'
+    if (job.status === 'running') {
+      jobRegistry.emit(job.jobId, {
+        type: 'lifecycle',
+        state: 'stopping',
+        exitCode: job.exitCode,
+      })
+      job.status = 'stopping'
+    }
     if (signal === 'SIGTERM' || recovered) {
       scheduleKillEscalation(job, recovered)
     }

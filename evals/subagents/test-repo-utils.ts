@@ -1,9 +1,25 @@
-import { execSync } from 'child_process'
-import fs from 'fs'
+import { execFile } from 'child_process'
+import { promises as fs } from 'fs'
 import * as os from 'os'
 import path from 'path'
+import { promisify } from 'util'
 
 import { getErrorObject } from '@codebuff/common/util/error'
+import {
+  captureEvaluationCommand,
+  createEvaluationExecution,
+  deriveEvaluationExecution,
+  isExecutionRefusal,
+  isEvaluationCleanupRetained,
+  prepareEvaluationCommand,
+  retainEvaluationRootUntilCleanup,
+} from '../buffbench/execution'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
+import type {
+  CleanupResult,
+  OwnedProcessScope,
+} from '@codebuff/common/types/contracts/process-scope'
+import { isExecutionDeadlineSignal } from '@codebuff/common/util/execution-context'
 
 /**
  * Build the `git clone` invocation for a repo URL. `file://` URLs pointing at
@@ -11,12 +27,108 @@ import { getErrorObject } from '@codebuff/common/util/error'
  * git refuses to shallow-copy a checked-out local repo; `--no-local` forces
  * the remote transport, which supports `--depth 1` against worktrees.
  */
-function buildCloneCommand(repoUrl: string, repoDir: string): string {
-  const depthFlag = '--depth 1'
-  const noLocalFlag = repoUrl.startsWith('file://') ? '--no-local' : ''
-  return ['git', 'clone', noLocalFlag, depthFlag, repoUrl, repoDir]
-    .filter(Boolean)
-    .join(' ')
+const execFileAsync = promisify(execFile)
+
+/** Discard setup output as before, and stop the command tree on cancellation. */
+export async function runInit(
+  command: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+  execution?: ExecutionAdapterContext,
+): Promise<void> {
+  let resolveCleanup!: (result: CleanupResult) => void
+  const cleanupFinished = new Promise<CleanupResult>((resolve) => {
+    resolveCleanup = resolve
+  })
+  let scope: OwnedProcessScope | undefined
+  let exitCode: number | null = null
+  let leaderExitObserved = false
+  let taskError: Error | undefined
+  let resourceSignal: AbortSignal | undefined
+  const abort = () => {
+    if (!leaderExitObserved)
+      taskError ??= Object.assign(new Error('Init command was aborted'), {
+        name: 'AbortError',
+        code: 'ABORT_ERR',
+      })
+    const deadline =
+      !!resourceSignal && isExecutionDeadlineSignal(resourceSignal)
+    void scope?.requestStop(deadline ? 'deadline' : 'owner-cancel', deadline)
+  }
+  const dispatch = await prepareEvaluationCommand(command, [], {
+    cwd,
+    env,
+    signal,
+    shell: true,
+    stdio: 'ignore',
+    detached: process.platform === 'linux',
+    execution,
+    branchId: 'supplemental.evaluator.setup.init',
+    onProcessCleanup: resolveCleanup,
+    onProcessScope: (owned, child) => {
+      scope = owned
+      child.once('error', (error) => {
+        const aborted =
+          error.name === 'AbortError' ||
+          (error as NodeJS.ErrnoException).code === 'ABORT_ERR'
+        if (!aborted || !leaderExitObserved) taskError ??= error
+        const deadline =
+          !!resourceSignal && isExecutionDeadlineSignal(resourceSignal)
+        void owned.requestStop(
+          aborted ? (deadline ? 'deadline' : 'owner-cancel') : 'adapter-error',
+          aborted && deadline,
+        )
+      })
+      child.once('exit', (code) => {
+        leaderExitObserved = true
+        exitCode = code
+        if (code !== 0)
+          taskError ??= new Error(`Init command exited with code ${code}`)
+      })
+      signal?.addEventListener('abort', abort, { once: true })
+      if (signal?.aborted) abort()
+    },
+  })
+  dispatch((actualSignal) => {
+    resourceSignal = actualSignal
+  })
+  const processCleanup = await cleanupFinished
+  signal?.removeEventListener('abort', abort)
+  if (taskError || exitCode !== 0 || processCleanup.status !== 'complete')
+    throw Object.assign(
+      taskError ?? new Error(`Init process cleanup ${processCleanup.status}`),
+      {
+        commandExitCode: exitCode,
+        processCleanup,
+      },
+    )
+}
+
+async function runSetupGit(
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; signal?: AbortSignal },
+  execution: ExecutionAdapterContext | undefined,
+  step: string,
+): Promise<{ stdout: string; stderr: string }> {
+  if (!execution) return execFileAsync('git', args, options)
+  return captureEvaluationCommand('git', args, {
+    ...options,
+    execution,
+    branchId: `supplemental.evaluator.setup.${step}`,
+  })
+}
+
+function cloneArgs(repoUrl: string, repoDir: string): string[] {
+  return [
+    'clone',
+    ...(repoUrl.startsWith('file://') ? ['--no-local'] : []),
+    '--depth',
+    '1',
+    '--',
+    repoUrl,
+    repoDir,
+  ]
 }
 
 /**
@@ -30,33 +142,87 @@ export const withTestRepo = async <T>(
     parentSha: string
     initCommand?: string
     env?: Record<string, string>
+    inheritEnv?: boolean
+    signal?: AbortSignal
+    execution?: ExecutionAdapterContext
   },
   fn: (cwd: string) => Promise<T>,
 ): Promise<T> => {
-  const { repoUrl, parentSha, initCommand, env } = repoConfig
+  const {
+    repoUrl,
+    parentSha,
+    initCommand,
+    env,
+    signal,
+    inheritEnv = true,
+  } = repoConfig
+  const execution = deriveEvaluationExecution(
+    repoConfig.execution ??
+      createEvaluationExecution({
+        cwd: process.cwd(),
+        env,
+        inheritEnv,
+        signal,
+      }),
+    'evaluator.setup',
+  )
+  const executionEnv = env
 
   // Create a temporary directory for the test repo
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codebuff-eval-'))
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codebuff-eval-'))
   const repoDir = path.join(tempDir, 'repo')
+  let retained = false
 
   try {
-    execSync(buildCloneCommand(repoUrl, repoDir), { stdio: 'ignore' })
-
-    execSync(`git fetch --depth 1 origin ${parentSha}`, {
-      cwd: repoDir,
-      stdio: 'ignore',
-    })
-    execSync(`git checkout ${parentSha}`, { cwd: repoDir, stdio: 'ignore' })
+    await runSetupGit(
+      cloneArgs(repoUrl, repoDir),
+      {
+        cwd: tempDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'clone',
+    )
+    await runSetupGit(
+      ['fetch', '--depth', '1', 'origin', parentSha],
+      {
+        cwd: repoDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'fetch',
+    )
+    await runSetupGit(
+      ['checkout', parentSha],
+      {
+        cwd: repoDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'checkout',
+    )
 
     if (initCommand) {
       console.log(`Running init command: ${initCommand}...`)
       try {
-        execSync(initCommand, {
-          cwd: repoDir,
-          stdio: 'ignore',
-          env: { ...process.env, ...env },
-        })
+        await runInit(
+          initCommand,
+          repoDir,
+          executionEnv ?? {},
+          signal,
+          execution,
+        )
       } catch (error) {
+        if (
+          signal?.aborted ||
+          isExecutionRefusal(error) ||
+          (error instanceof Error && error.name === 'AbortError') ||
+          isEvaluationCleanupRetained(error)
+        )
+          throw error
         console.error(
           `Error running init command: ${getErrorObject(error).message}`,
         )
@@ -65,10 +231,22 @@ export const withTestRepo = async <T>(
 
     // Run the provided function with the repo directory
     return await fn(repoDir)
+  } catch (error) {
+    retained = retainEvaluationRootUntilCleanup(error, () =>
+      fs.rm(tempDir, { recursive: true, force: true }).then(() => undefined),
+    )
+    if (retained && error && typeof error === 'object') {
+      try {
+        Object.assign(error, { retainedRepositoryRoot: tempDir })
+      } catch {
+        /* preserve original failure */
+      }
+    }
+    throw error
   } finally {
     // Clean up the temporary directory
     try {
-      fs.rmSync(tempDir, { recursive: true, force: true })
+      if (!retained) await fs.rm(tempDir, { recursive: true, force: true })
     } catch (error) {
       console.warn(`Failed to clean up temporary directory: ${error}`)
     }
@@ -80,31 +258,73 @@ export const withTestRepoAndParent = async <T>(
     repoUrl: string
     commitSha: string
     initCommand?: string
+    signal?: AbortSignal
+    env?: Record<string, string>
+    inheritEnv?: boolean
+    execution?: ExecutionAdapterContext
   },
   fn: (cwd: string, commitSha: string, parentSha: string) => Promise<T>,
 ): Promise<T | null> => {
-  const { repoUrl, commitSha, initCommand } = repoConfig
+  const { repoUrl, commitSha, initCommand, signal } = repoConfig
+  const execution = deriveEvaluationExecution(
+    repoConfig.execution ??
+      createEvaluationExecution({
+        cwd: process.cwd(),
+        env: repoConfig.env,
+        inheritEnv: repoConfig.inheritEnv,
+        signal,
+      }),
+    'evaluator.setup-parent',
+  )
+  const executionEnv = repoConfig.env
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codebuff-eval-'))
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'codebuff-eval-'))
   const repoDir = path.join(tempDir, 'repo')
+  let retained = false
 
   try {
-    execSync(buildCloneCommand(repoUrl, repoDir), { stdio: 'ignore' })
+    await runSetupGit(
+      cloneArgs(repoUrl, repoDir),
+      { cwd: tempDir, signal, env: executionEnv },
+      execution,
+      'clone',
+    )
 
-    execSync(`git fetch --depth 2 origin ${commitSha}`, {
-      cwd: repoDir,
-      stdio: 'ignore',
-    })
+    await runSetupGit(
+      ['fetch', '--depth', '2', 'origin', commitSha],
+      {
+        cwd: repoDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'fetch-parent',
+    )
 
-    execSync(`git checkout ${commitSha}`, { cwd: repoDir, stdio: 'ignore' })
+    await runSetupGit(
+      ['checkout', commitSha],
+      {
+        cwd: repoDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'checkout-commit',
+    )
 
     let parentSha: string
     try {
-      const parents = execSync(`git log --pretty=%P -n 1 ${commitSha}`, {
-        cwd: repoDir,
-        encoding: 'utf-8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }).trim()
+      const { stdout } = await runSetupGit(
+        ['log', '--pretty=%P', '-n', '1', commitSha],
+        {
+          cwd: repoDir,
+          signal,
+          env: executionEnv,
+        },
+        execution,
+        'parent-log',
+      )
+      const parents = stdout.trim()
 
       if (!parents) {
         console.warn(
@@ -123,21 +343,49 @@ export const withTestRepoAndParent = async <T>(
 
       parentSha = parentList[0]
     } catch (error) {
+      if (
+        signal?.aborted ||
+        isExecutionRefusal(error) ||
+        (error instanceof Error && error.name === 'AbortError') ||
+        isEvaluationCleanupRetained(error)
+      )
+        throw error
       console.error(`Error getting parent for ${commitSha.slice(0, 8)}:`, error)
       return null
     }
 
-    execSync(`git checkout ${parentSha}`, { cwd: repoDir, stdio: 'ignore' })
+    await runSetupGit(
+      ['checkout', parentSha],
+      {
+        cwd: repoDir,
+        signal,
+        env: executionEnv,
+      },
+      execution,
+      'checkout-parent',
+    )
 
     if (initCommand) {
       console.log(`Running init command: ${initCommand}...`)
-      execSync(initCommand, { cwd: repoDir, stdio: 'ignore' })
+      await runInit(initCommand, repoDir, executionEnv ?? {}, signal, execution)
     }
 
     return await fn(repoDir, commitSha, parentSha)
+  } catch (error) {
+    retained = retainEvaluationRootUntilCleanup(error, () =>
+      fs.rm(tempDir, { recursive: true, force: true }).then(() => undefined),
+    )
+    if (retained && error && typeof error === 'object') {
+      try {
+        Object.assign(error, { retainedRepositoryRoot: tempDir })
+      } catch {
+        /* preserve original failure */
+      }
+    }
+    throw error
   } finally {
     try {
-      fs.rmSync(tempDir, { recursive: true, force: true })
+      if (!retained) await fs.rm(tempDir, { recursive: true, force: true })
     } catch (error) {
       console.warn(`Failed to clean up temporary directory: ${error}`)
     }

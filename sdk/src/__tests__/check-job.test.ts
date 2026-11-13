@@ -1,3 +1,4 @@
+import { authenticatedHostFixture } from './authenticated-host-fixture'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
@@ -20,6 +21,7 @@ import {
 } from '../tools/background-jobs'
 import {
   CHECK_JOB_POLL_ACCUMULATION_CAP,
+  DEFAULT_CHECK_JOB_FOLLOW_TIMEOUT_MS,
   MAX_CHECK_JOB_FOLLOW_TIMEOUT_MS,
   appendBoundedCollected,
   checkJob,
@@ -189,6 +191,39 @@ describe('readNewJobOutput', () => {
 })
 
 describe('checkJob', () => {
+  test('explicit cursors replay independently without advancing the stored cursor', async () => {
+    const job = makeJob()
+    fs.appendFileSync(job.logFile, 'first line\n')
+    const first = value(
+      await checkJob({ jobId: job.jobId, cursor: 0, owner: TRUSTED_OWNER }),
+    )
+    expect(outputText(first)).toBe('first line\n')
+    expect(job.lastCheckCursor).toBeUndefined()
+
+    const replay = value(
+      await checkJob({ jobId: job.jobId, cursor: 0, owner: TRUSTED_OWNER }),
+    )
+    expect(outputText(replay)).toBe('first line\n')
+    expect(replay.nextCursor).toBe(first.nextCursor)
+
+    fs.appendFileSync(job.logFile, 'second line\n')
+    const next = value(
+      await checkJob({
+        jobId: job.jobId,
+        cursor: first.nextCursor,
+        owner: TRUSTED_OWNER,
+      }),
+    )
+    expect(outputText(next)).toBe('second line\n')
+    expect(job.lastCheckCursor).toBeUndefined()
+
+    const implicit = value(
+      await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+    )
+    expect(outputText(implicit)).toBe('first line\nsecond line\n')
+    expect(job.lastCheckCursor).toBe(implicit.nextCursor)
+  })
+
   test('poll mode returns new output and running status without repeating', async () => {
     const job = makeJob()
     fs.appendFileSync(job.logFile, 'line one\n')
@@ -788,6 +823,7 @@ describe('checkJob', () => {
     const projectRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), 'check-job-dirty-'),
     )
+    const host = authenticatedHostFixture(projectRoot)
     try {
       const run = (args: string[]) =>
         spawnSync('git', args, { cwd: projectRoot, encoding: 'utf8' })
@@ -814,7 +850,7 @@ describe('checkJob', () => {
       fs.appendFileSync(job.logFile, 'done\n')
 
       const first = value(
-        await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+        await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER, executionContext: host.context }),
       )
       expect(first.state).toBe('completed')
       expect(first.touchedPaths).toContain('from-bg.txt')
@@ -825,10 +861,24 @@ describe('checkJob', () => {
       // concurrent dirt appears after settle.
       fs.writeFileSync(path.join(projectRoot, 'post-settle.txt'), 'late\n')
       const second = value(
-        await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER }),
+        await checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER, executionContext: host.context }),
       )
       expect(second.touchedPaths).toBeUndefined()
       expect(second.state).toBe('completed')
+    } finally {
+      host.close()
+      fs.rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('settlement Git observation refuses when captured authority is missing', async () => {
+    const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'check-job-no-authority-'))
+    try {
+      const job = makeJob({ status: 'completed', exitCode: 0, projectRoot, dirtyBeforePaths: [] })
+      await expect(checkJob({ jobId: job.jobId, owner: TRUSTED_OWNER })).rejects.toThrow(
+        /Captured execution context is unavailable/,
+      )
+      expect(job.settlementTouchedPaths).toBeUndefined()
     } finally {
       fs.rmSync(projectRoot, { recursive: true, force: true })
     }
@@ -1348,9 +1398,10 @@ describe('resolveCheckJobWaitBounds (M2-T4 Fix 1)', () => {
   })
 
   test('negative timeout_seconds behaves as omitted (poll mode stays single-immediate-poll)', () => {
-    expect(
-      resolveCheckJobWaitBounds({ timeoutSeconds: -5 }),
-    ).toMatchObject({ follow: false, timeoutMs: 0 })
+    expect(resolveCheckJobWaitBounds({ timeoutSeconds: -5 })).toMatchObject({
+      follow: false,
+      timeoutMs: 0,
+    })
     // M2-T4 repair: follow mode requires an EXPLICIT positive timeout — the
     // documented poll contract is "without timeout_seconds, a wait_for is
     // evaluated against the single current poll" — so a wait_for (even with a
@@ -1367,6 +1418,22 @@ describe('resolveCheckJobWaitBounds (M2-T4 Fix 1)', () => {
     const bounds = resolveCheckJobWaitBounds({ waitFor: 'ready' })
     expect(bounds.follow).toBe(false)
     expect(bounds.timeoutMs).toBe(0)
+  })
+
+  test('DEFAULT_CHECK_JOB_FOLLOW_TIMEOUT_MS is deprecated and unreachable (no implicit follow window)', () => {
+    // The constant is retained for source compatibility only. Under the current
+    // resolution rule follow mode requires an explicit positive timeout, so
+    // there is no bare-wait_for path that could consume this default. Pinning
+    // that here keeps the exported doc and the implementation in sync.
+    expect(DEFAULT_CHECK_JOB_FOLLOW_TIMEOUT_MS).toBe(30_000)
+    const bareWaitFor = resolveCheckJobWaitBounds({ waitFor: 'ready' })
+    expect(bareWaitFor.follow).toBe(false)
+    expect(bareWaitFor.timeoutMs).not.toBe(DEFAULT_CHECK_JOB_FOLLOW_TIMEOUT_MS)
+    const explicit = resolveCheckJobWaitBounds({
+      waitFor: 'ready',
+      timeoutSeconds: 2,
+    })
+    expect(explicit.timeoutMs).toBe(2_000)
   })
 
   test('an oversized timeout_seconds clamps to the 600s maximum', () => {

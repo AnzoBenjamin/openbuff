@@ -1,0 +1,41 @@
+import json
+import os
+from pathlib import Path
+import subprocess
+
+BASE = Path('/tmp/openbuff-body-review-2026-11-05/evidence')
+WORK = BASE / '09-work'
+BIN = BASE / 'rust-target/debug/openbuff-native'
+HANDSHAKE = {'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {'protocolVersion': '1'}}
+
+def invoke(plan):
+    result = subprocess.run([str(BIN), 'exec'], input=json.dumps(HANDSHAKE)+'\n'+json.dumps(plan)+'\n', text=True, capture_output=True, timeout=5)
+    return {'observedExitCode':result.returncode, 'stdout':result.stdout, 'stderr':result.stderr}
+
+smoke = subprocess.run(['bash', '/home/ben/Code/CLI/openbuff/rust/scripts/smoke-test-sidecar.sh', str(BIN)], input='', text=True, capture_output=True, timeout=5)
+native_echo = invoke({'cmd':'/bin/echo','args':['09_NATIVE_SENTINEL'],'env':[],'no_landlock':True})
+allowed = WORK / '09-native-allowed'
+denied = WORK / '09-native-denied'
+allowed.mkdir(exist_ok=True)
+denied.mkdir(exist_ok=True)
+(allowed/'read.txt').write_text('09_ALLOWED_SENTINEL')
+(denied/'read.txt').write_text('09_DENIED_SENTINEL')
+payload = """import json,sys
+result={}
+for name,root in [('allowed',sys.argv[1]),('denied',sys.argv[2])]:
+ try:
+  open(root+'/read.txt').read()
+  result[name+'Read']=True
+ except OSError as e: result[name+'Read']=e.errno
+ try:
+  open(root+'/write.txt','w').write('09_WRITE_SENTINEL')
+  result[name+'Write']=True
+ except OSError as e: result[name+'Write']=e.errno
+print(json.dumps(result))
+"""
+system_read = [p for p in ['/usr','/lib','/lib64'] if os.path.exists(p)]
+native_landlock = invoke({'cmd':'/usr/bin/python3','args':['-I','-c',payload,str(allowed),str(denied)],'env':[],'allow_read':system_read+[str(allowed)],'allow_write':[str(allowed)]})
+result = {'binary':str(BIN),'build':'cargo build --workspace --locked --offline --target-dir '+str(BASE/'rust-target')+' completed successfully before this probe','smoke':{'observedExitCode':smoke.returncode,'stdout':smoke.stdout,'stderr':smoke.stderr}, 'nativeEcho':native_echo,'nativeLandlock':native_landlock,'constraints':'No external requests. Native target effects touch only two evidence/09-work fixture directories. Landlock is applied only in the thrown-away native child, never the parent.'}
+(BASE/'09-native-probe.json').write_text(json.dumps(result,indent=2))
+print('Native observations:')
+print(json.dumps(result,indent=2))

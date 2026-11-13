@@ -1,0 +1,15 @@
+(pass) containsStructuralAuditReceipt > returns false when there is no structuralReceipt anywhere [0.02ms]
+(pass) containsStructuralAuditReceipt > terminates and returns false for a cyclic object graph without a receipt [0.04ms]
+(pass) containsStructuralAuditReceipt > returns true for a receipt nested deeper than the old depth limit [0.08ms]
+(pass) containsStructuralAuditReceipt > returns false for non-object inputs [0.04ms]
+(pass) containsStructuralAuditReceipt > finds a receipt via a shorter path even after the shared node was first reached deeper [0.07ms]
+(pass) containsStructuralAuditReceipt > returns false when structuralReceipt exists but snapshot_id is missing or non-string [0.04ms]
+(pass) containsStructuralAuditReceipt > accepts an already-persisted collision marker bound to the expected snapshot [0.11ms]
+(pass) containsStructuralAuditReceipt > rejects an already-persisted marker bound to a different snapshot [0.03ms]
+(pass) containsStructuralAuditReceipt > rejects an already-persisted marker with no snapshot binding when one is expected [0.03ms]
+(pass) containsStructuralAuditReceipt > rejects an ordinary rejection that carries no already-persisted marker [0.03ms]
+
+ 28 pass
+ 0 fail
+ 70 expect() calls
+Ran 28 tests across 3 files. [230.00ms]

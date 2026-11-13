@@ -85,6 +85,9 @@ export const ListDirectoryComponent = defineToolComponent({
     } else {
       summaryText += ` — ${childDirectories.length} dir${childDirectories.length === 1 ? '' : 's'}, ${files.length} file${files.length === 1 ? '' : 's'}`
     }
+    const offset = typeof input?.offset === 'number' ? input.offset : 0
+    const pageNotice = `${offset > 0 ? `captured page at offset ${offset} · ` : ''}${record?.truncated === true ? `more entries available · nextOffset ${String(record.nextOffset ?? 'unknown')} · restart listing if directory contents changed` : ''}`
+    if (pageNotice) summaryText += ` · ${pageNotice}`
 
     // Use a wrapper component to access theme
     const ListDirectoryContent = () => {
@@ -95,9 +98,7 @@ export const ListDirectoryComponent = defineToolComponent({
             name="List"
             description={
               <>
-                {summaryText}
-                {' '}
-                <span fg={color}>{glyph}</span>
+                {summaryText} <span fg={color}>{glyph}</span>
               </>
             }
             descriptionColor={contentTheme.directory}
@@ -112,10 +113,7 @@ export const ListDirectoryComponent = defineToolComponent({
               count={entries.length}
               badge={`${childDirectories.length}d/${files.length}f`}
               entries={entries.map((entry, index) => (
-                <text
-                  key={`${entry}-${index}`}
-                  style={{ wrapMode: 'none' }}
-                >
+                <text key={`${entry}-${index}`} style={{ wrapMode: 'none' }}>
                   <span fg={contentTheme.muted}>{'    '}</span>
                   <span fg={contentTheme.foreground}>{entry}</span>
                 </text>

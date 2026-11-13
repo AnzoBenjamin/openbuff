@@ -631,13 +631,53 @@ describe('listDirectory listing behaviour', () => {
       projectPath: '/virtual/repo',
       fs: streamingFs(streamDirectory),
     })
-    expect(expectFailure(result).errorMessage).toMatch(/too large/i)
+    expect(expectListing(result).files).toHaveLength(MAX_LIST_DIRECTORY_ENTRIES)
+    expect(result[0].value).toMatchObject({
+      truncated: true,
+      nextOffset: MAX_LIST_DIRECTORY_ENTRIES,
+    })
     // Resource safety: an adversarial directory must never be materialized in
     // full. One entry past the cap is what makes 'over the cap' decidable.
     expect(streamDirectory.pulled).toBe(MAX_LIST_DIRECTORY_ENTRIES + 1)
     // Early termination must invoke the iterator's return(), the cleanup hook
     // the capability's documented obligations rely on.
     expect(streamDirectory.released).toBe(true)
+  })
+
+  test('continues streamed listings across pages after filtering hidden entries', async () => {
+    const entries = Array.from({ length: 11 }, (_, index) =>
+      dirent(`entry-${index}.txt`),
+    )
+    const stream = makeStreamDirectory(entries)
+    const fs = streamingFs(stream)
+    const fileFilter = (name: string) => ({
+      status: name.endsWith('entry-3.txt')
+        ? ('blocked' as const)
+        : ('allow' as const),
+    })
+    const collected: string[] = []
+    let offset = 0
+    for (;;) {
+      const result = await listDirectory({
+        directoryPath: 'src',
+        projectPath: '/virtual/repo',
+        fs,
+        fileFilter,
+        offset,
+        limit: 4,
+      })
+      collected.push(...expectListing(result).files)
+      const value = result[0].value as { nextOffset?: number }
+      if (value.nextOffset === undefined) break
+      offset = value.nextOffset
+    }
+    expect(collected).toEqual(
+      entries
+        .filter((entry) => entry.name !== 'entry-3.txt')
+        .map((entry) => entry.name),
+    )
+    expect(stream.released).toBe(true)
+    expect(collected).toHaveLength(new Set(collected).size)
   })
 
   test('reports only the errno code when the listing fails', async () => {
@@ -798,7 +838,7 @@ describe('listDirectory listing behaviour', () => {
     expect(expectListing(result).files.length).toBe(MAX_LIST_DIRECTORY_ENTRIES)
   })
 
-  test('caps huge listings via error to preserve contract', async () => {
+  test('returns recoverable pages for huge listings', async () => {
     const fs = makeFs({
       readdir: makeReaddir(
         Array.from({ length: MAX_LIST_DIRECTORY_ENTRIES + 1 }, (_, i) =>
@@ -811,23 +851,22 @@ describe('listDirectory listing behaviour', () => {
       projectPath: '/virtual/repo',
       fs,
     })
-    const value = expectFailure(result)
-    // Must preserve the original error contract for large dirs so persisted
-    // error handling and consumers expecting errorMessage continue to work.
-    expect(value.errorMessage).toMatch(/too large/i)
-    expect('files' in value).toBe(false)
-    // Deliberate text change, not a verbatim carry-over: the observed entry
-    // count and the previous `exceeds limit of <cap>` phrasing are gone. The
-    // "more than" bound is uniform across both read paths even though only
-    // the streaming path is unable to learn the true total. See the SDK
-    // CHANGELOG [Unreleased] entry for the migration.
-    expect(value.errorMessage).toBe(
-      `Directory listing too large: more than ${MAX_LIST_DIRECTORY_ENTRIES} entries. List a specific subdirectory instead.`,
-    )
-    expect(value.errorMessage).not.toContain('exceeds limit of')
-    // The guidance must name an action the model can take through this tool:
-    // fileFilter is supplied host-side and is not a list_directory input.
-    expect(value.errorMessage).not.toContain('fileFilter')
+    const value = expectListing(result)
+    expect(value.files).toHaveLength(MAX_LIST_DIRECTORY_ENTRIES)
+    expect(result[0].value).toMatchObject({
+      truncated: true,
+      nextOffset: MAX_LIST_DIRECTORY_ENTRIES,
+    })
+    const remaining = await listDirectory({
+      directoryPath: 'huge',
+      projectPath: '/virtual/repo',
+      fs,
+      offset: MAX_LIST_DIRECTORY_ENTRIES,
+    })
+    expect(expectListing(remaining).files).toEqual([
+      `file-${MAX_LIST_DIRECTORY_ENTRIES}.txt`,
+    ])
+    expect(remaining[0].value).not.toHaveProperty('nextOffset')
   })
 })
 

@@ -4,7 +4,7 @@
  * Uses OpenTUI's native fg/backgroundColor styling instead of ANSI escape sequences
  */
 
-import React, { useEffect, useState, memo } from 'react'
+import React, { useEffect, useRef, useState, memo } from 'react'
 
 import { type ImageCardImage } from './image-card'
 import {
@@ -18,6 +18,8 @@ interface ImageThumbnailProps {
   width: number // Width in cells
   height: number // Height in rows (each row uses half-blocks for 2 pixel rows)
   fallback?: React.ReactNode
+  onLoadState?: (state: 'loading' | 'ready' | 'error') => void
+  retryToken?: number
 }
 
 /**
@@ -28,14 +30,25 @@ interface ImageThumbnailProps {
  * - ▀ (upper half block) character
  */
 export const ImageThumbnail = memo(
-  ({ image, width, height, fallback }: ImageThumbnailProps) => {
+  ({
+    image,
+    width,
+    height,
+    fallback,
+    onLoadState,
+    retryToken = 0,
+  }: ImageThumbnailProps) => {
+    const notify = useRef(onLoadState)
+    notify.current = onLoadState
     const [thumbnailData, setThumbnailData] = useState<ThumbnailData | null>(
       null,
     )
 
     useEffect(() => {
       // Skip loading while image is processing or has error to avoid race condition and unnecessary failed reads
+      setThumbnailData(null)
       if ((image.status ?? 'ready') !== 'ready') return
+      notify.current?.('loading')
 
       let cancelled = false
 
@@ -57,6 +70,7 @@ export const ImageThumbnail = memo(
 
         if (!cancelled) {
           setThumbnailData(data)
+          notify.current?.(data ? 'ready' : 'error')
         }
       }
 
@@ -65,7 +79,7 @@ export const ImageThumbnail = memo(
       return () => {
         cancelled = true
       }
-    }, [image, width, height])
+    }, [image, width, height, retryToken])
 
     if (!thumbnailData) {
       return <>{fallback}</>

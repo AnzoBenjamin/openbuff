@@ -3,6 +3,7 @@ import os from 'os'
 import path from 'path'
 
 import { isMandatorySensitiveReadPath } from './sensitive-paths'
+import { bindFilesystemSandbox, getFilesystemSandbox, getSandboxReadPolicyToken, type FilesystemSandboxPolicy } from './filesystem-sandbox'
 
 import type { CodebuffFileSystem } from '../types/filesystem'
 
@@ -36,7 +37,8 @@ export type ContainedProjectPath = {
    * it no longer implies an openbuff-owned segment name (see
    * `OWNED_TEMP_SEGMENT_PATTERNS`, which is documentation only).
    */
-  scope: 'project' | 'owned-temp' | 'external-read'
+  // 'host' is a mutable external path granted by the captured sandbox policy.
+  scope: 'project' | 'owned-temp' | 'external-read' | 'host'
 }
 
 /**
@@ -392,10 +394,10 @@ async function getOwnedTempComparisonRootsForFileSystem(
  * `startsWith` check would admit it.
  */
 function isInsideTempRoot(target: string, roots: string[]): boolean {
-  return roots.some((root) => {
-    const relative = path.relative(root, target)
-    return relative !== '' && !escapesRoot(root, target)
-  })
+  // A configured temp root can itself be nested under the POSIX fallback.
+  // Reject every root entry before checking containment in another root.
+  if (roots.some((root) => path.relative(root, target) === '')) return false
+  return roots.some((root) => !escapesRoot(root, target))
 }
 
 /**
@@ -617,6 +619,48 @@ let externalReadComparisonRoots: string[] | undefined
 // roots would stay in force while project B's never applied.
 let externalReadRootsOwner: string | undefined
 
+declare const hostReadPolicyBrand: unique symbol
+export type HostReadPolicy = Readonly<{ [hostReadPolicyBrand]: 'host-read-policy' }>
+const hostReadPolicies = new WeakMap<object, Readonly<{
+  projectRoot: string; realProjectRoot: string; roots: readonly string[]; realRoots: readonly string[]
+}>>()
+
+/** Capture one run's read boundary; copied or deserialized objects grant no reads. */
+export function createHostReadPolicy(
+  projectRoot: string,
+  roots: readonly string[],
+  captureRealpath: (root: string) => string = realpathOrLexical,
+  sandbox?: FilesystemSandboxPolicy,
+): HostReadPolicy {
+  if (!path.isAbsolute(projectRoot) || projectRoot.includes('\0') ||
+    !Array.isArray(roots) || roots.some(root => typeof root !== 'string' || !path.isAbsolute(root) || root.includes('\0')))
+    throw new Error('Host read policy requires captured absolute roots')
+  const policy = Object.freeze(Object.create(null)) as HostReadPolicy
+  const capturedRoots = Object.freeze(normalizeExternalReadRoots(roots))
+  const canonical = (root: string) => {
+    const resolved = captureRealpath(root)
+    if (typeof resolved !== 'string' || !path.isAbsolute(resolved) || resolved.includes('\0'))
+      throw new Error('Host read policy requires absolute canonical roots')
+    return path.resolve(resolved)
+  }
+  hostReadPolicies.set(policy, Object.freeze({ projectRoot: path.resolve(projectRoot),
+    realProjectRoot: canonical(path.resolve(projectRoot)), roots: capturedRoots,
+    realRoots: Object.freeze(capturedRoots.map(canonical)) }))
+  if (sandbox) bindFilesystemSandbox(policy, sandbox)
+  return policy
+}
+
+export function getHostReadRoots(policy: HostReadPolicy): readonly string[] {
+  const state = hostReadPolicies.get(policy)
+  if (!state) throw new Error('Invalid host read policy')
+  return state.roots
+}
+
+function matchesHostReadPolicy(projectRoot: string, policy?: HostReadPolicy): boolean {
+  if (policy === undefined) return true
+  return hostReadPolicies.get(policy)?.projectRoot === path.resolve(projectRoot)
+}
+
 /**
  * Canonical normalization for external read root entries: `path.resolve`,
  * empty/whitespace-only entries dropped, deduped and sorted so the stored value
@@ -810,7 +854,12 @@ export function resetExternalReadRootsForTesting(): void {
  * be a symlink (e.g. a home directory on macOS), so a file's realpath only
  * lands under the dereferenced root.
  */
-function getExternalReadComparisonRoots(): string[] {
+function getExternalReadComparisonRoots(readPolicy?: HostReadPolicy): string[] {
+  if (readPolicy !== undefined) {
+    const state = hostReadPolicies.get(readPolicy)
+    if (!state || state.roots.some((root, index) => realpathOrLexical(root) !== state.realRoots[index])) return []
+    return [...new Set([...state.roots, ...state.realRoots])]
+  }
   if (!externalReadComparisonRoots) {
     const roots = getExternalReadRoots()
     externalReadComparisonRoots = [
@@ -828,10 +877,18 @@ function getExternalReadComparisonRoots(): string[] {
  */
 async function getExternalReadComparisonRootsForFileSystem(
   fileSystem: CodebuffFileSystem,
+  readPolicy?: HostReadPolicy,
 ): Promise<string[]> {
-  const roots = getExternalReadRoots()
+  if (readPolicy !== undefined) {
+    const state = hostReadPolicies.get(readPolicy)
+    if (!state) return []
+    const current = await Promise.all(state.roots.map(root => realpathOrLexicalForFileSystem(root, fileSystem)))
+    if (current.some((root, index) => root !== state.realRoots[index])) return []
+    return [...new Set([...state.roots, ...state.realRoots])]
+  }
+  const roots = readPolicy === undefined ? getExternalReadRoots() : [...getHostReadRoots(readPolicy)]
   const realRoots = await Promise.all(
-    roots.map((root) => realpathCachedForFileSystemRoot(root, fileSystem)),
+    roots.map((root) => readPolicy === undefined ? realpathCachedForFileSystemRoot(root, fileSystem) : realpathOrLexicalForFileSystem(root, fileSystem)),
   )
   return [...new Set([...roots, ...realRoots])]
 }
@@ -872,8 +929,8 @@ function isInsideExternalReadRoot(target: string, roots: string[]): boolean {
  * too closes the symlink escape — a file inside an allowlisted root that
  * points at `/etc/shadow`.
  */
-function resolveExternalReadRealPath(fullPath: string): string | null {
-  const roots = getExternalReadComparisonRoots()
+function resolveExternalReadRealPath(fullPath: string, readPolicy?: HostReadPolicy): string | null {
+  const roots = getExternalReadComparisonRoots(readPolicy)
   if (!isInsideExternalReadRoot(fullPath, roots)) return null
 
   const realFullPath = realpathOrLexical(fullPath)
@@ -916,8 +973,9 @@ function resolveExternalReadRealPath(fullPath: string): string | null {
 async function resolveExternalReadRealPathForFileSystem(
   fullPath: string,
   fileSystem: CodebuffFileSystem,
+  readPolicy?: HostReadPolicy,
 ): Promise<string | null> {
-  const roots = await getExternalReadComparisonRootsForFileSystem(fileSystem)
+  const roots = await getExternalReadComparisonRootsForFileSystem(fileSystem, readPolicy)
   if (!isInsideExternalReadRoot(fullPath, roots)) return null
 
   // Resolved once, exactly like the sync helper: the validated string is the
@@ -986,8 +1044,9 @@ export function isExternalReadPath(input: string): boolean {
  */
 function externalReadContainedPath(
   fullPath: string,
+  readPolicy?: HostReadPolicy,
 ): ContainedProjectPath | null {
-  const realFullPath = resolveExternalReadRealPath(fullPath)
+  const realFullPath = resolveExternalReadRealPath(fullPath, readPolicy)
   if (realFullPath === null) return null
   return {
     fullPath,
@@ -1005,10 +1064,12 @@ function externalReadContainedPath(
 async function externalReadContainedPathForFileSystem(
   fullPath: string,
   fileSystem: CodebuffFileSystem,
+  readPolicy?: HostReadPolicy,
 ): Promise<ContainedProjectPath | null> {
   const realFullPath = await resolveExternalReadRealPathForFileSystem(
     fullPath,
     fileSystem,
+    readPolicy,
   )
   if (realFullPath === null) return null
   return {
@@ -1048,16 +1109,41 @@ async function externalReadContainedPathForFileSystem(
  * (`packages/agent-runtime`) both call this helper instead of
  * re-implementing the same logic.
  */
+function sandboxHostPath(
+  projectRoot: string,
+  fullPath: string,
+  realFullPath: string,
+  realProjectRoot: string = realpathOrLexical(projectRoot),
+): ContainedProjectPath {
+  const lexicalInProject = !escapesRoot(projectRoot, fullPath)
+  const inProject = lexicalInProject && !escapesRoot(realProjectRoot, realFullPath)
+  return { fullPath, realFullPath, relativePath: lexicalInProject ? path.relative(projectRoot, fullPath) : fullPath,
+    scope: inProject ? 'project' : 'host' }
+}
+
+/** Captured runs follow their sandbox policy; standalone calls are contained. */
 export function resolveProjectPath(
   projectRoot: string,
   input: string,
+  policyToken?: HostReadPolicy,
 ): ContainedProjectPath | null {
-  if (!input) return null
+  if (!input || input.includes('\0')) return null
 
   const resolvedRoot = path.resolve(projectRoot)
   const fullPath = path.isAbsolute(input)
     ? path.resolve(input)
     : path.resolve(resolvedRoot, input)
+  const sandbox = getFilesystemSandbox(policyToken)
+  if (sandbox.mode === 'unrestricted') {
+    return sandboxHostPath(resolvedRoot, fullPath, realpathOrLexical(fullPath))
+  }
+  for (const root of sandbox.allowPaths) {
+    const realFullPath = realpathOrLexical(fullPath)
+    if (!escapesRoot(path.resolve(root), fullPath) && !escapesRoot(realpathOrLexical(root), realFullPath) &&
+      !isMandatorySensitiveReadPath(fullPath) && !isMandatorySensitiveReadPath(realFullPath)) {
+      return sandboxHostPath(resolvedRoot, fullPath, realFullPath)
+    }
+  }
   const ownedTempFallback = (): ContainedProjectPath | null =>
     hasTraversalSegment(input) ? null : ownedTempContainedPath(fullPath)
 
@@ -1098,13 +1184,28 @@ export async function resolveProjectPathForFileSystem(
   projectRoot: string,
   input: string,
   fileSystem: CodebuffFileSystem,
+  policyToken: HostReadPolicy | undefined = fileSystem.hostReadPolicy,
 ): Promise<ContainedProjectPath | null> {
-  if (!input) return null
+  if (!input || input.includes('\0')) return null
 
   const resolvedRoot = path.resolve(projectRoot)
   const fullPath = path.isAbsolute(input)
     ? path.resolve(input)
     : path.resolve(resolvedRoot, input)
+  const sandbox = getFilesystemSandbox(policyToken)
+  if (sandbox.mode === 'unrestricted') {
+    return sandboxHostPath(resolvedRoot, fullPath, await realpathOrLexicalForFileSystem(fullPath, fileSystem),
+      await realpathOrLexicalForFileSystem(resolvedRoot, fileSystem))
+  }
+  for (const root of sandbox.allowPaths) {
+    const realFullPath = await realpathOrLexicalForFileSystem(fullPath, fileSystem)
+    if (!escapesRoot(path.resolve(root), fullPath) &&
+      !escapesRoot(await realpathOrLexicalForFileSystem(root, fileSystem), realFullPath) &&
+      !isMandatorySensitiveReadPath(fullPath) && !isMandatorySensitiveReadPath(realFullPath)) {
+      return sandboxHostPath(resolvedRoot, fullPath, realFullPath,
+        await realpathOrLexicalForFileSystem(resolvedRoot, fileSystem))
+    }
+  }
   const ownedTempFallback = (): Promise<ContainedProjectPath | null> =>
     hasTraversalSegment(input)
       ? Promise.resolve(null)
@@ -1135,34 +1236,24 @@ export async function resolveProjectPathForFileSystem(
 }
 
 /**
- * READ-ONLY containment resolver: `resolveProjectPath` first, then the
- * configured external read allowlist as a fallback.
- *
- * `resolveProjectPath` and `resolveProjectPathForFileSystem` are DELIBERATELY
- * LEFT UNCHANGED. They are the resolvers the write path uses
- * (`sdk/src/tools/change-file.ts`, `sdk/src/tools/replace-range.ts`,
- * `sdk/src/tools/filesystem-authority.ts`), so keeping the external-read
- * widening in separate, differently-named read-only entry points means a write
- * cannot reach an allowlisted root even by mistake — a write handler would have
- * to be edited to call this function instead. Any future caller of this
- * resolver MUST be a read-only operation.
- *
- * All existing project and owned-temp behavior is identical by construction:
- * a non-null delegate result is returned unchanged, and the external-read
- * branch is only consulted when the delegate returns `null`. That branch
- * refuses a raw `..` first, exactly like the owned-temp fallback, so
- * `isExternalReadPath` and this resolver agree on every input.
+ * Read resolver follows the captured sandbox policy. In project mode, the
+ * read-only readableRoots boundary is an additional fallback; it never grants
+ * mutation authority. Standalone calls retain the contained default.
  */
 export function resolveProjectPathForRead(
   projectRoot: string,
   input: string,
+  readPolicy?: HostReadPolicy,
 ): ContainedProjectPath | null {
-  const contained = resolveProjectPath(projectRoot, input)
+  readPolicy ??= getSandboxReadPolicyToken() as HostReadPolicy | undefined
+  if (!matchesHostReadPolicy(projectRoot, readPolicy)) return null
+  if (readPolicy !== undefined && realpathOrLexical(path.resolve(projectRoot)) !== hostReadPolicies.get(readPolicy)!.realProjectRoot) return null
+  const contained = resolveProjectPath(projectRoot, input, readPolicy)
   if (contained !== null) return contained
   if (!input || hasTraversalSegment(input)) return null
   // Anchored on the project root exactly like the owned-temp fallback, so a
   // relative input never depends on `process.cwd()`.
-  return externalReadContainedPath(resolveAgainstRoot(projectRoot, input))
+  return externalReadContainedPath(resolveAgainstRoot(projectRoot, input), readPolicy)
 }
 
 /**
@@ -1175,17 +1266,22 @@ export async function resolveProjectPathForFileSystemRead(
   projectRoot: string,
   input: string,
   fileSystem: CodebuffFileSystem,
+  readPolicy: HostReadPolicy | undefined = fileSystem.hostReadPolicy,
 ): Promise<ContainedProjectPath | null> {
+  if (!matchesHostReadPolicy(projectRoot, readPolicy)) return null
+  if (readPolicy !== undefined && await realpathOrLexicalForFileSystem(path.resolve(projectRoot), fileSystem) !== hostReadPolicies.get(readPolicy)!.realProjectRoot) return null
   const contained = await resolveProjectPathForFileSystem(
     projectRoot,
     input,
     fileSystem,
+    readPolicy,
   )
   if (contained !== null) return contained
   if (!input || hasTraversalSegment(input)) return null
   return externalReadContainedPathForFileSystem(
     resolveAgainstRoot(projectRoot, input),
     fileSystem,
+    readPolicy,
   )
 }
 

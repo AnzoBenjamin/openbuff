@@ -1,5 +1,14 @@
 import { TextAttributes } from '@opentui/core'
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+
+import stringWidth from 'string-width'
+import { sliceTextCells } from '../utils/text-boundaries'
+import { OutputReaderScreen } from './output-reader-screen'
+import {
+  createTextDocument,
+  type OutputDocument,
+} from '../utils/output-document'
+import { readSavedTranscriptInspection } from '../utils/saved-transcript-inspection'
 
 import { Button } from './button'
 import { MultilineInput } from './multiline-input'
@@ -14,13 +23,12 @@ import {
 } from '../utils/chat-history'
 import { createTextPasteHandler } from '../utils/strings'
 import { isPlainEnterKey } from '../utils/terminal-enter-detection'
-import { BORDER_CHARS } from '../utils/ui-constants'
 
 import type { SelectableListItem } from './selectable-list'
 
 const LAYOUT = {
   CONTENT_PADDING: 4,
-  COMPACT_MODE_THRESHOLD: 20, // Hide header when terminal height is below this
+  COMPACT_MODE_THRESHOLD: 20, // Reduce spacing in short terminals
   NARROW_WIDTH_THRESHOLD: 70, // Hide buttons when terminal width is below this
   MAIN_CONTENT_PADDING: 2,
   INITIAL_CHATS: 25, // Load this many immediately for fast display
@@ -36,79 +44,153 @@ interface ChatHistoryScreenProps {
   onSelectChat: (chatId: string) => void
   onCancel: () => void
   onNewChat: () => void
+  dependencies?: {
+    load: typeof getAllChatsAsync
+    delete: typeof deleteChatSession
+    inspect?: typeof readSavedTranscriptInspection
+  }
 }
+
+export const filterOutDeletedChats = <T extends { chatId: string }>(
+  loaded: T[],
+  deletedIds: ReadonlySet<string>,
+): T[] =>
+  deletedIds.size === 0
+    ? loaded
+    : loaded.filter((c) => !deletedIds.has(c.chatId))
 
 export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
   onSelectChat,
   onCancel,
   onNewChat,
+  dependencies = { load: getAllChatsAsync, delete: deleteChatSession },
 }) => {
   const theme = useTheme()
   const { terminalWidth, terminalHeight } = useTerminalLayout()
 
   // Layout calculations - use full width
-  const contentWidth = terminalWidth - LAYOUT.CONTENT_PADDING
+  const contentWidth = Math.max(1, terminalWidth - LAYOUT.CONTENT_PADDING)
 
   // Two-phase loading: load initial chats immediately, then more in background
   const [chats, setChats] = useState<
     Awaited<ReturnType<typeof getAllChatsAsync>>
   >([])
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
+  const [loadState, setLoadState] = useState<
+    'loading' | 'partial' | 'loaded' | 'unavailable'
+  >('loading')
+  const [loadRevision, setLoadRevision] = useState(0)
+  const [inspectedId, setInspectedId] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+
+  // Chat ids deleted since this mount. The background getAllChatsAsync
+  // snapshot is taken before any delete can happen, so without filtering it
+  // the terminal .then(all) write would resurrect chats the user deleted
+  // while the load was still in flight.
+  const deletedIdsRef = useRef<ReadonlySet<string>>(new Set())
 
   // Load more chats in the background after initial render
   useEffect(() => {
     let cancelled = false
-    void getAllChatsAsync(LAYOUT.INITIAL_CHATS).then((initial) => {
-      if (cancelled) return
-      setChats(initial)
-      return getAllChatsAsync(
+    const controller = new AbortController()
+    let settledState: 'loaded' | 'partial' | 'unavailable' | undefined
+    setLoadState('loading')
+    void dependencies
+      .load(
         LAYOUT.INITIAL_CHATS + LAYOUT.BACKGROUND_CHATS,
-      ).then((all) => {
-        if (!cancelled) setChats(all)
+        controller.signal,
+        (initial) => {
+          if (!cancelled) {
+            setChats(filterOutDeletedChats(initial, deletedIdsRef.current))
+            setLoadState('partial')
+          }
+        },
+        LAYOUT.INITIAL_CHATS,
+        (state) => {
+          settledState = state.state
+          if (!cancelled) {
+            setLoadState(
+              state.state === 'unavailable'
+                ? 'unavailable'
+                : state.state === 'partial'
+                  ? 'partial'
+                  : 'loaded',
+            )
+            if (state.omitted)
+              setStatusMessage(
+                `${state.omitted} saved sessions could not be read`,
+              )
+          }
+        },
+      )
+      .then((all) => {
+        if (!cancelled) {
+          setChats(filterOutDeletedChats(all, deletedIdsRef.current))
+          setLoadState(settledState ?? 'loaded')
+        }
       })
-    })
+      .catch(() => {
+        if (!cancelled) setLoadState('unavailable')
+      })
     return () => {
       cancelled = true
+      controller.abort()
     }
-  }, [])
+  }, [loadRevision])
 
-  const handleDeleteChat = useCallback((chatId: string) => {
-    const deleted = deleteChatSession(chatId)
-    if (deleted) {
-      setChats((prev) => prev.filter((chat) => chat.chatId !== chatId))
-      setStatusMessage('Chat deleted')
-      return
-    }
+  const handleDeleteChat = useCallback(
+    (chatId: string) => {
+      if (pendingDelete !== chatId) {
+        setPendingDelete(chatId)
+        setStatusMessage(
+          'Delete this saved session? Enter confirms · Esc cancels. This cannot be undone.',
+        )
+        return
+      }
+      setPendingDelete(null)
+      let deleted = false
+      try {
+        deleted = dependencies.delete(chatId)
+      } catch (error) {
+        setStatusMessage(
+          `Could not delete saved session: ${error instanceof Error ? error.message : String(error)}`,
+        )
+        return
+      }
+      if (deleted) {
+        deletedIdsRef.current = new Set(deletedIdsRef.current).add(chatId)
+        setChats((prev) => prev.filter((chat) => chat.chatId !== chatId))
+        setStatusMessage(
+          `Deleted saved session: ${chats.find((chat) => chat.chatId === chatId)?.lastPrompt || chatId}`,
+        )
+        return
+      }
 
-    setStatusMessage('Could not delete chat')
-  }, [])
+      setStatusMessage('Could not delete saved session')
+    },
+    [pendingDelete, chats, dependencies.delete],
+  )
 
   // Calculate available width for the prompt text (last column, variable width)
   // Format: "[time]   [msgs]   [prompt...] [×]"
   // reservedWidth accounts for: time col, msgs col, delete button area,
-  // 2 gaps between columns, list border (2), scrollbar (1), and button padding (2)
+  // 2 gaps between columns, scrollbar (1), and button padding (2)
   const reservedWidth =
     LAYOUT.TIME_COL_WIDTH +
     LAYOUT.MSGS_COL_WIDTH +
     LAYOUT.DELETE_COL_WIDTH +
     LAYOUT.GAP_WIDTH * 2 +
-    5 // border + scrollbar + button padding
-  const maxPromptWidth = Math.max(20, contentWidth - reservedWidth)
+    3 // scrollbar + button padding
+  const maxPromptWidth = Math.max(1, contentWidth - reservedWidth)
 
-  // Truncate text to fit single line
-  const truncateText = (text: string, maxLen: number): string => {
-    const singleLine = text.replace(/\n/g, ' ').trim()
-    if (singleLine.length <= maxLen) return singleLine
-    return singleLine.slice(0, maxLen - 1) + '…'
+  const truncateText = (text: string, width: number) => {
+    const line = text.replace(/\s+/g, ' ').trim()
+    return stringWidth(line) <= width
+      ? line
+      : sliceTextCells(line, 0, Math.max(0, width - 1)) + '…'
   }
-
-  // Pad text to fixed width (right-pad with spaces)
-  const padRight = (text: string, width: number): string => {
-    // Use Array.from to count code points so emoji/wide chars don't break padding
-    const len = Array.from(text).length
-    if (len >= width) return text
-    return text + ' '.repeat(width - len)
-  }
+  const padRight = (text: string, width: number) =>
+    text + ' '.repeat(Math.max(0, width - stringWidth(text)))
 
   // Convert chats to SelectableListItem format with aligned columns
   // Order: time | message count | prompt
@@ -120,7 +202,9 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
           LAYOUT.TIME_COL_WIDTH,
         )
         const msgs = padRight(
-          `${chat.messageCount} msgs`,
+          chat.messageCountKnown === false
+            ? 'unknown'
+            : `${chat.messageCount} msgs`,
           LAYOUT.MSGS_COL_WIDTH,
         )
         const prompt = padRight(
@@ -132,13 +216,19 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
           id: chat.chatId,
           // Combine all columns into label for correct display order: time | msgs | prompt
           // The full prompt is kept in secondary for search filtering
-          label: `${time}${' '.repeat(LAYOUT.GAP_WIDTH)}${msgs}${' '.repeat(LAYOUT.GAP_WIDTH)}${prompt}`,
+          label:
+            terminalWidth < 100
+              ? truncateText(
+                  chat.lastPrompt || chat.chatId,
+                  Math.max(1, contentWidth - 10),
+                )
+              : `${time}${' '.repeat(LAYOUT.GAP_WIDTH)}${msgs}${' '.repeat(LAYOUT.GAP_WIDTH)}${prompt}`,
           icon: undefined,
           secondary: chat.lastPrompt, // Keep original prompt for search
           hideSecondary: true, // Don't display secondary, only use for filtering
         }
       }),
-    [chats, maxPromptWidth],
+    [chats, maxPromptWidth, terminalWidth],
   )
 
   // Custom filter function that searches the original prompt (stored in secondary)
@@ -172,9 +262,10 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
   // Handle chat selection
   const handleChatSelect = useCallback(
     (item: SelectableListItem) => {
+      if (pendingDelete) return
       onSelectChat(item.id)
     },
-    [onSelectChat],
+    [onSelectChat, pendingDelete],
   )
 
   const handleChatDelete = useCallback(
@@ -194,6 +285,37 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
       meta?: boolean
       option?: boolean
     }) => {
+      if (pendingDelete) {
+        if (key.name === 'escape') {
+          setPendingDelete(null)
+          setStatusMessage(null)
+          return true
+        }
+        if (isPlainEnterKey(key)) {
+          handleDeleteChat(pendingDelete)
+          return true
+        }
+        return true
+      }
+      if (key.ctrl && key.name === 'r') {
+        setStatusMessage(null)
+        setLoadRevision((revision) => revision + 1)
+        return true
+      }
+      if (key.ctrl && key.name === 'o') {
+        const item = filteredItems[focusedIndex]
+        if (item) setInspectedId(item.id)
+        return true
+      }
+      if (key.ctrl && key.name === 'n') {
+        onNewChat()
+        return true
+      }
+      if (key.ctrl && key.name === 'd') {
+        const item = filteredItems[focusedIndex]
+        if (item) handleDeleteChat(item.id)
+        return true
+      }
       if (key.name === 'escape') {
         if (searchQuery.length > 0) {
           setSearchQuery('')
@@ -207,9 +329,8 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
         return true
       }
       if (key.name === 'down') {
-        const maxIndex =
-          Math.min(filteredItems.length, LAYOUT.MAX_RENDERED_CHATS) - 1
-        setFocusedIndex((prev) => Math.min(maxIndex, prev + 1))
+        const maxIndex = filteredItems.length - 1
+        setFocusedIndex((prev) => Math.max(0, Math.min(maxIndex, prev + 1)))
         return true
       }
       if (isPlainEnterKey(key)) {
@@ -233,8 +354,26 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
       focusedIndex,
       onSelectChat,
       onCancel,
+      onNewChat,
+      pendingDelete,
+      handleDeleteChat,
     ],
   )
+
+  const selectedChat = chats.find(
+    (chat) => chat.chatId === filteredItems[focusedIndex]?.id,
+  )
+  if (inspectedId) {
+    const chat = chats.find((chat) => chat.chatId === inspectedId)
+    return (
+      <SavedTranscriptInspector
+        chatId={inspectedId}
+        metadata={`Session: ${inspectedId}\nSaved: ${chat?.timestamp ?? 'unknown'}\nMessages: ${chat?.messageCountKnown === false ? 'unknown' : (chat?.messageCount ?? 'unknown')}\n\n${chat?.lastPrompt ?? 'Prompt unavailable'}`}
+        inspect={dependencies.inspect ?? readSavedTranscriptInspection}
+        onClose={() => setInspectedId(null)}
+      />
+    )
+  }
 
   return (
     <box
@@ -250,12 +389,12 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
       <box
         style={{
           flexDirection: 'column',
-          alignItems: 'center',
+          alignItems: 'stretch',
           justifyContent: 'flex-start',
           width: '100%',
           paddingLeft: 2,
           paddingRight: 2,
-          paddingTop: isCompactMode ? 0 : 1,
+          paddingTop: 0,
           paddingBottom: 0,
           gap: 0,
           flexGrow: 1,
@@ -263,31 +402,16 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
         }}
       >
         {/* Title */}
-        {!isCompactMode && (
-          <box
-            style={{
-              flexDirection: 'column',
-              alignItems: 'center',
-              marginBottom: 1,
-              marginTop: 1,
-              flexShrink: 0,
-            }}
-          >
-            <text
-              style={{ fg: theme.foreground, attributes: TextAttributes.BOLD }}
-            >
-              Select a chat to resume
-            </text>
-          </box>
-        )}
-
-        {/* P6.3: make the render cap explicit instead of silently hiding
-            the rest of the list. */}
-        {!isCompactMode && filteredItems.length > LAYOUT.MAX_RENDERED_CHATS && (
-          <text style={{ fg: theme.muted, flexShrink: 0 }}>
-            {`Showing the ${LAYOUT.MAX_RENDERED_CHATS} most recent of ${filteredItems.length} chats — refine your search to see more`}
-          </text>
-        )}
+        <text
+          style={{
+            fg: theme.foreground,
+            attributes: TextAttributes.BOLD,
+            marginBottom: isCompactMode ? 0 : 1,
+            flexShrink: 0,
+          }}
+        >
+          Saved sessions
+        </text>
 
         {/* Search input */}
         <box
@@ -313,7 +437,7 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
               },
             )}
             onKeyIntercept={handleKeyIntercept}
-            placeholder="Search chats..."
+            placeholder="Search sessions…"
             focused={true}
             maxHeight={1}
             minHeight={1}
@@ -321,38 +445,72 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
           />
         </box>
 
+        <text
+          id="saved-history-status"
+          fg={loadState === 'unavailable' ? theme.error : theme.muted}
+          wrapMode="none"
+        >
+          {loadState === 'loading'
+            ? 'Loading saved sessions…'
+            : loadState === 'partial'
+              ? `Loaded ${chats.length} sessions · more may be loading or unavailable`
+              : loadState === 'unavailable'
+                ? 'Saved sessions unavailable · Ctrl+R retry'
+                : filteredItems.length < chats.length
+                  ? `${filteredItems.length} of ${chats.length} saved sessions`
+                  : `${chats.length} saved sessions`}
+        </text>
         {/* Chat list - grows to fill remaining space */}
         <box
           style={{
             flexDirection: 'column',
             width: contentWidth,
-            borderStyle: 'single',
-            borderColor: theme.muted,
-            customBorderChars: BORDER_CHARS,
             flexGrow: 1,
             flexShrink: 1,
             overflow: 'hidden',
           }}
-          border={['top', 'bottom', 'left', 'right']}
         >
-          <SelectableList
-            items={filteredItems.slice(0, LAYOUT.MAX_RENDERED_CHATS)}
-            focusedIndex={focusedIndex}
-            onSelect={handleChatSelect}
-            actionLabel="[×]"
-            onAction={handleChatDelete}
-            onFocusChange={handleFocusChange}
-            emptyMessage={
-              chats.length === 0
-                ? 'No chat history yet'
-                : searchQuery
-                  ? 'No matching chats'
-                  : 'No chats found'
-            }
-          />
+          {filteredItems.length === 0 && loadState !== 'loaded' ? null : (
+            <SelectableList
+              items={filteredItems}
+              focusedIndex={focusedIndex}
+              onSelect={handleChatSelect}
+              actionLabel="[×]"
+              onAction={handleChatDelete}
+              onFocusChange={handleFocusChange}
+              emptyMessage={
+                chats.length === 0
+                  ? 'No saved sessions yet'
+                  : searchQuery
+                    ? 'No matching sessions'
+                    : 'No saved sessions found'
+              }
+            />
+          )}
         </box>
       </box>
 
+      {selectedChat && (
+        <text
+          fg={theme.muted}
+          style={{ flexShrink: 0, paddingLeft: 2, paddingRight: 2 }}
+          wrapMode="none"
+        >
+          {sliceTextCells(
+            `${formatRelativeTime(selectedChat.timestamp)} · ${selectedChat.messageCountKnown === false ? 'message count unknown' : `${selectedChat.messageCount} messages`}`,
+            0,
+            contentWidth,
+          )}
+        </text>
+      )}
+      {statusMessage && (
+        <text
+          fg={pendingDelete ? theme.warning : theme.foreground}
+          style={{ flexShrink: 0, paddingLeft: 2, paddingRight: 2 }}
+        >
+          {statusMessage}
+        </text>
+      )}
       {/* Bottom bar */}
       <box
         style={{
@@ -380,14 +538,9 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
           {/* Help text */}
           <box style={{ flexGrow: 1, flexShrink: 1 }}>
             <text style={{ fg: theme.muted }}>
-              ↑↓ navigate · Enter select · Click [×] to remove · Esc cancel
+              ↑↓ · Enter open · Ctrl+N new · Ctrl+D delete · Ctrl+O inspect ·
+              Ctrl+R retry · Esc back
             </text>
-            {statusMessage && (
-              <text style={{ fg: theme.muted }}>
-                {' · '}
-                {statusMessage}
-              </text>
-            )}
           </box>
 
           {/* Buttons - hidden on narrow screens */}
@@ -396,37 +549,80 @@ export const ChatHistoryScreen: React.FC<ChatHistoryScreenProps> = ({
               <Button
                 onClick={onNewChat}
                 style={{
-                  paddingLeft: 2,
-                  paddingRight: 2,
+                  paddingLeft: 1,
+                  paddingRight: 1,
                   paddingTop: 0,
                   paddingBottom: 0,
-                  borderStyle: 'single',
-                  borderColor: theme.primary,
-                  customBorderChars: BORDER_CHARS,
+                  flexShrink: 0,
                 }}
-                border={['top', 'bottom', 'left', 'right']}
               >
-                <text style={{ fg: theme.primary }}>New Chat</text>
+                <text style={{ fg: theme.primary }}>New session</text>
               </Button>
               <Button
                 onClick={onCancel}
                 style={{
-                  paddingLeft: 2,
-                  paddingRight: 2,
+                  paddingLeft: 1,
+                  paddingRight: 1,
                   paddingTop: 0,
                   paddingBottom: 0,
-                  borderStyle: 'single',
-                  borderColor: theme.muted,
-                  customBorderChars: BORDER_CHARS,
+                  flexShrink: 0,
                 }}
-                border={['top', 'bottom', 'left', 'right']}
               >
-                <text style={{ fg: theme.muted }}>Cancel</text>
+                <text style={{ fg: theme.muted }}>Back</text>
               </Button>
             </box>
           )}
         </box>
       </box>
     </box>
+  )
+}
+
+function SavedTranscriptInspector({
+  chatId,
+  metadata,
+  inspect,
+  onClose,
+}: {
+  chatId: string
+  metadata: string
+  inspect: typeof readSavedTranscriptInspection
+  onClose: () => void
+}) {
+  const [document, setDocument] = useState<OutputDocument>(() =>
+    createTextDocument({
+      id: `saved-inspection:${chatId}`,
+      title: 'Saved session details',
+      text: metadata,
+      availability: 'pending',
+      notice: 'Loading saved capture for inspection · no session restore',
+    }),
+  )
+  useEffect(() => {
+    const controller = new AbortController()
+    void inspect(chatId, metadata, controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) setDocument(result)
+      })
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setDocument(
+            createTextDocument({
+              id: `saved-inspection:${chatId}`,
+              title: 'Saved session details',
+              text: metadata,
+              availability: 'unavailable',
+              notice: 'Saved capture unavailable · metadata only',
+            }),
+          )
+      })
+    return () => controller.abort()
+  }, [chatId, metadata, inspect])
+  return (
+    <OutputReaderScreen
+      messages={[]}
+      initialDocument={document}
+      onClose={onClose}
+    />
   )
 }

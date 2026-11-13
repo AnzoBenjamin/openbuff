@@ -39,13 +39,16 @@ export const findChromeExecutable = (): string | null => {
   return null
 }
 
-export const getSystemInfo = (processEnv: ProcessEnv = getProcessEnv()) => {
+export const getSystemInfo = (
+  processEnv: ProcessEnv = getProcessEnv(),
+  options: { homeDir?: string | null } = {},
+) => {
   return {
     platform,
     shell: 'bash',
     nodeVersion: process.version,
     arch: process.arch,
-    homedir: os.homedir(),
+    homedir: options.homeDir === undefined ? os.homedir() : options.homeDir ?? '',
     cpus: os.cpus().length,
     chromeAvailable: findChromeExecutable() !== null,
   }

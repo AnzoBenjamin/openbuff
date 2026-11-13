@@ -1,3 +1,5 @@
+import { detectSyntaxErrorViaTreeSitter } from '@codebuff/code-map'
+
 // Pre-flight syntax validation for edit tools (str_replace, write_file,
 // edit_transaction, apply_smart_patch). Catches syntax errors BEFORE dependent
 // edits stack on top of a broken file — today a malformed edit can cascade into
@@ -22,7 +24,17 @@ declare const Bun: {
 
 type BunTranspilerLoader = 'js' | 'jsx' | 'ts' | 'tsx'
 
-export type SyntaxValidationResult = { valid: boolean; message: string }
+export type SyntaxValidationResult = {
+  valid: boolean
+  message: string
+  /**
+   * Best-effort 1-based position of the reported syntax error. Only the Bun
+   * JS/TS validator fills these in; the Python/Go/tree-sitter validators
+   * never do, so callers must treat them as optional diagnostics.
+   */
+  line?: number
+  column?: number
+}
 
 // Module-level cache for Bun.Transpiler instances. Each loader (js/jsx/ts/tsx)
 // gets its own transpiler, reused across calls instead of allocating a fresh
@@ -73,10 +85,10 @@ export function isJavaScriptLikePath(path: string): boolean {
  * content passes syntax validation (or when no validator applies to the file
  * type), or { valid: false, message } when a syntax error is detected.
  */
-export function preflightValidateSyntax(
+export async function preflightValidateSyntax(
   path: string,
   content: string,
-): SyntaxValidationResult {
+): Promise<SyntaxValidationResult> {
   if (isJavaScriptLikePath(path)) {
     return validateJavaScriptLikeSyntax(path, content)
   }
@@ -87,8 +99,31 @@ export function preflightValidateSyntax(
     return validateGoSyntax(content)
   }
 
-  return { valid: true, message: 'No syntax validation needed for this file.' }
+  // For the remaining supported languages (c, cpp, csharp, java, php, ruby,
+  // rust, swift, kotlin, gdscript) use a fail-open tree-sitter parse. Any
+  // uncertainty (grammar unavailable, init/parse error) is treated as a skip.
+  const res = await detectSyntaxErrorViaTreeSitter(path, content)
+  if (res.available && res.hasError) {
+    return {
+      valid: false,
+      message: `Tree-sitter detected a syntax error in ${path}.`,
+    }
+  }
+  return {
+    valid: true,
+    message: res.available
+      ? 'Tree-sitter syntax check passed.'
+      : 'No syntax validation available for this file.',
+  }
 }
+
+/**
+ * Leads with the candidate-content diagnosis (the incident: ~10 rejections for
+ * a content syntax error while the model re-split transactions and re-minted
+ * capabilities), then demotes the two structural causes to fallbacks.
+ */
+const EDIT_TRANSACTION_PREFLIGHT_GUIDANCE =
+  'NO files were changed. Do NOT resubmit the same edit_transaction; it will fail the same way.\nThe syntax error is in the candidate content the edits would produce, not in the current file (which is unchanged): fix the parser tokens cited above inside your newString/content before resubmitting. Re-splitting the transaction, re-minting read capabilities, or switching edit types does not fix a syntax error in the content itself.\nIf the cited tokens do not pinpoint it, two structural causes are common: (1) a rewritten import block — prefer structured insert_import/remove_import operations instead of rewriting an entire import block (e.g. an `import { ... }` left without a valid `from "..."`); (2) an oversized edit (newString/content roughly >30-50 KB) cut in transport, producing a mid-body syntax error like `Unexpected ,` — then re-read the exact target range with `read_files` and resubmit smaller capability-anchored edits (`replace_range` with `readCapability` or `str_replace` with `basedOnRead`), each anchored on a unique declaration, rather than one monolithic transaction.'
 
 /**
  * Formats a preflight failure error message for a given tool. Used by the
@@ -106,7 +141,7 @@ export function formatPreflightErrorMessage(
 ): string {
   const toolSpecificGuidance =
     toolName === 'edit_transaction'
-      ? 'NO files were changed. Do NOT resubmit the same edit_transaction; it will fail the same way.\nFor import changes specifically, prefer structured insert_import/remove_import operations instead of rewriting an entire import block — generated multi-import rewrites are the most common cause of this error (e.g. an `import { ... }` left without a valid `from "..."`).\nAnother common cause is a single oversized edit whose `newString`/`content` (roughly >30-50 KB) was truncated in transport, producing a mid-body syntax error like `Unexpected ,` — the reported error may be a symptom of truncation, not a real bug in the existing file. To recover, split the change into several smaller capability-anchored edits: re-read the exact target range with `read_files`, then submit `replace_range` with `readCapability` or `str_replace` with `basedOnRead` in bounded chunks (anchor each on a unique declaration) rather than one monolithic transaction.'
+      ? EDIT_TRANSACTION_PREFLIGHT_GUIDANCE
       : toolName === 'apply_smart_patch'
         ? 'The smart patch was NOT written to disk. Do NOT resubmit the same patch; it will fail the same way.'
         : 'The edit was NOT written to disk. Do NOT resubmit the same edit; it will fail the same way.'
@@ -126,6 +161,84 @@ function getPythonIndentColumns(leadingWhitespace: string): number {
   return columns
 }
 
+/**
+ * Narrowed view of what Bun.Transpiler throws. A single parse failure is a
+ * BuildMessage-like object with a descriptive top-level `.message` plus 0-based
+ * `.line`/`.column`; multiple failures arrive as an AggregateError whose
+ * top-level `.message` is the useless literal string `Parse error` while
+ * `.errors[]` carries the actionable per-error messages. Bun also exposes a
+ * `.position` object on sub-errors, but its line/column proved internally
+ * inconsistent in probes, so only the top-level fields are trusted here.
+ */
+type BunSyntaxErrorShape = {
+  message?: unknown
+  line?: unknown
+  column?: unknown
+  errors?: unknown
+}
+
+function asBunSyntaxErrorShape(err: unknown): BunSyntaxErrorShape {
+  return (
+    typeof err === 'object' && err !== null ? err : {}
+  ) as BunSyntaxErrorShape
+}
+
+/**
+ * Composes the model-facing parse-error message from Bun's structured throw.
+ *
+ * An AggregateError's bare `Parse error` tells the model nothing about WHAT is
+ * broken (the incident: ~10 identical rejections for a missing comma), so the
+ * structured sub-error messages are surfaced verbatim instead — they carry
+ * the actionable tokens (e.g. `Expected ")" but found ":"`). Verbatim matters:
+ * the edit-tool truncation classifier regexes this composed message for
+ * /Unexpected [\),]/, so sub-error text must never be summarized or reworded.
+ * The 0-based top-level line/column are reported 1-based, best-effort.
+ */
+function describeBunSyntaxError(err: unknown): {
+  message: string
+  line?: number
+  column?: number
+} {
+  const shaped = asBunSyntaxErrorShape(err)
+  const subMessages: string[] = []
+  if (Array.isArray(shaped.errors)) {
+    const subErrors: unknown[] = shaped.errors
+    const seen = new Set<string>()
+    for (const sub of subErrors) {
+      const subMessage = String(asBunSyntaxErrorShape(sub).message ?? '')
+      if (!subMessage || seen.has(subMessage)) continue
+      seen.add(subMessage)
+      subMessages.push(subMessage)
+      if (subMessages.length >= 3) break
+    }
+  }
+  let message = subMessages.length
+    ? `Parse error: ${subMessages.join('; ')}`
+    : shaped.message
+      ? String(shaped.message)
+      : String(err)
+  const line =
+    typeof shaped.line === 'number' &&
+    Number.isFinite(shaped.line) &&
+    shaped.line >= 0
+      ? shaped.line
+      : undefined
+  const column =
+    typeof shaped.column === 'number' &&
+    Number.isFinite(shaped.column) &&
+    shaped.column >= 0
+      ? shaped.column
+      : undefined
+  if (line !== undefined && column !== undefined) {
+    return {
+      message: `${message} (near line ${line + 1}, column ${column + 1} of the candidate content)`,
+      line: line + 1,
+      column: column + 1,
+    }
+  }
+  return { message }
+}
+
 function validateJavaScriptLikeSyntax(
   path: string,
   content: string,
@@ -142,8 +255,14 @@ function validateJavaScriptLikeSyntax(
     const transpiler = getTranspiler(loader)
     transpiler.transformSync(content)
     return { valid: true, message: 'JavaScript/TypeScript syntax passed.' }
-  } catch (err: any) {
-    return { valid: false, message: err.message || String(err) }
+  } catch (err) {
+    const { message, line, column } = describeBunSyntaxError(err)
+    return {
+      valid: false,
+      message,
+      ...(line !== undefined && { line }),
+      ...(column !== undefined && { column }),
+    }
   }
 }
 

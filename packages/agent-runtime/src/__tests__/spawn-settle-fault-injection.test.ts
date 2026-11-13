@@ -11,6 +11,7 @@ import {
   mock,
   spyOn,
 } from 'bun:test'
+import { z } from 'zod/v4'
 
 import { mockFileContext } from './test-utils'
 import * as runAgentStep from '../run-agent-step'
@@ -149,6 +150,33 @@ const faultHandoff = {
   },
 }
 
+describe('journal deps propagation (P2-T2)', () => {
+  it(
+    'extractSubagentContextParams forwards journalWriter/journalReader into the subagent params spread',
+    () => {
+      const journalWriter = { append: () => {} }
+      const journalReader = {
+        lastEvent: () => undefined,
+        events: () => [],
+        toolResultFor: () => undefined,
+        toolResultForInput: () => undefined,
+      }
+      const extracted = realExtractSubagentContextParams({
+        clientSessionId: 'test-session',
+        fileContext: mockFileContext,
+        signal: new AbortController().signal,
+        userId: TEST_USER_ID,
+        journalWriter,
+        journalReader,
+      } as unknown as Parameters<
+        typeof realExtractSubagentContextParams
+      >[0])
+      expect(extracted.journalWriter).toBe(journalWriter)
+      expect(extracted.journalReader).toBe(journalReader)
+    },
+  )
+})
+
 describe('spawn settle fault injection (M2-T1)', () => {
   const createMockAgent = (
     id: string,
@@ -158,9 +186,7 @@ describe('spawn settle fault injection (M2-T1)', () => {
     displayName: `Mock ${id}`,
     outputMode: 'last_message' as const,
     inputSchema: {
-      prompt: {
-        safeParse: () => ({ success: true }),
-      } as unknown as AgentTemplate['inputSchema']['prompt'],
+      prompt: z.string(),
     },
     spawnerPrompt: '',
     model: '',

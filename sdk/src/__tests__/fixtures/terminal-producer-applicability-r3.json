@@ -1,0 +1,2209 @@
+{
+  "edgeCount": 156,
+  "edges": [
+    {
+      "branchId": "terminal.sync",
+      "producerId": "sdk.terminal",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3315",
+        "sdk/src/tools/run-terminal-command.ts:1257"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "terminal.safety.check",
+      "producerId": "sdk.terminal",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3315",
+        "sdk/src/tools/run-terminal-command.ts:1257",
+        "sdk/src/tools/run-terminal-command.ts:1378",
+        "sdk/src/tools/run-terminal-command.ts:961"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "terminal.safety.check",
+      "producerId": "terminal.dirty",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "listDirtyPaths fixes argv to status --porcelain -uall. Commit diff/check queries belong to validateStagedCommit; passing another attribution label to listDirtyPaths cannot establish a diff/check producer edge.",
+      "sourceRefs": [
+        "sdk/src/tools/run-terminal-command.ts:1154",
+        "sdk/src/tools/run-terminal-command.ts:1163",
+        "sdk/src/tools/run-terminal-command.ts:1366",
+        "sdk/src/tools/run-terminal-command.ts:1378",
+        "sdk/src/tools/run-terminal-command.ts:961"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "terminal.safety.diff",
+      "producerId": "sdk.terminal",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3315",
+        "sdk/src/tools/run-terminal-command.ts:1257",
+        "sdk/src/tools/run-terminal-command.ts:1378",
+        "sdk/src/tools/run-terminal-command.ts:961"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "terminal.safety.diff",
+      "producerId": "terminal.dirty",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "listDirtyPaths fixes argv to status --porcelain -uall. Commit diff/check queries belong to validateStagedCommit; passing another attribution label to listDirtyPaths cannot establish a diff/check producer edge.",
+      "sourceRefs": [
+        "sdk/src/tools/run-terminal-command.ts:1154",
+        "sdk/src/tools/run-terminal-command.ts:1163",
+        "sdk/src/tools/run-terminal-command.ts:1366",
+        "sdk/src/tools/run-terminal-command.ts:1378",
+        "sdk/src/tools/run-terminal-command.ts:961"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "terminal.safety.dirty-before",
+      "producerId": "sdk.terminal",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "terminal.safety.dirty-before",
+      "producerId": "terminal.dirty",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Dirty-before/after are exercised through actual SDK terminal settlement/preflight; the legacy compatibility helper uses an explicitly registered direct host operation.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3315",
+        "sdk/src/tools/run-terminal-command.ts:1154",
+        "sdk/src/tools/run-terminal-command.ts:1163",
+        "sdk/src/tools/run-terminal-command.ts:1257",
+        "sdk/src/tools/run-terminal-command.ts:1366"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "terminal.safety.dirty-after",
+      "producerId": "sdk.terminal",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "terminal.safety.dirty-after",
+      "producerId": "terminal.dirty",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Dirty-before/after are exercised through actual SDK terminal settlement/preflight; the legacy compatibility helper uses an explicitly registered direct host operation.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3315",
+        "sdk/src/tools/run-terminal-command.ts:1154",
+        "sdk/src/tools/run-terminal-command.ts:1163",
+        "sdk/src/tools/run-terminal-command.ts:1257",
+        "sdk/src/tools/run-terminal-command.ts:1366"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "terminal.legacy-dirty",
+      "producerId": "terminal.dirty",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Dirty-before/after are exercised through actual SDK terminal settlement/preflight; the legacy compatibility helper uses an explicitly registered direct host operation.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3315",
+        "sdk/src/tools/run-terminal-command.ts:1154",
+        "sdk/src/tools/run-terminal-command.ts:1163",
+        "sdk/src/tools/run-terminal-command.ts:1257",
+        "sdk/src/tools/run-terminal-command.ts:1366"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "workspace.branch",
+      "producerId": "sdk.push-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "workspace.branch",
+      "producerId": "sdk.inspect-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3526",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "workspace.upstream",
+      "producerId": "sdk.push-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "workspace.upstream",
+      "producerId": "sdk.inspect-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3526",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "workspace.head",
+      "producerId": "sdk.push-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "workspace.head",
+      "producerId": "sdk.inspect-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3526",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "workspace.status",
+      "producerId": "sdk.push-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "workspace.status",
+      "producerId": "sdk.inspect-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3526",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "workspace.default-ref",
+      "producerId": "sdk.push-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "workspace.default-ref",
+      "producerId": "sdk.inspect-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3526",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.bounded.root",
+      "producerId": "sdk.push-workspace",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "inspectWorkspace and repository bootstrap do not pass timeoutMs, so resolveWorkspaceIdentity selects legacy branches. The push resolver calls that same inspectWorkspace consumer.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435",
+        "sdk/src/run.ts:3526",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.bounded.root",
+      "producerId": "sdk.inspect-workspace",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "inspectWorkspace and repository bootstrap do not pass timeoutMs, so resolveWorkspaceIdentity selects legacy branches. The push resolver calls that same inspectWorkspace consumer.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435",
+        "sdk/src/run.ts:3526",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.bounded.root",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Selected helper variant is reached through the actual named SDK run.ts caller and keeps its action or host-observation correlation.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.bounded.root",
+      "producerId": "sdk.journal-bootstrap",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "inspectWorkspace and repository bootstrap do not pass timeoutMs, so resolveWorkspaceIdentity selects legacy branches. The push resolver calls that same inspectWorkspace consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1003",
+        "sdk/src/run.ts:1142",
+        "sdk/src/run.ts:3526",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/services/workspace-bootstrap.ts:27",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.bounded.root",
+      "producerId": "sdk.broker-bootstrap",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "inspectWorkspace and repository bootstrap do not pass timeoutMs, so resolveWorkspaceIdentity selects legacy branches. The push resolver calls that same inspectWorkspace consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1003",
+        "sdk/src/run.ts:1142",
+        "sdk/src/run.ts:3526",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/services/workspace-bootstrap.ts:27",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.bounded.common-dir",
+      "producerId": "sdk.push-workspace",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "inspectWorkspace and repository bootstrap do not pass timeoutMs, so resolveWorkspaceIdentity selects legacy branches. The push resolver calls that same inspectWorkspace consumer.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435",
+        "sdk/src/run.ts:3526",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.bounded.common-dir",
+      "producerId": "sdk.inspect-workspace",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "inspectWorkspace and repository bootstrap do not pass timeoutMs, so resolveWorkspaceIdentity selects legacy branches. The push resolver calls that same inspectWorkspace consumer.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435",
+        "sdk/src/run.ts:3526",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.bounded.common-dir",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Selected helper variant is reached through the actual named SDK run.ts caller and keeps its action or host-observation correlation.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.bounded.common-dir",
+      "producerId": "sdk.journal-bootstrap",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "inspectWorkspace and repository bootstrap do not pass timeoutMs, so resolveWorkspaceIdentity selects legacy branches. The push resolver calls that same inspectWorkspace consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1003",
+        "sdk/src/run.ts:1142",
+        "sdk/src/run.ts:3526",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/services/workspace-bootstrap.ts:27",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.bounded.common-dir",
+      "producerId": "sdk.broker-bootstrap",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "inspectWorkspace and repository bootstrap do not pass timeoutMs, so resolveWorkspaceIdentity selects legacy branches. The push resolver calls that same inspectWorkspace consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1003",
+        "sdk/src/run.ts:1142",
+        "sdk/src/run.ts:3526",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/services/workspace-bootstrap.ts:27",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.legacy.root",
+      "producerId": "sdk.push-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Selected helper variant is reached through the actual named SDK run.ts caller and keeps its action or host-observation correlation.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.legacy.root",
+      "producerId": "sdk.inspect-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Selected helper variant is reached through the actual named SDK run.ts caller and keeps its action or host-observation correlation.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3526",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.legacy.root",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle passes timeoutMs and phase=bundle, so resolveWorkspaceIdentity selects bounded branches.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435",
+        "sdk/src/run.ts:3537",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.legacy.root",
+      "producerId": "sdk.journal-bootstrap",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Selected helper variant is reached through the actual named SDK run.ts caller and keeps its action or host-observation correlation.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1003",
+        "sdk/src/run.ts:1142",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/services/workspace-bootstrap.ts:27"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.legacy.root",
+      "producerId": "sdk.broker-bootstrap",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Selected helper variant is reached through the actual named SDK run.ts caller and keeps its action or host-observation correlation.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1003",
+        "sdk/src/run.ts:1142",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/services/workspace-bootstrap.ts:27"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.legacy.common-dir",
+      "producerId": "sdk.push-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Selected helper variant is reached through the actual named SDK run.ts caller and keeps its action or host-observation correlation.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.legacy.common-dir",
+      "producerId": "sdk.inspect-workspace",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Selected helper variant is reached through the actual named SDK run.ts caller and keeps its action or host-observation correlation.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3526",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/tools/inspect-workspace.ts:15"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.legacy.common-dir",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle passes timeoutMs and phase=bundle, so resolveWorkspaceIdentity selects bounded branches.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:177",
+        "sdk/src/run.ts:1435",
+        "sdk/src/run.ts:3537",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.legacy.common-dir",
+      "producerId": "sdk.journal-bootstrap",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Selected helper variant is reached through the actual named SDK run.ts caller and keeps its action or host-observation correlation.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1003",
+        "sdk/src/run.ts:1142",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/services/workspace-bootstrap.ts:27"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "identity.legacy.common-dir",
+      "producerId": "sdk.broker-bootstrap",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Selected helper variant is reached through the actual named SDK run.ts caller and keeps its action or host-observation correlation.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1003",
+        "sdk/src/run.ts:1142",
+        "sdk/src/services/repository-identity.ts:47",
+        "sdk/src/services/repository-identity.ts:63",
+        "sdk/src/services/workspace-bootstrap.ts:27"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.status.all",
+      "producerId": "sdk.git-status",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The public git_status input schema has no timeoutMs selector, and run.ts supplies none. Its actual tool consumer selects legacy branches; a direct gitStatus(timeoutMs) call is supplemental adapter evidence only.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.status.all",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual caller selects this timeout, path, and include_diff/staged combination.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.status.all",
+      "producerId": "direct.git-branch",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "gitBranch calls gitStatus with cwd/signal/executionContext only. It has no timeoutMs/path/include_diff/staged selector, so only legacy status.all is reachable.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.status.filtered",
+      "producerId": "sdk.git-status",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The public git_status input schema has no timeoutMs selector, and run.ts supplies none. Its actual tool consumer selects legacy branches; a direct gitStatus(timeoutMs) call is supplemental adapter evidence only.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.status.filtered",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle fixes timeoutMs, include_diff=true, and no path/staged input. Only bounded status.all and bounded diff-unstaged.all are selected.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.status.filtered",
+      "producerId": "direct.git-branch",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "gitBranch calls gitStatus with cwd/signal/executionContext only. It has no timeoutMs/path/include_diff/staged selector, so only legacy status.all is reachable.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-unstaged.all",
+      "producerId": "sdk.git-status",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The public git_status input schema has no timeoutMs selector, and run.ts supplies none. Its actual tool consumer selects legacy branches; a direct gitStatus(timeoutMs) call is supplemental adapter evidence only.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-unstaged.all",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual caller selects this timeout, path, and include_diff/staged combination.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-unstaged.all",
+      "producerId": "direct.git-branch",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "gitBranch calls gitStatus with cwd/signal/executionContext only. It has no timeoutMs/path/include_diff/staged selector, so only legacy status.all is reachable.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-unstaged.filtered",
+      "producerId": "sdk.git-status",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The public git_status input schema has no timeoutMs selector, and run.ts supplies none. Its actual tool consumer selects legacy branches; a direct gitStatus(timeoutMs) call is supplemental adapter evidence only.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-unstaged.filtered",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle fixes timeoutMs, include_diff=true, and no path/staged input. Only bounded status.all and bounded diff-unstaged.all are selected.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-unstaged.filtered",
+      "producerId": "direct.git-branch",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "gitBranch calls gitStatus with cwd/signal/executionContext only. It has no timeoutMs/path/include_diff/staged selector, so only legacy status.all is reachable.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-staged.all",
+      "producerId": "sdk.git-status",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The public git_status input schema has no timeoutMs selector, and run.ts supplies none. Its actual tool consumer selects legacy branches; a direct gitStatus(timeoutMs) call is supplemental adapter evidence only.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-staged.all",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle fixes timeoutMs, include_diff=true, and no path/staged input. Only bounded status.all and bounded diff-unstaged.all are selected.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-staged.all",
+      "producerId": "direct.git-branch",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "gitBranch calls gitStatus with cwd/signal/executionContext only. It has no timeoutMs/path/include_diff/staged selector, so only legacy status.all is reachable.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-staged.filtered",
+      "producerId": "sdk.git-status",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The public git_status input schema has no timeoutMs selector, and run.ts supplies none. Its actual tool consumer selects legacy branches; a direct gitStatus(timeoutMs) call is supplemental adapter evidence only.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-staged.filtered",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle fixes timeoutMs, include_diff=true, and no path/staged input. Only bounded status.all and bounded diff-unstaged.all are selected.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.bounded.diff-staged.filtered",
+      "producerId": "direct.git-branch",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "gitBranch calls gitStatus with cwd/signal/executionContext only. It has no timeoutMs/path/include_diff/staged selector, so only legacy status.all is reachable.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.status.all",
+      "producerId": "sdk.git-status",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual caller selects this timeout, path, and include_diff/staged combination.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.status.all",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle fixes timeoutMs, include_diff=true, and no path/staged input. Only bounded status.all and bounded diff-unstaged.all are selected.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.status.all",
+      "producerId": "direct.git-branch",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual caller selects this timeout, path, and include_diff/staged combination.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.status.filtered",
+      "producerId": "sdk.git-status",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual caller selects this timeout, path, and include_diff/staged combination.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.status.filtered",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle fixes timeoutMs, include_diff=true, and no path/staged input. Only bounded status.all and bounded diff-unstaged.all are selected.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.status.filtered",
+      "producerId": "direct.git-branch",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "gitBranch calls gitStatus with cwd/signal/executionContext only. It has no timeoutMs/path/include_diff/staged selector, so only legacy status.all is reachable.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-unstaged.all",
+      "producerId": "sdk.git-status",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual caller selects this timeout, path, and include_diff/staged combination.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-unstaged.all",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle fixes timeoutMs, include_diff=true, and no path/staged input. Only bounded status.all and bounded diff-unstaged.all are selected.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-unstaged.all",
+      "producerId": "direct.git-branch",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "gitBranch calls gitStatus with cwd/signal/executionContext only. It has no timeoutMs/path/include_diff/staged selector, so only legacy status.all is reachable.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-unstaged.filtered",
+      "producerId": "sdk.git-status",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual caller selects this timeout, path, and include_diff/staged combination.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-unstaged.filtered",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle fixes timeoutMs, include_diff=true, and no path/staged input. Only bounded status.all and bounded diff-unstaged.all are selected.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-unstaged.filtered",
+      "producerId": "direct.git-branch",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "gitBranch calls gitStatus with cwd/signal/executionContext only. It has no timeoutMs/path/include_diff/staged selector, so only legacy status.all is reachable.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-staged.all",
+      "producerId": "sdk.git-status",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual caller selects this timeout, path, and include_diff/staged combination.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-staged.all",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle fixes timeoutMs, include_diff=true, and no path/staged input. Only bounded status.all and bounded diff-unstaged.all are selected.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-staged.all",
+      "producerId": "direct.git-branch",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "gitBranch calls gitStatus with cwd/signal/executionContext only. It has no timeoutMs/path/include_diff/staged selector, so only legacy status.all is reachable.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-staged.filtered",
+      "producerId": "sdk.git-status",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual caller selects this timeout, path, and include_diff/staged combination.",
+      "sourceRefs": [
+        "common/src/tools/params/tool/git-status.ts:11",
+        "sdk/src/run.ts:3519",
+        "sdk/src/tools/git-status.ts:247"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-staged.filtered",
+      "producerId": "sdk.bundle",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "getChangeReviewBundle fixes timeoutMs, include_diff=true, and no path/staged input. Only bounded status.all and bounded diff-unstaged.all are selected.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-status.legacy.diff-staged.filtered",
+      "producerId": "direct.git-branch",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "gitBranch calls gitStatus with cwd/signal/executionContext only. It has no timeoutMs/path/include_diff/staged selector, so only legacy status.all is reachable.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.snapshot-head",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3551",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/run-targeted-validation.ts:108",
+        "sdk/src/tools/run-targeted-validation.ts:63"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.snapshot-porcelain",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3551",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/run-targeted-validation.ts:108",
+        "sdk/src/tools/run-targeted-validation.ts:63"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.bundle-head",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.bundle-porcelain",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.clean-parent",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.clean-parent",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3551",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/run-targeted-validation.ts:108",
+        "sdk/src/tools/run-targeted-validation.ts:63"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.clean-committed-diff",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.clean-committed-diff",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3551",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/run-targeted-validation.ts:108",
+        "sdk/src/tools/run-targeted-validation.ts:63"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.full-binary-diff",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.full-binary-diff",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3551",
+        "sdk/src/tools/get-change-review-bundle.ts:523",
+        "sdk/src/tools/get-change-review-bundle.ts:652",
+        "sdk/src/tools/run-targeted-validation.ts:108",
+        "sdk/src/tools/run-targeted-validation.ts:63"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.security-default-ref",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:252",
+        "sdk/src/tools/get-change-review-bundle.ts:262",
+        "sdk/src/tools/get-change-review-bundle.ts:279",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.security-merge-base",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:252",
+        "sdk/src/tools/get-change-review-bundle.ts:262",
+        "sdk/src/tools/get-change-review-bundle.ts:279",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "bundle.security-parent",
+      "producerId": "sdk.bundle",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3537",
+        "sdk/src/tools/get-change-review-bundle.ts:252",
+        "sdk/src/tools/get-change-review-bundle.ts:262",
+        "sdk/src/tools/get-change-review-bundle.ts:279",
+        "sdk/src/tools/get-change-review-bundle.ts:744"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-branch.prior",
+      "producerId": "direct.git-branch",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-branch.create",
+      "producerId": "direct.git-branch",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "git-branch.create-switch",
+      "producerId": "direct.git-branch",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/tools/git-branch.ts:104",
+        "sdk/src/tools/git-branch.ts:124",
+        "sdk/src/tools/git-branch.ts:57"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "background.attached",
+      "producerId": "sdk.terminal",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:412",
+        "sdk/src/run.ts:3315",
+        "sdk/src/tools/run-terminal-command.ts:1257",
+        "sdk/src/tools/run-terminal-command.ts:1423"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "background.transferred",
+      "producerId": "sdk.terminal",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/host-execution.ts:412",
+        "sdk/src/run.ts:3315",
+        "sdk/src/tools/run-terminal-command.ts:1257",
+        "sdk/src/tools/run-terminal-command.ts:1423"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "hook.configured.project",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3468",
+        "sdk/src/run.ts:3551",
+        "sdk/src/tools/file-change-hooks.ts:1597",
+        "sdk/src/tools/file-change-hooks.ts:1674",
+        "sdk/src/tools/run-targeted-validation.ts:108",
+        "sdk/src/tools/run-targeted-validation.ts:63"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "hook.configured.project",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3468",
+        "sdk/src/run.ts:3551",
+        "sdk/src/tools/file-change-hooks.ts:1597",
+        "sdk/src/tools/file-change-hooks.ts:1674",
+        "sdk/src/tools/run-targeted-validation.ts:108",
+        "sdk/src/tools/run-targeted-validation.ts:63"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "hook.configured.per-file",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3468",
+        "sdk/src/run.ts:3551",
+        "sdk/src/tools/file-change-hooks.ts:1597",
+        "sdk/src/tools/file-change-hooks.ts:1674",
+        "sdk/src/tools/run-targeted-validation.ts:108",
+        "sdk/src/tools/run-targeted-validation.ts:63"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "hook.configured.per-file",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3468",
+        "sdk/src/run.ts:3551",
+        "sdk/src/tools/file-change-hooks.ts:1597",
+        "sdk/src/tools/file-change-hooks.ts:1674",
+        "sdk/src/tools/run-targeted-validation.ts:108",
+        "sdk/src/tools/run-targeted-validation.ts:63"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "hook.inferred-opt-in.project",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3468",
+        "sdk/src/tools/file-change-hooks.ts:1597",
+        "sdk/src/tools/file-change-hooks.ts:1619",
+        "sdk/src/tools/file-change-hooks.ts:1674",
+        "sdk/src/tools/file-change-hooks.ts:510",
+        "sdk/src/tools/file-change-hooks.ts:794"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "hook.inferred-opt-in.project",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3468",
+        "sdk/src/tools/file-change-hooks.ts:1597",
+        "sdk/src/tools/file-change-hooks.ts:1619",
+        "sdk/src/tools/file-change-hooks.ts:1674",
+        "sdk/src/tools/file-change-hooks.ts:510",
+        "sdk/src/tools/file-change-hooks.ts:794"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "hook.inferred-opt-in.per-file",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3468",
+        "sdk/src/tools/file-change-hooks.ts:1597",
+        "sdk/src/tools/file-change-hooks.ts:1619",
+        "sdk/src/tools/file-change-hooks.ts:1674",
+        "sdk/src/tools/file-change-hooks.ts:510",
+        "sdk/src/tools/file-change-hooks.ts:794"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "hook.inferred-opt-in.per-file",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Actual named consumer selects the concrete branch; planned cases expand applicable phase and clean/worktree selectors.",
+      "sourceRefs": [
+        "sdk/src/run.ts:3468",
+        "sdk/src/tools/file-change-hooks.ts:1597",
+        "sdk/src/tools/file-change-hooks.ts:1619",
+        "sdk/src/tools/file-change-hooks.ts:1674",
+        "sdk/src/tools/file-change-hooks.ts:510",
+        "sdk/src/tools/file-change-hooks.ts:794"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.tsc.baseline",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.tsc.baseline",
+      "producerId": "sdk.hooks",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.tsc.baseline",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.tsc.current",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.tsc.current",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.tsc.current",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.tsc.after",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.tsc.after",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.tsc.after",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.eslint.baseline",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.eslint.baseline",
+      "producerId": "sdk.hooks",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.eslint.baseline",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.eslint.current",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.eslint.current",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.eslint.current",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.eslint.after",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.eslint.after",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.eslint.after",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.ruff.baseline",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.ruff.baseline",
+      "producerId": "sdk.hooks",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.ruff.baseline",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.ruff.current",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.ruff.current",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.ruff.current",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.ruff.after",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.ruff.after",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.ruff.after",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.pyright.baseline",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.pyright.baseline",
+      "producerId": "sdk.hooks",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.pyright.baseline",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.pyright.current",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.pyright.current",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.pyright.current",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.pyright.after",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.pyright.after",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.pyright.after",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.cargo.baseline",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.cargo.baseline",
+      "producerId": "sdk.hooks",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.cargo.baseline",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.cargo.current",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.cargo.current",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.cargo.current",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.cargo.after",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.cargo.after",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.cargo.after",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.go.baseline",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.go.baseline",
+      "producerId": "sdk.hooks",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.go.baseline",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "source-backed-not-applicable",
+      "explanation": "The SDK mutation preflight captures baseline before write_file. The hook injector either captures current with skipSecondCapture=true or consumes the retained baseline and captures after; neither hooks nor targeted validation launches a new baseline command inside that consumer.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.go.current",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.go.current",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.go.current",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.go.after",
+      "producerId": "sdk.diagnostic",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.go.after",
+      "producerId": "sdk.hooks",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    },
+    {
+      "branchId": "diagnostic.go.after",
+      "producerId": "sdk.targeted-validation",
+      "applicability": "reachable-prepared-unexecuted",
+      "explanation": "Current uses an actual matching SDK hook without a pending baseline; after uses SDK write_file then a matching hook/targeted validation. SDK diagnostic baseline uses the actual mutation preflight runner.",
+      "sourceRefs": [
+        "sdk/src/run.ts:1071",
+        "sdk/src/run.ts:1813",
+        "sdk/src/services/diagnostic-delta-runner.ts:260",
+        "sdk/src/services/diagnostic-delta-runner.ts:262",
+        "sdk/src/services/diagnostic-delta.ts:206",
+        "sdk/src/services/diagnostic-delta.ts:259",
+        "sdk/src/services/diagnostic-delta.ts:789",
+        "sdk/src/services/diagnostic-delta.ts:862"
+      ],
+      "executed": false
+    }
+  ]
+}

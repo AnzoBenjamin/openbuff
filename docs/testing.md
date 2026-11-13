@@ -4,6 +4,8 @@
 - Use `spyOn()` only for globals / legacy seams.
 - Avoid `mock.module()` for functions; use `@codebuff/common/testing/mock-modules.ts` helpers for constants only.
 
+SDK terminal branch-control tests read their input tables from `sdk/src/__tests__/fixtures/`. Execution branch fixtures keep captures in memory during normal tests. Set `B19_TOOLCHAIN_BRANCH_EVIDENCE_DIR`, `B19_SDK_SUPERVISION_EVIDENCE_DIR`, or `B19_TERMINAL_BRANCH_R3_EVIDENCE_DIR` to an owned roadmap capture directory to retain receipts.
+
 ## Running per-package scripts with bun
 
 `bun --cwd <pkg> run <script>` does NOT execute the script — it silently prints
@@ -17,6 +19,165 @@ easy to think typecheck/test passed when nothing ran. Use one of these instead:
 This applies to `typecheck`, `test`, `build`, etc.
 
 CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer integration tests via components for hook behavior.
+
+## Test-infra notes (bun)
+
+- **Render-path cost checks use paired samples.** The layout benchmark warms all
+  implementations, calibrates batches to at least 5 ms, and rotates measurement
+  order. It reports median ratios but gates the conservative lower bound from
+  nine paired samples against the existing 2x/4x limits. Noisy comparisons are
+  remeasured together; the bounded benchmark cases have a 20-second budget for
+  loaded runners. Wrap-pass and allocation invariants remain deterministic.
+
+- **Code-map packaging tests need built grammars.** CI builds the SDK before
+  the code-map suite and sets `CODEBUFF_WASM_DIR` to the generated grammar
+  directory so each isolated test worker can load every advertised language.
+  GDScript comes from the checksum-pinned repair source rather than an installed
+  dependency.
+  From the repository root, reproduce that prerequisite and suite with:
+
+  ```bash
+  (cd sdk && bun run build)
+  CODEBUFF_WASM_DIR="$PWD/sdk/dist/wasm" bun test --isolate packages/code-map
+  ```
+
+- **Pinned Bun and OpenTUI runtime.** Development and CI use Bun 1.4.4
+  with OpenTUI 0.8.3. The runtime pin lives in `.bun-version`, workspace
+  manifests and CI setup steps. OpenTUI 0.8.3 requires Bun >= 1.3.14;
+  the old Bun 1.3.5 renderer-test workaround is no longer compatible.
+  Keep the native asset preload and test isolation when running individual
+  renderer suites:
+
+  ```bash
+  cd cli && bun test --preload ./scripts/preload-opentui.ts --isolate <test-files>
+  ```
+
+  Check `bun --version` before reproducing CI failures. Older Bun 1.3.x
+  releases had FFI/TDZ initialization failures (oven-sh/bun#30651 and
+  oven-sh/bun#30717); use the current pin rather than downgrading OpenTUI tests.
+
+- **Run the exact CI discovery+invocation before pushing.** `bun test --isolate`
+  does NOT give each file its own process — files share a pool of worker processes,
+  so which files cohabit a module registry depends on the machine's core count and
+  cross-file mock-leak scheduling differs between machines. Local isolated-file or
+  small-pair runs cannot prove CI-schedule correctness, so run CI's own discovery
+  and invocation locally first:
+
+  ```bash
+  cd cli && bun run test
+  ```
+
+  The runner applies the empty-list guard and binds the installed OpenTUI
+  native asset before module mocks load. It also seeds `OTUI_ASSET_ROOT` in the
+  parent environment so Bun's reused isolated workers avoid the asynchronous
+  native-package default-export initialization race. No dependency files are patched.
+
+  This matches the test discovery command in `.github/workflows/ci.yml` exactly
+  (it collects both `*.test.ts` and `*.test.tsx`, excluding
+  `*.integration.test.ts`).
+
+  Keep per-package `test` scripts on documented `bun test` options only:
+  `cli`'s script is `bun run scripts/run-cli-tests.ts`, which reproduces this CI
+  discovery exactly (`--isolate` over the same `*.test.ts`/`*.test.tsx` set,
+  excluding `*.integration.test.ts`) and then runs `bun test` over that list, so
+  `bun run test` at the repo root cannot diverge from the schedule documented
+  here. `packages/indexer` adds just `--isolate`.
+
+  Discovery lives in that bun-run TypeScript script rather than a
+  `find | sort | tr` pipeline because `engines` declares bun only: the package
+  test entry point must not require an undeclared POSIX userland that nothing
+  pins or locks. It walks the tree with `node:fs` and fails loudly instead of
+  silently degrading:
+  - an empty discovery throws `No test files found in cli ...` and exits 1,
+    matching CI's empty-glob policy, instead of expanding to nothing and
+    degenerating into bare `bun test` (the stalled invocation described below);
+  - an unreadable directory throws naming the path, so a partial list can never
+    report a vacuous green;
+  - the sorted file list and the `--isolate` invocation are pinned by
+    `cli/src/__tests__/run-cli-tests.test.ts`.
+
+  The `*.integration.test.ts` exclusion is load-bearing, not cosmetic, but it is
+  **not** the cause of the stall described below: those suites drive a real tmux
+  server, so with one installed but no server running they fail rather than
+  skip (measured: 18 failures when they are included). Any other package adding
+  a custom `test` script owes the same empty-list guard and fail-loud discovery.
+
+  A bare `cd cli && bun test` is **not** equivalent and reliably stalls. The
+  cause is cross-file cohabitation in bun's default (non-isolated) mode, not the
+  integration suites — `--isolate` is what fixes it, and the integration
+  exclusion is independent of the stall. Measured on a 12-core box, stopping at
+  a hard kill and recording where each run died:
+
+  | invocation                                       | result                                    |
+  | ------------------------------------------------ | ----------------------------------------- |
+  | bare `bun test`                                  | stalled, killed at 300s (no summary)      |
+  | all suites, integration excluded, no `--isolate` | stalled, killed at 200s                   |
+  | all 39 `*.test.tsx` suites alone, no `--isolate` | **pass**, 477 tests, 2.8s                 |
+  | one `.tsx` suite alone (`single-block-markdown`) | **pass**, 3 tests, 1.3s                   |
+  | all suites + integration, `--isolate`            | completes, 100s (18 integration failures) |
+
+  Each stalled run died inside the same `src/components/__tests__/*.test.tsx`
+  section, and every `.tsx` file passes alone and as a group. So the deadlock
+  needs the tsx render suites to be loaded into a registry that non-tsx suites
+  have already populated with module mocks — the OpenTUI FFI renderer cannot
+  then initialise and its progress bar keeps the process alive forever without
+  ever printing a summary. Consequences worth keeping in mind:
+  - Do not "fix" a stall by deleting or excluding tsx suites: they are all
+    green in isolation. Add `--isolate` instead.
+  - A stall is an **absence** of output, not a failure message, so it is easy
+    to mistake for a slow suite. Run suspicious invocations under a hard
+    `timeout` and treat a missing `Ran N tests` line as a stall.
+  - Wrapping a stalled run in `timeout` does not kill the `bun` child by itself;
+    kill the process group (`setsid`, or `pkill -f 'bun test'`) or an orphaned
+    runner will keep burning a core and make every later measurement look worse.
+
+  `--parallel=<n>` does exist (`bun test --help`, bun >= 1.3.14) and implies
+  `--isolate`, but do not adopt it for a package script: it pins the worker
+  count to the local core count, which is precisely what decides cross-file
+  `mock.module` leakage (see below), so a local green would stop being
+  readable against CI's schedule.
+
+- **`mock.module` hygiene.** Prefer `spyOn(ns, 'fn')` + `mock.restore()` over
+  `mock.module`. If `mock.module` is required:
+  - Capture the real module BEFORE registering, as a plain-object snapshot:
+    `const real = { ...(await import('spec')) }` — the module namespace is a live
+    binding that `mock.module` patches in place, so a static namespace import is
+    not a safe capture.
+  - Spread the captured exports in the factory, and make every override
+    delegate-unless-armed (armed flag set in `beforeEach`, cleared in `afterAll`).
+    A registry-wide override that replaces exports unconditionally leaks into
+    sibling suites.
+  - Never capture the real module via `createRequire` — it bridges the CJS/ESM
+    registries and can busy-spin sibling suites.
+
+  The shared helpers `mockModule()` / `clearMockedModules()` from
+  `@codebuff/common/testing/mock-modules` have a sharp resolution contract:
+  `modulePath` is resolved relative to `common/src/testing/mock-modules.ts`
+  ITSELF, not the calling test file, so caller-relative paths throw 'Cannot
+  find module'. Only use them for specifiers resolvable from common/src/testing
+  (existing consumers use bare package names).
+
+  `createRequire` captures have one sanctioned exception: when a workspace
+  package's ESM `import` condition resolves to a build artifact that may be
+  stale or broken under `bun test` (e.g. `@openbuff/sdk` resolves to the sdk
+  package's dist bundle output, not its source),
+  capture the real exports via `createRequire` (the `require` condition),
+  spread them EAGERLY into the factory, and never read the capture lazily —
+  lazy delegation through a require-captured binding is the CJS/ESM bridge
+  trap itself (the guard's first check).
+
+  Restore factories must also spread:
+  `mock.module(spec, () => ({ ...realSnapshot }))` — a factory returning the
+  snapshot directly contains no spread and is flagged as a full replacement.
+  Before pushing, run `bun --cwd=scripts run guard:mock-module` (wired into
+  check:ci-local Step F); it flags lazy live-binding delegation and first-party
+  full-replacement factories (exempt with a `mock-module-guard: intentional
+full replacement` comment).
+
+- **OAuth callback tests use per-test ports.** `setChatGptOAuthRedirectUriForTests()`
+  (`cli/src/utils/chatgpt-oauth.ts`) redirects the callback server to a unique
+  per-test port; production keeps the provider-registered fixed port (1455). Do
+  not re-add fixed-port bind assumptions in new OAuth tests.
 
 ## Coding harness experiments
 
@@ -36,7 +197,7 @@ Retrieval runs can append local-only JSONL metrics under
 
 ## CLI tmux Testing
 
-For testing CLI behavior via tmux, use the helper scripts in `scripts/tmux/`. These handle bracketed paste mode and session logging automatically. Session data is saved to `debug/tmux-sessions/` in YAML format and can be viewed with `bun scripts/tmux/tmux-viewer/index.tsx`. See `scripts/tmux/README.md` for details.
+For testing CLI behavior via tmux, use the helper scripts in `scripts/tmux/`. These handle bracketed paste mode and session logging automatically. Session data is saved to `debug/tmux-sessions/` in YAML format and can be viewed with `bun scripts/tmux/tmux-viewer/index.tsx` (the @cli-tester capture harness — not the user-facing run viewer). To inspect an agent RUN's journaled steps, use `openbuff dash` (`cli/src/commands/dash-command.ts`), which reads the live P2-T2 run journal; tmux-viewer remains the capture-tooling viewer only. See `scripts/tmux/README.md` for details.
 
 Useful workflow for agents:
 

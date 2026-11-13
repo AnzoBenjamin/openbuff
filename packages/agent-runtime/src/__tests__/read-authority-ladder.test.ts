@@ -1,12 +1,18 @@
 import { describe, expect, it } from 'bun:test'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 import { classifyReadBlockAuthority } from '../tools/handlers/tool/read-authority-ladder'
 
 import type { ReadBlockCoverage } from '../tools/handlers/tool/read-authority-ladder'
 
-// A complete, capability-eligible read of every line of a 7-line file with
-// real undecorated source text: the only shape that may authorize a whole-file
-// overwrite. Each test below flips exactly one field off this baseline.
+const sourceContent = ['l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7'].join('\n')
+const document = captureTextDocument(sourceContent)
+
+// The caller authenticates this exact whole-byte basis before asking the pure
+// coverage classifier whether the observed block grants whole-file authority.
 function wholeFileCoverage(
   overrides: Partial<ReadBlockCoverage> = {},
 ): ReadBlockCoverage {
@@ -15,7 +21,8 @@ function wholeFileCoverage(
     startLine: 1,
     endLine: 7,
     totalLines: 7,
-    sourceContent: ['l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7'].join('\n'),
+    sourceContent,
+    rawBasis: getRawReadBasis(document, 1, 7, 'whole'),
     ...overrides,
   }
 }
@@ -33,6 +40,7 @@ describe('classifyReadBlockAuthority', () => {
         endLine: 6,
         totalLines: 7,
         sourceContent: 'l4\nl5\nl6',
+        rawBasis: getRawReadBasis(document, 4, 6, 'lines'),
       }),
     ).toBe('scoped')
   })
@@ -45,6 +53,7 @@ describe('classifyReadBlockAuthority', () => {
         endLine: 7,
         totalLines: 7,
         sourceContent: 'l2\nl3\nl4\nl5\nl6\nl7',
+        rawBasis: getRawReadBasis(document, 2, 7, 'lines'),
       }),
     ).toBe('scoped')
   })
@@ -86,17 +95,45 @@ describe('classifyReadBlockAuthority', () => {
     ).toBe('whole_file')
   })
 
-  it('does not classify an empty file (totalLines 0) as whole_file', () => {
+  it('keeps an empty scoped read distinct from an explicit whole empty-file read', () => {
+    const emptyDocument = captureTextDocument('')
     const authority = classifyReadBlockAuthority({
       complete: true,
       startLine: 1,
-      endLine: 0,
+      endLine: 1,
       totalLines: 0,
       sourceContent: '',
+      rawBasis: getRawReadBasis(emptyDocument, 1, 1, 'lines'),
     })
 
     expect(authority).not.toBe('whole_file')
     expect(authority).toBe('scoped')
+    expect(
+      classifyReadBlockAuthority({
+        complete: true,
+        startLine: 1,
+        endLine: 1,
+        totalLines: 0,
+        sourceContent: '',
+        rawBasis: getRawReadBasis(emptyDocument, 1, 1, 'whole'),
+      }),
+    ).toBe('whole_file')
+  })
+
+  it('keeps all-visible-line scoped authority scoped', () => {
+    expect(
+      classifyReadBlockAuthority(
+        wholeFileCoverage({
+          rawBasis: getRawReadBasis(document, 1, 7, 'lines'),
+        }),
+      ),
+    ).toBe('scoped')
+  })
+
+  it('grants no authority without the authenticated raw basis', () => {
+    expect(
+      classifyReadBlockAuthority(wholeFileCoverage({ rawBasis: undefined })),
+    ).toBe('none')
   })
 
   it('fails closed to none for an incomplete read regardless of eligibility or content', () => {

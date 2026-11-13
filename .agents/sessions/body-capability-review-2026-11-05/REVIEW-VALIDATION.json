@@ -1,0 +1,512 @@
+{
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "completedPairs": 13,
+  "reports": [
+    {
+      "shardId": "01-cli",
+      "findings": 8,
+      "capabilities": 11,
+      "receiptFiles": 60
+    },
+    {
+      "shardId": "02-providers",
+      "findings": 7,
+      "capabilities": 14,
+      "receiptFiles": 41
+    },
+    {
+      "shardId": "03-orchestration",
+      "findings": 2,
+      "capabilities": 11,
+      "receiptFiles": 36
+    },
+    {
+      "shardId": "04-memory",
+      "findings": 9,
+      "capabilities": 7,
+      "receiptFiles": 61
+    },
+    {
+      "shardId": "05-durability",
+      "findings": 10,
+      "capabilities": 17,
+      "receiptFiles": 73
+    },
+    {
+      "shardId": "06-edits",
+      "findings": 12,
+      "capabilities": 8,
+      "receiptFiles": 57
+    },
+    {
+      "shardId": "07-languages",
+      "findings": 11,
+      "capabilities": 10,
+      "receiptFiles": 49
+    },
+    {
+      "shardId": "08-indexer",
+      "findings": 9,
+      "capabilities": 8,
+      "receiptFiles": 40
+    },
+    {
+      "shardId": "09-execution",
+      "findings": 10,
+      "capabilities": 13,
+      "receiptFiles": 50
+    },
+    {
+      "shardId": "10-extensions",
+      "findings": 11,
+      "capabilities": 13,
+      "receiptFiles": 76
+    },
+    {
+      "shardId": "11-evals-release",
+      "findings": 12,
+      "capabilities": 9,
+      "receiptFiles": 88
+    },
+    {
+      "shardId": "12-audit-docs",
+      "findings": 8,
+      "capabilities": 12,
+      "receiptFiles": 62
+    },
+    {
+      "shardId": "13-perception",
+      "findings": 9,
+      "capabilities": 11,
+      "receiptFiles": 70
+    }
+  ],
+  "errors": [],
+  "uniqueReceiptFiles": 555,
+  "uniqueReadWindowLines": 147555,
+  "historicalUniqueReadWindowLines": 147721,
+  "historicalWindowCountReverified": false,
+  "supplementalReadFiles": [
+    "cli/release/index.js",
+    "cli/release/package.json",
+    "node_modules/@agentclientprotocol/sdk/dist/acp.js"
+  ],
+  "subsystems": [
+    {
+      "id": ".agents",
+      "files": 19,
+      "sourceFiles": 16,
+      "tests": 1,
+      "docs": 0,
+      "shards": [
+        "10-extensions"
+      ],
+      "receiptFiles": 13,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": ".bin",
+      "files": 1,
+      "sourceFiles": 0,
+      "tests": 0,
+      "docs": 0,
+      "shards": [],
+      "receiptFiles": 0,
+      "domains": []
+    },
+    {
+      "id": ".",
+      "files": 29,
+      "sourceFiles": 1,
+      "tests": 0,
+      "docs": 2,
+      "shards": [
+        "06-edits",
+        "11-evals-release",
+        "12-audit-docs",
+        "13-perception"
+      ],
+      "receiptFiles": 5,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": ".commandcode",
+      "files": 2,
+      "sourceFiles": 0,
+      "tests": 0,
+      "docs": 0,
+      "shards": [],
+      "receiptFiles": 0,
+      "domains": []
+    },
+    {
+      "id": ".github",
+      "files": 16,
+      "sourceFiles": 0,
+      "tests": 0,
+      "docs": 0,
+      "shards": [
+        "04-memory",
+        "07-languages",
+        "09-execution",
+        "11-evals-release"
+      ],
+      "receiptFiles": 7,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": ".vscode",
+      "files": 1,
+      "sourceFiles": 0,
+      "tests": 0,
+      "docs": 0,
+      "shards": [],
+      "receiptFiles": 0,
+      "domains": []
+    },
+    {
+      "id": "agents-graveyard",
+      "files": 121,
+      "sourceFiles": 121,
+      "tests": 0,
+      "docs": 0,
+      "shards": [],
+      "receiptFiles": 0,
+      "domains": []
+    },
+    {
+      "id": "agents",
+      "files": 155,
+      "sourceFiles": 123,
+      "tests": 62,
+      "docs": 0,
+      "shards": [
+        "03-orchestration",
+        "04-memory",
+        "05-durability",
+        "06-edits",
+        "07-languages",
+        "09-execution",
+        "10-extensions",
+        "11-evals-release",
+        "12-audit-docs",
+        "13-perception"
+      ],
+      "receiptFiles": 20,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": "cli",
+      "files": 685,
+      "sourceFiles": 673,
+      "tests": 273,
+      "docs": 3,
+      "shards": [
+        "01-cli",
+        "02-providers",
+        "04-memory",
+        "05-durability",
+        "06-edits",
+        "07-languages",
+        "08-indexer",
+        "10-extensions",
+        "11-evals-release",
+        "12-audit-docs",
+        "13-perception"
+      ],
+      "receiptFiles": 100,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": "common",
+      "files": 386,
+      "sourceFiles": 340,
+      "tests": 92,
+      "docs": 4,
+      "shards": [
+        "02-providers",
+        "03-orchestration",
+        "04-memory",
+        "05-durability",
+        "06-edits",
+        "07-languages",
+        "08-indexer",
+        "09-execution",
+        "10-extensions",
+        "11-evals-release",
+        "12-audit-docs",
+        "13-perception"
+      ],
+      "receiptFiles": 62,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": "docs",
+      "files": 33,
+      "sourceFiles": 0,
+      "tests": 0,
+      "docs": 33,
+      "shards": [
+        "02-providers",
+        "03-orchestration",
+        "04-memory",
+        "05-durability",
+        "06-edits",
+        "07-languages",
+        "08-indexer",
+        "09-execution",
+        "10-extensions",
+        "11-evals-release",
+        "12-audit-docs",
+        "13-perception"
+      ],
+      "receiptFiles": 14,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": "evals",
+      "files": 681,
+      "sourceFiles": 76,
+      "tests": 23,
+      "docs": 5,
+      "shards": [
+        "04-memory",
+        "11-evals-release",
+        "12-audit-docs"
+      ],
+      "receiptFiles": 34,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": "openbuff.d.example",
+      "files": 4,
+      "sourceFiles": 0,
+      "tests": 0,
+      "docs": 0,
+      "shards": [
+        "12-audit-docs"
+      ],
+      "receiptFiles": 1,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": "packages",
+      "files": 479,
+      "sourceFiles": 446,
+      "tests": 200,
+      "docs": 3,
+      "shards": [
+        "02-providers",
+        "03-orchestration",
+        "04-memory",
+        "05-durability",
+        "06-edits",
+        "07-languages",
+        "08-indexer",
+        "09-execution",
+        "10-extensions",
+        "11-evals-release",
+        "12-audit-docs",
+        "13-perception"
+      ],
+      "receiptFiles": 133,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": "rust",
+      "files": 17,
+      "sourceFiles": 7,
+      "tests": 0,
+      "docs": 1,
+      "shards": [
+        "09-execution",
+        "10-extensions",
+        "13-perception"
+      ],
+      "receiptFiles": 10,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": "scripts",
+      "files": 107,
+      "sourceFiles": 80,
+      "tests": 20,
+      "docs": 7,
+      "shards": [
+        "05-durability",
+        "10-extensions",
+        "11-evals-release",
+        "12-audit-docs"
+      ],
+      "receiptFiles": 12,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": "sdk",
+      "files": 319,
+      "sourceFiles": 291,
+      "tests": 162,
+      "docs": 5,
+      "shards": [
+        "02-providers",
+        "03-orchestration",
+        "04-memory",
+        "05-durability",
+        "06-edits",
+        "07-languages",
+        "08-indexer",
+        "09-execution",
+        "10-extensions",
+        "11-evals-release",
+        "12-audit-docs",
+        "13-perception"
+      ],
+      "receiptFiles": 142,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    },
+    {
+      "id": "test",
+      "files": 1,
+      "sourceFiles": 1,
+      "tests": 1,
+      "docs": 0,
+      "shards": [
+        "11-evals-release"
+      ],
+      "receiptFiles": 1,
+      "domains": [
+        "api-contract",
+        "correctness",
+        "dependency-hygiene",
+        "error-handling",
+        "performance",
+        "security",
+        "state-mutation",
+        "test-coverage"
+      ]
+    }
+  ],
+  "originalSourceHashes": 0,
+  "originalHashMapRecovered": false,
+  "changedOriginalSource": null,
+  "currentBoundFiles": 558,
+  "evidenceAvailability": [],
+  "qualification": "Recovered original full-file hashes are compared only when available. Otherwise SOURCE-STABILITY records the missing original map; CURRENT-FILE-HASHES is a fresh binding, not historical equality evidence. Recovery-gap notices are not behavioral evidence."
+}

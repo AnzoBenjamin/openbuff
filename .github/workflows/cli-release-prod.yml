@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   validate-release-source:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v6
         with:
@@ -45,7 +45,7 @@ jobs:
 
   prepare-and-commit-prod:
     needs: validate-release-source
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     outputs:
@@ -112,7 +112,7 @@ jobs:
   # Create GitHub release with all binaries
   create-prod-release:
     needs: [prepare-and-commit-prod, build-prod-binaries]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
       id-token: write
@@ -199,7 +199,7 @@ jobs:
   # Publish npm package
   publish-prod-npm:
     needs: [prepare-and-commit-prod, create-prod-release]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       id-token: write
@@ -215,7 +215,7 @@ jobs:
       - name: Set up Node.js for npm publishing
         uses: actions/setup-node@v6
         with:
-          node-version: 24
+          node-version-file: .node-version
           registry-url: https://registry.npmjs.org/
 
       - name: Publish to npm

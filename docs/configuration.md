@@ -25,6 +25,25 @@ the exact rules):
    walk is bounded by `MAX_ANCESTOR_SCAN_DEPTH` (10) and never crosses above
    `$HOME` unless `OPENBUFF_TRUST_ANCESTOR_CONFIG=1` is set.
 
+> **Project trust.** Config from step 4 (and its `openbuff.d/` fragments) is
+> project scope. Until you trust the project it can only tighten policy:
+> providers with `apiKeyEnv`, ChatGPT OAuth providers and redefinitions of
+> your own providers are ignored; `defaultModel`, `visionModel`, mode, agent,
+> failover and semantic-indexing routes are kept only when they resolve to a
+> provider you configured; `fileChangeHooks` and `autoFileChangeHooks` are
+> ignored; `approvalMode` may only get stricter; `sandbox.mode` cannot be
+> turned off. Project skills, `.agents/` agents and `.agents/mcp.json` follow
+> the same decision. The interactive TUI asks once per project and lists what
+> would be enabled; `openbuff run` and `serve` print a notice and stay
+> untrusted. `--trust-project-agents` (TUI, `run`, `serve`) records an
+> explicit grant. Decisions are stored in
+> `~/.config/openbuff/project-trust.json` (owner-only), keyed by the project's
+> real path and a hash of its config files plus `.agents/mcp.json`; any change
+> to those files asks again. CI can set `OPENBUFF_TRUST_PROJECT_CONFIG=1`, and
+> SDK hosts pass `trustProjectConfig: true | false` to `run()` (omitted uses
+> the stored decision). Step 1 (`OPENBUFF_PROVIDER_CONFIG`) and the user
+> config dir are never gated.
+
 > **Credentials** (`credentials.json`, ChatGPT OAuth tokens) live in
 > `~/.config/openbuff/credentials.json` — the same global dir, with no
 > env-suffix variants. The directory is created `0700` and the credentials
@@ -162,7 +181,11 @@ Behavior, matched to the implementation in `sdk/src/impl/failover.ts` and
 - **Entry list is model IDs, not provider IDs.** Each entry is routed through
   the same provider-resolution step as the primary, so it must resolve to a
   provider in `providers`.
-- **Primary is always attempted first.** The failover list is deduped against
+- **Primary is attempted first when eligible.** Configured and implicit
+  ChatGPT OAuth routes honor the request's OAuth exclusion and the local
+  rate-limit cache. An excluded OAuth route selects an eligible configured
+  BYOK backup before reading OAuth credentials, or returns an actionable
+  routing error. The failover list is deduped against
   the primary, so a `failoverModels` entry that repeats the primary does not
   cause a redundant same-model attempt (`resolveModelsToTry`).
 - **Duplicate backups are collapsed automatically.** `resolveModelsToTry` also
@@ -170,16 +193,41 @@ Behavior, matched to the implementation in `sdk/src/impl/failover.ts` and
   misconfigured list like `["backup-a", "backup-a", "backup-b"]` is treated as
   `["backup-a", "backup-b"]` and the loop never wastefully retries the same
   backup model twice.
-- **Failover-eligible errors:** `401`, `403` (auth) and `500`, `502`, `503`,
-  `504` (server). These match `FAILOVER_ELIGIBLE_STATUS_CODES`. Auth errors
-  failover immediately (the inner retry loop does not retry them); 5xx are
-  retried first by the inner loop, and only failover once retries exhaust.
+- **Failover-eligible errors:** `401`, `403` (auth), `500`, `502`, `503`,
+  `504` (server) and `529` (Anthropic overloaded, including an SSE
+  `overloaded_error` event on a 200 stream). These match
+  `FAILOVER_ELIGIBLE_STATUS_CODES`. Auth errors failover immediately (the
+  inner retry loop does not retry them); 5xx and 529 are retried first by the
+  inner loop, and only failover once retries exhaust.
+- **Auth failures demote the route for the session:** after a `401`/`403`
+  failover, later requests start on the backup instead of paying another
+  round trip to the failed primary. The demoted route stays in the list as a
+  last resort. Restarting or running `/provider` clears the demotion. The
+  CLI keeps a warning line naming the status, the provider and its
+  `apiKeyEnv`.
 - **Retry-only carve-out:** `429` (rate limit) and `408` (timeout) are **not**
   failover-eligible — backoff is the proven response and failing over on 429
   risks cascading load across providers.
 - **No-content-yielded gate:** failover fires **only when no content has been
   yielded yet**, so partial output is never duplicated across attempts. If the
-  stream has already produced tokens, the error surfaces instead.
+  stream has already delivered text, reasoning or tool calls, the error
+  surfaces instead. Undelivered tool calls are discarded before retry.
+- **One retry owner:** Openbuff disables the AI SDK's automatic retries for
+  streaming, text and structured requests. Its shared policy defaults to
+  three retries after the initial attempt, with jittered exponential waits
+  capped at eight seconds. A valid integer or HTTP-date `Retry-After` hint is
+  honoured up to 120 seconds, and one request waits at most 180 seconds in
+  total; malformed hints fall back to exponential waits. The wait is
+  cancelled with the run, so it never outlives the run deadline.
+  Content-policy refusals and aborts do not retry or fail over, even when
+  wrapped around a retryable HTTP status. Context repair and OAuth recovery
+  consume the same finite request attempt ledger. Nonstreaming requests use
+  the shared retry policy on their selected BYOK route.
+- **Dormant credentials:** context-window and vision-capability inspection
+  use route metadata without validating API keys. Credentials are validated
+  only for the selected request route. A missing backup key cannot block a
+  healthy primary; selecting that backup returns an actionable configuration
+  error retaining the primary failure as its cause.
 - **`preferModelParam` bypass:** on each backup attempt the failover loop sets
   `preferModelParam: failoverIndex > 0` when resolving the agent's model. This
   makes the explicit backup model ID win over mode/agent/defaultModel routing
@@ -229,6 +277,20 @@ requests when the agent template does not declare its own `maxOutputTokens`.
 Precedence: agent template `maxOutputTokens` > per-model
 `modelCapabilities[modelId].context.outputTokens` >
 `defaultCapabilities.context.outputTokens` > provider default behavior.
+
+For example, set `modelCapabilities["your-model"].context.outputTokens` in
+your provider's `openbuff.d/providers.json` to a value supported by that model.
+This is a requested ceiling, not a way to exceed the provider's actual output
+or context limit. The shipped base and editor agents explicitly request 64,000
+tokens, so their template value takes precedence over provider configuration.
+
+Tool and child-agent output has separate limits. Child outputs that fit the
+256,000-character parent budget retain their complete strings; structural
+limits may still apply. When output is compacted, the receipt reports truncation
+and, when persistence succeeds, an `artifactPath` containing the full result.
+Read that artifact in ranges if it is too large for a single read. The
+provider's `maxOutputBytes` setting controls a transport diagnostic, not the
+model's token ceiling or the size of these parent receipts.
 
 Without any of these, the provider's own default applies (the
 Anthropic-compatible path defaults to a small ~4k cap, which can truncate
@@ -391,6 +453,15 @@ field** for these systems yet — the behavior is code-default and always on.
   positive int cap, max `20`. When omitted, resolves from
   `OPENBUFF_MAX_SPECIALIST_REPAIR_ROUNDS` only when set to a valid positive
   int; unset/invalid → unlimited. Explicit option values win over the env.
+- **`maxMissingOutputRetries`** is an `openbuff.json` key (and an SDK run
+  option). Default **unlimited**: a structured-output agent that ends its
+  turn without calling `set_output` is re-prompted on every turn-end until
+  a configured `maxAgentSteps` cap or user cancellation ends the run.
+  Setting a positive integer caps those retries; after the cap the parent
+  receives a null structured value. Configure in `openbuff.json` as
+  `"maxMissingOutputRetries": 3`, or set the
+  `OPENBUFF_MAX_MISSING_OUTPUT_RETRIES` env var to a positive integer; the
+  JSON config wins over the env fallback.
 - **`/context`** is a read-only slash command that prints the per-component
   token breakdown recorded for the current turn (advisory telemetry, not a
   hard gate). It also always prints the effective gate repair budgets
@@ -417,6 +488,8 @@ parent → fragment), Openbuff merges them with **override wins** semantics.
 Most fields use shallow-record merge (`{ ...base, ...override }`): the
 override entry replaces the base entry for the same key. Providers, routes,
 modes, agents, and reasoning efforts all follow this rule.
+The `execution` block replaces the earlier block as a whole; omitting it
+inherits the earlier declaration, including its declaring file.
 
 ### `fileChangeHooks` — concat-with-dedup
 
@@ -474,9 +547,122 @@ Example:
 
 Merged result (in order): `[prettier (project version), typecheck-sdk]`.
 
+## Filesystem sandbox
+
+Agent runs have unrestricted filesystem access by default. File tools accept
+absolute paths and paths relative to the current project, including `../`.
+Agents can read config directories and logs, search other directories, use
+external terminal working directories, and edit temporary files.
+
+To opt into containment, add this to `openbuff.json`:
+
+```json
+{
+  "sandbox": {
+    "mode": "project"
+  }
+}
+```
+
+Project mode restricts file tools and terminal path checks to the project and
+OS temporary directories. It also restores sensitive-file filtering and
+protections for temporary job logs, capture evidence, and executable files.
+This is a tool-level policy; the portable terminal backend does not isolate
+subprocesses at the OS level or restrict their network access.
+
+For additional writable directories, use absolute `sandbox.allowPaths`:
+
+```json
+{
+  "sandbox": {
+    "mode": "project",
+    "allowPaths": ["/opt/my-workspace", "/var/log/my-service"]
+  }
+}
+```
+
+Declare these paths in your user-global config. Project/ancestor fragments
+can grant additional paths when `OPENBUFF_TRUST_PROJECT_READABLE_ROOTS=1`;
+otherwise their entries are ignored. Existing `readableRoots` remain read-only
+exceptions in project mode. An omitted sandbox block inherits any earlier
+config block; `"sandbox": { "mode": "unrestricted" }` explicitly disables it.
+Each run captures its policy, including its subagents, independently of other
+concurrent runs. Changes apply on the next run.
+
+## Execution backend
+
+The SDK and ordinary local CLI runs can select an execution profile through
+an optional `execution` block. Declare it in the user-global configuration
+directory or the exact file selected by `OPENBUFF_PROVIDER_CONFIG`. Includes
+retain their own origin: an external included file does not inherit its
+parent's execution trust. Project and ancestor read-trust flags do not grant
+execution trust. An untrusted execution declaration fails startup.
+
+```json
+{
+  "execution": {
+    "profile": {
+      "policy": "workspace-write",
+      "preferredBackend": "native-exec",
+      "required": ["exact-env", "filesystem-isolation", "process-tree-containment"],
+      "optional": ["network-isolation"],
+      "allowBackendFallback": false
+    },
+    "native": {
+      "artifact": {
+        "path": "/absolute/installation/openbuff-native",
+        "sha256": "<trusted lowercase SHA-256 of the installed artifact>",
+        "platform": "linux-x64-gnu",
+        "crateVersion": "0.1.0",
+        "workspaceProtocol": "1"
+      },
+      "bwrap": {
+        "path": "/usr/bin/bwrap",
+        "sha256": "<trusted lowercase SHA-256 of bubblewrap>"
+      },
+      "runtimePaths": ["/usr", "/bin", "/lib", "/lib64"],
+      "network": "deny",
+      "landlock": "optional"
+    }
+  }
+}
+```
+
+Replace both checksum placeholders with trusted 64-character lowercase hex
+digests. Paths must be absolute. Native setup verifies the artifact and
+performs an owned version/clock probe within the original run deadline and
+a two-second setup cap. Failed verification or unconfirmed setup cleanup
+prevents target dispatch. The version probe alone does not establish OS
+enforcement.
+
+The current native adapter supports Linux x64 GNU one-shot shell, background,
+diagnostic and native-role processes. Other platforms and process families
+remain unavailable for native selection. Required capabilities must all be
+available; optional capabilities may remain unenforced. Full-access profiles
+inherit networking and do not provide filesystem or process-tree isolation.
+`portable-ts` selects the existing portable adapter and omits `native`.
+Explicit SDK `executionProfile` or `nativeExecution` options replace the
+entire configuration decision; the SDK caller owns injected installations.
+
 ## Harness approval mode
 
 `approvalMode` controls when terminal effects pause for confirmation:
+
+Use `openbuff --approval-mode balanced` for a session override, or change it
+in chat with `/permissions balanced`. Run `/permissions` to see the choices
+and current setting. `/permissions reset` returns to your JSON configuration.
+Changes apply to the next run; a command already awaiting approval keeps the
+policy captured when its run started.
+
+Headless and server invocations accept the same flag:
+
+```bash
+openbuff run --approval-mode allow-all "run the tests and fix failures"
+openbuff serve --approval-mode balanced
+```
+
+For attached sessions, set the policy on `openbuff serve`. The attached
+client cannot override the server's command approvals.
 
 ```jsonc
 {
@@ -490,9 +676,16 @@ Merged result (in order): `[prettier (project version), typecheck-sdk]`.
   migrations, uploads/remote shells, and arbitrary code evaluation ask once.
 - `strict` asks for every classified package, Git, remote, or destructive
   effect.
-- `allow-all` suppresses approval prompts but does not disable project-root
-  containment, mandatory secret filtering, global/system install blocks,
-  owned-path staging, or force/delete-push protection.
+- `allow-all` suppresses approval prompts. Filesystem access is controlled
+  separately by `sandbox`; it defaults to unrestricted.
+
+Ordinary reads, searches, project scripts, builds, and tests run without
+approval prompts in `balanced` and `strict`. Inline interpreter evaluation
+(for example `python -c`) and shell syntax the classifier cannot resolve
+still ask in these modes. `allow-all` also permits those commands without
+prompting; malformed commands remain rejected. Use the JSON setting above
+to keep your preference across CLI sessions. SDK runs honor the same loaded
+configuration; an explicit SDK `approvalMode` option overrides it.
 
 ## File-change hooks (verification gate)
 

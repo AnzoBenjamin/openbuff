@@ -38,6 +38,7 @@ type CompiledEvidence = {
   id: string
   path?: string
   stale?: boolean
+  kind?: string
 }
 
 function sha256(content: string): string {
@@ -95,6 +96,7 @@ function findCompiledEvidence(value: unknown): CompiledEvidence[] | undefined {
         id: item.id as string,
         ...(typeof item.path === 'string' ? { path: item.path } : {}),
         ...(typeof item.stale === 'boolean' ? { stale: item.stale } : {}),
+        ...(typeof item.kind === 'string' ? { kind: item.kind } : {}),
       }))
     }
   }
@@ -282,6 +284,18 @@ describe('memory retention scenario', () => {
     )
     const coldContextBytes = Buffer.byteLength(coldContext, 'utf8')
     const warmContextBytes = Buffer.byteLength(warmContext, 'utf8')
+    // Noise ratio: share of compiled evidence that is boilerplate per-read
+    // bookkeeping rather than reusable knowledge. Baseline persisted memory
+    // here is read-heavy, so the pre-Tier-1 ratio is 1.0 by construction.
+    const compiledEvidenceCount = warmEvidence.length
+    const readEvidenceCount = warmEvidence.filter(
+      (item) => item.kind === 'read',
+    ).length
+    const boilerplateReadNoiseRatio =
+      compiledEvidenceCount === 0
+        ? 0
+        : Math.round((readEvidenceCount / compiledEvidenceCount) * 1_000_000) /
+          1_000_000
 
     const metrics = {
       eligibleRelevantFacts,
@@ -296,6 +310,9 @@ describe('memory retention scenario', () => {
       knownRenameRecovery,
       coldContextBytes,
       warmContextBytes,
+      compiledEvidenceCount,
+      readEvidenceCount,
+      boilerplateReadNoiseRatio,
     }
 
     expect(metrics.eligibleRelevantFacts).toBe(2)
@@ -310,6 +327,13 @@ describe('memory retention scenario', () => {
     expect(metrics.knownRenameRecovery).toBe(1)
     expect(metrics.coldContextBytes).toBe(0)
     expect(metrics.warmContextBytes).toBeGreaterThan(metrics.coldContextBytes)
+    // Compiled evidence in this scenario is all read-kind bookkeeping (the
+    // stale entry is correctly excluded from the compiled context); the ratio
+    // documents how much of the warm prompt carries no reusable knowledge.
+    // Recording it makes read-noise regressions visible.
+    expect(metrics.compiledEvidenceCount).toBe(2)
+    expect(metrics.readEvidenceCount).toBe(2)
+    expect(metrics.boilerplateReadNoiseRatio).toBe(1)
 
     // The unchanged artifact remains reusable, while changed evidence does not
     // become reusable merely because it was retained in persisted memory.

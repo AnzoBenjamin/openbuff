@@ -1,0 +1,11 @@
+{
+  "_note": "Semantic vector (§12.7 GV-16): with events='full', an internal tool_result PrintModeEvent must NOT be emitted as an _openbuff.dev/event frame (§4.2 restricts the events row, never tool_call or tool_result). expectedFrames is empty: no frame leaves the chokepoint for this event.",
+  "negotiatedEvents": "full",
+  "internalEvent": {
+    "type": "tool_result",
+    "toolCallId": "call_12",
+    "toolName": "read_files",
+    "output": "file contents"
+  },
+  "expectedFrames": []
+}

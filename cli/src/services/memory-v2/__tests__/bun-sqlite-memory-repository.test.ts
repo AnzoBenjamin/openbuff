@@ -29,11 +29,17 @@ import {
   MemoryVerifyOutcomeSchema,
   MemoryVerifyRequestSchema,
   ProjectIdSchema,
+  ObservationIdSchema,
   TaskIdSchema,
   type MemoryAppendRequest,
   type MemoryEventDraft,
 } from '../../../../../common/src/types/memory-v2'
 import type { MemoryUsageEntry } from '../../../../../sdk/src/services/memory-v2/types'
+import type { ContextArchiveSnapshot } from '../../../../../common/src/types/context-archive'
+import type {
+  Message,
+  ToolMessage,
+} from '../../../../../common/src/types/messages/codebuff-message'
 
 import {
   BunSQLiteMemoryRepository,
@@ -313,10 +319,10 @@ describe('BunSQLiteMemoryRepository', () => {
       const version = database.query('PRAGMA user_version').get() as {
         user_version: number
       }
-      // SCHEMA_VERSION 3 (P7 mixed-version repair): a pre-P7 build sharing
-      // this store fails closed at its own open because its version check
-      // rejects user_version values above its own SCHEMA_VERSION.
-      expect(version.user_version).toBe(3)
+      // SCHEMA_VERSION 4 (context archive tables): a pre-archive build
+      // sharing this store fails closed at its own open because its version
+      // check rejects user_version values above its own SCHEMA_VERSION.
+      expect(version.user_version).toBe(4)
       const names = (
         database
           .query(
@@ -811,7 +817,7 @@ describe('BunSQLiteMemoryRepository', () => {
     const repository = await open(temporaryRepository())
     const health = await repository.kernelHealth()
     expect(['healthy', 'degraded']).toContain(health.status)
-    expect(health.schemaVersion).toBe(3)
+    expect(health.schemaVersion).toBe(4)
     expect(health.journalMode).toBeTruthy()
     expect(health.synchronous).toBeTruthy()
 
@@ -830,6 +836,33 @@ describe('BunSQLiteMemoryRepository', () => {
     })
     if (closedAppend.status === 'error')
       expect(closedAppend.error.message).not.toContain(repository.databasePath)
+  })
+
+  test('status integrity scans let the terminal event loop run', async () => {
+    const result = await BunSQLiteMemoryRepository.open({
+      repositoryRoot: temporaryRepository(),
+    })
+    if (result.status !== 'ok') throw new Error(result.error.message)
+    const repository = result.repository
+    let timerRan = false
+    const timer = setTimeout(() => {
+      timerRan = true
+    }, 0)
+    try {
+      const [health, kernel] = await Promise.all([
+        repository.health({
+          schemaVersion: 2,
+          projectId: ProjectIdSchema.parse('project-1'),
+        }),
+        repository.kernelHealth(),
+      ])
+      expect(health.status).toBe('healthy')
+      expect(kernel.status).toBe('healthy')
+      expect(timerRan).toBe(true)
+    } finally {
+      clearTimeout(timer)
+      await repository.close()
+    }
   })
 
   test('classifies a generic local filesystem failure as bounded nonretryable I/O', async () => {
@@ -936,7 +969,7 @@ describe('BunSQLiteMemoryRepository', () => {
     expect(migratedState.projectBinding).toBe('project-1')
     expect(migratedState.capabilities.length).toBeGreaterThan(0)
     expect(migratedState.projectionCursor).toBe('1')
-    expect(migratedState.userVersion).toBe(3)
+    expect(migratedState.userVersion).toBe(4)
     expect(migratedState.quickCheck).toBe('ok')
 
     const reopened = await open(root)
@@ -951,7 +984,7 @@ describe('BunSQLiteMemoryRepository', () => {
     expect(reopenedState.projectBinding).toBe(migratedState.projectBinding)
     expect(reopenedState.capabilities).toEqual(migratedState.capabilities)
     expect(reopenedState.projectionCursor).toBe(migratedState.projectionCursor)
-    expect(reopenedState.userVersion).toBe(3)
+    expect(reopenedState.userVersion).toBe(4)
     expect(reopenedState.quickCheck).toBe('ok')
     expect(afterMigration).not.toEqual(before)
   })
@@ -2209,6 +2242,88 @@ describe('BunSQLiteMemoryRepository', () => {
     }
   })
 
+  test('normal queries omit forgotten evidence before byte admission and retain tombstones', async () => {
+    const repository = await open(temporaryRepository())
+    // A large old capture can no longer suppress all useful current memory.
+    // Use the low-level append port so the payload exceeds query admission.
+    await repository.appendEvents([
+      event('forgotten-large', {
+        eventType: 'observation.recorded',
+        payload: {
+          payloadSchemaVersion: 1,
+          observation: {
+            ...observationFixture('obs-forgotten-large'),
+            detail: '😀'.repeat(2_100_000),
+          },
+        },
+        metadata: {
+          projectId: 'project-1',
+          schemaVersion: 2,
+          eventSchemaVersion: 1,
+          sessionId: 'session-1',
+        },
+      }),
+    ])
+    await repository.append(
+      MemoryAppendRequestSchema.parse({
+        schemaVersion: 2,
+        projectId: 'project-1',
+        events: [
+          canonicalDraft('claim.forgotten', 'forgotten-tombstone', {
+            payloadSchemaVersion: 1,
+            observationIds: ['obs-forgotten-large'],
+            reason: 'retention-policy',
+            requestedBy: 'test',
+            evidenceDisposition: 'retain-artifacts',
+          }),
+          canonicalDraft('observation.recorded', 'current-observation', {
+            payloadSchemaVersion: 1,
+            observation: observationFixture('obs-current'),
+          }),
+          canonicalDraft('evidence.verified', 'current-verified', {
+            payloadSchemaVersion: 1,
+            observationId: 'obs-current',
+            selector: evidenceFixture().selector,
+            verifier: 'test',
+            verifiedAt: '2025-01-02T03:05:05.000Z',
+            observedDigest: evidenceFixture().contentDigest,
+          }),
+        ],
+      }),
+    )
+    const request = MemoryRetrievalRequestSchema.parse({
+      schemaVersion: 2,
+      queryId: 'query:forgotten-budget',
+      projectId: 'project-1',
+      sessionId: 'session-2',
+      query: 'Discovery',
+      selectors: [],
+      artifactKinds: [],
+      includeHistorical: false,
+      maxResultsPerCategory: 10,
+    })
+    const normal = await repository.query(request)
+    expect(normal.outcome).toBe('result')
+    if (normal.outcome !== 'result') throw new Error('Query failed')
+    expect(normal.result.degradation.state).toBe('none')
+    expect(normal.result.verifiedKnowledge).toHaveLength(1)
+    expect(normal.result.verifiedKnowledge[0]?.observation.observationId).toBe(
+      ObservationIdSchema.parse('obs-current'),
+    )
+    const historical = await repository.query({
+      ...request,
+      includeHistorical: true,
+    })
+    expect(historical.outcome).toBe('result')
+    if (historical.outcome !== 'result') throw new Error('Query failed')
+    if (historical.result.degradation.state !== 'degraded') throw new Error('Historical admission should remain bounded')
+    expect(
+      historical.result.degradation.reasons.some(
+        (reason) => reason.code === 'resource-budget',
+      ),
+    ).toBe(true)
+  })
+
   test('uses UTF-8 byte admission and does not parse an excluded oversized newest row', async () => {
     const repository = await open(temporaryRepository())
     expect(
@@ -2681,14 +2796,18 @@ describe('BunSQLiteMemoryRepository', () => {
               completedAt: '2025-01-02T03:04:08.000Z',
             },
           ),
-          canonicalDraft('projection.rebuild.failed', 'current-rebuild-failed', {
-            payloadSchemaVersion: 1,
-            rebuildId: 'rebuild-2',
-            projectionNames: ['tasks'],
-            error: 'deterministic rebuild failure',
-            retryable: true,
-            failedAt: '2025-01-02T03:04:09.000Z',
-          }),
+          canonicalDraft(
+            'projection.rebuild.failed',
+            'current-rebuild-failed',
+            {
+              payloadSchemaVersion: 1,
+              rebuildId: 'rebuild-2',
+              projectionNames: ['tasks'],
+              error: 'deterministic rebuild failure',
+              retryable: true,
+              failedAt: '2025-01-02T03:04:09.000Z',
+            },
+          ),
         ],
       }),
     )
@@ -2953,10 +3072,14 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
   test('selectGCandidates returns stale and old events, excludes archived, and respects maxEvents', async () => {
     const repository = await open(temporaryRepository())
     const now = new Date().toISOString()
-    const oldObservation = canonicalDraft('observation.recorded', 'event:gc-old-1', {
-      payloadSchemaVersion: 1,
-      observation: observationFixture('gc-old-1', []),
-    })
+    const oldObservation = canonicalDraft(
+      'observation.recorded',
+      'event:gc-old-1',
+      {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('gc-old-1', []),
+      },
+    )
     const staleForgotten = MemoryEventDraftSchema.parse({
       schemaVersion: 2,
       eventSchemaVersion: 1,
@@ -3139,7 +3262,9 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
     for (const eventId of eventIds) expect(remainingIds).not.toContain(eventId)
     expect(remainingIds).toContain('event:gc-compact-archive')
     expect(
-      listed.events.find(({ eventId }) => eventId === 'event:gc-compact-archive')?.eventType,
+      listed.events.find(
+        ({ eventId }) => eventId === 'event:gc-compact-archive',
+      )?.eventType,
     ).toBe('claim.archived')
     const snapshot = await repository.getProjectionSnapshot()
     expect(snapshot.status).toBe('ok')
@@ -3158,7 +3283,9 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
     }
     const readable = await repository.listEvents()
     expect(readable.status).toBe('ok')
-    expect(await repository.getStoreStats({ projectId: 'project-1' })).toMatchObject({
+    expect(
+      await repository.getStoreStats({ projectId: 'project-1' }),
+    ).toMatchObject({
       eventCount: 1,
     })
   })
@@ -3197,7 +3324,11 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
     )
     const goodHash = `sha256:${createHash('sha256').update(JSON.stringify(archiveLines)).digest('hex')}`
     const archivedAt = new Date().toISOString()
-    const buildClaim = (archiveHash: string, archivedEventIds: string[], eventId: string) =>
+    const buildClaim = (
+      archiveHash: string,
+      archivedEventIds: string[],
+      eventId: string,
+    ) =>
       MemoryEventDraftSchema.parse({
         schemaVersion: 2,
         eventSchemaVersion: 1,
@@ -3216,11 +3347,20 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
         },
       })
     const badHash = `sha256:${'b'.repeat(64)}`
-    const badClaim = buildClaim(badHash, ['event:gc-reject-1', 'event:gc-reject-2'], 'event:gc-reject-bad')
+    const badClaim = buildClaim(
+      badHash,
+      ['event:gc-reject-1', 'event:gc-reject-2'],
+      'event:gc-reject-bad',
+    )
     const badFailure = await repository
       .privilegedCompact({
         projectId: ProjectIdSchema.parse('project-1'),
-        eventIds: ['event:gc-reject-1', 'event:gc-reject-2'] as unknown as Parameters<BunSQLiteMemoryRepository['privilegedCompact']>[0]['eventIds'],
+        eventIds: [
+          'event:gc-reject-1',
+          'event:gc-reject-2',
+        ] as unknown as Parameters<
+          BunSQLiteMemoryRepository['privilegedCompact']
+        >[0]['eventIds'],
         archiveClaimDraft: badClaim,
         archiveLines,
         archivePath: '.openbuff/memory/archive/gc-reject.jsonl',
@@ -3231,9 +3371,15 @@ describe('BunSQLiteMemoryRepository privileged GC', () => {
     expect(badFailure?.failure?.kind).toBe('invalid')
     expect(await countEvents()).toEqual(beforeIds)
     const unknownIds = ['event:gc-missing-1']
-    const unknownLines = unknownIds.map((eventId) => JSON.stringify({ eventId }))
+    const unknownLines = unknownIds.map((eventId) =>
+      JSON.stringify({ eventId }),
+    )
     const unknownHash = `sha256:${createHash('sha256').update(JSON.stringify(unknownLines)).digest('hex')}`
-    const unknownClaim = buildClaim(unknownHash, unknownIds, 'event:gc-reject-unknown')
+    const unknownClaim = buildClaim(
+      unknownHash,
+      unknownIds,
+      'event:gc-reject-unknown',
+    )
     const unknownFailure = await repository
       .privilegedCompact({
         projectId: ProjectIdSchema.parse('project-1'),
@@ -3814,11 +3960,10 @@ describe('BunSQLiteMemoryRepository usefulness-scored retrieval ordering', () =>
             schemaVersion: 2,
             projectId: 'project-1',
             events: buildObservations().map((observation, index) =>
-              canonicalDraft(
-                'observation.recorded',
-                `fold-control-${index}`,
-                { payloadSchemaVersion: 1, observation },
-              ),
+              canonicalDraft('observation.recorded', `fold-control-${index}`, {
+                payloadSchemaVersion: 1,
+                observation,
+              }),
             ),
           }),
         )
@@ -3847,11 +3992,10 @@ describe('BunSQLiteMemoryRepository usefulness-scored retrieval ordering', () =>
             projectId: 'project-1',
             events: [
               ...buildObservations().map((observation, index) =>
-                canonicalDraft(
-                  'observation.recorded',
-                  `fold-used-${index}`,
-                  { payloadSchemaVersion: 1, observation },
-                ),
+                canonicalDraft('observation.recorded', `fold-used-${index}`, {
+                  payloadSchemaVersion: 1,
+                  observation,
+                }),
               ),
               canonicalDraft('observation.reused', 'fold-used-event', {
                 payloadSchemaVersion: 1,
@@ -3877,9 +4021,12 @@ describe('BunSQLiteMemoryRepository usefulness-scored retrieval ordering', () =>
       ),
     ).toEqual(['fold-first', 'fold-second'])
     const scoredEntry = used.result.reusableDiscovery[0]
-    expect(scoredEntry?.reasons.some(({ code, detail }) =>
-      code === 'reusability' && detail === 'P4 usage correlation score.',
-    )).toBe(true)
+    expect(
+      scoredEntry?.reasons.some(
+        ({ code, detail }) =>
+          code === 'reusability' && detail === 'P4 usage correlation score.',
+      ),
+    ).toBe(true)
     expect(scoredEntry?.score).toBeLessThanOrEqual(1)
   })
 })
@@ -4038,16 +4185,24 @@ describe('P9 invariant enforcement (store)', () => {
 
   test('P9: projection replay is deterministic across rebuilds for new event types', async () => {
     const repository = await open(temporaryRepository())
-    const observation = canonicalDraft('observation.recorded', 'event:p9-replay-obs', {
-      payloadSchemaVersion: 1,
-      observation: observationFixture('p9-replay-target', []),
-    })
-    const reused = canonicalDraft('observation.reused', 'event:p9-replay-reused', {
-      payloadSchemaVersion: 1,
-      turnId: 'input:p9-replay',
-      used: [{ observationId: 'p9-replay-target', mechanism: 'gate-skip' }],
-      ignored: [],
-    })
+    const observation = canonicalDraft(
+      'observation.recorded',
+      'event:p9-replay-obs',
+      {
+        payloadSchemaVersion: 1,
+        observation: observationFixture('p9-replay-target', []),
+      },
+    )
+    const reused = canonicalDraft(
+      'observation.reused',
+      'event:p9-replay-reused',
+      {
+        payloadSchemaVersion: 1,
+        turnId: 'input:p9-replay',
+        used: [{ observationId: 'p9-replay-target', mechanism: 'gate-skip' }],
+        ignored: [],
+      },
+    )
     const archived = MemoryEventDraftSchema.parse({
       schemaVersion: 2,
       eventSchemaVersion: 1,
@@ -4433,15 +4588,23 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
               // create a contradiction topic (no overmatch).
               canonicalDraft('observation.recorded', 'hex-key-a-event', {
                 payloadSchemaVersion: 1,
-                observation: observationWithMetadata('hex-key-a', 'src/hex-a.ts', {
-                  claimId: hexUnderOtherKey,
-                }),
+                observation: observationWithMetadata(
+                  'hex-key-a',
+                  'src/hex-a.ts',
+                  {
+                    claimId: hexUnderOtherKey,
+                  },
+                ),
               }),
               canonicalDraft('observation.recorded', 'hex-key-b-event', {
                 payloadSchemaVersion: 1,
-                observation: observationWithMetadata('hex-key-b', 'src/hex-b.ts', {
-                  claimId: hexUnderOtherKey,
-                }),
+                observation: observationWithMetadata(
+                  'hex-key-b',
+                  'src/hex-b.ts',
+                  {
+                    claimId: hexUnderOtherKey,
+                  },
+                ),
               }),
               // Shared non-hex stableChunkIds under the canonical key must
               // group (no undermatch).
@@ -4571,10 +4734,14 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
             schemaVersion: 2,
             projectId: 'project-1',
             events: buildObservations().map((observation, index) =>
-              canonicalDraft('observation.recorded', `reinforce-control-${index}`, {
-                payloadSchemaVersion: 1,
-                observation,
-              }),
+              canonicalDraft(
+                'observation.recorded',
+                `reinforce-control-${index}`,
+                {
+                  payloadSchemaVersion: 1,
+                  observation,
+                },
+              ),
             ),
           }),
         )
@@ -4601,10 +4768,14 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
             projectId: 'project-1',
             events: [
               ...buildObservations().map((observation, index) =>
-                canonicalDraft('observation.recorded', `reinforce-used-${index}`, {
-                  payloadSchemaVersion: 1,
-                  observation,
-                }),
+                canonicalDraft(
+                  'observation.recorded',
+                  `reinforce-used-${index}`,
+                  {
+                    payloadSchemaVersion: 1,
+                    observation,
+                  },
+                ),
               ),
               canonicalDraft('claim.reinforced', 'reinforce-event', {
                 payloadSchemaVersion: 1,
@@ -4644,7 +4815,7 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
     ).toBe(true)
   })
 
-  test('mixed-version repair: a pre-P7 store (user_version 2) is upgraded to 3 and stale claim_dedup rows are reconciled on open', async () => {
+  test('mixed-version repair: a pre-P7 store (user_version 2) is upgraded to 4 and stale claim_dedup rows are reconciled on open', async () => {
     const root = temporaryRepository()
     const claimId = 'd'.repeat(64)
     const staleClaimId = 'e'.repeat(64)
@@ -4700,7 +4871,7 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
       legacy.close()
     }
 
-    // Opening with the new build upgrades the store to version 3 (a pre-P7
+    // Opening with the new build upgrades the store to version 4 (a pre-P7
     // build sharing the file now fails closed at its own open) and
     // reconciles the stale dedup row: only the live claim survives.
     const reopened = await open(root)
@@ -4714,7 +4885,7 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
             user_version: number
           }
         ).user_version,
-      ).toBe(3)
+      ).toBe(4)
     } finally {
       versionCheck.close()
     }
@@ -4893,5 +5064,429 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
     expect(rebuilt.status).toBe('ok')
     if (rebuilt.status !== 'ok') return
     expect(rebuilt.entries).toEqual(consolidated.entries)
+  })
+})
+
+const DAY_MS = 24 * 3600 * 1000
+
+const storePath = (root: string): string =>
+  join(root, '.openbuff', 'memory', 'memory-v2.sqlite')
+
+const toolResultMessage = (
+  callId: string,
+  output: string,
+  toolName = 'read_files',
+): ToolMessage => ({
+  role: 'tool',
+  toolCallId: callId,
+  toolName,
+  content: [{ type: 'json', value: { output } as never } as never],
+})
+
+const archiveSnapshotFixture = (
+  overrides: Partial<ContextArchiveSnapshot> = {},
+): ContextArchiveSnapshot => ({
+  archivedAt: Date.now(),
+  action: 'semantic_compaction',
+  keepRecentSteps: 6,
+  stepBase: 0,
+  messages: [
+    { role: 'user', content: [{ type: 'text', text: 'go' }] } as Message,
+    toolResultMessage('call-1', 'keystone-archive-fact alpha'),
+  ],
+  ...overrides,
+})
+
+/**
+ * Context-archive persistence (the cross-session recall_context source):
+ * additive migration onto an existing store, fail-closed on a newer store,
+ * persist→load roundtrip (eviction snapshots included), per-run idempotent
+ * full-replace, FTS search plus fail-open LIKE fallback, and the bounded TTL
+ * prune.
+ */
+describe('context archive persistence', () => {
+  test('additive migration: a pre-archive v3 store gains the context_archive_* tables on open', async () => {
+    const root = temporaryRepository()
+    const repository = await open(root)
+    const path = storePath(root)
+    await repository.close()
+    // Rewind the file to the pre-archive v3 shape: drop the additive side
+    // tables and roll user_version back.
+    const raw = new Database(path)
+    raw.exec(`
+      DROP TABLE context_archive_fts;
+      DROP TABLE context_archive_messages;
+      DROP TABLE context_archive_snapshots;
+      DROP TABLE context_archive_watermarks;
+      PRAGMA user_version = 3;
+    `)
+    raw.close()
+
+    const reopened = await open(root)
+    expect(await reopened.loadContextArchiveSnapshots({})).toEqual({
+      snapshots: [],
+    })
+    const check = new Database(path)
+    try {
+      const tables = check
+        .query(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'context_archive_%'",
+        )
+        .all() as Array<{ name: string }>
+      // FTS5 availability is feature-detected exactly like production (a
+      // sqlite_master probe): an FTS5 build legitimately owns the fts5 index
+      // plus its shadow tables, an FTS-less build only the row tables.
+      const ftsAvailable =
+        check
+          .query(
+            "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'context_archive_fts'",
+          )
+          .get() !== null
+      expect(tables.map(({ name }) => name).sort()).toEqual(
+        [
+          'context_archive_messages',
+          'context_archive_snapshots',
+          'context_archive_watermarks',
+          ...(ftsAvailable
+            ? [
+                'context_archive_fts',
+                'context_archive_fts_config',
+                'context_archive_fts_content',
+                'context_archive_fts_data',
+                'context_archive_fts_docsize',
+                'context_archive_fts_idx',
+              ]
+            : []),
+        ].sort(),
+      )
+      const fts = check
+        .query(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'context_archive_fts'",
+        )
+        .get()
+      expect(fts).toBeTruthy()
+      const version = check
+        .query('PRAGMA user_version')
+        .get() as { user_version: number }
+      expect(version.user_version).toBe(4)
+    } finally {
+      check.close()
+    }
+  })
+
+  test('fail-closed: a store written by a NEWER schema version refuses to open', async () => {
+    const root = temporaryRepository()
+    const repository = await open(root)
+    await repository.close()
+    const raw = new Database(storePath(root))
+    raw.exec('PRAGMA user_version = 99')
+    raw.close()
+
+    const result = await openResult(root)
+    expect(result.status).toBe('error')
+    if (result.status !== 'error') return
+    expect(result.error.kind).toBe('incompatible')
+  })
+
+  test('persist→load roundtrip incl. eviction snapshots with steps, newest-first', async () => {
+    const repository = await open(temporaryRepository())
+    // Transcript-era timestamps INSIDE the 30-day TTL window: the flush's
+    // bounded prune runs BEFORE inserts and deletes rows whose archivedAt
+    // predates the cutoff, so a later flush would legitimately remove
+    // epoch-1970 fixtures. archivedAt is a transcript timestamp, not a
+    // wall-clock write time, so fixtures model a live session near now.
+    const NOW = Date.now()
+    const HOUR = 3_600_000
+    const compaction = archiveSnapshotFixture({
+      archivedAt: NOW - 3 * HOUR,
+      stepBase: 4,
+      messages: [
+        { role: 'user', content: [{ type: 'text', text: 'go' }] } as Message,
+        toolResultMessage('call-9', 'compaction-fact'),
+      ],
+    })
+    const eviction: ContextArchiveSnapshot = {
+      archivedAt: NOW - 2 * HOUR,
+      action: 'tool_result_eviction',
+      keepRecentSteps: 2,
+      reason: 'deterministic tool-result eviction (stale recency)',
+      steps: [9, 11],
+      messages: [
+        toolResultMessage('evict-a', 'evicted-fact'),
+        toolResultMessage('evict-b', 'other-fact'),
+      ],
+    }
+    const result = await repository.persistContextArchiveSnapshots({
+      runId: 'run-1',
+      snapshots: [compaction, eviction],
+    })
+    expect(result).toEqual({ persisted: 2, skipped: 0 })
+
+    const loaded = await repository.loadContextArchiveSnapshots({
+      runId: 'run-1',
+    })
+    expect(loaded.snapshots.map((s) => s.archivedAt)).toEqual([
+      NOW - 2 * HOUR,
+      NOW - 3 * HOUR,
+    ])
+    const [evicted, compacted] = loaded.snapshots
+    expect(evicted!.action).toBe('tool_result_eviction')
+    expect(evicted!.steps).toEqual([9, 11])
+    expect(evicted!.reason).toBe(
+      'deterministic tool-result eviction (stale recency)',
+    )
+    expect(evicted!.stepBase).toBeUndefined()
+    expect(compacted!.stepBase).toBe(4)
+    expect(compacted!.action).toBe('semantic_compaction')
+    expect(compacted!.messages).toHaveLength(2)
+
+    // limit is honored; newest-first within the limit.
+    const limited = await repository.loadContextArchiveSnapshots({
+      runId: 'run-1',
+      limit: 1,
+    })
+    expect(limited.snapshots.map((s) => s.archivedAt)).toEqual([NOW - 2 * HOUR])
+
+    // Without runId the load spans runs.
+    await repository.persistContextArchiveSnapshots({
+      runId: 'run-2',
+      snapshots: [archiveSnapshotFixture({ archivedAt: NOW - 1 * HOUR })],
+    })
+    const all = await repository.loadContextArchiveSnapshots({})
+    expect(all.snapshots.map((s) => s.archivedAt)).toEqual([
+      NOW - 1 * HOUR,
+      NOW - 2 * HOUR,
+      NOW - 3 * HOUR,
+    ])
+  })
+
+  test('cap idempotency: re-persisting the same run fully replaces its rows', async () => {
+    const repository = await open(temporaryRepository())
+    const snapshots = [
+      archiveSnapshotFixture({ archivedAt: 1000 }),
+      archiveSnapshotFixture({ archivedAt: 2000 }),
+    ]
+    expect(
+      await repository.persistContextArchiveSnapshots({
+        runId: 'run-1',
+        snapshots,
+      }),
+    ).toEqual({ persisted: 2, skipped: 0 })
+
+    const messageCount = (): number => {
+      const raw = new Database(repository.databasePath)
+      try {
+        return (
+          raw.query('SELECT COUNT(*) AS count FROM context_archive_messages')
+            .get() as { count: number }
+        ).count
+      } finally {
+        raw.close()
+      }
+    }
+    expect(messageCount()).toBe(4) // 2 tool messages per snapshot
+
+    expect(
+      await repository.persistContextArchiveSnapshots({
+        runId: 'run-1',
+        snapshots,
+      }),
+    ).toEqual({ persisted: 2, skipped: 0 })
+    expect(messageCount()).toBe(4)
+    const loaded = await repository.loadContextArchiveSnapshots({
+      runId: 'run-1',
+    })
+    expect(loaded.snapshots).toHaveLength(2)
+
+    // A partial re-persist replaces the whole run: the dropped snapshot is
+    // gone because the in-memory archive is the capped truth.
+    expect(
+      await repository.persistContextArchiveSnapshots({
+        runId: 'run-1',
+        snapshots: [snapshots[0]!],
+      }),
+    ).toEqual({ persisted: 1, skipped: 0 })
+    expect(
+      (await repository.loadContextArchiveSnapshots({ runId: 'run-1' }))
+        .snapshots.map((s) => s.archivedAt),
+    ).toEqual([1000])
+  })
+
+  test('search hit through the durable FTS index with provenance and AND semantics', async () => {
+    const repository = await open(temporaryRepository())
+    await repository.persistContextArchiveSnapshots({
+      runId: 'run-search',
+      snapshots: [
+        archiveSnapshotFixture({
+          archivedAt: 5000,
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'text', text: 'go' }],
+            } as Message,
+            toolResultMessage(
+              'call-1',
+              'archive-search-fact-xyz trailing context',
+            ),
+          ],
+        }),
+      ],
+    })
+
+    const found = await repository.searchContextArchive({
+      query: 'archive-search-fact-xyz',
+    })
+    expect(found.matches).toHaveLength(1)
+    expect(found.matches[0]).toMatchObject({
+      runId: 'run-search',
+      archivedAt: 5000,
+      toolCallId: 'call-1',
+      toolName: 'read_files',
+    })
+    expect(found.matches[0]!.snippet).toContain('archive-search-fact-xyz')
+    expect(found.snapshotsSearched).toBe(1)
+
+    // ALL-terms AND semantics, matching the runtime recall contract.
+    expect(
+      (
+        await repository.searchContextArchive({
+          query: 'archive-search-fact-xyz zzz-no-such-term',
+        })
+      ).matches,
+    ).toEqual([])
+    // Case-insensitive.
+    expect(
+      (
+        await repository.searchContextArchive({
+          query: 'ARCHIVE-SEARCH-FACT-XYZ',
+        })
+      ).matches,
+    ).toHaveLength(1)
+    // A query with no FTS-expressible term is empty, not an error.
+    expect(await repository.searchContextArchive({ query: '& %' })).toEqual({
+      matches: [],
+      snapshotsSearched: 0,
+    })
+  })
+
+  test('fail-open: with the FTS table absent the search degrades to the LIKE scan', async () => {
+    const root = temporaryRepository()
+    const repository = await open(root)
+    await repository.persistContextArchiveSnapshots({
+      runId: 'run-like',
+      snapshots: [
+        archiveSnapshotFixture({
+          archivedAt: 7000,
+          messages: [
+            {
+              role: 'user',
+              content: [{ type: 'text', text: 'go' }],
+            } as Message,
+            toolResultMessage('call-like', 'like-scan-fact-abc'),
+          ],
+        }),
+      ],
+    })
+    // Simulate a store whose SQLite build lacked FTS5 at migration time by
+    // dropping the virtual table out from under the open repository: the FTS
+    // availability probe reads sqlite_master per call, so subsequent
+    // operations exercise the LIKE fallback branch exactly.
+    const raw = new Database(storePath(root))
+    raw.exec('DROP TABLE context_archive_fts')
+    raw.close()
+
+    const fallback = await repository.searchContextArchive({
+      query: 'like-scan-fact-abc',
+    })
+    expect(fallback.matches).toHaveLength(1)
+    expect(fallback.matches[0]).toMatchObject({
+      runId: 'run-like',
+      toolCallId: 'call-like',
+      toolName: 'read_files',
+    })
+    expect(fallback.matches[0]!.snippet).toContain('like-scan-fact-abc')
+    expect(fallback.snapshotsSearched).toBe(1)
+
+    // A post-drop persist skips the (absent) index rows and the LIKE scan
+    // still finds the freshly persisted body.
+    expect(
+      await repository.persistContextArchiveSnapshots({
+        runId: 'run-like-2',
+        snapshots: [
+          archiveSnapshotFixture({
+            archivedAt: 8000,
+            messages: [toolResultMessage('call-like-2', 'like-scan-fact-def')],
+          }),
+        ],
+      }),
+    ).toEqual({ persisted: 1, skipped: 0 })
+    expect(
+      (await repository.searchContextArchive({ query: 'like-scan-fact-def' }))
+        .matches,
+    ).toHaveLength(1)
+  })
+
+  test('TTL prune: snapshots older than 30 days are removed on the next flush', async () => {
+    const repository = await open(temporaryRepository())
+    const now = Date.now()
+    await repository.persistContextArchiveSnapshots({
+      runId: 'run-old',
+      snapshots: [archiveSnapshotFixture({ archivedAt: now - 31 * DAY_MS })],
+    })
+    await repository.persistContextArchiveSnapshots({
+      runId: 'run-fresh',
+      snapshots: [archiveSnapshotFixture({ archivedAt: now })],
+    })
+    expect(
+      await repository.loadContextArchiveSnapshots({ runId: 'run-old' }),
+    ).toEqual({ snapshots: [] })
+    expect(
+      (await repository.loadContextArchiveSnapshots({ runId: 'run-fresh' }))
+        .snapshots,
+    ).toHaveLength(1)
+  })
+
+  test('rejects and skips: empty runId, empty list, invalid action, closed store', async () => {
+    const repository = await open(temporaryRepository())
+    expect(
+      await repository.persistContextArchiveSnapshots({
+        runId: '',
+        snapshots: [archiveSnapshotFixture()],
+      }),
+    ).toEqual({ persisted: 0, skipped: 1 })
+    expect(
+      await repository.persistContextArchiveSnapshots({
+        runId: 'run-1',
+        snapshots: [],
+      }),
+    ).toEqual({ persisted: 0, skipped: 0 })
+    const invalidAction = {
+      ...archiveSnapshotFixture({ archivedAt: 100 }),
+      action: 'not-a-real-action',
+    } as unknown as ContextArchiveSnapshot
+    expect(
+      await repository.persistContextArchiveSnapshots({
+        runId: 'run-mixed',
+        snapshots: [invalidAction, archiveSnapshotFixture({ archivedAt: 200 })],
+      }),
+    ).toEqual({ persisted: 1, skipped: 1 })
+    expect(
+      (await repository.loadContextArchiveSnapshots({ runId: 'run-mixed' }))
+        .snapshots.map((s) => s.archivedAt),
+    ).toEqual([200])
+
+    await repository.close()
+    expect(
+      await repository.persistContextArchiveSnapshots({
+        runId: 'run-1',
+        snapshots: [archiveSnapshotFixture()],
+      }),
+    ).toEqual({ persisted: 0, skipped: 1 })
+    expect(
+      await repository.searchContextArchive({ query: 'anything' }),
+    ).toEqual({
+      matches: [],
+      snapshotsSearched: 0,
+    })
   })
 })

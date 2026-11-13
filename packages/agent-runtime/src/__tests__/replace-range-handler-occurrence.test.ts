@@ -1,12 +1,23 @@
-import { replaceRangeParams } from '@codebuff/common/tools/params/tool/replace-range'
+import {
+  preparedRangeMutationSchema,
+  replaceRangeParams,
+} from '@codebuff/common/tools/params/tool/replace-range'
+import { clientToolCallSchema } from '@codebuff/common/tools/list'
 import {
   encodeReadCapabilityToken,
   getContentHash,
+  getExactContentHash,
 } from '@codebuff/common/util/content-hash'
 import { describe, expect, it } from 'bun:test'
+import {
+  captureTextDocument,
+  getRawLineSpan,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 import { handleReplaceRange } from '../tools/handlers/tool/replace-range'
 import { mockFileContext } from './test-utils'
+import { confirmedMutationOutput } from './read-files-edit-state-fixtures'
 
 import type { FileProcessingState } from '../tools/handlers/tool/write-file'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
@@ -56,6 +67,12 @@ function capabilityToken(): string {
     endLine: capabilityEndLine,
     hash: getContentHash(capabilityContent),
     scope: { projectId: mockFileContext.projectRoot, path, runId },
+    rawBasis: getRawReadBasis(
+      captureTextDocument(diskContent),
+      capabilityStartLine,
+      capabilityEndLine,
+      'lines',
+    ),
   })
 }
 
@@ -79,6 +96,7 @@ async function invokeHandler(params: {
   capturedInputs: Array<Record<string, unknown>>
   fileProcessingState?: FileProcessingState
   requestOptionalFileCalls?: { count: number }
+  confirmedAfterContent?: string
 }) {
   const fileProcessingState =
     params.fileProcessingState ?? createFileProcessingState()
@@ -103,6 +121,16 @@ async function invokeHandler(params: {
       input: Record<string, unknown>
     }) => {
       params.capturedInputs.push(clientToolCall.input)
+      if (params.confirmedAfterContent !== undefined) {
+        return confirmedMutationOutput(
+          clientToolCall,
+          { [path]: params.confirmedAfterContent },
+          {
+            projectId: mockFileContext.projectRoot,
+            runId,
+          },
+        )
+      }
       return []
     },
     // The handler param type is intentionally wide; the neighbouring handler
@@ -111,7 +139,7 @@ async function invokeHandler(params: {
 }
 
 describe('handleReplaceRange occurrence resolution', () => {
-  it('forwards absolute lines of the requested occurrence in a provider-shaped payload', async () => {
+  it('forwards the exact prepared content of the requested occurrence with both preimages', async () => {
     const capturedInputs: Array<Record<string, unknown>> = []
 
     await invokeHandler({
@@ -126,32 +154,41 @@ describe('handleReplaceRange occurrence resolution', () => {
 
     expect(capturedInputs).toHaveLength(1)
     const capturedInput = capturedInputs[0] ?? {}
-    // Second in-range occurrence is absolute line 5 (line 1 is outside the
-    // authorized 2-6 window, so it is not counted).
-    expect(capturedInput.startLine).toBe(5)
-    expect(capturedInput.endLine).toBe(5)
-    expect(capturedInput.newContent).toBe('repeat(2);')
+    // Line 1 lies outside the observed 2-6 window. Only the second contained
+    // occurrence, at line 5, changes in the prepared exact file.
+    expect(capturedInput).toEqual({
+      type: 'file',
+      path,
+      content:
+        'repeat();\nconst alpha = 1\nrepeat();\nconst beta = 2\nrepeat(2);\nconst gamma = 3\n',
+      expectedHash: captureTextDocument(diskContent).observationHash,
+      expectedRawHash: getExactContentHash(diskContent),
+    })
     expect(Object.keys(capturedInput).sort()).toEqual([
-      'endLine',
-      'newContent',
+      'content',
+      'expectedHash',
+      'expectedRawHash',
       'path',
-      'readCapability',
-      'startLine',
+      'type',
     ])
-    // Regression: the payload used to carry the derived capability* keys and
-    // the already-resolved `occurrence`, which both strict schemas rejected
-    // with `Unrecognized keys`. Assert both re-validation boundaries the
-    // payload actually crosses: clientToolCallSchema.parse in sdk/src/run.ts
-    // uses providerInputSchema, and the SDK applicator re-parses inputSchema.
+    // The SDK wire accepts the strict internal variant. The provider surface
+    // still describes the caller's capability and range selection.
+    expect(preparedRangeMutationSchema.safeParse(capturedInput).success).toBe(
+      true,
+    )
+    expect(
+      clientToolCallSchema.safeParse({
+        toolCallId: 'forward-resolved-occurrence',
+        toolName: 'replace_range',
+        input: capturedInput,
+      }).success,
+    ).toBe(true)
     expect(
       replaceRangeParams.providerInputSchema.safeParse(capturedInput).success,
-    ).toBe(true)
-    expect(
-      replaceRangeParams.inputSchema.safeParse(capturedInput).success,
-    ).toBe(true)
+    ).toBe(false)
   })
 
-  it('forwards a multi-line occurrence match with endLine > startLine', async () => {
+  it('prepares the exact content of a contained multi-line occurrence', async () => {
     const capturedInputs: Array<Record<string, unknown>> = []
     const multiLineMatch = 'const beta = 2\nrepeat();'
 
@@ -166,12 +203,141 @@ describe('handleReplaceRange occurrence resolution', () => {
     })
 
     expect(capturedInputs).toHaveLength(1)
-    expect(capturedInputs[0]?.startLine).toBe(4)
-    expect(capturedInputs[0]?.endLine).toBe(5)
-    expect(Number(capturedInputs[0]?.endLine)).toBeGreaterThan(
-      Number(capturedInputs[0]?.startLine),
+    expect(capturedInputs[0]).toEqual({
+      type: 'file',
+      path,
+      content:
+        'repeat();\nconst alpha = 1\nrepeat();\nconst beta = 20\nrepeat(1);\nconst gamma = 3\n',
+      expectedHash: captureTextDocument(diskContent).observationHash,
+      expectedRawHash: getExactContentHash(diskContent),
+    })
+  })
+
+  it('prepares a relocated occurrence once after an insertion above the observed span', async () => {
+    const capturedInputs: Array<Record<string, unknown>> = []
+    const currentContent = `const inserted = 0\n${diskContent}`
+    const input = handlerInput({
+      occurrence: { match: 'repeat();', occurrence: 2 },
+      newContent: 'repeat(2);',
+    })
+
+    await invokeHandler({
+      toolCallId: 'forward-relocated-occurrence',
+      input,
+      currentContent,
+      capturedInputs,
+    })
+
+    expect(capturedInputs).toHaveLength(1)
+    expect(currentContent.split('\n')[5]).toBe('repeat();')
+    expect(capturedInputs[0]).toEqual({
+      type: 'file',
+      path,
+      content:
+        'const inserted = 0\nrepeat();\nconst alpha = 1\nrepeat();\nconst beta = 2\nrepeat(2);\nconst gamma = 3\n',
+      expectedHash: captureTextDocument(currentContent).observationHash,
+      expectedRawHash: getExactContentHash(currentContent),
+    })
+    expect(
+      preparedRangeMutationSchema.safeParse(capturedInputs[0]).success,
+    ).toBe(true)
+  })
+
+  it('prepares BOM, mixed-EOL and Unicode bytes and retains confirmed exact after-authority', async () => {
+    const before =
+      '\uFEFFhead 😀\r\nrepeat();\nkeep \uFEFFx\r\nrepeat();\nlast \rtail 😀'
+    const after =
+      '\uFEFFhead 😀\r\nrepeat();\nkeep \uFEFFx\r\nreplacement 😎\nextra\nlast \rtail 😀'
+    const document = captureTextDocument(before)
+    const span = getRawLineSpan(document, 2, 4)
+    const token = encodeReadCapabilityToken({
+      startLine: 2,
+      endLine: 4,
+      hash: getContentHash(
+        document.observation.slice(
+          span.startObservationOffset,
+          span.endObservationOffset,
+        ),
+      ),
+      scope: { projectId: mockFileContext.projectRoot, path, runId },
+      rawBasis: getRawReadBasis(document, 2, 4, 'lines'),
+    })
+    const state = createFileProcessingState()
+    state.strictReadBeforeEdit = true
+    const capturedInputs: Array<Record<string, unknown>> = []
+    const result = await invokeHandler({
+      toolCallId: 'forward-confirmed-mixed-occurrence',
+      input: handlerInput({
+        readCapability: token,
+        occurrence: { match: 'repeat();', occurrence: 2 },
+        newContent: 'replacement 😎\nextra',
+      }),
+      currentContent: before,
+      capturedInputs,
+      fileProcessingState: state,
+      confirmedAfterContent: after,
+    })
+
+    expect(capturedInputs).toEqual([
+      {
+        type: 'file',
+        path,
+        content: after,
+        expectedHash: document.observationHash,
+        expectedRawHash: document.rawHash,
+      },
+    ])
+    expect(result.output[0]).toMatchObject({
+      type: 'json',
+      value: { outcome: 'applied' },
+    })
+    expect(state.rawReadAuthorizationHashesByPath?.[path]).toBe(
+      getExactContentHash(after),
     )
-    expect(capturedInputs[0]?.newContent).toBe('const beta = 20\nrepeat(1);')
+    expect(
+      state.confirmedPostEditAnchorsByPath?.[path]?.rawBasis,
+    ).toMatchObject({
+      scope: 'whole',
+      rawHash: getExactContentHash(after),
+    })
+  })
+
+  it('does not invoke the client when the authenticated raw span is stale', async () => {
+    const capturedInputs: Array<Record<string, unknown>> = []
+    const result = await invokeHandler({
+      toolCallId: 'stale-before-prepared-handoff',
+      input: handlerInput({ newContent: 'replacement' }),
+      currentContent: diskContent.replace('const gamma = 3', 'const gamma = 4'),
+      capturedInputs,
+    })
+    expect(capturedInputs).toHaveLength(0)
+    expect(result.output[0]).toMatchObject({
+      type: 'json',
+      value: {
+        errorCode: 'fresh_read_required',
+        errorMessage: expect.stringContaining(
+          'raw bytes and line boundaries were not found',
+        ),
+      },
+    })
+  })
+
+  it('does not invoke the client when raw relocation has identical candidates', async () => {
+    const capturedInputs: Array<Record<string, unknown>> = []
+    const result = await invokeHandler({
+      toolCallId: 'ambiguous-before-prepared-handoff',
+      input: handlerInput({ newContent: 'replacement' }),
+      currentContent: `${diskContent}${capabilityContent}\n`,
+      capturedInputs,
+    })
+    expect(capturedInputs).toHaveLength(0)
+    expect(result.output[0]).toMatchObject({
+      type: 'json',
+      value: {
+        errorCode: 'fresh_read_required',
+        errorMessage: expect.stringContaining('2 identical candidate spans'),
+      },
+    })
   })
 
   it('returns occurrence_not_found without calling the client when the count is short', async () => {
@@ -265,7 +431,7 @@ describe('handleReplaceRange occurrence resolution', () => {
       }
       expect(value.errorCode).toBe('fresh_read_required')
       expect(String(value.errorMessage)).toContain(
-        'could not read current content',
+        'a lossless current source is unavailable',
       )
     }
   })
@@ -286,7 +452,7 @@ describe('handleReplaceRange occurrence resolution', () => {
         occurrence: { match: 'repeat();', occurrence: 1 },
         newContent: 'repeat(1);',
         // Transform normally fills these; include them so recovery messaging
-        // stays concrete without a bound cap.v3 token.
+        // stays concrete without a bound raw capability token.
         capabilityStartLine,
         capabilityEndLine,
       },
@@ -327,8 +493,12 @@ describe('handleReplaceRange occurrence resolution', () => {
     })
 
     expect(capturedInputs).toHaveLength(1)
-    expect(capturedInputs[0]?.startLine).toBe(capabilityStartLine)
-    expect(capturedInputs[0]?.endLine).toBe(capabilityEndLine)
-    expect(capturedInputs[0]?.newContent).toBe('replacement')
+    expect(capturedInputs[0]).toEqual({
+      type: 'file',
+      path,
+      content: 'repeat();\nreplacement\n',
+      expectedHash: captureTextDocument(diskContent).observationHash,
+      expectedRawHash: getExactContentHash(diskContent),
+    })
   })
 })

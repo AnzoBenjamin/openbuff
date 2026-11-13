@@ -10,6 +10,8 @@ import {
   stripHtml,
 } from './web-search-utils'
 
+import type { WebEgressOptions } from './web-search-utils'
+
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type {
   CodebuffToolCall,
@@ -31,6 +33,8 @@ export const handleWebSearch = (async (params: {
   repoId: string | undefined
   userInputId: string
   userId: string | undefined
+  /** Test seam for DNS/fetch (N05). Production omits it. */
+  webEgress?: WebEgressOptions
 }): Promise<{
   output: CodebuffToolOutput<'web_search'>
   creditsUsed: number
@@ -47,6 +51,7 @@ export const handleWebSearch = (async (params: {
     repoId,
     userId,
     userInputId,
+    webEgress,
   } = params
   const { query, depth, url, include_links, max_links } = toolCall.input
 
@@ -87,6 +92,7 @@ export const handleWebSearch = (async (params: {
             'Mozilla/5.0 (compatible; Codebuff/1.0; +https://openbuff.dev)',
         },
         signal: combinedSignal,
+        egress: webEgress,
       })
 
       if (!response.ok) {
@@ -161,6 +167,7 @@ export const handleWebSearch = (async (params: {
       query,
       depth ?? 'standard',
       AbortSignal.any([signal, AbortSignal.timeout(WEBSEARCH_TIMEOUT_MS)]),
+      webEgress,
     )
 
     if ('error' in searchResult) {
@@ -173,7 +180,15 @@ export const handleWebSearch = (async (params: {
         'Web search returned error',
       )
       return {
-        output: jsonToolResult({ errorMessage: searchResult.error }),
+        output: jsonToolResult({
+          errorMessage: searchResult.error,
+          status: searchResult.status,
+          reason: searchResult.reason,
+          nextStep: searchResult.nextStep,
+          ...(searchResult.retryAfterSeconds !== undefined
+            ? { retryAfterSeconds: searchResult.retryAfterSeconds }
+            : {}),
+        }),
         creditsUsed,
       }
     }
@@ -186,6 +201,9 @@ export const handleWebSearch = (async (params: {
       return {
         output: jsonToolResult({
           errorMessage: `No search results found for "${query}"`,
+          status: 'no_results',
+          reason: 'DuckDuckGo returned a normal results page with no matches.',
+          nextStep: 'Try a broader or differently worded query.',
         }),
         creditsUsed,
       }

@@ -159,6 +159,8 @@ export type AgentTemplate<
   maxSpawnDepth?: number
 
   mcpServers: Record<string, MCPConfig>
+  /** Opaque per-server references verified by the originating host. */
+  mcpServerReferences?: Record<string, string>
   toolNames: (ToolName | (string & {}))[]
   /** Hidden capabilities callable only from the trusted `handleSteps` generator. */
   programmaticToolNames?: (ToolName | (string & {}))[]

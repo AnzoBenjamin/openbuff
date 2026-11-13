@@ -27,7 +27,10 @@ Common phase triggers and routing policies:
 - `basher` — validation phase for tests, typechecks, lints, builds, or command discovery that lacks a dedicated harness tool. Prefer configured hooks and deterministic path-to-suite routing first, such as agents/base2 prompt/gate checks, SDK checks for `packages/sdk/*`, runtime checks for `packages/agent-runtime/*`, common/dependent checks for `common/*`, and CLI typecheck plus visual smoke for `cli/src/components/*` or `cli/src/hooks/*`.
   Basher requires `params.command`. For compatibility, `spawn_agents` repairs an explicit string-valued top-level `command` into `params.command` and decodes the bounded provider serialization `command</arg_key><arg_value>...` when it occurs directly in Basher params, but it never treats prompt prose as executable input. A spawn whose required params are genuinely absent is published with a structured failure result so the parent can inspect the validation error and retry safely.
   Prefer short project-script commands (`bun path/to/script`) over `bun -e` / `node -e` probes — interpreter eval is high-impact harness `arbitrary-code` and needs approval in balanced mode. Do not put env dumps or multi-KB heredocs / live `$()` env probes in `params.command`; terminal policy still denies those even when the harness classifier is quiet. Keep complex logic in project files authored with edit tools, and use `bun run smoke:harness` as the durable local classifier/policy check.
-- `set_output` expects native object fields. Complete stringified JSON objects and exact JSON code-fence/comment wrappers are decoded for compatibility. Malformed or incomplete string data is never accepted as agent output; the call receives a recoverable tool result so the agent can retry without losing the structured-output contract.
+- `set_output` expects native object fields. Complete stringified JSON objects and exact JSON code-fence/comment wrappers are decoded for compatibility. For a truncated object containing gate-critical fields, the runtime may recover complete top-level fields and validate them against the agent's output schema; a recognized reviewer receipt missing requirement coverage is marked `BLOCKING` with an uncertain coverage entry. Unrecoverable malformed data is rejected with a retryable tool result. Reviewer advisory arrays may also be decoded from complete JSON text, or a single plain advisory may be wrapped into an array. Each successful call replaces the previous output; it does not append chunks.
+- Output durability: complete large `set_output` objects follow normal schema validation. Undecodable oversized text is saved in full; if its fallback pointer fails the agent schema, the rejection names a retained recovery file instead of deleting the work. Duplicate detection compares the full payload hash, so corrections replace earlier oversized results. Parent receipts join their artifact writes before publication and report a failed write without a recovery path.
+- `list_directory` returns pages of up to 5,000 visible entries. A partial listing includes `truncated: true` and `nextOffset`; pass that offset in the next call, optionally with a smaller `limit`. Filtering happens before pagination. Restart at offset 0 if the directory changes between calls.
+- SYNC terminal output stays bounded inline while overflow is streamed to a full JSON log on disk. `fullLogPath` covers both streams, including text beyond the former accumulation cap; `logBytes` is the actual artifact byte size. Disk failures return `logPersisted: false` and `logError` without a path.
 - **Embedder contract note (set_output moved out of `programmaticToolNames`):** structured-output agents — `researcher-web` first — now declare `set_output` in `toolNames` (model-facing) with an empty `programmaticToolNames` list, instead of intercepting it at the `handleSteps` generator boundary. A host or harness that introspected `programmaticToolNames` to decide whether to intercept `set_output` programmatically will now see an empty list and must stop intercepting: the model self-calls `set_output`, and the runtime applies the structured-output contract (validation, recoverable failures) at the model-call boundary. Embedders that relied on generator-level interception must move that interception to the model tool-call path or accept the model-driven behavior.
 - Native tool inputs use canonical provider schemas, while the shared compatibility parser repairs a bounded set of unambiguous model-generated shapes before validation. This includes singular/plural selectors (`path`/`paths`, `file`/`files`, `edit`/`edits`, `agent`/`agents`), single items for declared collection fields, and explicit camelCase/snake_case equivalents. Canonical fields win when both forms are present; truncated JSON, unknown aliases, and ambiguous shapes still fail validation.
 - `dependency-manager` — explicit dependency-mutation phase only. It receives structured manager/operation/package/workspace inputs, constructs one bounded ecosystem-native command, and supports npm/pnpm/Yarn/Bun, uv/Poetry/pip, Cargo, Go modules, .NET, Bundler, Composer, SwiftPM, Dart/Flutter Pub, Mix, Maven dependency resolution, and Gradle dependency inspection. It cannot run arbitrary shell or global installs, and a missing-package diagnostic alone is not authorization to spawn it.
@@ -56,10 +59,10 @@ Runtime agent restrictions keep real security boundaries while removing over-str
 - SSRF host/IP/redirect revalidation on network fetches
 - Denials for `.env`, private keys/credentials, and real `.tfstate` paths
 - Project-path containment for reads/writes/spawned work
-- `cap.v3` HMAC signing with project/path/run scope binding
+- `cap.v4` HMAC signing with project/path/run scope and exact raw basis binding
 - `replace_range` authority chain (authenticated capability, not prose hashes)
-- Plan-only terminal attenuation (descendants stay on the read-only terminal profile) — currently overridden by the global full-access terminal profile, so it is no longer effective in the bundled runtime
-- Privilege-escalation, system-package, and env-dump bans (these apply to the non-full-access policy profiles, still enforced for SDK hosts and the high-impact approval gate, not to bundled agents now on full-access)
+- Plan mode is read-only at dispatch: plan-lineage tool calls to mutating tools fail with `plan_mode_read_only`, descendants run terminal commands under the enforced `read-only` profile, and plan templates spawn only agents without mutating tools (`common/src/tools/plan-mode-policy.ts`)
+- Privilege-escalation, system-package, and env-dump bans (these apply to the non-full-access policy profiles; bundled agents that declare `read-only` or `workspace-write` now run under them, agents with no declared profile stay on full-access)
 - Force/delete/default-branch push gating
 - Large-file scoped `basedOnRead` hard-fail when the anchor is required and invalid
 - `str_replace` circuit-breaker non-draining success (limit 5)
@@ -85,7 +88,7 @@ The root orchestrator has a versioned, local control-plane surface for work that
 - `get_change_review_bundle` produces snapshot-bound changed-file and diff **evidence** for reviewers. Its bare hex `snapshotId` is evidence-only — gate/specialist/security attestation uses opaque gate-owned `v3:…` tokens (`snapshot_id` / `snapshot_fingerprint`), never bare bundle hex as credit identity. An empty or failed bundle must not clear specialist review when reviewable pending files still exist; specialists still spawn under the gate-owned v3 token.
 - `inspect_environment` recursively reports nested JavaScript, Python, Rust, Go, Maven/Gradle, .NET, and Swift workspaces, their manifests/lockfiles, inferred managers with explicit confidence, and locally available toolchains without executing project code.
 - `get_affected_tests` and `get_build_targets` map changed files to the nearest workspace, existing test candidates, and manager-specific validation/build commands. Targets report `confirmed`, `inferred`, or `unknown` confidence instead of presenting guesses as discovered facts.
-- `run_targeted_validation` executes only an explicitly selected target against an expected snapshot and rejects stale or mid-run-mutated snapshots. It is **snapshot-scoped optional evidence only**: green targeted validation does **not** clear reviewer findings, does **not** unlock `git-committer`, and does **not** replace the validation/reviewer gate.
+- `run_targeted_validation` selects configured hooks using the supplied files, runs them against an expected snapshot, and rejects stale or mid-run-mutated snapshots. Optional `artifact_kinds` are evidence labels only; they do not select or filter hooks. It is **snapshot-scoped optional evidence only**: green targeted validation does **not** clear reviewer findings, does **not** unlock `git-committer`, and does **not** replace the validation/reviewer gate.
 - `inspect_codebase_structure` creates the authoritative snapshot-bound audit inventory, including subsystems, entrypoints, routes, commands, public APIs, tests, generated sources, and a detected language/framework capability packet.
 - `inspect_feature_completeness` follows a claimed feature vertically across runtime wiring, consumers, tests, docs, and failure-state evidence.
 - `write_audit_findings` returns a snapshot-bound `structuralReceipt` when the shard supplies the exact snapshot and explicit domain coverage, and `inspect_feature_completeness` returns a `coverageReceipt`; pass those receipts directly to `evaluate_audit_coverage` instead of reconstructing them from prose or count summaries. Feature receipts remain heuristic until their cited files are verified with exact reads.
@@ -100,14 +103,14 @@ Control-plane records use compare-and-swap revisions, atomic local persistence, 
 `run_file_change_hooks` + the automated code-reviewer are the **validation/reviewer gate** that unlocks finalization and commit. Hooks run user-configured checks and, only when a trusted
 project explicitly sets `autoFileChangeHooks: true`, combine them with bounded
 manifest inference. The opt-in is required because compilers, plugins, build
-scripts, and tests can execute repository-controlled code. Inference prefers explicit project scripts and supports native checks for
+scripts, and tests can execute repository-controlled code. Inference selects fixed validation commands and supports native checks for
 JavaScript/TypeScript, Python, Rust, Go, Java/Kotlin, .NET, C/C++, Ruby, PHP,
 Swift, and Godot. Compiler and linter output is normalized into structured
 diagnostics (`file`, range, severity, code, message, command, source) while the
 original bounded stdout/stderr remains available for recovery.
 
 - Automated security/test/doc auxiliary agents have explicit lifecycle handling. Their done flags are written only after successful completion; crashes and blocking security verdicts persist as blockers. Test/doc writers run automatically only when the user request explicitly includes those deliverables, and mixed-package test targets are routed to package-specific commands.
-- Productive agent steps, subagent duration, file mutations, configured file-change hooks, and terminal commands are all unbounded in wall-clock time by default. The remaining safeguards are user cancellation, cost/token budgets, spawn-depth limits, and context compaction; observational poll bounds (`check_job`, `check_background_agent`) and network/lock timeouts are unchanged. Gate repair and reviewer/specialist no-verdict retries are unlimited by default (finite caps only via `OPENBUFF_MAX_*` env or `createBase2` options); reviewer crashes retry once, and repeated no-verdict outputs keep re-prompting the reviewer instead of parking. Repeated reviewer crashes require the explicit user phrase `bypass reviewer gate` before finalization can continue.
+- Configured file-change hooks default to a 300-second local cap; explicit `timeoutSeconds: -1` removes that local cap. Terminal commands default to no local cap, and a supplied timeout applies to synchronous and background commands from action start, including approval and preflight. Finite parent deadlines still apply. The remaining safeguards include user cancellation, cost/token budgets, spawn-depth limits, and context compaction; observational poll bounds (`check_job`, `check_background_agent`) and network/lock timeouts are unchanged. Gate repair and reviewer/specialist no-verdict retries are unlimited by default (finite caps only via `OPENBUFF_MAX_*` env or `createBase2` options); reviewer crashes retry once, and repeated no-verdict outputs keep re-prompting the reviewer instead of parking. Repeated reviewer crashes require the explicit user phrase `bypass reviewer gate` before finalization can continue.
 - Root-orchestrator mutating/control gate operations such as Git-status observation, file-change hooks, and structural inventory are model-hidden programmatic tools. Their results are injected when needed after edits, so the harness remains active without paying for those schemas on every provider request. The orchestrator must **not** treat basher typechecks or `run_targeted_validation` as gate substitutes — only the runtime-owned hooks→reviewer cycle clears the gate. The read-only `get_change_review_bundle` tool remains model-visible so an orchestrator can refresh a stale reviewer snapshot after compaction. Fresh greetings and simple gratitude prompts take a narrow conversational fast path only when no pending work or reviewer blocker exists.
 
 **Pattern-specific agents** are intentionally **excluded** from `spawnableAgents` because they have a narrow contract that only makes sense within a specific workflow pattern. They are spawned by the pattern flow itself, not by the orchestrator:
@@ -300,8 +303,12 @@ and nested agent groups recurse through `AgentBlockGrid`. Tool rendering
 uses `ToolBranch`: hidden tools such as `end_turn`, `ask_user`, and blocks
 with `includeToolCall === false` are skipped; registered tool components
 render their custom content; unregistered tools fall back to `ToolCallItem`
-with JSON input, optional result output, streaming previews, finished
-previews, and default collapsed state.
+with summarized input, optional result output, streaming previews, finished
+previews, and default collapsed state. Complete JSON results are displayed as
+readable field paths and values; size and depth limits are indicated when
+details are omitted. `set_output` displays reviewer findings, evidence,
+corrections, advisories, and dimensions, and reports a rejected call as a
+failure rather than presenting its submitted verdict as accepted.
 
 `Thinking` normalizes reasoning text for compact previews, shows the last
 few visual lines while collapsed, preserves original line breaks in the
@@ -695,6 +702,32 @@ Tools represent the capabilities given to agents to interact with your system.
 - Tool executions are handled securely by the SDK on your local machine (reading/writing files, executing commands, searching codebase).
 - Since Openbuff has no hosted proxy backend, tool execution is extremely low-latency, and all outputs are processed directly by your locally configured models.
 
+### MCP and custom tool schemas
+
+Custom tools accept object inputs. Their original live Zod schema validates
+each call, including async refinements, defaults, and transforms; provider
+schemas describe an advisory input shape. Scalar-root custom schemas fail
+registration because tool calls use an object contract.
+
+The root input name `cb_easp` is reserved for step control. External input
+schemas that declare or constrain that name refuse publication, including
+composed and referenced schemas. This check uses a custom tool's original
+input shape before advisory normalization. Nested `cb_easp` fields, output
+fields, and fields created by a host transform remain ordinary data.
+
+MCP and restored JSON-only tool schemas use nonmutating draft-7 validation.
+Supervised prompt transfers preserve complete tool and agent schema members
+outside the generic bridge marker walk, whose depth limit otherwise truncates
+nested result schemas (including `read_files` summaries and `read_docs`
+library alternatives). Schema literals remain data during this transfer.
+Unsupported schemas fail explicitly during registration or discovery. In
+addition to unsupported dialects and executable behavior, Ajv 6 cannot safely
+compile an own `__proto__` entry in `properties`, `patternProperties`, or
+`dependencies`. It also cannot compile a `properties` map containing
+`hasOwnProperty` with more than eight entries and constrained
+`additionalProperties`. These shapes refuse; required-only prototype field
+names remain supported.
+
 ### Tool availability and unavailable-tool errors
 
 Each agent is granted a subset of the global tool registry, not the whole
@@ -755,11 +788,12 @@ jobs:
 
 - `check_job` polls or follows a job's new output and status, and returns the
   job's `logFile` path in its success output. It returns sequenced output
-  events (`{type:'output',data}`) with a per-consumer `nextCursor` (plus
-  `truncated`/`dropped` bounds) rather than a job-global read offset, so each
-  consumer advances its own cursor. Follow mode (`wait_for` with a bounded
-  `timeout_seconds`) waits on that event stream until a readiness/error
-  predicate matches. The first settled success observation may also include
+  events (`{type:'output',data}`) and `nextCursor` (plus
+  `truncated`/`dropped` bounds). An explicit `cursor` supports independent
+  replay without moving the job's default cursor; an omitted cursor advances
+  that job-level default. Follow mode (positive `timeout_seconds`, with an
+  optional `wait_for` predicate) waits until a match, job exit, or timeout.
+  The first settled success observation may also include
   one-shot optional `touchedPaths` for concurrent gate isolation (see
   [Concurrent gate isolation (`selfMutatedPaths`)](#concurrent-gate-isolation-selfmutatedpaths));
   start and later re-polls omit that field.
@@ -900,7 +934,7 @@ Three independent stages keep binary and oversized files out of the index AND ou
 2. `none` — if the token-annotated filtered tree fits the budget, render it as-is.
 3. `unimportant-files` — if the no-token filtered tree fits, render it without per-file token scores.
 4. `tokens` (`pruneFileTokenScores`) — iteratively strip the lowest-scoring per-file token annotations (batched, with a 5-tokens-per-name estimate) until the annotated tree fits.
-5. `depth-based` — if tokens pruning alone is not enough, remove the deepest files first (sorted by depth, sampled to estimate avg tokens per filename, removed in batches of `0.5 × tokensToRemove / avgTokensPerFileName + 100`, capped at 10 iterations). A no-progress safety break stops the loop if token count stops decreasing.
+5. `depth-based` — if tokens pruning alone is not enough, remove the deepest files first (sorted by depth, sampled to estimate avg tokens per filename, removed in batches of `0.5 × tokensToRemove / avgTokensPerFileName + 100`, capped at 10 iterations). The loop is bounded solely by that 10-iteration cap (no progress-based early exit), and a tokens-per-file-name fallback keeps the estimate finite when the sampled tree is empty.
 
 Gotchas:
 
@@ -998,24 +1032,30 @@ prompts or teach models overlapping call forms.
 
 Every complete whole-file, range, or symbol-slice result exposes one structured
 `editAnchor` with `startLine`, `endLine`, `contentHash`, and
-`readCapability`. `editAnchor.readCapability` is the copy-ready cap.v3 edit
+`readCapability`. `editAnchor.readCapability` is the copy-ready cap.v4 edit
 authority; the bounds and hash are diagnostic metadata and must not be mixed
 into the same edit call. Structured results expose no duplicate top-level
 `rangeHash` or `readCapability` fields. Partial or truncated file/range items
 expose neither hashes nor edit capabilities; successful slices in a partially
-satisfied symbol request retain their own anchors.
+satisfied symbol request retain their own anchors. Complete EOF/total metadata
+does not make truncated returned content complete or grant whole-file authority.
 
 Model-facing range content omits the transport-only `[RANGE_BLOCK ...]`
-metadata header. Exact undecorated bytes remain available as `sourceContent`,
-while the structured anchor carries freshness metadata without prose parsing.
+metadata header. `sourceContent` carries undecorated observation text, with
+CRLF normalized to LF. The structured anchor signs a separate exact raw basis,
+including original BOM and terminator facts. The host's lossless
+`rawSourceContent` callback channel is removed before model-facing output.
 
 For large files, `read_files` is also the capability-minting block reader: the
 `windows`, `around`, `symbol`, and batch `symbols` selectors below return one
 or more COMPLETE structural blocks so a large file yields a usable edit anchor
 without a guess-shrink-retry loop. Every complete block returns a structured
-`editAnchor` (`startLine`, `endLine`, `contentHash`, cap.v3 `readCapability`)
+`editAnchor` (`startLine`, `endLine`, `contentHash`, cap.v4 `readCapability`)
 that can be copied verbatim to `basedOnRead` / `readCapability` on a follow-up
-edit. Partial or failed blocks mint no capability. The selector modes may be
+edit. Line and structural selectors retain a `lines` raw basis even when their
+bounds cover the visible file; only an authenticated `whole` basis grants
+whole-file authority. Partial, failed or unverified blocks mint no capability.
+The selector modes may be
 combined in one call:
 
 - `windows: [{ path, windowSize?, window? }]` — split the file into complete
@@ -1025,10 +1065,10 @@ combined in one call:
   block around the 1-indexed `occurrence` (default 1) of the exact literal
   `match`, with `contextLines` (default 40) on each side, clamped at file
   boundaries. Robust to line-number drift.
-- `symbol: { path, name, occurrence? }` (or batch
-  `symbols: [{ path, name, occurrence? }]`) — pull the Nth (default 1)
-  top-level symbol with that name, mirroring `rewrite_symbol` occurrence
-  semantics. Pair with `read_outline` to discover names.
+- `symbol: { path, name, occurrence? }` — pull the Nth (default 1)
+  top-level symbol with that name. Batch `symbols: [{ path, names: [name] }]`
+  returns named slices; use `symbol` to select a specific occurrence. Pair with
+  `read_outline` to discover names.
 
 ```json
 {
@@ -1036,7 +1076,7 @@ combined in one call:
   "around": [
     { "path": "path/to/large-file.ts", "match": "export function loadConfig(" }
   ],
-  "symbols": [{ "path": "path/to/large-file.ts", "name": "loadConfig" }]
+  "symbols": [{ "path": "path/to/large-file.ts", "names": ["loadConfig"] }]
 }
 ```
 
@@ -1082,27 +1122,34 @@ read-before-edit enforcement:
   `No matching discriminator` error because it could be either `create` or
   `write_file`. Set `type` explicitly to avoid this.
 - A recent complete whole-file `read_files.paths` call authorizes subsequent
-  exact-match edits to that path and returns an authenticated opaque `cap.v3`
-  `readCapability` bound to the project, normalized path, and current run.
+  exact-match edits to that path and returns an authenticated opaque `cap.v4`
+  `readCapability` bound to the project, normalized path, current run and exact
+  observed raw bytes.
   Truncated reads expose no
   capability. Range and symbol reads remain scoped and require their
   `readCapability` on the follow-up edit.
-- `basedOnRead` prefers a `cap.v3` token copied from a fresh `read_files`
-  range header. The runtime verifies its authentication, project/path/run
-  binding, bounds, and current content hash. Legacy `cap.v2` tokens and
-  explicit `{ startLine, endLine, hash }` objects remain freshness anchors for
-  compatible non-strict flows, but cannot authorize an otherwise unread path.
+- `basedOnRead` prefers a `cap.v4` token copied from a fresh structured
+  `read_files` anchor. The runtime verifies its authentication, project/path/run
+  binding, bounds, normalized hash and exact raw basis. Whole raw drift refuses;
+  scoped reads can relocate only to one unchanged raw slice within the bounded
+  search. Historical `cap.v3` tokens still authenticate for parsing, while
+  legacy `cap.v2` tokens and explicit `{ startLine, endLine, hash }` objects
+  remain compatibility metadata. None supplies fresh raw edit authority.
 - Model-facing `replace_range` transaction edits use
   `{ readCapability, newContent }`, add both `startLine` and `endLine` to
   target a contained sub-range, or pass `occurrence: { match, occurrence? }`
   to target the Nth literal match inside the capability-authorized range.
   `occurrence` is mutually exclusive with `startLine`/`endLine`. The
-  authenticated cap.v3 token remains the
+  authenticated cap.v4 token remains the
   sole freshness authority; legacy `expectedHash` tuples are rejected.
 - A successful edit keeps path-level authorization during the editing flow,
   while exact-match follow-up edits chain from the latest prepared content.
   For large or ambiguous follow-up edits, carry the echoed post-edit
-  `basedOnRead` forward or re-read the target range.
+  `basedOnRead` forward or re-read the target range. Fresh after-state tokens
+  require the canonical committed receipt, exact after-hash and receiving
+  issuer scope. Output normalization verifies their whole raw metadata against
+  confirmed after-content or the coordinator's separately confirmed local
+  anchor before publishing them to the agent's history.
 - Stale or failed edits should be recovered by re-reading the exact
   target range named in the diagnostic and retrying with the new
   `basedOnRead`, not by guessing from memory. A stale failure deliberately
@@ -1621,12 +1668,22 @@ runtime archives the pre-compaction transcript onto the new optional
 (`packages/agent-runtime/src/util/context-archive.ts`, capped at 8 snapshots
 of 200 messages with 4k-char per-message truncation; plain JSON, so sessions
 persisted before the field existed parse without it). The registered
-`recall_context` tool (granted to base2 CORE) searches those archived tool
-bodies with bounded case-insensitive AND-match snippets and returns
+`recall_context` tool (granted to base2 CORE) searches those archived
+conversation and tool bodies with bounded case-insensitive AND-match snippets and returns
 provenance, so pre-compaction content is always marked stale-until-verified;
-the archive itself never enters the model context. Eviction is deliberately
-NOT archived: tombstones already instruct a re-run, and a fresh read of live
-files is more faithful than a stale body. After a semantic pass, the runtime
+the archive itself never enters the model context. As of P2-T2 slice 1, this
+archive — including D26 `tool_result_eviction` snapshots — persists across
+sessions via the CLI chat-state restore path (`saveChatState` /
+`loadMostRecentChatState`) and the P2-3 mid-turn checkpoint
+(`saveCheckpoint` / `loadCheckpoint`), and the SDK's
+`applyOverridesToSessionState` restore clone preserves it wholesale, with
+regression tests in `cli/src/utils/__tests__/run-state-storage.test.ts`,
+`cli/src/utils/__tests__/turn-checkpoint.test.ts`, and
+`sdk/src/__tests__/initial-session-state.test.ts` proving deep-equal restore
+over which recall operates unchanged. Eviction snapshots are archived under a
+separate bounded retention policy so tombstoned tool results remain recoverable;
+a fresh read of live files is still preferred before acting on stale content.
+After a semantic pass, the runtime
 verifies the extraction
 (`packages/agent-runtime/src/util/compaction-verification.ts`): expected facts
 (paths read or written, truncated commands) are derived from the

@@ -51,18 +51,11 @@ export function createSpecialist(
         enum: ['critical', 'high', 'medium', 'low'],
       },
       dimension: { type: 'string' as const, enum: dimensionKeys },
-      summary: boundedString(),
+      text: boundedString(),
       evidence: boundedStringArray(),
       correction: boundedString(),
     },
-    required: [
-      'id',
-      'severity',
-      'dimension',
-      'summary',
-      'evidence',
-      'correction',
-    ],
+    required: ['id', 'severity', 'dimension', 'text', 'evidence', 'correction'],
   }
   const dimensionsSchema = {
     type: 'object' as const,
@@ -70,8 +63,13 @@ export function createSpecialist(
       dimensionKeys.map((dimension) => [
         dimension,
         {
-          type: 'string' as const,
-          enum: ['pass', 'warning', 'block', 'not_applicable'],
+          // Clause-form status, matching the worked example's
+          // "pass: <one clause>" and the gate's leading-word read of a
+          // failing dimension (`block: <clause>`): a value is the bare
+          // status token or the token plus one clause. The exact enum
+          // this replaces rejected the canonical example outright.
+          ...boundedString(),
+          pattern: '^(pass|warning|block|not_applicable)(: .*)?$',
         },
       ]),
     ),
@@ -178,6 +176,13 @@ export function createSpecialist(
               maxItems: MAX_FINDINGS,
               items: findingSchema,
             },
+            // base2's collectReviewerAdvisories consumes this optional
+            // channel from reviewer-family specialist receipts exactly like
+            // code-reviewer's, so the schema declares it: observations that
+            // do not require a change (at most 8, one short line each). An
+            // omitted key still validates — the consumer treats a missing
+            // field as zero advisories.
+            advisories: boundedStringArray(),
             requirementCoverage: {
               type: 'array',
               maxItems: MAX_REQUIREMENTS,
@@ -238,8 +243,8 @@ export function createSpecialist(
     systemPrompt: `You are the ${config.displayName} specialist. You make source-backed judgments within a narrow contract and never invent validation, approvals, or filesystem state.`,
     instructionsPrompt: [
       config.advisory
-        ? 'Read the exact current sources and task state. A snapshot_id is optional for pre-edit advisory work; when supplied, it is the assigned gate snapshot fingerprint for this spawn — echo it exactly as snapshotFingerprint and do not invent a different value or re-validate against a live bundle that may have moved.'
-        : 'When supplied, params.snapshot_id is the authoritative assigned snapshot for this review spawn (opaque v3:… gate-assigned token from the parent gate — not the bare hex snapshotId from get_change_review_bundle). Echo that exact value as snapshotFingerprint. When params.snapshot_id is absent, this is a manual spawn following the omit-for-manual contract (the gate-assigned token exists only for runtime-owned spawns): review the files in params.files and the prompt scope, emit snapshotFingerprint as the empty string, and never invent a v3 token. You may use get_change_review_bundle as read-only evidence (file list/diff/empty-tree check); if a fresh call returns a different bare id, keep reviewing against params.snapshot_id and echo params.snapshot_id — do not emit stale-snapshot solely because the live bundle moved. List the exact normalized project-relative paths you read. Stale-snapshot BLOCKING is only for: inventing a different fingerprint or inability to read the assigned files — not live-bundle drift during review and not an absent snapshot_id on a manual spawn.',
+        ? 'Read the exact current sources and task state. A snapshot_id is optional for pre-edit advisory work; when supplied, it is the assigned gate snapshot fingerprint for this spawn — echo it exactly as snapshotFingerprint and do not invent a different value or re-validate against a live bundle that may have moved. When params.snapshot_id is absent, emit snapshotFingerprint as the empty string; never invent a v3 token.'
+        : 'When supplied, params.snapshot_id is the authoritative assigned snapshot for this review spawn (opaque v3:… gate-assigned token from the parent gate — not the bare hex snapshotId from get_change_review_bundle). Echo that exact value as snapshotFingerprint. When params.snapshot_id is absent, this is a manual spawn following the omit-for-manual contract (the gate-assigned token exists only for runtime-owned spawns): review the files in params.files and the prompt scope, emit snapshotFingerprint as the empty string, and never invent a v3 token. You may use get_change_review_bundle as read-only evidence (file list/diff/empty-tree check); its bare-hex snapshotId is CONTENT-keyed worktree identity (files/diff/HEAD) — stable while no file or HEAD changes — so if a fresh call returns a different bare id, real worktree content moved: record the drift as evidence, keep reviewing against the assigned params.snapshot_id and echo params.snapshot_id — do not emit stale-snapshot solely because the live bundle moved. List the exact normalized project-relative paths you read. Stale-snapshot BLOCKING is only for: inventing a different fingerprint or inability to read the assigned files — not live-bundle drift during review and not an absent snapshot_id on a manual spawn.',
       config.advisory
         ? 'Return family=advisory. Your output is design/coordination evidence; do not invent a blocking gate verdict and do not mutate files or external systems.'
         : 'Return family=reviewer. Any material issue requiring a code or contract change is BLOCKING. Only enumerate requirementCoverage for in-scope review requirements this specialist can judge from source/diff evidence; omit parent/orchestrator workflow (git rewrite, validation runs, commit/push, CI green). Never mark those missing/uncertain.',
@@ -248,7 +253,21 @@ export function createSpecialist(
       config.terminal
         ? 'Use only the tools exposed for this specialist. run_terminal_command is available only for the optional bounded diagnostic command; do not call a basher agent.'
         : 'Use only the tools exposed for this specialist. Do not call basher or run terminal validation; if runtime evidence is required, report the exact missing evidence for the parent to collect.',
-      `Use these exact dimension keys: ${dimensionKeys.join(', ')}. Every finding ID must be stable and formatted ${config.id}:<dimension>:<slug>; include severity, concrete evidence, and an actionable correction. Only emit findings that require a concrete code or contract change; do not emit informational observations about intended or documented behavior (e.g. 'this is the intended scope, not a defect'). Deleting mocks, fixtures, test doubles, stubs, or other test-only scaffolding is intended cleanup, not a defect: do not emit any finding (of any severity) solely because such a file was deleted; only flag a deletion when production source or a genuine public contract was removed without cleaning up its references. Keep the result compact: at most ${MAX_FINDINGS} findings and ${MAX_EVIDENCE_ITEMS} evidence items per finding. Snapshot/file-attestation protocol failures (an invented fingerprint or inability to read assigned files) are not source findings; report a stale-snapshot finding and do not invent a repair. An absent snapshot_id on a manual spawn is the documented omit-for-manual contract, not a protocol failure. Do not treat live get_change_review_bundle drift as stale-snapshot. Call set_output with a JSON object directly; never JSON.stringify the object or wrap it in a string. Return the required structured output and do not modify files. Output contract: call set_output exactly once with a native JSON object (never a string, never JSON.stringify, never a markdown fence) containing every required field from your declared output schema. schemaVersion is the number 1; reviewedFiles, findings, and (for reviewer family) requirementCoverage are arrays; dimensions is an object keyed by the exact dimension keys above.`,
+      `Use these exact dimension keys: ${dimensionKeys.join(', ')}. Every finding ID must be stable and formatted ${config.id}:<dimension>:<slug>; include severity, concrete evidence, and an actionable correction. Only emit findings that require a concrete code or contract change; do not emit informational observations about intended or documented behavior (e.g. 'this is the intended scope, not a defect'). Deleting mocks, fixtures, test doubles, stubs, or other test-only scaffolding is intended cleanup, not a defect: do not emit any finding (of any severity) solely because such a file was deleted; only flag a deletion when production source or a genuine public contract was removed without cleaning up its references. Keep the result compact: at most ${MAX_FINDINGS} findings and ${MAX_EVIDENCE_ITEMS} evidence items per finding. Snapshot/file-attestation protocol failures (an invented fingerprint or inability to read assigned files) are not source findings; report a stale-snapshot finding and do not invent a repair. An absent snapshot_id on a manual spawn is the documented omit-for-manual contract, not a protocol failure. Do not treat live get_change_review_bundle drift as stale-snapshot. Call set_output with a JSON object directly; never JSON.stringify the object or wrap it in a string. Return the required structured output and do not modify files. Output contract: call set_output exactly once with a native JSON object (never a string, never JSON.stringify, never a markdown fence) containing every required field from your declared output schema. schemaVersion is the number 1; reviewedFiles, findings, and (for reviewer family) requirementCoverage are arrays; dimensions is an object keyed by the exact dimension keys above. Do not echo the declared JSON schema, its $id/$schema wrappers, or schema definitions as output; emit only the required data fields with native values.`,
+      `Worked minimal clean-output example (reviewer family — mirror this shape exactly): call set_output with a native JSON object literal like
+        {
+          "schemaVersion": 1,
+          "family": "reviewer",
+          "verdict": "LOOKS_GOOD",
+          "snapshotFingerprint": "",
+          "reviewedFiles": ["path/one.ts"],
+          "coverage": "n/a",
+          "dimensions": { ${dimensionKeys.map((key) => `"${key}": "pass: <one clause>"`).join(', ')} },
+          "findings": [],
+          "requirementCoverage": [{ "requirement": "<the review request>", "status": "satisfied", "evidence": ["<file:line or one-line reason>"] }]
+        }
+      snapshotFingerprint is "" (the empty string) on manual spawns and the echoed params.snapshot_id on gate spawns. On BLOCKING or NON_BLOCKING verdicts keep exactly the same shape with findings populated; only the verdict value changes and findings gain entries.`,
+      `Per-field type checklist before calling set_output: schemaVersion is the number 1, not the string "1"; reviewedFiles, findings, and requirementCoverage are arrays, never strings; dimensions is an object whose keys are exactly the dimension keys listed above, and each dimensions value is one of the status tokens pass, warning, block, or not_applicable — either the bare token or the token followed by ": <one clause>" (e.g. "pass: guards close cleanly"); each findings entry is an object with id, text, severity, dimension, evidence, and correction (text is the human-readable finding text) — never a bare string; each requirementCoverage entry is an object with requirement (string), status ('satisfied' | 'missing' | 'uncertain'), and evidence (string array). Never wrap the object in quotes, never JSON.stringify it, and never emit a markdown fence.`,
     ].join('\n'),
   }
 }

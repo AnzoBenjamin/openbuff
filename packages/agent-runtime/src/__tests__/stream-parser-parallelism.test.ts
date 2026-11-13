@@ -47,6 +47,7 @@ const testAgentTemplate: AgentTemplate = {
     'glob',
     'query_index',
     'str_replace',
+    'edit_transaction',
     'write_file',
     'run_terminal_command',
     'end_turn',
@@ -125,6 +126,67 @@ function createParallelReadsStream(
 }
 
 describe('stream parser tool parallelism (P0-4)', () => {
+  it.each([
+    ['apply_patch', { path: 'a.txt', diff: 'patch' }],
+    ['apply_patch', { operation: { path: 'a.txt', diff: 'patch' } }],
+    ['apply_smart_patch', { operation: [{ path: 'a.txt', diff: 'patch' }] }],
+    ['apply_smart_patch', { path: 'a.txt', diff: 'patch' }],
+  ])(
+    'translates %s legacy arguments into an edit transaction',
+    async (name, input) => {
+      const chunks: any[] = []
+      const agentRuntimeImpl = {
+        ...TEST_AGENT_RUNTIME_IMPL,
+        sendAction: () => {},
+        requestToolCall: async () => ({ output: [] }),
+      }
+      const stream = createMockStreamWithToolCalls([{ toolName: name, input }])
+      await processStream(
+        buildProcessStreamParams({
+          stream,
+          agentRuntimeImpl,
+          onResponseChunk: (chunk) => chunks.push(chunk),
+        }),
+      )
+      expect(
+        chunks.some(
+          (chunk) => chunk.type === 'text' && chunk.text.includes('deprecated'),
+        ),
+      ).toBe(true)
+      expect(chunks.find((chunk) => chunk.type === 'tool_call')).toMatchObject({
+        toolName: 'edit_transaction',
+        input: { edits: [{ type: 'patch', path: 'a.txt', diff: 'patch' }] },
+      })
+    },
+  )
+
+  it('reports invalid legacy patch input after the deprecation warning', async () => {
+    const chunks: any[] = []
+    const agentRuntimeImpl = {
+      ...TEST_AGENT_RUNTIME_IMPL,
+      sendAction: () => {},
+      requestToolCall: async () => ({ output: [] }),
+    }
+    await processStream(
+      buildProcessStreamParams({
+        stream: createMockStreamWithToolCalls([
+          { toolName: 'apply_patch', input: { diff: 'patch' } },
+        ]),
+        agentRuntimeImpl,
+        onResponseChunk: (chunk) => chunks.push(chunk),
+      }),
+    )
+    expect(
+      chunks.some(
+        (chunk) => chunk.type === 'text' && chunk.text.includes('deprecated'),
+      ),
+    ).toBe(true)
+    expect(chunks.find((chunk) => chunk.type === 'error')).toMatchObject({
+      message: expect.stringContaining(
+        'Invalid parameters for edit_transaction',
+      ),
+    })
+  })
   it('runs N read_files calls concurrently (~1x latency, not Nx)', async () => {
     // Each read_files handler call resolves requestFiles after a fixed delay.
     // If reads were serialized, total time would be ~N * delay. With

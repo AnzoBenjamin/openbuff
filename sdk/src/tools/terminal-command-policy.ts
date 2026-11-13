@@ -1,7 +1,9 @@
 import {
   getOwnedTempRoots,
   isOwnedTempPath,
+  resolveProjectPath,
 } from '@codebuff/common/util/project-path-containment'
+import { hasFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
 import { isMandatorySensitiveReadPath } from '@codebuff/common/util/sensitive-paths'
 
 import path from 'node:path'
@@ -21,14 +23,17 @@ export type TerminalPolicyDecision =
   | { allowed: false; reason: string }
 
 const WORKSPACE_DENY_PATTERNS: Array<[RegExp, string]> = [
-  [/^(?:sudo|su)\b/i, 'privilege escalation is not allowed'],
   [
-    /^(?:apt|apt-get|dnf|yum|pacman|brew|choco|winget)\b/i,
+    /(?:^|[;&|\n\r(]\s*|\$\(\s*)(?:sudo|su)\b/i,
+    'privilege escalation is not allowed',
+  ],
+  [
+    /(?:^|[;&|\n\r(]\s*|\$\(\s*)(?:apt|apt-get|dnf|yum|pacman|brew|choco|winget)\b/i,
     'system package management is not allowed',
   ],
   [/\brm\s+-[^\n]*r[^\n]*\s+\/(?:\s|$)/i, 'root deletion is forbidden'],
   [
-    /^git\s+push\b[\s\S]*(?:--force(?:-with-lease)?|-f\b|--delete\b)/i,
+    /(?:^|[;&|\n\r(]\s*|\$\(\s*)git\s+push\b[\s\S]*(?:--force(?:-with-lease)?|-f\b|--delete\b)/i,
     'force and delete pushes are not allowed',
   ],
 ]
@@ -689,9 +694,29 @@ const DEPENDENCY_MUTATION_COMMANDS = [
 ]
 
 function normalizeCommand(command: string): string {
-  // Collapse only horizontal whitespace so unquoted newlines stay visible as
-  // shell command separators for later composition checks.
-  return command.trim().replace(/[ \t]+/g, ' ')
+  // Normalize separators only. Quoted and escaped whitespace is executable
+  // argument data, including the exact paths checked against allowedPaths.
+  let normalized = ''
+  let quote: "'" | '"' | undefined
+  let horizontalSpace = false
+  for (let index = 0; index < command.length; index++) {
+    const char = command[index]
+    if (char === '\\' && quote !== "'" && index + 1 < command.length) {
+      normalized += char + command[++index]
+      horizontalSpace = false
+      continue
+    }
+    if (char === quote) quote = undefined
+    else if (!quote && (char === "'" || char === '"')) quote = char
+    if (!quote && (char === ' ' || char === '\t')) {
+      if (!horizontalSpace) normalized += ' '
+      horizontalSpace = true
+    } else {
+      normalized += char
+      horizontalSpace = false
+    }
+  }
+  return normalized.trim()
 }
 
 type ShellSyntaxScanState = {
@@ -1274,7 +1299,7 @@ function findEscapingTraversalPath(
   if (cwd !== undefined) {
     const resolvedCwd = path.resolve(cwd)
     const relativeCwd = path.relative(root, resolvedCwd)
-    if (relativeCwd.startsWith('..') || path.isAbsolute(relativeCwd)) {
+    if (hasFilesystemSandbox() ? !resolveProjectPath(root, resolvedCwd) : relativeCwd.startsWith('..') || path.isAbsolute(relativeCwd)) {
       cwdOutsideProject = true
     } else {
       resolveBase = resolvedCwd
@@ -1289,7 +1314,7 @@ function findEscapingTraversalPath(
       ? path.resolve(token)
       : path.resolve(resolveBase, token)
     const relative = path.relative(root, resolved)
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    if (hasFilesystemSandbox() ? !resolveProjectPath(root, resolved) : relative.startsWith('..') || path.isAbsolute(relative)) {
       return rawToken
     }
   }
@@ -1962,9 +1987,7 @@ function findOutsideAbsolutePath(
         // home-suffixed form). Otherwise the bare token is an expansion
         // VALUE argument to a real executable (read-only invocation-like
         // `echo $HOME`, `ls ${HOME}`) and stays allowed.
-        const operands = command
-          .split(/\s+/)
-          .filter(Boolean)
+        const operands = command.split(/\s+/).filter(Boolean)
         const hasSensitiveOperand = operands.some((operand) =>
           isMandatorySensitiveReadPath(operand.replace(/^["']|["']$/g, '')),
         )
@@ -2046,7 +2069,7 @@ function findOutsideAbsolutePath(
       continue
     }
     const relative = path.relative(root, resolved)
-    if (relative.startsWith('..') || path.isAbsolute(relative)) return token
+    if (hasFilesystemSandbox() ? !resolveProjectPath(root, resolved) : relative.startsWith('..') || path.isAbsolute(relative)) return token
   }
   return undefined
 }
@@ -2071,9 +2094,7 @@ function findWorkspaceSegmentOutsidePath(
   }
   for (const rawArgument of resolved.arguments) {
     const argument = rawArgument.replace(/^["']|["']$/g, '')
-    const absolute = argument.match(
-      /(?:^|=)((?:[A-Za-z]:\\|\/)[^\s"'|;&)]*)/,
-    )
+    const absolute = argument.match(/(?:^|=)((?:[A-Za-z]:\\|\/)[^\s"'|;&)]*)/)
     if (!absolute) continue
     const token = absolute[1].replace(/[),.:]+$/, '')
     if (token.startsWith('/dev/null')) continue
@@ -2081,13 +2102,12 @@ function findWorkspaceSegmentOutsidePath(
     if (isOwnedTempScope(token)) continue
     const resolvedPath = path.resolve(token)
     const relative = path.relative(root, resolvedPath)
-    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    if (hasFilesystemSandbox() ? !resolveProjectPath(root, resolvedPath) : relative.startsWith('..') || path.isAbsolute(relative)) {
       return token
     }
   }
   return undefined
 }
-
 
 export function evaluateTerminalCommandPolicy(params: {
   command: string

@@ -24,7 +24,9 @@
       "@codebuff/common/*": ["../common/src/*"],
       "@codebuff/agent-runtime/*": ["../packages/agent-runtime/src/*"],
       "@codebuff/code-map": ["../packages/code-map/src/index.ts"],
-      "@codebuff/code-map/*": ["../packages/code-map/src/*"]
+      "@codebuff/code-map/*": ["../packages/code-map/src/*"],
+      "@codebuff/indexer": ["../packages/indexer/src/index.ts"],
+      "@codebuff/indexer/*": ["../packages/indexer/src/*"]
     }
   },
   "include": ["src/**/*"],

@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'bun:test'
 
 import { buildReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
+import { encodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
 
 import { getFileReadingUpdates } from '../get-file-reading-updates'
+import {
+  buildRangeReadItemV1,
+  buildWholeFileReadResultV1,
+  defaultTestAuthorityScope,
+} from './read-files-edit-state-fixtures'
 
 describe('getFileReadingUpdates', () => {
   it('[COR-M06][ABI-M04] preserves every selector in one structured batch call', async () => {
@@ -63,8 +69,15 @@ describe('getFileReadingUpdates', () => {
   it('removes capability metadata from truncated ranges using the current header shape', async () => {
     const legacyCapability =
       'cap.v2.1.2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
-    const currentCapability =
-      'cap.v3.1.2.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB.CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC.DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD'
+    const currentCapability = buildRangeReadItemV1({
+      path: 'range.ts',
+      rawContent: Array.from(
+        { length: 20 },
+        (_, index) => 'line ' + (index + 1),
+      ).join('\n'),
+      startLine: 1,
+      endLine: 2,
+    }).editAnchor!.readCapability
     const result = await getFileReadingUpdates({
       requestFiles: async () =>
         buildReadFilesResultV1([
@@ -182,6 +195,111 @@ describe('getFileReadingUpdates', () => {
       endLine: 120,
       complete: true,
     })
+  })
+
+  it('preserves the authenticated raw source on the host callback and forwards issuer and cancellation', async () => {
+    const raw = '\uFEFFone\r\ntwo\r'
+    const controller = new AbortController()
+    const calls: unknown[] = []
+    const result = await getFileReadingUpdates({
+      requestedFiles: ['raw.ts'],
+      capabilityIssuer: defaultTestAuthorityScope,
+      signal: controller.signal,
+      requestFiles: async (input) => {
+        calls.push(input)
+        return buildWholeFileReadResultV1(
+          input.filePaths,
+          () => raw,
+          input.capabilityIssuer,
+        )
+      },
+    })
+    expect(calls).toEqual([
+      {
+        filePaths: ['raw.ts'],
+        ranges: [],
+        capabilityIssuer: defaultTestAuthorityScope,
+        signal: controller.signal,
+      },
+    ])
+    expect(result.results[0]).toMatchObject({
+      selector: 'file',
+      status: 'ok',
+      content: 'one\ntwo\r',
+      rawSourceContent: raw,
+      metadataComplete: true,
+      editAnchor: {
+        readCapability: expect.stringMatching(/^cap\.v4\./),
+        rawBasis: { scope: 'whole' },
+      },
+    })
+  })
+
+  it('accepts an explicit final empty line only with an authenticated complete EOF basis', async () => {
+    const item = buildRangeReadItemV1({
+      path: 'final.ts',
+      rawContent: '\uFEFFone\r\n',
+      startLine: 1,
+      endLine: 2,
+    })
+    const result = await getFileReadingUpdates({
+      requestedFiles: [],
+      ranges: [{ path: 'final.ts', startLine: 1, endLine: 2 }],
+      capabilityIssuer: defaultTestAuthorityScope,
+      requestFiles: async () => buildReadFilesResultV1([item]),
+    })
+    expect(result.results[0]).toMatchObject({
+      selector: 'range',
+      status: 'ok',
+      sourceContent: 'one\n',
+      totalLines: 1,
+      endLine: 2,
+      editAnchor: { rawBasis: { scope: 'lines', endTerminator: 'none' } },
+    })
+  })
+
+  it('refuses unauthenticated final entries and an implicit end beyond the visible ceiling', async () => {
+    const item = buildRangeReadItemV1({
+      path: 'final.ts',
+      rawContent: 'one\n',
+      startLine: 1,
+      endLine: 2,
+    })
+    const anchor = item.editAnchor!
+    const legacy = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: 2,
+      hash: anchor.contentHash,
+      scope: { ...defaultTestAuthorityScope, path: item.path },
+    })
+    for (const variant of [
+      { item: { ...item, metadataComplete: false }, endLine: 2 },
+      {
+        item: { ...item, editAnchor: { ...anchor, readCapability: legacy } },
+        endLine: 2,
+      },
+      { item, endLine: undefined },
+    ]) {
+      const result = await getFileReadingUpdates({
+        requestedFiles: [],
+        ranges: [
+          {
+            path: item.path,
+            startLine: 1,
+            ...(variant.endLine === undefined
+              ? {}
+              : { endLine: variant.endLine }),
+          },
+        ],
+        capabilityIssuer: defaultTestAuthorityScope,
+        requestFiles: async () => buildReadFilesResultV1([variant.item]),
+      })
+      expect(result.results[0]).toMatchObject({
+        status: 'error',
+        error: { code: 'invalid_request' },
+      })
+      expect(result.results[0]).not.toHaveProperty('editAnchor')
+    }
   })
 
   it('fails closed when a returned range does not match the requested window', async () => {

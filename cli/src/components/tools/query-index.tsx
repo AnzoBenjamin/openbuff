@@ -1,13 +1,15 @@
+import { InlineResults } from './inline-results'
 import React from 'react'
+import { TextAttributes } from '@opentui/core'
 
 import { SimpleToolCallItem } from './tool-call-item'
 import { defineToolComponent } from './types'
+import { splitPatternSegments, statusGlyph } from './discovery-results'
 import { useTheme } from '../../hooks/use-theme'
 import { wrapTextPreservingNewlines } from '../../utils/text-layout'
 import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
 
 import type { ToolRenderConfig, ToolRenderOptions } from './types'
-import { statusGlyph } from './discovery-results'
 
 type QueryIndexResult = {
   path?: unknown
@@ -63,6 +65,17 @@ const DETAIL_INDENT = 3
 /** Width reserved for the leading numeric prefix (e.g. "1. "). */
 const NUMBER_PREFIX_WIDTH = 3
 
+/**
+ * UI component for `query_index`.
+ *
+ * Layout follows the discovery cards (`code_search` / `glob`): one bold
+ * `Index <summary> <glyph>` header, then the ranked results as the primary
+ * body — numbered path in the directory color with indented dim detail rows
+ * for why it matched — and only then a compact dim footer carrying the index
+ * telemetry (corpus size, snapshot, coverage, diagnostics). Raw score floats
+ * and content hashes are agent-facing telemetry and are never rendered; the
+ * rank order already communicates relevance.
+ */
 export const QueryIndexComponent = defineToolComponent({
   toolName: 'query_index',
 
@@ -125,98 +138,10 @@ export const QueryIndexComponent = defineToolComponent({
             name="Index"
             description={
               <>
-                {description}
-                {' '}
-                <span fg={contentColor}>{contentGlyph}</span>
+                {description} <span fg={contentColor}>{contentGlyph}</span>
               </>
             }
-            descriptionColor={theme.primary}
           />
-          <box
-            style={{
-              flexDirection: 'column',
-              gap: 0,
-              paddingLeft: INDENT_LEFT,
-              width: '100%',
-            }}
-          >
-            {status !== 'ready' ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={error ? theme.error : theme.muted}>
-                  {`State: ${status}`}
-                </span>
-              </text>
-            ) : null}
-            {totalIndexed !== null ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.muted}>
-                  {`Corpus: ${totalIndexed} indexed file${totalIndexed === 1 ? '' : 's'}${indexAge === null ? '' : ` · age ${formatAge(indexAge)}`}`}
-                </span>
-              </text>
-            ) : null}
-            {error || message ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={error ? theme.error : theme.muted}>
-                  {wrapTextPreservingNewlines(error ?? message, detailColWidth)}
-                </span>
-              </text>
-            ) : null}
-            {structuredStatus?.semantic ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span
-                  fg={theme.muted}
-                >{`Vector embeddings: ${structuredStatus.semantic}`}</span>
-              </text>
-            ) : null}
-            {snapshot ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.muted}>
-                  {`Snapshot: ${snapshot.snapshotId.slice(0, 16)}${snapshot.workspaceRevision === undefined ? '' : ` · workspace r${snapshot.workspaceRevision}`}`}
-                </span>
-              </text>
-            ) : null}
-            {structuredStatus?.lastBuildError ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.error}>
-                  {wrapTextPreservingNewlines(
-                    `Build error (${structuredStatus.lastBuildError.stage ?? 'unknown'}): ${structuredStatus.lastBuildError.message ?? 'unknown error'}${structuredStatus.lastBuildError.retryable ? ' · retryable' : ''}`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ) : null}
-            {coverage?.truncated ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.warning}>
-                  {wrapTextPreservingNewlines(
-                    `Partial coverage at ${coverage.maxFiles ?? 'configured limit'} files; skipped ${coverage.skippedFiles ?? 'unknown'} under ${(coverage.skippedPrefixes ?? []).join(', ') || 'unknown prefixes'}.`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ) : null}
-            {coverage?.parser?.truncated ? (
-              <text style={{ wrapMode: 'word' }}>
-                <span fg={theme.warning}>
-                  {wrapTextPreservingNewlines(
-                    `Parser coverage: ${coverage.parser.parsedFiles ?? 'unknown'}/${coverage.parser.requestedFiles ?? 'unknown'} parsed; skipped ${coverage.parser.skippedFiles ?? 'unknown'}${coverage.parser.skippedLanguages?.length ? ` across ${coverage.parser.skippedLanguages.join(', ')}` : ''}.`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ) : null}
-            {diagnostics.slice(0, 5).map((diagnostic, index) => (
-              <text key={`diagnostic-${index}`} style={{ wrapMode: 'word' }}>
-                <span fg={theme.warning}>
-                  {wrapTextPreservingNewlines(
-                    `Diagnostic: ${diagnostic.filePath ?? 'unknown file'} (${diagnostic.stage ?? 'parse'}): ${diagnostic.message ?? 'unknown parser error'}`,
-                    detailColWidth,
-                  )}
-                </span>
-              </text>
-            ))}
-
-          </box>
           {results.length > 0 ? (
             <box
               style={{
@@ -226,89 +151,268 @@ export const QueryIndexComponent = defineToolComponent({
                 width: '100%',
               }}
             >
-              {results.map((result, index) => {
-                const details = [
-                  typeof result.score === 'number'
-                    ? `score ${roundScore(result.score)}`
-                    : '',
-                  formatMatchedOn(result)
-                    ? `matched: ${formatMatchedOn(result)}`
-                    : '',
-                  typeof result.indexedHash === 'string'
-                    ? `hash ${result.indexedHash.slice(0, 12)}`
-                    : '',
-                ].filter(Boolean)
-                const snippet = formatSnippets(result)
-                const related = formatRelated(result)
-
-                const pathDisplay = wrapTextPreservingNewlines(
-                  String(result.path),
-                  pathColWidth,
-                )
-                const detailsDisplay =
-                  details.length > 0
-                    ? wrapTextPreservingNewlines(
-                        details.join(' · '),
-                        detailColWidth,
+              <InlineResults
+                items={results}
+                previewCount={10}
+                noun="result"
+                renderItem={(result, index) => {
+                  // Human-facing detail: WHY this ranked (what it matched on).
+                  // Raw score floats and content hashes are agent-facing
+                  // telemetry — the rank order already communicates score.
+                  const details = [
+                    formatMatchedOn(result)
+                      ? `matched: ${formatMatchedOn(result)}`
+                      : '',
+                  ].filter(Boolean)
+                  const snippet = formatSnippets(result)
+                  const snippets = Array.isArray(result.matchedSnippets)
+                    ? result.matchedSnippets.filter(
+                        (item): item is string => typeof item === 'string',
                       )
-                    : ''
-                const snippetDisplay = snippet
-                  ? wrapTextPreservingNewlines(snippet, detailColWidth)
-                  : ''
-                const relatedDisplay = related
-                  ? wrapTextPreservingNewlines(related, detailColWidth)
-                  : ''
-                const explanation =
-                  typeof result.explanation === 'string' &&
-                  result.explanation.length > 0
-                    ? wrapTextPreservingNewlines(
-                        truncate(result.explanation, 160),
-                        detailColWidth,
+                    : []
+                  const relatedFiles = Array.isArray(result.relatedFiles)
+                    ? result.relatedFiles.filter(
+                        (item) =>
+                          isRecord(item) && typeof item.path === 'string',
                       )
-                    : ''
+                    : []
 
-                return (
-                  <box
-                    key={`${String(result.path)}-${index}`}
-                    style={{ flexDirection: 'column', gap: 0, width: '100%' }}
-                  >
-                    <text style={{ wrapMode: 'word' }}>
-                      <span fg={theme.muted}>{`${index + 1}. `}</span>
-                      <span fg={theme.directory}>{pathDisplay}</span>
-                    </text>
-                    {detailsDisplay ? (
-                      <text
-                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
-                      >
-                        <span fg={theme.muted}>{detailsDisplay}</span>
+                  const pathDisplay = wrapTextPreservingNewlines(
+                    String(result.path),
+                    pathColWidth,
+                  )
+                  const detailsDisplay =
+                    details.length > 0
+                      ? wrapTextPreservingNewlines(
+                          details.join(' · '),
+                          detailColWidth,
+                        )
+                      : ''
+                  const queryTerms = String(query)
+                    .split(/\s+/)
+                    .filter((word) => word.length > 1)
+                    .map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+                  const emphasisPattern =
+                    queryTerms.length > 0 ? queryTerms.join('|') : ''
+                  const snippetSegments = emphasisPattern
+                    ? splitPatternSegments(
+                        wrapTextPreservingNewlines(
+                          snippet ?? '',
+                          detailColWidth,
+                        ),
+                        emphasisPattern,
+                      )
+                    : []
+                  const explanation =
+                    typeof result.explanation === 'string' &&
+                    result.explanation.length > 0
+                      ? wrapTextPreservingNewlines(
+                          truncate(result.explanation, 160),
+                          detailColWidth,
+                        )
+                      : ''
+
+                  return (
+                    <box
+                      key={`${String(result.path)}-${index}`}
+                      style={{ flexDirection: 'column', gap: 0, width: '100%' }}
+                    >
+                      <text style={{ wrapMode: 'word' }}>
+                        <span fg={theme.muted}>{`${index + 1}. `}</span>
+                        <span fg={theme.directory}>{pathDisplay}</span>
                       </text>
-                    ) : null}
-                    {snippetDisplay ? (
-                      <text
-                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
-                      >
-                        <span fg={theme.muted}>{snippetDisplay}</span>
-                      </text>
-                    ) : null}
-                    {relatedDisplay ? (
-                      <text
-                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
-                      >
-                        <span fg={theme.muted}>{relatedDisplay}</span>
-                      </text>
-                    ) : null}
-                    {explanation ? (
-                      <text
-                        style={{ wrapMode: 'word', marginLeft: DETAIL_INDENT }}
-                      >
-                        <span fg={theme.muted}>{explanation}</span>
-                      </text>
-                    ) : null}
-                  </box>
-                )
-              })}
+                      {snippet ? (
+                        <InlineResults
+                          items={snippets}
+                          previewCount={1}
+                          noun="snippet"
+                          scope={`snippets:${index}`}
+                          renderItem={(_entry, snippetIndex) =>
+                            snippetIndex === 0 ? (
+                              <text
+                                style={{
+                                  wrapMode: 'word',
+                                  marginLeft: DETAIL_INDENT,
+                                }}
+                              >
+                                {snippetSegments.length > 0
+                                  ? snippetSegments.map((segment, segIndex) =>
+                                      segment.match ? (
+                                        <span
+                                          key={segIndex}
+                                          fg={theme.primary}
+                                          attributes={TextAttributes.BOLD}
+                                        >
+                                          {segment.text}
+                                        </span>
+                                      ) : (
+                                        <span
+                                          key={segIndex}
+                                          fg={theme.foreground}
+                                        >
+                                          {segment.text}
+                                        </span>
+                                      ),
+                                    )
+                                  : null}
+                                {snippetSegments.length === 0
+                                  ? wrapTextPreservingNewlines(
+                                      snippet,
+                                      detailColWidth,
+                                    )
+                                  : null}
+                              </text>
+                            ) : (
+                              <text
+                                fg={theme.foreground}
+                                style={{
+                                  wrapMode: 'word',
+                                  marginLeft: DETAIL_INDENT,
+                                }}
+                              >
+                                {wrapTextPreservingNewlines(
+                                  formatSnippets(result, snippetIndex),
+                                  detailColWidth,
+                                )}
+                              </text>
+                            )
+                          }
+                        />
+                      ) : null}
+                      {detailsDisplay ? (
+                        <text
+                          style={{
+                            wrapMode: 'word',
+                            marginLeft: DETAIL_INDENT,
+                          }}
+                        >
+                          <span fg={theme.muted}>{detailsDisplay}</span>
+                        </text>
+                      ) : null}
+                      {relatedFiles.length > 0 ? (
+                        <InlineResults
+                          items={relatedFiles}
+                          previewCount={1}
+                          noun="related file"
+                          scope={`related-files:${index}`}
+                          renderItem={(_entry, relatedIndex) => (
+                            <text
+                              style={{
+                                wrapMode: 'word',
+                                marginLeft: DETAIL_INDENT,
+                              }}
+                            >
+                              <span fg={theme.muted}>
+                                {wrapTextPreservingNewlines(
+                                  formatRelated(result, relatedIndex),
+                                  detailColWidth,
+                                )}
+                              </span>
+                            </text>
+                          )}
+                        />
+                      ) : null}
+                      {explanation ? (
+                        <text
+                          style={{
+                            wrapMode: 'word',
+                            marginLeft: DETAIL_INDENT,
+                          }}
+                        >
+                          <span fg={theme.muted}>{explanation}</span>
+                        </text>
+                      ) : null}
+                    </box>
+                  )
+                }}
+              />
             </box>
           ) : null}
+          {/* Footer: index telemetry, demoted below the results so the ranked
+              paths stay the visual focus. */}
+          {status !== 'ready' ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={error ? theme.error : theme.muted}>
+                {`State: ${status}`}
+              </span>
+            </text>
+          ) : null}
+          {totalIndexed !== null ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.muted}>
+                {`${totalIndexed} indexed file${totalIndexed === 1 ? '' : 's'}${indexAge === null ? '' : ` · age ${formatAge(indexAge)}`}`}
+              </span>
+            </text>
+          ) : null}
+          {error || message ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={error ? theme.error : theme.muted}>
+                {wrapTextPreservingNewlines(error ?? message, detailColWidth)}
+              </span>
+            </text>
+          ) : null}
+          {structuredStatus?.semantic ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.muted}>
+                {`Vector embeddings: ${structuredStatus.semantic}`}
+              </span>
+            </text>
+          ) : null}
+          {snapshot ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.muted}>
+                {`Snapshot: ${snapshot.snapshotId.slice(0, 16)}${snapshot.workspaceRevision === undefined ? '' : ` · workspace r${snapshot.workspaceRevision}`}`}
+              </span>
+            </text>
+          ) : null}
+          {structuredStatus?.lastBuildError ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.error}>
+                {wrapTextPreservingNewlines(
+                  `Build error (${structuredStatus.lastBuildError.stage ?? 'unknown'}): ${structuredStatus.lastBuildError.message ?? 'unknown error'}${structuredStatus.lastBuildError.retryable ? ' · retryable' : ''}`,
+                  detailColWidth,
+                )}
+              </span>
+            </text>
+          ) : null}
+          {coverage?.truncated ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.warning}>
+                {wrapTextPreservingNewlines(
+                  `Partial coverage at ${coverage.maxFiles ?? 'configured limit'} files; skipped ${coverage.skippedFiles ?? 'unknown'} under ${(coverage.skippedPrefixes ?? []).join(', ') || 'unknown prefixes'}.`,
+                  detailColWidth,
+                )}
+              </span>
+            </text>
+          ) : null}
+          {coverage?.parser?.truncated ? (
+            <text style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}>
+              <span fg={theme.warning}>
+                {wrapTextPreservingNewlines(
+                  `Parser coverage: ${coverage.parser.parsedFiles ?? 'unknown'}/${coverage.parser.requestedFiles ?? 'unknown'} parsed; skipped ${coverage.parser.skippedFiles ?? 'unknown'}${coverage.parser.skippedLanguages?.length ? ` across ${coverage.parser.skippedLanguages.join(', ')}` : ''}.`,
+                  detailColWidth,
+                )}
+              </span>
+            </text>
+          ) : null}
+          <InlineResults
+            items={diagnostics}
+            previewCount={5}
+            noun="diagnostic"
+            renderItem={(diagnostic, index) => (
+              <text
+                key={`diagnostic-${index}`}
+                style={{ wrapMode: 'word', marginLeft: INDENT_LEFT }}
+              >
+                <span fg={theme.warning}>
+                  {wrapTextPreservingNewlines(
+                    `Diagnostic: ${diagnostic.filePath ?? 'unknown file'} (${diagnostic.stage ?? 'parse'}): ${diagnostic.message ?? 'unknown parser error'}`,
+                    detailColWidth,
+                  )}
+                </span>
+              </text>
+            )}
+          />
         </box>
       )
     }
@@ -320,7 +424,7 @@ export const QueryIndexComponent = defineToolComponent({
         from,
         to,
         results,
-      })} ${glyph}`,
+      })} ${glyph}${status === 'ready' ? '' : ` · ${status}`}`,
       content: <QueryIndexContent />,
     }
   },
@@ -372,13 +476,15 @@ function getIndexStatus(input: {
   resultCount: number
 }): string {
   if (input.error) return 'failed'
-  if (input.lifecycle === 'queued') return 'queued'
-  if (input.lifecycle === 'running' || !input.output) return 'building'
   if (input.lifecycle === 'cancelled') return 'cancelled'
+  if (input.lifecycle === 'failed') return 'failed'
+  if (input.lifecycle === 'queued') return 'queued'
+  if (input.lifecycle === 'running') return 'building'
+  if (!input.output) return 'unavailable'
 
   const structured = extractStructuredStatus(input.output.status)
   if (structured) {
-    return `${structured.state}${structured.refreshing ? ' · refreshing' : ''}`
+    return `${structured.state}${structured.stale ? ' · stale evidence' : ''}${structured.coverage?.truncated || structured.coverage?.parser?.truncated ? ' · partial coverage' : ''}${structured.refreshing ? ' · refreshing' : ''}`
   }
 
   const message =
@@ -520,31 +626,32 @@ function formatMatchedOn(result: QueryIndexResult): string {
     : ''
 }
 
-function formatSnippets(result: QueryIndexResult): string {
+function formatSnippets(result: QueryIndexResult, index = 0): string {
   if (
     !Array.isArray(result.matchedSnippets) ||
     result.matchedSnippets.length === 0
   ) {
     return ''
   }
-  const first = result.matchedSnippets.find((item) => typeof item === 'string')
+  const first = result.matchedSnippets.filter(
+    (item) => typeof item === 'string',
+  )[index]
   if (typeof first !== 'string') return ''
   const snippet = truncate(first, 80)
-  return /^snippet\s*:/i.test(snippet) ? snippet : `snippet: ${snippet}`
+  const shown = /^snippet\s*:/i.test(snippet) ? snippet : `snippet: ${snippet}`
+  return shown
 }
 
-function formatRelated(result: QueryIndexResult): string {
+function formatRelated(result: QueryIndexResult, index = 0): string {
   if (!Array.isArray(result.relatedFiles) || result.relatedFiles.length === 0) {
     return ''
   }
-  const first = result.relatedFiles.find(isRecord)
+  const first = result.relatedFiles.filter(
+    (item) => isRecord(item) && typeof item.path === 'string',
+  )[index]
   if (!first || typeof first.path !== 'string') return ''
   const reason = typeof first.reason === 'string' ? `: ${first.reason}` : ''
   return truncate(`related to ${first.path}${reason}`, 120)
-}
-
-function roundScore(score: number): string {
-  return (Math.round(score * 100) / 100).toString()
 }
 
 function truncate(text: string, maxLength: number): string {

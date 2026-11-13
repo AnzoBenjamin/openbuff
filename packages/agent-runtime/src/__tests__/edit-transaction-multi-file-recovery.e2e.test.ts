@@ -1,13 +1,13 @@
-import { buildReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
 import { getExactContentHash } from '@codebuff/common/util/content-hash'
 import { describe, expect, it } from 'bun:test'
 
 import { handleEditTransaction } from '../tools/handlers/tool/edit-transaction'
 import { handleReadFiles } from '../tools/handlers/tool/read-files'
+import { getContentHash } from '../process-str-replace'
 import {
-  encodeReadCapabilityToken,
-  getContentHash,
-} from '../process-str-replace'
+  buildWholeFileReadResultV1,
+  confirmedMutationOutput,
+} from './read-files-edit-state-fixtures'
 import { mockFileContext } from './test-utils'
 
 import type { FileProcessingState } from '../tools/handlers/tool/write-file'
@@ -42,191 +42,25 @@ function createFileProcessingState(): FileProcessingState {
   }
 }
 
-function buildWholeFileReadResultV1(
-  filePaths: string[],
-  getContent: (path: string) => string | null,
+async function readWholeFiles(
+  paths: string[],
+  diskContentByPath: Record<string, string>,
+  fileProcessingState: FileProcessingState,
+  toolCallId: string,
 ) {
-  return buildReadFilesResultV1(
-    filePaths.map((path, requestIndex) => {
-      const content = getContent(path)
-      return content === null
-        ? {
-            selector: 'file' as const,
-            requestIndex,
-            path,
-            status: 'error' as const,
-            error: {
-              code: 'not_found' as const,
-              message: '[FILE_DOES_NOT_EXIST]',
-              retryable: true,
-              recovery: 'discover_path' as const,
-            },
-          }
-        : {
-            selector: 'file' as const,
-            requestIndex,
-            path,
-            status: 'ok' as const,
-            content,
-            complete: true,
-            template: false,
-          }
-    }),
-  )
-}
-
-function confirmedMutationOutput(
-  toolCall: any,
-  expectedContentByPath: Record<string, string>,
-  scope: { projectId: string; runId: string } = defaultTestAuthorityScope,
-) {
-  const changes = Array.isArray(toolCall.input)
-    ? toolCall.input
-    : [toolCall.input]
-  const operationId = toolCall.toolCallId
-  const receiptId = `${operationId}-receipt`
-  type SyntheticAction = {
-    actionId: string
-    index: number
-    action: 'create' | 'update' | 'delete' | 'move'
-    path: string
-    destinationPath?: string
-    beforeHash: string | null
-  } & (
-    | { afterHash: null }
-    | {
-        afterHash: string
-        afterContent: string
-        editAnchor: {
-          startLine: number
-          endLine: number
-          contentHash: string
-          readCapability: string
-        }
-      }
-  )
-  const actions: SyntheticAction[] = changes.map(
-    (change: any, index: number) => {
-      const action =
-        change.type === 'delete' || change.type === 'move'
-          ? change.type
-          : change.expectedHash === null
-            ? 'create'
-            : 'update'
-      const finalPath = change.destinationPath ?? change.path
-      const finalContent =
-        action === 'delete' ? undefined : expectedContentByPath[finalPath]
-      if (action !== 'delete' && finalContent === undefined) {
-        throw new Error(`Missing expected post-edit content for ${finalPath}`)
-      }
-      const endLine = finalContent?.replace(/\r\n?/g, '\n').split('\n').length
-      const editAnchor =
-        finalContent === undefined
-          ? undefined
-          : {
-              startLine: 1,
-              endLine: endLine!,
-              contentHash: getContentHash(finalContent),
-              readCapability: encodeReadCapabilityToken({
-                startLine: 1,
-                endLine: endLine!,
-                hash: getContentHash(finalContent),
-                scope: {
-                  projectId: scope.projectId,
-                  path: finalPath,
-                  runId: scope.runId,
-                },
-              }),
-            }
-      return {
-        actionId: `${operationId}:${index}`,
-        index,
-        action,
-        path: change.path,
-        ...(change.destinationPath
-          ? { destinationPath: change.destinationPath }
-          : {}),
-        beforeHash: change.expectedHash ?? null,
-        afterHash:
-          action === 'delete' ? null : getExactContentHash(finalContent!),
-        ...(finalContent === undefined
-          ? {}
-          : { afterContent: finalContent, editAnchor }),
-      } as SyntheticAction
-    },
-  )
-  const receipt = {
-    kind: 'commit_receipt' as const,
-    version: 1 as const,
-    receiptId,
-    operationId,
-    callId: operationId,
-    authorityTier: 'portable_path' as const,
-    status: 'committed' as const,
-    actions: actions.map((action) => ({
-      actionId: action.actionId,
-      index: action.index,
-      action: action.action,
-      path: action.path,
-      ...('destinationPath' in action
-        ? { destinationPath: action.destinationPath }
-        : {}),
-      status: 'committed' as const,
-      beforeHash: action.beforeHash,
-      afterHash: action.afterHash,
-    })),
-    finalHashes: Object.fromEntries(
-      actions.map((action) => [
-        'destinationPath' in action ? action.destinationPath! : action.path,
-        action.afterHash,
-      ]),
-    ),
-  }
-  const canonicalProject = mockFileContext.projectRoot
-    .replaceAll('\\', '/')
-    .replace(/\/+$/, '')
-  const freshCapabilities = actions.flatMap((action) => {
-    if (action.afterHash === null || !('editAnchor' in action)) return []
-    const finalPath = action.destinationPath ?? action.path
-    return [
-      {
-        kind: 'whole_file' as const,
-        version: 1 as const,
-        token: action.editAnchor.readCapability,
-        snapshot: {
-          kind: 'file_snapshot' as const,
-          version: 1 as const,
-          canonicalPath: `${canonicalProject}/${finalPath
-            .replaceAll('\\', '/')
-            .replace(/^\.\//, '')}`,
-          contentHash: action.afterHash,
-          sizeBytes: Buffer.byteLength(action.afterContent),
-          encoding: 'utf8' as const,
-          readGeneration: Date.now(),
-        },
-      },
-    ]
-  })
-  return [
-    {
-      type: 'json' as const,
-      value: {
-        kind: 'file_mutation_result',
-        version: 1,
-        operationId,
-        outcome: 'applied',
-        actions: actions.map((action) => ({
-          ...action,
-          outcome: 'applied' as const,
-        })),
-        authorityTier: 'portable_path',
-        receiptId,
-        authorityReceipt: receipt,
-        errors: [],
-        freshCapabilities,
-      },
-    },
-  ]
+  return handleReadFiles({
+    ...defaultTestHandlerAuthority,
+    previousToolCallFinished: Promise.resolve(),
+    toolCall: { toolCallId, toolName: 'read_files', input: { paths } },
+    fileProcessingState,
+    requestFiles: async ({ filePaths, capabilityIssuer }) =>
+      buildWholeFileReadResultV1(
+        filePaths,
+        (path) => diskContentByPath[path] ?? null,
+        capabilityIssuer,
+      ),
+    logger,
+  } as Parameters<typeof handleReadFiles>[0])
 }
 
 describe('edit_transaction multi-file no-match recovery loop', () => {
@@ -240,19 +74,19 @@ describe('edit_transaction multi-file no-match recovery loop', () => {
     const runId = defaultTestAuthorityScope.runId
     const fileProcessingState = createFileProcessingState()
     fileProcessingState.strictReadBeforeEdit = true
-    fileProcessingState.readAuthorizationsByPath = {
-      [pathA]: true,
-      [pathB]: true,
-    }
-    fileProcessingState.readAuthorizationHashesByPath = {
-      [pathA]: getContentHash(contentA),
-      [pathB]: getContentHash(contentB),
-    }
 
     const diskContentByPath: Record<string, string> = {
       [pathA]: contentA,
       [pathB]: contentB,
     }
+
+    // Establish both normalized and raw authority through authenticated reads.
+    await readWholeFiles(
+      [pathA, pathB],
+      diskContentByPath,
+      fileProcessingState,
+      'initial-whole-file-reads',
+    )
 
     let clientCalls = 0
     const abortResult = await handleEditTransaction({
@@ -347,23 +181,12 @@ describe('edit_transaction multi-file no-match recovery loop', () => {
     // Simulate the narrowed recovery: re-read ONLY recovery.paths (pathB).
     // pathA is never re-read here, so the retry below can only succeed if its
     // retained authorization survived the abort.
-    await handleReadFiles({
-      ...defaultTestHandlerAuthority,
-      previousToolCallFinished: Promise.resolve(),
-      toolCall: {
-        toolCallId: 'multi-file-recovery-reread',
-        toolName: 'read_files',
-        input: { paths: [pathB] },
-      },
-      fileContext: mockFileContext,
+    await readWholeFiles(
+      [pathB],
+      diskContentByPath,
       fileProcessingState,
-      requestFiles: async ({ filePaths }: { filePaths: string[] }) =>
-        buildWholeFileReadResultV1(
-          filePaths,
-          (filePath) => diskContentByPath[filePath] ?? null,
-        ),
-      logger,
-    } as any)
+      'multi-file-recovery-reread',
+    )
 
     for (const path of [pathA, pathB]) {
       expect(
@@ -372,6 +195,9 @@ describe('edit_transaction multi-file no-match recovery loop', () => {
       expect(fileProcessingState.readAuthorizationsByPath?.[path]).toBe(true)
       expect(fileProcessingState.readAuthorizationHashesByPath?.[path]).toBe(
         getContentHash(diskContentByPath[path]),
+      )
+      expect(fileProcessingState.rawReadAuthorizationHashesByPath?.[path]).toBe(
+        getExactContentHash(diskContentByPath[path]),
       )
     }
 
@@ -449,19 +275,19 @@ describe('edit_transaction multi-file no-match recovery loop', () => {
     const runId = defaultTestAuthorityScope.runId
     const fileProcessingState = createFileProcessingState()
     fileProcessingState.strictReadBeforeEdit = true
-    fileProcessingState.readAuthorizationsByPath = {
-      [pathA]: true,
-      [pathB]: true,
-    }
-    fileProcessingState.readAuthorizationHashesByPath = {
-      [pathA]: getContentHash(contentA),
-      [pathB]: getContentHash(contentB),
-    }
 
     const diskContentByPath: Record<string, string> = {
       [pathA]: contentA,
       [pathB]: contentB,
     }
+
+    // Establish both normalized and raw authority through authenticated reads.
+    await readWholeFiles(
+      [pathA, pathB],
+      diskContentByPath,
+      fileProcessingState,
+      'initial-whole-file-reads',
+    )
 
     let clientCalls = 0
     const abortResult = await handleEditTransaction({

@@ -4,12 +4,13 @@ import {
   type ReadFilesResultV1,
 } from '@codebuff/common/tools/results/filesystem'
 import * as projectFileTree from '@codebuff/common/project-file-tree'
-import { getInitialSessionState } from '@codebuff/common/types/session-state'
-import { getStubProjectFileContext } from '@codebuff/common/util/file'
-import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { writeFileSync } from 'node:fs'
 
 import { OpenbuffClient } from '../client'
+import { beginSdkCallback, createSdkCallbackFixture } from './sdk-callback-fixture'
 import * as databaseModule from '../impl/database'
+import { nodeConfigReadFs } from '../host-config'
 
 import type { FileFilter } from '../tools/read-files'
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
@@ -60,13 +61,38 @@ function createMockFs(config: {
     readdir: async () => [],
     mkdir: async () => undefined,
     realpath: async (filePath: PathLike) => String(filePath),
+    unlink: async (filePath: PathLike) => {
+      const pathStr = String(filePath)
+      if (!files[pathStr]) {
+        throw createNodeError(
+          `ENOENT: no such file or directory: ${pathStr}`,
+          'ENOENT',
+        )
+      }
+      delete files[pathStr]
+    },
     writeFile: async () => undefined,
   } as unknown as CodebuffFileSystem
 }
 
 describe('OpenbuffClientOptions fileFilter', () => {
+  let fixture: ReturnType<typeof createSdkCallbackFixture>
+  beforeEach(() => {
+    fixture = createSdkCallbackFixture('run-file-filter')
+    const configFile = fixture.file('openbuff.json')
+    writeFileSync(configFile, JSON.stringify({ sandbox: { mode: 'project' } }))
+    fixture.options = {
+      ...fixture.options,
+      configReadFs: nodeConfigReadFs,
+      hostConfiguration: {
+        ...fixture.options.hostConfiguration!,
+        selection: { kind: 'explicit', path: configFile, required: true },
+      },
+    }
+  })
   afterEach(() => {
     mock.restore()
+    fixture.close()
   })
 
   it('[SEC-H01] applies mandatory sensitive policy before the custom filter', async () => {
@@ -86,8 +112,8 @@ describe('OpenbuffClientOptions fileFilter', () => {
 
     const mockFs = createMockFs({
       files: {
-        '/project/.env': { content: 'SECRET=value' },
-        '/project/src/index.ts': { content: 'console.log("hello")' },
+        [fixture.file('.env')]: { content: 'SECRET=value' },
+        [fixture.file('src/index.ts')]: { content: 'console.log("hello")' },
       },
     })
 
@@ -96,7 +122,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
         const { sendAction, promptId, requestFiles } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sessionState } = await beginSdkCallback(params)
 
         // Simulate agent requesting files
         requestedFiles = await requestFiles({
@@ -135,8 +161,9 @@ describe('OpenbuffClientOptions fileFilter', () => {
     }
 
     const client = new OpenbuffClient({
+      ...fixture.options,
       apiKey: 'test-key',
-      cwd: '/project',
+      cwd: fixture.cwd,
       fsSource: mockFs,
       fileFilter,
     })
@@ -183,7 +210,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
 
     const mockFs = createMockFs({
       files: {
-        '/project/.env.example': { content: 'API_KEY=your_key_here' },
+        [fixture.file('.env.example')]: { content: 'API_KEY=your_key_here' },
       },
     })
 
@@ -192,7 +219,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
         const { sendAction, promptId, requestFiles } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sessionState } = await beginSdkCallback(params)
 
         requestedFiles = await requestFiles({
           filePaths: ['.env.example'],
@@ -228,8 +255,9 @@ describe('OpenbuffClientOptions fileFilter', () => {
     }
 
     const client = new OpenbuffClient({
+      ...fixture.options,
       apiKey: 'test-key',
-      cwd: '/project',
+      cwd: fixture.cwd,
       fsSource: mockFs,
       fileFilter,
     })
@@ -267,7 +295,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
 
     const mockFs = createMockFs({
       files: {
-        '/project/secret.key': { content: 'private key content' },
+        [fixture.file('secret.key')]: { content: 'private key content' },
       },
     })
 
@@ -276,7 +304,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
         const { sendAction, promptId, requestOptionalFile } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sessionState } = await beginSdkCallback(params)
 
         // Use requestOptionalFile which should also use the fileFilter
         try {
@@ -318,8 +346,9 @@ describe('OpenbuffClientOptions fileFilter', () => {
     }
 
     const client = new OpenbuffClient({
+      ...fixture.options,
       apiKey: 'test-key',
-      cwd: '/project',
+      cwd: fixture.cwd,
       fsSource: mockFs,
       fileFilter,
     })
@@ -351,7 +380,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
 
     const mockFs = createMockFs({
       files: {
-        '/project/src/index.ts': { content: 'normal file content' },
+        [fixture.file('src/index.ts')]: { content: 'normal file content' },
       },
     })
 
@@ -360,10 +389,10 @@ describe('OpenbuffClientOptions fileFilter', () => {
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
         const { sendAction, promptId, requestOptionalFile } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sessionState } = await beginSdkCallback(params)
 
         try {
-          await requestOptionalFile({ filePath: '/project/src/index.ts' })
+          await requestOptionalFile({ filePath: fixture.file('src/index.ts') })
         } catch (error) {
           optionalFileError =
             error instanceof Error ? error.message : String(error)
@@ -392,8 +421,9 @@ describe('OpenbuffClientOptions fileFilter', () => {
     )
 
     const client = new OpenbuffClient({
+      ...fixture.options,
       apiKey: 'test-key',
-      cwd: '/project',
+      cwd: fixture.cwd,
       fsSource: mockFs,
     })
 
@@ -423,7 +453,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
 
     const mockFs = createMockFs({
       files: {
-        '/project/src/index.ts': { content: 'normal file content' },
+        [fixture.file('src/index.ts')]: { content: 'normal file content' },
       },
     })
 
@@ -432,7 +462,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
         const { sendAction, promptId, requestFiles } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sessionState } = await beginSdkCallback(params)
 
         requestedFiles = await requestFiles({
           filePaths: ['src/index.ts'],
@@ -461,8 +491,9 @@ describe('OpenbuffClientOptions fileFilter', () => {
     )
 
     const client = new OpenbuffClient({
+      ...fixture.options,
       apiKey: 'test-key',
-      cwd: '/project',
+      cwd: fixture.cwd,
       fsSource: mockFs,
     })
 
@@ -498,7 +529,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
 
     const mockFs = createMockFs({
       files: {
-        '/project/src/index.ts': { content: 'normal file content' },
+        [fixture.file('src/index.ts')]: { content: 'normal file content' },
       },
     })
     let requestedFiles: unknown
@@ -506,7 +537,7 @@ describe('OpenbuffClientOptions fileFilter', () => {
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
         const { sendAction, promptId, requestFiles } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sessionState } = await beginSdkCallback(params)
         requestedFiles = await requestFiles({
           filePaths: ['src/index.ts'],
         })
@@ -526,8 +557,9 @@ describe('OpenbuffClientOptions fileFilter', () => {
     )
 
     const client = new OpenbuffClient({
+      ...fixture.options,
       apiKey: 'test-key',
-      cwd: '/project',
+      cwd: fixture.cwd,
       fsSource: mockFs,
       overrideTools: {
         read_files: async ({ filePaths }) =>
@@ -575,15 +607,17 @@ describe('OpenbuffClientOptions fileFilter', () => {
 
     const mockFs = createMockFs({
       files: {
-        '/project/blocked.ts': { content: 'blocked content' },
+        [fixture.file('blocked.ts')]: { content: 'blocked content' },
       },
     })
 
+    let readCalls = 0
     spyOn(mainPromptModule, 'callMainPrompt').mockImplementation(
       async (params: Parameters<typeof mainPromptModule.callMainPrompt>[0]) => {
         const { sendAction, promptId, requestFiles } = params
-        const sessionState = getInitialSessionState(getStubProjectFileContext())
+        const { sessionState } = await beginSdkCallback(params)
 
+        readCalls++
         await requestFiles({
           filePaths: ['blocked.ts'],
         })
@@ -616,18 +650,44 @@ describe('OpenbuffClientOptions fileFilter', () => {
     }
 
     const client = new OpenbuffClient({
+      ...fixture.options,
       apiKey: 'test-key',
-      cwd: '/project',
+      cwd: fixture.cwd,
       fsSource: mockFs,
       fileFilter,
     })
 
-    await client.run({
+    const result = await client.run({
       agent: 'base2',
       prompt: 'read files',
     })
 
+    expect(result.output.type).toBe('lastMessage')
+    expect(readCalls).toBe(1)
     // isFileIgnored should not be called since fileFilter blocks the file first
     expect(isFileIgnoredSpy).not.toHaveBeenCalled()
   })
+
+  it('a captured root mismatch refuses before the mocked prompt and file reads', async () => {
+    const mockFs = createMockFs({ files: { [fixture.file('src/index.ts')]: { content: 'unchanged' } } })
+    const read = spyOn(mockFs, 'readFile')
+    const prompt = spyOn(mainPromptModule, 'callMainPrompt')
+    const result = await new OpenbuffClient({
+      ...fixture.options,
+      fsSource: mockFs,
+      hostConfiguration: {
+        ...fixture.options.hostConfiguration!,
+        projectRoot: fixture.file('different-project'),
+      },
+    }).run({ agent: 'base2', prompt: 'refused startup' })
+    expect(result.output).toMatchObject({
+      type: 'error', message: 'Run cwd differs from the captured project root',
+    })
+    expect(result.runOutcome).toMatchObject({
+      termination: 'failed', cause: { code: 'execution_invalid_context' },
+    })
+    expect(prompt).not.toHaveBeenCalled()
+    expect(read).not.toHaveBeenCalled()
+  })
+
 })

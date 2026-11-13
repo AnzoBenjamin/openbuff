@@ -8,12 +8,17 @@ import { getLoadedAgentsData } from '../utils/local-agent-registry'
 import { openFileAtPath } from '../utils/open-file'
 import { formatValidationError } from '../utils/validation-error-formatting'
 import { NETWORK_ERROR_ID } from '../utils/validation-error-helpers'
+import { createJsonDocument } from '../utils/output-document'
+import { capturedDiagnosticDocument } from '../utils/captured-diagnostic-document'
+import { useOutputReaderStore } from '../state/output-reader-store'
+import { clipEvidenceLine } from '../utils/bounded-evidence'
 
 import type { LocalAgentInfo } from '../utils/local-agent-registry'
 import type { FeedbackCategory } from '@codebuff/common/constants/feedback'
 
 interface ValidationErrorPopoverProps {
   errors: Array<{ id: string; message: string }>
+  agentEntries?: LocalAgentInfo[]
   onOpenFeedback?: (options: {
     category: FeedbackCategory
     footerMessage: string
@@ -24,13 +29,14 @@ interface ValidationErrorPopoverProps {
 
 export const ValidationErrorPopover: React.FC<ValidationErrorPopoverProps> = ({
   errors,
+  agentEntries,
   onOpenFeedback,
   onClose,
 }) => {
   const theme = useTheme()
   const [isReportHovered, setIsReportHovered] = useState(false)
   const [isCloseHovered, setIsCloseHovered] = useState(false)
-  const loadedAgentsData = getLoadedAgentsData()
+  const loadedAgents = agentEntries ?? getLoadedAgentsData()?.agents ?? []
 
   const errorCount = errors.length
 
@@ -55,7 +61,7 @@ export const ValidationErrorPopover: React.FC<ValidationErrorPopoverProps> = ({
           }}
         >
           <text style={{ fg: theme.warning, wrapMode: 'word' }}>
-            {pluralize(errorCount, 'Error')}
+            {`${pluralize(errorCount, 'Error')} · showing ${Math.min(3, errorCount)} of ${errorCount} captured entries`}
           </text>
           {onClose && (
             <Button
@@ -81,12 +87,15 @@ export const ValidationErrorPopover: React.FC<ValidationErrorPopoverProps> = ({
             const errorId = error.id ?? ''
             const agentId = errorId.replace(/_\d+$/, '')
             const isNetworkError = errorId === NETWORK_ERROR_ID
-            const agentInfo = loadedAgentsData?.agents.find(
-              (a) => a.id === agentId,
-            ) as LocalAgentInfo | undefined
+            const agentInfo = loadedAgents.find((a) => a.id === agentId) as
+              | LocalAgentInfo
+              | undefined
 
             const { fieldName, message } = formatValidationError(error.message)
-            const errorMsg = fieldName ? `${fieldName}: ${message}` : message
+            const errorMsg = clipEvidenceLine(
+              fieldName ? `${fieldName}: ${message}` : message,
+              120,
+            )
 
             // Special handling for network errors - show message only without ID
             if (isNetworkError) {
@@ -159,16 +168,41 @@ export const ValidationErrorPopover: React.FC<ValidationErrorPopoverProps> = ({
             </text>
           )}
         </box>
+        <Button
+          onClick={() =>
+            useOutputReaderStore
+              .getState()
+              .open({
+                document: capturedDiagnosticDocument(
+                  'captured-validation-errors',
+                  'Captured validation errors',
+                  errors,
+                ),
+              })
+          }
+        >
+          <text fg={theme.secondary}>Inspect all captured errors</text>
+        </Button>
 
         {onOpenFeedback && (
           <box style={{ paddingTop: 1, justifyContent: 'flex-end' }}>
             <Button
               onClick={() =>
-                onOpenFeedback({
-                  category: 'app_bug',
-                  footerMessage: 'Validation errors are auto-attached',
-                  errors,
-                })
+                useOutputReaderStore
+                  .getState()
+                  .open({
+                    document: createJsonDocument(
+                      'validation-report-evidence',
+                      'Local validation report · remote submission unavailable',
+                      {
+                        support:
+                          'https://github.com/AnzoBenjamin/openbuff/issues',
+                        notice:
+                          'Review and copy captured evidence before sharing it. Remote feedback submission is unavailable in this local build.',
+                        errors,
+                      },
+                    ),
+                  })
               }
               onMouseOver={() => setIsReportHovered(true)}
               onMouseOut={() => setIsReportHovered(false)}

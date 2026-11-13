@@ -1,0 +1,21 @@
+{
+  "_note": "Semantic vector (§12.7 GV-17, end-to-end NEW-1 proof): a client.run() whose base agent has a merged client-origin http MCP server with header 'Authorization: $OPENROUTER_API_KEY' (env set), driven through the real requestMcpToolData path. The captured header is the literal '$OPENROUTER_API_KEY' (no $VAR expansion at the untrusted 'client' origin).",
+  "env": {
+    "OPENROUTER_API_KEY": "sk-or-v1-real-secret"
+  },
+  "mcpServer": {
+    "name": "peer",
+    "origin": "client",
+    "config": {
+      "type": "http",
+      "url": "http://127.0.0.1:9090/rpc",
+      "params": {},
+      "headers": {
+        "Authorization": "Bearer $OPENROUTER_API_KEY"
+      }
+    }
+  },
+  "expectedCapturedHeaders": {
+    "authorization": "Bearer $OPENROUTER_API_KEY"
+  }
+}

@@ -184,11 +184,13 @@ page; the high-level wiring is:
 
 - **Staged read-before-edit.** Edit tools (`str_replace`,
   `edit_transaction`, patch applicators) can require a recent
-  `read_files` authorization (or an authenticated `cap.v3`
-  `basedOnRead` capability bound to the current project, path, and run)
-  before mutating a path under strict-mode flows. Legacy range hashes remain
-  freshness checks but cannot authorize an otherwise unread path. Successful
-  edits invalidate stale anchors. See
+  `read_files` authorization (or an authenticated `cap.v4`
+  `basedOnRead` capability bound to the current project, path, and run
+  with an authenticated original raw basis) before mutating a path under
+  strict-mode flows. Historical v3 parsing grants no fresh raw edit authority.
+  Whole writes require a whole basis; line and structural reads retain scoped
+  authority. Confirmed exact after-content receipts refresh raw authority, and
+  invalidation clears stale anchors. See
   [Deterministic Edit System](./deterministic-edit-system.md).
 - **Reviewer / validation gate.** A turn that opts into the gate tracks
   pending gate files with working-tree content markers
@@ -262,4 +264,4 @@ During the transition from the upstream Codebuff codebase, a small set of compat
 
 ### Internal Workspace Package Names
 
-All internal workspace packages retain their historical `@codebuff/*` names: `@codebuff/common`, `@codebuff/agents`, `@codebuff/internal`, `@codebuff/code-map`, `@codebuff/indexer`, `@codebuff/agent-runtime`, `@codebuff/build-tools`, `@codebuff/evals`, `@codebuff/scripts`, `@codebuff/.agents`, and the workspace `@codebuff/cli` (which is published as `@openbuff/cli`). These are private and never published to npm. Only `@openbuff/cli` (v0.1.0) and `@openbuff/sdk` (v0.11.0) are published. Homepage: openbuff.dev. Repo: github.com/AnzoBenjamin/openbuff.
+All internal workspace packages retain the `@codebuff/*` namespace: `@codebuff/common`, `@codebuff/agents`, `@codebuff/internal`, `@codebuff/code-map`, `@codebuff/indexer`, `@codebuff/agent-runtime`, `@codebuff/build-tools`, `@codebuff/evals`, `@codebuff/scripts`, `@codebuff/local-agents` (the `.agents/` workspace), and the workspace `@codebuff/cli` (which is published as `@openbuff/cli`). These are private and never published to npm. Only `@openbuff/cli` (v0.1.0) and `@openbuff/sdk` (v0.11.0) are published. Homepage: openbuff.dev. Repo: github.com/AnzoBenjamin/openbuff.

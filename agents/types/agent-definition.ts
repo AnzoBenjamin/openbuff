@@ -318,6 +318,8 @@ export interface AgentDefinition {
       agentState: AgentState
       toolResult: ToolResultOutput[] | undefined
       stepsComplete: boolean
+      /** True when stepsComplete is due to an explicit fixed step cap; break out instead of continuing, or the cap re-triggers forever. */
+      hitStepCap?: boolean
       nResponses?: string[]
     }
   >

@@ -24,3 +24,15 @@
 
 (impl_item trait: (type_identifier) @call.identifier)
 (impl_item type: (type_identifier) @call.identifier !trait)
+
+; P3-T5 AST import-capture tier: the use-tree argument of a use declaration
+; plus mod declarations. Consumption reduces both to the leading
+; ::-separated path (see import-sites.ts), so brace lists and globs trim to
+; the same path prefix the line-based extractor emits for those forms;
+; mod declarations are captured because the line-based fallback indexes them
+; as import sites too and the AST tier must not drop them.
+(use_declaration
+  argument: (_) @import.specifier)
+
+(mod_item
+  name: (identifier) @import.specifier)

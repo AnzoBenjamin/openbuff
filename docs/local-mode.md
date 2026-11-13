@@ -18,6 +18,12 @@ openbuff          # primary binary
 
 Openbuff is always local/BYOK — there is no cloud-mode toggle.
 
+Agents have unrestricted filesystem access by default, including config
+directories and temporary files. Set `"sandbox": { "mode": "project" }` in
+`openbuff.json` to opt into tool-level containment. See
+[Filesystem sandbox](./configuration.md#filesystem-sandbox) for additional
+allowed paths and policy details.
+
 ## Quickstart
 
 1. Install and launch the CLI:
@@ -288,12 +294,168 @@ provider can declare compatibility behavior:
 }
 ```
 
-- `stripCacheControl`: removes Anthropic/OpenRouter prompt-cache metadata.
+- `stripCacheControl`: removes Anthropic/OpenRouter prompt-cache metadata. Defaults to `true` for OpenAI-compatible providers and `false` for `anthropic-compatible` ones. `anthropic/*` models on `openrouter.ai` always send the markers, because OpenRouter forwards them to Anthropic.
 - `stringifyTextContent`: sends text-only user messages as a plain string.
 - `supportsTools`: set `false` for chat-only providers that reject tool schemas.
 - `supportsRequiredToolChoice`: set `false` for providers that accept tools but reject `tool_choice: "required"`.
 - `supportsStopSequences`: set `true` only for OpenAI-compatible providers that accept the `stop` request field; otherwise Openbuff enforces stop sequences locally.
 - `stripProviderMetadata`: omits Codebuff/OpenRouter-specific provider metadata.
+- `reasoningReplay`: set to `"required"` for OpenAI-compatible endpoints that require assistant reasoning in conversation history. Openbuff retains the streamed reasoning and sends `reasoning_content` on each assistant message. This is enabled automatically for `api.ifm.ai`; set it to `"none"` to override that default. Reasoning replay increases stored history and input tokens. Earlier sessions whose reasoning was discarded cannot recover the original trace.
+
+## Model output degeneration
+
+Degeneration is garbled or degraded model output in long agentic sessions:
+repeated whitespace runs, aborted or mixed tool-call syntax, runaway
+repetition. A typical specimen: coherent text, then hundreds of repeated
+carriage returns, then aborted tool-call tag fragments (`<to`, `<tool_call`,
+`<tool_c`), then a foreign-protocol fragment (`<parameter name="path">...`).
+Degeneration is usually stochastic — retrying the turn often clears it. When
+it recurs, the triggers below are the usual suspects.
+
+### Known triggers and mitigations
+
+- **Sampling repetition loops.** Greedy (temperature-0) or
+  very-high-temperature decoding can lock into self-reinforcing repetition:
+  repeated tokens, whitespace runs, tag fragments. Retry the turn and avoid
+  temperature 0 for long sessions. On OpenAI-compatible/local endpoints set
+  a repetition penalty around 1.1 (never above ~1.3), top-p around 0.9-0.95,
+  and consider min-p 0.05-0.1. Route long tool-heavy sessions to a stronger
+  model (`/models` or `agents[agentId]` in `openbuff.json`).
+- **Context pressure.** Output quality degrades well before the hard context
+  window ("context rot"), and providers fail differently at the ceiling:
+  Anthropic returns a hard "prompt is too long" 400, Ollama silently truncates
+  prompts at its `num_ctx` default, and OpenRouter middle-truncation
+  transforms silently drop content. Keep sessions well below the window
+  (Openbuff prunes context automatically; `/usage` shows the pressure), set
+  `num_ctx` explicitly on Ollama, compact on Anthropic instead of re-sending
+  an identical oversized prompt, and prefer models whose context comfortably
+  exceeds the session.
+- **Self-hosted prefix/KV-cache bugs.** Documented garbled-output cases exist
+  for vLLM prefix caching (issues #20261, #5543) and SGLang radix cache
+  (#4175, #46259) — repeated, truncated, or garbled tokens that vanish when
+  caching is disabled. No public evidence ties corrupted output to OpenAI's
+  or Anthropic _managed_ prompt caching (their documented issues are cache
+  misses, a cost concern). If a self-hosted OpenAI-compatible endpoint
+  garbles output, disable prefix caching (vLLM `--no-enable-prefix-caching`,
+  SGLang `--disable-radix-cache`) and upgrade the engine.
+- **Quantized or small local models.** They fail non-linearly in long
+  tool-use loops even when short demos look fine, and KV-cache quantization
+  has broken tool calling on specific architectures (Ollama issues #10945,
+  #17347). Prefer Q4_K_M-or-better weight quants for coding agents, leave the
+  KV cache at f16 when tool calling stalls, use a larger model or a hosted
+  API for long sessions, and restart the local server when degradation
+  appears after long uptime.
+- **Tool-call protocol confusion.** Models trained on several serialization
+  dialects sometimes mix them mid-output (claude-code issue #49747; Qwen
+  tool-call XML inside reasoning on some vLLM setups). Use the correct
+  tool-call parser/chat template for the model on self-hosted servers, and
+  if a model persistently mixes formats, switch models or providers.
+- **EOS / stop-sequence mishandling.** Generation runs away when a server
+  ignores stop strings (llama.cpp issue #11538: multi-token stops) or when
+  `ignore_eos` is enabled. Avoid `ignore_eos`, prefer single-token stop
+  sequences, and declare `supportsStopSequences: false` for endpoints that
+  ignore stop strings so Openbuff enforces stop sequences locally.
+- **max_tokens truncation mid-tool-call.** Some servers mislabel a truncated
+  tool call as completed (vLLM issue #58228, since fixed; llama.cpp issue
+  #30773); Anthropic's documented guidance is to retry with a higher
+  max_tokens and never execute a truncated tool_use. Set a generous
+  max_tokens and treat `finish_reason: "length"` or `stop_reason: "max_tokens"`
+  plus invalid arguments as truncation — retry the turn, never execute a
+  repaired guess.
+
+### What Openbuff already does
+
+The parser stack is fail-closed: degenerated bytes never become a tool call.
+
+- Malformed tool calls never execute: the streaming parser
+  (`packages/agent-runtime/src/util/stream-xml-parser.ts`) turns invalid JSON
+  or a missing tool name into a structured parse error instead of a call.
+- A dropped call is not silent: the parse error — including a bounded
+  excerpt of the offending bytes — is persisted into the conversation as a
+  `TOOL_CALL_ERROR` message and the turn is retried, so the model can
+  correct its own malformed output instead of repeating it.
+- Unterminated content past the buffer limit is discarded without leaking
+  into the visible text stream (`tool_call_buffer_exceeded`), and a call left
+  unterminated at end of stream is reported back
+  (`tool_call_unterminated_eof`) so the model learns the call was dropped and
+  can retry with a smaller payload — never executed, never leaked into the
+  visible text stream.
+- Common JSON damage is repaired conservatively (trailing or duplicate
+  commas, `common/src/tools/params/utils.ts`), and transport-truncated
+  arguments are recovered only when the cut dropped nothing but container
+  closers — a half-written value is never guessed into existence.
+- Tool-name respellings (`tool_name` / `toolName` / `tool` / `name`) are
+  resolved instead of dropping the call.
+- Provider-reported max-token cuts are classified as truncation, not schema
+  errors.
+- Degeneration specimens — aborted tag fragments plus repeated control
+  bytes — are pinned by regression tests: they produce plain-text output and
+  zero executed tool calls.
+
+### When it happens
+
+- Retry the turn; degeneration is usually stochastic.
+- If it recurs: route the agent to a stronger model (`/models`), check
+  `/usage` for context pressure, review the provider `compatibility` flags,
+  and on local endpoints revisit sampling parameters and quantization. For
+  backup providers see `failoverModels` in
+  [docs/configuration.md](./configuration.md).
+
+## Local semantic search
+
+Vector search ranks files by the similarity of their embedding vectors to a
+query, then blends that ranking with keyword matches. It can help when a query
+describes behavior without using the source's exact identifiers. It remains
+optional: keyword search works while vectors are disabled or building.
+“Stale · refreshing” means the last successful index is being served while a
+new snapshot builds; “ready” means that refresh finished.
+
+For a stronger modern local alternative to Nomic Embed Text v1.5, use
+[Qwen3-Embedding 0.6B](https://ollama.com/library/qwen3-embedding:0.6b).
+Its [model documentation](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B)
+includes multilingual and code retrieval. Larger 4B/8B variants trade more
+memory and CPU/GPU work for quality. The 0.6B model used about 1.4 GB on the
+reference CPU machine; a small warm-query probe took about 168 ms. This is a
+latency probe, not a repository-wide quality benchmark.
+
+Run Ollama locally, pull the model, and add these declarations to your provider
+config (or its corresponding provider/indexing fragments):
+
+```sh
+ollama serve
+# In another terminal:
+ollama pull qwen3-embedding:0.6b
+```
+
+```json
+{
+  "providers": {
+    "local-embeddings": {
+      "type": "openai-compatible",
+      "baseURL": "http://127.0.0.1:11434/v1",
+      "models": ["qwen3-embedding:0.6b"]
+    }
+  },
+  "indexing": {
+    "semantic": {
+      "enabled": true,
+      "model": "local-embeddings/qwen3-embedding:0.6b"
+    }
+  }
+}
+```
+
+Restart the CLI after changing indexing configuration. `/index` reports vector
+status; `/index explain <query>` shows ranking provenance. Initial CPU indexing
+of a large repository can take hours even when individual queries are quick.
+Loopback embedding endpoints use small serial batches to avoid HTTP timeouts.
+The index saves progress after the first batch and every 64 additional vectors,
+so interrupted builds can resume with the same model and source content.
+
+To warm the configured index outside the interactive terminal, run
+`bun scripts/warm-index.ts /path/to/project` from an Openbuff checkout. It uses
+the target project's provider configuration and preserves keyword fallback
+while building. No cloud API key is required for the Ollama setup above.
 
 ## Smoke test
 

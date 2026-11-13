@@ -36,18 +36,37 @@ Standalone edit handlers remain registered for persisted/external
 compatibility. All active mutation
 paths participate in the same staged read-before-edit policy.
 Under strict-mode edit flows, the runtime requires a recent `read_files`
-authorization for each touched path before accepting an edit:
+authorization for each touched path before accepting an edit.
+
+Raw UTF-8 bytes and displayed text have separate identities. Observation text
+uses LF and excludes a leading UTF-8 BOM; localized splices preserve unrelated
+raw bytes, including mixed terminators, later U+FEFF and Unicode scalars.
+Invalid UTF-8 and unpaired surrogates are refused. Fresh v4 capabilities bind
+both the observation and its original raw basis. Historical v3 remains parsable
+but supplies no fresh raw edit authority. Whole bases cannot relocate after
+raw drift. Scoped bases can relocate only to a unique unchanged raw slice after
+a complete finite search; duplicate scopes or an exceeded budget refuse.
+
+Prepared mutations carry normalized `expectedHash` and separate exact
+`expectedRawHash` guards. The SDK checks raw preimages again before staging and
+retains its conditional commit and existing receipt/rollback semantics. Bounded
+Node readers use an owned result buffer plus a fixed descriptor chunk, scan to
+EOF without retaining discarded lines, and forward cancellation through actual
+close. Requested-content completeness and known EOF/hash metadata are separate;
+a partial selected line grants no authority even when an EOF scan knows totals.
 
 There are three tiers of read authorization, and confusing them is the most
 common cause of "I already read this file, why is my edit blocked?":
 
-1. **Whole-file authorization (reusable).** A _complete_ whole-file read mints
+1. **Whole-file authorization (reusable).** A complete whole-file read with
+   an authenticated whole raw basis mints
    a per-path authorization the runtime remembers, so later exact-match edits
    on that path proceed without a capability. Only complete whole-file reads
-   register this.
+   with that basis register this.
 2. **Scoped capability (per-edit).** A _range_ or _symbol_ read mints a
    `readCapability` bound to the exact project, path, line bounds, content
-   hash, and run. It authorizes only edits inside those bounds and must be
+   observation hash, raw basis, and run. It authorizes only edits inside the
+   observed slice and must be
    passed explicitly on the edit (`basedOnRead` / `readCapability`); it does
    **not** grant whole-file authorization for the path.
 3. **No capability (truncated/partial).** A truncated or oversized read mints
@@ -64,21 +83,18 @@ common cause of "I already read this file, why is my edit blocked?":
   whole-file authorization. SDK v1 wire results retain legacy duplicate fields,
   but the runtime removes them before provider context construction.
 - `basedOnRead` (the read capability returned from a `read_files` range
-  header, or the freshly echoed capability on a successful large-file
-  edit) is the explicit authorization path. The runtime verifies the
-  embedded hash and rejects stale or mismatched anchors before any file
-  is changed.
+  header, or a freshly confirmed after-edit capability) is the explicit
+  authorization path. The runtime verifies the embedded observation and raw
+  basis and rejects stale or mismatched anchors before any file is changed.
 - The `replace_range` transaction edit accepts that same `readCapability` and decodes the
   line bounds plus hash as one atomic target. Prefer this form for Markdown,
   checklists, and formatting-sensitive blocks instead of copying a rendered
   range into a large `oldString` or manually pairing three range fields.
-- The provider schema exposes only `{ readCapability, newContent }`; the runtime
-  compatibility parser also accepts the legacy
+- The provider schema requires `{ readCapability, newContent }` and accepts
+  either contained `startLine`/`endLine` bounds or an `occurrence` selector.
+  The runtime compatibility parser also accepts the legacy
   `{ startLine, endLine, expectedHash, newContent }` form, but callers cannot
   combine it with `readCapability`. Capability-only edits normalize internally.
-  The one sanctioned mixed form — a whole-file capability paired with narrower
-  caller bounds — is described under "Capability minting and the default
-  replace_range flow" below.
 - Every fully applied action may return an action-local post-edit `editAnchor`
   containing the confirmed post-edit bounds, content hash, and reusable
   `readCapability`. It describes that action's resulting content, not the
@@ -92,16 +108,16 @@ common cause of "I already read this file, why is my edit blocked?":
   `postEditCapabilities`: an array of `{ path, contentHash, readCapability }`,
   one per granted path. This part is model-facing (it flows into message
   history) and is **not** rendered in the user-facing CLI rows. Each
-  `readCapability` is a scope-bound `cap.v3` token the model can pass as
+  `readCapability` is a scope-bound `cap.v4` token the model can pass as
   `basedOnRead` (write_file) or per-replacement `basedOnRead` (str_replace) on
   a follow-up edit, avoiding a redundant re-read. The part appears only when at
   least one anchor was granted; it is omitted when no anchor could be minted
   (for example, no runtime-known content or no authoritative scope).
 - `coordinateEditApplication` confirms only `confirmationPaths` (default: all
-  coordinated `paths`). `wholeFileContentByPath` may still include excluded
-  no-op snapshots for sticky/anchor minting, but the afterHash / covering-action
-  check is restricted to `confirmationPaths`. An extra snapshot with no applied
-  action must not undo confirmation of the applied subset.
+  coordinated `paths`). `wholeFileContentByPath` may include excluded no-op
+  snapshots, but confirmation and new authority are restricted to
+  `confirmationPaths`. An extra snapshot with no applied action must not undo
+  confirmation of the applied subset or receive a new capability.
   Client-output inspection (`hasExplicitError`, envelope collection, structured
   `stale_snapshot`/`stale_state` classification, and unconfirmed-application
   detection) is an iterative heap walk with a depth bound of 6. Recursion is
@@ -118,43 +134,23 @@ common cause of "I already read this file, why is my edit blocked?":
   `stale_snapshot` is classified from structured `errorCode` (on the output
   object or `failures[]` entries) and from filesystem `code: 'stale_state'`
   on mutation errors/actions (SDK CAS), not only `errorCode: 'stale_snapshot'`.
-- A confirmed `create` (or any confirmed whole-file write) grants sticky
-  whole-file authorization **iff** a whole-file post-edit cap can be minted
-  (client-verified 7-point anchor or a synthesized `cap.v3` from known bytes).
-  Empty or non-authoritative project/run scope does **not** grant sticky-from-
-  apply and does **not** store an anchor or surface `postEditCapabilities`.
-  When minting succeeds, the runtime records the confirmed post-edit anchor
-  (hash + bounds + issuer projectId/runId) on durable `agentState` and remints
-  `cap.v3` on hydrate only when the stored issuer matches the current
-  project+run (or the stored token still authenticates for that scope).
-  Cross-project/run restore drops anchors rather than rebinding them.
-  A follow-up `delete` (or `move`) on that path is then authorized when the
-  anchor's content hash still matches the transaction's snapshotted current
-  content; an external modification (hash mismatch) fails closed and requires
-  a fresh read. A `move`'s destination path needs no read authorization — its
-  safety is enforced by the lifecycle preflight, which blocks `Move destination
-already exists`. The client-echoed anchor is preferred when valid but is
-  never itself trusted to authorize — it is only reused after passing the
-  7-point verification.
-- A `ConfirmedPostEditAnchor` (recorded in `confirmedPostEditAnchorsByPath`)
-  is definitionally whole-file-verified: it is only minted when the 7-point
-  check confirms whole-file coverage (`startLine === 1` and
-  `endLine === totalLines`) with a hash matching the runtime-known post-edit
-  bytes. Confirmed post-edit anchors are durable on `agentState` across turns;
-  hash+bounds are the source of truth and `cap.v3` is reminted on hydrate only
-  when the stored issuer matches the current project+run (or the stored token
-  authenticates for that scope). Cross-project/run restore drops anchors.
-  Compaction keeps them (same as sticky hashes); revoke, journal revision
-  bump, and unknown-tool wipe clear them.
-  There is no scoped/partial confirmed post-edit anchor — a confirmed apply
-  re-anchors to whole-file because the full post-edit content is always
-  runtime-known (`processEditTransaction` computes it from gate-verified
-  initial bytes). This is why a confirmed apply may grant whole-file sticky
-  authorization even for a localized edit: the granted hash pins the exact
-  full post-edit bytes, and every consumer re-hashes the current file and
-  fails closed on drift. A destructive `delete`/`move` additionally requires
-  the anchor to be whole-file (`startLine === 1`) as a defensive guard, so a
-  future partial anchor could never authorize a whole-file delete/move.
+- A confirmed create or edit can grant whole-file authority only when a
+  committed receipt pins exact lossless after-content. The runtime verifies the
+  receipt's raw after-hash, checks an authenticated v4 whole anchor or mints a
+  local one from those confirmed bytes, and stores its raw basis, observation
+  hash, bounds and issuer. Missing after-content grants no new authority.
+  Unconfirmed no-op paths and extra receipt envelopes outside the requested
+  confirmation set receive no new capability.
+- Confirmed post-edit anchors remain durable across turns. Hydration retains
+  the original raw basis only for the matching trusted local project/run issuer;
+  it cannot upgrade v3 into raw authority. Revocation, workspace revision changes
+  and unknown-tool invalidation clear stale anchors. A later delete or move
+  requires an explicit whole basis and unchanged exact source bytes. A move's
+  destination remains an exclusive missing target. Confirmed operations discard
+  earlier prepared promise queues, so follow-up writes use current or absent
+  source content. Localized edits can grant whole authority from a confirmed
+  full after-content receipt even though their initial read was scoped.
+
 - Reread when the next edit needs a different region, the action anchor is
   missing or oversized, external activity may have made filesystem state
   stale, or a stale/ambiguous diagnostic explicitly asks for a fresh range.
@@ -172,43 +168,25 @@ already exists`. The client-echoed anchor is preferred when valid but is
   model step **unless** the edit carries an explicit capability or the server
   performs its one-shot auto-reread (below). Explicit authenticated capabilities
   from earlier visible context remain valid.
-- Semantic compaction and emergency mechanical trimming **no longer wipe**
-  sticky whole-file authorizations/hashes. They record a `context_compacted`
-  reread reason. For `str_replace`, hash-fresh unique edits may still proceed
-  (unique `oldString` is the safety bound) but a successful unique apply does
-  **not** clear `context_compacted`; failed/no-match `str_replace` and
-  proper-subset/scoped reads also do **not** clear it. For **`write_file`**, `context_compacted` **blocks**
-  a whole-file overwrite even when the sticky hash still matches disk — only a
-  complete whole-file `read_files` grant (paths whole-file content, or full-file
-  range `1..totalLines` with `sourceContent`) **or** an explicit whole-file-covering
-  `basedOnRead` (hash-fresh, startLine=1 through current line count, same project/
-  path/run) clears that marker before overwrite is allowed. Changed files still
-  fail closed on hash mismatch. Authenticated scoped capabilities retained in
-  operational memory are still verified against live content when used.
-- Complete full-file range reads (`startLine === 1` and `endLine === totalLines`,
-  with complete `sourceContent`) grant sticky whole-file authorization the same
-  way as `read_files.paths`. Proper-subset and truncated ranges stay scoped-only.
-- On a strict auth miss (no fresh whole-file hash match and no `basedOnRead`),
-  `str_replace` / `edit_transaction` `str_replace` may **auto-reread once**
-  server-side via `requestOptionalFile` and authorize **only that** unique
-  replacement in-process (`allowMultiple` false/undefined). Multi-match
-  replacements with `allowMultiple: true` **never** auto-reread — they fail
-  closed and require real sticky auth or explicit `basedOnRead`. Auto-reread
-  **does not** mint durable sticky whole-file authorization (so a later
-  `write_file` cannot chain a blind overwrite off a server re-read). A successful
-  applied unique edit may still refresh sticky from observed **post-edit**
-  content. Still fail-closed if the file is missing, the circuit breaker is open,
-  the match is ambiguous, or zero matches remain after re-read; residual failures
-  mint a whole-file `basedOnRead` capability in the error recovery payload.
-  Explicit `basedOnRead` still works same-batch.
-  **`write_file` (standalone and `edit_transaction` `write_file`) never
-  auto-rereads** — whole-file overwrites require a prior complete whole-file
-  sticky hash match from a real read / successful observed edit, **or** an
-  optional whole-file-covering `basedOnRead` from a fresh complete whole-file
-  read (paths or full-file range). Partial range caps **never** authorize
-  overwrite. Capability echo on `write_file` / create-on-existing failures is
-  retry-usable as `basedOnRead` without an exploratory re-read. Sticky maps alone
-  do not make partial-range `basedOnRead` work for overwrite.
+- Semantic compaction and emergency trimming preserve sticky raw hashes while
+  recording `context_compacted`. Unique exact `str_replace` edits can still
+  proceed on fresh authority, but their successful apply and scoped reads keep
+  that marker. A whole-file overwrite requires a fresh complete paths read or
+  an explicit v4 capability with a matching whole raw basis to clear it.
+  Range, window, around and symbol selectors retain `scope: 'lines'`, including
+  slices covering the visible file; coverage alone cannot grant whole authority.
+
+- On a strict auth miss, `str_replace` may auto-reread once through the lossless
+  optional-file callback for a unique replacement. `allowMultiple` requires real
+  sticky authority or an explicit capability. Auto-reread grants no durable
+  whole-file authority; only a confirmed applied result can supply a new whole
+  after-basis. Missing, ambiguous or stale results require a fresh read and mint
+  no capability. Supplied invalid or stale capabilities are always respected as
+  a refusal boundary, including on small files with a unique `oldString`.
+  Whole-file `write_file` never auto-authorizes from a blind reread: it needs
+  unchanged raw whole-file sticky authority or an explicit matching v4 whole
+  capability. Line and structural tokens cannot authorize that overwrite.
+
 - `edit_transaction` create-on-existing recovery points to `write_file` or
   `str_replace` with whole-file sticky auth **or** `basedOnRead` on the
   `write_file` / replacement (end-to-end reachable: mint capability → pass as
@@ -219,7 +197,7 @@ already exists`. The client-echoed anchor is preferred when valid but is
   first when content is known; `read_files` remains the fallback only when no
   capability can be minted. Auto-reread and a successful unique `str_replace`
   apply do **not** clear `context_compacted` — only a complete whole-file
-  `read_files` grant or an explicit whole-file-covering `basedOnRead` does.
+  `read_files` grant or an explicit `basedOnRead` with a whole raw basis does.
   Other failed-edit markers may still clear after a confirmed unique apply.
 - Input-only and preflight failures that never reached the client preserve a
   still-current whole-file authorization. Failures that make filesystem state
@@ -234,7 +212,6 @@ Structured v1 `read_files` responses are correlated back to their requested
 selectors before any authorization is derived from them. A response whose
 items do not line up with the requested selector index, kind, and path fails
 closed: no content or capability from that batch is allowed to mint whole-file
-
 or scoped read authorization. The failure is reported per selector — each
 requested selector keeps its own genuine per-item diagnostic (for example a
 real `not_found`/`blocked` error for that path) instead of being collapsed
@@ -301,9 +278,9 @@ edit variants does not bypass this rule.
 
 ### Multi-file `edit_transaction` abort recovery
 
-`edit_transaction` is all-or-nothing: any preflight failure means **no disk
-writes**, so every target file is still byte-identical to the snapshot the
-transaction read. On match/no-match and capability aborts a fresh read is
+Any `edit_transaction` preflight failure means **no disk writes** by the
+transaction. Application remains guarded and sequential; client failures can
+report partial changes or rollback. On match/no-match and capability aborts a fresh read is
 required only for the **failing** paths named in `recovery.paths`. Non-failing
 targets keep their existing read authorization and do **not** need re-reading —
 that retained authorization is still hash-verified against live content at its
@@ -367,7 +344,7 @@ follows one of three paths:
    exact-match edits on that path proceed without passing a capability;
    copy `editAnchor.readCapability` only when explicit proof is required.
 2. **Range read.** A complete `read_files.ranges` read returns a scoped
-   `editAnchor.readCapability` (cap.v3) bound to those exact lines. Pass it
+   `editAnchor.readCapability` (cap.v4) bound to those exact lines. Pass it
    verbatim as the edit capability: `edit_transaction` `replace_range`
    `{ readCapability, newContent }` (preferred for a block) or scoped
    `str_replace` with `basedOnRead`. With no caller `startLine`/`endLine`,
@@ -379,27 +356,26 @@ follows one of three paths:
 The rest of this section is the reference detail behind that flow.
 
 A complete range read mints a `readCapability` bound to exactly the
-requested line bounds and the hash of the returned slice. The runtime mints
-only authenticated cap.v3 tokens from a nonempty capability issuer; each token
-binds the project, path, line bounds, content hash, and run. If authoritative
+requested line bounds, observation hash and original raw basis. The runtime mints
+only authenticated cap.v4 tokens from a nonempty capability issuer; each token
+binds the project, path, line bounds, observation hash, raw basis, and run. If authoritative
 project/run scope is unavailable, no edit capability is minted. Truncated or
 render-clamped reads likewise mint nothing, so a partial or unscoped observation
 can never be reused as edit authorization.
 
-Structured-v1 range results expose the scoped capability only as
-`editAnchor.readCapability`, alongside diagnostic bounds and content hash. They
-do not expose a separate whole-file capability. A proper-subset range therefore
-remains scoped to the observed range and cannot grant whole-file overwrite
-authority. To obtain reusable whole-file authorization or a whole-file-covering
-cap.v3 token, perform a complete whole-file paths read or a complete full-file
-range read.
+Structured range results expose `editAnchor.readCapability`, diagnostic
+bounds, the observation hash and the authenticated raw basis. Every line or
+structural selector retains a lines basis, even when it covers the visible
+file. Obtain reusable whole-file authority through an authenticated complete
+paths read or a confirmed exact after-content receipt.
 
-On the edit side, the shipped structured-v1 `edit_transaction` `replace_range`
-input is capability-only: pass `{ readCapability, newContent }`. During input
-normalization the runtime authenticates the token and derives its exact bounds
-and expected content hash before preflight. Caller-supplied bounds or
-`expectedHash` are not part of this structured-v1 form; re-read the desired
-range when different bounds are needed.
+For `replace_range`, pass `{ readCapability, newContent }` to replace the
+observed range. Optional `startLine` and `endLine` together select a contained
+sub-range; optional `occurrence` instead targets a literal occurrence inside
+that range. The runtime derives and verifies raw freshness from the token;
+`expectedHash` is not a model-facing input. An explicit final empty entry is
+addressable only when its capability and complete EOF metadata authenticate it.
+An omitted read end stays at the visible ceiling.
 
 ### read_files `windows`/`around`/`symbol` selectors and occurrence-scoped `replace_range`
 
@@ -423,7 +399,7 @@ selector returns one result item with a contiguous `requestIndex` and its own
   call.
 
 Every complete block returns a structured `editAnchor` (`startLine`, `endLine`,
-`contentHash`, and a cap.v3 `readCapability` bound to the project, path, and
+`contentHash`, and a cap.v4 `readCapability` bound to the project, path, and
 run). Copy `editAnchor.readCapability` verbatim to `basedOnRead` /
 `readCapability` on a follow-up edit. Partial or failed blocks mint NO
 capability. These are scoped (per-edit) authorizations, not whole-file grants;
@@ -431,7 +407,7 @@ they participate in the same staged read-before-edit policy as a `read_files`
 range read.
 
 `replace_range` additionally accepts an optional
-`occurrence: { match, occurrence? }` alongside `startLine`/`endLine`. When
+`occurrence: { match, occurrence? }` as an alternative to `startLine`/`endLine`. When
 present, the edit targets the 1-indexed `occurrence` (default 1) of the exact
 literal `match` found only within the capability-authorized range
 (`capabilityStartLine..capabilityEndLine`); the resolved absolute lines then

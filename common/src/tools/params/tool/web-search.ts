@@ -123,6 +123,15 @@ export const webSearchParams = {
       }),
       z.object({
         errorMessage: z.string(),
+        status: z
+          .enum(['blocked', 'error', 'no_results'])
+          .optional()
+          .describe(
+            "'blocked' means the search backend served a bot check or rate limit (not 'no results').",
+          ),
+        reason: z.string().optional(),
+        nextStep: z.string().optional(),
+        retryAfterSeconds: z.number().optional(),
       }),
     ]),
   ),

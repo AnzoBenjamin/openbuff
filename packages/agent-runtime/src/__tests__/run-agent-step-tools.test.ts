@@ -19,9 +19,13 @@ import {
   resetExternalReadRootsForTesting,
 } from '@codebuff/common/util/project-path-containment'
 
-import { handleWriteTodos } from '../tools/handlers/tool/write-todos'
+import {
+  getTodoSimilarity,
+  handleWriteTodos,
+} from '../tools/handlers/tool/write-todos'
 import {
   canonicalScopedToolPath,
+  getFilesystemToolPaths,
   parseRawToolCall,
 } from '../tools/tool-executor'
 import {
@@ -56,6 +60,36 @@ import type { ProjectFileContext } from '@codebuff/common/util/file'
 import { buildReadFilesResultV1 } from '@codebuff/common/tools/results/filesystem'
 
 describe('tool executor input and scope helpers', () => {
+  it('includes every read_files selector in filesystem scope checks', () => {
+    const call = parseRawToolCall({
+      rawToolCall: {
+        toolName: 'read_files',
+        toolCallId: 'all-read-selectors',
+        input: {
+          paths: ['whole.ts'],
+          ranges: [{ path: 'range.ts', startLine: 1, endLine: 2 }],
+          windows: [{ path: 'window.ts', window: 1 }],
+          around: [{ path: 'around.ts', match: 'needle' }],
+          symbol: [{ path: 'symbol.ts', name: 'run' }],
+          symbols: [{ path: 'symbols.ts', names: ['run'] }],
+        },
+      },
+    })
+    expect('error' in call).toBe(false)
+    if ('error' in call) return
+    expect(getFilesystemToolPaths(call.toolName, call.input)).toEqual({
+      access: 'read',
+      paths: [
+        'whole.ts',
+        'range.ts',
+        'window.ts',
+        'around.ts',
+        'symbol.ts',
+        'symbols.ts',
+      ],
+    })
+  })
+
   it('canonicalizes symlinks outside the project so scope checks can deny them', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tool-scope-test-'))
     const projectRoot = path.join(tempDir, 'project')
@@ -137,6 +171,96 @@ type WriteTodosOutput = {
 }
 
 describe('write_todos tool', () => {
+  it('preserves fuzzy threshold decisions and yields during long comparisons', async () => {
+    const base = 'a'.repeat(200)
+    let yielded = false
+    setImmediate(() => {
+      yielded = true
+    })
+    expect(
+      await getTodoSimilarity(base, `${'a'.repeat(170)}${'b'.repeat(30)}`),
+    ).toBe(0.85)
+    expect(yielded).toBe(true)
+    expect(
+      await getTodoSimilarity(base, `${'a'.repeat(169)}${'b'.repeat(31)}`),
+    ).toBeLessThan(0.85)
+    expect(await getTodoSimilarity('same task', ' SAME TASK ')).toBe(1)
+    expect(await getTodoSimilarity('short', 'much longer task')).toBeLessThan(
+      0.85,
+    )
+  })
+
+  it('matches the original edit-distance decisions for substitutions and insertions', async () => {
+    const reference = (left: string, right: string) => {
+      const rows = Array.from({ length: left.length + 1 }, () =>
+        Array<number>(right.length + 1).fill(0),
+      )
+      for (let i = 0; i <= left.length; i++) rows[i][0] = i
+      for (let j = 0; j <= right.length; j++) rows[0][j] = j
+      for (let i = 1; i <= left.length; i++) {
+        for (let j = 1; j <= right.length; j++) {
+          rows[i][j] = Math.min(
+            rows[i - 1][j] + 1,
+            rows[i][j - 1] + 1,
+            rows[i - 1][j - 1] + (left[i - 1] === right[j - 1] ? 0 : 1),
+          )
+        }
+      }
+      return (
+        1 -
+        rows[left.length][right.length] / Math.max(left.length, right.length)
+      )
+    }
+    const original = 'implement the carefully scoped change'
+    for (let index = 0; index < original.length; index++) {
+      for (const candidate of [
+        `${original.slice(0, index)}X${original.slice(index + 1)}`,
+        `${original.slice(0, index)}X${original.slice(index)}`,
+        original.slice(0, index),
+      ]) {
+        const expected = reference(original, candidate)
+        const actual = await getTodoSimilarity(original, candidate)
+        expect(actual >= 0.85).toBe(expected >= 0.85)
+        if (expected >= 0.85) expect(actual).toBe(expected)
+      }
+    }
+  })
+
+  it('serializes overlapping checklist updates without losing either', async () => {
+    const previousCwd = process.cwd()
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'write-todos-concurrent-'),
+    )
+    try {
+      process.chdir(tempDir)
+      const call = (task: string) =>
+        handleWriteTodos({
+          previousToolCallFinished: Promise.resolve(),
+          toolCall: {
+            toolName: 'write_todos',
+            input: { todos: [{ task, completed: false }] },
+          } as CodebuffToolCall<'write_todos'>,
+        })
+      await Promise.all([
+        call('First unique task'),
+        call('Second unrelated operation'),
+      ])
+      const saved = JSON.parse(
+        fs.readFileSync(
+          path.join(tempDir, '.omx/state/todos-session.json'),
+          'utf8',
+        ),
+      )
+      expect(saved.map((item: { task: string }) => item.task)).toEqual([
+        'First unique task',
+        'Second unrelated operation',
+      ])
+    } finally {
+      process.chdir(previousCwd)
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
   it('returns current incoming todos as the visible active summary', async () => {
     const previousCwd = process.cwd()
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'write-todos-test-'))
@@ -2097,6 +2221,49 @@ describe('runAgentStep - set_output tool', () => {
         type: 'tool_call',
         toolName: 'read_files',
       }),
+    )
+  })
+
+  it.each([
+    ['windows', { windows: [{ path: '../outside.ts', window: 1 }] }],
+    ['around', { around: [{ path: '../outside.ts', match: 'needle' }] }],
+    ['symbol', { symbol: [{ path: '../outside.ts', name: 'run' }] }],
+  ])('blocks project escapes through the %s selector', async (_name, input) => {
+    const chunks: unknown[] = []
+    runAgentStepBaseParams = {
+      ...runAgentStepBaseParams,
+      onResponseChunk: (chunk) => chunks.push(chunk),
+      promptAiSdkStream: async function* () {
+        yield createToolCallChunk('read_files', input)
+        yield createToolCallChunk('end_turn', {})
+        return promptSuccess('mock-message-id')
+      },
+    }
+    const sessionState = getInitialSessionState(mockFileContext)
+    const agent: AgentTemplate = {
+      ...testAgent,
+      id: 'unscoped-agent',
+      toolNames: ['read_files', 'end_turn'],
+      filesystemScope: undefined,
+    }
+
+    await runAgentStep({
+      ...runAgentStepBaseParams,
+      agentType: agent.id,
+      localAgentTemplates: { [agent.id]: agent },
+      agentTemplate: agent,
+      agentState: sessionState.mainAgentState,
+      prompt: 'Read outside the project',
+    })
+
+    expect(chunks).toContainEqual(
+      expect.objectContaining({
+        type: 'error',
+        message: expect.stringContaining('filesystem read scope'),
+      }),
+    )
+    expect(chunks).not.toContainEqual(
+      expect.objectContaining({ type: 'tool_call', toolName: 'read_files' }),
     )
   })
 

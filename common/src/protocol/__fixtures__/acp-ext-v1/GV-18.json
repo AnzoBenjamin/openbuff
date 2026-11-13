@@ -1,0 +1,35 @@
+{
+  "_note": "Semantic vector (§12.7 GV-18): over --socket, a client stdio mcpServers entry is refused when serve.allowClientMcp is unset. The session/new response is -32602 with data['openbuff.dev'].code = 'client_mcp_disabled' and no process is spawned (§12.3 transport gating).",
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "session/new",
+    "params": {
+      "cwd": "/home/dev/proj",
+      "mcpServers": [
+        {
+          "name": "peer-tools",
+          "command": "node",
+          "args": [
+            "server.js"
+          ],
+          "env": {}
+        }
+      ]
+    }
+  },
+  "error": {
+    "jsonrpc": "2.0",
+    "id": 3,
+    "error": {
+      "code": -32602,
+      "message": "Client-supplied MCP servers are disabled on this transport",
+      "data": {
+        "openbuff.dev": {
+          "code": "client_mcp_disabled"
+        }
+      }
+    }
+  },
+  "expectedSpawnedProcesses": 0
+}

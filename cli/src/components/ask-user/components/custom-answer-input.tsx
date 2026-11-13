@@ -52,7 +52,7 @@ export const CustomAnswerInput: React.FC<CustomAnswerInputProps> = memo(
               }
             }}
             focused={focused}
-            maxHeight={5}
+            maxHeight={2}
             minHeight={1}
             placeholder="Type your answer..."
             showScrollbar={true}

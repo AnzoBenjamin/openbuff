@@ -147,6 +147,8 @@ export interface AgentDefinition {
 
   /** MCP servers by name. Names cannot contain `/`. */
   mcpServers?: Record<string, MCPConfig>
+  /** Opaque references from a host-created session; these are not trust labels. */
+  mcpServerReferences?: Record<string, string>
 
   /**
    * Tools this agent can use.
@@ -330,6 +332,8 @@ export interface AgentDefinition {
       agentState: AgentState
       toolResult: ToolResultOutput[] | undefined
       stepsComplete: boolean
+      /** True when stepsComplete is due to an explicit fixed step cap; break out instead of continuing, or the cap re-triggers forever. */
+      hitStepCap?: boolean
       nResponses?: string[]
     }
   >

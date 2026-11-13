@@ -1,6 +1,10 @@
+import React from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, test } from 'bun:test'
 
 import { getToolMetadata } from '@codebuff/common/tools/metadata'
+import { buildFileMutationResultFromReceiptV1 } from '@codebuff/common/tools/results/filesystem'
+import { committedMutationFixture } from '@codebuff/common/testing/fixtures/file-mutation'
 
 import { initializeThemeStore } from '../../../hooks/use-theme'
 import { chatThemes } from '../../../utils/theme-system'
@@ -111,6 +115,7 @@ describe('restored blocks with removed tool names', () => {
       type: 'tool',
       toolName: 'apply_patch',
       toolCallId: 'pending-apply-patch',
+      lifecycle: 'running',
       input: { operation: { path: 'src/p.ts', diff: '@@ -1 +1 @@\n-a\n+b' } },
     }
 
@@ -157,8 +162,44 @@ describe('restored blocks with removed tool names', () => {
   })
 
   test.each(['rolled_back', 'rollback_incomplete', 'not_applied'] as const)(
-    'a canonical %s result is labeled not applied',
+    'a canonical %s result retains its explicit outcome',
     (outcome) => {
+      const afterHash = outcome === 'rollback_incomplete' ? 'partial' : 'before'
+      const mutation = buildFileMutationResultFromReceiptV1({
+        kind: 'commit_receipt',
+        version: 1,
+        receiptId: `receipt-${outcome}`,
+        operationId: `op-${outcome}`,
+        callId: `${outcome}-apply-patch`,
+        authorityTier: 'conditional_commit',
+        status: outcome === 'not_applied' ? 'not_started' : outcome,
+        actions: [
+          {
+            actionId: 'action',
+            index: 0,
+            action: 'update',
+            path: 'src/r.ts',
+            status:
+              outcome === 'rollback_incomplete'
+                ? 'rollback_failed'
+                : outcome === 'not_applied'
+                  ? 'not_started'
+                  : 'rolled_back',
+            beforeHash: 'before',
+            afterHash,
+            ...(outcome === 'rollback_incomplete'
+              ? {
+                  forward: {
+                    outcome: 'unconfirmed' as const,
+                    afterHashes: { 'src/r.ts': afterHash },
+                  },
+                }
+              : {}),
+          },
+        ],
+        finalHashes: { 'src/r.ts': afterHash },
+      })
+      mutation.actions[0]!.patch = '@@ -1 +1 @@\n-a\n+b'
       const config = renderToolComponent(
         {
           type: 'tool',
@@ -168,19 +209,7 @@ describe('restored blocks with removed tool names', () => {
           outputRaw: [
             {
               type: 'json',
-              value: {
-                kind: 'file_mutation_result',
-                version: 1,
-                outcome,
-                actions: [
-                  {
-                    action: 'update',
-                    path: 'src/r.ts',
-                    outcome,
-                    diff: '@@ -1 +1 @@\n-a\n+b',
-                  },
-                ],
-              },
+              value: mutation,
             },
           ],
         } as PersistedToolBlock,
@@ -188,12 +217,16 @@ describe('restored blocks with removed tool names', () => {
         { availableWidth: 80, indentationOffset: 0, labelWidth: 0 },
       )
       expect(config?.path).toBe('src/r.ts')
-      expect(config?.collapsedPreview).toContain('not applied')
+      expect(config?.collapsedPreview).toContain(outcome.replaceAll('_', ' '))
       expect(config?.collapsedPreview).not.toContain('• applied')
     },
   )
 
   test('a canonical applied result is labeled applied', () => {
+    const mutation = committedMutationFixture([
+      { path: 'src/a.ts', content: 'b\n' },
+    ])
+    mutation.actions[0]!.patch = '@@ -1 +1 @@\n-a\n+b'
     const config = renderToolComponent(
       {
         type: 'tool',
@@ -203,19 +236,7 @@ describe('restored blocks with removed tool names', () => {
         outputRaw: [
           {
             type: 'json',
-            value: {
-              kind: 'file_mutation_result',
-              version: 1,
-              outcome: 'applied',
-              actions: [
-                {
-                  action: 'update',
-                  path: 'src/a.ts',
-                  outcome: 'applied',
-                  diff: '@@ -1 +1 @@\n-a\n+b',
-                },
-              ],
-            },
+            value: mutation,
           },
         ],
       } as PersistedToolBlock,
@@ -303,4 +324,61 @@ describe('restored blocks with removed tool names', () => {
       { path: 'src/c.ts', diff: '@@ -1 +1 @@\n-a\n+b' },
     ])
   })
+})
+
+test('a partial legacy canonical result names each retained action outcome', () => {
+  const mutation = buildFileMutationResultFromReceiptV1({
+    kind: 'commit_receipt',
+    version: 1,
+    receiptId: 'receipt-partial',
+    operationId: 'op-partial',
+    callId: 'partial-legacy',
+    authorityTier: 'conditional_commit',
+    status: 'failed',
+    actions: [
+      {
+        actionId: 'applied',
+        index: 0,
+        action: 'update',
+        path: 'a.ts',
+        status: 'committed',
+        beforeHash: 'a',
+        afterHash: 'b',
+        forward: { outcome: 'applied', afterHashes: { 'a.ts': 'b' } },
+      },
+      {
+        actionId: 'refused',
+        index: 1,
+        action: 'update',
+        path: 'b.ts',
+        status: 'failed',
+        beforeHash: 'c',
+        afterHash: 'c',
+        forward: { outcome: 'not_applied', afterHashes: { 'b.ts': 'c' } },
+      },
+    ],
+    finalHashes: { 'a.ts': 'b', 'b.ts': 'c' },
+  })
+  mutation.actions[0]!.patch = '@@ -1 +1 @@\n-a\n+b'
+  mutation.actions[1]!.patch = '@@ -1 +1 @@\n-c\n+d'
+  const result = renderToolComponent(
+    {
+      type: 'tool',
+      toolName: 'apply_patch',
+      toolCallId: 'partial-legacy',
+      input: {},
+      outputRaw: [
+        {
+          type: 'json',
+          value: mutation,
+        },
+      ],
+    } as PersistedToolBlock,
+    chatThemes.dark,
+    { availableWidth: 60, indentationOffset: 0, labelWidth: 0 },
+  )
+  expect(result?.collapsedPreview).toContain('partial')
+  const markup = renderToStaticMarkup(result?.content as React.ReactElement)
+  expect(markup).toContain('a.ts · applied')
+  expect(markup).toContain('b.ts · not applied')
 })

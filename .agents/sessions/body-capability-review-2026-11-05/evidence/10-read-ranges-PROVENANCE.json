@@ -1,0 +1,3656 @@
+{
+  "rangeCount": 142,
+  "commandRangeCount": 142,
+  "entries": [
+    {
+      "range": {
+        "path": "common/src/mcp/client.ts",
+        "from": 130,
+        "to": 356
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0328-call_6vJXsZ0yyy3PuqX84LjJ7qRw.txt",
+        "sha256": "ef39c26b8e85894fb4a024552563edeaccdb71c5e19eb63386fa9e18249a5b77",
+        "timestamp": "2026-11-05T22:34:00.553Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_6vJXsZ0yyy3PuqX84LjJ7qRw"
+      },
+      "captures": [
+        {
+          "capture": "a8968f1ed53e7e0d62ee308b6a755420d483754a2de5453a5f3e3b2fb2a67580.json",
+          "sha256": "a8968f1ed53e7e0d62ee308b6a755420d483754a2de5453a5f3e3b2fb2a67580",
+          "bytes": 20551,
+          "timestamp": "2026-11-05T22:34:01.547Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_6vJXsZ0yyy3PuqX84LjJ7qRw",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "common/src/mcp/client.ts",
+        "from": 812,
+        "to": 903
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0328-call_6vJXsZ0yyy3PuqX84LjJ7qRw.txt",
+        "sha256": "ef39c26b8e85894fb4a024552563edeaccdb71c5e19eb63386fa9e18249a5b77",
+        "timestamp": "2026-11-05T22:34:00.553Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_6vJXsZ0yyy3PuqX84LjJ7qRw"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/mcp.ts",
+        "from": 1,
+        "to": 98
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0328-call_6vJXsZ0yyy3PuqX84LjJ7qRw.txt",
+        "sha256": "ef39c26b8e85894fb4a024552563edeaccdb71c5e19eb63386fa9e18249a5b77",
+        "timestamp": "2026-11-05T22:34:00.553Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_6vJXsZ0yyy3PuqX84LjJ7qRw"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/types/mcp.ts",
+        "from": 1,
+        "to": 38
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0328-call_6vJXsZ0yyy3PuqX84LjJ7qRw.txt",
+        "sha256": "ef39c26b8e85894fb4a024552563edeaccdb71c5e19eb63386fa9e18249a5b77",
+        "timestamp": "2026-11-05T22:34:00.553Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_6vJXsZ0yyy3PuqX84LjJ7qRw"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/run.ts",
+        "from": 2293,
+        "to": 2465
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt",
+        "sha256": "2a9ca2f1028c1832a48a02c826130e93e5d4497d58aa9c63c2d5fbb47dc35f6d",
+        "timestamp": "2026-11-05T22:34:12.458Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_06CnL4sCDwtI9AD5TUApMpok"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/run-state.ts",
+        "from": 134,
+        "to": 183
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt",
+        "sha256": "2a9ca2f1028c1832a48a02c826130e93e5d4497d58aa9c63c2d5fbb47dc35f6d",
+        "timestamp": "2026-11-05T22:34:12.458Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_06CnL4sCDwtI9AD5TUApMpok"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/custom-tool.ts",
+        "from": 1,
+        "to": 76
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt",
+        "sha256": "2a9ca2f1028c1832a48a02c826130e93e5d4497d58aa9c63c2d5fbb47dc35f6d",
+        "timestamp": "2026-11-05T22:34:12.458Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_06CnL4sCDwtI9AD5TUApMpok"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/tools/prompts.ts",
+        "from": 425,
+        "to": 500
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt",
+        "sha256": "2a9ca2f1028c1832a48a02c826130e93e5d4497d58aa9c63c2d5fbb47dc35f6d",
+        "timestamp": "2026-11-05T22:34:12.458Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_06CnL4sCDwtI9AD5TUApMpok"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/run.ts",
+        "from": 1535,
+        "to": 1618
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt",
+        "sha256": "2a9ca2f1028c1832a48a02c826130e93e5d4497d58aa9c63c2d5fbb47dc35f6d",
+        "timestamp": "2026-11-05T22:34:12.458Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_06CnL4sCDwtI9AD5TUApMpok"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+        "from": 4001,
+        "to": 4200
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0332-call_ZEXG6caZrrBW63yBv240NsgJ.txt",
+        "sha256": "eac822547db68821ab592a65beefc6badb69f913155a61f1d568076b9b042c9d",
+        "timestamp": "2026-11-05T22:34:22.974Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_ZEXG6caZrrBW63yBv240NsgJ"
+      },
+      "captures": [
+        {
+          "capture": "9d2cab9f2cc370d7eb65d764ef996f00e22059b85bd0fedc0c3ffe949531650d.json",
+          "sha256": "9d2cab9f2cc370d7eb65d764ef996f00e22059b85bd0fedc0c3ffe949531650d",
+          "bytes": 15859,
+          "timestamp": "2026-11-05T22:34:23.665Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_ZEXG6caZrrBW63yBv240NsgJ",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+        "from": 4201,
+        "to": 4368
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0332-call_ZEXG6caZrrBW63yBv240NsgJ.txt",
+        "sha256": "eac822547db68821ab592a65beefc6badb69f913155a61f1d568076b9b042c9d",
+        "timestamp": "2026-11-05T22:34:22.974Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_ZEXG6caZrrBW63yBv240NsgJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/agents/load-agents.ts",
+        "from": 1,
+        "to": 330
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0333-call_vuKPqtvWkRQNSqPbYlVXsCye.txt",
+        "sha256": "16c0c126c3407e552c43a2ef7fb43cc171d52f27b7e0d1983b58321a79fef1b6",
+        "timestamp": "2026-11-05T22:34:37.994Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_vuKPqtvWkRQNSqPbYlVXsCye"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/templates/agent-validation.ts",
+        "from": 308,
+        "to": 503
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0333-call_vuKPqtvWkRQNSqPbYlVXsCye.txt",
+        "sha256": "16c0c126c3407e552c43a2ef7fb43cc171d52f27b7e0d1983b58321a79fef1b6",
+        "timestamp": "2026-11-05T22:34:37.994Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_vuKPqtvWkRQNSqPbYlVXsCye"
+      },
+      "captures": [
+        {
+          "capture": "88ed26d0ca1493bc3ccb52484b0138f9538171a7375dbfdbbe65793abb101c24.json",
+          "sha256": "88ed26d0ca1493bc3ccb52484b0138f9538171a7375dbfdbbe65793abb101c24",
+          "bytes": 23543,
+          "timestamp": "2026-11-05T22:34:38.396Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_vuKPqtvWkRQNSqPbYlVXsCye",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+        "from": 194,
+        "to": 427
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0334-call_SHVCFXpi8FKU2WpEhLsHxpub.txt",
+        "sha256": "2a4c82f9564177557ddc30bd11600f31bb90f99a360321c86ef86d7cacee758a",
+        "timestamp": "2026-11-05T22:34:57.317Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_SHVCFXpi8FKU2WpEhLsHxpub"
+      },
+      "captures": [
+        {
+          "capture": "696a526c2e6f3954d1a3c72c9647dcfcc77267ef8c639ba306925630464fab31.json",
+          "sha256": "696a526c2e6f3954d1a3c72c9647dcfcc77267ef8c639ba306925630464fab31",
+          "bytes": 27020,
+          "timestamp": "2026-11-05T22:34:57.678Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_SHVCFXpi8FKU2WpEhLsHxpub",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "cli/scripts/prebuild-agents.ts",
+        "from": 1,
+        "to": 141
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0334-call_SHVCFXpi8FKU2WpEhLsHxpub.txt",
+        "sha256": "2a4c82f9564177557ddc30bd11600f31bb90f99a360321c86ef86d7cacee758a",
+        "timestamp": "2026-11-05T22:34:57.317Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_SHVCFXpi8FKU2WpEhLsHxpub"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/templates/agent-validation.ts",
+        "from": 500,
+        "to": 735
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0334-call_SHVCFXpi8FKU2WpEhLsHxpub.txt",
+        "sha256": "2a4c82f9564177557ddc30bd11600f31bb90f99a360321c86ef86d7cacee758a",
+        "timestamp": "2026-11-05T22:34:57.317Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_SHVCFXpi8FKU2WpEhLsHxpub"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/tools/compile-tool-definitions.ts",
+        "from": 1,
+        "to": 304
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0335-call_Wm5dqnm6V1fftfgfXDBZ04fH.txt",
+        "sha256": "0a5356ea5c3a67427ae521dda1dc6d66f7e21772a4a2a7977768d4cce65bb2b0",
+        "timestamp": "2026-11-05T22:35:09.382Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_Wm5dqnm6V1fftfgfXDBZ04fH"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "scripts/generate-tool-definitions.ts",
+        "from": 1,
+        "to": 78
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0335-call_Wm5dqnm6V1fftfgfXDBZ04fH.txt",
+        "sha256": "0a5356ea5c3a67427ae521dda1dc6d66f7e21772a4a2a7977768d4cce65bb2b0",
+        "timestamp": "2026-11-05T22:35:09.382Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_Wm5dqnm6V1fftfgfXDBZ04fH"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/util/zod-schema.ts",
+        "from": 1,
+        "to": 25
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0335-call_Wm5dqnm6V1fftfgfXDBZ04fH.txt",
+        "sha256": "0a5356ea5c3a67427ae521dda1dc6d66f7e21772a4a2a7977768d4cce65bb2b0",
+        "timestamp": "2026-11-05T22:35:09.382Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_Wm5dqnm6V1fftfgfXDBZ04fH"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/agents/load-mcp-config.ts",
+        "from": 1,
+        "to": 222
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt",
+        "sha256": "37b0197e04e224c8fa1f37e77201482999fa037618266cc575afa0635b5b8e30",
+        "timestamp": "2026-11-05T22:35:18.594Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_Sx74pIOhhnFwzJFatZeNMiPe"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+        "from": 135,
+        "to": 218
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt",
+        "sha256": "37b0197e04e224c8fa1f37e77201482999fa037618266cc575afa0635b5b8e30",
+        "timestamp": "2026-11-05T22:35:18.594Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_Sx74pIOhhnFwzJFatZeNMiPe"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/impl/database.ts",
+        "from": 258,
+        "to": 341
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt",
+        "sha256": "37b0197e04e224c8fa1f37e77201482999fa037618266cc575afa0635b5b8e30",
+        "timestamp": "2026-11-05T22:35:18.594Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_Sx74pIOhhnFwzJFatZeNMiPe"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "cli/src/utils/local-agent-registry.ts",
+        "from": 131,
+        "to": 247
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt",
+        "sha256": "37b0197e04e224c8fa1f37e77201482999fa037618266cc575afa0635b5b8e30",
+        "timestamp": "2026-11-05T22:35:18.594Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_Sx74pIOhhnFwzJFatZeNMiPe"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+        "from": 428,
+        "to": 706
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0337-call_6Xid74iAyghnAmhoRweR3DaK.txt",
+        "sha256": "c1236bdf9e1c1d6fd07adb834fa4f4d8871ce1fb39c8d651ffd3879c132bee74",
+        "timestamp": "2026-11-05T22:35:41.954Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_6Xid74iAyghnAmhoRweR3DaK"
+      },
+      "captures": [
+        {
+          "capture": "b83c792bb0aad554d411cdee80ccb4d493317ad58ede5d380a8d312cdb1f166f.json",
+          "sha256": "b83c792bb0aad554d411cdee80ccb4d493317ad58ede5d380a8d312cdb1f166f",
+          "bytes": 27626,
+          "timestamp": "2026-11-05T22:35:42.350Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_6Xid74iAyghnAmhoRweR3DaK",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+        "from": 870,
+        "to": 1055
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0337-call_6Xid74iAyghnAmhoRweR3DaK.txt",
+        "sha256": "c1236bdf9e1c1d6fd07adb834fa4f4d8871ce1fb39c8d651ffd3879c132bee74",
+        "timestamp": "2026-11-05T22:35:41.954Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_6Xid74iAyghnAmhoRweR3DaK"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/tools/prompts.ts",
+        "from": 1,
+        "to": 49
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0337-call_6Xid74iAyghnAmhoRweR3DaK.txt",
+        "sha256": "c1236bdf9e1c1d6fd07adb834fa4f4d8871ce1fb39c8d651ffd3879c132bee74",
+        "timestamp": "2026-11-05T22:35:41.954Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_6Xid74iAyghnAmhoRweR3DaK"
+      },
+      "captures": [
+        {
+          "capture": "b83c792bb0aad554d411cdee80ccb4d493317ad58ede5d380a8d312cdb1f166f.json",
+          "sha256": "b83c792bb0aad554d411cdee80ccb4d493317ad58ede5d380a8d312cdb1f166f",
+          "bytes": 27626,
+          "timestamp": "2026-11-05T22:35:42.350Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_6Xid74iAyghnAmhoRweR3DaK",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/tools/prompts.ts",
+        "from": 510,
+        "to": 610
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0337-call_6Xid74iAyghnAmhoRweR3DaK.txt",
+        "sha256": "c1236bdf9e1c1d6fd07adb834fa4f4d8871ce1fb39c8d651ffd3879c132bee74",
+        "timestamp": "2026-11-05T22:35:41.954Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_6Xid74iAyghnAmhoRweR3DaK"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+        "from": 707,
+        "to": 869
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0338-call_wSe66mYAcWObsmTSaakljwBh.txt",
+        "sha256": "1621390d932cb20a65d56e68d2a9f51004b560f804dbb714b0cf63dc10a47a01",
+        "timestamp": "2026-11-05T22:35:52.479Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wSe66mYAcWObsmTSaakljwBh"
+      },
+      "captures": [
+        {
+          "capture": "8a3a11913938f1b034190138071a200312c873a7d582d4721830fd93cd16bce5.json",
+          "sha256": "8a3a11913938f1b034190138071a200312c873a7d582d4721830fd93cd16bce5",
+          "bytes": 19575,
+          "timestamp": "2026-11-05T22:35:53.193Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_wSe66mYAcWObsmTSaakljwBh",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/__tests__/sandbox-generator.test.ts",
+        "from": 1,
+        "to": 196
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0338-call_wSe66mYAcWObsmTSaakljwBh.txt",
+        "sha256": "1621390d932cb20a65d56e68d2a9f51004b560f804dbb714b0cf63dc10a47a01",
+        "timestamp": "2026-11-05T22:35:52.479Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wSe66mYAcWObsmTSaakljwBh"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/__tests__/run-programmatic-step.test.ts",
+        "from": 218,
+        "to": 343
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0338-call_wSe66mYAcWObsmTSaakljwBh.txt",
+        "sha256": "1621390d932cb20a65d56e68d2a9f51004b560f804dbb714b0cf63dc10a47a01",
+        "timestamp": "2026-11-05T22:35:52.479Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wSe66mYAcWObsmTSaakljwBh"
+      },
+      "captures": [
+        {
+          "capture": "8a3a11913938f1b034190138071a200312c873a7d582d4721830fd93cd16bce5.json",
+          "sha256": "8a3a11913938f1b034190138071a200312c873a7d582d4721830fd93cd16bce5",
+          "bytes": 19575,
+          "timestamp": "2026-11-05T22:35:53.193Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_wSe66mYAcWObsmTSaakljwBh",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "docs/agents-and-tools.md",
+        "from": 1,
+        "to": 14
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "docs/agents-and-tools.md",
+        "from": 53,
+        "to": 81
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "docs/agents-and-tools.md",
+        "from": 103,
+        "to": 114
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "docs/architecture.md",
+        "from": 143,
+        "to": 158
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "docs/request-flow.md",
+        "from": 118,
+        "to": 157
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/README.md",
+        "from": 302,
+        "to": 319
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/run.ts",
+        "from": 289,
+        "to": 412
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/run.ts",
+        "from": 585,
+        "to": 638
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/run.ts",
+        "from": 1006,
+        "to": 1082
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/package.json",
+        "from": 1,
+        "to": 93
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/package.json",
+        "from": 1,
+        "to": 56
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/package.json",
+        "from": 1,
+        "to": 10
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "rust/crates/openbuff-native/src/lib.rs",
+        "from": 1,
+        "to": 115
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt",
+        "sha256": "dc205e6d692af8149829577a3194330c8d61910ae6ff9635fb4f8aabcf2fa84c",
+        "timestamp": "2026-11-05T22:36:06.619Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_foKQnH099XTgLaiuEBk8DBbJ"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/mcp/server.ts",
+        "from": 345,
+        "to": 543
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0344-call_qcCLzsY7bftMfC3It5qF8WfF.txt",
+        "sha256": "a57a854cb19349b3edf6d993f391f3139ce39e51cad230687759cca77997764d",
+        "timestamp": "2026-11-05T22:36:15.883Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_qcCLzsY7bftMfC3It5qF8WfF"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/mcp/server.ts",
+        "from": 1480,
+        "to": 1635
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0344-call_qcCLzsY7bftMfC3It5qF8WfF.txt",
+        "sha256": "a57a854cb19349b3edf6d993f391f3139ce39e51cad230687759cca77997764d",
+        "timestamp": "2026-11-05T22:36:15.883Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_qcCLzsY7bftMfC3It5qF8WfF"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "cli/src/commands/mcp-command.ts",
+        "from": 1,
+        "to": 176
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0344-call_qcCLzsY7bftMfC3It5qF8WfF.txt",
+        "sha256": "a57a854cb19349b3edf6d993f391f3139ce39e51cad230687759cca77997764d",
+        "timestamp": "2026-11-05T22:36:15.883Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_qcCLzsY7bftMfC3It5qF8WfF"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/serve/bridge.ts",
+        "from": 526,
+        "to": 545
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt",
+        "sha256": "30de09e481f870f7dbf6a41a009cd531ebc3d28a5ad2044b119e2f3706bd0a40",
+        "timestamp": "2026-11-05T22:36:33.485Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_N2RNWuqX5qnOVygaUdgBXqww"
+      },
+      "captures": [
+        {
+          "capture": "548335ce758dbc94c5fae4245948b2efbd58670c294a4034609a6cabf1119e21.json",
+          "sha256": "548335ce758dbc94c5fae4245948b2efbd58670c294a4034609a6cabf1119e21",
+          "bytes": 20127,
+          "timestamp": "2026-11-05T22:36:33.881Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_N2RNWuqX5qnOVygaUdgBXqww",
+          "transformation": "exact recorded output",
+          "location": "$.result.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/serve/bridge.ts",
+        "from": 749,
+        "to": 773
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt",
+        "sha256": "30de09e481f870f7dbf6a41a009cd531ebc3d28a5ad2044b119e2f3706bd0a40",
+        "timestamp": "2026-11-05T22:36:33.485Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_N2RNWuqX5qnOVygaUdgBXqww"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/serve/bridge.ts",
+        "from": 861,
+        "to": 927
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt",
+        "sha256": "30de09e481f870f7dbf6a41a009cd531ebc3d28a5ad2044b119e2f3706bd0a40",
+        "timestamp": "2026-11-05T22:36:33.485Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_N2RNWuqX5qnOVygaUdgBXqww"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/services/acp/acp-agent.ts",
+        "from": 935,
+        "to": 984
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt",
+        "sha256": "30de09e481f870f7dbf6a41a009cd531ebc3d28a5ad2044b119e2f3706bd0a40",
+        "timestamp": "2026-11-05T22:36:33.485Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_N2RNWuqX5qnOVygaUdgBXqww"
+      },
+      "captures": [
+        {
+          "capture": "548335ce758dbc94c5fae4245948b2efbd58670c294a4034609a6cabf1119e21.json",
+          "sha256": "548335ce758dbc94c5fae4245948b2efbd58670c294a4034609a6cabf1119e21",
+          "bytes": 20127,
+          "timestamp": "2026-11-05T22:36:33.881Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_N2RNWuqX5qnOVygaUdgBXqww",
+          "transformation": "exact recorded output",
+          "location": "$.result.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "common/src/protocol/acp-ext-v1.ts",
+        "from": 1,
+        "to": 96
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt",
+        "sha256": "30de09e481f870f7dbf6a41a009cd531ebc3d28a5ad2044b119e2f3706bd0a40",
+        "timestamp": "2026-11-05T22:36:33.485Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_N2RNWuqX5qnOVygaUdgBXqww"
+      },
+      "captures": [
+        {
+          "capture": "548335ce758dbc94c5fae4245948b2efbd58670c294a4034609a6cabf1119e21.json",
+          "sha256": "548335ce758dbc94c5fae4245948b2efbd58670c294a4034609a6cabf1119e21",
+          "bytes": 20127,
+          "timestamp": "2026-11-05T22:36:33.881Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_N2RNWuqX5qnOVygaUdgBXqww",
+          "transformation": "exact recorded output",
+          "location": "$.result.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "common/src/protocol/acp-ext-v1.ts",
+        "from": 286,
+        "to": 304
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt",
+        "sha256": "30de09e481f870f7dbf6a41a009cd531ebc3d28a5ad2044b119e2f3706bd0a40",
+        "timestamp": "2026-11-05T22:36:33.485Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_N2RNWuqX5qnOVygaUdgBXqww"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/services/acp/ext-methods.ts",
+        "from": 1,
+        "to": 157
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt",
+        "sha256": "30de09e481f870f7dbf6a41a009cd531ebc3d28a5ad2044b119e2f3706bd0a40",
+        "timestamp": "2026-11-05T22:36:33.485Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_N2RNWuqX5qnOVygaUdgBXqww"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/codex-cli.ts",
+        "from": 1,
+        "to": 216
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt",
+        "sha256": "c2f62f8d61830e746ed1ff19f38c1b56648825bd548289c127c31740284f6275",
+        "timestamp": "2026-11-05T22:36:44.306Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KsGADU2wLIVOYRx2LgpHDGfc"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/lib/create-cli-agent.ts",
+        "from": 1,
+        "to": 85
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt",
+        "sha256": "c2f62f8d61830e746ed1ff19f38c1b56648825bd548289c127c31740284f6275",
+        "timestamp": "2026-11-05T22:36:44.306Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KsGADU2wLIVOYRx2LgpHDGfc"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/lib/cli-agent-types.ts",
+        "from": 1,
+        "to": 57
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt",
+        "sha256": "c2f62f8d61830e746ed1ff19f38c1b56648825bd548289c127c31740284f6275",
+        "timestamp": "2026-11-05T22:36:44.306Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KsGADU2wLIVOYRx2LgpHDGfc"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/lib/cli-agent-schemas.ts",
+        "from": 1,
+        "to": 149
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt",
+        "sha256": "c2f62f8d61830e746ed1ff19f38c1b56648825bd548289c127c31740284f6275",
+        "timestamp": "2026-11-05T22:36:44.306Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KsGADU2wLIVOYRx2LgpHDGfc"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/__tests__/placeholder.test.ts",
+        "from": 1,
+        "to": 5
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt",
+        "sha256": "c2f62f8d61830e746ed1ff19f38c1b56648825bd548289c127c31740284f6275",
+        "timestamp": "2026-11-05T22:36:44.306Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KsGADU2wLIVOYRx2LgpHDGfc"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/lib/cli-agent-prompts.ts",
+        "from": 1,
+        "to": 197
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0353-call_PMlQ84Jg4vhbgLWxCz969NI7.txt",
+        "sha256": "c5c4ccd4ad619efbf7c3707460355da9ca74b100f23d2fdce138e4474bc49de5",
+        "timestamp": "2026-11-05T22:36:56.532Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_PMlQ84Jg4vhbgLWxCz969NI7"
+      },
+      "captures": [
+        {
+          "capture": "32a738b79cd1fa6ca813b2b4c3de075594f1c1ec11bbc5d2e49b947ede47d291.json",
+          "sha256": "32a738b79cd1fa6ca813b2b4c3de075594f1c1ec11bbc5d2e49b947ede47d291",
+          "bytes": 24897,
+          "timestamp": "2026-11-05T22:36:57.422Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_PMlQ84Jg4vhbgLWxCz969NI7",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": ".agents/lib/cli-agent-prompts.ts",
+        "from": 198,
+        "to": 378
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0353-call_PMlQ84Jg4vhbgLWxCz969NI7.txt",
+        "sha256": "c5c4ccd4ad619efbf7c3707460355da9ca74b100f23d2fdce138e4474bc49de5",
+        "timestamp": "2026-11-05T22:36:56.532Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_PMlQ84Jg4vhbgLWxCz969NI7"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "scripts/tmux/tmux-cli.sh",
+        "from": 1,
+        "to": 158
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0353-call_PMlQ84Jg4vhbgLWxCz969NI7.txt",
+        "sha256": "c5c4ccd4ad619efbf7c3707460355da9ca74b100f23d2fdce138e4474bc49de5",
+        "timestamp": "2026-11-05T22:36:56.532Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_PMlQ84Jg4vhbgLWxCz969NI7"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/__tests__/custom-tool-dispatch.test.ts",
+        "from": 1,
+        "to": 128
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt",
+        "sha256": "d14126a553d5d55d522c91eda075c549e31deb2b5cd51ce9c39f680fc31c5117",
+        "timestamp": "2026-11-05T22:37:34.636Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_YmHavjmiKffNKRYHUbxCHiOH"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/__tests__/run-mcp-tool-filter.test.ts",
+        "from": 1,
+        "to": 124
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt",
+        "sha256": "d14126a553d5d55d522c91eda075c549e31deb2b5cd51ce9c39f680fc31c5117",
+        "timestamp": "2026-11-05T22:37:34.636Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_YmHavjmiKffNKRYHUbxCHiOH"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/__tests__/mcp-tool-schema.test.ts",
+        "from": 1,
+        "to": 38
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt",
+        "sha256": "d14126a553d5d55d522c91eda075c549e31deb2b5cd51ce9c39f680fc31c5117",
+        "timestamp": "2026-11-05T22:37:34.636Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_YmHavjmiKffNKRYHUbxCHiOH"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/__tests__/agent-validation.test.ts",
+        "from": 849,
+        "to": 981
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt",
+        "sha256": "d14126a553d5d55d522c91eda075c549e31deb2b5cd51ce9c39f680fc31c5117",
+        "timestamp": "2026-11-05T22:37:34.636Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_YmHavjmiKffNKRYHUbxCHiOH"
+      },
+      "captures": [
+        {
+          "capture": "da709d906912d49304e289f9a44edc86440ae83c399f57c25f42b7d6677200b4.json",
+          "sha256": "da709d906912d49304e289f9a44edc86440ae83c399f57c25f42b7d6677200b4",
+          "bytes": 25908,
+          "timestamp": "2026-11-05T22:37:35.371Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_YmHavjmiKffNKRYHUbxCHiOH",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/run.ts",
+        "from": 386,
+        "to": 412
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt",
+        "sha256": "d14126a553d5d55d522c91eda075c549e31deb2b5cd51ce9c39f680fc31c5117",
+        "timestamp": "2026-11-05T22:37:34.636Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_YmHavjmiKffNKRYHUbxCHiOH"
+      },
+      "captures": [
+        {
+          "capture": "da709d906912d49304e289f9a44edc86440ae83c399f57c25f42b7d6677200b4.json",
+          "sha256": "da709d906912d49304e289f9a44edc86440ae83c399f57c25f42b7d6677200b4",
+          "bytes": 25908,
+          "timestamp": "2026-11-05T22:37:35.371Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_YmHavjmiKffNKRYHUbxCHiOH",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/run.ts",
+        "from": 585,
+        "to": 638
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt",
+        "sha256": "d14126a553d5d55d522c91eda075c549e31deb2b5cd51ce9c39f680fc31c5117",
+        "timestamp": "2026-11-05T22:37:34.636Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_YmHavjmiKffNKRYHUbxCHiOH"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/templates/agent-validation.ts",
+        "from": 1,
+        "to": 98
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt",
+        "sha256": "d14126a553d5d55d522c91eda075c549e31deb2b5cd51ce9c39f680fc31c5117",
+        "timestamp": "2026-11-05T22:37:34.636Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_YmHavjmiKffNKRYHUbxCHiOH"
+      },
+      "captures": [
+        {
+          "capture": "da709d906912d49304e289f9a44edc86440ae83c399f57c25f42b7d6677200b4.json",
+          "sha256": "da709d906912d49304e289f9a44edc86440ae83c399f57c25f42b7d6677200b4",
+          "bytes": 25908,
+          "timestamp": "2026-11-05T22:37:35.371Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_YmHavjmiKffNKRYHUbxCHiOH",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/__tests__/load-agents.test.ts",
+        "from": 199,
+        "to": 383
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0357-call_KjuFipr7E7qN0UHUVsfXWvGX.txt",
+        "sha256": "f4b0ce1de22a7cbda22f22ff0fbe182900a57709bc67d481ade28affc779d67f",
+        "timestamp": "2026-11-05T22:37:46.001Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KjuFipr7E7qN0UHUVsfXWvGX"
+      },
+      "captures": [
+        {
+          "capture": "26c1fd8f2ddf7edbb6ac526689935c27817129cae83236ae92904fecb9b2caa7.json",
+          "sha256": "26c1fd8f2ddf7edbb6ac526689935c27817129cae83236ae92904fecb9b2caa7",
+          "bytes": 24641,
+          "timestamp": "2026-11-05T22:37:46.801Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_KjuFipr7E7qN0UHUVsfXWvGX",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/__tests__/load-agents.test.ts",
+        "from": 964,
+        "to": 1095
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0357-call_KjuFipr7E7qN0UHUVsfXWvGX.txt",
+        "sha256": "f4b0ce1de22a7cbda22f22ff0fbe182900a57709bc67d481ade28affc779d67f",
+        "timestamp": "2026-11-05T22:37:46.001Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KjuFipr7E7qN0UHUVsfXWvGX"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/mcp/__tests__/client.test.ts",
+        "from": 138,
+        "to": 427
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0357-call_KjuFipr7E7qN0UHUVsfXWvGX.txt",
+        "sha256": "f4b0ce1de22a7cbda22f22ff0fbe182900a57709bc67d481ade28affc779d67f",
+        "timestamp": "2026-11-05T22:37:46.001Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KjuFipr7E7qN0UHUVsfXWvGX"
+      },
+      "captures": [
+        {
+          "capture": "26c1fd8f2ddf7edbb6ac526689935c27817129cae83236ae92904fecb9b2caa7.json",
+          "sha256": "26c1fd8f2ddf7edbb6ac526689935c27817129cae83236ae92904fecb9b2caa7",
+          "bytes": 24641,
+          "timestamp": "2026-11-05T22:37:46.801Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_KjuFipr7E7qN0UHUVsfXWvGX",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": ".agents/claude-code-cli.ts",
+        "from": 1,
+        "to": 136
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt",
+        "sha256": "cc5dc2c670c60c58dca6f42834eee3fa68c31997e7a2d37ec708de9bd8a27811",
+        "timestamp": "2026-11-05T22:38:02.196Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_4rnLV2GTjNoGfDF3zLB62U3N"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/gemini-cli.ts",
+        "from": 1,
+        "to": 142
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt",
+        "sha256": "cc5dc2c670c60c58dca6f42834eee3fa68c31997e7a2d37ec708de9bd8a27811",
+        "timestamp": "2026-11-05T22:38:02.196Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_4rnLV2GTjNoGfDF3zLB62U3N"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/codebuff-local-cli.ts",
+        "from": 1,
+        "to": 147
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt",
+        "sha256": "cc5dc2c670c60c58dca6f42834eee3fa68c31997e7a2d37ec708de9bd8a27811",
+        "timestamp": "2026-11-05T22:38:02.196Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_4rnLV2GTjNoGfDF3zLB62U3N"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/notion-agent.ts",
+        "from": 1,
+        "to": 45
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt",
+        "sha256": "cc5dc2c670c60c58dca6f42834eee3fa68c31997e7a2d37ec708de9bd8a27811",
+        "timestamp": "2026-11-05T22:38:02.196Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_4rnLV2GTjNoGfDF3zLB62U3N"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/notion-researcher.ts",
+        "from": 1,
+        "to": 50
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt",
+        "sha256": "cc5dc2c670c60c58dca6f42834eee3fa68c31997e7a2d37ec708de9bd8a27811",
+        "timestamp": "2026-11-05T22:38:02.196Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_4rnLV2GTjNoGfDF3zLB62U3N"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/templates/initial-agents-dir/types/agent-definition.ts",
+        "from": 142,
+        "to": 242
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt",
+        "sha256": "cc5dc2c670c60c58dca6f42834eee3fa68c31997e7a2d37ec708de9bd8a27811",
+        "timestamp": "2026-11-05T22:38:02.196Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_4rnLV2GTjNoGfDF3zLB62U3N"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/types/agent-definition.ts",
+        "from": 263,
+        "to": 400
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt",
+        "sha256": "cc5dc2c670c60c58dca6f42834eee3fa68c31997e7a2d37ec708de9bd8a27811",
+        "timestamp": "2026-11-05T22:38:02.196Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_4rnLV2GTjNoGfDF3zLB62U3N"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/run.ts",
+        "from": 1395,
+        "to": 1534
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt",
+        "sha256": "3a22bc68c7d48287b94a9026cfc66a5b3aabef59ade21fabe5f9e258efc6e361",
+        "timestamp": "2026-11-05T22:38:30.091Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_3FHqljNtlB3mQDVSEGp3FRcM"
+      },
+      "captures": [
+        {
+          "capture": "c38d0e9b7bb8ce005bc4ccd4a78359cd2333a930fe8533b01f5d924a854e10b8.json",
+          "sha256": "c38d0e9b7bb8ce005bc4ccd4a78359cd2333a930fe8533b01f5d924a854e10b8",
+          "bytes": 28583,
+          "timestamp": "2026-11-05T22:38:30.463Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_3FHqljNtlB3mQDVSEGp3FRcM",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/__tests__/mcp-server.test.ts",
+        "from": 149,
+        "to": 189
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt",
+        "sha256": "3a22bc68c7d48287b94a9026cfc66a5b3aabef59ade21fabe5f9e258efc6e361",
+        "timestamp": "2026-11-05T22:38:30.091Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_3FHqljNtlB3mQDVSEGp3FRcM"
+      },
+      "captures": [
+        {
+          "capture": "c38d0e9b7bb8ce005bc4ccd4a78359cd2333a930fe8533b01f5d924a854e10b8.json",
+          "sha256": "c38d0e9b7bb8ce005bc4ccd4a78359cd2333a930fe8533b01f5d924a854e10b8",
+          "bytes": 28583,
+          "timestamp": "2026-11-05T22:38:30.463Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_3FHqljNtlB3mQDVSEGp3FRcM",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/__tests__/mcp-server.test.ts",
+        "from": 322,
+        "to": 453
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt",
+        "sha256": "3a22bc68c7d48287b94a9026cfc66a5b3aabef59ade21fabe5f9e258efc6e361",
+        "timestamp": "2026-11-05T22:38:30.091Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_3FHqljNtlB3mQDVSEGp3FRcM"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/__tests__/mcp-server.test.ts",
+        "from": 478,
+        "to": 552
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt",
+        "sha256": "3a22bc68c7d48287b94a9026cfc66a5b3aabef59ade21fabe5f9e258efc6e361",
+        "timestamp": "2026-11-05T22:38:30.091Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_3FHqljNtlB3mQDVSEGp3FRcM"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/types/dynamic-agent-template.ts",
+        "from": 1,
+        "to": 113
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt",
+        "sha256": "3a22bc68c7d48287b94a9026cfc66a5b3aabef59ade21fabe5f9e258efc6e361",
+        "timestamp": "2026-11-05T22:38:30.091Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_3FHqljNtlB3mQDVSEGp3FRcM"
+      },
+      "captures": [
+        {
+          "capture": "c38d0e9b7bb8ce005bc4ccd4a78359cd2333a930fe8533b01f5d924a854e10b8.json",
+          "sha256": "c38d0e9b7bb8ce005bc4ccd4a78359cd2333a930fe8533b01f5d924a854e10b8",
+          "bytes": 28583,
+          "timestamp": "2026-11-05T22:38:30.463Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_3FHqljNtlB3mQDVSEGp3FRcM",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "common/src/types/dynamic-agent-template.ts",
+        "from": 180,
+        "to": 199
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt",
+        "sha256": "3a22bc68c7d48287b94a9026cfc66a5b3aabef59ade21fabe5f9e258efc6e361",
+        "timestamp": "2026-11-05T22:38:30.091Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_3FHqljNtlB3mQDVSEGp3FRcM"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/templates/agent-validation.ts",
+        "from": 142,
+        "to": 291
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt",
+        "sha256": "3a22bc68c7d48287b94a9026cfc66a5b3aabef59ade21fabe5f9e258efc6e361",
+        "timestamp": "2026-11-05T22:38:30.091Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_3FHqljNtlB3mQDVSEGp3FRcM"
+      },
+      "captures": [
+        {
+          "capture": "c38d0e9b7bb8ce005bc4ccd4a78359cd2333a930fe8533b01f5d924a854e10b8.json",
+          "sha256": "c38d0e9b7bb8ce005bc4ccd4a78359cd2333a930fe8533b01f5d924a854e10b8",
+          "bytes": 28583,
+          "timestamp": "2026-11-05T22:38:30.463Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_3FHqljNtlB3mQDVSEGp3FRcM",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/validate-agents.ts",
+        "from": 1,
+        "to": 125
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0367-call_wi7GA9HkAgbaqcqiHoJTpRpM.txt",
+        "sha256": "b1efae1aa1cf849b2e9b42c52a32db628fb8d7d3511a3a618172b78c02d4e24a",
+        "timestamp": "2026-11-05T22:38:59.467Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wi7GA9HkAgbaqcqiHoJTpRpM"
+      },
+      "captures": [
+        {
+          "capture": "efe595bb243947e9e5c3cda55ca0f76ede9d3948ccf15c7675efba8e17b09010.json",
+          "sha256": "efe595bb243947e9e5c3cda55ca0f76ede9d3948ccf15c7675efba8e17b09010",
+          "bytes": 19757,
+          "timestamp": "2026-11-05T22:39:00.182Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_wi7GA9HkAgbaqcqiHoJTpRpM",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts",
+        "from": 1,
+        "to": 62
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0367-call_wi7GA9HkAgbaqcqiHoJTpRpM.txt",
+        "sha256": "b1efae1aa1cf849b2e9b42c52a32db628fb8d7d3511a3a618172b78c02d4e24a",
+        "timestamp": "2026-11-05T22:38:59.467Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wi7GA9HkAgbaqcqiHoJTpRpM"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/codebuff-local-cli.ts",
+        "from": 1,
+        "to": 43
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0367-call_wi7GA9HkAgbaqcqiHoJTpRpM.txt",
+        "sha256": "b1efae1aa1cf849b2e9b42c52a32db628fb8d7d3511a3a618172b78c02d4e24a",
+        "timestamp": "2026-11-05T22:38:59.467Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wi7GA9HkAgbaqcqiHoJTpRpM"
+      },
+      "captures": [
+        {
+          "capture": "efe595bb243947e9e5c3cda55ca0f76ede9d3948ccf15c7675efba8e17b09010.json",
+          "sha256": "efe595bb243947e9e5c3cda55ca0f76ede9d3948ccf15c7675efba8e17b09010",
+          "bytes": 19757,
+          "timestamp": "2026-11-05T22:39:00.182Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_wi7GA9HkAgbaqcqiHoJTpRpM",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": ".agents/gemini-cli.ts",
+        "from": 105,
+        "to": 142
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0367-call_wi7GA9HkAgbaqcqiHoJTpRpM.txt",
+        "sha256": "b1efae1aa1cf849b2e9b42c52a32db628fb8d7d3511a3a618172b78c02d4e24a",
+        "timestamp": "2026-11-05T22:38:59.467Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wi7GA9HkAgbaqcqiHoJTpRpM"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "docs/architecture.md",
+        "from": 129,
+        "to": 144
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0367-call_wi7GA9HkAgbaqcqiHoJTpRpM.txt",
+        "sha256": "b1efae1aa1cf849b2e9b42c52a32db628fb8d7d3511a3a618172b78c02d4e24a",
+        "timestamp": "2026-11-05T22:38:59.467Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wi7GA9HkAgbaqcqiHoJTpRpM"
+      },
+      "captures": [
+        {
+          "capture": "efe595bb243947e9e5c3cda55ca0f76ede9d3948ccf15c7675efba8e17b09010.json",
+          "sha256": "efe595bb243947e9e5c3cda55ca0f76ede9d3948ccf15c7675efba8e17b09010",
+          "bytes": 19757,
+          "timestamp": "2026-11-05T22:39:00.182Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_wi7GA9HkAgbaqcqiHoJTpRpM",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "common/src/templates/initial-agents-dir/types/agent-definition.ts",
+        "from": 243,
+        "to": 418
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0367-call_wi7GA9HkAgbaqcqiHoJTpRpM.txt",
+        "sha256": "b1efae1aa1cf849b2e9b42c52a32db628fb8d7d3511a3a618172b78c02d4e24a",
+        "timestamp": "2026-11-05T22:38:59.467Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wi7GA9HkAgbaqcqiHoJTpRpM"
+      },
+      "captures": [
+        {
+          "capture": "efe595bb243947e9e5c3cda55ca0f76ede9d3948ccf15c7675efba8e17b09010.json",
+          "sha256": "efe595bb243947e9e5c3cda55ca0f76ede9d3948ccf15c7675efba8e17b09010",
+          "bytes": 19757,
+          "timestamp": "2026-11-05T22:39:00.182Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_wi7GA9HkAgbaqcqiHoJTpRpM",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": ".agents/sessions/polyglot-roadmap-v2/SPEC.md",
+        "from": 209,
+        "to": 254
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt",
+        "sha256": "e31c8292ff0ebeec895a80c185833e0cfa25144c5c1b52b5fe72fe3e79297468",
+        "timestamp": "2026-11-05T22:39:15.612Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_AQ1foVkdvjLN8z9EvbsQlAGj"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+        "from": 204,
+        "to": 214
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt",
+        "sha256": "e31c8292ff0ebeec895a80c185833e0cfa25144c5c1b52b5fe72fe3e79297468",
+        "timestamp": "2026-11-05T22:39:15.612Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_AQ1foVkdvjLN8z9EvbsQlAGj"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+        "from": 150,
+        "to": 150
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt",
+        "sha256": "e31c8292ff0ebeec895a80c185833e0cfa25144c5c1b52b5fe72fe3e79297468",
+        "timestamp": "2026-11-05T22:39:15.612Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_AQ1foVkdvjLN8z9EvbsQlAGj"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+        "from": 179,
+        "to": 179
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt",
+        "sha256": "e31c8292ff0ebeec895a80c185833e0cfa25144c5c1b52b5fe72fe3e79297468",
+        "timestamp": "2026-11-05T22:39:15.612Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_AQ1foVkdvjLN8z9EvbsQlAGj"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/agents/load-mcp-config.ts",
+        "from": 1,
+        "to": 46
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt",
+        "sha256": "e31c8292ff0ebeec895a80c185833e0cfa25144c5c1b52b5fe72fe3e79297468",
+        "timestamp": "2026-11-05T22:39:15.612Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_AQ1foVkdvjLN8z9EvbsQlAGj"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/mcp/client.ts",
+        "from": 574,
+        "to": 601
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt",
+        "sha256": "c2d489f08e9016d21bef84c29500c34f59c4d6f4a3f2ae24742fe49f5340f0af",
+        "timestamp": "2026-11-05T22:39:34.161Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_G2IELrrKgzhtYSLCZ2iJO6X3"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/tools/file-change-hooks.ts",
+        "from": 1,
+        "to": 92
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt",
+        "sha256": "c2d489f08e9016d21bef84c29500c34f59c4d6f4a3f2ae24742fe49f5340f0af",
+        "timestamp": "2026-11-05T22:39:34.161Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_G2IELrrKgzhtYSLCZ2iJO6X3"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/tools/file-change-hooks.ts",
+        "from": 770,
+        "to": 820
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt",
+        "sha256": "c2d489f08e9016d21bef84c29500c34f59c4d6f4a3f2ae24742fe49f5340f0af",
+        "timestamp": "2026-11-05T22:39:34.161Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_G2IELrrKgzhtYSLCZ2iJO6X3"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/provider-config.ts",
+        "from": 780,
+        "to": 865
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt",
+        "sha256": "c2d489f08e9016d21bef84c29500c34f59c4d6f4a3f2ae24742fe49f5340f0af",
+        "timestamp": "2026-11-05T22:39:34.161Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_G2IELrrKgzhtYSLCZ2iJO6X3"
+      },
+      "captures": [
+        {
+          "capture": "ce21db33d2ddc7a4f529c7fa8fe3cb9f94fb043779f5eb0b98f53d3112a97afb.json",
+          "sha256": "ce21db33d2ddc7a4f529c7fa8fe3cb9f94fb043779f5eb0b98f53d3112a97afb",
+          "bytes": 12673,
+          "timestamp": "2026-11-05T22:39:34.875Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_G2IELrrKgzhtYSLCZ2iJO6X3",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "common/src/tools/__tests__/compile-tool-definitions.test.ts",
+        "from": 1,
+        "to": 54
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt",
+        "sha256": "c2d489f08e9016d21bef84c29500c34f59c4d6f4a3f2ae24742fe49f5340f0af",
+        "timestamp": "2026-11-05T22:39:34.161Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_G2IELrrKgzhtYSLCZ2iJO6X3"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/run-state.ts",
+        "from": 1,
+        "to": 133
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0389-call_P0UK8qW3k4ZoxtdEAxlewbCh.txt",
+        "sha256": "23a8ef288368c17db3cc41dcec638c3d92e5f40b43e70182feb45194a21a8bc0",
+        "timestamp": "2026-11-05T22:41:50.757Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_P0UK8qW3k4ZoxtdEAxlewbCh"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+        "from": 1000,
+        "to": 1121
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0389-call_P0UK8qW3k4ZoxtdEAxlewbCh.txt",
+        "sha256": "23a8ef288368c17db3cc41dcec638c3d92e5f40b43e70182feb45194a21a8bc0",
+        "timestamp": "2026-11-05T22:41:50.757Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_P0UK8qW3k4ZoxtdEAxlewbCh"
+      },
+      "captures": [
+        {
+          "capture": "0a35bbe6bfb53984572b742d8706abe884e1ca1e37f30b9144639979a406a336.json",
+          "sha256": "0a35bbe6bfb53984572b742d8706abe884e1ca1e37f30b9144639979a406a336",
+          "bytes": 13302,
+          "timestamp": "2026-11-05T22:41:51.551Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_P0UK8qW3k4ZoxtdEAxlewbCh",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/run-state.ts",
+        "from": 690,
+        "to": 790
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0391-call_dCFyVK2GfbDOCxUZRMpMX6Fm.txt",
+        "sha256": "11c1f998dfb987a79e856c4cbe1c2bb5e63e71e70645ce9d133da4bcfb9ae3e0",
+        "timestamp": "2026-11-05T22:42:03.202Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_dCFyVK2GfbDOCxUZRMpMX6Fm"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/run-state.ts",
+        "from": 1007,
+        "to": 1155
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0391-call_dCFyVK2GfbDOCxUZRMpMX6Fm.txt",
+        "sha256": "11c1f998dfb987a79e856c4cbe1c2bb5e63e71e70645ce9d133da4bcfb9ae3e0",
+        "timestamp": "2026-11-05T22:42:03.202Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_dCFyVK2GfbDOCxUZRMpMX6Fm"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+        "from": 2364,
+        "to": 2470
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0391-call_dCFyVK2GfbDOCxUZRMpMX6Fm.txt",
+        "sha256": "11c1f998dfb987a79e856c4cbe1c2bb5e63e71e70645ce9d133da4bcfb9ae3e0",
+        "timestamp": "2026-11-05T22:42:03.202Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_dCFyVK2GfbDOCxUZRMpMX6Fm"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/run-state.ts",
+        "from": 690,
+        "to": 790
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0393-call_kE6T1Ecxc6hqAT3N5UsFucGB.txt",
+        "sha256": "afd37e810af253aa6c7deea354d0e4fdcd66ea5165250b77a6df5faa31f9942d",
+        "timestamp": "2026-11-05T22:42:13.509Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_kE6T1Ecxc6hqAT3N5UsFucGB"
+      },
+      "captures": [
+        {
+          "capture": "fe2ca8b656adb87890aecddc65c63b9e700dd996e30ba36a1024d6f3b95a0b3a.json",
+          "sha256": "fe2ca8b656adb87890aecddc65c63b9e700dd996e30ba36a1024d6f3b95a0b3a",
+          "bytes": 15873,
+          "timestamp": "2026-11-05T22:42:13.903Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_kE6T1Ecxc6hqAT3N5UsFucGB",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/run-state.ts",
+        "from": 1007,
+        "to": 1155
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0393-call_kE6T1Ecxc6hqAT3N5UsFucGB.txt",
+        "sha256": "afd37e810af253aa6c7deea354d0e4fdcd66ea5165250b77a6df5faa31f9942d",
+        "timestamp": "2026-11-05T22:42:13.509Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_kE6T1Ecxc6hqAT3N5UsFucGB"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+        "from": 2364,
+        "to": 2470
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0393-call_kE6T1Ecxc6hqAT3N5UsFucGB.txt",
+        "sha256": "afd37e810af253aa6c7deea354d0e4fdcd66ea5165250b77a6df5faa31f9942d",
+        "timestamp": "2026-11-05T22:42:13.509Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_kE6T1Ecxc6hqAT3N5UsFucGB"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+        "from": 50,
+        "to": 68
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0393-call_kE6T1Ecxc6hqAT3N5UsFucGB.txt",
+        "sha256": "afd37e810af253aa6c7deea354d0e4fdcd66ea5165250b77a6df5faa31f9942d",
+        "timestamp": "2026-11-05T22:42:13.509Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_kE6T1Ecxc6hqAT3N5UsFucGB"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/util/filesystem-scope.ts",
+        "from": 1,
+        "to": 81
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0395-call_kz75Yh4Holv8CkSfNoDEEcaT.txt",
+        "sha256": "94a2a0b4c3e59bc8f9111805cf9c7978a9af35294c4ff0d9a22396f60284b050",
+        "timestamp": "2026-11-05T22:42:33.074Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_kz75Yh4Holv8CkSfNoDEEcaT"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+        "from": 1,
+        "to": 134
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0395-call_kz75Yh4Holv8CkSfNoDEEcaT.txt",
+        "sha256": "94a2a0b4c3e59bc8f9111805cf9c7978a9af35294c4ff0d9a22396f60284b050",
+        "timestamp": "2026-11-05T22:42:33.074Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_kz75Yh4Holv8CkSfNoDEEcaT"
+      },
+      "captures": [
+        {
+          "capture": "0ccbf193b0812e9fbb45530bfe7bb3dad7af7f5cb016c1bb5664c8f473f37c41.json",
+          "sha256": "0ccbf193b0812e9fbb45530bfe7bb3dad7af7f5cb016c1bb5664c8f473f37c41",
+          "bytes": 17454,
+          "timestamp": "2026-11-05T22:42:33.481Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_kz75Yh4Holv8CkSfNoDEEcaT",
+          "transformation": "exact recorded output",
+          "location": "$.result.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/tools/file-change-hooks.ts",
+        "from": 1517,
+        "to": 1650
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0395-call_kz75Yh4Holv8CkSfNoDEEcaT.txt",
+        "sha256": "94a2a0b4c3e59bc8f9111805cf9c7978a9af35294c4ff0d9a22396f60284b050",
+        "timestamp": "2026-11-05T22:42:33.074Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_kz75Yh4Holv8CkSfNoDEEcaT"
+      },
+      "captures": [
+        {
+          "capture": "0ccbf193b0812e9fbb45530bfe7bb3dad7af7f5cb016c1bb5664c8f473f37c41.json",
+          "sha256": "0ccbf193b0812e9fbb45530bfe7bb3dad7af7f5cb016c1bb5664c8f473f37c41",
+          "bytes": 17454,
+          "timestamp": "2026-11-05T22:42:33.481Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_kz75Yh4Holv8CkSfNoDEEcaT",
+          "transformation": "exact recorded output",
+          "location": "$.result.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/provider-config.ts",
+        "from": 493,
+        "to": 520
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0395-call_kz75Yh4Holv8CkSfNoDEEcaT.txt",
+        "sha256": "94a2a0b4c3e59bc8f9111805cf9c7978a9af35294c4ff0d9a22396f60284b050",
+        "timestamp": "2026-11-05T22:42:33.074Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_kz75Yh4Holv8CkSfNoDEEcaT"
+      },
+      "captures": [
+        {
+          "capture": "0ccbf193b0812e9fbb45530bfe7bb3dad7af7f5cb016c1bb5664c8f473f37c41.json",
+          "sha256": "0ccbf193b0812e9fbb45530bfe7bb3dad7af7f5cb016c1bb5664c8f473f37c41",
+          "bytes": 17454,
+          "timestamp": "2026-11-05T22:42:33.481Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_kz75Yh4Holv8CkSfNoDEEcaT",
+          "transformation": "exact recorded output",
+          "location": "$.result.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+        "from": 600,
+        "to": 735
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0399-call_cBf62D2WMIjsdvdcNaKZzwE2.txt",
+        "sha256": "142d22589a3660ef219715ee4c74c7d521f68ac77813f74f1f08dc40de7453f1",
+        "timestamp": "2026-11-05T22:43:00.733Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_cBf62D2WMIjsdvdcNaKZzwE2"
+      },
+      "captures": [
+        {
+          "capture": "c8fa7e0c77d530d6a718f83f1cdabb7cefcc85be999a45a9296c20b717189c11.json",
+          "sha256": "c8fa7e0c77d530d6a718f83f1cdabb7cefcc85be999a45a9296c20b717189c11",
+          "bytes": 8841,
+          "timestamp": "2026-11-05T22:43:01.489Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_cBf62D2WMIjsdvdcNaKZzwE2",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/supervision/child-entry.ts",
+        "from": 428,
+        "to": 465
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0399-call_cBf62D2WMIjsdvdcNaKZzwE2.txt",
+        "sha256": "142d22589a3660ef219715ee4c74c7d521f68ac77813f74f1f08dc40de7453f1",
+        "timestamp": "2026-11-05T22:43:00.733Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_cBf62D2WMIjsdvdcNaKZzwE2"
+      },
+      "captures": [
+        {
+          "capture": "c8fa7e0c77d530d6a718f83f1cdabb7cefcc85be999a45a9296c20b717189c11.json",
+          "sha256": "c8fa7e0c77d530d6a718f83f1cdabb7cefcc85be999a45a9296c20b717189c11",
+          "bytes": 8841,
+          "timestamp": "2026-11-05T22:43:01.489Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_cBf62D2WMIjsdvdcNaKZzwE2",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+        "from": 3880,
+        "to": 3945
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0402-call_KgI7zj2dyZL0XCeKn4jq35JO.txt",
+        "sha256": "b39f654b915bb4a4f342e1234e8449365599c39147d2584ebb0965d74b28e0df",
+        "timestamp": "2026-11-05T22:43:14.109Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KgI7zj2dyZL0XCeKn4jq35JO"
+      },
+      "captures": [
+        {
+          "capture": "8fb7085f2c669bf7c75cb32a4b09f5128d3cbac55e84ffeb4e81687e4d1c6002.json",
+          "sha256": "8fb7085f2c669bf7c75cb32a4b09f5128d3cbac55e84ffeb4e81687e4d1c6002",
+          "bytes": 5767,
+          "timestamp": "2026-11-05T22:43:14.940Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_KgI7zj2dyZL0XCeKn4jq35JO",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/impl/database.ts",
+        "from": 222,
+        "to": 257
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0402-call_KgI7zj2dyZL0XCeKn4jq35JO.txt",
+        "sha256": "b39f654b915bb4a4f342e1234e8449365599c39147d2584ebb0965d74b28e0df",
+        "timestamp": "2026-11-05T22:43:14.109Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KgI7zj2dyZL0XCeKn4jq35JO"
+      },
+      "captures": [
+        {
+          "capture": "8fb7085f2c669bf7c75cb32a4b09f5128d3cbac55e84ffeb4e81687e4d1c6002.json",
+          "sha256": "8fb7085f2c669bf7c75cb32a4b09f5128d3cbac55e84ffeb4e81687e4d1c6002",
+          "bytes": 5767,
+          "timestamp": "2026-11-05T22:43:14.940Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_KgI7zj2dyZL0XCeKn4jq35JO",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/impl/database.ts",
+        "from": 342,
+        "to": 365
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0402-call_KgI7zj2dyZL0XCeKn4jq35JO.txt",
+        "sha256": "b39f654b915bb4a4f342e1234e8449365599c39147d2584ebb0965d74b28e0df",
+        "timestamp": "2026-11-05T22:43:14.109Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_KgI7zj2dyZL0XCeKn4jq35JO"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+        "from": 415,
+        "to": 441
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0404-call_wDnpsAnnIENdLcymGsu1hody.txt",
+        "sha256": "fdec72c5bea7449a8657246fcc7b5fbd4386a5c043047de4ed2a5fb8cec51f48",
+        "timestamp": "2026-11-05T22:43:46.260Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wDnpsAnnIENdLcymGsu1hody"
+      },
+      "captures": [
+        {
+          "capture": "7d57bf053ef9883586c9492b948c209deeebe5b2e7b3c43533fd43bd1c297267.json",
+          "sha256": "7d57bf053ef9883586c9492b948c209deeebe5b2e7b3c43533fd43bd1c297267",
+          "bytes": 8057,
+          "timestamp": "2026-11-05T22:43:47.064Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_wDnpsAnnIENdLcymGsu1hody",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+        "from": 465,
+        "to": 516
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0404-call_wDnpsAnnIENdLcymGsu1hody.txt",
+        "sha256": "fdec72c5bea7449a8657246fcc7b5fbd4386a5c043047de4ed2a5fb8cec51f48",
+        "timestamp": "2026-11-05T22:43:46.260Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wDnpsAnnIENdLcymGsu1hody"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+        "from": 822,
+        "to": 858
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0404-call_wDnpsAnnIENdLcymGsu1hody.txt",
+        "sha256": "fdec72c5bea7449a8657246fcc7b5fbd4386a5c043047de4ed2a5fb8cec51f48",
+        "timestamp": "2026-11-05T22:43:46.260Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wDnpsAnnIENdLcymGsu1hody"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+        "from": 1383,
+        "to": 1410
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0404-call_wDnpsAnnIENdLcymGsu1hody.txt",
+        "sha256": "fdec72c5bea7449a8657246fcc7b5fbd4386a5c043047de4ed2a5fb8cec51f48",
+        "timestamp": "2026-11-05T22:43:46.260Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_wDnpsAnnIENdLcymGsu1hody"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+        "from": 813,
+        "to": 828
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0405-call_NuNCx5lLWRihBLXjn7unx7v8.txt",
+        "sha256": "ce600fd4ed059424ac9853d0b240de1b501ca4c75a6f414dfb99d7660af31dac",
+        "timestamp": "2026-11-05T22:44:07.578Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_NuNCx5lLWRihBLXjn7unx7v8"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/types/agent-template.ts",
+        "from": 102,
+        "to": 117
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0405-call_NuNCx5lLWRihBLXjn7unx7v8.txt",
+        "sha256": "ce600fd4ed059424ac9853d0b240de1b501ca4c75a6f414dfb99d7660af31dac",
+        "timestamp": "2026-11-05T22:44:07.578Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_NuNCx5lLWRihBLXjn7unx7v8"
+      },
+      "captures": [
+        {
+          "capture": "154cf631abf24aa0d650795c9fd469075c2b5da0838f93fe901cb4b6fff8b03a.json",
+          "sha256": "154cf631abf24aa0d650795c9fd469075c2b5da0838f93fe901cb4b6fff8b03a",
+          "bytes": 4277,
+          "timestamp": "2026-11-05T22:44:08.520Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_NuNCx5lLWRihBLXjn7unx7v8",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/run.ts",
+        "from": 1690,
+        "to": 1717
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0405-call_NuNCx5lLWRihBLXjn7unx7v8.txt",
+        "sha256": "ce600fd4ed059424ac9853d0b240de1b501ca4c75a6f414dfb99d7660af31dac",
+        "timestamp": "2026-11-05T22:44:07.578Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_NuNCx5lLWRihBLXjn7unx7v8"
+      },
+      "captures": [
+        {
+          "capture": "154cf631abf24aa0d650795c9fd469075c2b5da0838f93fe901cb4b6fff8b03a.json",
+          "sha256": "154cf631abf24aa0d650795c9fd469075c2b5da0838f93fe901cb4b6fff8b03a",
+          "bytes": 4277,
+          "timestamp": "2026-11-05T22:44:08.520Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_NuNCx5lLWRihBLXjn7unx7v8",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/run-state.ts",
+        "from": 808,
+        "to": 861
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0405-call_NuNCx5lLWRihBLXjn7unx7v8.txt",
+        "sha256": "ce600fd4ed059424ac9853d0b240de1b501ca4c75a6f414dfb99d7660af31dac",
+        "timestamp": "2026-11-05T22:44:07.578Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_NuNCx5lLWRihBLXjn7unx7v8"
+      },
+      "captures": [
+        {
+          "capture": "154cf631abf24aa0d650795c9fd469075c2b5da0838f93fe901cb4b6fff8b03a.json",
+          "sha256": "154cf631abf24aa0d650795c9fd469075c2b5da0838f93fe901cb4b6fff8b03a",
+          "bytes": 4277,
+          "timestamp": "2026-11-05T22:44:08.520Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_NuNCx5lLWRihBLXjn7unx7v8",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/tools/file-change-hooks.ts",
+        "from": 1650,
+        "to": 1686
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0409-call_FVTGpL4HRQ116sfHvfMibGWY.txt",
+        "sha256": "f8e2f5349e17b4eb9c4f07da4ad72d5af21402de4d8e9f580aafe54d49ddc1cd",
+        "timestamp": "2026-11-05T22:45:35.737Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_FVTGpL4HRQ116sfHvfMibGWY"
+      },
+      "captures": [
+        {
+          "capture": "2c0e09cd0242da1f8db601dca4be5de3c2750938454d8671f25ff44c8046abe4.json",
+          "sha256": "2c0e09cd0242da1f8db601dca4be5de3c2750938454d8671f25ff44c8046abe4",
+          "bytes": 17954,
+          "timestamp": "2026-11-05T22:45:36.563Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_FVTGpL4HRQ116sfHvfMibGWY",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "docs/testing.md",
+        "from": 1,
+        "to": 74
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0409-call_FVTGpL4HRQ116sfHvfMibGWY.txt",
+        "sha256": "f8e2f5349e17b4eb9c4f07da4ad72d5af21402de4d8e9f580aafe54d49ddc1cd",
+        "timestamp": "2026-11-05T22:45:35.737Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_FVTGpL4HRQ116sfHvfMibGWY"
+      },
+      "captures": [
+        {
+          "capture": "2c0e09cd0242da1f8db601dca4be5de3c2750938454d8671f25ff44c8046abe4.json",
+          "sha256": "2c0e09cd0242da1f8db601dca4be5de3c2750938454d8671f25ff44c8046abe4",
+          "bytes": 17954,
+          "timestamp": "2026-11-05T22:45:36.563Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_FVTGpL4HRQ116sfHvfMibGWY",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "docs/development.md",
+        "from": 1,
+        "to": 37
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0409-call_FVTGpL4HRQ116sfHvfMibGWY.txt",
+        "sha256": "f8e2f5349e17b4eb9c4f07da4ad72d5af21402de4d8e9f580aafe54d49ddc1cd",
+        "timestamp": "2026-11-05T22:45:35.737Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_FVTGpL4HRQ116sfHvfMibGWY"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "docs/environment-variables.md",
+        "from": 1,
+        "to": 57
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0409-call_FVTGpL4HRQ116sfHvfMibGWY.txt",
+        "sha256": "f8e2f5349e17b4eb9c4f07da4ad72d5af21402de4d8e9f580aafe54d49ddc1cd",
+        "timestamp": "2026-11-05T22:45:35.737Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_FVTGpL4HRQ116sfHvfMibGWY"
+      },
+      "captures": [
+        {
+          "capture": "2c0e09cd0242da1f8db601dca4be5de3c2750938454d8671f25ff44c8046abe4.json",
+          "sha256": "2c0e09cd0242da1f8db601dca4be5de3c2750938454d8671f25ff44c8046abe4",
+          "bytes": 17954,
+          "timestamp": "2026-11-05T22:45:36.563Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_FVTGpL4HRQ116sfHvfMibGWY",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "docs/local-mode.md",
+        "from": 1,
+        "to": 62
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0409-call_FVTGpL4HRQ116sfHvfMibGWY.txt",
+        "sha256": "f8e2f5349e17b4eb9c4f07da4ad72d5af21402de4d8e9f580aafe54d49ddc1cd",
+        "timestamp": "2026-11-05T22:45:35.737Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_FVTGpL4HRQ116sfHvfMibGWY"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/util/agent-tool-names.ts",
+        "from": 1,
+        "to": 82
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt",
+        "sha256": "03643c88a73431463b62997dd56aaf29f84bbfca516953fa120319e5cc2ed1ee",
+        "timestamp": "2026-11-05T22:46:10.579Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_vfS5YJ5uvgJFIJNguE0IR566"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+        "from": 1054,
+        "to": 1125
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt",
+        "sha256": "03643c88a73431463b62997dd56aaf29f84bbfca516953fa120319e5cc2ed1ee",
+        "timestamp": "2026-11-05T22:46:10.579Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_vfS5YJ5uvgJFIJNguE0IR566"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "sdk/src/client.ts",
+        "from": 1,
+        "to": 73
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt",
+        "sha256": "03643c88a73431463b62997dd56aaf29f84bbfca516953fa120319e5cc2ed1ee",
+        "timestamp": "2026-11-05T22:46:10.579Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_vfS5YJ5uvgJFIJNguE0IR566"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "agents/general-agent/general-agent.ts",
+        "from": 1,
+        "to": 95
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt",
+        "sha256": "03643c88a73431463b62997dd56aaf29f84bbfca516953fa120319e5cc2ed1ee",
+        "timestamp": "2026-11-05T22:46:10.579Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_vfS5YJ5uvgJFIJNguE0IR566"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "common/src/tools/params/__tests__/x1-golden-vectors.test.ts",
+        "from": 1,
+        "to": 183
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt",
+        "sha256": "03643c88a73431463b62997dd56aaf29f84bbfca516953fa120319e5cc2ed1ee",
+        "timestamp": "2026-11-05T22:46:10.579Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_vfS5YJ5uvgJFIJNguE0IR566"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "agents/general-agent/general-agent.ts",
+        "from": 1,
+        "to": 22
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0413-call_R6F6f9aae4Ws72Vxs7Q9wPeF.txt",
+        "sha256": "7bd6a2ea934e82ec72c884953bddce1cf29d23aebf8ae9214d1ab8a081ff1388",
+        "timestamp": "2026-11-05T22:47:02.248Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_R6F6f9aae4Ws72Vxs7Q9wPeF"
+      },
+      "captures": [
+        {
+          "capture": "d5d3efb9c832fc0ea614bbe9fdd170aeaa51f9c0c8a9795ea72f5678c179c5cb.json",
+          "sha256": "d5d3efb9c832fc0ea614bbe9fdd170aeaa51f9c0c8a9795ea72f5678c179c5cb",
+          "bytes": 4870,
+          "timestamp": "2026-11-05T22:47:03.083Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_R6F6f9aae4Ws72Vxs7Q9wPeF",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/client.ts",
+        "from": 66,
+        "to": 73
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0413-call_R6F6f9aae4Ws72Vxs7Q9wPeF.txt",
+        "sha256": "7bd6a2ea934e82ec72c884953bddce1cf29d23aebf8ae9214d1ab8a081ff1388",
+        "timestamp": "2026-11-05T22:47:02.248Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_R6F6f9aae4Ws72Vxs7Q9wPeF"
+      },
+      "captures": []
+    },
+    {
+      "range": {
+        "path": "packages/agent-runtime/src/main-prompt.ts",
+        "from": 190,
+        "to": 213
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0413-call_R6F6f9aae4Ws72Vxs7Q9wPeF.txt",
+        "sha256": "7bd6a2ea934e82ec72c884953bddce1cf29d23aebf8ae9214d1ab8a081ff1388",
+        "timestamp": "2026-11-05T22:47:02.248Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_R6F6f9aae4Ws72Vxs7Q9wPeF"
+      },
+      "captures": [
+        {
+          "capture": "d5d3efb9c832fc0ea614bbe9fdd170aeaa51f9c0c8a9795ea72f5678c179c5cb.json",
+          "sha256": "d5d3efb9c832fc0ea614bbe9fdd170aeaa51f9c0c8a9795ea72f5678c179c5cb",
+          "bytes": 4870,
+          "timestamp": "2026-11-05T22:47:03.083Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_R6F6f9aae4Ws72Vxs7Q9wPeF",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "sdk/src/run.ts",
+        "from": 1594,
+        "to": 1611
+      },
+      "endpointBinding": "captured numbered row matches requested endpoint",
+      "command": {
+        "filename": "0413-call_R6F6f9aae4Ws72Vxs7Q9wPeF.txt",
+        "sha256": "7bd6a2ea934e82ec72c884953bddce1cf29d23aebf8ae9214d1ab8a081ff1388",
+        "timestamp": "2026-11-05T22:47:02.248Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_R6F6f9aae4Ws72Vxs7Q9wPeF"
+      },
+      "captures": [
+        {
+          "capture": "d5d3efb9c832fc0ea614bbe9fdd170aeaa51f9c0c8a9795ea72f5678c179c5cb.json",
+          "sha256": "d5d3efb9c832fc0ea614bbe9fdd170aeaa51f9c0c8a9795ea72f5678c179c5cb",
+          "bytes": 4870,
+          "timestamp": "2026-11-05T22:47:03.083Z",
+          "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+          "callId": "call_R6F6f9aae4Ws72Vxs7Q9wPeF",
+          "transformation": "exact recorded output",
+          "location": "$.output"
+        }
+      ]
+    },
+    {
+      "range": {
+        "path": "common/src/tools/params/__tests__/x1-golden-vectors.test.ts",
+        "from": 156,
+        "to": 183
+      },
+      "endpointBinding": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": {
+        "filename": "0413-call_R6F6f9aae4Ws72Vxs7Q9wPeF.txt",
+        "sha256": "7bd6a2ea934e82ec72c884953bddce1cf29d23aebf8ae9214d1ab8a081ff1388",
+        "timestamp": "2026-11-05T22:47:02.248Z",
+        "session": "rollout-2026-11-06T01-33-15-01a1add8-4ba5-7d01-aa7a-f8ea61ccd4ba.jsonl",
+        "callId": "call_R6F6f9aae4Ws72Vxs7Q9wPeF"
+      },
+      "captures": []
+    }
+  ],
+  "limitations": [
+    {
+      "group": "10",
+      "path": "common/src/mcp/client.ts",
+      "from": 812,
+      "requestedTo": 903,
+      "to": 903,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0328-call_6vJXsZ0yyy3PuqX84LjJ7qRw.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/mcp.ts",
+      "from": 1,
+      "requestedTo": 98,
+      "to": 98,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0328-call_6vJXsZ0yyy3PuqX84LjJ7qRw.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/types/mcp.ts",
+      "from": 1,
+      "requestedTo": 38,
+      "to": 38,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0328-call_6vJXsZ0yyy3PuqX84LjJ7qRw.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 2293,
+      "requestedTo": 2465,
+      "to": 2465,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run-state.ts",
+      "from": 134,
+      "requestedTo": 183,
+      "to": 183,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/custom-tool.ts",
+      "from": 1,
+      "requestedTo": 76,
+      "to": 76,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/prompts.ts",
+      "from": 425,
+      "requestedTo": 500,
+      "to": 500,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 1535,
+      "requestedTo": 1618,
+      "to": 1618,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0329-call_06CnL4sCDwtI9AD5TUApMpok.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 4201,
+      "requestedTo": 4368,
+      "to": 4368,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0332-call_ZEXG6caZrrBW63yBv240NsgJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/agents/load-agents.ts",
+      "from": 1,
+      "requestedTo": 330,
+      "to": 330,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0333-call_vuKPqtvWkRQNSqPbYlVXsCye.txt"
+    },
+    {
+      "group": "10",
+      "path": "cli/scripts/prebuild-agents.ts",
+      "from": 1,
+      "requestedTo": 141,
+      "to": 141,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0334-call_SHVCFXpi8FKU2WpEhLsHxpub.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/templates/agent-validation.ts",
+      "from": 500,
+      "requestedTo": 735,
+      "to": 735,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0334-call_SHVCFXpi8FKU2WpEhLsHxpub.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/tools/compile-tool-definitions.ts",
+      "from": 1,
+      "requestedTo": 304,
+      "to": 304,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0335-call_Wm5dqnm6V1fftfgfXDBZ04fH.txt"
+    },
+    {
+      "group": "10",
+      "path": "scripts/generate-tool-definitions.ts",
+      "from": 1,
+      "requestedTo": 78,
+      "to": 78,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0335-call_Wm5dqnm6V1fftfgfXDBZ04fH.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/util/zod-schema.ts",
+      "from": 1,
+      "requestedTo": 210,
+      "to": 25,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0335-call_Wm5dqnm6V1fftfgfXDBZ04fH.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/agents/load-mcp-config.ts",
+      "from": 1,
+      "requestedTo": 222,
+      "to": 222,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+      "from": 135,
+      "requestedTo": 218,
+      "to": 218,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/impl/database.ts",
+      "from": 258,
+      "requestedTo": 341,
+      "to": 341,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt"
+    },
+    {
+      "group": "10",
+      "path": "cli/src/utils/local-agent-registry.ts",
+      "from": 131,
+      "requestedTo": 247,
+      "to": 247,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0336-call_Sx74pIOhhnFwzJFatZeNMiPe.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 870,
+      "requestedTo": 1055,
+      "to": 1055,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0337-call_6Xid74iAyghnAmhoRweR3DaK.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/prompts.ts",
+      "from": 510,
+      "requestedTo": 617,
+      "to": 610,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0337-call_6Xid74iAyghnAmhoRweR3DaK.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/__tests__/sandbox-generator.test.ts",
+      "from": 1,
+      "requestedTo": 196,
+      "to": 196,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0338-call_wSe66mYAcWObsmTSaakljwBh.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/agents-and-tools.md",
+      "from": 1,
+      "requestedTo": 14,
+      "to": 14,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/agents-and-tools.md",
+      "from": 53,
+      "requestedTo": 81,
+      "to": 81,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/agents-and-tools.md",
+      "from": 103,
+      "requestedTo": 114,
+      "to": 114,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/architecture.md",
+      "from": 143,
+      "requestedTo": 158,
+      "to": 158,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/request-flow.md",
+      "from": 118,
+      "requestedTo": 157,
+      "to": 157,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/README.md",
+      "from": 302,
+      "requestedTo": 319,
+      "to": 319,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 289,
+      "requestedTo": 412,
+      "to": 412,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 585,
+      "requestedTo": 638,
+      "to": 638,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 1006,
+      "requestedTo": 1082,
+      "to": 1082,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/package.json",
+      "from": 1,
+      "requestedTo": 93,
+      "to": 93,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/package.json",
+      "from": 1,
+      "requestedTo": 56,
+      "to": 56,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/package.json",
+      "from": 1,
+      "requestedTo": 10,
+      "to": 10,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "rust/crates/openbuff-native/src/lib.rs",
+      "from": 1,
+      "requestedTo": 115,
+      "to": 115,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0343-call_foKQnH099XTgLaiuEBk8DBbJ.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/mcp/server.ts",
+      "from": 345,
+      "requestedTo": 543,
+      "to": 543,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0344-call_qcCLzsY7bftMfC3It5qF8WfF.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/mcp/server.ts",
+      "from": 1480,
+      "requestedTo": 1635,
+      "to": 1635,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0344-call_qcCLzsY7bftMfC3It5qF8WfF.txt"
+    },
+    {
+      "group": "10",
+      "path": "cli/src/commands/mcp-command.ts",
+      "from": 1,
+      "requestedTo": 176,
+      "to": 176,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0344-call_qcCLzsY7bftMfC3It5qF8WfF.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/serve/bridge.ts",
+      "from": 749,
+      "requestedTo": 773,
+      "to": 773,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/serve/bridge.ts",
+      "from": 861,
+      "requestedTo": 927,
+      "to": 927,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/protocol/acp-ext-v1.ts",
+      "from": 286,
+      "requestedTo": 304,
+      "to": 304,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/services/acp/ext-methods.ts",
+      "from": 1,
+      "requestedTo": 157,
+      "to": 157,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0351-call_N2RNWuqX5qnOVygaUdgBXqww.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/codex-cli.ts",
+      "from": 1,
+      "requestedTo": 216,
+      "to": 216,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/lib/create-cli-agent.ts",
+      "from": 1,
+      "requestedTo": 85,
+      "to": 85,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/lib/cli-agent-types.ts",
+      "from": 1,
+      "requestedTo": 57,
+      "to": 57,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/lib/cli-agent-schemas.ts",
+      "from": 1,
+      "requestedTo": 149,
+      "to": 149,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/__tests__/placeholder.test.ts",
+      "from": 1,
+      "requestedTo": 5,
+      "to": 5,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0352-call_KsGADU2wLIVOYRx2LgpHDGfc.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/lib/cli-agent-prompts.ts",
+      "from": 198,
+      "requestedTo": 378,
+      "to": 378,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0353-call_PMlQ84Jg4vhbgLWxCz969NI7.txt"
+    },
+    {
+      "group": "10",
+      "path": "scripts/tmux/tmux-cli.sh",
+      "from": 1,
+      "requestedTo": 158,
+      "to": 158,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0353-call_PMlQ84Jg4vhbgLWxCz969NI7.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/__tests__/custom-tool-dispatch.test.ts",
+      "from": 1,
+      "requestedTo": 128,
+      "to": 128,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/__tests__/run-mcp-tool-filter.test.ts",
+      "from": 1,
+      "requestedTo": 124,
+      "to": 124,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/__tests__/mcp-tool-schema.test.ts",
+      "from": 1,
+      "requestedTo": 38,
+      "to": 38,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run.ts",
+      "from": 585,
+      "requestedTo": 638,
+      "to": 638,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0355-call_YmHavjmiKffNKRYHUbxCHiOH.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/__tests__/load-agents.test.ts",
+      "from": 964,
+      "requestedTo": 1095,
+      "to": 1095,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0357-call_KjuFipr7E7qN0UHUVsfXWvGX.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/claude-code-cli.ts",
+      "from": 1,
+      "requestedTo": 136,
+      "to": 136,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/gemini-cli.ts",
+      "from": 1,
+      "requestedTo": 142,
+      "to": 142,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/codebuff-local-cli.ts",
+      "from": 1,
+      "requestedTo": 147,
+      "to": 147,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/notion-agent.ts",
+      "from": 1,
+      "requestedTo": 45,
+      "to": 45,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/notion-researcher.ts",
+      "from": 1,
+      "requestedTo": 50,
+      "to": 50,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/templates/initial-agents-dir/types/agent-definition.ts",
+      "from": 142,
+      "requestedTo": 242,
+      "to": 242,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/types/agent-definition.ts",
+      "from": 263,
+      "requestedTo": 400,
+      "to": 400,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0359-call_4rnLV2GTjNoGfDF3zLB62U3N.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/__tests__/mcp-server.test.ts",
+      "from": 322,
+      "requestedTo": 453,
+      "to": 453,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/__tests__/mcp-server.test.ts",
+      "from": 478,
+      "requestedTo": 552,
+      "to": 552,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/types/dynamic-agent-template.ts",
+      "from": 180,
+      "requestedTo": 199,
+      "to": 199,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0360-call_3FHqljNtlB3mQDVSEGp3FRcM.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/handlers/tool/run-terminal-command.ts",
+      "from": 1,
+      "requestedTo": 68,
+      "to": 62,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0367-call_wi7GA9HkAgbaqcqiHoJTpRpM.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/gemini-cli.ts",
+      "from": 105,
+      "requestedTo": 142,
+      "to": 142,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0367-call_wi7GA9HkAgbaqcqiHoJTpRpM.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/sessions/polyglot-roadmap-v2/SPEC.md",
+      "from": 209,
+      "requestedTo": 254,
+      "to": 254,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+      "from": 204,
+      "requestedTo": 214,
+      "to": 214,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+      "from": 150,
+      "requestedTo": 150,
+      "to": 150,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt"
+    },
+    {
+      "group": "10",
+      "path": ".agents/sessions/polyglot-roadmap-v2/PLAN.md",
+      "from": 179,
+      "requestedTo": 179,
+      "to": 179,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/agents/load-mcp-config.ts",
+      "from": 1,
+      "requestedTo": 46,
+      "to": 46,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0370-call_AQ1foVkdvjLN8z9EvbsQlAGj.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/mcp/client.ts",
+      "from": 574,
+      "requestedTo": 601,
+      "to": 601,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 1,
+      "requestedTo": 92,
+      "to": 92,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 770,
+      "requestedTo": 820,
+      "to": 820,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/tools/__tests__/compile-tool-definitions.test.ts",
+      "from": 1,
+      "requestedTo": 115,
+      "to": 54,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0374-call_G2IELrrKgzhtYSLCZ2iJO6X3.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run-state.ts",
+      "from": 1,
+      "requestedTo": 133,
+      "to": 133,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0389-call_P0UK8qW3k4ZoxtdEAxlewbCh.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run-state.ts",
+      "from": 690,
+      "requestedTo": 790,
+      "to": 790,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0391-call_dCFyVK2GfbDOCxUZRMpMX6Fm.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run-state.ts",
+      "from": 1007,
+      "requestedTo": 1155,
+      "to": 1155,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0391-call_dCFyVK2GfbDOCxUZRMpMX6Fm.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 2364,
+      "requestedTo": 2470,
+      "to": 2470,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0391-call_dCFyVK2GfbDOCxUZRMpMX6Fm.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/util/scoped-tool-path.ts",
+      "from": 1,
+      "requestedTo": 159,
+      "reason": "endpoint not captured and disposable file unavailable",
+      "command": "0391-call_dCFyVK2GfbDOCxUZRMpMX6Fm.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/run-state.ts",
+      "from": 1007,
+      "requestedTo": 1155,
+      "to": 1155,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0393-call_kE6T1Ecxc6hqAT3N5UsFucGB.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 2364,
+      "requestedTo": 2470,
+      "to": 2470,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0393-call_kE6T1Ecxc6hqAT3N5UsFucGB.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+      "from": 50,
+      "requestedTo": 68,
+      "to": 68,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0393-call_kE6T1Ecxc6hqAT3N5UsFucGB.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/util/filesystem-scope.ts",
+      "from": 1,
+      "requestedTo": 147,
+      "to": 81,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0395-call_kz75Yh4Holv8CkSfNoDEEcaT.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/impl/database.ts",
+      "from": 342,
+      "requestedTo": 365,
+      "to": 365,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0402-call_KgI7zj2dyZL0XCeKn4jq35JO.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+      "from": 465,
+      "requestedTo": 516,
+      "to": 516,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0404-call_wDnpsAnnIENdLcymGsu1hody.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+      "from": 822,
+      "requestedTo": 858,
+      "to": 858,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0404-call_wDnpsAnnIENdLcymGsu1hody.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+      "from": 1383,
+      "requestedTo": 1410,
+      "to": 1410,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0404-call_wDnpsAnnIENdLcymGsu1hody.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+      "from": 813,
+      "requestedTo": 828,
+      "to": 828,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0405-call_NuNCx5lLWRihBLXjn7unx7v8.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/development.md",
+      "from": 1,
+      "requestedTo": 37,
+      "to": 37,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0409-call_FVTGpL4HRQ116sfHvfMibGWY.txt"
+    },
+    {
+      "group": "10",
+      "path": "docs/local-mode.md",
+      "from": 1,
+      "requestedTo": 62,
+      "to": 62,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0409-call_FVTGpL4HRQ116sfHvfMibGWY.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/util/agent-tool-names.ts",
+      "from": 1,
+      "requestedTo": 156,
+      "to": 82,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt"
+    },
+    {
+      "group": "10",
+      "path": "packages/agent-runtime/src/run-programmatic-step.ts",
+      "from": 1054,
+      "requestedTo": 1125,
+      "to": 1125,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/client.ts",
+      "from": 1,
+      "requestedTo": 119,
+      "to": 73,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt"
+    },
+    {
+      "group": "10",
+      "path": "agents/general-agent/general-agent.ts",
+      "from": 1,
+      "requestedTo": 95,
+      "to": 95,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/tools/params/__tests__/x1-golden-vectors.test.ts",
+      "from": 1,
+      "requestedTo": 183,
+      "to": 183,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0410-call_vfS5YJ5uvgJFIJNguE0IR566.txt"
+    },
+    {
+      "group": "10",
+      "path": "sdk/src/client.ts",
+      "from": 66,
+      "requestedTo": 80,
+      "to": 73,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0413-call_R6F6f9aae4Ws72Vxs7Q9wPeF.txt"
+    },
+    {
+      "group": "10",
+      "path": "common/src/tools/params/__tests__/x1-golden-vectors.test.ts",
+      "from": 156,
+      "requestedTo": 183,
+      "to": 183,
+      "reason": "recorded helper arguments; endpoint clamped using present source line count",
+      "command": "0413-call_R6F6f9aae4Ws72Vxs7Q9wPeF.txt"
+    }
+  ]
+}

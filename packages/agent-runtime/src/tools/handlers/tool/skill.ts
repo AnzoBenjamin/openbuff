@@ -52,19 +52,26 @@ function isSafeSkillName(skillName: string): boolean {
 async function loadSkillFromDisk(
   projectRoot: string,
   skillName: string,
+  includeProjectSkills: boolean,
 ): Promise<SkillDefinition | null> {
   // Reject unsafe skill names before path.join to prevent directory traversal.
   if (!isSafeSkillName(skillName)) {
     return null
   }
   const home = os.homedir()
+  // First match wins, so this lists the loader's precedence
+  // (sdk/src/skills/load-skills.ts) from highest to lowest: project
+  // `.agents`, project `.claude`, then home `.agents`, home `.claude`.
+  // Project dirs are skipped when the host withheld project skills (N02).
   const skillsDirs = [
-    // Global directories first
+    ...(includeProjectSkills
+      ? [
+          path.join(projectRoot, '.agents', SKILLS_DIR_NAME),
+          path.join(projectRoot, '.claude', SKILLS_DIR_NAME),
+        ]
+      : []),
     path.join(home, '.agents', SKILLS_DIR_NAME),
     path.join(home, '.claude', SKILLS_DIR_NAME),
-    // Project directories (later takes precedence for overwriting)
-    path.join(projectRoot, '.agents', SKILLS_DIR_NAME),
-    path.join(projectRoot, '.claude', SKILLS_DIR_NAME),
   ]
 
   for (const skillsDir of skillsDirs) {
@@ -140,11 +147,15 @@ export const handleSkill = (async (params: {
 
   // If skill not in cache, try to load it dynamically from disk
   // This supports skills created during the session
-  const diskSkill = cachedSkill
-    ? null
-    : fileContext.projectRoot
-      ? await loadSkillFromDisk(fileContext.projectRoot, name)
-      : null
+  const projectRoot = fileContext?.projectRoot
+  const diskSkill =
+    cachedSkill || !projectRoot
+      ? null
+      : await loadSkillFromDisk(
+          projectRoot,
+          name,
+          fileContext.projectSkillsTrusted !== false,
+        )
 
   const skill = cachedSkill ?? diskSkill
 

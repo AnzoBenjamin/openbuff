@@ -88,6 +88,35 @@ describe('codeSearch', () => {
   })
 
   describe('basic search', () => {
+    it('lists matching files when requested and preserves ripgrep diagnostics', async () => {
+      const search = codeSearch({
+        projectPath: '/test/project',
+        pattern: '[',
+        flags: '-l',
+      })
+      const args = mockSpawn.mock.calls[0]![1] as string[]
+      expect(args).toContain('-l')
+      expect(args).not.toContain('--json')
+      mockProcess.stderr.emit('data', Buffer.from('regex parse error'))
+      mockProcess.emit('close', 2)
+      const result = asCodeSearchResult((await search)[0])
+      expect(result.stderr).toContain('regex parse error')
+      expect('exitCode' in result && result.exitCode).toBe(2)
+    })
+
+    it('returns matching file paths in files-only mode', async () => {
+      const search = codeSearch({
+        projectPath: '/test/project',
+        pattern: 'needle',
+        flags: '--files-with-matches',
+      })
+      mockProcess.stdout.emit('data', Buffer.from('src/a.ts\nsrc/b.ts\n'))
+      mockProcess.emit('close', 0)
+      const result = asCodeSearchResult((await search)[0])
+      expect(result.stdout).toBe('src/a.ts\nsrc/b.ts')
+      expect('exitCode' in result && result.exitCode).toBe(0)
+    })
+
     it('should parse standard ripgrep output without context flags', async () => {
       const searchPromise = codeSearch({
         projectPath: '/test/project',

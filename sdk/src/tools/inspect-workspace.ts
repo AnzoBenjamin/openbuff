@@ -1,29 +1,48 @@
 import path from 'node:path'
 
 import { resolveWorkspaceIdentity } from '../services/repository-identity'
+import { isExecutionRefusalError } from '../services/execution-launch'
 import { runGit } from './git-status'
 
 import type { CodebuffToolOutput } from '../../../common/src/tools/list'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 
 export async function inspectWorkspace(params: {
   cwd: string
   signal?: AbortSignal
+  executionContext?: ExecutionAdapterContext
 }): Promise<CodebuffToolOutput<'inspect_workspace'>> {
+  params = { ...params, signal: params.executionContext?.signal ?? params.signal }
   const commands = await Promise.all([
-    runGit(['branch', '--show-current'], params.cwd, params.signal),
+    runGit(['branch', '--show-current'], params.cwd, params.signal, {
+      executionContext: params.executionContext,
+      branchId: 'workspace.branch',
+    }),
     runGit(
       ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'],
       params.cwd,
       params.signal,
+      { executionContext: params.executionContext, branchId: 'workspace.upstream' },
     ),
-    runGit(['rev-parse', 'HEAD'], params.cwd, params.signal),
-    runGit(['status', '--short', '--branch'], params.cwd, params.signal),
+    runGit(['rev-parse', 'HEAD'], params.cwd, params.signal, {
+      executionContext: params.executionContext,
+      branchId: 'workspace.head',
+    }),
+    runGit(['status', '--short', '--branch'], params.cwd, params.signal, {
+      executionContext: params.executionContext,
+      branchId: 'workspace.status',
+    }),
     runGit(
       ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'],
       params.cwd,
       params.signal,
+      { executionContext: params.executionContext, branchId: 'workspace.default-ref' },
     ),
   ])
+  const refusal = commands.find((command) => command.executionRefusal)?.executionRefusal
+  if (refusal) {
+    return [{ type: 'json', value: { errorMessage: refusal.cause, executionRefusal: refusal } }]
+  }
   const [branch, upstream, head, status, defaultRef] = commands
   let identity
   try {
@@ -37,6 +56,7 @@ export async function inspectWorkspace(params: {
             error instanceof Error
               ? error.message
               : 'Unable to inspect the current Git workspace.',
+          ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
         },
       },
     ]

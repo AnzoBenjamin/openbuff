@@ -122,7 +122,7 @@ const inputSchema = z
       .string()
       .optional()
       .describe(
-        'Optional current-task pointer written as a `<!-- current-task: <task> -->` annotation in PLAN.md. Pass an empty string or omit to clear the pointer. Only takes effect when path targets PLAN.md.',
+        'Optional current-task pointer written as a `<!-- current-task: <task> -->` annotation in PLAN.md. Pass an empty string to clear the pointer. When omitted, an update that starts a task selects it; otherwise the pointer is preserved. Only takes effect when path targets PLAN.md.',
       ),
     expectedRevision: z
       .number()

@@ -5,6 +5,9 @@ import {
   timingSafeEqual,
 } from 'node:crypto'
 
+import { parseRawReadBasis } from './raw-read-basis'
+import type { RawReadBasisV1 } from './raw-read-basis'
+
 /**
  * Canonical CRLF→LF normalization shared by the read/edit toolchain so that
  * file-content hashes are stable across Windows/Unix checkouts.
@@ -28,6 +31,13 @@ export function getContentHash(content: string): string {
   return getExactContentHash(normalizeLineEndings(content))
 }
 
+/** Whole-document observation hash; the leading UTF-8 BOM is metadata. */
+export function getObservationContentHash(content: string): string {
+  return getContentHash(
+    content.startsWith('\uFEFF') ? content.slice(1) : content,
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Read capability tokens
 // ---------------------------------------------------------------------------
@@ -42,7 +52,9 @@ export type ReplacementReadCapability = {
   endLine: number
   hash: string
   scopeFingerprint: string
-  tokenVersion: 'v3'
+  tokenVersion: 'v3' | 'v4'
+  /** Present only in v4; authenticated along with the existing issuer/bounds/hash. */
+  rawBasis?: RawReadBasisV1
 }
 
 export type ReadCapabilityScope = {
@@ -63,8 +75,8 @@ export const READ_CAPABILITY_TOKEN_PREFIX = 'cap.'
 const READ_CAPABILITY_TOKEN_VERSION = 'v3'
 const SHA256_HEX_PATTERN = /^sha256:([a-f0-9]{64})$/
 const BASE64URL_SHA256_PATTERN = /^[A-Za-z0-9_-]{43}$/
-// cap.v3 is an in-process runtime capability, not a reconstructable content
-// checksum. Restarting the runtime invalidates outstanding tokens by design.
+// Read capabilities use an in-process signing key. Restarting the runtime
+// invalidates outstanding tokens unless a trusted handoff remints their facts.
 const READ_CAPABILITY_SIGNING_KEY = randomBytes(32)
 
 function normalizeScopeComponent(value: string): string {
@@ -105,22 +117,23 @@ export function readCapabilityMatchesScope(
   scope: ReadCapabilityScope,
 ): boolean {
   return (
-    capability.tokenVersion === READ_CAPABILITY_TOKEN_VERSION &&
+    (capability.tokenVersion === READ_CAPABILITY_TOKEN_VERSION ||
+      capability.tokenVersion === 'v4') &&
     capability.scopeFingerprint === getReadCapabilityScopeFingerprint(scope)
   )
 }
 
 /**
- * Encodes an authenticated, scoped read capability as
- * `cap.v3.<start>.<end>.<contentDigest>.<scopeDigest>.<hmac>`.
- * The scope binds the capability to its project, normalized path, and issuing
- * run; the canonical sha256 hash binds it to the content returned by the read.
+ * Encodes cap.v4 when the original raw basis is supplied, or historical cap.v3
+ * otherwise. Both authenticate the project/path/run scope, bounds and
+ * observation hash; only v4 authenticates raw facts for fresh edit authority.
  */
 export function encodeReadCapabilityToken(params: {
   startLine: number
   endLine: number
   hash: string
   scope: ReadCapabilityScope
+  rawBasis?: RawReadBasisV1
 }): string {
   const { startLine, endLine, hash, scope } = params
   if (!hasAuthoritativeReadCapabilityScope(scope)) {
@@ -138,6 +151,35 @@ export function encodeReadCapabilityToken(params: {
 
   const digest = Buffer.from(sha256Match[1]!, 'hex').toString('base64url')
   const scopeFingerprint = getReadCapabilityScopeFingerprint(scope)
+  if (params.rawBasis !== undefined) {
+    if (
+      !Number.isSafeInteger(startLine) ||
+      !Number.isSafeInteger(endLine) ||
+      startLine < 1 ||
+      endLine < startLine
+    ) {
+      throw new RangeError(
+        'Raw read capabilities require valid inclusive line bounds',
+      )
+    }
+    const payload = Buffer.from(
+      JSON.stringify({
+        startLine,
+        endLine,
+        hash,
+        scopeFingerprint,
+        rawBasis: parseRawReadBasis(params.rawBasis),
+      }),
+    ).toString('base64url')
+    const signedPayload = `v4.${payload}`
+    const signature = createHmac('sha256', READ_CAPABILITY_SIGNING_KEY)
+      .update(signedPayload)
+      .digest('base64url')
+    const token = `${READ_CAPABILITY_TOKEN_PREFIX}${signedPayload}.${signature}`
+    if (token.length > 4096)
+      throw new RangeError('Raw read capability exceeds its encoded byte limit')
+    return token
+  }
   const signedPayload = `${READ_CAPABILITY_TOKEN_VERSION}.${startLine}.${endLine}.${digest}.${scopeFingerprint}`
   const signature = createHmac('sha256', READ_CAPABILITY_SIGNING_KEY)
     .update(signedPayload)
@@ -146,7 +188,7 @@ export function encodeReadCapabilityToken(params: {
 }
 
 /**
- * Decodes an authenticated cap.v3 read capability. Returns a human-readable,
+ * Decodes authenticated cap.v3 and cap.v4 read capabilities. Returns a human-readable,
  * recoverable re-read error when the supplied value is malformed, unauthenticated,
  * or from any retired capability format.
  */
@@ -154,13 +196,14 @@ export function decodeReadCapabilityToken(
   token: string,
 ): ReplacementReadCapability | string {
   token = normalizeCopiedReadCapabilityToken(token)
+  if (token.startsWith('cap.v4.')) return decodeRawReadCapabilityToken(token)
   if (token.startsWith('whole.')) {
-    return `Invalid basedOnRead: ${JSON.stringify(token)} is a legacy mutation capability, not cap.v3 read authorization. Re-read the target with read_files and copy its readCapability from the fresh editAnchor.`
+    return `Invalid basedOnRead: ${JSON.stringify(token)} is a legacy mutation capability. Re-read the target with read_files and copy its fresh cap.v4 readCapability from the editAnchor.`
   }
 
   const v3Prefix = `${READ_CAPABILITY_TOKEN_PREFIX}${READ_CAPABILITY_TOKEN_VERSION}.`
   if (!token.startsWith(v3Prefix)) {
-    return `Invalid basedOnRead: expected an authenticated scoped cap.v3 readCapability, but received ${JSON.stringify(token)}. Re-read the target with read_files and copy its readCapability from the fresh editAnchor.`
+    return `Invalid basedOnRead: expected an authenticated scoped readCapability, but received ${JSON.stringify(token)}. Re-read the target with read_files and copy its fresh cap.v4 readCapability from the editAnchor.`
   }
 
   const match = token.match(
@@ -197,6 +240,57 @@ export function decodeReadCapabilityToken(
     hash: `sha256:${digest.toString('hex')}`,
     scopeFingerprint,
     tokenVersion: 'v3',
+  }
+}
+
+function decodeRawReadCapabilityToken(
+  token: string,
+): ReplacementReadCapability | string {
+  const invalid =
+    'Invalid basedOnRead capability: malformed or unauthenticated cap.v4 raw basis. Re-read the target and copy its fresh readCapability.'
+  if (token.length > 4096) return invalid
+  const match = token.match(/^cap\.v4\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]{43})$/)
+  if (!match) return invalid
+  const expected = createHmac('sha256', READ_CAPABILITY_SIGNING_KEY)
+    .update(`v4.${match[1]}`)
+    .digest()
+  const supplied = Buffer.from(match[2]!, 'base64url')
+  if (
+    supplied.length !== expected.length ||
+    !timingSafeEqual(supplied, expected)
+  )
+    return invalid
+  try {
+    const bytes = Buffer.from(match[1]!, 'base64url')
+    if (bytes.toString('base64url') !== match[1]) return invalid
+    const payload: unknown = JSON.parse(bytes.toString('utf8'))
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload))
+      return invalid
+    const data = payload as Record<string, unknown>
+    if (
+      Object.keys(data).sort().join(',') !==
+        'endLine,hash,rawBasis,scopeFingerprint,startLine' ||
+      !Number.isSafeInteger(data.startLine) ||
+      !Number.isSafeInteger(data.endLine) ||
+      (data.startLine as number) < 1 ||
+      (data.endLine as number) < (data.startLine as number) ||
+      typeof data.hash !== 'string' ||
+      !SHA256_HEX_PATTERN.test(data.hash) ||
+      typeof data.scopeFingerprint !== 'string' ||
+      !BASE64URL_SHA256_PATTERN.test(data.scopeFingerprint)
+    ) {
+      return invalid
+    }
+    return {
+      startLine: data.startLine as number,
+      endLine: data.endLine as number,
+      hash: data.hash,
+      scopeFingerprint: data.scopeFingerprint,
+      tokenVersion: 'v4',
+      rawBasis: parseRawReadBasis(data.rawBasis),
+    }
+  } catch {
+    return invalid
   }
 }
 

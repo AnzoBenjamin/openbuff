@@ -147,8 +147,9 @@ describe('read capabilities', () => {
     const digest = Buffer.from('a'.repeat(64), 'hex').toString('base64url')
     const decoded = decodeReadCapabilityToken(`cap.v2.2.5.${digest}`)
 
-    expect(decoded).toContain('expected an authenticated scoped cap.v3')
+    expect(decoded).toContain('expected an authenticated scoped readCapability')
     expect(decoded).toContain('Re-read the target')
+    expect(decoded).toContain('fresh cap.v4 readCapability')
   })
 
   it('rejects legacy base64 payload tokens with a targeted re-read error', () => {
@@ -157,8 +158,9 @@ describe('read capabilities', () => {
     ).toString('base64url')}`
     const decoded = decodeReadCapabilityToken(token)
 
-    expect(decoded).toContain('expected an authenticated scoped cap.v3')
+    expect(decoded).toContain('expected an authenticated scoped readCapability')
     expect(decoded).toContain('Re-read the target')
+    expect(decoded).toContain('fresh cap.v4 readCapability')
   })
 
   it('identifies legacy whole-file mutation tokens', () => {

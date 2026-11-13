@@ -3,7 +3,7 @@ import z from 'zod/v4'
 import {
   $getNativeToolCallExampleString,
   isObviousEditPlaceholder,
-  jsonToolResultSchema,
+  editToolResultSchema,
 } from '../utils'
 import { basedOnReadSchema } from '../based-on-read'
 import { updateFileResultSchema } from './str-replace'
@@ -44,7 +44,7 @@ const inputSchema = z
         'When multiple top-level symbols share this name, the 1-indexed one to replace.',
       ),
     readCapability: basedOnReadSchema.describe(
-      'Optional cap.v3 copied from the matching read_files symbol slice. Under strict read-before-edit this authorizes exactly the symbol and its contiguous preceding comment block.',
+      'Optional cap.v4 copied from the matching read_files symbol slice. Under strict read-before-edit this authorizes exactly the symbol and its contiguous preceding comment block.',
     ),
   })
   .describe(
@@ -77,5 +77,5 @@ export const rewriteSymbolParams = {
   endsAgentStep,
   description,
   inputSchema,
-  outputSchema: jsonToolResultSchema(updateFileResultSchema),
+  outputSchema: editToolResultSchema(updateFileResultSchema),
 } satisfies $ToolParams

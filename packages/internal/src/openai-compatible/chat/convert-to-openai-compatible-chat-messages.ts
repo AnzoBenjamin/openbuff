@@ -15,7 +15,7 @@ function getOpenAIMetadata(message: {
 
 export function convertToOpenAICompatibleChatMessages(
   prompt: LanguageModelV2Prompt,
-  options: { stringifyTextContent?: boolean } = {},
+  options: { stringifyTextContent?: boolean; reasoningReplay?: boolean } = {},
 ): OpenAICompatibleChatPrompt {
   const messages: OpenAICompatibleChatPrompt = []
   for (const { role, content, ...message } of prompt) {
@@ -29,6 +29,18 @@ export function convertToOpenAICompatibleChatMessages(
               (part) => part.type === 'text' && part.text.trim().length === 0,
             ))
         ) {
+          break
+        }
+        // Prompt-cache breakpoints (OpenRouter → Anthropic) are honoured on
+        // content parts, not on the message, so a system message carrying
+        // `cache_control` is sent as a single text part that holds it.
+        const { cache_control: cacheControl, ...messageMetadata } = metadata
+        if (cacheControl !== undefined && typeof content === 'string') {
+          messages.push({
+            role: 'system',
+            content: [{ type: 'text', text: content, cache_control: cacheControl }],
+            ...messageMetadata,
+          })
           break
         }
         messages.push({ role: 'system', content, ...metadata })
@@ -129,7 +141,7 @@ export function convertToOpenAICompatibleChatMessages(
           reasoning_content:
             reasoningContent.length > 0
               ? reasoningContent
-              : toolCalls.length > 0
+              : toolCalls.length > 0 || options.reasoningReplay
                 ? ''
                 : undefined,
           tool_calls: toolCalls.length > 0 ? toolCalls : undefined,

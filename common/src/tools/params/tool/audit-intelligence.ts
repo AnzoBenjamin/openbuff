@@ -15,6 +15,21 @@ export const auditCoverageDomains = [
 ] as const
 
 export const auditCoverageDomainSchema = z.enum(auditCoverageDomains)
+export const capabilityMaturitySchema = z.enum([
+  'unknown',
+  'absent',
+  'partial',
+  'unwired',
+])
+export const featureCompletenessStatusSchema = z.enum([
+  'complete',
+  'partial',
+  'implemented_but_unreachable',
+  'documented_but_unimplemented',
+  'tested_without_runtime_wiring',
+  'runtime_wired_without_failure_coverage',
+  'unknown',
+])
 
 function normalizeAuditCoverageInput(value: unknown): unknown {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
@@ -60,6 +75,9 @@ function normalizeAuditCoverageInput(value: unknown): unknown {
           snapshot_id: item.snapshot_id ?? item.snapshotId,
           feature: item.feature,
           evidence_kind: item.evidence_kind ?? item.evidenceKind,
+          maturity: item.maturity,
+          status: item.status,
+          missing: item.missing,
           evidence: {
             entrypoints: evidence.entrypoints,
             implementation: evidence.implementation,
@@ -106,7 +124,7 @@ export const evaluateAuditCoverageParams = {
   toolName: 'evaluate_audit_coverage',
   endsAgentStep: true,
   description:
-    'Machine-checks structuralReceipt objects from write_audit_findings and coverageReceipt objects from inspect_feature_completeness against an exact snapshot. Every nested receipt must carry its own snapshot id; heuristic feature evidence remains incomplete until explicitly verified.',
+    'Checks source inspection coverage against a freshly attested snapshot. Every nested receipt carries its own snapshot id. Verified file reads can complete inspection while capability maturity stays unknown, absent, partial or unwired. complete and inspectionComplete describe inspection; readinessComplete requires separate runtime evidence and remains false here.',
   inputSchema: z.preprocess(
     normalizeAuditCoverageInput,
     z.object({
@@ -131,6 +149,9 @@ export const evaluateAuditCoverageParams = {
               snapshot_id: z.string().min(1),
               feature: z.string().min(1),
               evidence_kind: z.enum(['heuristic', 'verified']),
+              maturity: capabilityMaturitySchema.optional(),
+              status: featureCompletenessStatusSchema.optional(),
+              missing: z.array(z.string()).optional(),
               evidence: z
                 .object({
                   entrypoints: z.array(z.string()),

@@ -1,0 +1,56 @@
+import fs from 'node:fs/promises'
+import path from 'node:path'
+import { createHash } from 'node:crypto'
+import { processEditTransaction } from '/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/process-edit-transaction.ts'
+import { encodeReadCapabilityToken, getContentHash } from '/home/ben/Code/CLI/openbuff/common/src/util/content-hash.ts'
+import { WorkspaceMutationBroker } from '/home/ben/Code/CLI/openbuff/sdk/src/services/workspace-mutation-broker.ts'
+import { createNodeFileSystem } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/node-filesystem.ts'
+import { changeFiles } from '/home/ben/Code/CLI/openbuff/sdk/src/tools/change-file.ts'
+
+const evidenceDir = '/tmp/openbuff-body-review-2026-11-05/evidence'
+const fixtureRoot = await fs.mkdtemp(path.join(evidenceDir, '06-preservation-fixture-'))
+const cwd = path.join(fixtureRoot, 'workspace')
+await fs.mkdir(cwd)
+const broker = await WorkspaceMutationBroker.create({ cwd, stateDir: path.join(fixtureRoot, 'state') })
+const filesystem = createNodeFileSystem({ mutationBroker: broker })
+const issuer = { projectId: cwd, runId: 'range-preservation-probe' }
+const logger = { debug() {}, info() {}, warn() {}, error() {} } as any
+const original = 'const keep = 1;\r\nconst target = 2;\r\nconst final = 3;\r\n'
+await fs.writeFile(path.join(cwd, 'a.ts'), original)
+const capability = encodeReadCapabilityToken({ startLine: 2, endLine: 2, hash: getContentHash('const target = 2;'), scope: { ...issuer, path: 'a.ts' } })
+const preflight = await processEditTransaction({ edits: [{ type: 'replace_range', path: 'a.ts', readCapability: capability, newContent: 'const target = 4;' }] as any, initialContentByPath: new Map([['a.ts', original]]), logger, requireFreshReadCapabilityForPaths: new Set(['a.ts']), readCapabilityIssuer: issuer })
+let mutation: unknown
+if ('files' in preflight) {
+  // Match handleEditTransaction's actual clientChanges builder: prepared
+  // content reaches the SDK as a patch plus normalized expected preimage hash.
+  const output = await changeFiles({ parameters: preflight.files.map((file) => ({ type: 'patch', path: file.path, content: file.patch, expectedHash: getContentHash(original) })), cwd, fs: filesystem, capabilityIssuer: issuer })
+  mutation = output[0]?.value
+}
+const final = await fs.readFile(path.join(cwd, 'a.ts'), 'utf8')
+
+// Bounded 24 MiB single-line fixture; observe Buffer.concat sizes in this
+// disposable probe process instead of claiming a whole-process RSS benchmark.
+const longPath = path.join(cwd, 'long.txt')
+await fs.writeFile(longPath, Buffer.alloc(24 * 1024 * 1024, 0x61))
+const originalConcat = Buffer.concat
+let largestConcatBytes = 0
+let concatCalls = 0
+Buffer.concat = ((list: readonly Uint8Array[], totalLength?: number) => {
+  const bytes = totalLength ?? list.reduce((n, entry) => n + entry.byteLength, 0)
+  largestConcatBytes = Math.max(largestConcatBytes, bytes)
+  concatCalls++
+  return originalConcat(list, totalLength)
+}) as typeof Buffer.concat
+let rangeResult: any
+try {
+  rangeResult = await filesystem.readTextRange!(longPath, 1, 1, 1024)
+} finally {
+  Buffer.concat = originalConcat
+}
+const report = {
+  fixtureRoot,
+  rangePreservation: { original, final, originalCrlfCount: (original.match(/\r\n/g) ?? []).length, finalCrlfCount: (final.match(/\r\n/g) ?? []).length, finalLfCount: (final.match(/\n/g) ?? []).length, preflight: 'files' in preflight ? { message: preflight.message, files: preflight.files.map((file) => ({ path: file.path, content: file.content })) } : preflight, mutationOutcome: (mutation as any)?.outcome },
+  boundedReadMemory: { fileBytes: 24 * 1024 * 1024, maxBytes: 1024, returnedBytes: rangeResult.data.byteLength, complete: rangeResult.complete, totalLines: rangeResult.totalLines, largestConcatBytes, concatCalls },
+}
+await fs.writeFile(path.join(evidenceDir, '06-text-preservation-probe.json'), `${JSON.stringify(report, null, 2)}\n`)
+console.log(JSON.stringify(report, null, 2))

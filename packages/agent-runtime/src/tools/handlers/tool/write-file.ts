@@ -1,14 +1,23 @@
 import { AbortError } from '@codebuff/common/util/error'
+import { hasFilesystemSandbox, getSandboxProjectRoot } from '@codebuff/common/util/filesystem-sandbox'
+import path from 'node:path'
 import {
   decodeReadCapabilityToken,
-  getContentHash,
+  getExactContentHash,
+  getObservationContentHash,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
 import {
+  captureTextDocument,
+  describeRawReadFailure,
+  getRawReadBasis,
+  reanchorRawReadCapability,
+} from '@codebuff/common/util/byte-text'
+import { rawReadBasesMatch } from '@codebuff/common/util/raw-read-basis'
+import type { RawReadBasisV1 } from '@codebuff/common/util/raw-read-basis'
+import {
   describeLineBounds,
   getLineCoordinates,
-  getRangeSlice,
-  isWholeFileCoveringRange,
 } from '@codebuff/common/util/line-coordinates'
 
 import { coordinateEditApplication } from './edit-application-coordinator'
@@ -65,6 +74,7 @@ export type FileProcessing<
       messages: string[]
       failedReplacementCount?: number
       expectedHash?: string | null
+      expectedRawHash?: string | null
     }
   | {
       error: string
@@ -102,6 +112,7 @@ export type FileProcessingState = {
   // similar per-turn bounds.
   readAuthorizationsByPath?: Record<string, true>
   readAuthorizationHashesByPath?: Record<string, string>
+  rawReadAuthorizationHashesByPath?: Record<string, string>
   confirmedPostEditAnchorsByPath?: Record<string, ConfirmedPostEditAnchor>
   /**
    * Whole-file authorizations that were visible before the current model
@@ -109,33 +120,39 @@ export type FileProcessingState = {
    * instead of reads completed later in the same streamed response.
    */
   modelVisibleReadAuthorizationHashesByPath?: Record<string, string>
+  modelVisibleRawReadAuthorizationHashesByPath?: Record<string, string>
   editRereadRequirementsByPath?: Record<string, EditRereadRequirement>
 }
 
-function getUsableWholeFileAuthorizationHash(
+function getUsableWholeFileRawAuthorizationHash(
   state: Pick<
     FileProcessingState,
     | 'readAuthorizationsByPath'
     | 'readAuthorizationHashesByPath'
+    | 'rawReadAuthorizationHashesByPath'
     | 'modelVisibleReadAuthorizationHashesByPath'
+    | 'modelVisibleRawReadAuthorizationHashesByPath'
     | 'confirmedPostEditAnchorsByPath'
   >,
   path: string,
 ): string | undefined {
   const stickyHash =
-    state.readAuthorizationsByPath?.[path] === true
-      ? state.readAuthorizationHashesByPath?.[path]
+    state.readAuthorizationsByPath?.[path] === true &&
+    typeof state.readAuthorizationHashesByPath?.[path] === 'string'
+      ? state.rawReadAuthorizationHashesByPath?.[path]
       : undefined
   // Prefer a confirmed post-edit hash only when it agrees with the sticky hash
   // map. An unsigned/injected confirmed hash must not override sticky authority.
   if (
     typeof stickyHash === 'string' &&
-    state.confirmedPostEditAnchorsByPath?.[path]?.contentHash === stickyHash
+    state.confirmedPostEditAnchorsByPath?.[path]?.rawBasis?.scope === 'whole' &&
+    state.confirmedPostEditAnchorsByPath?.[path]?.rawBasis?.rawHash ===
+      stickyHash
   ) {
     return stickyHash
   }
-  if (state.modelVisibleReadAuthorizationHashesByPath !== undefined) {
-    return state.modelVisibleReadAuthorizationHashesByPath[path]
+  if (state.modelVisibleRawReadAuthorizationHashesByPath !== undefined) {
+    return state.modelVisibleRawReadAuthorizationHashesByPath[path]
   }
   return stickyHash
 }
@@ -145,12 +162,14 @@ export function hasWholeFileReadAuthorization(
     FileProcessingState,
     | 'readAuthorizationsByPath'
     | 'readAuthorizationHashesByPath'
+    | 'rawReadAuthorizationHashesByPath'
     | 'modelVisibleReadAuthorizationHashesByPath'
+    | 'modelVisibleRawReadAuthorizationHashesByPath'
     | 'confirmedPostEditAnchorsByPath'
   >,
   path: string,
 ): boolean {
-  return typeof getUsableWholeFileAuthorizationHash(state, path) === 'string'
+  return typeof getUsableWholeFileRawAuthorizationHash(state, path) === 'string'
 }
 
 export function isWholeFileReadAuthorizationFresh(
@@ -158,15 +177,22 @@ export function isWholeFileReadAuthorizationFresh(
     FileProcessingState,
     | 'readAuthorizationsByPath'
     | 'readAuthorizationHashesByPath'
+    | 'rawReadAuthorizationHashesByPath'
     | 'modelVisibleReadAuthorizationHashesByPath'
+    | 'modelVisibleRawReadAuthorizationHashesByPath'
     | 'confirmedPostEditAnchorsByPath'
   >,
   path: string,
   content: string,
 ): boolean {
-  return (
-    getUsableWholeFileAuthorizationHash(state, path) === getContentHash(content)
-  )
+  try {
+    return (
+      getUsableWholeFileRawAuthorizationHash(state, path) ===
+      captureTextDocument(content).rawHash
+    )
+  } catch {
+    return false
+  }
 }
 
 export function grantWholeFileReadAuthorization(
@@ -174,15 +200,35 @@ export function grantWholeFileReadAuthorization(
     FileProcessingState,
     | 'readAuthorizationsByPath'
     | 'readAuthorizationHashesByPath'
+    | 'rawReadAuthorizationHashesByPath'
     | 'modelVisibleReadAuthorizationHashesByPath'
+    | 'modelVisibleRawReadAuthorizationHashesByPath'
   >,
   path: string,
   content: string,
-): void {
+  rawBasis?: RawReadBasisV1,
+): boolean {
+  if (!rawBasis || rawBasis.scope !== 'whole') return false
+  let document
+  try {
+    document = captureTextDocument(content, rawBasis)
+    if (
+      !rawReadBasesMatch(
+        rawBasis,
+        getRawReadBasis(document, 1, document.maxCapabilityLine, 'whole'),
+      )
+    )
+      return false
+  } catch {
+    return false
+  }
   state.readAuthorizationsByPath ??= {}
   state.readAuthorizationHashesByPath ??= {}
+  state.rawReadAuthorizationHashesByPath ??= {}
   state.readAuthorizationsByPath[path] = true
-  state.readAuthorizationHashesByPath[path] = getContentHash(content)
+  state.readAuthorizationHashesByPath[path] = document.observationHash
+  state.rawReadAuthorizationHashesByPath[path] = document.rawHash
+  return true
 }
 
 export function revokeWholeFileReadAuthorization(
@@ -190,14 +236,18 @@ export function revokeWholeFileReadAuthorization(
     FileProcessingState,
     | 'readAuthorizationsByPath'
     | 'readAuthorizationHashesByPath'
+    | 'rawReadAuthorizationHashesByPath'
     | 'modelVisibleReadAuthorizationHashesByPath'
+    | 'modelVisibleRawReadAuthorizationHashesByPath'
     | 'confirmedPostEditAnchorsByPath'
   >,
   path: string,
 ): void {
   delete state.readAuthorizationsByPath?.[path]
   delete state.readAuthorizationHashesByPath?.[path]
+  delete state.rawReadAuthorizationHashesByPath?.[path]
   delete state.modelVisibleReadAuthorizationHashesByPath?.[path]
+  delete state.modelVisibleRawReadAuthorizationHashesByPath?.[path]
   delete state.confirmedPostEditAnchorsByPath?.[path]
 }
 
@@ -211,6 +261,17 @@ export function normalizeToolPath(filePath: string): string {
   }
 
   const withForwardSlashes = filePath.replace(/\\/g, '/')
+
+  // Captured runs authorize paths at the filesystem boundary, after resolving
+  // absolute paths, parent segments, and symlinks against their project root.
+  if (hasFilesystemSandbox()) {
+    const root = getSandboxProjectRoot()
+    if (!root) return withForwardSlashes
+    const absolute = path.resolve(root, withForwardSlashes)
+    const relative = path.relative(root, absolute)
+    return relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+      ? absolute.replace(/\\/g, '/') : relative.replace(/\\/g, '/')
+  }
 
   // Runtime tool paths must be project-relative. Reject POSIX absolute paths,
   // UNC/device paths (which begin with `//` after slash normalization), and
@@ -255,12 +316,14 @@ export function getFileProcessingValues(
     strictReadBeforeEdit: true,
     readAuthorizationsByPath: {},
     readAuthorizationHashesByPath: {},
+    rawReadAuthorizationHashesByPath: {},
     // M2-T6: hydrate every key the FileProcessingState type declares. The copy
     // loop only accepts keys present in these defaults, so an optional field
     // omitted here would be silently dropped by hydration: specifically
     // modelVisibleReadAuthorizationHashesByPath was lost across turn
     // boundaries, degrading strict edit checks to the sticky-hash fallback.
     modelVisibleReadAuthorizationHashesByPath: {},
+    modelVisibleRawReadAuthorizationHashesByPath: {},
     confirmedPostEditAnchorsByPath: {},
     editRereadRequirementsByPath: {},
   }
@@ -405,37 +468,43 @@ export const handleWriteFile = (async (
           error: `write_file blocked for ${path}: basedOnRead belongs to a different project, path, or agent run. Call read_files with paths: ["${path}"] and retry with the capability from that complete model-visible read.`,
         }
       }
-      // A full-file RANGE read numbers lines in visible space and hashes the
-      // slice without the trailing newline, while a whole-file paths read binds
-      // the capability ceiling. Both are complete observations, so accept either
-      // and re-hash exactly the slice the capability covered.
-      const coordinates = getLineCoordinates(fileContent)
+      const coordinates = getLineCoordinates(
+        captureTextDocument(fileContent).observation,
+      )
       if (
-        !isWholeFileCoveringRange(
-          coordinates,
-          decoded.startLine,
-          decoded.endLine,
-        )
+        decoded.tokenVersion !== 'v4' ||
+        decoded.rawBasis?.scope !== 'whole'
       ) {
         return {
           ok: false,
           error: `write_file blocked for ${path}: a range capability cannot authorize a whole-file overwrite (capability covers lines ${decoded.startLine}-${decoded.endLine}; ${describeLineBounds(coordinates)}). Call read_files with paths: ["${path}"] and retry with the whole-file capability from that complete model-visible read.`,
         }
       }
-      if (
-        decoded.hash !==
-        getContentHash(
-          getRangeSlice(coordinates, decoded.startLine, decoded.endLine),
-        )
-      ) {
+      const fresh = reanchorRawReadCapability({
+        content: fileContent,
+        capability: decoded,
+      })
+      if (!fresh.ok) {
         return {
           ok: false,
-          error: `write_file blocked for ${path}: basedOnRead did not match the current file content (stale hash). Call read_files with paths: ["${path}"] and retry with the capability from that complete model-visible read.`,
+          error: `write_file blocked for ${path}: ${describeRawReadFailure(fresh)}. Call read_files with paths: ["${path}"] and retry with the capability from that complete model-visible read.`,
         }
       }
       // Explicit whole-file capability is the real re-read substitute, including
       // clearing context_compacted without an exploratory auto-reread.
-      grantWholeFileReadAuthorization(fileProcessingState, path, fileContent)
+      if (
+        !grantWholeFileReadAuthorization(
+          fileProcessingState,
+          path,
+          fileContent,
+          decoded.rawBasis,
+        )
+      ) {
+        return {
+          ok: false,
+          error: `write_file blocked for ${path}: the authenticated whole raw basis does not match the current file. Call read_files before retrying.`,
+        }
+      }
       clearEditRereadRequirement(fileProcessingState, path, {
         clearContextCompacted: true,
       })
@@ -594,7 +663,11 @@ export const handleWriteFile = (async (
     return {
       ...result.value,
       expectedHash:
-        initialContent === null ? null : getContentHash(initialContent),
+        initialContent === null
+          ? null
+          : getObservationContentHash(initialContent),
+      expectedRawHash:
+        initialContent === null ? null : getExactContentHash(initialContent),
     }
   })()
     .catch((error) => {
@@ -620,7 +693,7 @@ export const handleWriteFile = (async (
         toolCallId: toolCall.toolCallId,
       }
       if (!('error' in fileProcessingResult)) {
-        const syntaxValidation = preflightValidateSyntax(
+        const syntaxValidation = await preflightValidateSyntax(
           path,
           fileProcessingResult.content,
         )
@@ -742,12 +815,14 @@ export async function postStreamProcessing<T extends PostStreamProcessingTools>(
           path,
           content: patch,
           expectedHash: toolCall.expectedHash,
+          expectedRawHash: toolCall.expectedRawHash,
         }
       : {
           type: 'file' as const,
           path,
           content,
           expectedHash: toolCall.expectedHash,
+          expectedRawHash: toolCall.expectedRawHash,
         },
   } as ClientToolCall<T>
   const clientToolResult = await requestClientToolCall(clientToolCall)

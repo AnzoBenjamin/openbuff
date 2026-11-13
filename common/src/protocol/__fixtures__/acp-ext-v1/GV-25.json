@@ -1,0 +1,104 @@
+{
+  "_note": "Semantic vector (§12.7 GV-25, §12.1 SEC-6 + NEW-6): an agent edits the sensitive path '.env'. No diff content is emitted for it (replaced by a '[sensitive file changed]' note); its beforeHash/afterHash/finalHashes become 'sha256:redacted'; rawInput content fields are '[sensitive]'.",
+  "toolCall": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_13",
+        "title": "Write file",
+        "kind": "edit",
+        "status": "pending",
+        "locations": [
+          {
+            "path": "/home/dev/proj/.env"
+          }
+        ],
+        "rawInput": {
+          "type": "write_file",
+          "path": ".env",
+          "content": "[sensitive]"
+        }
+      }
+    }
+  },
+  "toolCallUpdate": {
+    "jsonrpc": "2.0",
+    "method": "session/update",
+    "params": {
+      "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_13",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "[sensitive file changed: .env]"
+            }
+          }
+        ],
+        "_meta": {
+          "openbuff.dev": {
+            "laneId": "main",
+            "receipt": {
+              "kind": "openbuff.receipt_envelope",
+              "version": 1,
+              "sessionId": "obs_01J8Z3Q4R5S6T7V8W9X0Y1Z2A3",
+              "toolCallId": "call_13",
+              "laneId": "main",
+              "mutation": {
+                "kind": "file_mutation_result",
+                "version": 1,
+                "operationId": "op_2",
+                "outcome": "applied",
+                "actions": [
+                  {
+                    "actionId": "op_2:0",
+                    "index": 0,
+                    "action": "update",
+                    "path": ".env",
+                    "outcome": "applied",
+                    "beforeHash": "sha256:redacted",
+                    "afterHash": "sha256:redacted"
+                  }
+                ],
+                "authorityTier": "conditional_commit",
+                "receiptId": "rcpt_2",
+                "authorityReceipt": {
+                  "kind": "commit_receipt",
+                  "version": 1,
+                  "receiptId": "rcpt_2",
+                  "operationId": "op_2",
+                  "callId": "call_13",
+                  "authorityTier": "conditional_commit",
+                  "status": "committed",
+                  "actions": [
+                    {
+                      "actionId": "op_2:0",
+                      "index": 0,
+                      "action": "update",
+                      "path": ".env",
+                      "status": "committed",
+                      "beforeHash": "sha256:redacted",
+                      "afterHash": "sha256:redacted"
+                    }
+                  ],
+                  "finalHashes": {
+                    ".env": "sha256:redacted"
+                  }
+                },
+                "errors": [],
+                "freshCapabilities": []
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -2,8 +2,12 @@ import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { withFilesystemSandbox, type FilesystemSandboxPolicy } from '@codebuff/common/util/filesystem-sandbox'
+import { resolveProjectPath } from '@codebuff/common/util/project-path-containment'
 
-import { resolveWorkspaceIdentity } from './repository-identity'
+import { captureWorkspaceBootstrapExecution, resolveBootstrapWorkspaceIdentity } from './workspace-bootstrap'
+import type { WorkspaceIdentitySource } from './workspace-bootstrap'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 
 import type {
   CodebuffConditionalCommitResult,
@@ -14,11 +18,18 @@ import type {
 import type { PathLike } from 'node:fs'
 
 const DEFAULT_LOCK_TIMEOUT_MS = 10_000
-const DEFAULT_STALE_LOCK_MS = 120_000
 const DEFAULT_LOCK_POLL_MS = 20
 
 /** Newest receipts to report from listReceipts (no pruning this session). */
 const RECEIPT_LIST_LIMIT = 500
+/**
+ * Retention cap for finalized receipts (hr-09 P4.3). Receipts accumulated
+ * indefinitely; the listing was bounded but the directory was not, so a
+ * long-lived workspace grew without limit. Finalizing a receipt now prunes
+ * the OLDEST finalized receipts beyond this cap. Deliberately above
+ * RECEIPT_LIST_LIMIT so the newest full listing window is always intact.
+ */
+const RECEIPT_RETENTION_LIMIT = 1000
 
 export const WORKSPACE_MUTATION_AUTHORITY = 'cooperative_cas' as const
 
@@ -73,7 +84,10 @@ export type WorkspaceMutationMoveResult = CodebuffConditionalMoveResult & {
 export type WorkspaceMutationBrokerOptions = {
   cwd: string
   stateDir: string
+  sandboxPolicy?: FilesystemSandboxPolicy
+  executionContext?: ExecutionAdapterContext
   lockTimeoutMs?: number
+  /** @deprecated Stale locks are never automatically reclaimed. */
   staleLockMs?: number
   lockPollMs?: number
 }
@@ -89,18 +103,6 @@ type LockOwner = {
   token: string
   pid: number
   acquiredAt: string
-}
-
-function fallbackIdentity(cwd: string): {
-  repositoryId: string
-  workspaceId: string
-} {
-  const canonical = path.resolve(cwd)
-  const digest = createHash('sha256')
-    .update(canonical)
-    .digest('hex')
-    .slice(0, 24)
-  return { repositoryId: digest, workspaceId: digest }
 }
 
 function exactHash(content: Uint8Array): string {
@@ -167,6 +169,7 @@ export class WorkspaceMutationBroker {
   readonly authorityKind = WORKSPACE_MUTATION_AUTHORITY
   readonly repositoryId: string
   readonly workspaceId: string
+  readonly identitySource: WorkspaceIdentitySource
   readonly workspaceRoot: string
   readonly brokerDir: string
 
@@ -175,21 +178,23 @@ export class WorkspaceMutationBroker {
   private readonly statePath: string
   private readonly lockPath: string
   private readonly lockTimeoutMs: number
-  private readonly staleLockMs: number
   private readonly lockPollMs: number
+  private readonly sandboxPolicy?: FilesystemSandboxPolicy
 
   private constructor(params: {
     workspaceRoot: string
     stateDir: string
     repositoryId: string
     workspaceId: string
+    identitySource: WorkspaceIdentitySource
     lockTimeoutMs: number
-    staleLockMs: number
     lockPollMs: number
+    sandboxPolicy?: FilesystemSandboxPolicy
   }) {
     this.workspaceRoot = params.workspaceRoot
     this.repositoryId = params.repositoryId
     this.workspaceId = params.workspaceId
+    this.identitySource = params.identitySource
     this.brokerDir = path.join(
       path.resolve(params.stateDir),
       params.repositoryId,
@@ -201,13 +206,15 @@ export class WorkspaceMutationBroker {
     this.statePath = path.join(this.brokerDir, 'state.json')
     this.lockPath = `${this.brokerDir}.lock`
     this.lockTimeoutMs = params.lockTimeoutMs
-    this.staleLockMs = params.staleLockMs
     this.lockPollMs = params.lockPollMs
+    this.sandboxPolicy = params.sandboxPolicy && Object.freeze({ ...params.sandboxPolicy,
+      allowPaths: Object.freeze([...params.sandboxPolicy.allowPaths]) })
   }
 
   static async create(
     options: WorkspaceMutationBrokerOptions,
   ): Promise<WorkspaceMutationBroker> {
+    options = { ...options, executionContext: captureWorkspaceBootstrapExecution(options) }
     const resolvedRoot = path.resolve(options.cwd)
     const workspaceRoot = await fs
       .realpath(resolvedRoot)
@@ -221,17 +228,19 @@ export class WorkspaceMutationBroker {
         'Workspace mutation broker state must be stored outside the workspace.',
       )
     }
-    const identity = await resolveWorkspaceIdentity({
+    const identity = await resolveBootstrapWorkspaceIdentity({
       cwd: workspaceRoot,
-    }).catch(() => fallbackIdentity(workspaceRoot))
+      executionContext: options.executionContext,
+    })
     const broker = new WorkspaceMutationBroker({
       workspaceRoot,
       stateDir,
       repositoryId: identity.repositoryId,
       workspaceId: identity.workspaceId,
+      identitySource: identity.identitySource,
       lockTimeoutMs: options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
-      staleLockMs: options.staleLockMs ?? DEFAULT_STALE_LOCK_MS,
       lockPollMs: options.lockPollMs ?? DEFAULT_LOCK_POLL_MS,
+      sandboxPolicy: options.sandboxPolicy,
     })
     await broker.initialize()
     return broker
@@ -544,9 +553,9 @@ export class WorkspaceMutationBroker {
   }
 
   private async initialize(): Promise<void> {
-    await fs.mkdir(this.pendingDir, { recursive: true, mode: 0o700 })
-    await fs.mkdir(this.receiptsDir, { recursive: true, mode: 0o700 })
     await this.withWorkspaceLock(async () => {
+      await fs.mkdir(this.pendingDir, { recursive: true, mode: 0o700 })
+      await fs.mkdir(this.receiptsDir, { recursive: true, mode: 0o700 })
       if (!(await this.exists(this.statePath))) {
         await this.writeJsonDurable(this.statePath, {
           schemaVersion: 1,
@@ -590,9 +599,15 @@ export class WorkspaceMutationBroker {
         break
       } catch (error) {
         if (errorCode(error) !== 'EEXIST') throw error
-        if (await this.canRecoverLock()) {
-          await fs.rm(this.lockPath, { recursive: true, force: true })
-          continue
+        const status = await this.readLockStatus()
+        if (status === 'missing') continue
+        if (
+          status === 'dead' ||
+          (status === 'unknown' && Date.now() - startedAt >= this.lockTimeoutMs)
+        ) {
+          throw new WorkspaceMutationBrokerRecoveryError(
+            `Workspace mutation lock requires recovery: '${this.lockPath}' (${status} owner; automatic takeover is disabled).`,
+          )
         }
         if (Date.now() - startedAt >= this.lockTimeoutMs) {
           throw new Error(
@@ -603,6 +618,8 @@ export class WorkspaceMutationBroker {
       }
     }
 
+    // No participant can replace this live ownership: contenders never reclaim.
+    // This is cooperative exclusion, not fencing against external lock deletion.
     return async () => {
       try {
         const current = await this.readJson<LockOwner>(
@@ -618,32 +635,45 @@ export class WorkspaceMutationBroker {
     }
   }
 
-  private async canRecoverLock(): Promise<boolean> {
-    let age: number
+  /**
+   * Liveness is diagnostic only. No contender may remove an existing lock,
+   * even after ESRCH: read/check/unlink is not an atomic ownership transfer.
+   * Only the process which exclusively created it may release it. Crashes
+   * leave inspectable recovery-required state until explicit resolution.
+   */
+  private async readLockStatus(): Promise<
+    'missing' | 'live' | 'dead' | 'unknown'
+  > {
+    let owner: LockOwner
     try {
-      age = Date.now() - (await fs.stat(this.lockPath)).mtimeMs
-    } catch (error) {
-      if (errorCode(error) === 'ENOENT') return true
-      throw error
-    }
-    if (age <= this.staleLockMs) return false
-    try {
-      const owner = await this.readJson<LockOwner>(
+      owner = await this.readJson<LockOwner>(
         path.join(this.lockPath, 'owner.json'),
       )
-      return !this.isProcessAlive(owner.pid)
     } catch (error) {
-      return errorCode(error) === 'ENOENT' || error instanceof SyntaxError
+      if (errorCode(error) !== 'ENOENT' && !(error instanceof SyntaxError)) {
+        return 'unknown'
+      }
+      return (await this.exists(this.lockPath)) ? 'unknown' : 'missing'
     }
-  }
-
-  private isProcessAlive(pid: number): boolean {
-    if (!Number.isSafeInteger(pid) || pid <= 0) return false
+    if (
+      !owner ||
+      owner.schemaVersion !== 1 ||
+      typeof owner.token !== 'string' ||
+      !owner.token ||
+      !Number.isSafeInteger(owner.pid) ||
+      owner.pid <= 0
+    ) {
+      return 'unknown'
+    }
     try {
-      process.kill(pid, 0)
-      return true
+      process.kill(owner.pid, 0)
+      return 'live'
     } catch (error) {
-      return errorCode(error) === 'EPERM'
+      return errorCode(error) === 'ESRCH'
+        ? 'dead'
+        : errorCode(error) === 'EPERM'
+          ? 'live'
+          : 'unknown'
     }
   }
 
@@ -828,7 +858,37 @@ export class WorkspaceMutationBroker {
     await this.writeJsonDurable(finalPath, finalized)
     await this.removeIfExists(pendingPath)
     await this.fsyncDirectory(this.pendingDir)
+    await this.pruneOldReceipts()
     return finalized
+  }
+
+  /**
+   * Retention prune (hr-09 P4.3): delete the oldest finalized receipts beyond
+   * RECEIPT_RETENTION_LIMIT. Best-effort by design — a failed unlink logs and
+   * continues (the next finalize retries), never failing the mutation that
+   * just succeeded. Never touches the pending dir.
+   */
+  private async pruneOldReceipts(): Promise<void> {
+    let names: string[]
+    try {
+      names = (await fs.readdir(this.receiptsDir))
+        .filter((name) => name.endsWith('.json'))
+        .sort()
+    } catch {
+      return
+    }
+    if (names.length <= RECEIPT_RETENTION_LIMIT) return
+    const excess = names.slice(0, names.length - RECEIPT_RETENTION_LIMIT)
+    for (const name of excess) {
+      try {
+        await fs.unlink(path.join(this.receiptsDir, name))
+      } catch (error) {
+        if (errorCode(error) === 'ENOENT') continue
+        // Best-effort: log-free by design (no logger on this class); the
+        // next finalize retries the prune.
+      }
+    }
+    await this.fsyncDirectory(this.receiptsDir)
   }
 
   private receiptFileName(receipt: WorkspaceMutationReceipt): string {
@@ -850,7 +910,7 @@ export class WorkspaceMutationBroker {
     const raw = pathLikeToString(value)
     const absolutePath = path.resolve(this.workspaceRoot, raw)
     if (
-      !isWithin(this.workspaceRoot, absolutePath) ||
+      !this.isAllowedPath(absolutePath) ||
       absolutePath === this.workspaceRoot
     ) {
       throw new Error(
@@ -859,7 +919,7 @@ export class WorkspaceMutationBroker {
     }
     const parent = path.dirname(absolutePath)
     const canonicalParent = await fs.realpath(parent)
-    if (!isWithin(this.workspaceRoot, canonicalParent)) {
+    if (!this.isAllowedPath(canonicalParent)) {
       throw new Error(
         `Workspace mutation parent escapes the broker root: ${raw}`,
       )
@@ -880,7 +940,7 @@ export class WorkspaceMutationBroker {
   private absoluteFromRelative(relativePath: string): string {
     const absolute = path.resolve(this.workspaceRoot, relativePath)
     if (
-      !isWithin(this.workspaceRoot, absolute) ||
+      !this.isAllowedPath(absolute) ||
       absolute === this.workspaceRoot
     ) {
       throw new WorkspaceMutationBrokerRecoveryError(
@@ -888,6 +948,12 @@ export class WorkspaceMutationBroker {
       )
     }
     return absolute
+  }
+
+  private isAllowedPath(absolutePath: string): boolean {
+    return this.sandboxPolicy
+      ? withFilesystemSandbox(this.sandboxPolicy, () => resolveProjectPath(this.workspaceRoot, absolutePath) !== null)
+      : isWithin(this.workspaceRoot, absolutePath)
   }
 
   private stagingRelativePath(target: string, suffix: string): string {

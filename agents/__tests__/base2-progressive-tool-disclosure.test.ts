@@ -93,6 +93,10 @@ describe('base2 progressive tool disclosure (M1)', () => {
       'list_directory',
       'glob',
       'code_search',
+      'go_to_definition',
+      'find_references',
+      'hover_type',
+      'workspace_symbol',
       'ask_user',
       'skill',
       'suggest_followups',
@@ -102,6 +106,9 @@ describe('base2 progressive tool disclosure (M1)', () => {
       'check_background_agent',
       'read_logs',
       'edit_transaction',
+      'rename_symbol',
+      'code_action',
+      'extract_symbol',
       'create_plan',
       'update_plan_status',
       'inspect_workspace',
@@ -178,6 +185,10 @@ describe('base2 progressive tool disclosure (M1)', () => {
       'list_directory',
       'glob',
       'code_search',
+      'go_to_definition',
+      'find_references',
+      'hover_type',
+      'workspace_symbol',
       'ask_user',
       'skill',
       'suggest_followups',
@@ -268,13 +279,12 @@ describe('base2 progressive tool disclosure (M1)', () => {
     expect(tools).not.toContain('write_todos')
   })
 
-  test('token budget: always-on full tool surface is under 22.5k', async () => {
-    // The deliberate new default is the full 34-tool surface (measured ~21.4k
-    // tokens). This is a regression ceiling for that decision, not a
-    // core-only budget. Kept tight (~5% headroom) so an accidental surface
-    // expansion trips it instead of growing silently.
+  test('token budget: always-on full tool surface is under 29.5k', async () => {
+    // Field descriptions are retained for tool argument clarity; the measured
+    // full native-tool surface is ~27.6k. This ceiling keeps about 6% growth
+    // headroom and does not include the agent catalog or other prompt text.
     const tools = createBase2('default').toolNames ?? []
-    expect(await toolSurfaceTokenCount(tools)).toBeLessThan(22_500)
+    expect(await toolSurfaceTokenCount(tools)).toBeLessThan(29_500)
   })
 
   test('programmaticToolNames unchanged vs today', () => {
@@ -448,6 +458,9 @@ describe('tier resolution helpers (M1-T3)', () => {
         'spawn_agents',
         'read_files',
         'edit_transaction',
+        'rename_symbol',
+        'code_action',
+        'extract_symbol',
         'create_plan',
         'update_plan_status',
         'inspect_workspace',
@@ -478,6 +491,9 @@ describe('tier resolution helpers (M1-T3)', () => {
         'spawn_agents',
         'read_files',
         'edit_transaction',
+        'rename_symbol',
+        'code_action',
+        'extract_symbol',
         'create_plan',
         'update_plan_status',
         'inspect_workspace',
@@ -499,6 +515,9 @@ describe('tier resolution helpers (M1-T3)', () => {
         'spawn_agents',
         'read_files',
         'edit_transaction',
+        'rename_symbol',
+        'code_action',
+        'extract_symbol',
         'create_plan',
         'update_plan_status',
         'inspect_workspace',
@@ -544,6 +563,9 @@ describe('tier resolution helpers (M1-T3)', () => {
         'spawn_agents',
         'read_files',
         'edit_transaction',
+        'rename_symbol',
+        'code_action',
+        'extract_symbol',
         'create_plan',
         'update_plan_status',
         'inspect_workspace',
@@ -587,6 +609,9 @@ describe('tier resolution helpers (M1-T3)', () => {
         'create_plan',
         'read_files',
         'edit_transaction',
+        'rename_symbol',
+        'code_action',
+        'extract_symbol',
         'update_plan_status',
         'inspect_workspace',
         'inspect_environment',
@@ -621,6 +646,9 @@ describe('tier resolution helpers (M1-T3)', () => {
         'spawn_agents',
         'read_files',
         'edit_transaction',
+        'rename_symbol',
+        'code_action',
+        'extract_symbol',
         'create_plan',
         'update_plan_status',
         'inspect_workspace',

@@ -1,13 +1,17 @@
 import {
   decodeReadCapabilityToken,
-  getContentHash,
+  getExactContentHash,
+  getObservationContentHash,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
 import {
+  describeRawReadFailure,
+  reanchorRawReadCapability,
+} from '@codebuff/common/util/byte-text'
+import { rawReadBasesMatch } from '@codebuff/common/util/raw-read-basis'
+import {
   describeLineBounds,
   getLineCoordinates,
-  getRangeSlice,
-  isWholeFileCoveringRange,
 } from '@codebuff/common/util/line-coordinates'
 import {
   MAX_FILE_CHANGES_PER_TRANSACTION,
@@ -34,11 +38,15 @@ import {
   coordinateEditApplication,
   invalidatePreparedEditPaths,
 } from './edit-application-coordinator'
-import { processEditTransaction } from '../../../process-edit-transaction'
+import {
+  attributeContentOffset,
+  processEditTransaction,
+} from '../../../process-edit-transaction'
 import {
   preflightValidateSyntax,
   formatPreflightErrorMessage,
 } from '../../../util/preflight-syntax-validation'
+import type { SyntaxValidationResult } from '../../../util/preflight-syntax-validation'
 
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type { FileProcessingState } from './write-file'
@@ -52,16 +60,40 @@ import type { RequestOptionalFileFn } from '@codebuff/common/types/contracts/cli
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ParamsExcluding } from '@codebuff/common/types/function-params'
 import type { ProjectFileContext } from '@codebuff/common/util/file'
+import type { ConfirmedPostEditAnchor } from '@codebuff/common/types/session-state'
+import type { RawReadBasisV1 } from '@codebuff/common/util/raw-read-basis'
 
 const TRANSACTION_SNAPSHOT_CONCURRENCY = 8
+
+function isConfirmedWholeFileAnchorFresh(
+  anchor: ConfirmedPostEditAnchor,
+  content: string,
+  scope: { projectId: string; path: string; runId: string },
+): boolean {
+  const decoded = decodeReadCapabilityToken(anchor.readCapability)
+  return (
+    typeof decoded !== 'string' &&
+    decoded.tokenVersion === 'v4' &&
+    decoded.rawBasis?.scope === 'whole' &&
+    readCapabilityMatchesScope(decoded, scope) &&
+    anchor.startLine === 1 &&
+    anchor.startLine === decoded.startLine &&
+    anchor.endLine === decoded.endLine &&
+    anchor.contentHash === decoded.hash &&
+    anchor.contentHash === getObservationContentHash(content) &&
+    rawReadBasesMatch(anchor.rawBasis, decoded.rawBasis) &&
+    reanchorRawReadCapability({ content, capability: decoded }).ok
+  )
+}
 
 /**
  * Conservative signal that a preflight syntax message is a transport-truncation
  * artifact (a payload cut in transit) rather than a genuine code-syntax error.
- * Only fires on SMALL payloads carrying `Unexpected )` / `Unexpected ,`: a real
- * file very rarely has more closers than openers, but a payload whose newString
- * was cut mid-expression ends exactly there. Genuine syntax errors on real file
- * content keep the normal preflight_failed path; this never overrides them.
+ * Fires on a payload carrying `Unexpected )` / `Unexpected ,` whose replacement
+ * content has more closers than openers: a real file very rarely has more
+ * closers than openers, but a payload whose newString was cut mid-expression
+ * ends exactly there. Genuine syntax errors on real file content keep the
+ * normal preflight_failed path; this never overrides them.
  *
  * The closer-over-opener heuristic on the edit payload alone can mislabel a
  * malformed-but-NOT-truncated edit whose newString legitimately has more
@@ -97,9 +129,11 @@ function looksLikeTruncatedEditContent(
     return false
   }
   const text = fragments.join('\n')
-  // Truncation only makes sense for sub-slab payloads; large payloads fail at
-  // argument-parse instead and never reach preflight.
-  if (text.length > 64 * 1024) return false
+  // Payload size never disqualifies the classification: large payloads are
+  // exactly the ones transport truncates, so a size bail-out would hide the
+  // very case this signal exists for. False positives on complete content stay
+  // blocked by the isRawDelimiterUnbalanced(filePostEditContent) corroboration
+  // below, which a non-truncated file always fails.
   const balance = (open: string, close: string): number => {
     let delta = 0
     for (const ch of text) {
@@ -178,6 +212,92 @@ function isCapabilityBearingEdit(edit: TransactionEdit): boolean {
   )
 }
 
+type ContentLedger = Parameters<typeof attributeContentOffset>[0]
+
+type PreflightFailureAttribution = {
+  editIndex: number
+  attributionSuffix: string
+}
+
+/**
+ * Refines the naive first-edit-on-path attribution with the transaction
+ * ledger: it records which edit produced each byte range of the candidate
+ * content, so the edit that actually emitted the broken bytes is named
+ * instead of the first edit that happened to touch the same path.
+ */
+function resolvePreflightFailureAttribution(params: {
+  syntaxValidation: SyntaxValidationResult
+  file: { path: string; content: string; ledger?: ContentLedger }
+  edits: TransactionEdit[]
+  fallbackEditIndex: number
+  originalIndexByContentEditIndex: Map<number, number>
+  initialContentByPath: Map<string, string | null>
+}): PreflightFailureAttribution {
+  const {
+    syntaxValidation,
+    file,
+    edits,
+    fallbackEditIndex,
+    originalIndexByContentEditIndex,
+    initialContentByPath,
+  } = params
+  let editIndex = fallbackEditIndex
+  let attributionSuffix = ''
+  if (typeof syntaxValidation.line === 'number' && syntaxValidation.line >= 1) {
+    // getLineCoordinates normalizes line endings, matching the normalized
+    // space the ledger is built in (via normalizeLineEndings), so this
+    // offset is comparable to the ledger's after-range offsets. On CRLF
+    // files a column may drift by the dropped \r — positions here are
+    // best-effort diagnostics, not anchors.
+    const { lines, visibleLineCount } = getLineCoordinates(file.content)
+    const clampedLine = Math.min(syntaxValidation.line, visibleLineCount)
+    let offset = 0
+    for (let index = 0; index < clampedLine - 1; index++) {
+      offset += lines[index]!.length + 1
+    }
+    if (
+      typeof syntaxValidation.column === 'number' &&
+      syntaxValidation.column >= 1
+    ) {
+      offset += Math.min(
+        syntaxValidation.column - 1,
+        lines[clampedLine - 1]!.length,
+      )
+    }
+    const attribution = attributeContentOffset(file.ledger ?? [], offset)
+    const originalContent = initialContentByPath.get(file.path)
+    // The ledger's owningEditIndex is an index into contentEdits (the
+    // array processEditTransaction received), so translate it back to the
+    // model's original edits[] index before reporting it.
+    const originalEditIndex =
+      attribution.owningEditIndex === null
+        ? undefined
+        : originalIndexByContentEditIndex.get(attribution.owningEditIndex)
+    if (
+      originalEditIndex !== undefined &&
+      originalEditIndex >= 0 &&
+      originalEditIndex < edits.length
+    ) {
+      editIndex = originalEditIndex
+      attributionSuffix = ` The failing content was produced by edit ${editIndex + 1} of ${edits.length} (near line ${syntaxValidation.line} of the candidate content).`
+    } else if (
+      attribution.originalOffset !== null &&
+      typeof originalContent === 'string'
+    ) {
+      // Best-effort: the ledger maps original offsets in line-ending
+      // normalized space, so on CRLF files the reported current-file line
+      // may drift by the dropped carriage returns.
+      const originalLine = originalContent
+        .slice(0, attribution.originalOffset)
+        .split('\n').length
+      attributionSuffix = ` Near line ${syntaxValidation.line} of the candidate content (line ${originalLine} of the current file).`
+    } else {
+      attributionSuffix = ` Near line ${syntaxValidation.line} of the candidate content.`
+    }
+  }
+  return { editIndex, attributionSuffix }
+}
+
 /**
  * Server-side post-edit authority substitution. Preflight-time edit reshaping
  * only — never writes files, never partially applies, never touches reread
@@ -191,17 +311,17 @@ function isCapabilityBearingEdit(edit: TransactionEdit): boolean {
  *
  * Fail closed — substitute ONLY when ALL of these hold; otherwise return the
  * edit unchanged so the existing strict capability path fires:
- * 1. The provided token decodes to a well-formed cap.v3 (an undecodable token
+ * 1. The provided token decodes to an authenticated cap.v4 with a whole raw basis (an undecodable token
  *    is owned by the existing capability_invalid path).
  * 2. A confirmed post-edit anchor exists for the path.
- * 3. The anchor is whole-file (startLine === 1) — a scoped anchor never
+ * 3. The anchor carries an authenticated whole raw basis — a scoped anchor never
  *    substitutes, least of all for a whole-file overwrite.
  * 4. The transaction snapshot content for the path is known.
- * 5. The anchor hash is fresh against the current snapshot — a mismatch means
+ * 5. The anchor's exact raw hash is fresh against the current snapshot — a mismatch means
  *    the file changed since the confirmed apply.
  * 6. The anchor's own capability re-decodes and is scope-bound to this same
  *    run + normalized path (cross-run / cross-path anti-replay).
- * 7. The PROVIDED capability is itself whole-file covering — substituting a
+ * 7. The PROVIDED capability itself carries a whole raw basis — substituting a
  *    scoped capability with the whole-file anchor would widen what the edit
  *    can target (with omitted startLine/endLine the transaction defaults the
  *    target from the substituted capability's span, turning a scoped edit
@@ -230,19 +350,24 @@ export function substituteConfirmedPostEditCapabilities(
     providedToken: string,
   ): string | null => {
     const decodedProvided = decodeReadCapabilityToken(providedToken)
-    if (typeof decodedProvided === 'string') {
+    if (
+      typeof decodedProvided === 'string' ||
+      decodedProvided.tokenVersion !== 'v4' ||
+      decodedProvided.startLine !== 1 ||
+      decodedProvided.rawBasis?.scope !== 'whole'
+    ) {
       return null
     }
     const anchor = fileProcessingState.confirmedPostEditAnchorsByPath?.[path]
     if (!anchor) return null
-    if (anchor.startLine !== 1) return null
     const snapshotContent = initialContentByPath.get(path)
     if (typeof snapshotContent !== 'string') return null
-    if (anchor.contentHash !== getContentHash(snapshotContent)) return null
-    const decodedAnchor = decodeReadCapabilityToken(anchor.readCapability)
-    if (typeof decodedAnchor === 'string') return null
     if (
-      !readCapabilityMatchesScope(decodedAnchor, { projectId, path, runId })
+      !isConfirmedWholeFileAnchorFresh(anchor, snapshotContent, {
+        projectId,
+        path,
+        runId,
+      })
     ) {
       return null
     }
@@ -253,15 +378,6 @@ export function substituteConfirmedPostEditCapabilities(
     // whole-file clobber. Only a provided capability that already covers the
     // whole file may take the anchor; a scoped caller keeps its own token and
     // follows the normal strict/stale/re-read recovery path.
-    if (
-      !isWholeFileCoveringRange(
-        getLineCoordinates(snapshotContent),
-        decodedProvided.startLine,
-        decodedProvided.endLine,
-      )
-    ) {
-      return null
-    }
     // 8. Provided-capability scope anti-replay (fail closed): the PROVIDED
     // token must itself be scope-bound to this same project + path + run. A
     // decodable whole-file token minted for a DIFFERENT path, project, or run
@@ -349,6 +465,11 @@ export const handleEditTransaction = (async (
     requestClientToolCall,
     requestOptionalFile,
   } = params
+  // D22/PR-T4: with the edit-blocks flag enabled the provider schema accepts
+  // a raw block payload string, but the preprocess translates it into edit
+  // objects before this handler runs — a string can never reach here, and the
+  // runtime inputSchema deliberately has no string arm so this stays typed as
+  // the edit-object array.
   const edits = toolCall.input.edits.map((edit) => ({
     ...edit,
     path: normalizeToolPath(edit.path),
@@ -518,14 +639,14 @@ export const handleEditTransaction = (async (
   }
 
   /**
-   * Validate write_file basedOnRead: must be whole-file covering, scope-bound,
-   * and hash-fresh against current content. Partial ranges never authorize.
+   * Validate write_file basedOnRead: must carry a whole raw basis, be scope-bound,
+   * and match exact current bytes. Line selectors never authorize whole writes.
    */
   const validateWriteFileBasedOnRead = (
     path: string,
     content: string,
     token: string,
-  ): { ok: true } | { ok: false; error: string } => {
+  ): { ok: true; rawBasis: RawReadBasisV1 } | { ok: false; error: string } => {
     const decoded = decodeReadCapabilityToken(token)
     if (typeof decoded === 'string') {
       return { ok: false, error: decoded }
@@ -536,31 +657,21 @@ export const handleEditTransaction = (async (
         error: `write_file basedOnRead for ${path} belongs to a different project, path, or agent run. Re-read the whole file and pass the fresh capability.`,
       }
     }
-    // A full-file RANGE read numbers lines in visible space and hashes the slice
-    // without the trailing newline, while a whole-file paths read binds the
-    // capability ceiling. Both are complete observations, so accept either and
-    // re-hash exactly the slice the capability covered.
     const coordinates = getLineCoordinates(content)
-    if (
-      !isWholeFileCoveringRange(coordinates, decoded.startLine, decoded.endLine)
-    ) {
+    if (decoded.tokenVersion !== 'v4' || decoded.rawBasis?.scope !== 'whole') {
       return {
         ok: false,
-        error: `a range capability cannot authorize a whole-file overwrite for ${path} (capability covers lines ${decoded.startLine}-${decoded.endLine}; ${describeLineBounds(coordinates)}). Pass only a whole-file-covering cap.v3 from a complete paths or full-file range read.`,
+        error: `a range capability cannot authorize a whole-file overwrite for ${path} (capability covers lines ${decoded.startLine}-${decoded.endLine}; ${describeLineBounds(coordinates)}). Pass an authenticated cap.v4 with a whole raw basis from a complete paths read.`,
       }
     }
-    if (
-      decoded.hash !==
-      getContentHash(
-        getRangeSlice(coordinates, decoded.startLine, decoded.endLine),
-      )
-    ) {
+    const fresh = reanchorRawReadCapability({ content, capability: decoded })
+    if (!fresh.ok) {
       return {
         ok: false,
-        error: `write_file basedOnRead for ${path} did not match the current file content (stale hash). Re-read the whole file and retry with the fresh capability.`,
+        error: `write_file basedOnRead for ${path} did not match the current file content: ${describeRawReadFailure(fresh)}. Re-read the whole file and retry with the fresh capability.`,
       }
     }
-    return { ok: true }
+    return { ok: true, rawBasis: decoded.rawBasis }
   }
 
   // Memoize per (path, token): the same write_file edit can reach this helper
@@ -586,8 +697,22 @@ export const handleEditTransaction = (async (
       authorizeWholeFileFromCapabilityCache.set(cacheKey, auth)
       return auth
     }
+    if (
+      !grantWholeFileReadAuthorization(
+        fileProcessingState,
+        path,
+        content,
+        auth.rawBasis,
+      )
+    ) {
+      const result = {
+        ok: false as const,
+        error: `write_file basedOnRead for ${path} has no matching authenticated whole raw basis. Re-read the whole file before retrying.`,
+      }
+      authorizeWholeFileFromCapabilityCache.set(cacheKey, result)
+      return result
+    }
     freshWholeFileAuthorizationPaths.add(path)
-    grantWholeFileReadAuthorization(fileProcessingState, path, content)
     clearEditRereadRequirement(fileProcessingState, path, {
       clearContextCompacted: true,
     })
@@ -726,7 +851,7 @@ export const handleEditTransaction = (async (
         return
       }
       // write_file: context_compacted blocks overwrite even when sticky hash matches,
-      // unless an explicit whole-file-covering basedOnRead authorizes (handled above).
+      // unless basedOnRead authenticates a whole raw basis (handled above).
       if (
         edit.type === 'write_file' &&
         getEditRereadRequirement(fileProcessingState, edit.path)?.reason ===
@@ -781,9 +906,12 @@ export const handleEditTransaction = (async (
         const snapContent = initialContentByPath.get(edit.path)
         if (
           anchor &&
-          anchor.startLine === 1 &&
           typeof snapContent === 'string' &&
-          anchor.contentHash === getContentHash(snapContent)
+          isConfirmedWholeFileAnchorFresh(anchor, snapContent, {
+            projectId,
+            path: edit.path,
+            runId,
+          })
         ) {
           // Clear any stale reread marker on the source key so a later move
           // does not leave a lingering marker; preserve context_compacted,
@@ -960,15 +1088,39 @@ export const handleEditTransaction = (async (
     runId,
     logger,
   )
-  const contentEdits = substitutedEdits.filter(
-    (edit) =>
+  // processEditTransaction receives ONLY the content edits (create/delete/move
+  // are applied by the client-change builder below), so every index it reports
+  // — including the transformation ledger's per-action editIndex — is an index
+  // into contentEdits. This map translates those back to the model's original
+  // edits[] indices so failure attribution keeps naming the submitted edit.
+  // processEditTransaction's own edit union covers exactly these six members,
+  // so the Extract keeps contentEdits assignable to its edits parameter.
+  const contentEdits: Extract<
+    TransactionEdit,
+    {
+      type:
+        | 'str_replace'
+        | 'structured'
+        | 'replace_range'
+        | 'rewrite_symbol'
+        | 'patch'
+        | 'write_file'
+    }
+  >[] = []
+  const originalIndexByContentEditIndex = new Map<number, number>()
+  substitutedEdits.forEach((edit, editIndex) => {
+    if (
       edit.type === 'str_replace' ||
       edit.type === 'structured' ||
       edit.type === 'replace_range' ||
       edit.type === 'rewrite_symbol' ||
       edit.type === 'patch' ||
-      edit.type === 'write_file',
-  )
+      edit.type === 'write_file'
+    ) {
+      originalIndexByContentEditIndex.set(contentEdits.length, editIndex)
+      contentEdits.push(edit)
+    }
+  })
   const transactionResult =
     contentEdits.length > 0
       ? await processEditTransaction({
@@ -1041,9 +1193,9 @@ export const handleEditTransaction = (async (
     const invalidationPaths = narrowInvalidationToFailingPaths
       ? failingPaths
       : uniquePaths
-    // Match / atomic-batch aborts and capability failures both require one new
-    // snapshot for every transaction target so multi-file retries cannot reuse
-    // other paths from memory. Pure syntax failures never reach this branch.
+    // Revoke only the affected paths; retained authorizations are revalidated
+    // against live content on their next use. Pure syntax failures do not reach
+    // this branch.
     const requiresFreshRead =
       requiresFreshCapability ||
       isMatchOrAtomicAbort ||
@@ -1112,7 +1264,7 @@ export const handleEditTransaction = (async (
     // transaction still has to be resent (nothing was applied).
     const multiTargetRecoveryProse = narrowInvalidationToFailingPaths
       ? [
-          `Only ${failingPaths.join(', ')} lost read authorization and needs a fresh read; every other transaction target retains valid read state and does NOT need re-reading (this supersedes the generic re-read-every-target note above). Re-read ${failingPaths.join(', ')} only — for an anchored-scope or capability failure, a range that contains the target lines for that path is enough — then resend the whole transaction because no files were changed.`,
+          `Only ${failingPaths.join(', ')} lost read authorization and needs a fresh read; every other transaction target retains valid read state and does NOT need re-reading. Re-read ${failingPaths.join(', ')} only — for an anchored-scope or capability failure, a range that contains the target lines for that path is enough — then resend the whole transaction because no files were changed.`,
         ]
       : requiresFreshRead
         ? [
@@ -1143,22 +1295,43 @@ export const handleEditTransaction = (async (
   // (Bun.Transpiler), Python (structural validation), and Go (structural
   // validation). In Node.js, JS/TS validation is gracefully skipped.
   for (const file of transactionResult.files) {
-    const syntaxValidation = preflightValidateSyntax(file.path, file.content)
+    const syntaxValidation = await preflightValidateSyntax(
+      file.path,
+      file.content,
+    )
     if (!syntaxValidation.valid) {
       // A preflight syntax failure is NOT a stale-anchor failure: the edits
       // were structurally applied but the resulting content has a syntax
       // error. Don't force a re-read (markAllTransactionPathsAsRequiringRead)
       // — the agent only needs to fix the syntax, not re-read all files.
-      // Report the first edit index that targeted this path so the agent can
-      // identify which edit produced the broken content (multiple edits can
-      // target the same path; the first is the most actionable starting point).
-      const editIndex = edits.findIndex((edit) => edit.path === file.path)
+      // Report the edit that produced the broken content so the agent can fix
+      // it; the first-edit-on-path fallback below is only the starting point
+      // when the ledger cannot attribute the bytes.
+      const fallbackEditIndex = edits.findIndex(
+        (edit) => edit.path === file.path,
+      )
+      const { editIndex, attributionSuffix } =
+        resolvePreflightFailureAttribution({
+          syntaxValidation,
+          file,
+          edits,
+          fallbackEditIndex,
+          originalIndexByContentEditIndex,
+          initialContentByPath,
+        })
+      // The truncation classifier inspects the payload of the REFINED edit
+      // index. For single-edit and first-edit-on-path transactions the refined
+      // index equals the naive findIndex one, so the classification is
+      // byte-identical to the pre-attribution behavior.
       const truncated = looksLikeTruncatedEditContent(
         edits[editIndex] ??
           ({ type: 'delete', path: file.path } as TransactionEdit),
         syntaxValidation.message,
         file.content,
       )
+      // The attribution suffix rides along only on the genuine-syntax-error
+      // branch; a transport-truncated payload keeps its existing note.
+      const composedSyntaxMessage = `${syntaxValidation.message}${attributionSuffix}`
       return {
         output: [
           {
@@ -1169,13 +1342,15 @@ export const handleEditTransaction = (async (
                 file.path,
                 truncated
                   ? `${syntaxValidation.message} — the edit payload appears cut in transport (unbalanced delimiters). Re-send the edit; keep each edit's newString/content well under the transport-safe band.`
-                  : syntaxValidation.message,
+                  : composedSyntaxMessage,
               ),
               failures: [
                 {
                   editIndex,
                   path: file.path,
-                  errorMessage: syntaxValidation.message,
+                  errorMessage: truncated
+                    ? syntaxValidation.message
+                    : composedSyntaxMessage,
                   failureKind: truncated
                     ? PAYLOAD_TRUNCATED_ERROR_CODE
                     : 'preflight_failed',
@@ -1193,7 +1368,10 @@ export const handleEditTransaction = (async (
 
   for (const edit of edits) {
     if (edit.type !== 'create') continue
-    const syntaxValidation = preflightValidateSyntax(edit.path, edit.content)
+    const syntaxValidation = await preflightValidateSyntax(
+      edit.path,
+      edit.content,
+    )
     if (!syntaxValidation.valid) {
       const truncated = looksLikeTruncatedEditContent(
         edit,
@@ -1253,7 +1431,9 @@ export const handleEditTransaction = (async (
         type: 'patch',
         path,
         content: file.patch,
-        expectedHash: initial === null ? null : getContentHash(initial),
+        expectedHash:
+          initial === null ? null : getObservationContentHash(initial),
+        expectedRawHash: initial === null ? null : getExactContentHash(initial),
       },
     })
   }
@@ -1266,6 +1446,7 @@ export const handleEditTransaction = (async (
           path: edit.path,
           content: edit.content,
           expectedHash: null,
+          expectedRawHash: null,
         },
       })
     } else if (edit.type === 'delete') {
@@ -1276,7 +1457,8 @@ export const handleEditTransaction = (async (
           change: {
             type: 'delete',
             path: edit.path,
-            expectedHash: getContentHash(initial),
+            expectedHash: getObservationContentHash(initial),
+            expectedRawHash: getExactContentHash(initial),
           },
         })
       }
@@ -1289,7 +1471,8 @@ export const handleEditTransaction = (async (
             type: 'move',
             path: edit.path,
             destinationPath: edit.destinationPath,
-            expectedHash: getContentHash(initial),
+            expectedHash: getObservationContentHash(initial),
+            expectedRawHash: getExactContentHash(initial),
             destinationExpectedHash: null,
           },
         })
@@ -1390,6 +1573,7 @@ export const handleEditTransaction = (async (
           .map((edit) => edit.path),
       )
       for (const file of transactionResult.files) {
+        if (!confirmationPaths.has(file.path)) continue
         if (
           appliedWriteFilePaths.has(file.path) ||
           appliedNonAllowMultipleStrReplacePaths.has(file.path)
@@ -1419,7 +1603,10 @@ export const handleEditTransaction = (async (
     // tool-executor MIGRATION NOTE). The raw error is logged here; both the
     // top-level and the per-failure messages stay static.
     logger.warn(
-      { paths: transactionResult.files.map((file) => file.path), error: application.error },
+      {
+        paths: transactionResult.files.map((file) => file.path),
+        error: application.error,
+      },
       'edit_transaction apply threw; sanitized static error returned to the model',
     )
     return {

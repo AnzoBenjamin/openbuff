@@ -35,12 +35,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             target: linux-x64
             bun_target: bun-linux-x64-baseline
             platform: linux
             arch: x64
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             target: linux-arm64
             bun_target: bun-linux-arm64
             platform: linux
@@ -392,6 +392,29 @@ jobs:
             grep -Eq 'minos 11(\.0+)?' "$RUNNER_TEMP/vtool.txt"
           done
 
+      - name: Create tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          BINARY_FILE="${{ inputs.binary-name }}"
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            BINARY_FILE="${{ inputs.binary-name }}.exe"
+          fi
+          # The binary loads tree-sitter wasm grammars and the
+          # tree-sitter-queries/*.scm tag queries as sibling files at runtime
+          # (bun --compile asset embedding wasn't reliable on Windows). The
+          # shared list script fails if any of them is missing (N09).
+          LEGACY_FLAG=""
+          if [[ "${{ matrix.legacy_macos == true }}" == "true" ]]; then
+            LEGACY_FLAG="--legacy-macos"
+          fi
+          mapfile -t FILES < <(bash cli/scripts/release-tarball-files.sh cli/bin "$BINARY_FILE" $LEGACY_FLAG)
+          tar -czf ${{ inputs.binary-name }}-${{ matrix.target }}.tar.gz -C cli/bin "${FILES[@]}"
+          QUERY_COUNT=$(tar -tzf ${{ inputs.binary-name }}-${{ matrix.target }}.tar.gz | grep -c '^tree-sitter-queries/.*\.scm$')
+          EXPECTED=$(find packages/code-map/src/tree-sitter-queries -name '*.scm' | wc -l)
+          echo "Tarball ships $QUERY_COUNT/$EXPECTED tree-sitter queries"
+          test "$QUERY_COUNT" -eq "$EXPECTED"
+
       - name: Smoke test binary
         if: matrix.smoke_test != 'emulated'
         shell: bash
@@ -404,12 +427,8 @@ jobs:
           else
             BINARY_FILE="${{ inputs.binary-name }}"
           fi
-          cp "cli/bin/$BINARY_FILE" "$SMOKE_DIR/$BINARY_FILE"
-          cp cli/bin/tree-sitter*.wasm "$SMOKE_DIR/"
-          cp cli/bin/tree-sitter-manifest.json "$SMOKE_DIR/"
-          if [[ "${{ matrix.legacy_macos == true }}" == "true" ]]; then
-            cp cli/bin/libopentui.dylib cli/bin/rg "$SMOKE_DIR/"
-          fi
+          # Smoke the installed layout: extract the release tarball itself.
+          tar -xzf "${{ inputs.binary-name }}-${{ matrix.target }}.tar.gz" -C "$SMOKE_DIR"
           SMOKE_SCRIPT="$PWD/cli/scripts/smoke-binary.ts"
           cd "$SMOKE_DIR"
           BIN="$SMOKE_DIR/$BINARY_FILE"
@@ -442,30 +461,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Smoke the installed layout: extract the release tarball itself.
+          SMOKE_DIR="$(mktemp -d)"
+          trap 'rm -rf "$SMOKE_DIR"' EXIT
+          tar -xzf "${{ inputs.binary-name }}-${{ matrix.target }}.tar.gz" -C "$SMOKE_DIR"
           docker run --rm --platform linux/arm64 \
-            -v "$PWD/cli/bin:/app:ro" \
+            -v "$SMOKE_DIR:/app:ro" \
             ubuntu:24.04 \
-            bash -lc '/app/${{ inputs.binary-name }} --version | tail -n 1 | grep -Fx "${{ inputs.new-version }}" && /app/${{ inputs.binary-name }} --help >/dev/null'
-
-      - name: Create tarball
-        shell: bash
-        run: |
-          BINARY_FILE="${{ inputs.binary-name }}"
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            BINARY_FILE="${{ inputs.binary-name }}.exe"
-          fi
-          # Bundle the binary alongside tree-sitter.wasm — the CLI loads
-          # the wasm as a sibling file at runtime since bun --compile
-          # asset embedding wasn't reliable on Windows.
-          FILES=("$BINARY_FILE")
-          for wasm in cli/bin/tree-sitter*.wasm; do
-            FILES+=("$(basename "$wasm")")
-          done
-          FILES+=(tree-sitter-manifest.json)
-          if [[ "${{ matrix.legacy_macos == true }}" == "true" ]]; then
-            FILES+=(libopentui.dylib rg)
-          fi
-          tar -czf ${{ inputs.binary-name }}-${{ matrix.target }}.tar.gz -C cli/bin "${FILES[@]}"
+            bash -lc '/app/${{ inputs.binary-name }} --version | tail -n 1 | grep -Fx "${{ inputs.new-version }}" && /app/${{ inputs.binary-name }} --help >/dev/null && /app/${{ inputs.binary-name }} --smoke-code-map'
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v7
@@ -590,6 +593,20 @@ jobs:
           OVERRIDE_PLATFORM: win32
           OVERRIDE_ARCH: x64
 
+      - name: Create tarball
+        shell: bash
+        run: |
+          set -euo pipefail
+          BINARY_FILE="${{ inputs.binary-name }}.exe"
+          # Same shared list as the matrix job (wasm, manifest and
+          # tree-sitter-queries/*.scm next to the binary).
+          mapfile -t FILES < <(bash cli/scripts/release-tarball-files.sh cli/bin "$BINARY_FILE")
+          tar -czf ${{ inputs.binary-name }}-win32-x64.tar.gz -C cli/bin "${FILES[@]}"
+          QUERY_COUNT=$(tar -tzf ${{ inputs.binary-name }}-win32-x64.tar.gz | grep -c '^tree-sitter-queries/.*\.scm$')
+          EXPECTED=$(find packages/code-map/src/tree-sitter-queries -name '*.scm' | wc -l)
+          echo "Tarball ships $QUERY_COUNT/$EXPECTED tree-sitter queries"
+          test "$QUERY_COUNT" -eq "$EXPECTED"
+
       - name: Smoke test binary
         shell: bash
         # SMOKE_VERBOSE passthrough for Windows diagnostics — buildSmokeEnv spreads
@@ -601,9 +618,8 @@ jobs:
           SMOKE_DIR="$(mktemp -d)"
           trap 'rm -rf "$SMOKE_DIR"' EXIT
           BINARY_FILE="${{ inputs.binary-name }}.exe"
-          cp "cli/bin/$BINARY_FILE" "$SMOKE_DIR/$BINARY_FILE"
-          cp cli/bin/tree-sitter*.wasm "$SMOKE_DIR/"
-          cp cli/bin/tree-sitter-manifest.json "$SMOKE_DIR/"
+          # Smoke the installed layout: extract the release tarball itself.
+          tar -xzf "${{ inputs.binary-name }}-win32-x64.tar.gz" -C "$SMOKE_DIR"
           # Git Bash on windows-latest (bash.EXE) uses MSYS path translation.
           # Use cygpath -w when available so BIN and script paths are Windows-native
           # for bun/node child_process.spawn (which does not understand /c/... MSYS paths).
@@ -634,19 +650,6 @@ jobs:
           # deterministically — previous allowlist dropped critical Windows vars
           # and caused 0-byte SIGKILL hangs with stdio pipe.
           bun "$SMOKE_SCRIPT" "$BIN"
-
-      - name: Create tarball
-        shell: bash
-        run: |
-          BINARY_FILE="${{ inputs.binary-name }}.exe"
-          # Bundle tree-sitter.wasm next to the binary; see the
-          # equivalent matrix-job tar step for context.
-          FILES=("$BINARY_FILE")
-          for wasm in cli/bin/tree-sitter*.wasm; do
-            FILES+=("$(basename "$wasm")")
-          done
-          FILES+=(tree-sitter-manifest.json)
-          tar -czf ${{ inputs.binary-name }}-win32-x64.tar.gz -C cli/bin "${FILES[@]}"
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v7

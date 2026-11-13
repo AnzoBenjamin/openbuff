@@ -3,6 +3,11 @@ import {
   getContentHash,
 } from '@codebuff/common/util/content-hash'
 import { describe, expect, it } from 'bun:test'
+import {
+  captureTextDocument,
+  getRawLineSpan,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 import { processEditTransaction } from '../process-edit-transaction'
 
@@ -27,11 +32,13 @@ const initial = 'a\nb\n'
  * final newline) hashed over that same slice.
  */
 function wholeFileReadCapability(content: string): string {
+  const document = captureTextDocument(content)
   return encodeReadCapabilityToken({
     startLine: 1,
-    endLine: content.replace(/\r\n?/g, '\n').split('\n').length,
-    hash: getContentHash(content),
+    endLine: document.maxCapabilityLine,
+    hash: document.observationHash,
     scope: { ...issuer, path },
+    rawBasis: getRawReadBasis(document, 1, document.maxCapabilityLine, 'whole'),
   })
 }
 
@@ -42,13 +49,26 @@ function wholeFileReadCapability(content: string): string {
 function rangeReadCapability(params: {
   startLine: number
   endLine: number
-  content: string
+  rawContent: string
 }): string {
+  const document = captureTextDocument(params.rawContent)
+  const span = getRawLineSpan(document, params.startLine, params.endLine)
   return encodeReadCapabilityToken({
     startLine: params.startLine,
     endLine: params.endLine,
-    hash: getContentHash(params.content),
+    hash: getContentHash(
+      document.observation.slice(
+        span.startObservationOffset,
+        span.endObservationOffset,
+      ),
+    ),
     scope: { ...issuer, path },
+    rawBasis: getRawReadBasis(
+      document,
+      params.startLine,
+      params.endLine,
+      'lines',
+    ),
   })
 }
 
@@ -67,7 +87,7 @@ describe('replace_range with a capability whose lines shifted', () => {
           readCapability: rangeReadCapability({
             startLine: 1,
             endLine: 2,
-            content: 'a\nb',
+            rawContent: 'a\nb\nc\n',
           }),
           newContent: 'A\nB',
         },
@@ -95,7 +115,7 @@ describe('replace_range with a capability whose lines shifted', () => {
           readCapability: rangeReadCapability({
             startLine: 1,
             endLine: 2,
-            content: 'a\nb',
+            rawContent: 'a\nb\nc\n',
           }),
           newContent: 'A\nB',
         },
@@ -104,8 +124,11 @@ describe('replace_range with a capability whose lines shifted', () => {
 
     expect('error' in result).toBe(true)
     if ('error' in result) {
-      expect(result.failures[0]?.errorMessage).toBe(
-        `replace_range blocked for ${path}: the readCapability-covered content is stale. Re-read lines 1-2 and retry with the fresh token. Cause: the observed content now appears at 2 identical candidate spans, so the target is ambiguous.`,
+      expect(result.failures[0]?.errorMessage).toContain(
+        'readCapability-covered content is stale',
+      )
+      expect(result.failures[0]?.errorMessage).toContain(
+        'the observed raw content now appears at 2 identical candidate spans',
       )
       // The recovery contract is unchanged: a refused re-anchor is still stale.
       expect(result.failures[0]?.failureKind).toBe('capability_stale')
@@ -124,7 +147,7 @@ describe('replace_range with a capability whose lines shifted', () => {
           readCapability: rangeReadCapability({
             startLine: 1,
             endLine: 2,
-            content: 'a\nb',
+            rawContent: 'a\nb\nc\n',
           }),
           newContent: 'A\nB',
         },
@@ -137,7 +160,7 @@ describe('replace_range with a capability whose lines shifted', () => {
         'the readCapability-covered content is stale',
       )
       expect(result.failures[0]?.errorMessage).toContain(
-        'the observed content was not found anywhere in the file',
+        'the observed raw bytes and line boundaries were not found in the current file',
       )
       expect(result.failures[0]?.failureKind).toBe('capability_stale')
     }

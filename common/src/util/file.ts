@@ -2,9 +2,14 @@ import * as os from 'os'
 import * as path from 'path'
 
 import { z } from 'zod/v4'
+import {
+  externalToolIdentitySchema,
+  externalToolPathParameterSchema,
+} from '../tools/external-tool'
 
 import type { CodebuffFileSystem } from '../types/filesystem'
 import type { SkillsMap } from '../types/skill'
+import type { InstructionFileRecord } from './instruction-files'
 
 export const FileTreeNodeSchema: z.ZodType<FileTreeNode> = z.object({
   name: z.string(),
@@ -80,10 +85,12 @@ export const customToolDefinitionsSchema = z
       // inputSchema can be a Zod schema (from MCP tools) or a JSON Schema object
       // (from SDK custom tools that have been serialized). The agent-runtime
       // converts JSON schemas to Zod using ensureZodSchema() before use.
-      inputSchema: z.custom<z.ZodType | Record<string, unknown>>(),
+      inputSchema: z.custom<z.ZodType | Record<string, unknown> | boolean>(),
       endsAgentStep: z.boolean().optional().default(false),
       description: z.string().optional(),
       exampleInputs: z.record(z.string(), z.any()).array().optional(),
+      identity: externalToolIdentitySchema.optional(),
+      pathParameters: z.array(externalToolPathParameterSchema).optional(),
     }),
   )
   .default(() => ({}))
@@ -94,6 +101,19 @@ export type CustomToolDefinitions = NonNullable<
 export const ProjectFileContextSchema = z.object({
   projectRoot: z.string(),
   cwd: z.string(),
+  /** Reference to this process's retained MCP host scope; labels confer no trust. */
+  mcpSessionReference: z.string().optional(),
+  mcpCatalogs: z
+    .record(
+      z.string(),
+      z.object({
+        generation: z.number().int().nonnegative().nullable(),
+        complete: z.boolean(),
+        incompleteReasons: z.array(z.string()),
+        origin: z.enum(['user', 'project', 'client']).optional(),
+      }),
+    )
+    .optional(),
   fileTreeSource: z.enum(['live', 'virtual']).optional(),
   fileTree: z.array(z.custom<FileTreeNode>()),
   fileTokenScores: z.record(z.string(), z.record(z.string(), z.number())),
@@ -102,9 +122,22 @@ export const ProjectFileContextSchema = z.object({
     .optional(),
   knowledgeFiles: z.record(z.string(), z.string()),
   userKnowledgeFiles: z.record(z.string(), z.string()).optional(),
+  /** N08: load-order records for instruction files in `knowledgeFiles`. */
+  instructionFiles: z
+    .array(
+      z.object({
+        path: z.string(),
+        scope: z.enum(['ancestor', 'project', 'nested', 'import']),
+        importedBy: z.string().optional(),
+        chars: z.number(),
+      }),
+    )
+    .optional(),
   agentTemplates: z.record(z.string(), z.any()).default(() => ({})),
   customToolDefinitions: customToolDefinitionsSchema,
   skills: z.record(z.string(), z.any()).optional(),
+  /** N02: false when the host withheld project skills (untrusted project). */
+  projectSkillsTrusted: z.boolean().optional(),
   gitChanges: z.object({
     status: z.string(),
     diff: z.string(),
@@ -127,6 +160,16 @@ export const ProjectFileContextSchema = z.object({
 export type ProjectFileContext = {
   projectRoot: string
   cwd: string
+  mcpSessionReference?: string
+  mcpCatalogs?: Record<
+    string,
+    {
+      generation: number | null
+      complete: boolean
+      incompleteReasons: string[]
+      origin?: 'user' | 'project' | 'client'
+    }
+  >
   /** Whether fileTree came from the filesystem or explicit in-memory files. */
   fileTreeSource?: 'live' | 'virtual'
   fileTree: FileTreeNode[]
@@ -134,9 +177,20 @@ export type ProjectFileContext = {
   tokenCallers?: Record<string, Record<string, string[]>>
   knowledgeFiles: Record<string, string>
   userKnowledgeFiles?: Record<string, string>
+  /**
+   * N08: instruction files (AGENTS.md / CLAUDE.md / knowledge.md and their
+   * `@path` imports) in load order. Content lives in `knowledgeFiles`. Absent
+   * when the caller supplied `knowledgeFiles` directly.
+   */
+  instructionFiles?: InstructionFileRecord[]
   agentTemplates: Record<string, any>
   customToolDefinitions: CustomToolDefinitions
   skills?: SkillsMap
+  /**
+   * N02: false when the host withheld project skills because the project is
+   * not trusted. The `skill` tool's disk fallback then skips project dirs.
+   */
+  projectSkillsTrusted?: boolean
   gitChanges: {
     status: string
     diff: string
@@ -154,6 +208,36 @@ export type ProjectFileContext = {
     cpus: number
     chromeAvailable: boolean
   }
+}
+
+/**
+ * The project root to use for scope and capability work, tolerating an absent
+ * fileContext.
+ *
+ * `ProjectFileContext.projectRoot` is typed as a required string, but the
+ * runtime value can be missing (a handler invoked from a programmatic/child
+ * path, a test-seam harness, or a partially-built context). Returning '' lets
+ * every downstream scope check fail closed rather than the handler throwing a
+ * raw TypeError out of `path.resolve`:
+ *
+ * - `encodeReadCapabilityToken` refuses an empty projectId, so no read
+ *   capability is minted; `hasAuthoritativeReadCapabilityScope` reports false.
+ * - `readCapabilityMatchesScope` simply fails to match, so a reconciliation
+ *   pass degrades to "unconfirmed" instead of crashing.
+ * - a workspace-path lease keyed on '' still conflicts correctly with other
+ *   rootless leases.
+ *
+ * DO NOT use this where the root anchors a CONTAINMENT decision. `path.resolve('',
+ * p)` is a real path (it resolves against `process.cwd()`), not an error, so an
+ * empty root would silently re-anchor a containment check on the cwd instead of
+ * the project. Sites like that must explicitly skip the check when there is no
+ * root — see the filesystem-scope backstop in
+ * `packages/agent-runtime/src/tools/tool-executor.ts`.
+ */
+export function resolveProjectRootOrEmpty(
+  fileContext: { projectRoot?: string } | undefined,
+): string {
+  return fileContext?.projectRoot ?? ''
 }
 
 export const fileRegex =

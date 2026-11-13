@@ -4,14 +4,14 @@ import browserUse from '../browser-use/browser-use'
 import researcherDocs from '../researcher/researcher-docs'
 
 describe('audited specialist contracts', () => {
-  test('browser-use defaults to read-only interaction and proportional media evidence', () => {
+  test('browser-use defaults to allow-interactions and workspace-write terminal profile', () => {
     expect(
       browserUse.inputSchema?.params?.properties?.interactionPolicy,
     ).toMatchObject({
-      default: 'read-only',
+      default: 'allow-interactions',
       enum: ['read-only', 'allow-interactions'],
     })
-    expect(browserUse.terminalPermissionProfile).toBe('read-only')
+    expect(browserUse.terminalPermissionProfile).toBe('workspace-write')
 
     const prompts = `${browserUse.systemPrompt}\n${browserUse.instructionsPrompt}`
     expect(prompts).toContain('Do not generate all media types')

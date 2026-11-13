@@ -4,14 +4,37 @@ import { ContentWithMarkdown } from './content-with-markdown'
 import { useTheme } from '../../hooks/use-theme'
 import { useChatStore } from '../../state/chat-store'
 import { shouldCollapseToolByDefault } from '../../utils/constants'
+import {
+  boundedFallbackOutput,
+  hasFallbackInputValue,
+} from '../../utils/fallback-input-summary'
 import { renderToolComponent } from '../tools/registry'
+import { StructuredResult } from '../tools/structured-result'
+import {
+  cleanPreviewText,
+  humanizeFieldName,
+  summarizeStructuredPreview,
+} from '../../utils/structured-preview'
+import { toolDisplayOutput } from '../../utils/tool-display-output'
+import { sliceTextCells } from '../../utils/text-boundaries'
+import { getStructuredErrorMessages } from '../../utils/tool-result-normalizer'
 import { ToolCallItem } from '../tools/tool-call-item'
+import { Button } from '../button'
+import { InspectAction } from '../inspect-action'
+import { documentForTool } from '../../utils/output-catalog'
+import { createJsonDocument } from '../../utils/output-document'
+import { useOutputReaderStore } from '../../state/output-reader-store'
+import { InlineResultScope } from '../tools/inline-results'
 
 import type { ContentBlock } from '../../types/chat'
-import type { MarkdownPalette } from '../../utils/markdown-renderer'
+import {
+  hasMarkdown,
+  type MarkdownPalette,
+} from '../../utils/markdown-renderer'
 
 interface ToolBranchProps {
   toolBlock: Extract<ContentBlock, { type: 'tool' }>
+  messageId?: string
   keyPrefix: string
   availableWidth: number
   onToggleCollapsed: (id: string) => void
@@ -21,6 +44,7 @@ interface ToolBranchProps {
 export const ToolBranch = memo(
   ({
     toolBlock,
+    messageId,
     keyPrefix,
     availableWidth,
     onToggleCollapsed,
@@ -32,8 +56,15 @@ export const ToolBranch = memo(
       state.streamingAgents.has(toolBlock.toolCallId),
     )
 
-    const sanitizePreview = (value: string): string =>
-      value.replace(/[#*_`~\[\]()]/g, '').trim()
+    const sanitizePreview = (value: string): string => {
+      const text = cleanPreviewText(value)
+        .replace(/[#*_`~\[\]()]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      const width = Math.max(1, Math.min(140, availableWidth - 4))
+      const shown = sliceTextCells(text, 0, Math.max(0, width - 1))
+      return shown.length < text.length ? `${shown}…` : text
+    }
 
     if (toolBlock.toolName === 'end_turn') {
       return null
@@ -63,16 +94,36 @@ export const ToolBranch = memo(
         ? shouldCollapseToolByDefault(toolBlock.toolName)
         : true)
 
-    const inputContent = `\`\`\`json\n${JSON.stringify(toolBlock.input, null, 2)}\n\`\`\``
-    const codeBlockLang =
-      toolBlock.toolName === 'run_terminal_command' ? '' : 'yaml'
-    const resultContent = toolBlock.output
-      ? `\n\n**Result:**\n\`\`\`${codeBlockLang}\n${toolBlock.output}\n\`\`\``
-      : ''
-    const fullContent = inputContent + resultContent
+    // Custom and MCP tools get the same disclosure hierarchy as shipped tools.
+    // Avoid projecting their fallback data at all when a bespoke renderer exists.
+    const inputContent =
+      !hasRegisteredComponent && hasFallbackInputValue(toolBlock.input)
+        ? toolBlock.input
+        : undefined
+    const displayOutput = !hasRegisteredComponent
+      ? toolDisplayOutput(toolBlock.outputRaw, toolBlock.output)
+      : {}
+    const fallbackError = !hasRegisteredComponent
+      ? getStructuredErrorMessages(toolBlock.outputRaw)[0]
+      : undefined
+    const fallbackFailure =
+      !hasRegisteredComponent &&
+      (fallbackError ||
+        toolBlock.lifecycle === 'failed' ||
+        toolBlock.lifecycle === 'cancelled')
+        ? `${toolBlock.lifecycle === 'cancelled' ? 'Cancelled' : 'Failed'}${fallbackError ? ` · ${cleanPreviewText(boundedFallbackOutput(fallbackError))}` : ''}`
+        : undefined
+    const structuredOutput = displayOutput.value
+    const fullContent = cleanPreviewText(
+      boundedFallbackOutput(displayOutput.text ?? ''),
+    )
 
     const lines = fullContent.split('\n').filter((line) => line.trim())
-    const firstLine = lines[0] || ''
+    const firstLine =
+      displayOutput.preview ??
+      (structuredOutput !== undefined
+        ? summarizeStructuredPreview(structuredOutput)
+        : lines[0] || '')
     const lastLine = lines[lines.length - 1] || firstLine
     const commandPreview =
       toolBlock.toolName === 'run_terminal_command' &&
@@ -84,7 +135,7 @@ export const ToolBranch = memo(
         : null
 
     const streamingPreview = isStreaming
-      ? (commandPreview ?? `${sanitizePreview(firstLine)}...`)
+      ? (commandPreview ?? (firstLine ? `${sanitizePreview(firstLine)}…` : ''))
       : ''
 
     const getToolFinishedPreview = useCallback(
@@ -110,7 +161,14 @@ export const ToolBranch = memo(
 
     const finishedPreview = !isStreaming
       ? (toolRenderConfig?.collapsedPreview ??
-        getToolFinishedPreview(commandPreview, lastLine))
+        sanitizePreview(
+          fallbackFailure ??
+            getToolFinishedPreview(
+              commandPreview,
+              displayOutput.preview ??
+                (structuredOutput !== undefined ? firstLine : lastLine),
+            ),
+        ))
       : ''
 
     const agentMarkdownOptions = {
@@ -121,34 +179,58 @@ export const ToolBranch = memo(
       },
     }
 
-    const displayContent = (
-      <ContentWithMarkdown
-        content={fullContent}
-        isStreaming={false}
-        codeBlockWidth={agentMarkdownOptions.codeBlockWidth}
-        palette={agentMarkdownOptions.palette}
-      />
-    )
-
-    const renderableDisplayContent =
-      displayContent === null ||
-      displayContent === undefined ||
-      displayContent === false ||
-      displayContent === '' ? null : (
-        <text
-          fg={theme.foreground}
-          style={{ wrapMode: 'word' }}
-          attributes={
-            theme.messageTextAttributes && theme.messageTextAttributes !== 0
-              ? theme.messageTextAttributes
-              : undefined
-          }
-        >
-          {displayContent}
+    const resultContent = fullContent ? (
+      hasMarkdown(fullContent) ? (
+        <ContentWithMarkdown
+          content={fullContent}
+          isStreaming={false}
+          codeBlockWidth={agentMarkdownOptions.codeBlockWidth}
+          palette={agentMarkdownOptions.palette}
+        />
+      ) : (
+        <text fg={theme.foreground} style={{ wrapMode: 'word' }}>
+          {fullContent}
         </text>
       )
+    ) : null
+    const renderableDisplayContent = (
+      <box style={{ flexDirection: 'column', width: '100%', gap: 1 }}>
+        {fallbackFailure ? (
+          <text fg={theme.error} style={{ wrapMode: 'word' }}>
+            {fallbackFailure}
+          </text>
+        ) : null}
+        {resultContent}
+        {structuredOutput !== undefined ? (
+          <StructuredResult value={structuredOutput} />
+        ) : null}
+        {inputContent !== undefined ? (
+          <box style={{ flexDirection: 'column', width: '100%' }}>
+            <text fg={theme.muted}>Input</text>
+            <StructuredResult value={inputContent} />
+            <Button
+              onClick={() =>
+                useOutputReaderStore.getState().open({
+                  document: createJsonDocument(
+                    `tool:${toolBlock.toolCallId}:input`,
+                    'Submitted input · captured request',
+                    inputContent,
+                  ),
+                })
+              }
+            >
+              <text fg={theme.muted}>Inspect input</text>
+            </Button>
+          </box>
+        ) : null}
+      </box>
+    )
 
-    const headerName = displayInfo.name
+    const readableName = cleanPreviewText(
+      humanizeFieldName(displayInfo.name),
+    ).replace(/\s+/g, ' ')
+    const headerName =
+      readableName.charAt(0).toUpperCase() + readableName.slice(1)
 
     const handleToggle = useCallback(() => {
       onToggleCollapsed(toolBlock.toolCallId)
@@ -165,8 +247,15 @@ export const ToolBranch = memo(
         }}
       >
         <ToolCallItem
-          name={headerName}
-          content={toolRenderConfig?.content ?? renderableDisplayContent}
+          name={toolRenderConfig?.displayName ?? headerName}
+          content={
+            <InlineResultScope
+              messageId={messageId ?? keyPrefix}
+              scope={`tool:${toolBlock.toolCallId}`}
+            >
+              {toolRenderConfig?.content ?? renderableDisplayContent}
+            </InlineResultScope>
+          }
           isCollapsed={isCollapsed}
           isStreaming={isStreaming}
           streamingPreview={streamingPreview}
@@ -177,6 +266,18 @@ export const ToolBranch = memo(
           titleSuffix={undefined}
           availableWidth={availableWidth}
         />
+        {!isCollapsed &&
+          (toolBlock.outputRaw !== undefined ||
+            toolBlock.output !== undefined) && (
+            <InspectAction
+              label="Inspect captured output"
+              onClick={() =>
+                useOutputReaderStore
+                  .getState()
+                  .open({ document: documentForTool(toolBlock) })
+              }
+            />
+          )}
       </box>
     )
   },

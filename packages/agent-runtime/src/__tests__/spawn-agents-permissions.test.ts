@@ -50,9 +50,7 @@ describe('Spawn Agents Permissions', () => {
     displayName: `Mock ${id}`,
     outputMode: 'last_message' as const,
     inputSchema: {
-      prompt: {
-        safeParse: () => ({ success: true }),
-      } as unknown as AgentTemplate['inputSchema']['prompt'],
+      prompt: z.string(),
     },
     spawnerPrompt: '',
     model: '',
@@ -688,9 +686,7 @@ describe('editor implementation brief validation', () => {
   const editorTemplate = {
     id: 'editor',
     inputSchema: {
-      prompt: {
-        safeParse: () => ({ success: true }),
-      },
+      prompt: z.string(),
     },
   } as unknown as AgentTemplate
 

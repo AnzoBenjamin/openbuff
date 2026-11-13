@@ -76,7 +76,7 @@ describe('RunTerminalCommandComponent', () => {
 
       expect(result).toBeDefined()
       expect(result.content).toBeDefined()
-      expect(result.collapsedPreview).toBe('$ ls -la')
+      expect(result.collapsedPreview).toBe('$ ls -la · completed · exit 0')
     })
 
     test('preserves leading whitespace in stdout (tree output)', () => {
@@ -302,6 +302,62 @@ describe('RunTerminalCommandComponent', () => {
   })
 
   describe('parseTerminalOutput', () => {
+    test.each(['{"ok":true}', '[1,2,3]', '"literal"', 'null', '42'])(
+      'preserves literal command JSON: %s',
+      (raw) => {
+        expect(parseTerminalOutput(raw).output).toBe(raw)
+      },
+    )
+    test('retains failed-command stdout and stderr alongside the timeout', () => {
+      const parsed = parseTerminalOutput(
+        JSON.stringify([
+          {
+            type: 'json',
+            value: {
+              errorMessage: 'Timed out',
+              timedOut: true,
+              stdout: 'first output',
+              stderr: 'failure evidence',
+              exitCode: 137,
+            },
+          },
+        ]),
+      )
+      expect(parsed.output).toContain('first output')
+      expect(parsed.output).toContain('failure evidence')
+      expect(parsed.status).toBe('timed out')
+      expect(parsed.exitCode).toBe(137)
+    })
+    test('foreground cancellation and nonzero exit remain visible', () => {
+      const options = {
+        availableWidth: 80,
+        indentationOffset: 0,
+        labelWidth: 0,
+      }
+      const cancelled = RunTerminalCommandComponent.render(
+        createToolBlock('sleep 10', '', undefined, { lifecycle: 'cancelled' }),
+        {} as ChatTheme,
+        options,
+      )
+      expect((cancelled.content as RenderContentElement).props.status).toBe(
+        'cancelled',
+      )
+      const failed = RunTerminalCommandComponent.render(
+        createToolBlock(
+          'false',
+          JSON.stringify([
+            { type: 'json', value: { stdout: '', exitCode: 1 } },
+          ]),
+          undefined,
+          { lifecycle: 'succeeded' },
+        ),
+        {} as ChatTheme,
+        options,
+      )
+      expect((failed.content as RenderContentElement).props.status).toBe(
+        'error',
+      )
+    })
     test('handles error messages', () => {
       const errorPayload = JSON.stringify([
         {

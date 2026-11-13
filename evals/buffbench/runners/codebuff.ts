@@ -1,9 +1,18 @@
-import { execSync } from 'child_process'
-import fs from 'fs'
-import path from 'path'
+import { execFileSync } from 'child_process'
+import { randomUUID } from 'node:crypto'
+import {
+  artifactId,
+  type EvaluationArtifactSink,
+} from '../evaluation-artifacts'
+import type { RunOutcome } from '@codebuff/common/types/run-outcome'
 
 import type { Runner, RunnerResult, AgentStep, RunnerOptions } from './runner'
 import type { OpenbuffClient } from '@openbuff/sdk'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
+import {
+  captureEvaluationCommand,
+  deriveEvaluationExecution,
+} from '../execution'
 
 const DEBUG_ERROR = true
 
@@ -16,6 +25,9 @@ export class CodebuffRunner implements Runner {
   private printEvents: boolean
   private commitId: string
   private parentSha: string
+  private artifactSink?: EvaluationArtifactSink
+  private inheritEnv: boolean
+  private execution?: ExecutionAdapterContext
 
   constructor(options: {
     cwd: string
@@ -26,6 +38,9 @@ export class CodebuffRunner implements Runner {
     printEvents: boolean
     commitId: string
     parentSha: string
+    artifactSink?: EvaluationArtifactSink
+    inheritEnv?: boolean
+    execution?: ExecutionAdapterContext
   }) {
     this.cwd = options.cwd
     this.env = options.env
@@ -35,6 +50,9 @@ export class CodebuffRunner implements Runner {
     this.printEvents = options.printEvents
     this.commitId = options.commitId
     this.parentSha = options.parentSha
+    this.artifactSink = options.artifactSink
+    this.inheritEnv = options.inheritEnv ?? true
+    this.execution = options.execution
   }
 
   async run(
@@ -66,88 +84,87 @@ export class CodebuffRunner implements Runner {
      * is correct.
      */
     let streamedCostUsd = 0
-
-    const maxAgentSteps = 40
-    const result = await this.client.run({
-      agent: this.agentId,
-      prompt,
-      agentDefinitions: this.localAgentDefinitions,
-      cwd: this.cwd,
-      env: this.env,
-      maxAgentSteps,
-      signal: options.signal,
-      handleEvent: (event) => {
-        if (
-          (event.type === 'tool_call' || event.type === 'tool_result') &&
-          event.toolName === 'set_messages'
-        ) {
-          return
-        }
-        // Accumulate cost from streaming `finish` events. The `finish` event's
-        // `totalCost` is reported in cents (same as `creditsUsed`), so divide by
-        // 100 to USD and sum across every finish in the run (subagent + main).
-        if (event.type === 'finish' && typeof event.totalCost === 'number') {
-          streamedCostUsd += event.totalCost / 100
-        }
-        if (event.type === 'error') {
-          console.error(
-            `[${this.commitId}:${this.agentId}] Error event:`,
-            event.message,
-          )
-          if (DEBUG_ERROR && !event.message.startsWith('Invalid JSON')) {
-            // Save errors in a file, but not tool calls with invalid json.
-            fs.writeFileSync(
-              path.join(
-                __dirname,
-                '..',
-                `${this.commitId}-${this.agentId}-error-${Math.random().toString(36).substring(2, 6)}.json`,
-              ),
-              JSON.stringify(
-                {
-                  error: event.message,
-                  trace: steps,
-                },
-                null,
-                2,
-              ),
-            )
-          }
-        } else if (this.printEvents) {
-          console.log(
-            `[${this.commitId}:${this.agentId}]`,
-            JSON.stringify(event, null, 2),
-          )
-        }
-        steps.push(event)
-      },
-    })
-
-    if (result.output.type === 'error') {
-      console.error(
-        `[${this.commitId}:${this.agentId}] Error:`,
-        result.output.message,
-      )
-      if (DEBUG_ERROR) {
-        // Save errors in a file, but not tool calls with invalid json.
-        fs.writeFileSync(
-          path.join(
-            __dirname,
-            '..',
-            `${this.commitId}-${this.agentId}-error-${Math.random().toString(36).substring(2, 6)}.json`,
-          ),
-          JSON.stringify(
-            {
-              ...result.output,
-              trace: steps,
-            },
-            null,
-            2,
-          ),
+    let streamedCostReported = false
+    let runError: string | undefined
+    let result: Awaited<ReturnType<OpenbuffClient['run']>> | undefined
+    const saveError = (value: unknown) => {
+      if (DEBUG_ERROR && this.artifactSink)
+        this.artifactSink.writeJson(
+          `${artifactId(this.commitId)}-${artifactId(this.agentId)}-error-${randomUUID()}.json`,
+          value,
         )
-      }
     }
 
-    const mainAgentState = result.sessionState?.mainAgentState
+    const maxAgentSteps = 40
+    try {
+      result = await this.client.run({
+        agent: this.agentId,
+        prompt,
+        agentDefinitions: this.localAgentDefinitions,
+        cwd: this.cwd,
+        env: this.env,
+        inheritEnv: this.inheritEnv,
+        maxAgentSteps,
+        signal: options.signal,
+        handleEvent: (event) => {
+          if (
+            (event.type === 'tool_call' || event.type === 'tool_result') &&
+            event.toolName === 'set_messages'
+          ) {
+            return
+          }
+          // Accumulate cost from streaming `finish` events. The `finish` event's
+          // `totalCost` is reported in cents (same as `creditsUsed`), so divide by
+          // 100 to USD and sum across every finish in the run (subagent + main).
+          if (
+            event.type === 'finish' &&
+            typeof event.totalCost === 'number' &&
+            Number.isFinite(event.totalCost) &&
+            event.totalCost >= 0
+          ) {
+            streamedCostReported = true
+            streamedCostUsd += event.totalCost / 100
+            streamedCostReported = Number.isFinite(streamedCostUsd)
+          }
+          if (event.type === 'error') {
+            console.error(
+              `[${this.commitId}:${this.agentId}] Error event:`,
+              event.message,
+            )
+            if (!event.message.startsWith('Invalid JSON'))
+              saveError({ error: event.message, trace: steps })
+          } else if (this.printEvents) {
+            console.log(
+              `[${this.commitId}:${this.agentId}]`,
+              JSON.stringify(event, null, 2),
+            )
+          }
+          steps.push(event)
+        },
+      })
+    } catch (error) {
+      runError = error instanceof Error ? error.message : String(error)
+      saveError({ error: runError, trace: steps })
+    }
+    if (result?.output.type === 'error') {
+      runError = result.output.message
+      saveError({ ...result.output, trace: steps })
+    }
+    let runOutcome: RunOutcome = result?.runOutcome ??
+      result?.sessionState?.mainAgentState?.runOutcome ?? {
+        termination: options.signal?.aborted
+          ? 'cancelled'
+          : runError !== undefined
+            ? 'failed'
+            : 'completed',
+      }
+    if (runError !== undefined && runOutcome.termination === 'completed')
+      runOutcome = { ...runOutcome, termination: 'failed' }
+    if (runOutcome.termination !== 'completed') {
+      runError ??= runOutcome.cause?.message ?? `Run ${runOutcome.termination}`
+    }
+
+    const mainAgentState = result?.sessionState?.mainAgentState
     // Prefer the authoritative post-run `creditsUsed` (credited per-turn,
     // summed across steps). When it's 0/absent — the routed-provider case —
     // fall back to `directCreditsUsed` (a sibling session-state cost field that
@@ -155,14 +172,22 @@ export class CodebuffRunner implements Runner {
     // streaming-aggregated cost. All three are credit-denominated (cents), so
     // each is divided by 100 to USD. cachedInputTokens / inputTokens still read
     // from mainAgentState exactly as before (those were NOT reported missing).
-    const creditsUsed = mainAgentState?.creditsUsed ?? 0
-    const directCreditsUsed = mainAgentState?.directCreditsUsed ?? 0
+    const creditsUsed =
+      Number.isFinite(mainAgentState?.creditsUsed) &&
+      (mainAgentState?.creditsUsed ?? -1) >= 0
+        ? mainAgentState!.creditsUsed
+        : 0
+    const directCreditsUsed =
+      Number.isFinite(mainAgentState?.directCreditsUsed) &&
+      (mainAgentState?.directCreditsUsed ?? -1) >= 0
+        ? mainAgentState!.directCreditsUsed
+        : 0
     if (creditsUsed > 0) {
       totalCostUsd = creditsUsed / 100
     } else if (directCreditsUsed > 0) {
       totalCostUsd = directCreditsUsed / 100
     } else {
-      totalCostUsd = streamedCostUsd
+      totalCostUsd = Number.isFinite(streamedCostUsd) ? streamedCostUsd : 0
     }
 
     const cachedInputTokens = mainAgentState?.cacheInputTokens
@@ -185,13 +210,46 @@ export class CodebuffRunner implements Runner {
     // Get git diff after Codebuff has made changes
     let diff = ''
     try {
-      execSync('git add .', { cwd: this.cwd, stdio: 'ignore' })
-      diff = execSync(`git diff ${this.parentSha}`, {
-        cwd: this.cwd,
-        encoding: 'utf-8',
-        maxBuffer: 10 * 1024 * 1024,
-      })
-    } catch {
+      if (this.execution) {
+        const execution = deriveEvaluationExecution(
+          this.execution,
+          'evaluator.post-run-diff',
+        )
+        await captureEvaluationCommand('git', ['add', '--', '.'], {
+          cwd: this.cwd,
+          env: this.env,
+          signal: options.signal,
+          execution,
+          branchId: 'supplemental.evaluator.post-run-add',
+        })
+        diff = (
+          await captureEvaluationCommand(
+            'git',
+            ['diff', this.parentSha, '--'],
+            {
+              cwd: this.cwd,
+              env: this.env,
+              signal: options.signal,
+              execution,
+              branchId: 'supplemental.evaluator.post-run-diff',
+            },
+          )
+        ).stdout
+      } else {
+        execFileSync('git', ['add', '--', '.'], {
+          cwd: this.cwd,
+          env: this.env,
+          stdio: 'ignore',
+        })
+        diff = execFileSync('git', ['diff', this.parentSha, '--'], {
+          cwd: this.cwd,
+          env: this.env,
+          encoding: 'utf-8',
+          maxBuffer: 10 * 1024 * 1024,
+        })
+      }
+    } catch (error) {
+      if (this.execution) throw error
       // Ignore git errors
     }
 
@@ -199,6 +257,22 @@ export class CodebuffRunner implements Runner {
       steps,
       totalCostUsd,
       diff,
+      error: runError,
+      runOutcome,
+      costEvidence: {
+        status:
+          creditsUsed > 0 || directCreditsUsed > 0 || streamedCostReported
+            ? 'reported'
+            : 'unknown',
+        source:
+          creditsUsed > 0
+            ? 'creditsUsed'
+            : directCreditsUsed > 0
+              ? 'directCreditsUsed'
+              : streamedCostReported
+                ? 'finish.totalCost'
+                : undefined,
+      },
       cachedInputTokens,
       inputTokens,
       finalMessageHistoryText,

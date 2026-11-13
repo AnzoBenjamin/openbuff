@@ -1,0 +1,27 @@
+{
+  "_note": "Semantic vector (§12.7 GV-24, §12.4): a duplicate permission response for an already-resolved request id is ignored (dropped by the SDK's pending map); the first outcome stands.",
+  "firstResponse": {
+    "jsonrpc": "2.0",
+    "id": 100,
+    "result": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "allow_once"
+      }
+    }
+  },
+  "duplicateResponse": {
+    "jsonrpc": "2.0",
+    "id": 100,
+    "result": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "reject_once"
+      }
+    }
+  },
+  "expectedOutcome": {
+    "outcome": "selected",
+    "optionId": "allow_once"
+  }
+}

@@ -373,6 +373,41 @@ describe('discovery coordinator', () => {
     )
   })
 
+  test('evaluateMemoryCover never skips or narrows for exhaustive tools (read-search-01 probe)', () => {
+    // glob('Dockerfile', cwd:'src') with only src/auth/login.ts in memory.
+    const probe = evaluateMemoryCover({
+      excerpts: [{ path: 'src/auth/login.ts', excerpt: 'login' }],
+      pathPrefixes: ['src'],
+      query: 'Dockerfile',
+      exhaustive: true,
+    })
+    expect(probe.decision).toBe('full')
+    expect(probe.reason).toBe('exhaustive-tool')
+    expect(probe.remainingGaps).toEqual([])
+    // Covering excerpts survive only as hints.
+    expect(probe.coveringExcerpts.map((entry) => entry.path)).toEqual([
+      'src/auth/login.ts',
+    ])
+
+    const partial = evaluateMemoryCover({
+      excerpts: [{ path: 'src/auth/login.ts', excerpt: 'login' }],
+      pathPrefixes: ['src/auth', 'src/other'],
+      query: 'authentication',
+      exhaustive: true,
+    })
+    expect(partial.decision).toBe('full')
+    expect(partial.reason).toBe('exhaustive-tool')
+
+    // Non-exhaustive callers (query_index) keep the old decision.
+    expect(
+      evaluateMemoryCover({
+        excerpts: [{ path: 'src/auth/login.ts', excerpt: 'login' }],
+        pathPrefixes: ['src'],
+        query: 'Dockerfile',
+      }).decision,
+    ).toBe('skip')
+  })
+
   test('evaluateMemoryCover narrows on partial cover', () => {
     const evaluation = evaluateMemoryCover({
       excerpts: [{ path: 'src/auth/login.ts', excerpt: 'login' }],
@@ -413,6 +448,12 @@ describe('discovery coordinator', () => {
   })
 
   test('evaluateMemoryCover goes full without cover', () => {
+    expect(
+      evaluateMemoryCover({
+        pathPrefixes: ['src/auth'],
+        query: 'auth',
+      }).remainingGaps,
+    ).toEqual(['src/auth'])
     expect(
       evaluateMemoryCover({ pathPrefixes: ['src/auth'], query: 'auth' })
         .decision,
@@ -687,9 +728,21 @@ describe('recordMemoryReuse', () => {
 
   test('is deterministic across independent states for the same ordered sequence', () => {
     const entries: Parameters<typeof recordMemoryReuse>[1][] = [
-      { tool: 'code_search', decision: 'skip', served: 5, gaps: 1, recordedDecisions: 2 },
+      {
+        tool: 'code_search',
+        decision: 'skip',
+        served: 5,
+        gaps: 1,
+        recordedDecisions: 2,
+      },
       { tool: 'glob', decision: 'narrow', served: 3, gaps: 2 },
-      { tool: 'query_index', decision: 'full', served: 9, gaps: 4, recordedDecisions: 1 },
+      {
+        tool: 'query_index',
+        decision: 'full',
+        served: 9,
+        gaps: 4,
+        recordedDecisions: 1,
+      },
     ]
 
     const stateA: Parameters<typeof recordMemoryReuse>[0] = {}

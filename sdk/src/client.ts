@@ -1,5 +1,7 @@
-import { run } from './run'
+import { resolveClientBackend } from './client/backend'
+import { projectRunOutcomes } from './run-state'
 
+import type { ClientBackend } from './client/backend'
 import type { RunOptions, OpenbuffClientOptions } from './run'
 import type { RunState } from './run-state'
 
@@ -25,6 +27,16 @@ export class OpenbuffClient {
   }
 
   /**
+   * The pluggable backend this client dispatches to. Defaults to the
+   * in-process backend (today's `run()`); a host can substitute an
+   * ACP-remote backend via `OpenbuffClientOptions.backend` (P1-T3). Exposed
+   * so hosts can reach the detach/attach/close surface when one exists.
+   */
+  public get backend(): ClientBackend {
+    return resolveClientBackend(this.options)
+  }
+
+  /**
    * Run an Openbuff agent with the specified options.
    *
    * @param agent - The agent to run. Use 'base' for the default agent, or specify a custom agent ID if you made your own agent config.
@@ -39,13 +51,18 @@ export class OpenbuffClient {
    * @param skillsDir - (Optional) Path to a directory containing skills to load. Each skill should be in its own subdirectory with a SKILL.md file (e.g., `skillsDir/my-skill/SKILL.md`). When provided, skills are loaded from this directory instead of the default locations. The loaded skills will be listed in the `skill` tool's description and can be loaded by the agent.
    * @param maxAgentSteps - (Optional) Maximum number of steps the agent can take before stopping. Use this as a safety measure in case your agent starts going off the rails. A reasonable number is around 20.
    * @param env - (Optional) Environment variables to pass to terminal commands executed by the agent. These will be merged with the current process environment, with the custom values taking precedence. Can also be provided in individual run() calls to override.
+   * @param inheritEnv - (Optional) Set false to give terminal commands only the supplied env. SDK/provider execution still uses the host process context.
    *
    * @returns A Promise that resolves to a RunState JSON object which you can pass to a subsequent run() call to continue the run. Use result.output to get the agent's output.
    */
   public async run(
     options: RunOptions & OpenbuffClientOptions,
   ): Promise<RunState> {
-    return run({ ...this.options, ...options })
+    const merged = { ...this.options, ...options }
+    // P1-T3 backend seam: an injected backend takes over execution entirely;
+    // otherwise resolveClientBackend returns the in-process default.
+    const backend = resolveClientBackend(merged)
+    return projectRunOutcomes(await backend.run(merged))
   }
 }
 

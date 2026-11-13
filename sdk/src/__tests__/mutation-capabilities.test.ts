@@ -1,11 +1,18 @@
 import { describe, expect, it } from 'bun:test'
+import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
+import { applySemanticEdit } from '../tools/semantic-edit-apply'
 
 import {
   decodeReadCapabilityToken,
   getContentHash,
   getExactContentHash,
+  getObservationContentHash,
   readCapabilityMatchesScope,
 } from '@codebuff/common/util/content-hash'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 import {
   buildFreshWholeFileCapability,
@@ -13,7 +20,29 @@ import {
 } from '../tools/mutation-capabilities'
 
 describe('mutation capabilities', () => {
-  it('emits a scoped cap.v3 token while snapshotting exact committed bytes', () => {
+  it('[B03] semantic compact projection preserves refused evidence and does not report applied', async () => {
+    const fs = createMockFs({ files: { '/repo/a.txt': 'before\n' } })
+    let attempts = 0
+    fs.conditionalCommit = async () => {
+      attempts++
+      await fs.writeFile('/repo/a.txt', 'foreign\n')
+      return { applied: false, actualHash: getExactContentHash('foreign\n') }
+    }
+    const result = await applySemanticEdit(
+      { changedFiles: [{ path: '/repo/a.txt', newContent: 'after\n' }] },
+      { cwd: '/repo', fs },
+    )
+    expect(result.output[0]?.value).toMatchObject({
+      applied: false,
+      results: [{ path: 'a.txt', applied: false }],
+    })
+    expect(result.mutation?.actions[0]?.forward?.outcome).toBe('not_applied')
+    expect(result.mutation?.authorityReceipt?.status).toBe('failed')
+    expect(attempts).toBe(1)
+    expect(await fs.readFile('/repo/a.txt', 'utf8')).toBe('foreign\n')
+  })
+
+  it('emits a cap.v4 token binding the confirmed exact committed bytes', () => {
     const capabilityIssuer = {
       projectId: '/project',
       runId: 'run-mutation-1',
@@ -23,17 +52,19 @@ describe('mutation capabilities', () => {
       canonicalPath: '/project/src/example.ts',
       path: 'src/example.ts',
       content,
+      confirmedAfterHash: getExactContentHash(content),
       capabilityIssuer,
     })
 
-    expect(capability.token).toStartWith('cap.v3.')
+    expect(capability.token).toStartWith('cap.v4.')
     const decoded = decodeReadCapabilityToken(capability.token)
     if (typeof decoded === 'string') throw new Error(decoded)
     expect(decoded).toMatchObject({
       startLine: 1,
       endLine: 3,
       hash: getContentHash(content),
-      tokenVersion: 'v3',
+      tokenVersion: 'v4',
+      rawBasis: getRawReadBasis(captureTextDocument(content), 1, 3, 'whole'),
     })
     expect(capability.snapshot.contentHash).toBe(getExactContentHash(content))
     expect(capability.snapshot.contentHash).not.toBe(decoded.hash)
@@ -56,6 +87,7 @@ describe('mutation capabilities', () => {
         canonicalPath: '/project/src/example.ts',
         path,
         content: 'value\n',
+        confirmedAfterHash: getExactContentHash('value\n'),
         capabilityIssuer,
       }
 
@@ -76,6 +108,7 @@ describe('mutation capabilities', () => {
       canonicalPath: '/project/src/example.ts',
       path: 'src/example.ts',
       content,
+      confirmedAfterHash: getExactContentHash(content),
       capabilityIssuer,
     })
 
@@ -86,6 +119,7 @@ describe('mutation capabilities', () => {
       endLine: 3,
       contentHash: getContentHash(content),
       readCapability: authority.capability.token,
+      rawBasis: getRawReadBasis(captureTextDocument(content), 1, 3, 'whole'),
     })
     expect(
       buildFreshWholeFileMutationAuthority({
@@ -93,6 +127,42 @@ describe('mutation capabilities', () => {
         path: 'src/large.txt',
         content: 'x'.repeat(10 * 1024 * 1024 + 1),
         capabilityIssuer,
+      }),
+    ).toBeUndefined()
+  })
+
+  it('refuses fresh authority for unconfirmed or divergent after-bytes', () => {
+    const params = {
+      canonicalPath: '/project/bom.txt',
+      path: 'bom.txt',
+      content: '\uFEFFone\r\ntwo\n',
+      capabilityIssuer: { projectId: '/project', runId: 'raw-after' },
+    }
+    expect(buildFreshWholeFileMutationAuthority(params)).toBeUndefined()
+    expect(
+      buildFreshWholeFileMutationAuthority({
+        ...params,
+        confirmedAfterHash: getExactContentHash('one\r\ntwo\n'),
+      }),
+    ).toBeUndefined()
+    const authority = buildFreshWholeFileMutationAuthority({
+      ...params,
+      confirmedAfterHash: getExactContentHash(params.content),
+    })!
+    expect(authority.afterContent).toBe(params.content)
+    expect(authority.editAnchor.contentHash).toBe(
+      getObservationContentHash(params.content),
+    )
+    expect(authority.editAnchor.rawBasis).toMatchObject({
+      scope: 'whole',
+      documentBom: 'utf8',
+      includesBom: true,
+    })
+    expect(
+      buildFreshWholeFileMutationAuthority({
+        ...params,
+        content: '\ud800',
+        confirmedAfterHash: getExactContentHash('\ud800'),
       }),
     ).toBeUndefined()
   })

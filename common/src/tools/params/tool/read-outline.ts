@@ -12,7 +12,7 @@ const inputSchema = z
       .string()
       .min(1, 'Path cannot be empty')
       .describe(
-        'File path to generate the AST-like outline for, relative to the project root.',
+        'File path to generate the AST-like outline for, absolute or relative to the project root; access follows the configured sandbox policy.',
       ),
   })
   .describe(
@@ -43,6 +43,8 @@ export const readOutlineParams = {
       path: z.string(),
       outline: z.string(),
       errorMessage: z.string().optional(),
+      /** Near-match project paths when the file does not exist. */
+      candidates: z.array(z.string()).max(3).optional(),
     }),
   ),
 } satisfies $ToolParams

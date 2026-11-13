@@ -46,6 +46,13 @@ export const taskMemoryEvidenceV1Schema = z.object({
   verifiedAt: z.number().int().nonnegative().optional(),
   supersedes: z.array(z.string().min(1).max(160)).max(16).optional(),
   stale: z.boolean().optional(),
+  /**
+   * Tier 1D: derived read evidence is session-ephemeral. Optional so records
+   * persisted before this field stay valid; the store drops session-scoped
+   * entries at merge time instead of writing them back to disk, so one-off
+   * exploratory reads no longer occupy durable evidence slots.
+   */
+  sessionScoped: z.boolean().optional(),
 })
 
 /**

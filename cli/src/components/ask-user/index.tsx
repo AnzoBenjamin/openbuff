@@ -20,28 +20,81 @@ import {
 import { useTheme } from '../../hooks/use-theme'
 import { useChatStore } from '../../state/chat-store'
 import { isPlainEnterKey } from '../../utils/terminal-enter-detection'
-import { BORDER_CHARS } from '../../utils/ui-constants'
 import { Button } from '../button'
+import {
+  formatStructuredAnswer,
+  type StructuredFormAnswer,
+} from './utils/structured-answer'
+import { validateOtherText } from './utils/validation'
+import { useOutputReaderStore } from '../../state/output-reader-store'
+import { createJsonDocument } from '../../utils/output-document'
+import { useTerminalDimensions } from '../../hooks/use-terminal-dimensions'
 
 import type { AskUserQuestion } from '../../types/store'
 import type { KeyEvent } from '@opentui/core'
-import {
-  countInProgressDraftAnswers,
-  nextEscapeAction,
-} from './skip-guard'
+import { countInProgressDraftAnswers } from './skip-guard'
 
 export interface MultipleChoiceFormProps {
   questions: AskUserQuestion[]
-  onSubmit: (answers: { question: string; answer: string }[]) => void
+  onSubmit: (answers: StructuredFormAnswer[]) => void
   onSkip: () => void
+  onStop?: () => void
 }
 
 export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
   questions,
   onSubmit,
   onSkip,
+  onStop,
 }) => {
   const theme = useTheme()
+  const { terminalWidth, terminalHeight } = useTerminalDimensions()
+  const inspecting = useOutputReaderStore((state) => state.request !== null)
+  const [isValidating, setIsValidating] = useState(false)
+  const mountedRef = useRef(true)
+  const settledRef = useRef(false)
+  const questionsRef = useRef(questions)
+  questionsRef.current = questions
+  const submissionRef = useRef<{
+    controller: AbortController
+    questions: AskUserQuestion[]
+    answers: Map<number, AccordionAnswer>
+  } | null>(null)
+  const cancelValidation = useCallback(() => {
+    submissionRef.current?.controller.abort()
+    submissionRef.current = null
+    if (mountedRef.current) setIsValidating(false)
+  }, [])
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      cancelValidation()
+    }
+  }, [cancelValidation])
+  useEffect(() => {
+    cancelValidation()
+    settledRef.current = false
+  }, [questions, cancelValidation])
+  const inspectQuestions = () => {
+    cancelValidation()
+    useOutputReaderStore.getState().open({
+      document: createJsonDocument(
+        'questions',
+        'Questions and choices',
+        questions.map((question, index) => ({
+          question: question.inspectionText ?? question.question,
+          options: question.options,
+          answer: formatStructuredAnswer(
+            question,
+            answersRef.current.get(index),
+            index,
+          ),
+        })),
+      ),
+    })
+  }
+  const [validationError, setValidationError] = useState('')
   const terminalFocused = useChatStore((state) => state.inputFocused)
   const suppressNextHoverFocusRef = useRef(false)
 
@@ -54,12 +107,20 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
   const [answers, setAnswers] = useState<Map<number, AccordionAnswer>>(
     new Map(),
   )
+  const answersRef = useRef(answers)
+  answersRef.current = answers
 
   // Track focused option within expanded question
-  const [focusedOptionIndex, setFocusedOptionIndex] = useState<number | null>(
-    questions.length > 0 ? 0 : null,
-  )
+  const [focusedOptionIndex, setFocusedOptionIndexState] = useState<
+    number | null
+  >(questions.length > 0 ? 0 : null)
 
+  // Terminal input can batch several arrows before React commits a render.
+  const focusedOptionRef = useRef(focusedOptionIndex)
+  const setFocusedOptionIndex = useCallback((value: number | null) => {
+    focusedOptionRef.current = value
+    setFocusedOptionIndexState(value)
+  }, [])
   // Track which question has keyboard focus
   const [focusedQuestionIndex, setFocusedQuestionIndex] = useState<number>(0)
 
@@ -80,6 +141,22 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
   // only warns; a second press confirms the skip so a stray keypress can no
   // longer silently discard the whole form.
   const [confirmingSkip, setConfirmingSkip] = useState<boolean>(false)
+  const [confirmAction, setConfirmAction] = useState<'skip' | 'stop'>('skip')
+  const requestDiscard = (action: 'skip' | 'stop') => {
+    cancelValidation()
+    if (settledRef.current) return
+    if (
+      countInProgressDraftAnswers(answers) &&
+      (!confirmingSkip || confirmAction !== action)
+    ) {
+      setConfirmAction(action)
+      setConfirmingSkip(true)
+      return
+    }
+    settledRef.current = true
+    if (action === 'stop' && onStop) onStop()
+    else onSkip()
+  }
 
   // Track if user is typing in "Custom" text input
   const [isTypingCustom, setIsTypingCustom] = useState<boolean>(false)
@@ -94,14 +171,14 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
       questionIndex: number,
       updater: (previous: AccordionAnswer | undefined) => AccordionAnswer,
     ) => {
-      setAnswers((prev) => {
-        const nextAnswers = new Map(prev)
-        const previousAnswer = prev.get(questionIndex) ?? {}
-        nextAnswers.set(questionIndex, updater(previousAnswer))
-        return nextAnswers
-      })
+      cancelValidation()
+      const nextAnswers = new Map(answersRef.current)
+      const previousAnswer = nextAnswers.get(questionIndex) ?? {}
+      nextAnswers.set(questionIndex, updater(previousAnswer))
+      answersRef.current = nextAnswers
+      setAnswers(nextAnswers)
     },
-    [],
+    [cancelValidation],
   )
 
   const openQuestion = useCallback(
@@ -177,20 +254,6 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
       setSubmitFocused(false)
       const isCustomOption = optionIndex === CUSTOM_OPTION_INDEX
 
-      // When clicking out of Custom typing mode, first click just exits and highlights
-      // the option without selecting it (requires a second click to actually select)
-      if (source === 'mouse' && isTypingCustom && !isCustomOption) {
-        setIsTypingCustom(false)
-        setFocusedOptionIndex(optionIndex)
-        setShowFocusHighlight(true)
-        // Deselect Custom option but preserve the typed text
-        setAnswerForQuestion(questionIndex, (currentAnswer) => ({
-          ...currentAnswer,
-          isCustom: false,
-        }))
-        return
-      }
-
       if (source === 'mouse' && !isCustomOption) {
         setShowFocusHighlight(false)
         suppressNextHoverFocusRef.current = true
@@ -244,23 +307,20 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
     (questionIndex: number, optionIndex: number) => {
       setSubmitFocused(false)
       setConfirmingSkip(false)
+      cancelValidation()
       let toggledCustomOn = false
+      const newAnswers = new Map(answersRef.current)
+      const currentAnswer: AccordionAnswer = newAnswers.get(questionIndex) ?? {}
 
-      setAnswers((prev) => {
-        const newAnswers = new Map(prev)
-        const currentAnswer: AccordionAnswer = prev.get(questionIndex) ?? {}
-
-        if (optionIndex === CUSTOM_OPTION_INDEX) {
-          toggledCustomOn = !(currentAnswer?.isCustom ?? false)
-          newAnswers.set(questionIndex, {
-            ...currentAnswer,
-            selectedIndices: new Set(currentAnswer?.selectedIndices ?? []),
-            isCustom: !currentAnswer?.isCustom,
-            customText: currentAnswer?.customText || '',
-          })
-          return newAnswers
-        }
-
+      if (optionIndex === CUSTOM_OPTION_INDEX) {
+        toggledCustomOn = !(currentAnswer?.isCustom ?? false)
+        newAnswers.set(questionIndex, {
+          ...currentAnswer,
+          selectedIndices: new Set(currentAnswer?.selectedIndices ?? []),
+          isCustom: !currentAnswer?.isCustom,
+          customText: currentAnswer?.customText || '',
+        })
+      } else {
         const newIndices = new Set(currentAnswer?.selectedIndices ?? [])
         if (newIndices.has(optionIndex)) {
           newIndices.delete(optionIndex)
@@ -272,66 +332,87 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
           selectedIndices: newIndices,
           isCustom: currentAnswer?.isCustom ?? false,
         })
-        return newAnswers
-      })
+      }
+      answersRef.current = newAnswers
+      setAnswers(newAnswers)
 
       // For "Custom" option in multi-select, also enter typing mode
       if (optionIndex === CUSTOM_OPTION_INDEX) {
         setIsTypingCustom(toggledCustomOn)
       }
     },
-    [],
-  )
-
-  const formatAnswer = useCallback(
-    (question: AskUserQuestion, answer: AccordionAnswer | undefined) => {
-      if (!answer) {
-        return { question: question.question, answer: 'Skipped' }
-      }
-
-      const selectedOptions = question.multiSelect
-        ? Array.from(answer.selectedIndices ?? [])
-            .map((idx) => getOptionLabel(question.options[idx]))
-            .filter(Boolean)
-        : answer.selectedIndex !== undefined
-          ? [getOptionLabel(question.options[answer.selectedIndex])]
-          : []
-
-      const customText =
-        answer.isCustom && (answer.customText?.trim().length ?? 0) > 0
-          ? (answer.customText ?? '').trim()
-          : ''
-
-      const parts = customText
-        ? [...selectedOptions, customText]
-        : selectedOptions
-      if (parts.length === 0) {
-        return { question: question.question, answer: 'Skipped' }
-      }
-
-      return {
-        question: question.question,
-        answer: question.multiSelect ? parts.join(', ') : parts[0],
-      }
-    },
-    [],
+    [cancelValidation],
   )
 
   const draftAnswerCount = countInProgressDraftAnswers(answers)
 
   // Handle submit
-  const handleSubmit = useCallback(() => {
-    const formattedAnswers = questions.map((question, index) =>
-      formatAnswer(question, answers.get(index)),
-    )
-
-    onSubmit(formattedAnswers)
-  }, [questions, answers, onSubmit, formatAnswer])
+  const handleSubmit = useCallback(async () => {
+    if (settledRef.current || submissionRef.current) return
+    const submission = {
+      controller: new AbortController(),
+      questions,
+      answers: answersRef.current,
+    }
+    // Install the owner before awaiting worker validation or accepting another Enter.
+    submissionRef.current = submission
+    setIsValidating(true)
+    const ownsSubmission = () =>
+      mountedRef.current &&
+      !submission.controller.signal.aborted &&
+      submissionRef.current === submission &&
+      questionsRef.current === submission.questions &&
+      answersRef.current === submission.answers
+    try {
+      for (let index = 0; index < submission.questions.length; index++) {
+        const answer = submission.answers.get(index)
+        if (answer?.isCustom) {
+          const result = await validateOtherText(
+            answer.customText ?? '',
+            submission.questions[index].validation,
+            500,
+            submission.controller.signal,
+          )
+          if (!ownsSubmission()) return
+          if (!result.isValid) {
+            setValidationError(`Question ${index + 1}: ${result.error}`)
+            openQuestion(index, questions[index]?.options.length ?? 0)
+            setIsTypingCustom(true)
+            return
+          }
+        }
+      }
+      if (!ownsSubmission() || useOutputReaderStore.getState().request !== null)
+        return
+      setValidationError('')
+      const formattedAnswers = submission.questions.map((question, index) =>
+        formatStructuredAnswer(question, submission.answers.get(index), index),
+      )
+      settledRef.current = true
+      onSubmit(formattedAnswers)
+    } finally {
+      if (submissionRef.current === submission) {
+        submissionRef.current = null
+        if (mountedRef.current) setIsValidating(false)
+      }
+    }
+  }, [questions, onSubmit, openQuestion])
 
   // Keyboard navigation using OpenTUI's useKeyboard hook
   useKeyboard(
     useCallback(
       (key: KeyEvent) => {
+        if (inspecting) return
+        if (key.ctrl && key.name === 'c' && onStop) {
+          key.preventDefault()
+          requestDiscard('stop')
+          return
+        }
+        if (!isTypingCustom && key.name === 'i') {
+          key.preventDefault()
+          inspectQuestions()
+          return
+        }
         // Helper to prevent default behavior
         const preventDefault = () => {
           if (
@@ -347,16 +428,13 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
         // discard (shard-cli-tui finding: ask-user Esc data-loss).
         if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
           preventDefault()
-          if (
-            nextEscapeAction(
-              countInProgressDraftAnswers(answers),
-              confirmingSkip,
-            ) === 'warn'
-          ) {
-            setConfirmingSkip(true)
-            return
-          }
-          onSkip()
+          requestDiscard(confirmingSkip ? confirmAction : 'skip')
+          return
+        }
+
+        if (confirmingSkip && key.name === 'n') {
+          key.preventDefault()
+          setConfirmingSkip(false)
           return
         }
 
@@ -412,7 +490,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
         const optionCount = currentQuestion.options.length + 1
         const lastOptionIndex = optionCount - 1
         const currentOptionIndex = Math.min(
-          Math.max(focusedOptionIndex ?? 0, 0),
+          Math.max(focusedOptionRef.current ?? 0, 0),
           lastOptionIndex,
         )
 
@@ -515,11 +593,14 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
         isTypingCustom,
         showFocusHighlight,
         answers,
+        inspecting,
         confirmingSkip,
+        confirmAction,
         handleSelectOption,
         handleToggleOption,
         handleSubmit,
         onSkip,
+        onStop,
         openQuestion,
         focusSubmit,
       ],
@@ -540,81 +621,112 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
   }, [terminalFocused])
 
   return (
-    <box style={{ flexDirection: 'column', padding: 0, width: '100%' }}>
-      {/* Close button in top-right */}
+    <box
+      style={{
+        flexDirection: 'column',
+        padding: 0,
+        width: '100%',
+        flexGrow: 0,
+        flexShrink: 0,
+      }}
+    >
+      {/* Keep secondary actions separate from the question on roomy terminals. */}
       <box
         style={{
           flexDirection: 'row',
-          justifyContent: 'flex-end',
-          marginBottom: 1,
+          justifyContent: terminalWidth >= 80 ? 'flex-end' : 'flex-start',
+          gap: 2,
+          flexWrap: 'wrap',
+          marginBottom: terminalHeight >= 24 ? 1 : 0,
           width: '100%',
         }}
       >
         <Button
-          onClick={onSkip}
+          onClick={() => requestDiscard('skip')}
           style={{
             padding: 0,
           }}
         >
-          <text style={{ fg: theme.muted }}>Close ✕</text>
+          <text style={{ fg: theme.muted }}>Skip questions</text>
         </Button>
+        <Button onClick={() => inspectQuestions()}>
+          <text fg={theme.primary}>Inspect (I)</text>
+        </Button>
+        {onStop && (
+          <Button onClick={() => requestDiscard('stop')}>
+            <text fg={theme.error}>Stop run</text>
+          </Button>
+        )}
       </box>
 
       {/* All questions in accordion style */}
-      {questions.map((question, index) => (
-        <AccordionQuestion
-          key={index}
-          question={question}
-          questionIndex={index}
-          totalQuestions={questions.length}
-          answer={answers.get(index)}
-          isExpanded={expandedIndex === index}
-          isTypingCustom={isTypingCustom && expandedIndex === index}
-          onToggleExpand={() => {
-            const nextExpandedIndex = expandedIndex === index ? null : index
-            setExpandedIndex(nextExpandedIndex)
-            setFocusedQuestionIndex(index)
-            setSubmitFocused(false)
-            setIsTypingCustom(false)
-            setFocusedOptionIndex(nextExpandedIndex === null ? null : 0)
-          }}
-          onSelectOption={(optionIndex) =>
-            handleSelectOption(index, optionIndex, 'mouse')
-          }
-          onToggleOption={(optionIndex) =>
-            handleToggleOption(index, optionIndex)
-          }
-          onSetCustomText={(text, cursorPos) =>
-            handleSetCustomText(index, text, cursorPos)
-          }
-          onCustomSubmit={() => handleCustomSubmit(index)}
-          customCursorPosition={customCursorPositions.get(index) ?? 0}
-          focusedOptionIndex={
-            expandedIndex === index && !submitFocused && showFocusHighlight
-              ? focusedOptionIndex
-              : null
-          }
-          onFocusOption={(optionIndex) => {
-            if (!terminalFocused || isTypingCustom) return
-            if (suppressNextHoverFocusRef.current) {
-              suppressNextHoverFocusRef.current = false
-              return
-            }
-            setShowFocusHighlight(true)
-            setSubmitFocused(false)
-            setFocusedQuestionIndex(index)
-            if (expandedIndex !== index) {
-              setExpandedIndex(index)
-            }
-            setFocusedOptionIndex(optionIndex)
-          }}
-        />
-      ))}
+      <box flexDirection="column" flexGrow={0} flexShrink={0}>
+        {questions
+          .slice(focusedQuestionIndex, focusedQuestionIndex + 1)
+          .map((question, visibleIndex) => {
+            const index = focusedQuestionIndex + visibleIndex
+            return (
+              <AccordionQuestion
+                key={index}
+                question={question}
+                questionIndex={index}
+                totalQuestions={questions.length}
+                answer={answers.get(index)}
+                isExpanded={expandedIndex === index}
+                isTypingCustom={
+                  isTypingCustom && expandedIndex === index && !inspecting
+                }
+                onToggleExpand={() => {
+                  const nextExpandedIndex =
+                    expandedIndex === index ? null : index
+                  setExpandedIndex(nextExpandedIndex)
+                  setFocusedQuestionIndex(index)
+                  setSubmitFocused(false)
+                  setIsTypingCustom(false)
+                  setFocusedOptionIndex(nextExpandedIndex === null ? null : 0)
+                }}
+                onSelectOption={(optionIndex) =>
+                  handleSelectOption(index, optionIndex, 'mouse')
+                }
+                onToggleOption={(optionIndex) =>
+                  handleToggleOption(index, optionIndex)
+                }
+                onSetCustomText={(text, cursorPos) =>
+                  handleSetCustomText(index, text, cursorPos)
+                }
+                onCustomSubmit={() => handleCustomSubmit(index)}
+                customCursorPosition={customCursorPositions.get(index) ?? 0}
+                focusedOptionIndex={
+                  expandedIndex === index &&
+                  !submitFocused &&
+                  showFocusHighlight
+                    ? focusedOptionIndex
+                    : null
+                }
+                onFocusOption={(optionIndex) => {
+                  if (!terminalFocused || isTypingCustom) return
+                  if (suppressNextHoverFocusRef.current) {
+                    suppressNextHoverFocusRef.current = false
+                    return
+                  }
+                  setShowFocusHighlight(true)
+                  setSubmitFocused(false)
+                  setFocusedQuestionIndex(index)
+                  if (expandedIndex !== index) {
+                    setExpandedIndex(index)
+                  }
+                  setFocusedOptionIndex(optionIndex)
+                }}
+              />
+            )
+          })}
+      </box>
+      {validationError && <text fg={theme.error}>{validationError}</text>}
 
       {/* Skip confirmation (shard-cli-tui finding: ask-user Esc data-loss): */}
       {confirmingSkip ? (
-        <text style={{ wrapMode: 'none', fg: theme.primary, marginRight: 1 }}>
-          {`${draftAnswerCount} answer${draftAnswerCount === 1 ? '' : 's'} will be discarded — press Esc again to confirm`}
+        <text style={{ wrapMode: 'word', fg: theme.primary, marginRight: 1 }}>
+          {`${confirmAction === 'stop' ? 'Stop current run and discard' : 'Skip questions and discard'} ${draftAnswerCount} draft answer${draftAnswerCount === 1 ? '' : 's'}? ${confirmAction === 'stop' ? 'Queued work stays paused.' : 'Run resumes without answers.'} Esc confirms · N keeps editing`}
         </text>
       ) : null}
 
@@ -622,10 +734,11 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
       <box
         style={{
           flexDirection: 'row',
-          justifyContent: 'flex-start',
+          justifyContent: terminalWidth >= 80 ? 'space-between' : 'flex-start',
           alignItems: 'center',
           width: '100%',
-          gap: 4,
+          marginTop: terminalHeight >= 24 ? 1 : 0,
+          gap: 1,
         }}
       >
         <box style={{ flexShrink: 0 }}>
@@ -639,14 +752,12 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
               setSubmitHovered(false)
             }}
             style={{
-              borderStyle: 'single',
-              borderColor:
+              backgroundColor:
                 submitFocused || (submitHovered && terminalFocused)
-                  ? theme.primary
-                  : theme.muted,
-              customBorderChars: BORDER_CHARS,
-              paddingLeft: 2,
-              paddingRight: 2,
+                  ? theme.surfaceHover
+                  : undefined,
+              paddingLeft: 1,
+              paddingRight: 1,
             }}
           >
             <text
@@ -661,7 +772,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
                     : undefined,
               }}
             >
-              Submit
+              {isValidating ? 'Checking answers…' : '[ Submit ]'}
             </text>
           </Button>
         </box>
@@ -675,7 +786,10 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
             minWidth: 0,
           }}
         >
-          {KEYBOARD_HINTS.map((hint, idx) => (
+          {(terminalHeight < 25
+            ? ['↑↓ choices', 'Tab submit', 'I inspect']
+            : KEYBOARD_HINTS
+          ).map((hint, idx) => (
             <text
               key={hint}
               wrapMode="none"
@@ -684,7 +798,7 @@ export const MultipleChoiceForm: React.FC<MultipleChoiceFormProps> = ({
                 marginRight: idx === KEYBOARD_HINTS.length - 1 ? 0 : 1,
               }}
             >
-              {hint}
+              {`${idx > 0 ? ' · ' : ''}${hint}`}
             </text>
           ))}
         </box>

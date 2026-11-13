@@ -50,6 +50,7 @@ export function appendOrchestrationEvent(params: {
   state: AgentState
   event: OrchestrationEventDraftV1
   expectedRevision?: number
+  now?: number
 }): OrchestrationLedgerV1 {
   const current = params.state.orchestrationLedger
   const eventId = params.event.eventId ?? randomUUID()
@@ -82,7 +83,7 @@ export function appendOrchestrationEvent(params: {
     schemaVersion: 1,
     eventId,
     sequence,
-    timestamp: params.event.timestamp ?? Date.now(),
+    timestamp: params.event.timestamp ?? params.now ?? Date.now(),
   })
   const revision = (current?.revision ?? -1) + 1
   const events = compactEvents([...(current?.events ?? []), event])
@@ -96,7 +97,10 @@ export function appendOrchestrationEvent(params: {
   return ledger
 }
 
-export function reconcileInterruptedLedgerSpawns(state: AgentState): void {
+export function reconcileInterruptedLedgerSpawns(
+  state: AgentState,
+  now?: number,
+): void {
   const events = state.orchestrationLedger?.events ?? []
   const finished = new Set(
     events
@@ -117,8 +121,10 @@ export function reconcileInterruptedLedgerSpawns(state: AgentState): void {
       alreadyInterrupted.has(event.spawnId)
     )
       continue
+    // P2-T1b: interrupted-spawn events use the caller's injected clock.
     appendOrchestrationEvent({
       state,
+      now,
       event: {
         type: 'interrupted',
         runId: state.runId ?? state.agentId,

@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
 import basher from './basher'
+import base2Plan from './base2/base2-plan'
+import contextPruner from './context-pruner'
+import debuggerAgent from './debugger/debugger'
+import generalAgent from './general-agent/general-agent'
 import { createBase2 } from './base2/base2'
 import browserUse from './browser-use/browser-use'
 import dependencyManager from './dependency-manager/dependency-manager'
@@ -44,6 +48,14 @@ import {
   removedToolNames,
   toolMetadata,
 } from '@codebuff/common/tools/metadata'
+import {
+  PLAN_MODE_ALLOWED_ARTIFACT_TOOL_NAMES,
+  PLAN_MODE_REFUSED_TOOL_NAMES,
+} from '@codebuff/common/tools/plan-mode-policy'
+import { deriveSpawnTemplateCapabilities } from '@codebuff/agent-runtime/tools/handlers/tool/spawn-agent-utils'
+import { getEffectiveAgentToolNames } from '@codebuff/agent-runtime/util/agent-tool-names'
+
+import type { AgentTemplate } from '@codebuff/common/types/agent-template'
 
 /**
  * Guards against the "registered but unusable" failure mode: a tool can be in
@@ -126,6 +138,103 @@ describe('agent tool reachability', () => {
     expect(tools).not.toContain('run_targeted_validation')
     expect(tools).toContain('check_background_agent')
     for (const tool of PROPOSAL_TOOLS) expect(tools).not.toContain(tool)
+  })
+
+  // N03: plan mode is read-only. No plan-refused tool (and no kill_job) is
+  // model-visible on the plan root, no shipped plan-mode spawnable declares
+  // one, and the runtime derivation strips them from every plan-lineage child.
+  const PLAN_UNREACHABLE = [...PLAN_MODE_REFUSED_TOOL_NAMES, 'kill_job']
+  const asTemplate = (definition: unknown): AgentTemplate => {
+    const template = definition as AgentTemplate
+    return { ...template, toolNames: template.toolNames ?? [] }
+  }
+  const SPAWNABLE_DEFINITIONS: Record<string, unknown> = {
+    'context-pruner': contextPruner,
+    'file-picker': filePicker,
+    'general-agent': generalAgent,
+    'researcher-web': researcherWeb,
+    'researcher-docs': researcherDocs,
+    basher,
+    thinker,
+    'browser-use': browserUse,
+    'code-reviewer': codeReviewer,
+    'security-reviewer': securityReviewer,
+    debugger: debuggerAgent,
+    librarian,
+    synthesizer,
+    architect,
+    'product-reviewer': productReviewer,
+    'integration-agent': integrationAgent,
+    'performance-specialist': performanceSpecialist,
+    'reliability-reviewer': reliabilityReviewer,
+    'migration-reviewer': migrationReviewer,
+    'accessibility-reviewer': accessibilityReviewer,
+    'ux-visual-reviewer': uxVisualReviewer,
+    'compatibility-reviewer': compatibilityReviewer,
+    'dependency-reviewer': dependencyReviewer,
+    'incident-coordinator': incidentCoordinator,
+    'release-manager': releaseManager,
+    'docs-architect': docsArchitect,
+    evaluator,
+  }
+
+  test('base2-plan exposes no mutating tool except plan artifacts', () => {
+    for (const definition of [base2Plan, createBase2('fast', { planOnly: true })]) {
+      const tools = getEffectiveAgentToolNames(asTemplate(definition))
+      for (const tool of PLAN_UNREACHABLE) {
+        expect(tools, `${definition.displayName} exposes ${tool}`).not.toContain(tool)
+      }
+      expect(definition.programmaticConfig?.planOnly).toBe(true)
+    }
+    const tools = base2Plan.toolNames ?? []
+    expect(tools).toContain('create_plan')
+    expect(tools).toContain('update_plan_status')
+  })
+
+  test('no mutating tool is reachable from any base2-plan child', () => {
+    const plan = asTemplate(base2Plan)
+    expect(plan.spawnableAgents).not.toContain('synthesizer')
+    for (const id of plan.spawnableAgents) {
+      const definition = SPAWNABLE_DEFINITIONS[id]
+      expect(definition, `unmapped plan spawnable ${id}`).toBeDefined()
+      const declared = asTemplate(definition).toolNames
+      for (const tool of PLAN_MODE_REFUSED_TOOL_NAMES) {
+        expect(declared, `plan spawnable ${id} declares ${tool}`).not.toContain(tool)
+      }
+      const derived = deriveSpawnTemplateCapabilities({
+        agentTemplate: asTemplate(definition),
+        parentAgentTemplate: plan,
+        handoff: undefined,
+        projectRoot: '/tmp/plan-reachability',
+      })
+      expect(derived.programmaticConfig?.planOnly, id).toBe(true)
+      const reachable = getEffectiveAgentToolNames(derived)
+      for (const tool of PLAN_MODE_REFUSED_TOOL_NAMES) {
+        expect(reachable, `plan child ${id} reaches ${tool}`).not.toContain(tool)
+      }
+      if (reachable.includes('run_terminal_command')) {
+        expect(derived.terminalPermissionProfile, id).toBe('read-only')
+      }
+    }
+  })
+
+  test('plan artifact allowlist stays closed', () => {
+    expect([...PLAN_MODE_ALLOWED_ARTIFACT_TOOL_NAMES].sort()).toEqual([
+      'create_plan',
+      'update_plan_status',
+      'write_audit_findings',
+    ])
+    // Every metadata mutation tool is either a plan artifact or refused.
+    for (const toolName of toolNames) {
+      if (getToolMetadata(toolName).kind !== 'mutation') continue
+      expect(
+        [
+          ...PLAN_MODE_ALLOWED_ARTIFACT_TOOL_NAMES,
+          ...PLAN_MODE_REFUSED_TOOL_NAMES,
+        ] as string[],
+        toolName,
+      ).toContain(toolName)
+    }
   })
 
   test('code editor exposes structural edit + read tools', () => {

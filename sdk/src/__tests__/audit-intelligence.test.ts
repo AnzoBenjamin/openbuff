@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -11,7 +11,11 @@ import {
   isIgnoredPath,
   promoteFeatureEvidence,
 } from '../services/audit-intelligence'
-import { inspectFeatureCompletenessTool } from '../tools/audit-intelligence'
+import {
+  inspectCodebaseStructureTool,
+  inspectFeatureCompletenessTool,
+  evaluateAuditCoverageTool,
+} from '../tools/audit-intelligence'
 import {
   auditCoverageDomains,
   evaluateAuditCoverageParams,
@@ -120,12 +124,10 @@ describe('native audit intelligence', () => {
       snapshotId: inventory.snapshotId,
       shardId: `${subsystem.id}-shard`,
       subsystemIds: [subsystem.id],
-      files: [
-        inventory.files.find(
-          (file) =>
-            (file.includes('/') ? file.split('/')[0] : '.') === subsystem.id,
-        )!,
-      ],
+      files: inventory.files.filter(
+        (file) =>
+          (file.includes('/') ? file.split('/')[0] : '.') === subsystem.id,
+      ),
       domains: [...auditDomains],
     }))
     expect(
@@ -228,12 +230,10 @@ describe('native audit intelligence', () => {
       snapshotId: inventory.snapshotId,
       shardId: `${subsystem.id}-shard`,
       subsystemIds: [subsystem.id],
-      files: [
-        inventory.files.find(
-          (file) =>
-            (file.includes('/') ? file.split('/')[0] : '.') === subsystem.id,
-        )!,
-      ],
+      files: inventory.files.filter(
+        (file) =>
+          (file.includes('/') ? file.split('/')[0] : '.') === subsystem.id,
+      ),
       domains: [...auditDomains],
     }))
     expect(
@@ -295,7 +295,10 @@ describe('native audit intelligence', () => {
     fs.mkdirSync(path.join(root, '.openbuff', 'memory'), { recursive: true })
     fs.writeFileSync(path.join(root, '.openbuff', 'memory', 'x.sqlite-wal'), '')
     fs.mkdirSync(path.join(root, '.codebuff-index'), { recursive: true })
-    fs.writeFileSync(path.join(root, '.codebuff-index', 'metadata.json.tmp'), '')
+    fs.writeFileSync(
+      path.join(root, '.codebuff-index', 'metadata.json.tmp'),
+      '',
+    )
     fs.mkdirSync(path.join(root, 'debug'), { recursive: true })
     fs.writeFileSync(path.join(root, 'debug', 'log.jsonl'), '')
     fs.mkdirSync(path.join(root, '.agents', 'sessions', 'slug', 'findings'), {
@@ -356,9 +359,7 @@ describe('native audit intelligence', () => {
       'resume plan notes',
     )
     const feature = inspectFeatureCompleteness(root, 'resume plan', inventory)
-    const attested = [
-      ...new Set(Object.values(feature.evidence).flat()),
-    ]
+    const attested = [...new Set(Object.values(feature.evidence).flat())]
     const promotion = promoteFeatureEvidence(feature, inventory, attested)
     expect(promotion.verified).toBe(true)
     const receipts = inventory.subsystems.map((subsystem) => ({
@@ -366,12 +367,10 @@ describe('native audit intelligence', () => {
       snapshotId: inventory.snapshotId,
       shardId: `${subsystem.id}-shard`,
       subsystemIds: [subsystem.id],
-      files: [
-        inventory.files.find(
-          (file) =>
-            (file.includes('/') ? file.split('/')[0] : '.') === subsystem.id,
-        )!,
-      ],
+      files: inventory.files.filter(
+        (file) =>
+          (file.includes('/') ? file.split('/')[0] : '.') === subsystem.id,
+      ),
       domains: [...auditDomains],
     }))
     expect(
@@ -383,26 +382,28 @@ describe('native audit intelligence', () => {
     ).toBe(true)
   })
 
-  test('hashes inventoried files through a capped read beyond 256KB', () => {
+  test('full source identity changes for equal-length mutations after 256KB', () => {
     const root = fixture()
-    fs.writeFileSync(path.join(root, 'sdk', 'src', 'big.ts'), 'x'.repeat(300_000))
+    fs.writeFileSync(
+      path.join(root, 'sdk', 'src', 'big.ts'),
+      'x'.repeat(300_000),
+    )
     const before = inspectCodebaseStructure(root)
     expect(before.files).toContain('sdk/src/big.ts')
     expect(before.snapshotId).toHaveLength(64)
-    // Mutate only bytes past the 256KB cap boundary: capped hashing must not
-    // observe the change, so the snapshot hash stays stable.
     fs.writeFileSync(
       path.join(root, 'sdk', 'src', 'big.ts'),
       `${'x'.repeat(256_000)}y${'x'.repeat(43_999)}`,
     )
     const after = inspectCodebaseStructure(root)
-    expect(after.snapshotId).toBe(before.snapshotId)
+    expect(after.snapshotId).not.toBe(before.snapshotId)
   })
 
   test('promoteFeatureEvidence flips to verified only with full attestation', () => {
     const inventory = inspectCodebaseStructure(fixture())
     const record = {
       feature: 'resume plan',
+      snapshotId: inventory.snapshotId,
       evidenceKind: 'heuristic' as const,
       status: 'partial' as const,
       missing: ['failureStates'],
@@ -415,16 +416,16 @@ describe('native audit intelligence', () => {
         failureStates: ['cli/commands/resume-plan.ts'],
       },
     }
-    const attested = [
-      ...new Set(Object.values(record.evidence).flat()),
-    ]
+    const attested = [...new Set(Object.values(record.evidence).flat())]
     const promoted = promoteFeatureEvidence(record, inventory, attested)
     expect(promoted.verified).toBe(true)
     expect(promoted.unattested).toEqual([])
     expect(promoted.record).toMatchObject({
       evidenceKind: 'verified',
-      status: 'complete',
-      missing: [],
+      inspectionStatus: 'complete',
+      status: 'partial',
+      maturity: 'unknown',
+      missing: ['failureStates'],
     })
     const rejected = promoteFeatureEvidence(
       record,
@@ -434,5 +435,309 @@ describe('native audit intelligence', () => {
     expect(rejected.verified).toBe(false)
     expect(rejected.record).toEqual(record)
     expect(rejected.unattested).toEqual(['README.md'])
+  })
+
+  test('cached tools reattest source bytes and retain findings-only snapshot stability', () => {
+    const root = fixture()
+    const inventory = inspectCodebaseStructure(root)
+    inspectCodebaseStructureTool(root)
+    fs.writeFileSync(
+      path.join(root, 'sdk/src/resume-plan.ts'),
+      'export const resumePlan = () => "changed"',
+    )
+    const stale = inspectFeatureCompletenessTool(root, {
+      snapshot_id: inventory.snapshotId,
+      feature: 'resume plan',
+    })
+    const value = stale[0]?.type === 'json' ? stale[0].value : undefined
+    expect(value).toMatchObject({
+      sourceBinding: {
+        status: 'stale',
+        expectedSnapshotId: inventory.snapshotId,
+      },
+    })
+    expect(value).toHaveProperty('errorMessage')
+  })
+
+  test('release source membership and full tail bytes participate in attestation', () => {
+    const root = fixture()
+    fs.mkdirSync(path.join(root, 'release'))
+    fs.mkdirSync(path.join(root, 'empty-directory'))
+    fs.writeFileSync(path.join(root, 'release/publish.ts'), 'x'.repeat(300_000))
+    fs.writeFileSync(
+      path.join(root, 'release/openbuff.exe'),
+      'generated binary',
+    )
+    const before = inspectCodebaseStructure(root)
+    expect(before.sourceBinding?.shippedSourceFiles).toContain(
+      'release/publish.ts',
+    )
+    // Release membership is conservative; file extensions cannot certify that
+    // an executable or an unfamiliar language file contains no shipped source.
+    expect(before.files).toContain('release/openbuff.exe')
+    expect(before.directoryDispositions).toContainEqual({
+      id: 'empty-directory',
+      status: 'empty',
+      reason: 'No included source files',
+    })
+    fs.writeFileSync(
+      path.join(root, 'release/publish.ts'),
+      'x'.repeat(299_999) + 'y',
+    )
+    expect(inspectCodebaseStructure(root).snapshotId).not.toBe(
+      before.snapshotId,
+    )
+  })
+
+  test('attests extensionless release scripts and unfamiliar source extensions', () => {
+    const root = fixture()
+    fs.mkdirSync(path.join(root, 'release', 'tools'), { recursive: true })
+    fs.mkdirSync(path.join(root, 'bin'))
+    for (const file of [
+      'release/tools/bootstrap',
+      'bin/openbuff',
+      'release/tools/worker.hpp',
+    ]) {
+      fs.writeFileSync(path.join(root, file), '#!/bin/sh\nprintf "one"\n')
+      const before = inspectCodebaseStructure(root)
+      expect(before.sourceBinding?.shippedSourceFiles).toContain(file)
+      fs.writeFileSync(path.join(root, file), '#!/bin/sh\nprintf "two"\n')
+      expect(inspectCodebaseStructure(root).snapshotId).not.toBe(
+        before.snapshotId,
+      )
+    }
+  })
+
+  test('symlink retargets invalidate a cached shipped-source snapshot', () => {
+    const root = fixture()
+    fs.mkdirSync(path.join(root, 'release', 'tools'), { recursive: true })
+    fs.writeFileSync(
+      path.join(root, 'release', 'tools', 'a.ts'),
+      'export const a = 1\n',
+    )
+    fs.writeFileSync(
+      path.join(root, 'release', 'tools', 'b.ts'),
+      'export const b = 1\n',
+    )
+    const link = path.join(root, 'release', 'tools', 'link.ts')
+    fs.symlinkSync('a.ts', link)
+    const before = inspectCodebaseStructure(root)
+    inspectCodebaseStructureTool(root)
+    expect(before.sourceBinding?.shippedSourceFiles).toContain(
+      'release/tools/link.ts',
+    )
+    fs.unlinkSync(link)
+    fs.symlinkSync('b.ts', link)
+    expect(inspectCodebaseStructure(root).snapshotId).not.toBe(
+      before.snapshotId,
+    )
+    expect(
+      inspectFeatureCompletenessTool(root, {
+        feature: 'resume plan',
+        snapshot_id: before.snapshotId,
+      })[0],
+    ).toMatchObject({
+      type: 'json',
+      value: { sourceBinding: { status: 'stale' } },
+    })
+  })
+
+  test('file contents cannot impersonate a second source record', () => {
+    const root = fixture()
+    fs.mkdirSync(path.join(root, 'release', 'tools'), { recursive: true })
+    const first = 'release/tools/a.ts'
+    const second = 'release/tools/b.ts'
+    fs.writeFileSync(path.join(root, first), 'x')
+    fs.writeFileSync(path.join(root, second), 'y')
+    const mode = fs.statSync(path.join(root, second)).mode
+    const before = inspectCodebaseStructure(root)
+    inspectCodebaseStructureTool(root)
+    fs.unlinkSync(path.join(root, second))
+    fs.writeFileSync(path.join(root, first), `x\n${second}\0${mode}\0file\0y`)
+    const after = inspectCodebaseStructure(root)
+    expect(after.files).not.toContain(second)
+    expect(after.snapshotId).not.toBe(before.snapshotId)
+    expect(
+      inspectFeatureCompletenessTool(root, {
+        feature: 'resume plan',
+        snapshot_id: before.snapshotId,
+      })[0],
+    ).toMatchObject({
+      type: 'json',
+      value: { sourceBinding: { status: 'stale' } },
+    })
+  })
+
+  test('rejects a same-inode rewrite observed at the final metadata boundary', () => {
+    const root = fixture()
+    const file = path.join(root, 'sdk', 'src', 'resume-plan.ts')
+    const original = fs.lstatSync.bind(fs)
+    let calls = 0
+    const stat = spyOn(fs, 'lstatSync').mockImplementation(((
+      ...args: Parameters<typeof fs.lstatSync>
+    ) => {
+      if (args[0] === file && ++calls === 2)
+        fs.writeFileSync(file, 'export const resumePlan = () => "wrong"')
+      return original(...args)
+    }) as typeof fs.lstatSync)
+    try {
+      expect(() => inspectCodebaseStructure(root)).toThrow(
+        'Source changed during snapshot attestation',
+      )
+      expect(calls).toBe(2)
+    } finally {
+      stat.mockRestore()
+    }
+    expect(inspectCodebaseStructure(root).sourceBinding?.status).toBe(
+      'complete',
+    )
+  })
+
+  test('nested feature identity cannot borrow the enclosing snapshot', () => {
+    const root = fixture()
+    const inventory = inspectCodebaseStructure(root)
+    inspectCodebaseStructureTool(root)
+    const result = evaluateAuditCoverageTool(root, {
+      snapshot_id: inventory.snapshotId,
+      structural_receipts: inventory.subsystems.map((subsystem) => ({
+        schema_version: 1,
+        snapshot_id: inventory.snapshotId,
+        shard_id: subsystem.id,
+        subsystem_ids: [subsystem.id],
+        files: inventory.files.filter(
+          (file) =>
+            (file.includes('/') ? file.split('/')[0] : '.') === subsystem.id,
+        ),
+        domains: [...auditDomains],
+      })),
+      features: [
+        {
+          schema_version: 1,
+          snapshot_id: 'foreign-snapshot',
+          feature: 'resume plan',
+          evidence_kind: 'verified',
+          evidence: {
+            entrypoints: [],
+            implementation: [],
+            consumers: [],
+            tests: [],
+            docs: ['README.md'],
+            failure_states: [],
+          },
+        },
+      ],
+    })
+    const value = result[0]?.type === 'json' ? result[0].value : undefined
+    expect(value).toMatchObject({
+      inspectionComplete: false,
+      readinessComplete: false,
+    })
+    expect(value).toMatchObject({
+      incompleteFeatures: [
+        { feature: 'resume plan', reason: 'snapshot_mismatch' },
+      ],
+    })
+  })
+
+  test('complete source inspection preserves partial, unwired, absent and unknown maturity', () => {
+    const root = fixture()
+    const inventory = inspectCodebaseStructure(root)
+    const structuralReceipts = inventory.subsystems.map((subsystem) => ({
+      schemaVersion: 1 as const,
+      snapshotId: inventory.snapshotId,
+      shardId: subsystem.id,
+      subsystemIds: [subsystem.id],
+      files: inventory.files.filter(
+        (file) =>
+          (file.includes('/') ? file.split('/')[0] : '.') === subsystem.id,
+      ),
+      domains: [...auditDomains],
+    }))
+    for (const maturity of [
+      'partial',
+      'unwired',
+      'absent',
+      'unknown',
+    ] as const) {
+      const assessment = evaluateAuditCoverage({
+        inventory,
+        structuralReceipts,
+        featureRecords: [
+          {
+            feature: 'resume plan',
+            snapshotId: inventory.snapshotId,
+            evidenceKind: 'verified',
+            maturity,
+            status: 'partial',
+            missing: ['implementation', 'tests'],
+            evidence: {
+              entrypoints: [],
+              implementation: [],
+              consumers: [],
+              tests: [],
+              docs: ['README.md'],
+              failureStates: [],
+            },
+          },
+        ],
+      })
+      expect(assessment.inspectionComplete).toBe(true)
+      expect(assessment.readinessComplete).toBe(false)
+      expect(assessment.featureAssessments[0]).toMatchObject({
+        maturity,
+        assurance: 'source_inspection',
+        runtimeReadiness: 'not_assessed',
+      })
+    }
+    const discovered = inspectFeatureCompleteness(
+      root,
+      'resume plan',
+      inventory,
+    )
+    const promoted = promoteFeatureEvidence(
+      discovered,
+      inventory,
+      inventory.files,
+    )
+    expect(promoted.verified).toBe(true)
+    expect(promoted.record.status).not.toBe('complete')
+    expect(promoted.record.maturity).toBe('unknown')
+    expect(
+      evaluateAuditCoverage({
+        inventory,
+        structuralReceipts,
+        featureRecords: [promoted.record],
+      }).readinessComplete,
+    ).toBe(false)
+  })
+
+  test('a subsystem receipt cannot hide an omitted source file', () => {
+    const root = fixture()
+    const inventory = inspectCodebaseStructure(root)
+    const assessment = evaluateAuditCoverage({
+      inventory,
+      structuralReceipts: inventory.subsystems.map((subsystem) => ({
+        schemaVersion: 1 as const,
+        snapshotId: inventory.snapshotId,
+        shardId: subsystem.id,
+        subsystemIds: [subsystem.id],
+        files: inventory.files
+          .filter(
+            (file) =>
+              (file.includes('/') ? file.split('/')[0] : '.') === subsystem.id,
+          )
+          .slice(0, 1),
+        domains: [...auditDomains],
+      })),
+      featureRecords: [
+        promoteFeatureEvidence(
+          inspectFeatureCompleteness(root, 'resume plan', inventory),
+          inventory,
+          inventory.files,
+        ).record,
+      ],
+    })
+    expect(assessment.inspectionComplete).toBe(false)
+    expect(assessment.uncoveredFiles.length).toBeGreaterThan(0)
   })
 })

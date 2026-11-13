@@ -19,7 +19,7 @@ const CI_WORKFLOW = readFileSync(
 
 /** The exact per-package test discovery command from the CI workflow. */
 const CI_FIND_COMMAND =
-  "find . \\( -path ./node_modules -o -path ./.git -o -path ./dist \\) -prune -o -type f -name '*.test.ts' ! -name '*.integration.test.ts' -print"
+  "find . \\( -path ./node_modules -o -path ./.git -o -path ./dist \\) -prune -o -type f \\( -name '*.test.ts' -o -name '*.test.tsx' \\) ! -name '*.integration.test.ts' -print"
 
 let tmpRoot: string
 
@@ -49,8 +49,7 @@ describe('CI test-job truth (M4-T3)', () => {
     expect(files.length).toBeGreaterThan(0)
     expect(
       files.some(
-        (file) =>
-          file.startsWith('./__tests__/') && file.endsWith('.test.ts'),
+        (file) => file.startsWith('./__tests__/') && file.endsWith('.test.ts'),
       ),
     ).toBe(true)
   })
@@ -76,9 +75,7 @@ describe('CI test-job truth (M4-T3)', () => {
   test('empty test-discovery result fails the job instead of passing', () => {
     // The old empty branch echoed "No tests found" and exited 0 (vacuous
     // green). It must exit 1 now.
-    expect(CI_WORKFLOW).toMatch(
-      /No tests found in .+\n[^`]*exit 1/s,
-    )
+    expect(CI_WORKFLOW).toMatch(/No tests found in .+\n[^`]*exit 1/s)
   })
 })
 
@@ -145,10 +142,169 @@ describe('CI gate-helpers drift gate (M4-T3)', () => {
   })
 })
 
+describe('CI project-root guard gate', () => {
+  test('build-and-check runs the project-root guard', () => {
+    // The guard tripwire must run in an automated gate, not only exist as a
+    // `guard:project-root` script in scripts/package.json.
+    const ciLines = CI_WORKFLOW.split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    expect(ciLines).toContain('bun --cwd=scripts run guard:project-root')
+  })
+
+  test('build-and-check runs the byok-wording guard', () => {
+    const ciLines = CI_WORKFLOW.split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    expect(ciLines).toContain('bun --cwd=scripts run guard:byok-wording')
+  })
+
+  test('build-and-check runs the dependency-provenance guard', () => {
+    // Provenance reconciliation is only a real gate if CI runs it; a guard
+    // that exists solely as a `guard:dependency-provenance` script in
+    // scripts/package.json never blocks a merge.
+    const ciLines = CI_WORKFLOW.split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+    expect(ciLines).toContain(
+      'bun --cwd=scripts run guard:dependency-provenance',
+    )
+  })
+
+  test('build-and-check runs the types-declaration guard', () => {
+    // The co-declaration invariant (an untyped runtime dependency must declare
+    // its @types sibling in the same manifest) only blocks a merge if CI runs
+    // it; a lone `guard:types-declaration` script in scripts/package.json
+    // never fails a build. Invoked through the script like its sibling guards,
+    // so the guard's own package manifest stays the single source of the
+    // command.
+    expect(CI_WORKFLOW).toContain(
+      'run: bun --cwd=scripts run guard:types-declaration',
+    )
+  })
+
+  test('build-and-check checks append-only provenance over immutable whole-event ranges', () => {
+    const step = CI_WORKFLOW.split(
+      '- name: Check append-only provenance changes and dedicated commits',
+    )[1]!.split('- name: Types declaration guard')[0]!
+    expect(step).toContain(
+      'PROVENANCE_BASE_SHA: ${{ github.event.pull_request.base.sha }}',
+    )
+    expect(step).toContain(
+      'PROVENANCE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}',
+    )
+    expect(step).toContain('PROVENANCE_BEFORE_SHA: ${{ github.event.before }}')
+    expect(step).toContain('git fetch --no-tags --unshallow origin')
+    expect(step).toContain(
+      'bun scripts/provenance-change-guard.ts --event pull_request --base "$PROVENANCE_BASE_SHA" --head "$PROVENANCE_HEAD_SHA"',
+    )
+    expect(step).toContain(
+      'bun scripts/provenance-change-guard.ts --event push --before "$PROVENANCE_BEFORE_SHA" --head "$PROVENANCE_HEAD_SHA"',
+    )
+    expect(step).toContain(
+      'PROVENANCE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}',
+    )
+    expect(step).toContain(
+      'git fetch --no-tags origin "refs/heads/$PROVENANCE_DEFAULT_BRANCH"',
+    )
+    expect(step).toContain('--default-base "$default_base"')
+    expect(step).toContain(
+      'if [ "$PROVENANCE_REF_NAME" = "$PROVENANCE_DEFAULT_BRANCH" ]; then',
+    )
+    expect(step).toContain('--initial-history')
+    expect(step).not.toContain('HEAD~1')
+    expect(step).not.toContain('github.base_ref')
+    expect(step).not.toContain('exit 0')
+  })
+})
+
 describe('CI flake ledger wiring (M4-T3)', () => {
   test('retry step records total_attempts into the checked-in ledger', () => {
     expect(CI_WORKFLOW).toContain('id: tests')
     expect(CI_WORKFLOW).toContain('steps.tests.outputs.total_attempts')
     expect(CI_WORKFLOW).toContain('scripts/flake-ledger.json')
+  })
+})
+
+describe('CI bun toolchain alignment', () => {
+  test('setup-bun installs the version engines/packageManager declare', () => {
+    // The reproducibility fields promise the toolchain CI executes; the
+    // provenance and declaration guards are only valid when both agree.
+    // Every manifest declaring a bun engine must declare the CI toolchain;
+    // only the root also carries the `packageManager` corepack-style field.
+    const manifests = [
+      'package.json',
+      'cli/package.json',
+      'scripts/package.json',
+    ]
+    for (const manifest of manifests) {
+      const parsed = JSON.parse(
+        readFileSync(join(repoRoot, manifest), 'utf8'),
+      ) as {
+        engines?: { bun?: string }
+        packageManager?: string
+      }
+      expect(parsed.engines?.bun).toBe('1.4.4')
+      if (parsed.packageManager !== undefined) {
+        expect(manifest).toBe('package.json')
+        expect(parsed.packageManager).toBe('bun@1.4.4')
+      }
+    }
+
+    // Every setup-bun step in the workflow must pin the declared toolchain.
+    const ciVersions = [
+      ...CI_WORKFLOW.matchAll(/bun-version:\s*'([^']+)'/g),
+    ].map((match) => match[1]!)
+    expect(ciVersions.length).toBeGreaterThan(0)
+    expect(new Set(ciVersions)).toEqual(new Set(['1.4.4']))
+  })
+})
+
+describe('CI sdk dist build gating', () => {
+  test('sdk dist builds are limited to CLI imports and code-map grammar coverage', () => {
+    // CLI tests import @openbuff/sdk through the ESM import condition, which
+    // resolves the dist bundle. Code-map unit tests need the packaged grammars;
+    // unrelated package jobs must skip the build.
+    const lines = CI_WORKFLOW.split('\n')
+    const buildIndexes = lines
+      .map((line, index) =>
+        line.trim() === 'run: cd sdk && bun run build' ? index : -1,
+      )
+      .filter((index) => index !== -1)
+    // Exactly one gated build per test job: `test` and `test-integration`.
+    expect(buildIndexes.length).toBe(2)
+    const expectedSteps = [
+      {
+        name: 'Build SDK dist for CLI imports and code-map grammar coverage',
+        condition:
+          "matrix.package == 'cli' || matrix.package == 'packages/code-map'",
+      },
+      {
+        name: 'Build sdk dist (cli tests import @openbuff/sdk through the ESM import condition)',
+        condition: "matrix.package == 'cli'",
+      },
+    ]
+    for (const [position, index] of buildIndexes.entries()) {
+      const expectedStep = expectedSteps[position]!
+      const stepLines = lines.slice(index - 2, index)
+      expect(
+        stepLines.some(
+          (line) => line.trim() === `if: ${expectedStep.condition}`,
+        ),
+      ).toBe(true)
+      expect(
+        stepLines.some(
+          (line) => line.trim() === `- name: ${expectedStep.name}`,
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('code-map tests select the packaged grammars through the job environment', () => {
+    expect(CI_WORKFLOW).toContain(
+      `      - name: Use packaged grammars for code-map tests
+        if: matrix.package == 'packages/code-map'
+        run: echo "CODEBUFF_WASM_DIR=$GITHUB_WORKSPACE/sdk/dist/wasm" >> "$GITHUB_ENV"`,
+    )
   })
 })

@@ -1,14 +1,16 @@
 import { TextAttributes } from '@opentui/core'
-import React, { useState } from 'react'
+import React from 'react'
 
 import { Button } from '../button'
 import { useTheme } from '../../hooks/use-theme'
+import { InlineResults } from './inline-results'
 
 import type { ChatTheme } from '../../types/theme-system'
 
 export interface SearchMatch {
   line: number
   content: string
+  context?: boolean
 }
 
 export interface SearchGroup {
@@ -25,13 +27,19 @@ const PREVIEW_ENTRIES = 3
 
 /**
  * Map a discovery status string to a colored status glyph. Errors keep their
- * full detail text elsewhere; the glyph is the glanceable signal.
+ * full detail text elsewhere; the glyph is the glanceable signal. A settled
+ * 'unavailable' result maps to a muted dash instead of the in-progress
+ * spinner glyph, so an absent language server does not read as still running.
  */
 export function statusGlyph(
   status: string,
   theme: ChatTheme,
 ): { glyph: string; color: string } {
   if (status === 'failed') return { glyph: '✗', color: theme.error }
+  if (status === 'cancelled') return { glyph: '×', color: theme.warning }
+  if (status === 'unavailable') return { glyph: '–', color: theme.muted }
+  if (/^(disabled|stale|degraded|partial|error)/.test(status))
+    return { glyph: '◐', color: theme.warning }
   if (status.startsWith('complete') || status.startsWith('ready')) {
     return { glyph: '✓', color: theme.success }
   }
@@ -54,8 +62,8 @@ export interface HighlightSegment {
 
 /**
  * Split content into matched/unmatched segments for emphasis rendering.
- * Tolerates invalid or pathological patterns: invalid regex falls back to a
- * case-insensitive literal split; oversized patterns skip highlighting.
+ * Use case-insensitive literal emphasis. Search producers own regex matching;
+ * the UI never evaluates an untrusted pattern during layout.
  */
 export function splitPatternSegments(
   text: string,
@@ -64,52 +72,21 @@ export function splitPatternSegments(
   if (!text || !pattern || pattern.length > 200) {
     return [{ text, match: false }]
   }
-  let re: RegExp | null = null
-  try {
-    re = new RegExp(pattern, 'gi')
-  } catch {
-    re = null
-  }
-  if (!re) {
-    const needle = pattern.toLowerCase()
-    const haystack = text.toLowerCase()
-    const segments: HighlightSegment[] = []
-    let from = 0
-    let at = haystack.indexOf(needle)
-    while (at !== -1) {
-      if (at > from) {
-        segments.push({ text: text.slice(from, at), match: false })
-      }
-      segments.push({ text: text.slice(at, at + needle.length), match: true })
-      from = at + needle.length
-      at = haystack.indexOf(needle, from)
-    }
-    if (from < text.length) {
-      segments.push({ text: text.slice(from), match: false })
-    }
-    return segments.length > 0 ? segments : [{ text, match: false }]
-  }
+  const needle = pattern.toLowerCase()
+  const haystack = text.toLowerCase()
+  if (haystack.length !== text.length) return [{ text, match: false }]
   const segments: HighlightSegment[] = []
-  let last = 0
-  re.lastIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = re.exec(text)) !== null) {
-    if (match.index > last) {
-      segments.push({ text: text.slice(last, match.index), match: false })
-    }
-    const matched = match[0]
-    if (matched.length === 0) {
-      re.lastIndex += 1
-      continue
-    }
-    segments.push({ text: matched, match: true })
-    last = match.index + matched.length
-    if (segments.length > 1000) break
+  let from = 0
+  let at = haystack.indexOf(needle)
+  while (at !== -1 && segments.length < 1000) {
+    if (at > from) segments.push({ text: text.slice(from, at), match: false })
+    segments.push({ text: text.slice(at, at + needle.length), match: true })
+    from = at + needle.length
+    at = haystack.indexOf(needle, from)
   }
-  if (last < text.length) {
-    segments.push({ text: text.slice(last), match: false })
-  }
-  return segments
+  if (from < text.length)
+    segments.push({ text: text.slice(from), match: false })
+  return segments.length ? segments : [{ text, match: false }]
 }
 
 /**
@@ -159,31 +136,23 @@ export function CollapsibleGroup({
   previewCount?: number
 }) {
   const theme = useTheme()
-  const [expanded, setExpanded] = useState(false)
-  const visibleCount = expanded
-    ? entries.length
-    : Math.min(previewCount ?? PREVIEW_ENTRIES, entries.length)
-  const hiddenCount = entries.length - visibleCount
-
   return (
-    <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
-      <Button onClick={() => setExpanded((value) => !value)}>
-        <text style={{ wrapMode: 'word' }}>
-          <span fg={theme.foreground} attributes={TextAttributes.BOLD}>
-            {expanded ? '▾ ' : '▸ '}
-          </span>
-          <span fg={theme.directory}>
-            {`${label} (${badge ?? count})`}
-          </span>
-        </text>
-      </Button>
-      {entries.slice(0, visibleCount)}
-      {hiddenCount > 0 ? (
-        <text style={{ wrapMode: 'none' }}>
-          <span fg={theme.muted}>{`    … ${hiddenCount} more`}</span>
-        </text>
-      ) : null}
-    </box>
+    <InlineResults
+      items={entries}
+      previewCount={previewCount ?? PREVIEW_ENTRIES}
+      scope={`group:${label}`}
+      renderItem={(entry) => entry}
+      renderHeader={(expanded, toggle) => (
+        <Button onClick={toggle}>
+          <text style={{ wrapMode: 'word' }}>
+            <span fg={theme.foreground} attributes={TextAttributes.BOLD}>
+              {expanded ? '▾ ' : '▸ '}
+            </span>
+            <span fg={theme.directory}>{`${label} (${badge ?? count})`}</span>
+          </text>
+        </Button>
+      )}
+    />
   )
 }
 
@@ -208,26 +177,32 @@ export function SearchGroups({
 
   return (
     <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
-      {groups.map((group) => (
-        <CollapsibleGroup
-          key={group.file}
-          label={shortenPath(group.file, cwd)}
-          count={group.matches.length}
-          entries={group.matches.map((match, index) => (
-            <box
-              key={`${match.line}-${index}`}
-              style={{ flexDirection: 'row', gap: 0, width: '100%' }}
-            >
-              <text style={{ wrapMode: 'none' }}>
-                <span fg={theme.muted}>
-                  {`  ${String(match.line).padStart(lineWidth)} | `}
-                </span>
-              </text>
-              <HighlightedContent content={match.content} pattern={pattern} />
-            </box>
-          ))}
-        />
-      ))}
+      <InlineResults
+        items={groups}
+        previewCount={50}
+        noun="file"
+        scope="search-files"
+        renderItem={(group) => (
+          <CollapsibleGroup
+            key={group.file}
+            label={shortenPath(group.file, cwd)}
+            count={group.matches.length}
+            entries={group.matches.map((match, index) => (
+              <box
+                key={`${match.line}-${index}`}
+                style={{ flexDirection: 'row', gap: 0, width: '100%' }}
+              >
+                <text style={{ wrapMode: 'none' }}>
+                  <span fg={theme.muted}>
+                    {`  ${String(match.line).padStart(lineWidth)} | `}
+                  </span>
+                </text>
+                <HighlightedContent content={match.content} pattern={pattern} />
+              </box>
+            ))}
+          />
+        )}
+      />
     </box>
   )
 }
@@ -247,22 +222,29 @@ export function FileGroups({
 
   return (
     <box style={{ flexDirection: 'column', gap: 0, width: '100%' }}>
-      {groups.map((group) => (
-        <CollapsibleGroup
-          key={group.dir || '.'}
-          label={group.dir ? shortenPath(group.dir, cwd) : '.'}
-          count={group.files.length}
-          entries={group.files.map((file, index) => {
-            const basename = file.slice(file.lastIndexOf('/') + 1)
-            return (
-              <text key={`${file}-${index}`} style={{ wrapMode: 'none' }}>
-                <span fg={theme.muted}>{'    '}</span>
-                <span fg={theme.foreground}>{basename}</span>
-              </text>
-            )
-          })}
-        />
-      ))}
+      <InlineResults
+        items={groups}
+        previewCount={50}
+        noun="directory"
+        pluralNoun="directories"
+        scope="file-directories"
+        renderItem={(group) => (
+          <CollapsibleGroup
+            key={group.dir || '.'}
+            label={group.dir ? shortenPath(group.dir, cwd) : '.'}
+            count={group.files.length}
+            entries={group.files.map((file, index) => {
+              const basename = file.slice(file.lastIndexOf('/') + 1)
+              return (
+                <text key={`${file}-${index}`} style={{ wrapMode: 'none' }}>
+                  <span fg={theme.muted}>{'    '}</span>
+                  <span fg={theme.foreground}>{basename}</span>
+                </text>
+              )
+            })}
+          />
+        )}
+      />
     </box>
   )
 }

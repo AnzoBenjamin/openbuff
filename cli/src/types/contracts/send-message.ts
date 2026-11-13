@@ -9,4 +9,6 @@ export type SendMessageFn = (params: {
   agentMode: AgentMode
   postUserMessage?: PostUserMessageFn
   attachments?: PendingAttachment[]
+  /** Called once when preparation and readiness checks accept the run. */
+  onAccepted?: () => void
 }) => Promise<void>

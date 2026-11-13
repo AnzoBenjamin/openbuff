@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'bun:test'
 import { handleReadOutline } from '../tools/handlers/tool/read-outline'
 import { extractSlices } from '../structural-read'
-import { decodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
+import {
+  decodeReadCapabilityToken,
+  encodeReadCapabilityToken,
+  readCapabilityMatchesScope,
+} from '@codebuff/common/util/content-hash'
+import {
+  captureTextDocument,
+  getRawReadBasis,
+} from '@codebuff/common/util/byte-text'
 
 describe('read_outline handler', () => {
   it('returns outline of exports, imports, functions, classes, and types', async () => {
@@ -81,16 +89,65 @@ const myArrow = (y: string) => {
     const result = output[0].value
     expect(result.outline).toBe('Error: File does not exist.')
   })
+
+  it('reports a missing file in errorMessage with near-match candidates', async () => {
+    const { output } = await handleReadOutline({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: { input: { path: 'src/missng.ts' } },
+      requestOptionalFile: async () => null,
+      fileContext: {
+        projectRoot: '/repo',
+        fileTree: [
+          {
+            name: 'src',
+            type: 'directory',
+            filePath: 'src',
+            children: [
+              { name: 'missing.ts', type: 'file', filePath: 'src/missing.ts' },
+              { name: 'other.ts', type: 'file', filePath: 'src/other.ts' },
+            ],
+          },
+        ],
+      },
+    } as any)
+    const result = output[0].value as {
+      errorMessage?: string
+      candidates?: string[]
+    }
+    expect(result.candidates).toEqual(['src/missing.ts'])
+    expect(result.errorMessage).toContain('src/missing.ts')
+  })
 })
 
 describe('symbol slices', () => {
   it('covers a contiguous preceding documentation block in content and capability', async () => {
     const content = '/** doc */\nexport function greet() {\n  return 1\n}\n'
-    const slices = await extractSlices(content, 'src/file.ts', ['greet'], 5, {
+    const document = captureTextDocument(content)
+    const scope = {
       projectId: '/repo',
       path: 'src/file.ts',
       runId: 'symbol-slice-test',
+    }
+    const sourceReadCapability = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: document.maxCapabilityLine,
+      hash: document.observationHash,
+      scope,
+      rawBasis: getRawReadBasis(
+        document,
+        1,
+        document.maxCapabilityLine,
+        'whole',
+      ),
     })
+    const slices = await extractSlices(
+      content,
+      'src/file.ts',
+      ['greet'],
+      5,
+      scope,
+      sourceReadCapability,
+    )
 
     expect(slices).toHaveLength(1)
     expect(slices[0]).toMatchObject({
@@ -103,6 +160,9 @@ describe('symbol slices', () => {
     if (typeof decoded !== 'string') {
       expect(decoded.startLine).toBe(1)
       expect(decoded.endLine).toBe(4)
+      expect(decoded.tokenVersion).toBe('v4')
+      expect(readCapabilityMatchesScope(decoded, scope)).toBe(true)
+      expect(decoded.rawBasis).toEqual(getRawReadBasis(document, 1, 4, 'lines'))
     }
   })
 })
@@ -148,6 +208,39 @@ describe('read_outline path containment', () => {
     )
     const result = output[0].value
     expect(result.outline).toBe('Error: File does not exist.')
+    expect(called).toBe(false)
+  })
+
+  it('fails closed to the legacy error message when fileContext has no projectRoot', async () => {
+    // `src/file.ts` is accepted when a project root is present (see the
+    // acceptance case below), so a refusal here can only come from the
+    // missing root. Params are built inline because `makeParams` always
+    // forces `fileContext: { projectRoot: '/repo' }`.
+    let called = false
+    const requestOptionalFile = async (_p: { filePath: string }) => {
+      called = true
+      return 'export const x = 1\n'
+    }
+
+    const withoutFileContext = await handleReadOutline({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: { input: { path: 'src/file.ts' } },
+      requestOptionalFile,
+    } as any)
+    expect(withoutFileContext.output[0].value.outline).toBe(
+      'Error: File does not exist.',
+    )
+    expect(called).toBe(false)
+
+    const withEmptyFileContext = await handleReadOutline({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall: { input: { path: 'src/file.ts' } },
+      requestOptionalFile,
+      fileContext: {},
+    } as any)
+    expect(withEmptyFileContext.output[0].value.outline).toBe(
+      'Error: File does not exist.',
+    )
     expect(called).toBe(false)
   })
 

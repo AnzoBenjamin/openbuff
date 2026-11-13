@@ -6,7 +6,6 @@ import {
   recordMemoryReuse,
 } from '../../../orchestration/discovery-coordinator'
 
-import type { VerifiedExcerpt } from '../../../orchestration/discovery-coordinator'
 import type { CodebuffToolHandlerFunction } from '../handler-function-type'
 import type { AgentState } from '@codebuff/common/types/session-state'
 import type {
@@ -30,28 +29,6 @@ function buildDiscoveryQuestion(input: {
   return question.slice(0, 4000)
 }
 
-function buildSkipOutput(
-  covering: VerifiedExcerpt[],
-): CodebuffToolOutput<ToolName> {
-  const bounded = covering.slice(0, 5)
-  const lines = bounded.map((entry) =>
-    entry.excerpt
-      ? `${entry.path}: ${entry.excerpt.slice(0, 500)}`
-      : entry.path,
-  )
-  const stdout =
-    lines.join('\n').slice(0, 2500) || bounded.map((entry) => entry.path).join('\n')
-  return [
-    {
-      type: 'json',
-      value: {
-        stdout,
-        message: `Served from verified memory; skipped code search (${bounded.length} paths fully covered).`,
-      },
-    },
-  ] as unknown as CodebuffToolOutput<ToolName>
-}
-
 export const handleCodeSearch = (async (params: {
   previousToolCallFinished: Promise<void>
   toolCall: CodebuffToolCall<'code_search'>
@@ -62,8 +39,12 @@ export const handleCodeSearch = (async (params: {
 }): Promise<{
   output: CodebuffToolOutput<'code_search'>
 }> => {
-  const { previousToolCallFinished, toolCall, requestClientToolCall, agentState } =
-    params
+  const {
+    previousToolCallFinished,
+    toolCall,
+    requestClientToolCall,
+    agentState,
+  } = params
 
   await previousToolCallFinished
   const input = toolCall.input as {
@@ -90,12 +71,14 @@ export const handleCodeSearch = (async (params: {
       // Coverage recording must never break the tool call.
     }
   }
-  // Memory-first check (best-effort, never breaks the call).
+  // Memory is accounting-only here. code_search answers "every line matching
+  // X"; memory excerpts are not matches, and narrowing the scope to the
+  // uncovered paths would hide matches in the covered ones (read-search-01).
   try {
     if (agentState && typeof agentState === 'object') {
       const excerpts = getVerifiedMemoryExcerpts(agentState, {
         limit: 5,
-        maxCharsPerExcerpt: 500,
+        maxCharsPerExcerpt: 2_000,
       })
       const pathPrefixes: string[] = []
       if (Array.isArray(input.paths)) {
@@ -116,37 +99,18 @@ export const handleCodeSearch = (async (params: {
         workspaceRevision: agentState.workspaceState?.revision,
         workspaceSnapshotId: agentState.workspaceState?.snapshotId,
         existingIndexSnapshotId: agentState.discoveryCoverage?.indexSnapshotId,
+        exhaustive: true,
       })
       recordMemoryReuse(agentState, {
         tool: 'code_search',
-        decision: cover.decision,
-        served:
-          cover.decision === 'skip' || cover.decision === 'narrow'
-            ? cover.coveringExcerpts.length
-            : 0,
+        decision: 'full',
+        reason: cover.reason,
+        served: 0,
         gaps: cover.remainingGaps.length,
-        coveredStableChunkIds: cover.coveringExcerpts
-          .map((entry) => entry.chunkId)
-          .filter((id): id is string => typeof id === 'string' && id.length > 0),
       })
-      if (cover.decision === 'skip' && cover.coveringExcerpts.length > 0) {
-        const output = buildSkipOutput(cover.coveringExcerpts)
-        recordCoverage(output)
-        return { output }
-      }
-      if (cover.decision === 'narrow' && cover.remainingGaps.length > 0) {
-        const narrowedPaths = cover.remainingGaps.slice(0, 20)
-        const narrowedCall = {
-          ...toolCall,
-          input: { ...input, paths: narrowedPaths },
-        } as unknown as ClientToolCall<ToolName>
-        const output = await requestClientToolCall(narrowedCall)
-        recordCoverage(output)
-        return { output }
-      }
     }
   } catch {
-    // Fall through to the full call on any memory-check failure.
+    // Accounting failure never affects the call.
   }
   const output = await requestClientToolCall(
     toolCall as unknown as ClientToolCall<ToolName>,

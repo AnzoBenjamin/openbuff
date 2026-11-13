@@ -5,6 +5,7 @@ import {
   CONTEXT_PRUNER_AGENT_ID,
   isContextPrunerAgentId,
 } from './context-pruner-identity'
+import { buildCompactionArchivePointers } from './context-archive'
 
 import type { executeSubagent } from '../tools/handlers/tool/spawn-agent-utils'
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
@@ -31,6 +32,17 @@ import type { ToolSet } from 'ai'
  * helper deliberately does not re-check suppression and must not be called
  * from an un-gated site.
  */
+
+/**
+ * What the runtime pass actually did, so the caller can settle the announced
+ * compaction card honestly (memory-context-06). `completed` means the pruner
+ * ran and its transcript was written back; `skipped` and `failed` mean the
+ * transcript is unchanged and only the mechanical brake remains.
+ */
+export type RuntimeSemanticCompactionOutcome =
+  | { outcome: 'completed' }
+  | { outcome: 'skipped' | 'failed'; reason: string }
+
 export async function runRuntimeSemanticCompaction(
   params: {
     /** Parent state to compact. Its `messageHistory` is replaced in place. */
@@ -68,7 +80,7 @@ export async function runRuntimeSemanticCompaction(
     | 'spawnParams'
     | 'userInputId'
   >,
-): Promise<void> {
+): Promise<RuntimeSemanticCompactionOutcome> {
   const {
     agentState: parentAgentState,
     agentTemplate,
@@ -92,7 +104,7 @@ export async function runRuntimeSemanticCompaction(
     isContextPrunerAgentId(agentTemplate.id) ||
     isContextPrunerAgentId(parentAgentState.agentType)
   ) {
-    return
+    return { outcome: 'skipped', reason: 'The pruner does not compact its own run.' }
   }
 
   try {
@@ -131,7 +143,10 @@ export async function runRuntimeSemanticCompaction(
         },
         'Skipped runtime semantic compaction: context-pruner is not declared in the parent template spawnableAgents',
       )
-      return
+      return {
+        outcome: 'skipped',
+        reason: `Agent '${agentTemplate.id}' does not list '${CONTEXT_PRUNER_AGENT_ID}' in spawnableAgents, so only the emergency trim can reduce context. Add it to spawnableAgents to enable compaction.`,
+      }
     }
 
     // Spawn exactly what the consumer declared. `getMatchingSpawn` grants
@@ -149,7 +164,10 @@ export async function runRuntimeSemanticCompaction(
         { agentType: prunerAgentId, runId },
         'Skipped runtime semantic compaction: context-pruner template could not be resolved',
       )
-      return
+      return {
+        outcome: 'skipped',
+        reason: `The compaction agent '${prunerAgentId}' could not be loaded, so only the emergency trim can reduce context.`,
+      }
     }
 
     // Mirrors the pruner-specific inline setup: the context editor needs the
@@ -177,11 +195,24 @@ export async function runRuntimeSemanticCompaction(
 
     const result = await executeSubagent({
       ...extractSubagentContextParams(params),
+      executionIdentity: undefined,
+      executionHostOperation: parentAgentState.runId ? {
+        actor: { runId: parentAgentState.runId, rootRunId: parentAgentState.ancestorRunIds[0] ?? parentAgentState.runId,
+          agentId: parentAgentState.agentId },
+        purpose: 'semantic-compaction',
+      } : undefined,
 
       ancestorRunIds: parentAgentState.ancestorRunIds,
       userInputId: `${userInputId}-inline-${prunerAgentId}${childAgentState.agentId}`,
       prompt: '',
-      spawnParams: undefined,
+      spawnParams: (() => {
+        // D25/CQ-T1: thread the archive eviction-pointer index into the pruner
+        // (the archive was written before this pass), omitted when empty.
+        const archivePointers = buildCompactionArchivePointers(
+          parentAgentState.compactionArchive,
+        )
+        return archivePointers ? { archivePointers } : undefined
+      })(),
       agentTemplate: prunerChildTemplate,
       parentAgentState,
       agentState: childAgentState,
@@ -202,9 +233,30 @@ export async function runRuntimeSemanticCompaction(
       clearUserPromptMessagesAfterResponse: false,
     })
 
-    // Only the transcript propagates back, exactly like the inline path's
-    // `editsParentMessageHistory` branch.
+    // `set_messages` commits the pruner's bounded task memory atomically with
+    // its transcript. Propagate both halves back to the parent; otherwise the
+    // parent keeps compiling stale memory that the child just compacted.
     parentAgentState.messageHistory = result.agentState.messageHistory
+    parentAgentState.taskMemory = result.agentState.taskMemory
+    // executeSubagent degrades a pruner crash to an error output instead of
+    // throwing, so the failure must be read from the result (memory-context-06).
+    const output = result.output as { type?: unknown; message?: unknown } | undefined
+    const termination = result.agentState.runOutcome?.termination
+    if (output?.type === 'error' || termination === 'failed') {
+      const message =
+        typeof output?.message === 'string'
+          ? output.message
+          : result.agentState.runOutcome?.cause?.message ?? 'unknown error'
+      logger.warn(
+        { agentType: prunerAgentId, runId, message },
+        'Runtime-driven semantic compaction failed (non-fatal)',
+      )
+      return {
+        outcome: 'failed',
+        reason: `Compaction failed: ${message}`.slice(0, 400),
+      }
+    }
+    return { outcome: 'completed' }
   } catch (error) {
     // Non-fatal by design: a pruner failure must never abort the agent turn.
     // The deterministic mechanical brake still runs downstream.
@@ -212,6 +264,10 @@ export async function runRuntimeSemanticCompaction(
       { error, agentType: CONTEXT_PRUNER_AGENT_ID, runId },
       'Runtime-driven semantic compaction failed (non-fatal)',
     )
-    return
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      outcome: 'failed',
+      reason: `Compaction failed: ${message}`.slice(0, 400),
+    }
   }
 }

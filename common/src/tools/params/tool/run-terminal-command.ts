@@ -1,56 +1,56 @@
 import z from 'zod/v4'
 
 import { $getNativeToolCallExampleString, jsonToolResultSchema } from '../utils'
+import { executionRefusalSchema } from '../execution-refusal'
+import { processCleanupSchema } from '../process-cleanup'
+import { executionUsageSchema } from '../execution-usage'
+import { nativeWaitStatusFields } from '../native-wait-status'
 
 import { gitCommitGuidePrompt } from '../../../constants/git-discipline'
 
 import type { $ToolParams } from '../../constants'
 
+const executionMetadata = {
+  ...nativeWaitStatusFields,
+  executionSignal: z.number().int().positive().max(64).optional(),
+  executionUsage: executionUsageSchema.optional(),
+  processCleanup: processCleanupSchema.optional(),
+  logComplete: z.boolean().optional(),
+  /** Longest SYNC silence (ms), reported once it reaches the idle-output threshold (30 s). */
+  idleOutputMs: z.number().optional(),
+  /** "Waiting for input?" hint attached when a SYNC command went silent; the command was not stopped for it. */
+  idleOutputHint: z.string().optional(),
+  executionRefusal: executionRefusalSchema.optional(),
+  dirtyObservationRefusal: executionRefusalSchema.optional(),
+  executionBindingVersion: z.literal(2).optional(),
+  executionBindingDigest: z.string().optional(),
+  approvalReceiptId: z.string().optional(),
+  harnessAction: z.string().optional(),
+  harnessTarget: z.string().optional(),
+  harnessEffects: z.array(z.object({
+    action: z.string(),
+    target: z.string(),
+    branch: z.string().optional(),
+    pushRisks: z.array(z.string()).optional(),
+  })).optional(),
+  harnessParseStatus: z.enum(['complete', 'unsupported', 'malformed']).optional(),
+}
+
 export const terminalCommandOutputSchema = z.union([
   z.object({
-    command: z.string(),
-    startingCwd: z.string().optional(),
-    message: z.string().optional(),
-    stderr: z.string().optional(),
-    stdout: z.string().optional(),
-    exitCode: z.number().optional(),
-    /** Project-relative paths newly dirtied by a SYNC command (post − pre git status). */
-    touchedPaths: z.array(z.string()).optional(),
-  }),
-  z.object({
-    command: z.string(),
-    startingCwd: z.string().optional(),
-    status: z.enum(['passed', 'failed', 'unknown']).optional(),
-    message: z.string().optional(),
-    stderr: z.string().optional(),
-    stderrExcerpt: z.string().optional(),
-    stdoutExcerpt: z.string().optional(),
-    stdoutOmittedForLength: z.literal(true),
-    exitCode: z.number().optional(),
-    touchedPaths: z.array(z.string()).optional(),
-  }),
-  z.object({
-    command: z.string(),
-    processId: z.number(),
-    backgroundProcessStatus: z.enum([
-      'running',
-      'completed',
-      'error',
-      'lost',
-      'stopped',
-    ]),
-    detached: z.boolean().optional(),
-    /** Job id to poll/follow with the check_job tool. */
-    jobId: z.string().optional(),
-    /** Temp file the background job streams its combined output to. */
-    logFile: z.string().optional(),
-  }),
-  z.object({
+    ...executionMetadata,
     command: z.string(),
     errorMessage: z.string(),
     timedOut: z.boolean().optional(),
     spawnFailed: z.boolean().optional(),
     permissionDenied: z.boolean().optional(),
+    /**
+     * The git-commit safety preflight could not inspect the staged diff
+     * (spawn/timeout/output-budget/header-decode failure). Distinct from
+     * permissionDenied: the commit was never judged, so a retry on transient
+     * failure is reasonable.
+     */
+    safetyPreflightFailed: z.boolean().optional(),
     permissionProfile: z
       .enum([
         'read-only',
@@ -69,7 +69,67 @@ export const terminalCommandOutputSchema = z.union([
     startingCwd: z.string().optional(),
     /** Project-relative paths newly dirtied before timeout/spawn failure (best-effort). */
     touchedPaths: z.array(z.string()).optional(),
+    /** Full streamed output persisted to a scratch file when the inline result was truncated; read with read_logs/read_files. */
+    fullLogPath: z.string().optional(),
+    /** Byte length of the persisted full-output artifact. */
+    logBytes: z.number().optional(),
+    logPersisted: z.boolean().optional(),
+    logError: z.string().optional(),
+  }),  z.object({
+    ...executionMetadata,
+    command: z.string(),
+    startingCwd: z.string().optional(),
+    status: z.enum(['passed', 'failed', 'unknown']).optional(),
+    message: z.string().optional(),
+    stderr: z.string().optional(),
+    stderrExcerpt: z.string().optional(),
+    stdoutExcerpt: z.string().optional(),
+    stdoutOmittedForLength: z.literal(true),
+    exitCode: z.number().optional(),
+    touchedPaths: z.array(z.string()).optional(),
+    /** Full untruncated output persisted to a scratch file when the inline result was truncated; read with read_logs/read_files. */
+    fullLogPath: z.string().optional(),
+    /** Byte length of the persisted full-output artifact. */
+    logBytes: z.number().optional(),
+    logPersisted: z.boolean().optional(),
+    logError: z.string().optional(),
   }),
+  z.object({
+    ...executionMetadata,
+    command: z.string(),
+    processId: z.number(),
+    startingCwd: z.string().optional(),
+    backgroundProcessStatus: z.enum([
+      'running',
+      'completed',
+      'error',
+      'lost',
+      'stopped',
+    ]),
+    detached: z.boolean().optional(),
+    /** Job id to poll/follow with the check_job tool. */
+    jobId: z.string().optional(),
+    /** Temp file the background job streams its combined output to. */
+    logFile: z.string().optional(),
+  }),
+  z.object({
+    ...executionMetadata,
+    command: z.string(),
+    startingCwd: z.string().optional(),
+    message: z.string().optional(),
+    stderr: z.string().optional(),
+    stdout: z.string().optional(),
+    exitCode: z.number().optional(),
+    /** Project-relative paths newly dirtied by a SYNC command (post − pre git status). */
+    touchedPaths: z.array(z.string()).optional(),
+    /** Full streamed output persisted to a scratch file when the inline result was truncated; read with read_logs/read_files. */
+    fullLogPath: z.string().optional(),
+    /** Byte length of the persisted full-output artifact. */
+    logBytes: z.number().optional(),
+    logPersisted: z.boolean().optional(),
+    logError: z.string().optional(),
+  }),
+
 ])
 
 const toolName = 'run_terminal_command'
@@ -92,7 +152,7 @@ const inputSchema = z
       .optional()
       .default(false)
       .describe(
-        `For BACKGROUND commands only: keep the job running if the owning request is cancelled. Defaults to false.`,
+        `For BACKGROUND commands only: transfer the job to the registered session receiver so request cancellation does not stop it. A finite timeout remains in force. Defaults to false.`,
       ),
     cwd: z
       .string()
@@ -102,10 +162,9 @@ const inputSchema = z
       ),
     timeout_seconds: z
       .number()
-      .default(-1)
       .optional()
       .describe(
-        `Wall-clock bound in seconds for SYNC commands. Omit or use -1 for no timeout (the default). Does not apply to BACKGROUND commands.`,
+        `Wall-clock bound in seconds, including startup and approval waits. If omitted, SYNC commands get 120 s of execution time (approval waits excluded) and BACKGROUND jobs have no local timeout. Raise it for long builds or test suites. -1 means no local timeout where the host allows it; a host cap and any finite parent deadline still apply.`,
       ),
     owner: z
       .object({
@@ -137,12 +196,14 @@ DO NOT do any of the following:
 6. Use the wrong package manager for the project. For example, if the project uses \`pnpm\` or \`bun\` or \`yarn\`, you should not use \`npm\`. Similarly not everyone uses \`pip\` for python, etc.
 
 Do:
-- If there's an opportunity to use "-y" or "--yes" flags, use them. Any command that prompts for confirmation will hang if you don't use the flags.
+- If there's an opportunity to use "-y" or "--yes" flags, use them. stdin is closed (reads get EOF), so a command that prompts for confirmation fails or stalls without them. A SYNC result with idleOutputHint means the command went 30 s without output; it may be waiting on a terminal prompt.
+- SYNC commands time out after 120 s unless you pass timeout_seconds; set it higher for long builds or test suites. The timeout keeps the partial output, and so does a user cancel.
 
 Notes:
 - If the user references a specific file, it could be either from their cwd or from the project root. You **must** determine which they are referring to (either infer or ask). Then, you must specify the path relative to the project root (or use the cwd parameter)
 - Commands can succeed without giving any output, e.g. if no type errors were found.
 - Use SYNC for finite commands. For long-running or never-exiting commands (dev servers, watchers, \`tail -f\`), set process_type: BACKGROUND — fire-and-forget start that returns a jobId immediately. Live job_update streams progress to the user; call check_job only when you need agent-side readiness/exitCode/join (e.g. wait_for a pattern), not to poll solely for user progress.
+- When a SYNC command's output is truncated, the result includes fullLogPath — read the full output with read_logs (it accepts a path) instead of re-running the command.
 
 ${gitCommitGuidePrompt}
 

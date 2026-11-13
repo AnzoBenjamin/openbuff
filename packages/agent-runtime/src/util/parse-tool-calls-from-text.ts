@@ -1,10 +1,13 @@
-import {
-  startToolTag,
-  endToolTag,
-  toolNameParam,
-} from '@codebuff/common/tools/constants'
+import { startToolTag, endToolTag } from '@codebuff/common/tools/constants'
 import { parseJsonStringWithRepair } from '@codebuff/common/tools/params/utils'
 import { escapeRegexForLiteral as escapeRegex } from '@codebuff/common/util/language-profiles'
+
+import {
+  MISSING_TOOL_NAME_REASON,
+  resolveToolName,
+  stripToolNameKeys,
+} from './tool-name-key'
+import { toBoundedRawExcerpt } from './stream-xml-parser'
 
 // Module-level constant: building the extraction RegExp inside
 // parseTextWithToolCalls allocated a fresh RegExp per assistant-text parse in
@@ -34,6 +37,13 @@ export type ParsedTextSegment = {
 export type ParsedToolCallParseError = {
   type: 'parse_error'
   message: string
+  /**
+   * Bounded excerpt of the raw trimmed block content that failed to parse,
+   * quoted back to the model at the emission boundary so it can diff its
+   * broken JSON instead of repeating the identical malformed shape
+   * (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+   */
+  rawExcerpt?: string
 }
 
 export type ParsedSegment =
@@ -82,6 +92,10 @@ export function parseTextWithToolCalls(text: string): ParsedSegment[] {
     }
 
     const jsonContent = match[1].trim()
+    // Bounded excerpt of the raw trimmed block, captured once so every
+    // parse_error site can quote the offending bytes back to the model
+    // (.agents/sessions/degeneration-followups-2026-10/findings/error-feedback-loop.md).
+    const rawExcerpt = toBoundedRawExcerpt(jsonContent)
 
     try {
       const parsed = parseJsonStringWithRepair(jsonContent)
@@ -91,28 +105,24 @@ export function parseTextWithToolCalls(text: string): ParsedSegment[] {
           type: 'parse_error',
           message:
             'Ignored codebuff_tool_call content because it did not parse to a JSON object.',
+          rawExcerpt,
         })
       } else {
-        const toolName = parsed[toolNameParam]
+        const resolved = resolveToolName(parsed)
 
-        if (typeof toolName === 'string') {
-          // Remove the tool name param from the input
-          const input = { ...parsed }
-          delete input[toolNameParam]
-
-          // Also remove cb_easp if present
-          delete input['cb_easp']
+        if (resolved !== undefined) {
+          const input = stripToolNameKeys(parsed, resolved)
 
           segments.push({
             type: 'tool_call',
-            toolName,
+            toolName: resolved.toolName,
             input,
           })
         } else {
           segments.push({
             type: 'parse_error',
-            message:
-              'Ignored codebuff_tool_call content because cb_tool_name was missing or not a string.',
+            message: `Ignored codebuff_tool_call content because ${MISSING_TOOL_NAME_REASON}`,
+            rawExcerpt,
           })
         }
       }
@@ -122,6 +132,7 @@ export function parseTextWithToolCalls(text: string): ParsedSegment[] {
         message: `Ignored codebuff_tool_call content because JSON parsing failed: ${
           err instanceof Error ? err.message : String(err)
         }`,
+        rawExcerpt,
       })
     }
 

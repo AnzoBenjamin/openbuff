@@ -18,6 +18,7 @@ import {
   SEMANTIC_COMPACTION_SMALL_WINDOW_THRESHOLD_TOKENS,
   SEMANTIC_COMPACTION_TARGET_FRACTION,
   SEMANTIC_COMPACTION_TRIGGER_FRACTION,
+  SEMANTIC_EVICTION_FRACTION,
 } from '@codebuff/agent-runtime/util/context-pruning'
 
 import {
@@ -123,6 +124,7 @@ describe('pruner-budgets freshness', () => {
         DEFAULT_SEMANTIC_COMPACTION_TARGET_TOKENS,
       ],
       ['SEMANTIC_TRIGGER_FRACTION', SEMANTIC_COMPACTION_TRIGGER_FRACTION],
+      ['SEMANTIC_EVICTION_FRACTION', SEMANTIC_EVICTION_FRACTION],
       ['SEMANTIC_TARGET_FRACTION', SEMANTIC_COMPACTION_TARGET_FRACTION],
       ['SEMANTIC_HEADROOM_FRACTION', SEMANTIC_COMPACTION_HEADROOM_FRACTION],
       ['SEMANTIC_MIN_HEADROOM_TOKENS', SEMANTIC_COMPACTION_MIN_HEADROOM_TOKENS],
@@ -250,7 +252,7 @@ describe('pruner-budgets derivation & splice', () => {
       BUDGET_CANONICAL_NAMES.map((name) => [name, '1']),
     )
     const mirrors = deriveBudgetMirrors(literals)
-    expect(mirrors).toHaveLength(15)
+    expect(mirrors).toHaveLength(16)
     // MODEL_CONTEXT pairs keep their canonical name as the pruner-local name.
     expect(
       mirrors.find(

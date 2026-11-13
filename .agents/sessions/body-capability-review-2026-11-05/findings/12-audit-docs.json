@@ -1,0 +1,2148 @@
+{
+  "shardId": "12-audit-docs",
+  "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+  "structuralReceipt": {
+    "schemaVersion": 1,
+    "snapshotId": "ec141833a7efa94cd25b0e2c964fc2c832ce5983b2446c03769515032360deb0",
+    "shardId": "12-audit-docs",
+    "subsystemIds": [
+      ".",
+      "agents",
+      "cli",
+      "common",
+      "docs",
+      "evals",
+      "openbuff.d.example",
+      "packages",
+      "scripts",
+      "sdk"
+    ],
+    "files": [
+      "DESIGN.md",
+      "README.md",
+      "agents/__tests__/code-reviewer.test.ts",
+      "agents/__tests__/gate-reviewer.test.ts",
+      "agents/__tests__/quality-prompt-snapshot.test.ts",
+      "agents/__tests__/spawn-contract.test.ts",
+      "agents/base2/base2.ts",
+      "agents/base2/gate-reviewer.ts",
+      "agents/base2/quality-prompt-section.ts",
+      "agents/base2/spawn-contract.ts",
+      "agents/base2/tool-tiers.ts",
+      "agents/patterns/audit-codebase.md",
+      "agents/reviewer/code-reviewer.ts",
+      "cli/src/components/tools/harness-intelligence-tools.tsx",
+      "common/src/constants/prompt-sections.ts",
+      "common/src/tools/compile-tool-definitions.ts",
+      "common/src/tools/constants.ts",
+      "common/src/tools/list.ts",
+      "common/src/tools/params/__tests__/write-audit-findings.test.ts",
+      "common/src/tools/params/tool/audit-intelligence.ts",
+      "common/src/tools/params/tool/get-task.ts",
+      "common/src/tools/params/tool/inspect-workspace.ts",
+      "common/src/tools/params/tool/write-audit-findings.ts",
+      "docs/README.md",
+      "docs/agents-and-tools.md",
+      "docs/architecture.md",
+      "docs/audits/feature-switch-inventory-2026-11-02.md",
+      "docs/design/cli-overhaul/HUMAN-TESTING.md",
+      "docs/design/cli-overhaul/README.md",
+      "docs/request-flow.md",
+      "docs/testing.md",
+      "evals/buffbench/plan-sharding-signals.ts",
+      "openbuff.d.example/routes.json",
+      "package.json",
+      "packages/agent-runtime/src/templates/agent-registry.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/audit-intelligence.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/get-change-review-bundle.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/set-output.ts",
+      "packages/agent-runtime/src/tools/handlers/tool/write-audit-findings.ts",
+      "packages/agent-runtime/src/util/reviewer-output.ts",
+      "scripts/generate-tool-definitions.ts",
+      "sdk/src/__tests__/audit-intelligence.test.ts",
+      "sdk/src/__tests__/get-change-review-bundle.test.ts",
+      "sdk/src/__tests__/harness-intelligence.test.ts",
+      "sdk/src/__tests__/local-harness-store.test.ts",
+      "sdk/src/__tests__/write-audit-findings.test.ts",
+      "sdk/src/provider-config.ts",
+      "sdk/src/run.ts",
+      "sdk/src/services/audit-intelligence.ts",
+      "sdk/src/services/harness-enforcement.ts",
+      "sdk/src/services/harness-intelligence.ts",
+      "sdk/src/services/local-harness-store.ts",
+      "sdk/src/tools/audit-intelligence.ts",
+      "sdk/src/tools/file-change-hooks.ts",
+      "sdk/src/tools/get-affected-tests.ts",
+      "sdk/src/tools/get-build-targets.ts",
+      "sdk/src/tools/get-change-review-bundle.ts",
+      "sdk/src/tools/get-task.ts",
+      "sdk/src/tools/inspect-environment.ts",
+      "sdk/src/tools/inspect-workspace.ts",
+      "sdk/src/tools/run-targeted-validation.ts",
+      "sdk/src/tools/write-audit-findings.ts"
+    ],
+    "domains": [
+      "security",
+      "correctness",
+      "state-mutation",
+      "error-handling",
+      "performance",
+      "dependency-hygiene",
+      "test-coverage",
+      "api-contract"
+    ]
+  },
+  "readRanges": [
+    {
+      "path": "DESIGN.md",
+      "from": 1,
+      "to": 157
+    },
+    {
+      "path": "README.md",
+      "from": 1,
+      "to": 250
+    },
+    {
+      "path": "agents/__tests__/code-reviewer.test.ts",
+      "from": 39,
+      "to": 75
+    },
+    {
+      "path": "agents/__tests__/gate-reviewer.test.ts",
+      "from": 2397,
+      "to": 2496
+    },
+    {
+      "path": "agents/__tests__/quality-prompt-snapshot.test.ts",
+      "from": 60,
+      "to": 111
+    },
+    {
+      "path": "agents/__tests__/spawn-contract.test.ts",
+      "from": 58,
+      "to": 132
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 6160,
+      "to": 6210
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 6302,
+      "to": 6457
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 6550,
+      "to": 6608
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 12867,
+      "to": 12965
+    },
+    {
+      "path": "agents/base2/base2.ts",
+      "from": 12992,
+      "to": 13087
+    },
+    {
+      "path": "agents/base2/gate-reviewer.ts",
+      "from": 110,
+      "to": 447
+    },
+    {
+      "path": "agents/base2/gate-reviewer.ts",
+      "from": 570,
+      "to": 736
+    },
+    {
+      "path": "agents/base2/gate-reviewer.ts",
+      "from": 830,
+      "to": 935
+    },
+    {
+      "path": "agents/base2/gate-reviewer.ts",
+      "from": 1862,
+      "to": 2040
+    },
+    {
+      "path": "agents/base2/quality-prompt-section.ts",
+      "from": 1,
+      "to": 108
+    },
+    {
+      "path": "agents/base2/spawn-contract.ts",
+      "from": 1,
+      "to": 298
+    },
+    {
+      "path": "agents/base2/tool-tiers.ts",
+      "from": 1,
+      "to": 201
+    },
+    {
+      "path": "agents/patterns/audit-codebase.md",
+      "from": 1,
+      "to": 296
+    },
+    {
+      "path": "agents/reviewer/code-reviewer.ts",
+      "from": 1,
+      "to": 259
+    },
+    {
+      "path": "cli/src/components/tools/harness-intelligence-tools.tsx",
+      "from": 1,
+      "to": 240
+    },
+    {
+      "path": "common/src/constants/prompt-sections.ts",
+      "from": 1,
+      "to": 248
+    },
+    {
+      "path": "common/src/tools/compile-tool-definitions.ts",
+      "from": 1,
+      "to": 304
+    },
+    {
+      "path": "common/src/tools/constants.ts",
+      "from": 1,
+      "to": 190
+    },
+    {
+      "path": "common/src/tools/list.ts",
+      "from": 1,
+      "to": 160
+    },
+    {
+      "path": "common/src/tools/params/__tests__/write-audit-findings.test.ts",
+      "from": 30,
+      "to": 90
+    },
+    {
+      "path": "common/src/tools/params/tool/audit-intelligence.ts",
+      "from": 1,
+      "to": 155
+    },
+    {
+      "path": "common/src/tools/params/tool/get-task.ts",
+      "from": 1,
+      "to": 36
+    },
+    {
+      "path": "common/src/tools/params/tool/inspect-workspace.ts",
+      "from": 1,
+      "to": 41
+    },
+    {
+      "path": "common/src/tools/params/tool/write-audit-findings.ts",
+      "from": 1,
+      "to": 512
+    },
+    {
+      "path": "docs/README.md",
+      "from": 1,
+      "to": 49
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 1,
+      "to": 121
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 579,
+      "to": 725
+    },
+    {
+      "path": "docs/agents-and-tools.md",
+      "from": 1227,
+      "to": 1263
+    },
+    {
+      "path": "docs/architecture.md",
+      "from": 1,
+      "to": 260
+    },
+    {
+      "path": "docs/audits/feature-switch-inventory-2026-11-02.md",
+      "from": 1,
+      "to": 116
+    },
+    {
+      "path": "docs/design/cli-overhaul/HUMAN-TESTING.md",
+      "from": 1,
+      "to": 53
+    },
+    {
+      "path": "docs/design/cli-overhaul/README.md",
+      "from": 1,
+      "to": 46
+    },
+    {
+      "path": "docs/request-flow.md",
+      "from": 198,
+      "to": 259
+    },
+    {
+      "path": "docs/testing.md",
+      "from": 1,
+      "to": 74
+    },
+    {
+      "path": "evals/buffbench/plan-sharding-signals.ts",
+      "from": 579,
+      "to": 941
+    },
+    {
+      "path": "openbuff.d.example/routes.json",
+      "from": 1,
+      "to": 86
+    },
+    {
+      "path": "package.json",
+      "from": 1,
+      "to": 80
+    },
+    {
+      "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+      "from": 1,
+      "to": 218
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/audit-intelligence.ts",
+      "from": 1,
+      "to": 46
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/get-change-review-bundle.ts",
+      "from": 1,
+      "to": 28
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/set-output.ts",
+      "from": 664,
+      "to": 714
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/set-output.ts",
+      "from": 954,
+      "to": 1120
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/write-audit-findings.ts",
+      "from": 1,
+      "to": 29
+    },
+    {
+      "path": "packages/agent-runtime/src/util/reviewer-output.ts",
+      "from": 1,
+      "to": 22
+    },
+    {
+      "path": "scripts/generate-tool-definitions.ts",
+      "from": 1,
+      "to": 78
+    },
+    {
+      "path": "sdk/src/__tests__/audit-intelligence.test.ts",
+      "from": 1,
+      "to": 438
+    },
+    {
+      "path": "sdk/src/__tests__/get-change-review-bundle.test.ts",
+      "from": 1,
+      "to": 224
+    },
+    {
+      "path": "sdk/src/__tests__/get-change-review-bundle.test.ts",
+      "from": 241,
+      "to": 351
+    },
+    {
+      "path": "sdk/src/__tests__/harness-intelligence.test.ts",
+      "from": 73,
+      "to": 145
+    },
+    {
+      "path": "sdk/src/__tests__/local-harness-store.test.ts",
+      "from": 34,
+      "to": 102
+    },
+    {
+      "path": "sdk/src/__tests__/write-audit-findings.test.ts",
+      "from": 1135,
+      "to": 1248
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "from": 502,
+      "to": 526
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "from": 703,
+      "to": 727
+    },
+    {
+      "path": "sdk/src/provider-config.ts",
+      "from": 1027,
+      "to": 1045
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 1104,
+      "to": 1135
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2545,
+      "to": 2599
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2899,
+      "to": 2926
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 2953,
+      "to": 3015
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "from": 3077,
+      "to": 3133
+    },
+    {
+      "path": "sdk/src/services/audit-intelligence.ts",
+      "from": 1,
+      "to": 457
+    },
+    {
+      "path": "sdk/src/services/harness-enforcement.ts",
+      "from": 639,
+      "to": 710
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 1233,
+      "to": 1392
+    },
+    {
+      "path": "sdk/src/services/harness-intelligence.ts",
+      "from": 1851,
+      "to": 2430
+    },
+    {
+      "path": "sdk/src/services/local-harness-store.ts",
+      "from": 1,
+      "to": 396
+    },
+    {
+      "path": "sdk/src/tools/audit-intelligence.ts",
+      "from": 1,
+      "to": 165
+    },
+    {
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 35,
+      "to": 55
+    },
+    {
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 532,
+      "to": 565
+    },
+    {
+      "path": "sdk/src/tools/file-change-hooks.ts",
+      "from": 1505,
+      "to": 1650
+    },
+    {
+      "path": "sdk/src/tools/get-affected-tests.ts",
+      "from": 1,
+      "to": 47
+    },
+    {
+      "path": "sdk/src/tools/get-build-targets.ts",
+      "from": 1,
+      "to": 34
+    },
+    {
+      "path": "sdk/src/tools/get-change-review-bundle.ts",
+      "from": 1,
+      "to": 86
+    },
+    {
+      "path": "sdk/src/tools/get-change-review-bundle.ts",
+      "from": 355,
+      "to": 930
+    },
+    {
+      "path": "sdk/src/tools/get-task.ts",
+      "from": 1,
+      "to": 67
+    },
+    {
+      "path": "sdk/src/tools/inspect-environment.ts",
+      "from": 1,
+      "to": 10
+    },
+    {
+      "path": "sdk/src/tools/inspect-workspace.ts",
+      "from": 1,
+      "to": 84
+    },
+    {
+      "path": "sdk/src/tools/run-targeted-validation.ts",
+      "from": 1,
+      "to": 148
+    },
+    {
+      "path": "sdk/src/tools/write-audit-findings.ts",
+      "from": 1,
+      "to": 403
+    }
+  ],
+  "readMethod": "Pinned picker/INVENTORY/RETRIEVAL context, rg symbol/consumer/test/doc searches and numbered bounded exact reads. Read ranges state inspected windows, not complete audits of large files. No native exposed query_index/read_files tools were available; SDK repository functions were used only in explicitly saved isolated local probes.",
+  "summary": {
+    "findingCount": 8,
+    "severityCounts": {
+      "CRITICAL": 0,
+      "HIGH": 3,
+      "MEDIUM": 5,
+      "LOW": 0
+    },
+    "capabilityCount": 12,
+    "inspectedCurrentFiles": 62,
+    "inspectedRangeLines": 11983,
+    "primaryScope": "Macro audit/capability truth, reviewer/task evidence, registry/document fidelity, and strategy/body boundaries",
+    "overallConclusion": "Useful body foundations exist; declaration/category and incomplete source identities are over-credited as current or executable evidence."
+  },
+  "capabilities": [
+    {
+      "id": "native-audit-inventory",
+      "name": "Native structural inventory and pinned metadata",
+      "maturity": "usable",
+      "assurance": "static trace; reused local integration probes",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "sdk/src/services/audit-intelligence.ts",
+          "line": 150,
+          "detail": "Produces files/subsystems/manifests/routes/commands/public API/test/language metadata."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 3108,
+          "detail": "Real SDK dispatcher invokes the service wrapper."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/snapshot-probes.json",
+          "line": 1,
+          "detail": "Reused root probe documents native prefix-hash collision and active release source exclusion."
+        }
+      ],
+      "trace": [
+        "common inspect_codebase_structure descriptor",
+        "runtime client delegation",
+        "SDK wrapper/cache",
+        "inventory service",
+        "base2 broad-audit allocation"
+      ],
+      "tests": [
+        "sdk/src/__tests__/audit-intelligence.test.ts:55,279,386"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:92",
+        "agents/patterns/audit-codebase.md:60"
+      ],
+      "states": {
+        "failure": "Filesystem walk/hash errors propagate; unavailable/missing paths are not a capability result.",
+        "loading": "Synchronous inventory has no streamed progress.",
+        "empty": "Empty/scoped inventory can be produced; it cannot establish body readiness.",
+        "cancellation": "No AbortSignal enters the synchronous service/wrapper.",
+        "retry": "Reinspect refreshes inventory; cache behavior is covered by 12-F2.",
+        "permission": "Metadata read only; no repository script execution."
+      },
+      "gaps": [
+        "Native snapshot covers capped prefixes and omits active paths named release; root probe is reused, not filed again.",
+        "A language extension list is observed source breadth, not installed semantic support.",
+        "Large traversal is synchronous; latency was not measured."
+      ],
+      "strengths": [
+        "Real runtime\u2192SDK producer path.",
+        "Live-state exclusions keep findings/journals from moving the audit snapshot.",
+        "Explicit subsystem/file inventory is useful for accountable allocation."
+      ],
+      "unknowns": []
+    },
+    {
+      "id": "audit-coverage-readiness",
+      "name": "Feature evidence, structural receipts, and audit coverage",
+      "maturity": "partial",
+      "assurance": "public wrapper integration probes plus reused root counterexample",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "sdk/src/services/audit-intelligence.ts",
+          "line": 277,
+          "detail": "Feature candidates are term/path/content heuristics with six file-category evidence lists."
+        },
+        {
+          "path": "sdk/src/services/audit-intelligence.ts",
+          "line": 354,
+          "detail": "Promotion checks cited file attestation, not executed producer\u2192consumer behavior."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/12-source-binding-probe.json",
+          "line": 1,
+          "detail": "Nested identity, cached drift, and assessed absence probes exercise the public wrapper."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/completeness-probe.json",
+          "line": 1,
+          "detail": "Reused unimplemented command + empty test + docs reaches verified complete."
+        }
+      ],
+      "trace": [
+        "common strict receipt schemas",
+        "runtime audit handlers",
+        "sdk audit wrapper",
+        "evaluateAuditCoverage service",
+        "canonical broad-audit synthesis instruction"
+      ],
+      "tests": [
+        "sdk/src/__tests__/audit-intelligence.test.ts:140,187,219,402"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:93-95",
+        "agents/patterns/audit-codebase.md",
+        "common/src/constants/prompt-sections.ts:121"
+      ],
+      "states": {
+        "failure": "Unknown or missing categories block; stale checks disappear on cache hit.",
+        "loading": "No explicit progress state.",
+        "empty": "An empty feature list is rejected; absent capabilities have no successful inspection state.",
+        "cancellation": "Service path is synchronous without cancellation.",
+        "retry": "Heuristic evidence is manually promoted; invalid/mismatched receipts should be refused.",
+        "permission": "Read-only inspection and caller-declared evidence."
+      },
+      "gaps": [
+        "12-F1,12-F2,12-F8.",
+        "A verified category roster is not executable readiness.",
+        "Structural domain coverage remains declared inspection, not proof of all source lines."
+      ],
+      "strengths": [
+        "Versioned schemas, explicit heuristic marker, per-receipt fields, all-domain coverage and invalid-receipt diagnostics.",
+        "Compatibility aliases are normalized rather than silently changing published field names."
+      ],
+      "unknowns": []
+    },
+    {
+      "id": "durable-audit-sink",
+      "name": "Validated audit artifacts and compact persistence receipts",
+      "maturity": "usable",
+      "assurance": "static producer/consumer trace; inspected unit tests",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/write-audit-findings.ts",
+          "line": 17,
+          "detail": "Artifact path is derived from bounded session/shard identifiers."
+        },
+        {
+          "path": "sdk/src/tools/write-audit-findings.ts",
+          "line": 289,
+          "detail": "Exclusive create uses expectedHash:null and only applied mutation returns success."
+        },
+        {
+          "path": "sdk/src/tools/write-audit-findings.ts",
+          "line": 331,
+          "detail": "Collision compares persisted content identity and snapshot marker before credit."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 2559,
+          "detail": "SDK retains the underlying mutation for host bookkeeping."
+        },
+        {
+          "path": "common/src/tools/params/tool/write-audit-findings.ts",
+          "line": 251,
+          "detail": "Coverage lists are trimmed, bounded, unique, and control-character checked."
+        }
+      ],
+      "trace": [
+        "common input/provider/output schemas",
+        "runtime artifact client handler",
+        "SDK writer",
+        "conditional filesystem mutation",
+        "compact receipt + durable Markdown synthesizer input"
+      ],
+      "tests": [
+        "common/src/tools/params/__tests__/write-audit-findings.test.ts:30-90",
+        "sdk/src/__tests__/write-audit-findings.test.ts:1135-1248"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:1227-1237"
+      ],
+      "states": {
+        "failure": "Invalid parameters/unconfirmed write returns declared error shape.",
+        "loading": "Single asynchronous mutation, no fabricated completion.",
+        "empty": "Explicit noIssuesFound must agree with empty findings.",
+        "cancellation": "Signal forwarded to mutation; non-applied result cannot synthesize success.",
+        "retry": "Exact persisted content gives an idempotent marker; changed-content collision requires a distinct shard.",
+        "permission": "Runtime-owned contained path; caller cannot choose another destination."
+      },
+      "gaps": [
+        "The receipt still reports caller-declared inspected files/domains.",
+        "Filesystem broker/recovery semantics are other-shard responsibilities."
+      ],
+      "strengths": [
+        "Exclusive creation avoids shard overwrites.",
+        "Snapshot marker comes from persisted bytes on collision.",
+        "Bounded artifact/report context and explicit retry behavior are practical."
+      ],
+      "unknowns": [
+        "No installed/native full audit sink run was executed in this shard."
+      ]
+    },
+    {
+      "id": "breadth-accountability",
+      "name": "Scope-first paired audits and subsystem accounting",
+      "maturity": "partial",
+      "assurance": "static instructions and eval-function inspection",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "agents/patterns/audit-codebase.md",
+          "line": 95,
+          "detail": "Defines scope-first vertical discovery/auditor pairs and eight domains."
+        },
+        {
+          "path": "evals/buffbench/plan-sharding-signals.ts",
+          "line": 598,
+          "detail": "Minimum pairs = max(domainCount,5), based on counts."
+        },
+        {
+          "path": "evals/buffbench/plan-sharding-signals.ts",
+          "line": 690,
+          "detail": "Coverage matrix allocates aggregate pair counts round-robin, not by observed inspected files."
+        },
+        {
+          "path": "evals/buffbench/plan-sharding-signals.ts",
+          "line": 734,
+          "detail": "Planner output coverage checks domain mentions."
+        }
+      ],
+      "trace": [
+        "canonical broad audit prompt",
+        "file-picker discovery",
+        "general-agent audit sink",
+        "native structural coverage",
+        "eval aggregate/mention diagnostics"
+      ],
+      "tests": [
+        "agents/__tests__/quality-prompt-snapshot.test.ts:84",
+        "agents/__tests__/spawn-contract.test.ts:100",
+        "evals/buffbench/__tests__/plan-sharding-signals.test.ts (test-name discovery only)"
+      ],
+      "docs": [
+        "agents/patterns/audit-codebase.md",
+        "common/src/constants/prompt-sections.ts:110-123"
+      ],
+      "states": {
+        "failure": "Uncovered structures/receipt problems require more work.",
+        "loading": "Bounded joined waves are specified.",
+        "empty": "No-issue shard must persist explicit coverage.",
+        "cancellation": "Actual child cancellation is outside this slice.",
+        "retry": "Additional discovery/auditor waves until coverage is accounted.",
+        "permission": "Discovery cannot write; artifact sink controls the audited output path."
+      },
+      "gaps": [
+        "Counts, mentions, and declarations are accountability signals, not executable feature assurance.",
+        "Pair05 owns the current workflow injection mismatch; no duplicate finding here.",
+        "Eval/CI activation and actual benchmark gates belong to pair11."
+      ],
+      "strengths": [
+        "Vertical traces, explicit exclusions, eight-domain requirement, durable findings and compact receipts preserve audit breadth."
+      ],
+      "unknowns": []
+    },
+    {
+      "id": "review-evidence-gate",
+      "name": "Structured reviewer dimensions, requirements, attestation, and credit",
+      "maturity": "partial",
+      "assurance": "schema/runtime static trace; exported guard probes",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "agents/reviewer/code-reviewer.ts",
+          "line": 29,
+          "detail": "Reviewer can read files and publish output; cannot mutate, validate, or spawn."
+        },
+        {
+          "path": "agents/reviewer/code-reviewer.ts",
+          "line": 37,
+          "detail": "Parent orchestration history/system prompt are not inherited."
+        },
+        {
+          "path": "agents/base2/gate-reviewer.ts",
+          "line": 843,
+          "detail": "Finalization checks structured LOOKS_GOOD with coverage/requirement/dimension blockers."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/12-source-binding-probe.json",
+          "line": 1,
+          "detail": "Foreign fingerprint and omitted-assessment acceptance shapes."
+        }
+      ],
+      "trace": [
+        "reviewer grant/schema/prompt",
+        "read_files + set_output",
+        "runtime schema/verdict guard",
+        "gate attestation + blocker parser",
+        "base2 credit and durable review receipt"
+      ],
+      "tests": [
+        "agents/__tests__/code-reviewer.test.ts:39-75",
+        "agents/__tests__/gate-reviewer.test.ts:2397-2496"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:579-696"
+      ],
+      "states": {
+        "failure": "Crash, no verdict, missing coverage, and reported in-scope requirements are distinct blockers.",
+        "loading": "Parent gate owns review phase.",
+        "empty": "Clean findings are legitimate; missing dimensions/requirements are currently indistinguishable from clean omission.",
+        "cancellation": "Generic child/generator lifecycle is pair03 scope.",
+        "retry": "Receipt corrections preserve review; one protocol retry before block is present.",
+        "permission": "Read-only grants separate assessment from mutation."
+      },
+      "gaps": [
+        "12-F3,12-F4.",
+        "No observed read ledger is consumed by the inspected attestation helper.",
+        "String dimensions only block on a specific prefix; stronger typed outcomes are preferable."
+      ],
+      "strengths": [
+        "Structured native object receipts, no inherited parent workflow, explicit coverage hard blockers and stable finding/advisory separation.",
+        "Source tests already document the intentional tolerance, making its repair requirements concrete."
+      ],
+      "unknowns": []
+    },
+    {
+      "id": "task-workspace-evidence",
+      "name": "Plan task reads, Git workspace identity, and stored review evidence",
+      "maturity": "partial",
+      "assurance": "static runtime/CLI trace; real bundle/store probe",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/get-task.ts",
+          "line": 18,
+          "detail": "Task lookup uses a durable plan session pointer/state/preflight/artifact list."
+        },
+        {
+          "path": "sdk/src/tools/inspect-workspace.ts",
+          "line": 62,
+          "detail": "Workspace read returns repository/worktree/Git metadata, no content snapshot or persisted task authority."
+        },
+        {
+          "path": "sdk/src/tools/get-change-review-bundle.ts",
+          "line": 848,
+          "detail": "Stored evidence is scoped to repository/workspace/content snapshot and changed files."
+        },
+        {
+          "path": "sdk/src/services/harness-enforcement.ts",
+          "line": 658,
+          "detail": "Ownership service can record to the store; production searches found no constructor consumer."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/12-review-bundle-probe.json",
+          "line": 1,
+          "detail": "Corrupt unresolved finding disappears without a degraded state."
+        }
+      ],
+      "trace": [
+        "native get_task/inspect_workspace/get_change_review_bundle",
+        "SDK dispatch",
+        "plan/Git identities + LocalHarnessStore readers",
+        "CLI harness renderer"
+      ],
+      "tests": [
+        "sdk/src/__tests__/get-change-review-bundle.test.ts:241-347 manually seed ownership/validation/findings",
+        "sdk/src/__tests__/local-harness-store.test.ts:34-102"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:84-101",
+        "common/src/tools/params/tool/get-task.ts:15",
+        "common/src/tools/params/tool/inspect-workspace.ts:19"
+      ],
+      "states": {
+        "failure": "Missing plan/invalid slug/Git HEAD failure is explicit; corrupt stored evidence is hidden at bundle consumer.",
+        "loading": "Async Git reads; plan reads synchronous.",
+        "empty": "Missing plan is an error; empty evidence may also mean unwired or lost records.",
+        "cancellation": "Signal forwarded to workspace/bundle Git reads.",
+        "retry": "Store supports CAS and diagnostics, but consumer loss is 12-F7.",
+        "permission": "Read tools remain observational; store record writes are internal infrastructure."
+      },
+      "gaps": [
+        "12-F7.",
+        "No default runtime producer for store validation/findings was found in production search; the ownership helper is exported but not constructed.",
+        "get_task plan state and inspect_workspace Git identity should not be presented as a unified live run authority."
+      ],
+      "strengths": [
+        "Stable repository/worktree scoping, CAS, atomic writes, private modes and quarantine.",
+        "Current record-scoping fixture tests are useful for optional host integration."
+      ],
+      "unknowns": [
+        "No claim that optional external host producers do not exist.",
+        "Pair05 owns lease/journal/resume internals."
+      ]
+    },
+    {
+      "id": "environment-target-languages",
+      "name": "Environment/toolchain discovery, build targets, and tiered test impact",
+      "maturity": "partial",
+      "assurance": "static runtime trace; inspected fixture tests",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 1358,
+          "detail": "Manifest discovery and available-tool probes are awaited concurrently."
+        },
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 1916,
+          "detail": "Coverage impact tier is an explicit empty placeholder."
+        },
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 2205,
+          "detail": "Non-JavaScript commands report inferred confidence."
+        },
+        {
+          "path": "sdk/src/tools/get-affected-tests.ts",
+          "line": 18,
+          "detail": "Default tool has no reverse-dependency graph accessor and labels the graph tier empty."
+        },
+        {
+          "path": "sdk/src/tools/get-build-targets.ts",
+          "line": 16,
+          "detail": "Optional build-graph result can be absent on failure; input truncation is signaled."
+        }
+      ],
+      "trace": [
+        "common native descriptors",
+        "SDK async wrappers",
+        "manifest/workspace discovery",
+        "convention/build/optional graph tiers",
+        "writer/reviewer prompts and CLI summaries"
+      ],
+      "tests": [
+        "sdk/src/__tests__/harness-intelligence.test.ts:73-145",
+        "test-name discovery of later async/cancellation cases"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:89-90",
+        "docs/architecture.md:101-129"
+      ],
+      "states": {
+        "failure": "Discovery errors propagate; optional owningTargets errors omit that field.",
+        "loading": "Async bounded concurrent probes and shared discovery cache.",
+        "empty": "Unknown manager or absent scripts produce unknown/empty targets; graph/coverage tiers are explicitly limited.",
+        "cancellation": "Signal reaches async discovery and SDK wrappers.",
+        "retry": "Workspace discovery caches/inflight work avoid repeat scans.",
+        "permission": "Discovery does not execute project scripts; inferred execution requires a separate trust contract."
+      },
+      "gaps": [
+        "Generic file/shell and manifest commands do not establish syntax/semantic/cross-language interface support.",
+        "Graph targeting is unwired in the default get_affected_tests consumer despite injected helper tests.",
+        "No installed foreign-toolchain task was run."
+      ],
+      "strengths": [
+        "Workspace ownership, explicit confidence, output notes, bounded async fan-out, deduped manifests and shared discovery are valuable.",
+        "Architecture docs qualify grammar loading fallback rather than treating every advertised extension as compiler support."
+      ],
+      "unknowns": []
+    },
+    {
+      "id": "targeted-validation",
+      "name": "Optional snapshot-scoped configured validation evidence",
+      "maturity": "partial",
+      "assurance": "real local Git/SDK integration with injected hook",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/run-targeted-validation.ts",
+          "line": 47,
+          "detail": "Stale/unavailable before identity refuses validation."
+        },
+        {
+          "path": "sdk/src/tools/run-targeted-validation.ts",
+          "line": 98,
+          "detail": "After identity errors/drift reject returned evidence."
+        },
+        {
+          "path": "sdk/src/tools/run-targeted-validation.ts",
+          "line": 110,
+          "detail": "No hooks/skips remain skipped rather than passed."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/12-review-bundle-probe.json",
+          "line": 1,
+          "detail": "Capped content identity permits mid-validation equal-length untracked tail drift."
+        }
+      ],
+      "trace": [
+        "model-visible targeted validation descriptor",
+        "SDK dispatch",
+        "identity-before",
+        "configured hook runner",
+        "identity-after",
+        "status/assurance evidence payload"
+      ],
+      "tests": [
+        "sdk/src/__tests__/get-change-review-bundle.test.ts (initial identity sections inspected)",
+        "12-review-bundle-probe.ts"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:91",
+        "agents/base2/quality-prompt-section.ts:72-74"
+      ],
+      "states": {
+        "failure": "Nonzero/permission/error/diagnostic rejection becomes failed; identity error is distinguished from content drift.",
+        "loading": "Hook execution may run concurrently; default 300s bound is static traced.",
+        "empty": "No matching checks => skipped/reduced assurance.",
+        "cancellation": "Signal forwarded; actual hook cancellation outcome lifecycle belongs to pair09.",
+        "retry": "Caller supplies refreshed content snapshot; no pretend successful drift result should remain.",
+        "permission": "Configured/inferred commands share hook runner trust; 12-F5 is a default mismatch."
+      },
+      "gaps": [
+        "12-F6.",
+        "Returned assurance:full concerns selected configured checks, not feature completeness or all acceptance criteria.",
+        "No store validation record is persisted by this function."
+      ],
+      "strengths": [
+        "Explicit optional-evidence role avoids replacing the reviewer gate.",
+        "Before/after identity and skipped-result distinctions are sound foundations for the repaired identity."
+      ],
+      "unknowns": []
+    },
+    {
+      "id": "canonical-tool-agent-catalog",
+      "name": "Shared tool schemas, generated mirrors, grants, and agent resolution",
+      "maturity": "usable",
+      "assurance": "static catalog\u2192consumer trace and inspected contract tests",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "common/src/tools/list.ts",
+          "line": 82,
+          "detail": "Canonical descriptor map is typed against ToolName."
+        },
+        {
+          "path": "common/src/tools/constants.ts",
+          "line": 169,
+          "detail": "Quarantined compatibility tools are explicitly separate from shipped grants."
+        },
+        {
+          "path": "common/src/tools/compile-tool-definitions.ts",
+          "line": 26,
+          "detail": "Published JSON schemas derive from the same resolved parameter schema as TypeScript mirrors."
+        },
+        {
+          "path": "common/src/tools/compile-tool-definitions.ts",
+          "line": 291,
+          "detail": "Unrecognized schema shape throws rather than silently inventing a type."
+        },
+        {
+          "path": "agents/base2/tool-tiers.ts",
+          "line": 124,
+          "detail": "Explicit mode-neutral allowlist denies unlisted future tools."
+        },
+        {
+          "path": "packages/agent-runtime/src/templates/agent-registry.ts",
+          "line": 145,
+          "detail": "Local templates are validated/coerced and provenance classifications propagate."
+        }
+      ],
+      "trace": [
+        "canonical tool names + descriptor map",
+        "provider schema/type generator",
+        "bundled grant/mode policy + spawn contract",
+        "runtime client handlers",
+        "SDK dispatch + CLI renderers"
+      ],
+      "tests": [
+        "agents/__tests__/spawn-contract.test.ts:58-132",
+        "agents/__tests__/quality-prompt-snapshot.test.ts:60-111"
+      ],
+      "docs": [
+        "docs/agents-and-tools.md:697-725",
+        "openbuff.d.example/routes.json"
+      ],
+      "states": {
+        "failure": "Unsupported generation shapes fail; missing/ungranted agent/tool needs an explicit diagnostic.",
+        "loading": "Template resolution may be async; installed handler availability is not represented by schema membership.",
+        "empty": "Unknown agent resolves null; compatibility tools retain registration with distinct grant policy.",
+        "cancellation": "Loader/MCP details are pair10 scope.",
+        "retry": "Specific-version cache avoids pinning latest indefinitely.",
+        "permission": "Mode/grant policy and provenance constrain discovery; registration does not grant effects."
+      },
+      "gaps": [
+        "Membership does not establish installed/native availability, runtime health, semantic support, or measured quality.",
+        "The richer per-operation capability packet is still needed for macro/target-language truth."
+      ],
+      "strengths": [
+        "One descriptor source reduces mirror drift.",
+        "Explicit quarantine and fail-closed policy distinguish compatibility from default capability.",
+        "Leaf imports/derived spawn clauses and local-first template resolution preserve composability."
+      ],
+      "unknowns": [
+        "No repeated schema transformation, loader trust, or MCP semantic review; pair10 owns those."
+      ]
+    },
+    {
+      "id": "docs-design-plan-fidelity",
+      "name": "Public product/design claims, examples, and historical plan context",
+      "maturity": "partial",
+      "assurance": "static documentation/source comparison",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "DESIGN.md",
+          "line": 5,
+          "detail": "Current status separates implementation checks from exact scenario/human/emulator acceptance."
+        },
+        {
+          "path": "DESIGN.md",
+          "line": 10,
+          "detail": "Source coverage is explicitly distinct from visual validation."
+        },
+        {
+          "path": "docs/design/cli-overhaul/README.md",
+          "line": 7,
+          "detail": "Source-supported and executed acceptance clauses are counted separately."
+        },
+        {
+          "path": "docs/design/cli-overhaul/HUMAN-TESTING.md",
+          "line": 27,
+          "detail": "Missing original baseline is acknowledged, with missing timings not invented as zero."
+        },
+        {
+          "path": "docs/audits/feature-switch-inventory-2026-11-02.md",
+          "line": 3,
+          "detail": "Switch inventory explicitly disclaims readiness; preferences, permissions and missing implementations are distinct."
+        },
+        {
+          "path": "README.md",
+          "line": 20,
+          "detail": "Comparative multi-agent benefit is a public product claim, not a measured result supplied here."
+        }
+      ],
+      "trace": [
+        "README/docs discovery",
+        "schema/config/SDK public contracts",
+        "DESIGN/current acceptance records",
+        "historical 120-task inventory + latest D29-D56 notes"
+      ],
+      "tests": [
+        "Documentation and prompt parity tests were inspected/discovered; no live acceptance was performed."
+      ],
+      "docs": [
+        "README.md",
+        "DESIGN.md",
+        "docs/architecture.md",
+        "docs/agents-and-tools.md",
+        "docs/audits/feature-switch-inventory-2026-11-02.md",
+        "docs/design/cli-overhaul/README.md"
+      ],
+      "states": {
+        "failure": "Docs should expose unverified/unavailable behavior instead of implied green completion.",
+        "loading": "DESIGN names queued/running/loading and unavailable content states.",
+        "empty": "Missing acceptance stays unverified; no participant data invented.",
+        "cancellation": "Design contract distinguishes stop/skip/back/recovery; actual UI implementation is pair01 scope.",
+        "retry": "Source support is not certification; current docs retain follow-up acceptance.",
+        "permission": "Trust preferences and explicit mutation/release choices are classified separately from feature flags."
+      },
+      "gaps": [
+        "12-F3 and 12-F5 documentation contradict current evidence-binding/default behavior.",
+        "inspect_workspace docs promise a content snapshot that its current public schema/implementation does not return.",
+        "Old checkmarks are historical declarations, never current readiness; latest amendments govern language/isolation choices."
+      ],
+      "strengths": [
+        "Current design and human protocol are candid about remaining assurance gaps.",
+        "Switch inventory avoids blanket activation of permissions or opt-in features."
+      ],
+      "unknowns": [
+        "No independent whole-CLI/human/emulator acceptance or benchmark superiority result was evaluated."
+      ]
+    },
+    {
+      "id": "strategy-autonomy-body-control",
+      "name": "Composable strategy and human controls over a canonical body",
+      "maturity": "partial",
+      "assurance": "static agent/tool/gate contract trace",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "README.md",
+          "line": 66,
+          "detail": "Custom prompts, tool grants, spawnable agents and TS generators give explicit workflow control."
+        },
+        {
+          "path": "agents/base2/tool-tiers.ts",
+          "line": 149,
+          "detail": "Caller-selected tool tiers/modes are distinct from dormant progressive disclosure."
+        },
+        {
+          "path": "agents/base2/spawn-contract.ts",
+          "line": 54,
+          "detail": "Bundled workflow uses hidden programmatic gate operations."
+        },
+        {
+          "path": "agents/base2/quality-prompt-section.ts",
+          "line": 66,
+          "detail": "Default base2 executes a prescribed hooks\u2192reviewer gate cycle."
+        },
+        {
+          "path": "common/src/constants/prompt-sections.ts",
+          "line": 80,
+          "detail": "Decision capture preserves model rationale as untrusted evidence, not future instructions."
+        }
+      ],
+      "trace": [
+        "configured/custom agent strategy",
+        "canonical grants + generator yields",
+        "runtime gate state",
+        "SDK actions/evidence",
+        "human mode/approval/stop surfaces"
+      ],
+      "tests": [
+        "agents/__tests__/spawn-contract.test.ts",
+        "current gate/reviewer shape probe"
+      ],
+      "docs": [
+        "README.md:41-91,169-177",
+        "docs/agents-and-tools.md:42-51",
+        "DESIGN.md:96-111"
+      ],
+      "states": {
+        "failure": "Concrete results and blockers must remain authoritative across strategies.",
+        "loading": "Canonical queued/running/awaiting-review states are a body obligation.",
+        "empty": "Conversation/no-work states should remain cheap without suppressing pending work.",
+        "cancellation": "Cancellation/resource guarantees are other-shard runtime/effect concerns, not prompt duties.",
+        "retry": "Repairs and re-reviews are policy choices; stop/defer must be explicit and observable.",
+        "permission": "Retain real trust/mutation boundaries and user-selected modes; do not activate every opt-in."
+      },
+      "gaps": [
+        "Bundled gate sequencing is one strategy, not the intelligence supplied by the model.",
+        "A shared host session/effect/evidence contract should be consumable by alternative strategies and clients.",
+        "Missing default wiring must not be disguised by another helper, more prompts, or a port."
+      ],
+      "strengths": [
+        "Configurable templates, custom tools and explicit strategy composition are useful.",
+        "Runtime-owned policy allows model action choice without relying on prompt-only safety."
+      ],
+      "unknowns": [
+        "Main continuation, cost limits, transport ownership and child lifecycle are referenced from parent context only."
+      ]
+    },
+    {
+      "id": "learning-cooperation-assurance",
+      "name": "Learning closure and cross-language cooperation graduation",
+      "maturity": "unknown",
+      "assurance": "static seams; cross-shard planning context",
+      "confidence": "high",
+      "evidence": [
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 2315,
+          "detail": "VerifiedKnowledgeService records source/hash/verification/expiry metadata; a durable record is not a measured learning loop."
+        },
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 2348,
+          "detail": "Fresh knowledge lookup is expiry-filtered store retrieval."
+        },
+        {
+          "path": "sdk/src/tools/get-affected-tests.ts",
+          "line": 18,
+          "detail": "Default graph-tier consumer is still unwired."
+        },
+        {
+          "path": "docs/architecture.md",
+          "line": 147,
+          "detail": "Evaluation workflow is documented; actual evaluator/learning production closure is other-shard scope."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/PLAN-NOTES.md",
+          "line": 1,
+          "detail": "Parent records current D29-D56 amendments and known memory/evaluation consumer concerns."
+        }
+      ],
+      "trace": [
+        "task/outcome/evidence producers (other shards)",
+        "memory/verified-knowledge seams",
+        "evaluation/promotion and future injection (not established here)",
+        "target-project ecosystem tools",
+        "versioned cross-component interface evidence (required workload)"
+      ],
+      "tests": [
+        "Held-out learning and installed/native vertical acceptance were not run in this shard."
+      ],
+      "docs": [
+        "docs/architecture.md:101-151",
+        "CAPABILITY-RUBRIC.md (external review context)",
+        "PLAN-NOTES.md (external review context)"
+      ],
+      "states": {
+        "failure": "A failed/missing outcome must remain in the denominator; no learned-promotion claim from stored lessons.",
+        "loading": "Training/export is conditional offline work in latest plan decisions.",
+        "empty": "No demonstrated closed loop in this slice remains unknown, not silently usable.",
+        "cancellation": "Foreign boundary cancellation/effect ownership needs cross-component probes.",
+        "retry": "Protocol errors and source drift must remain typed and provenance-bound.",
+        "permission": "Model/network/training probes were out of this shard's authorized scope."
+      },
+      "gaps": [
+        "Do not equate decision/lesson accumulation with held-out improvement.",
+        "Grammar/command discovery is broad shallow coverage, not semantic or interface validation.",
+        "A concrete TS\u2194Rust\u2194Python protocol/schema task must prove consumer updates, immutable source/artifact identities and cancellation."
+      ],
+      "strengths": [
+        "Latest plan choices provide useful rationale: TS producer/consumer repairs first, Rust for OS ownership/kernel enforcement/fencing, conditional Python for offline evaluator/training.",
+        "Mature ecosystem tools can cooperate through protocols without expanding authored-language count."
+      ],
+      "unknowns": [
+        "Pair04/pair11 own memory, routing, evaluators and promotion behavior; no whole-repository absence claim is made."
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "12-F1",
+      "title": "Feature receipt snapshot identity is discarded before audit coverage evaluation",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "common/src/tools/params/tool/audit-intelligence.ts",
+          "line": 131,
+          "detail": "Each feature input must carry snapshot_id."
+        },
+        {
+          "path": "sdk/src/tools/audit-intelligence.ts",
+          "line": 137,
+          "detail": "Mapping drops the nested snapshot_id and schema_version; the FeatureCompletenessRecord retains no identity."
+        },
+        {
+          "path": "sdk/src/services/audit-intelligence.ts",
+          "line": 431,
+          "detail": "Feature acceptance checks verified/status/file membership, without nested snapshot equality."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/12-source-binding-probe.json",
+          "line": 4,
+          "detail": "nestedFeatureSnapshot: foreign-feature-snapshot passes input schema and returns complete:true with current structural receipts."
+        }
+      ],
+      "trigger": "Pass feature evidence from a different snapshot alongside structurally current receipts for matching paths.",
+      "consequence": "The coverage result advertises exact snapshot binding while accepting feature evidence with another identity.",
+      "suggestedFix": "Validate every nested feature snapshot against the pinned inventory before normalization; retain identity in the typed feature record and report mismatches explicitly.",
+      "acceptanceProbe": "Public wrapper with matching nested identities remains successful; foreign/missing identities fail with a specific feature-identity diagnostic, including camelCase compatibility inputs.",
+      "assurance": "local integration probe",
+      "inference": "The probe demonstrates receipt acceptance, not the quality or frequency of an actual model's feature audit."
+    },
+    {
+      "id": "12-F2",
+      "title": "Cached audit inventories bypass stale-source refusal and mix source generations",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "error-handling",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/audit-intelligence.ts",
+          "line": 48,
+          "detail": "Feature inspection reuses a same-root inventory cache entry; stale checking is only performed on cache misses."
+        },
+        {
+          "path": "sdk/src/tools/audit-intelligence.ts",
+          "line": 116,
+          "detail": "Coverage evaluation uses the same cache-only stale check."
+        },
+        {
+          "path": "sdk/src/services/audit-intelligence.ts",
+          "line": 296,
+          "detail": "Feature search reads current mutable source bytes against the cached file roster."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/12-source-binding-probe.json",
+          "line": 59,
+          "detail": "cachedSourceDrift: changing small inventoried source changes a fresh inventory hash but cached evaluation still returns complete:true under the old hash."
+        }
+      ],
+      "trigger": "Inventory a workspace, modify an inventoried implementation below the byte cap, then inspect/evaluate using the original cached snapshot id.",
+      "consequence": "Current source can be reported under an older snapshot, and a stale coverage result is accepted without the documented refusal.",
+      "suggestedFix": "Either pin immutable source bytes and read those throughout the audit, or re-attest full non-live contents before feature inspection and synthesis. Preserve live-state exclusions and project-root binding.",
+      "acceptanceProbe": "Cache the inventory, change a small source file, and require explicit stale refusal; writing only excluded finding/journal artifacts remains accepted. Repeat across a different cwd with identical bytes.",
+      "assurance": "local integration probe",
+      "distinctFrom": "The probe modifies a small file below every cap; it does not repeat the root's native large-tail/source-exclusion probes."
+    },
+    {
+      "id": "12-F3",
+      "title": "Reviewer gate accepts foreign source fingerprints and records credit under the expected identity",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "agents/base2/gate-reviewer.ts",
+          "line": 292,
+          "detail": "Wrong-but-well-formed v3 fingerprints are accepted whenever declared file coverage is complete."
+        },
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 6431,
+          "detail": "The production caller emits fingerprint drift as telemetry and continues gate processing."
+        },
+        {
+          "path": "agents/base2/base2.ts",
+          "line": 13000,
+          "detail": "Successful receipt gateId uses the parent's expected fingerprint; per-file hashes are sampled at credit time."
+        },
+        {
+          "path": "agents/__tests__/gate-reviewer.test.ts",
+          "line": 2411,
+          "detail": "Existing regression explicitly requires accepting a wrong-but-well-formed fingerprint."
+        },
+        {
+          "path": "docs/agents-and-tools.md",
+          "line": 591,
+          "detail": "Public contract says the runtime verifies the fingerprint against the pending working-tree snapshot."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/12-source-binding-probe.json",
+          "line": 73,
+          "detail": "reviewerForeignFingerprint has no attestation issues/blockers and yields LOOKS_GOOD while telemetry records the foreign token."
+        }
+      ],
+      "trigger": "A reviewer returns LOOKS_GOOD over the same declared pending paths but with a source fingerprint different from the parent's expected token.",
+      "consequence": "Syntax and file membership do not establish inspected bytes; a stale assessment may be credited under an expected/current source identity and later reused as reviewed truth.",
+      "suggestedFix": "Bind review credit to observed file/read basis references or an immutable reviewed snapshot; reject source-content drift. Exclude unrelated metadata from the identity rather than tolerating arbitrary foreign content fingerprints. Preserve reduced-cost reuse only for unchanged reviewed bytes.",
+      "acceptanceProbe": "Review source generation A, change the same paths to B, submit A's receipt, and require a fresh review with no B credit. An unrelated findings/journal update with unchanged source must not cause review churn.",
+      "assurance": "local gate-helper probe plus static production credit trace",
+      "inference": "No live model or full generator finalization was run. The helper accepts foreign tokens and the caller records credit; the rate of obsolete model assessments is unmeasured."
+    },
+    {
+      "id": "12-F4",
+      "title": "Ordinary reviewer receipts can omit all assessment dimensions and implementation requirements",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "test-coverage",
+        "api-contract"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "agents/reviewer/code-reviewer.ts",
+          "line": 117,
+          "detail": "All five nested dimensions are optional; requirementCoverage is optional at the top level."
+        },
+        {
+          "path": "agents/base2/gate-reviewer.ts",
+          "line": 881,
+          "detail": "Finalization checks only reported incomplete requirements and reported block-prefixed dimensions."
+        },
+        {
+          "path": "agents/base2/gate-reviewer.ts",
+          "line": 1899,
+          "detail": "The lightweight tier deliberately excludes contract-bearing changes."
+        },
+        {
+          "path": "packages/agent-runtime/src/util/reviewer-output.ts",
+          "line": 14,
+          "detail": "Runtime semantic guard checks only that the verdict is a known label."
+        },
+        {
+          "path": "packages/agent-runtime/src/tools/handlers/tool/set-output.ts",
+          "line": 963,
+          "detail": "Normal receipt acceptance validates the declared schema, which permits omissions."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/12-source-binding-probe.json",
+          "line": 84,
+          "detail": "reviewerOmittedAssessment: contract file is not lightweight-eligible; dimensions:{} and no requirements have no missing top-level schema fields, no runtime verdict issue, no blockers, and LOOKS_GOOD."
+        }
+      ],
+      "trigger": "A normal review of a contract-bearing behavioral change returns a matching fingerprint/file roster and LOOKS_GOOD but dimensions:{} and no requirementCoverage.",
+      "consequence": "The harness cannot distinguish an omitted assessment from a complete clean review; a full-review policy is weakened without explicit lightweight eligibility.",
+      "suggestedFix": "Use typed dimension outcomes and require every ordinary-review dimension plus coverage of an established user/plan requirement roster. Permit explicit n/a with evidence and preserve the opt-in lightweight escalation mechanism.",
+      "acceptanceProbe": "A standard contract-file review missing a dimension or known implementation requirement is rejected or remains incomplete; a complete clean review and an explicitly eligible reduced review succeed.",
+      "assurance": "schema inspection, runtime verdict guard, exported gate-helper probe",
+      "inference": "The source/probe establish an accepted omission shape; they do not measure whether a configured reviewer model commonly emits it."
+    },
+    {
+      "id": "12-F5",
+      "title": "Omitted automatic hook setting enables manifest inference despite documented trust opt-in",
+      "severity": "HIGH",
+      "domains": [
+        "security",
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/provider-config.ts",
+          "line": 514,
+          "detail": "autoFileChangeHooks is described as disabled by default and requiring explicit true for trusted projects."
+        },
+        {
+          "path": "sdk/src/provider-config.ts",
+          "line": 723,
+          "detail": "The empty/default configuration leaves autoFileChangeHooks undefined; merging preserves omission."
+        },
+        {
+          "path": "sdk/src/tools/file-change-hooks.ts",
+          "line": 1538,
+          "detail": "Only value===false suppresses inference; undefined enters manifest inference."
+        },
+        {
+          "path": "sdk/src/tools/file-change-hooks.ts",
+          "line": 544,
+          "detail": "Rust manifests produce cargo clippy and cargo test commands for changed .rs files."
+        },
+        {
+          "path": "sdk/src/run.ts",
+          "line": 2908,
+          "detail": "Real SDK dispatch passes no normalized autoFileChangeHooks choice or explicit hook list."
+        },
+        {
+          "path": "docs/agents-and-tools.md",
+          "line": 103,
+          "detail": "Public docs promise trusted projects must explicitly set autoFileChangeHooks:true."
+        },
+        {
+          "path": "sdk/src/tools/file-change-hooks.ts",
+          "line": 43,
+          "detail": "Hooks actually default to a bounded 300-second timeout; schema/public no-timeout prose is stale."
+        }
+      ],
+      "trigger": "A workspace with Cargo.toml and changed Rust files runs the normal hook gate while autoFileChangeHooks is omitted.",
+      "consequence": "Manifest-inferred compilers/tests can execute repository-controlled build scripts/test code without the documented trust opt-in. Users also receive conflicting timeout expectations.",
+      "suggestedFix": "Require config.autoFileChangeHooks===true before inference; use configured hooks otherwise. Inject the effective configuration at the SDK boundary so scope/env choices are explicit. Reconcile documentation and config timeout comments with the selected current timeout contract.",
+      "acceptanceProbe": "With a harmless captured runner and isolated public config fixture, omitted/false settings run no inferred commands; explicit true selects inferred commands, and explicitly configured hooks still run. Assert the actual default/override timeout sent to the executor.",
+      "assurance": "static production trace",
+      "inference": "No untrusted target-project command was executed. Cargo build-script execution is the consequence of the discovered command choice; concrete implicit selection is established statically.",
+      "secondaryContractDrift": "docs/agents-and-tools.md:113 and provider-config.ts:507 claim unbounded/omitted timeout, while executor forwards hook.timeoutSeconds ?? 300 at file-change-hooks.ts:1605."
+    },
+    {
+      "id": "12-F6",
+      "title": "Targeted validation accepts equal-length untracked tail mutation outside the snapshot byte prefix",
+      "severity": "HIGH",
+      "domains": [
+        "correctness",
+        "state-mutation",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/get-change-review-bundle.ts",
+          "line": 46,
+          "detail": "Each changed file contributes at most 1MiB to identity."
+        },
+        {
+          "path": "sdk/src/tools/get-change-review-bundle.ts",
+          "line": 393,
+          "detail": "Full size plus capped prefix are hashed; equal-length tail changes contribute identical bytes."
+        },
+        {
+          "path": "sdk/src/tools/get-change-review-bundle.ts",
+          "line": 539,
+          "detail": "The tracked git diff does not contain untracked file contents."
+        },
+        {
+          "path": "sdk/src/tools/run-targeted-validation.ts",
+          "line": 94,
+          "detail": "Pre/post source refusal depends on equality of this capped snapshot id."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/12-review-bundle-probe.json",
+          "line": 4,
+          "detail": "equalLengthUntrackedTail changes the exported value in a 1,200,028-byte untracked.ts but leaves snapshot unchanged and bundleTruncated:false; midValidationTailMutation returns status:passed and assurance:full after a further tail edit."
+        }
+      ],
+      "trigger": "Change a same-length source tail beyond 1MiB in an untracked file, including during targeted validation.",
+      "consequence": "Distinct source generations alias to one identity, so validation evidence can claim full assurance for bytes that changed mid-run.",
+      "suggestedFix": "Hash full file contents with incremental bounded I/O, or mark identity incomplete and refuse full/source-bound attestation. Output retention may remain capped independently. Ensure untracked source and capped diff/status tails cannot alias through length-only terms.",
+      "acceptanceProbe": "Real public bundle changes identity for an equal-length untracked tail edit; the real targeted-validation function rejects the same mid-hook mutation while an unchanged-source successful hook passes. Include large tracked diffs and bounded-memory controls.",
+      "assurance": "real local Git/SDK integration with injected harmless validation hook",
+      "distinctFrom": "This is the review/targeted-validation identity path with a 1MiB cap, not the root's native audit inventory 256KB snapshot probe.",
+      "inference": "No target-project suite or live model review ran; the probe isolates the source identity acceptance guarantee."
+    },
+    {
+      "id": "12-F7",
+      "title": "Review bundles silently drop corrupt unresolved findings after quarantine",
+      "severity": "MEDIUM",
+      "domains": [
+        "error-handling",
+        "state-mutation",
+        "correctness",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/local-harness-store.ts",
+          "line": 316,
+          "detail": "list() returns only records from listWithDiagnostics and discards diagnostics."
+        },
+        {
+          "path": "sdk/src/services/local-harness-store.ts",
+          "line": 337,
+          "detail": "Corrupt records are moved into .corrupt with detailed diagnostics."
+        },
+        {
+          "path": "sdk/src/tools/get-change-review-bundle.ts",
+          "line": 882,
+          "detail": "The real findings consumer uses list(), making corrupted/inaccessible evidence look like an empty list."
+        },
+        {
+          "path": "cli/src/components/tools/harness-intelligence-tools.tsx",
+          "line": 208,
+          "detail": "The CLI displays finding records only when the returned list is nonempty; no lost-record state is available."
+        },
+        {
+          "path": "sdk/src/__tests__/local-harness-store.test.ts",
+          "line": 85,
+          "detail": "Existing corruption test covers store diagnostics, not bundle propagation."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/12-review-bundle-probe.json",
+          "line": 40,
+          "detail": "corruptFindingConsumption: in-scope open finding disappears as findings:[], no error/diagnostic, with its file quarantined."
+        }
+      ],
+      "trigger": "A persisted in-scope open finding becomes malformed before get_change_review_bundle reads it.",
+      "consequence": "Evidence loss is presented as successful empty findings; subsequent reads may be even less diagnostic after quarantine removed the original file.",
+      "suggestedFix": "Return corruption/availability diagnostics through the review bundle for all evidence kinds and persist a degraded-evidence marker so later calls do not erase the loss state. Distinguish no records, stale/out-of-scope records, and unavailable records.",
+      "acceptanceProbe": "Seed a current unresolved finding, corrupt it, and require visible degraded/unavailable evidence plus the corruption location on the first and later bundle reads; healthy unrelated records remain available.",
+      "assurance": "real local Git/SDK/store integration",
+      "inference": "The consumer bug does not prove that every default run currently produces LocalHarnessStore finding records; that producer path is itself not established in this slice."
+    },
+    {
+      "id": "12-F8",
+      "title": "Audit completion conflates inspected coverage with feature readiness and cannot certify assessed absence",
+      "severity": "MEDIUM",
+      "domains": [
+        "correctness",
+        "api-contract",
+        "test-coverage"
+      ],
+      "confidence": "high",
+      "basis": "evidence",
+      "evidence": [
+        {
+          "path": "sdk/src/services/audit-intelligence.ts",
+          "line": 431,
+          "detail": "Every feature must be verified complete with every implementation category nonempty."
+        },
+        {
+          "path": "sdk/src/services/audit-intelligence.ts",
+          "line": 417,
+          "detail": "Out-of-scope exclusions apply to structural subsystem coverage, not feature readiness."
+        },
+        {
+          "path": "common/src/constants/prompt-sections.ts",
+          "line": 121,
+          "detail": "The orchestrator must not synthesize until this combined coverage/readiness result is complete."
+        },
+        {
+          "path": "agents/patterns/audit-codebase.md",
+          "line": 170,
+          "detail": "Canonical flow promotes evidence_kind after exact reads and blocks synthesis on incomplete features."
+        },
+        {
+          "path": "/tmp/openbuff-body-review-2026-11-05/evidence/12-source-binding-probe.json",
+          "line": 27,
+          "detail": "coverageReadinessSeparation: all inventoried file/domain declarations are valid, known absence is recorded, but complete:false and missing implementation categories remain despite the feature exclusion reason."
+        }
+      ],
+      "trigger": "A comprehensive body audit correctly concludes that a requested capability is absent or unwired.",
+      "consequence": "The audit cannot graduate its inspection while reporting missing product capabilities; it is incentivized to omit a gap or over-promote readiness to satisfy the procedure.",
+      "suggestedFix": "Separate audit coverage from capability maturity and assurance. Support verified negative evidence and explicit feature dispositions without claiming usability. Keep unknown/uninspected states incomplete.",
+      "acceptanceProbe": "A source-backed assessed-absent or unwired feature can have coverageComplete:true while readinessComplete:false; an uninspected feature remains coverage-incomplete, and the root's intentionally unimplemented fixture never becomes usable.",
+      "assurance": "public audit-wrapper probe plus static procedure trace",
+      "relationship": "Counterpart to the root's existing false-positive completeness probe; consolidate at synthesis if desired, without losing the assessed-absence acceptance requirement."
+    }
+  ],
+  "domainAssessment": {
+    "security": "Static current trust mismatch: omitted autoFileChangeHooks selects inferred project commands despite explicit opt-in. Artifact paths/identifiers/coverage hygiene and read-only reviewer grants are useful strengths. No source credentials/private values, network, malicious command or OS-boundary test was performed; pair09/pair10 own effect/loader enforcement.",
+    "correctness": "Concrete public probes show foreign nested feature identity, cached generation mixing, large untracked tail aliasing and false full validation assurance; reviewer guard probes show foreign/omitted assessment acceptance. Assessed absence is blocked by readiness/coverage conflation.",
+    "state-mutation": "Source caches retain old identities; receipt persistence samples credit-time bytes; store quarantine hides lost evidence at the consumer. CAS/private modes/exclusive audit creation are valuable infrastructure. Generic lock/lease/recovery defects remain other-shard responsibilities.",
+    "error-handling": "Corruption diagnostics are dropped by the review-bundle list consumer; stale refusal is bypassed on cache hits. Current writer returns declared invalid/unconfirmed/collision errors; targeted checks distinguish skipped and post-identity failure, subject to repaired exact source identity.",
+    "performance": "Bounded async manifest probes, fixed cache retention, windowed per-file hashing and capped presentation output are useful. Prefix-only identities sacrifice correctness; use incremental full hashing independently from output retention. Native audit walk/hash is synchronous and not signal-driven; no latency or asymptotic workload measurement was invented.",
+    "dependency-hygiene": "Root manifest pins Bun1.3.5 and shared schema/type generation avoids descriptor drift. Inspection covers generation/public catalog/package contract, not a vulnerability/provenance/license audit or release execution; pair11 owns those gates. No package install or dependency mutation occurred.",
+    "test-coverage": "Inspected tests cover schema/grant/receipt/collision/store invariants and explicitly preserve wrong-fingerprint/native-cap behavior; injected graph/manually seeded record tests cannot prove default runtime wiring. Existing negative acceptance holes are demonstrated by two local recorded probes. No broad test-suite or live model acceptance claim is made.",
+    "api-contract": "Nested feature snapshots are required but ignored, ordinary assessment completeness is optional, identity caps permit false source assurance, and public hook/fingerprint/workspace claims drift. Compatibility aliases/quarantine and exact collision markers are useful preserved contracts."
+  },
+  "bodyAxes": {
+    "observe": {
+      "assessment": "partial",
+      "basis": "Local file/metadata/environment/review observations exist; exact source identity and graph impact have current gaps."
+    },
+    "act": {
+      "assessment": "partial; cross-shard context",
+      "basis": "Canonical tools/SDK dispatch exist; parent edit/broker/effect findings govern deterministic act quality and were not repeated."
+    },
+    "control": {
+      "assessment": "partial",
+      "basis": "Real gate/hook/strategy controls exist, but reviewer/validation evidence is over-credited and explicit trust default is wrong."
+    },
+    "continue": {
+      "assessment": "partial; cross-shard context",
+      "basis": "Parent journal/main-resume/ACP evidence determines actual continuation; no killed-run probe in this slice."
+    },
+    "coordinate": {
+      "assessment": "partial; cross-shard context",
+      "basis": "Derived spawn contracts/grants and paired audit machinery exist; parent supervision/receipt ownership findings determine cross-process truth."
+    },
+    "remember": {
+      "assessment": "partial; cross-shard context",
+      "basis": "Decision/knowledge/plan structures exist; parent memory/compaction probes establish retention/recall failures and were not rerun."
+    },
+    "learn": {
+      "assessment": "unknown at closed-loop assurance level",
+      "basis": "Recorded knowledge/eval declarations do not prove held-out improvement or future consumer injection here; memory/eval shards own the full path."
+    },
+    "govern": {
+      "assessment": "partial",
+      "basis": "Artifact hygiene/grants/provenance controls are useful; automatic hook trust mismatch is direct; native OS effects are other-shard scope."
+    },
+    "connect": {
+      "assessment": "partial",
+      "basis": "Real CLI/SDK tool transports/renderers exist; plan/Git/evidence-store reads are not one canonical live session truth. ACP/MCP internals remain other shards."
+    },
+    "cooperate-across-languages": {
+      "assessment": "partial",
+      "basis": "Ecosystem manifests/commands, explicit confidence and grammar signals are available; default graph/coverage tiers and cross-language interface evidence require installed task proof."
+    }
+  },
+  "strengths": [
+    {
+      "claim": "Audit artifacts cannot choose arbitrary destinations and are created exclusively; collisions preserve caller/actual-content truth.",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/write-audit-findings.ts",
+          "line": 17,
+          "detail": "Derived path"
+        },
+        {
+          "path": "sdk/src/tools/write-audit-findings.ts",
+          "line": 289,
+          "detail": "Expected-null conditional create"
+        },
+        {
+          "path": "sdk/src/tools/write-audit-findings.ts",
+          "line": 331,
+          "detail": "Persisted identity checks"
+        }
+      ]
+    },
+    {
+      "claim": "Reviewers have a narrow read/receipt role without inherited parent execution duties.",
+      "evidence": [
+        {
+          "path": "agents/reviewer/code-reviewer.ts",
+          "line": 29,
+          "detail": "Read_files/set_output grants"
+        },
+        {
+          "path": "agents/reviewer/code-reviewer.ts",
+          "line": 37,
+          "detail": "No inherited parent system/history"
+        }
+      ]
+    },
+    {
+      "claim": "Discovery reports uncertainty and specific unwired tiers instead of manufacturing runtime support.",
+      "evidence": [
+        {
+          "path": "sdk/src/tools/get-affected-tests.ts",
+          "line": 10,
+          "detail": "Explicit graph note"
+        },
+        {
+          "path": "sdk/src/services/harness-intelligence.ts",
+          "line": 2205,
+          "detail": "Inferred/unknown command confidence"
+        }
+      ]
+    },
+    {
+      "claim": "One descriptor source and explicit fail-closed grant/mode policies reduce accidental public mirror/grant drift.",
+      "evidence": [
+        {
+          "path": "common/src/tools/compile-tool-definitions.ts",
+          "line": 26,
+          "detail": "Shared schema resolver"
+        },
+        {
+          "path": "agents/base2/tool-tiers.ts",
+          "line": 124,
+          "detail": "Explicit policy allowlist"
+        }
+      ]
+    },
+    {
+      "claim": "Current design/acceptance docs distinguish source support, executed evidence and still-open human/emulator certification.",
+      "evidence": [
+        {
+          "path": "DESIGN.md",
+          "line": 5,
+          "detail": "Open certification remains"
+        },
+        {
+          "path": "docs/design/cli-overhaul/README.md",
+          "line": 7,
+          "detail": "Assurance split"
+        },
+        {
+          "path": "docs/design/cli-overhaul/HUMAN-TESTING.md",
+          "line": 27,
+          "detail": "Missing original baseline acknowledged"
+        }
+      ]
+    },
+    {
+      "claim": "Control-plane store CAS and diagnostics are useful retained infrastructure even when consumers are partial.",
+      "evidence": [
+        {
+          "path": "sdk/src/services/local-harness-store.ts",
+          "line": 361,
+          "detail": "CAS/atomic records"
+        },
+        {
+          "path": "sdk/src/services/local-harness-store.ts",
+          "line": 320,
+          "detail": "Corruption diagnostics"
+        }
+      ]
+    }
+  ],
+  "evidenceArtifacts": [
+    "/tmp/openbuff-body-review-2026-11-05/evidence/12-source-binding-probe.json",
+    "/tmp/openbuff-body-review-2026-11-05/evidence/12-review-bundle-probe.json",
+    "/tmp/openbuff-body-review-2026-11-05/evidence/12-source-binding-probe.ts",
+    "/tmp/openbuff-body-review-2026-11-05/evidence/12-review-bundle-probe.ts"
+  ],
+  "existingEvidenceReused": [
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/evidence/completeness-probe.json",
+      "role": "root-owned unimplemented feature false-positive completion; reused, not rerun or duplicated as a finding"
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/evidence/snapshot-probes.json",
+      "role": "root-owned native audit prefix collision and active cli/release exclusion; reused, not rerun or duplicated as a finding"
+    }
+  ],
+  "contextReferences": [
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/AUDIT-CONTRACT.md",
+      "inspection": "Full contract read; not a current repository structural file."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/CAPABILITY-RUBRIC.md",
+      "inspection": "Full rubric read; not structural source."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/PLAN-NOTES.md",
+      "inspection": "Parent replacement-plan notes/latest D29-D56 amendments and cross-shard summaries; context, not repeated source verification."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/picks/12-audit-docs.json",
+      "inspection": "Full assigned selected/secondary/capability/scope metadata read."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/INVENTORY.json",
+      "inspection": "Structural paths/subsystems/snapshot and membership verification; no private file contents read."
+    },
+    {
+      "path": "/tmp/openbuff-body-review-2026-11-05/OLD-TASK-INVENTORY.json",
+      "inspection": "Historical 120-task count and declaration context; current defects were not inferred from checkmarks or PARTIAL history."
+    }
+  ],
+  "searchCoverage": {
+    "roots": [
+      "cli/src",
+      "packages",
+      "agents",
+      "sdk/src",
+      "common/src",
+      "docs",
+      "openbuff.d.example",
+      "evals/buffbench",
+      "scripts/generate-tool-definitions.ts"
+    ],
+    "methods": [
+      "rg canonical tool/agent/schema consumers",
+      "rg LocalHarnessStore/ChangeOwnershipService/validation/findings/ownership producers excluding tests/e2e/fixtures",
+      "numbered exact selected/adjacent reads",
+      "isolated SDK/public helper probes"
+    ],
+    "defaultProducerSearchResult": "No production LocalHarnessStore validation/findings writer or ChangeOwnershipService construction was found in searched current source roots. Existing bundle tests manually seed records; optional external host producers remain possible.",
+    "sampling": "Primary selected ranges were followed vertically; large base2/set_output/bundle/harness/test files have explicit windows in readRanges. Some supporting tests were discovered by test-name search only and are named as such."
+  },
+  "coverageLimits": [
+    "Exactly this shard's assigned slice is assessed; its receipt is not a guarantee of every line, every subsystem's whole content, or a body-wide installed/live acceptance result.",
+    "Only current INVENTORY.json paths are included in structuralReceipt. Root's omitted cli/release source is supplemental context-only; no excluded active release path is credited to this receipt.",
+    "Native audit tools are repository code, not exposed Codex tools; no claim to have called query_index/read_files/inspect_codebase_structure through an unavailable tool transport.",
+    "Root's existing completeness and native snapshot probes were reused without rerunning. The new large-tail probe targets review/targeted-validation identity rather than native audit identity.",
+    "No source fixes, credentials/private configuration/log reads, model/network calls, package installs, external messages, or live CLI/native/foreign-toolchain tests occurred.",
+    "Pair05 owns workflow injection mismatch, leases/snapshot/main continuation; pair11 owns CI/evaluation/package gates; pair10 owns schema transformation/loader/MCP semantics. Other body-axis assessments here are explicitly parent context.",
+    "Reviewer gate probes demonstrate accepted shapes and static credit wiring, not a live model's probability of emitting stale/omitted evidence. Hook trust mismatch is a static production trace, not executed malicious code.",
+    "Historical plan declarations and latest decisions are contextual constraints; they do not prove present defects or present capability maturity.",
+    "Current design source-supported/fixture/compiled PTY counts are documentation claims with explicit remaining limits; this shard did not independently recertify the original captures or a human/screen-reader baseline."
+  ],
+  "recommendedPlanWork": [
+    {
+      "id": "12-W1",
+      "problem": "Audit and review/validation source identities over-credit stale or incomplete bytes.",
+      "sourceAnchors": [
+        "sdk/src/tools/audit-intelligence.ts:48,116,137",
+        "sdk/src/tools/get-change-review-bundle.ts:393",
+        "sdk/src/tools/run-targeted-validation.ts:94"
+      ],
+      "owner": "SDK audit and review evidence",
+      "scope": "Full-content bounded hashing and immutable/re-attested audit snapshots; nested feature identity validation.",
+      "prerequisites": [],
+      "languageDecision": "Repair TS producers/consumers now; no port is required.",
+      "acceptance": "12-source-binding-probe and 12-review-bundle-probe must reject foreign nested/cached/large-tail source generations while unchanged-source/live-state controls remain successful.",
+      "regressionChecks": [
+        "Root native prefix/source-exclusion probes",
+        "same-root vs different-cwd snapshots",
+        "bounded memory/cancellation"
+      ],
+      "completionEvidence": "Versioned source-basis receipts plus positive/adversarial probe JSON tied to exact source.",
+      "stopDeferRule": "Do not add new readiness/client gates until identity can represent exact or explicitly incomplete source."
+    },
+    {
+      "id": "12-W2",
+      "problem": "Reviewer declarations can omit assessments or carry foreign source tokens while granting credit.",
+      "sourceAnchors": [
+        "agents/reviewer/code-reviewer.ts:117",
+        "agents/base2/gate-reviewer.ts:292,881",
+        "agents/base2/base2.ts:13000"
+      ],
+      "owner": "Reviewer evidence and host gate",
+      "scope": "Typed complete normal-review outcomes, requirement roster coverage, observed read/source basis and credit identity; preserve explicit lightweight escalation.",
+      "prerequisites": [
+        "12-W1"
+      ],
+      "languageDecision": "TS canonical producer/consumer contract; preserve D53 host statechart migration as a later behavior-preserving integration.",
+      "acceptance": "Old review over changed same paths is refused; normal contract-file omitted dimensions/requirements are incomplete; unchanged-byte and eligible lightweight controls pass.",
+      "regressionChecks": [
+        "exact fingerprint/file coverage",
+        "deletions-only review",
+        "unrelated metadata changes",
+        "receipt correction",
+        "parent-owned requirements"
+      ],
+      "completionEvidence": "Real set_output\u2192host credit test and stale review integration receipt; helper tests alone are insufficient.",
+      "stopDeferRule": "Do not widen reuse or receipt shortcuts without an unchanged-source proof."
+    },
+    {
+      "id": "12-W3",
+      "problem": "Coverage categories and readiness are one green gate, preventing honest assessed absence and enabling false promotion.",
+      "sourceAnchors": [
+        "sdk/src/services/audit-intelligence.ts:354,431",
+        "common/src/constants/prompt-sections.ts:121",
+        "agents/patterns/audit-codebase.md:153"
+      ],
+      "owner": "Capability audit contract",
+      "scope": "Separate inspection coverage, usable/partial/unwired/absent/unknown maturity, and static/unit/integration/live assurance; require executable/negative evidence with source identities.",
+      "prerequisites": [
+        "12-W1"
+      ],
+      "languageDecision": "TS schema/service/doc update; retain open capability registry/tiering decisions D29/D33.",
+      "acceptance": "Assessed absence can finish audit coverage without becoming ready; root's unimplemented fixture never becomes usable; uninspected feature remains incomplete.",
+      "regressionChecks": [
+        "legacy receipt normalization",
+        "all-domain/subsystem coverage",
+        "unknown/out-of-scope distinctions"
+      ],
+      "completionEvidence": "Coverage and readiness matrices derived from validated receipts, not plan checkmarks.",
+      "stopDeferRule": "Retire any completion claim based solely on six populated file lists."
+    },
+    {
+      "id": "12-W4",
+      "problem": "Automatic inferred commands run under omitted trust configuration and timeout prose disagrees with executor.",
+      "sourceAnchors": [
+        "sdk/src/provider-config.ts:514,723",
+        "sdk/src/tools/file-change-hooks.ts:1538,1605",
+        "sdk/src/run.ts:2908",
+        "docs/agents-and-tools.md:103,113"
+      ],
+      "owner": "Hook configuration and public contract",
+      "scope": "Effective config injection, explicit-true inference, configured-hook preservation, consistent timeout descriptions and harmless executor capture.",
+      "prerequisites": [],
+      "languageDecision": "TS enforcement at the caller/runner boundary; native isolation does not fix this configuration semantic mismatch.",
+      "acceptance": "Omitted/false never infer; true explicitly enables; configured hooks retain behavior; actual timeout forwarding matches the selected public contract.",
+      "regressionChecks": [
+        "config layering and env/cwd scope",
+        "trusted manifest inference",
+        "skipped/failed/permission/cancellation results"
+      ],
+      "completionEvidence": "Isolated public config fixture\u2192SDK runner acceptance with exact selected commands and timeouts.",
+      "stopDeferRule": "Do not activate optional validation or native tools through a blanket feature-switch change."
+    },
+    {
+      "id": "12-W5",
+      "problem": "Evidence-store readers lack default producers and discard corruption diagnostics.",
+      "sourceAnchors": [
+        "sdk/src/tools/get-change-review-bundle.ts:846,882",
+        "sdk/src/services/local-harness-store.ts:316,337",
+        "sdk/src/services/harness-enforcement.ts:658",
+        "sdk/src/tools/run-targeted-validation.ts:121"
+      ],
+      "owner": "Canonical harness evidence producer/consumer integration",
+      "scope": "Wire confirmed ownership/validation/review-finding records or label optional/unwired availability; propagate and retain degradation diagnostics.",
+      "prerequisites": [
+        "12-W1",
+        "12-W2"
+      ],
+      "languageDecision": "TS producer/consumer integration first; native D50/D51 ownership/store architecture remains conditional measured follow-on.",
+      "acceptance": "Actual SDK edit/check/review outcomes appear in a source-bound bundle; corrupted record remains visibly unavailable across later reads; no effect from a failed action is recorded as committed.",
+      "regressionChecks": [
+        "CAS/revision/source/run scoping",
+        "healthy/stale/unrelated records",
+        "record corruption/quarantine",
+        "legacy plan/Git read surfaces"
+      ],
+      "completionEvidence": "Real outcome\u2192store\u2192bundle\u2192CLI evidence trace, including failure and interruption paths.",
+      "stopDeferRule": "Do not describe a record kind/exported helper as a default body capability without its producer and consuming user path."
+    },
+    {
+      "id": "12-W6",
+      "problem": "Published tools, source extensions, and available binaries are mistaken for semantically usable capability.",
+      "sourceAnchors": [
+        "common/src/tools/constants.ts:93,169",
+        "common/src/tools/compile-tool-definitions.ts:26",
+        "sdk/src/tools/get-affected-tests.ts:18",
+        "sdk/src/services/harness-intelligence.ts:1916,2205"
+      ],
+      "owner": "Capability catalog and target-project cooperation",
+      "scope": "Expose granted/installed/healthy/semantic tiers and wire graph test impact through a real indexer accessor; separate discovered commands from executed validation.",
+      "prerequisites": [
+        "12-W1",
+        "12-W3"
+      ],
+      "languageDecision": "Consume mature ecosystem tools through versioned requests/results; new authored language only with dated measurable capability rationale.",
+      "acceptance": "One multi-package/multi-language contract task discovers consumers and tests, updates the shared interface, and validates each component with immutable diagnostic/artifact references.",
+      "regressionChecks": [
+        "unknown toolchain",
+        "grammar fallback",
+        "optional graph missing",
+        "input/output caps",
+        "cross-boundary cancellation"
+      ],
+      "completionEvidence": "Installed/native vertical task receipt, with unsupported operations explicitly reported.",
+      "stopDeferRule": "Keep graph/coverage/native fields partial or unknown until the default caller executes them."
+    },
+    {
+      "id": "12-W7",
+      "problem": "Memory/evaluation infrastructure can be described as learning without demonstrated behavior change and held-out gains.",
+      "sourceAnchors": [
+        "sdk/src/services/harness-intelligence.ts:2315",
+        "docs/architecture.md:147",
+        "Parent pair04/pair11 evidence"
+      ],
+      "owner": "Outcome traces, evaluation and promotion",
+      "scope": "Connect correctly identified outcomes to retained knowledge, candidate promotion, future consumer injection and held-out comparison; distinguish offline analysis from deployed adaptation.",
+      "prerequisites": [
+        "12-W1",
+        "12-W2",
+        "12-W5"
+      ],
+      "languageDecision": "Conditional offline Python evaluator/training/export role consistent with latest D34/D38; TS orchestration/receipt authority remains canonical.",
+      "acceptance": "Failure-preserving fixed held-out workload demonstrates a promoted change actually reaches a later task and improves the declared target without added false completion.",
+      "regressionChecks": [
+        "compaction/restart recall",
+        "outcome identity/idempotency",
+        "failed samples in denominators",
+        "promotion rollback"
+      ],
+      "completionEvidence": "Baseline/candidate/promotion/injection/held-out artifacts with source/model/workload identities; no inferred gain from lesson counts.",
+      "stopDeferRule": "Defer authored ML/model infrastructure until trace/outcome truth and the consumer loop are proven."
+    },
+    {
+      "id": "12-W8",
+      "problem": "Public claims and old task completion notes do not consistently match current maturity/assurance/defaults.",
+      "sourceAnchors": [
+        "README.md:20",
+        "DESIGN.md:5,10",
+        "docs/agents-and-tools.md:86,103,113,591",
+        "docs/audits/feature-switch-inventory-2026-11-02.md:3",
+        "OLD-TASK-INVENTORY.json and latest D29-D56 notes"
+      ],
+      "owner": "Canonical capability documentation and replacement roadmap",
+      "scope": "Publish current producer/consumer maturity and assurance matrix; correct specific hook/fingerprint/workspace claims; map old tasks to retain/verify/integrate/split/consolidate/defer/retire.",
+      "prerequisites": [
+        "12-W3",
+        "12-W4"
+      ],
+      "languageDecision": "Honor latest TS/Rust/optional offline Python, explicit replay, platform isolation, native authority and ecosystem-tool amendments; do not reopen superseded choices.",
+      "acceptance": "Every public capability/default claim points to current source and exact behavioral evidence or a qualified unverified state; each old task has a concrete disposition and each ready task a stop rule.",
+      "regressionChecks": [
+        "example/schema/route/grant consistency",
+        "design source-support versus executed/human certification",
+        "canonical plan pointer"
+      ],
+      "completionEvidence": "One canonical CAPABILITIES/SPEC/PLAN/STATUS set and all 120 historical dispositions, with no duplicate independent plan truth.",
+      "stopDeferRule": "No done state for a scaffold, unit-only helper, skipped installed path, or historical checkbox."
+    }
+  ],
+  "verification": {
+    "structuredContractAndInventoryMembership": "passed custom local checks",
+    "markdownWords": 2072,
+    "nativeCoverageFunction": "root will validate returned structuralReceipt; not claimed as run here",
+    "localProbePrograms": [
+      "12-source-binding-probe.ts",
+      "12-review-bundle-probe.ts"
+    ],
+    "sourceMutations": false
+  }
+}

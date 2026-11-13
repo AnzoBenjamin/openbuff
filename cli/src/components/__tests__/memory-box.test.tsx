@@ -81,15 +81,15 @@ describe('MemoryBox', () => {
     )
   })
 
-  test('status renders revision·age header', () => {
+  test('status labels the retained source timestamp without inventing a live age', () => {
     const block = makeStatusBlock({
       revision: 12,
       updatedAt: FIXED_NOW - 5_000,
     })
-    const expectedAge = formatAge(FIXED_NOW - block.updatedAt) // should be "5s"
     const markup = renderToStaticMarkup(<MemoryBox block={block} />)
-    expect(markup).toContain(`${block.revision} \u00B7 ${expectedAge}`)
-    expect(markup).toContain('12 \u00B7')
+    expect(markup).toContain(`Revision ${block.revision}`)
+    expect(markup).toContain(new Date(block.updatedAt).toISOString())
+    expect(markup).toContain('saved timestamp')
   })
 
   test('status renders goalPreview', () => {

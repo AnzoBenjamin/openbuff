@@ -5,7 +5,7 @@ import {
 import micromatch from 'micromatch'
 import path from 'path'
 
-import { resolveFilePathWithinProject } from './path-utils'
+import { resolveFilePathForFileSystemReadOperation } from './path-utils'
 import { isReadPathBlocked } from './read-policy'
 
 import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
@@ -22,12 +22,30 @@ export async function glob(params: {
   const { pattern, projectPath, cwd, fs, fileFilter } = params
 
   try {
+    const target = cwd ? await resolveFilePathForFileSystemReadOperation(projectPath, cwd, fs) : undefined
+    if (cwd && !target) return [{ type: 'json', value: { errorMessage: `Invalid cwd: Path '${cwd}' is outside the project directory.` } }]
+    if (target && target.scope !== 'project') {
+      const stat = await fs.stat(target.operationPath)
+      const base = stat.isDirectory() ? target.operationPath : path.dirname(target.operationPath)
+      const candidates = stat.isDirectory()
+        ? flattenTree(await getProjectFileTree({ projectRoot: base, fs })).filter(node => node.type === 'file').map(node => node.filePath)
+        : [path.basename(target.operationPath)]
+      const files: string[] = []
+      for (const relative of candidates) {
+        const fullPath = path.resolve(base, relative)
+        if (!micromatch.isMatch(relative, pattern) && !micromatch.isMatch(fullPath, pattern)) continue
+        if (isReadPathBlocked(fullPath, fileFilter, fs.hostReadPolicy)) continue
+        if (await resolveFilePathForFileSystemReadOperation(projectPath, fullPath, fs)) files.push(fullPath)
+      }
+      files.sort()
+      return [{ type: 'json', value: { files, count: files.length, message: `Found ${files.length} file(s) matching pattern "${pattern}" in "${cwd}"` } }]
+    }
     const fileTree = await getProjectFileTree({ projectRoot: projectPath, fs })
     const flattenedNodes = flattenTree(fileTree)
     let allFilePaths = flattenedNodes
       .filter((node) => node.type === 'file')
       .map((node) => node.filePath)
-      .filter((filePath) => !isReadPathBlocked(filePath, fileFilter))
+      .filter((filePath) => !isReadPathBlocked(filePath, fileFilter, fs.hostReadPolicy))
 
     let matchingFiles: string[]
     let normalizedCwd = normalizeCwd(cwd)
@@ -37,10 +55,7 @@ export async function glob(params: {
       // files outside the project. If the cwd does not resolve inside the
       // project, fail closed instead of silently broadening the search to the
       // whole repository.
-      const resolvedCwd = resolveFilePathWithinProject(
-        projectPath,
-        normalizedCwd,
-      )
+      const resolvedCwd = target
       if (!resolvedCwd) {
         return [
           {

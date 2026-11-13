@@ -1,4 +1,7 @@
-import { existsSync as nodeExistsSync, readFileSync as nodeReadFileSync } from 'node:fs'
+import {
+  existsSync as nodeExistsSync,
+  readFileSync as nodeReadFileSync,
+} from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -18,6 +21,13 @@ export type UpdateStatusDeps = {
 type WrapperMetadata = {
   version?: unknown
   pendingVersion?: unknown
+  updateCheck?: {
+    checkedAt?: unknown
+    latestVersion?: unknown
+    source?: unknown
+    lastFailureAt?: unknown
+    failureKind?: unknown
+  }
 }
 
 function resolveUpdateConfigDir(
@@ -35,14 +45,17 @@ function resolveUpdateConfigDir(
   return path.join(homeDir, '.config', 'openbuff')
 }
 
-function compareUpdateVersions(current: string, pending: string): number {
+export function compareUpdateVersions(
+  current: string,
+  pending: string,
+): number {
   if (!current || !pending) return 0
   // A non-semver current label (e.g. "dev") is always treated as outdated.
   if (!current.match(/^\d+(\.\d+)*(?:-[0-9A-Za-z.-]+)?$/)) {
     return -1
   }
   const parseVersion = (version: string) => {
-    const parts = version.split('-')
+    const parts = version.split(/-(.*)/s)
     const mainParts = parts[0].split('.').map(Number)
     const prereleaseParts = parts[1] ? parts[1].split('.') : []
     return { main: mainParts, prerelease: prereleaseParts }
@@ -105,7 +118,8 @@ export type UpdateStatus = {
  */
 export function buildUpdateStatus(deps: UpdateStatusDeps = {}): UpdateStatus {
   try {
-    const env = deps.env ?? (getCliEnv() as unknown as Record<string, string | undefined>)
+    const env =
+      deps.env ?? (getCliEnv() as unknown as Record<string, string | undefined>)
     const platform = deps.platform ?? process.platform
     const homeDir = deps.homeDir ?? os.homedir()
     const metadataFileName = deps.metadataFileName ?? 'openbuff-metadata.json'
@@ -127,15 +141,40 @@ export function buildUpdateStatus(deps: UpdateStatusDeps = {}): UpdateStatus {
 
     let metadata: WrapperMetadata = {}
     if (existsSync(metadataPath)) {
-      metadata = JSON.parse(readFileSync(metadataPath, 'utf8')) as WrapperMetadata
+      metadata = JSON.parse(
+        readFileSync(metadataPath, 'utf8'),
+      ) as WrapperMetadata
     }
 
     const current = asVersionString(metadata.version) ?? cliVersion
     const pending = asVersionString(metadata.pendingVersion)
+    const check = metadata.updateCheck
+    const checkedAt =
+      typeof check?.checkedAt === 'string' &&
+      Number.isFinite(Date.parse(check.checkedAt))
+        ? check.checkedAt
+        : null
+    const latestVersion = asVersionString(check?.latestVersion)
+    const source = asVersionString(check?.source) ?? 'registry'
+    const failureAt =
+      typeof check?.lastFailureAt === 'string' &&
+      Number.isFinite(Date.parse(check.lastFailureAt))
+        ? check.lastFailureAt
+        : null
+    const freshness = checkedAt
+      ? `Last successful ${source} check: ${checkedAt}${latestVersion ? ` (latest ${latestVersion})` : ''}.`
+      : 'Registry freshness unknown: no successful update check is recorded.'
+    const failure =
+      failureAt &&
+      (!checkedAt || Date.parse(failureAt) >= Date.parse(checkedAt))
+        ? `A newer check failed at ${failureAt}; run openbuff --check-update to retry.`
+        : null
 
     if (
       pending &&
-      (current === null || current === undefined || compare(current, pending) < 0)
+      (current === null ||
+        current === undefined ||
+        compare(current, pending) < 0)
     ) {
       return {
         status: 'staged',
@@ -144,16 +183,28 @@ export function buildUpdateStatus(deps: UpdateStatusDeps = {}): UpdateStatus {
         lines: [
           `Update ${pending} staged (current ${current ?? 'unknown'}) \u2014 restart to apply.`,
           'The binary cannot update while running; run `openbuff --update` from your shell to apply now.',
+          freshness,
+          ...(failure ? [failure] : []),
         ],
       }
     }
 
     return {
-      status: 'current',
+      status:
+        checkedAt &&
+        latestVersion &&
+        current &&
+        compare(current, latestVersion) >= 0 &&
+        !failure
+          ? 'current'
+          : 'unavailable',
       current: current ?? null,
       pending: null,
       lines: [
-        `Openbuff is up to date (${current ?? 'unknown'}). Background wrapper checks stage updates; run \`openbuff --check-update\` from your shell to check now.`,
+        `Installed Openbuff ${current ?? 'version unknown'}; no newer staged update is known.`,
+        freshness,
+        ...(failure ? [failure] : []),
+        'Run `openbuff --check-update` from your shell to check now.',
       ],
     }
   } catch {
