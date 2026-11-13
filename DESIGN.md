@@ -3,7 +3,7 @@
 ## Source of truth
 
 - Status: **Active** — implementation and scoped checks pass; exact scenario certification, saved-history recovery design, independent review and human/emulator acceptance remain open. [Current status](docs/design/cli-overhaul/README.md).
-- Last refreshed: 2026-11-10.
+- Last refreshed: 2026-11-13.
 - Primary product surfaces: Openbuff terminal CLI (React/OpenTUI), launch/setup/questions/sessions and command/install/update output, with embedded OAuth callback and SDK dashboard supporting surfaces.
 - User brief: a clean, understandable interface that makes large or complicated content readable and lets people navigate expanded output comfortably.
 - Current refinement: a compact wordmark/project header, quiet graphite surfaces, bright green primary headings and task boundaries, restrained composer borders and caret, text-based mode selection, and grouped structured results. Prefer readable field labels and outcomes over JSON syntax and protocol metadata; keep Inspect available for captured evidence. Short tool summaries share a single row when their complete text fits. Saved sessions and review choices use the same left-aligned hierarchy. [OpenTUI 0.8 refinement](docs/design/cli-overhaul/REFINEMENT.md).
@@ -17,7 +17,7 @@
 
 - Personality: precise, calm, capable, approachable.
 - Trust signals: clear action outcomes, accurate status, accessible evidence, truthful counts and explicit content availability.
-- Retain the recognizable lime-green identity: the dark primary is `#a4e879`, between historical `#9EFC62` and the upgrade’s `#b0d98a`. Use green for primary headings, task boundaries, active mode and keyboard keys; keep ordinary prose neutral.
+- Restore the historical lime-green identity: dark primary is `#9EFC62`, and light primary is the readable forest green `#33721e`. The compact wordmark, focused composer border, primary headings, task boundaries, active mode and keyboard keys use green; ordinary prose and unfocused borders remain neutral. Keep the modern secondary/status colors and controlled backgrounds so light and dark interactive surfaces retain readable contrast.
 - Avoid decorative animation, repeated boxes around every item, unexplained abbreviations and walls of implementation metadata.
 
 ## Product goals

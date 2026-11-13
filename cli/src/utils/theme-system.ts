@@ -102,11 +102,11 @@ export function getLogoAccentColor(
   env: CliEnv = getCliEnv(),
 ): string {
   const isTruecolor = supportsTruecolor(env)
-  // Match the restrained green used for focus and primary actions.
+  // Match the historical green used for focus and primary actions.
   if (themeName === 'dark') {
-    return isTruecolor ? '#a4e879' : 'lime'
+    return isTruecolor ? '#9EFC62' : 'lime'
   }
-  return isTruecolor ? '#396a30' : 'green'
+  return isTruecolor ? '#33721e' : 'green'
 }
 
 const IDE_THEME_INFERENCE = {
@@ -855,12 +855,12 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
   dark: {
     name: 'dark',
     // Core semantic colors
-    primary: '#a4e879',
+    primary: '#9EFC62',
     secondary: '#a1a69e',
     success: '#85d69b',
     error: '#ef9696',
     warning: '#e6be7e',
-    info: '#a4e879',
+    info: '#9EFC62',
     link: '#a7c6ef',
     directory: '#a1a69e',
 
@@ -874,7 +874,7 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
 
     // Context-specific
     aiLine: '#71796d',
-    userLine: '#a4e879',
+    userLine: '#9EFC62',
 
     // Agent backgrounds
     agentToggleHeaderBg: '#20231f',
@@ -888,7 +888,7 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
     modeFastBg: '#20231f',
     modeFastText: '#e6e8e4',
     modePlanBg: '#20231f',
-    modePlanText: '#a4e879',
+    modePlanText: '#9EFC62',
 
     // Image card
     imageCardBorder: '#71796d',
@@ -909,12 +909,12 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
   light: {
     name: 'light',
     // Core semantic colors
-    primary: '#396a30',
+    primary: '#33721e',
     secondary: '#626b60',
     success: '#087448',
     error: '#bf2934',
     warning: '#8a5300',
-    info: '#58684e',
+    info: '#33721e',
     link: '#315da8',
     directory: '#626b60',
 
@@ -928,7 +928,7 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
 
     // AI/User context
     aiLine: '#858e7d',
-    userLine: '#396a30',
+    userLine: '#33721e',
 
     // Agent context
     agentToggleHeaderBg: '#f1f3ed',
@@ -942,7 +942,7 @@ const DEFAULT_CHAT_THEMES: Record<ThemeName, ChatTheme> = {
     modeFastBg: '#f1f3ed',
     modeFastText: '#1f2822',
     modePlanBg: '#f1f3ed',
-    modePlanText: '#1f2822',
+    modePlanText: '#33721e',
 
     // Image card
     imageCardBorder: '#858e7d',

@@ -268,12 +268,11 @@ export const ChatInputBar = ({
 
   const effectivePlaceholder =
     inputMode === 'default' ? inputPlaceholder : modeConfig.placeholder
-  const borderColor =
-    inputMode === 'default'
-      ? theme.border
-      : inputFocused
-        ? theme[modeConfig.color]
-        : theme.border
+  const borderColor = inputFocused
+    ? inputMode === 'default'
+      ? theme.primary
+      : theme[modeConfig.color]
+    : theme.border
 
   if (askUserState) {
     return (

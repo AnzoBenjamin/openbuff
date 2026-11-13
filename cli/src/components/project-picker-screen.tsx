@@ -243,7 +243,10 @@ export const ProjectPickerScreen: React.FC<ProjectPickerScreenProps> = ({
       }}
     >
       <text fg={theme.foreground} style={{ flexShrink: 0 }} wrapMode="none">
-        Openbuff · {view === 'recents' ? 'Recent projects' : 'Choose project'}
+        <span fg={theme.primary}>Openbuff</span>
+        <span>
+          {view === 'recents' ? ' · Recent projects' : ' · Choose project'}
+        </span>
       </text>
       <MultilineInput
         value={query}

@@ -9,6 +9,7 @@ import { MultipleChoiceForm } from '../ask-user'
 import { AgentModeToggle } from '../agent-mode-toggle'
 import { ChatInputBar } from '../chat-input-bar'
 import { CommandPaletteScreen } from '../command-palette-screen'
+import { ProjectPickerScreen } from '../project-picker-screen'
 import { AskUserBridge } from '@codebuff/common/utils/ask-user-bridge'
 import { createJsonDocument } from '../../utils/output-document'
 import {
@@ -271,7 +272,15 @@ nativeTest(
   },
 )
 
-function ApprovalBar({ width, height }: { width: number; height: number }) {
+function ApprovalBar({
+  width,
+  height,
+  focused = true,
+}: {
+  width: number
+  height: number
+  focused?: boolean
+}) {
   const theme = useTheme()
   const inputRef = React.useRef<MultilineInputHandle | null>(null)
   return (
@@ -279,7 +288,7 @@ function ApprovalBar({ width, height }: { width: number; height: number }) {
       inputValue="retained composer draft"
       cursorPosition={4}
       setInputValue={useChatStore.getState().setInputValue}
-      inputFocused={true}
+      inputFocused={focused}
       inputRef={inputRef}
       inputPlaceholder="Enter a coding task"
       lastEditDueToNav={false}
@@ -313,6 +322,104 @@ function ApprovalBar({ width, height }: { width: number; height: number }) {
     />
   )
 }
+
+function rgb(hex: string): number[] {
+  return [1, 3, 5].map((offset) => parseInt(hex.slice(offset, offset + 2), 16))
+}
+
+nativeTest(
+  'idle project headers and composer focus visibly retain the green identity in both themes',
+  async () => {
+    for (const name of ['dark', 'light'] as const) {
+      useThemeStore.getState().setThemeName(name)
+      const theme = useThemeStore.getState().theme
+      const primary = rgb(theme.primary)
+      expect(primary[1]).toBeGreaterThan(primary[0]!)
+      expect(primary[1]).toBeGreaterThan(primary[2]!)
+      for (const width of [60, 100]) {
+        useChatStore.getState().setInputMode('default')
+        const picker = await mount(
+          <ProjectPickerScreen
+            initialPath="/tmp/openbuff-theme-fixture"
+            recentProjects={[]}
+            onSelectProject={() => {}}
+            browserDependencies={{
+              list: async () => ({ entries: [], state: 'ready', omitted: 0 }),
+              git: async () => false,
+              canonical: (value) => value,
+              isDirectory: () => true,
+            }}
+          />,
+          width,
+          24,
+        )
+        try {
+          const frame = capture(picker, `green-project-${name}-${width}x24`)
+          expect(frame).toContain('Openbuff · Choose project')
+          const spans = picker
+            .captureSpans()
+            .lines.flatMap((line) => line.spans)
+          const brand = spans.find((span) => span.text.includes('Openbuff'))!
+          const context = spans.find((span) =>
+            span.text.includes('Choose project'),
+          )!
+          expect(brand.fg.toInts().slice(0, 3)).toEqual(primary)
+          expect(context.fg.toInts().slice(0, 3)).toEqual(rgb(theme.foreground))
+        } finally {
+          await React.act(async () => picker.renderer.destroy())
+        }
+
+        for (const focused of [true, false]) {
+          const composer = await mount(
+            <box
+              width={width}
+              height={24}
+              backgroundColor={theme.background}
+              flexDirection="column"
+            >
+              <ApprovalBar width={width} height={24} focused={focused} />
+            </box>,
+            width,
+            24,
+          )
+          try {
+            const frame = capture(
+              composer,
+              `green-composer-${name}-${focused ? 'focused' : 'unfocused'}-${width}x24`,
+            )
+            expect(frame).toContain('retained composer draft')
+            const border = composer
+              .captureSpans()
+              .lines.flatMap((line) => line.spans)
+              .find((span) => span.text.includes('╭'))!
+            expect(border.fg.toInts().slice(0, 3)).toEqual(
+              rgb(focused ? theme.primary : theme.border),
+            )
+          } finally {
+            await React.act(async () => composer.renderer.destroy())
+          }
+        }
+      }
+
+      useChatStore.getState().setInputMode('homeDir')
+      const warning = await mount(
+        <ApprovalBar width={100} height={24} />,
+        100,
+        24,
+      )
+      try {
+        capture(warning, `green-composer-${name}-warning-100x24`)
+        const border = warning
+          .captureSpans()
+          .lines.flatMap((line) => line.spans)
+          .find((span) => span.text.includes('╭'))!
+        expect(border.fg.toInts().slice(0, 3)).toEqual(rgb(theme.warning))
+      } finally {
+        await React.act(async () => warning.renderer.destroy())
+      }
+    }
+  },
+)
 
 nativeTest(
   'help and commands use available width with readable light and dark themes',

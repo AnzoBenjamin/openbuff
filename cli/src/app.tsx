@@ -203,7 +203,7 @@ export const App = ({
           marginBottom: 1,
         }}
       >
-        <text fg={theme.foreground}>
+        <text fg={theme.primary}>
           <b>Openbuff</b>
         </text>
         <text style={{ wrapMode: 'word', fg: theme.muted }}>
