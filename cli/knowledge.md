@@ -2,7 +2,7 @@
 
 ## Render-path performance checks
 
-The text-layout cost baseline warms all paths, calibrates sample duration and rotates adjacent measurements. It reports point estimates and gates conservative paired lower bounds against the original 2x/4x ceilings. A steady 2.4x slowdown is still rejected; deterministic wrap-pass and allocation checks remain. Only the bounded benchmark cases have a 20-second test budget for heavily loaded runners. CI command processes use Node 26.13.1 from `.node-version`, while the CLI runtime remains Bun 1.4.4.
+The ASCII layout path counts uniform hard wraps arithmetically at integral widths and retains the legacy loop for nonintegral widths. Its sticky token scans use RegExp.test/lastIndex instead of allocating match arrays; newline detection stays bounded to whitespace runs. Row/cursor boundaries, token slices, width calls and one-pass reuse remain checked against the existing reference. The text-layout cost baseline warms all paths, calibrates sample duration and rotates adjacent measurements. It reports point estimates and gates conservative paired lower bounds against the original 2x/4x ceilings. A steady 2.4x slowdown is still rejected; deterministic wrap-pass and allocation checks remain. Only the bounded benchmark cases have a 20-second test budget for heavily loaded runners. CI command processes use Node 26.13.1 from `.node-version`, while the CLI runtime remains Bun 1.4.4.
 
 ## Listener ownership and turn responsiveness
 
