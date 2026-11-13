@@ -43,7 +43,7 @@ jobs:
       run:
         working-directory: rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       # Explicit pin matches rust/rust-toolchain.toml; rustup installs it on
       # uncached runners, so the job never depends on a preinstalled toolchain.
@@ -102,7 +102,7 @@ jobs:
         working-directory: ${{ runner.temp }}
         run: git config --global core.longpaths true
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
       # Same explicit 1.87.0 pin as build-test; `targets:` installs the target
       # std in one rustup pass.
