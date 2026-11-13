@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   run-nightly-evals:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 360 # 6 hours is the max for any hosted github action
     steps:
       - name: Checkout repository

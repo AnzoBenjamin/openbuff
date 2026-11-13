@@ -22,6 +22,13 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
 
 ## Test-infra notes (bun)
 
+- **Render-path cost checks use paired samples.** The layout benchmark warms all
+  implementations, calibrates batches to at least 5 ms, and rotates measurement
+  order. It reports median ratios but gates the conservative lower bound from
+  nine paired samples against the existing 2x/4x limits. Noisy comparisons are
+  remeasured together; the bounded benchmark cases have a 20-second budget for
+  loaded runners. Wrap-pass and allocation invariants remain deterministic.
+
 - **Code-map packaging tests need built grammars.** CI builds the SDK before
   the code-map suite and sets `CODEBUFF_WASM_DIR` to the generated grammar
   directory so each isolated test worker can load every advertised language.

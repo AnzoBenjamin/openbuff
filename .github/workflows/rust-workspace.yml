@@ -38,7 +38,7 @@ permissions:
 
 jobs:
   build-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     defaults:
       run:
         working-directory: rust
@@ -69,16 +69,16 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-26.04
             runs-tests: true
             runs-smoke: true
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-26.04
             apt: musl-tools
             runs-tests: false
             runs-smoke: false
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-26.04
             apt: gcc-aarch64-linux-gnu
             linker: aarch64-linux-gnu-gcc
             runs-tests: false
@@ -146,7 +146,7 @@ jobs:
       # built binary for debugging.
       - name: Upload openbuff-native binary
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: openbuff-native-${{ matrix.target }}
           path: rust/target/${{ matrix.target }}/release/openbuff-native*

@@ -11,6 +11,11 @@ CI. Upgrade an existing installation with `bun upgrade` and verify
 `bun --version` before installing dependencies. The CLI uses OpenTUI 0.8.3,
 which requires Bun >= 1.3.14.
 
+Node commands in CI and npm publishing use Node 26.13.1, pinned in
+`.node-version`. Use that version when reproducing Node-specific behavior.
+GitHub manages JavaScript action runtimes separately: current retry and artifact
+actions declare Node 24, while repository commands run on Node 26.
+
 To develop the CLI locally, you do not need to run a web server or database. Simply configure your local providers and run the CLI developer task directly:
 
 1. **Install Dependencies:**

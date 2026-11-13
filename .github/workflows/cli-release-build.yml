@@ -35,12 +35,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             target: linux-x64
             bun_target: bun-linux-x64-baseline
             platform: linux
             arch: x64
-          - os: ubuntu-latest
+          - os: ubuntu-26.04
             target: linux-arm64
             bun_target: bun-linux-arm64
             platform: linux
