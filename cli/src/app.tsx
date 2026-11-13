@@ -74,6 +74,8 @@ export const App = ({
   const theme = useTheme()
   const renderer = useRenderer()
   useEffect(() => {
+    // Alpha-zero backgrounds emit the terminal's default background (SGR 49).
+    // Keep the canvas native to the terminal instead of painting an opaque fill.
     renderer.setBackgroundColor(theme.background)
   }, [renderer, theme.background])
 

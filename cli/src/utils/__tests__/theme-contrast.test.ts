@@ -15,12 +15,12 @@ function contrast(foreground: string, background: string): number {
   return (Math.max(...values) + 0.05) / (Math.min(...values) + 0.05)
 }
 
-describe('readability on the built-in controlled surfaces', () => {
+describe('readability on owned surfaces and representative terminal backgrounds', () => {
   for (const name of ['dark', 'light'] as const) {
     const theme = chatThemes[name]
     test(`${name} content, actions and status text retain readable contrast`, () => {
       for (const background of [
-        theme.background,
+        ...(name === 'dark' ? ['#1f2430', '#24273a'] : ['#ffffff', '#fdf6e3']),
         theme.surface,
         theme.surfaceHover,
       ]) {
@@ -40,6 +40,15 @@ describe('readability on the built-in controlled surfaces', () => {
         }
       }
       expect(contrast(theme.border, theme.surface)).toBeGreaterThanOrEqual(3)
+      expect(contrast(theme.border, theme.surfaceHover)).toBeGreaterThanOrEqual(
+        3,
+      )
+      expect(
+        contrast(
+          theme.markdown!.inlineCodeFg!,
+          theme.markdown!.codeBackground!,
+        ),
+      ).toBeGreaterThanOrEqual(4.5)
     })
   }
 })
