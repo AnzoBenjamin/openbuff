@@ -227,18 +227,21 @@ describe('R2 bounded finite Node deadline scheduling', () => {
   test('actual child close disarms a still-finite helper deadline', async () => {
     const manual = createControlledExecutionClock()
     const processes = realRecorder()
-    const host = fixture({ ...manual, projectRoot: scratch(), spawn: processes.spawn, actionLimit: { kind: 'finite', durationMs: 100 } })
+    // This case checks disarming after exit, so leave room for process startup
+    // on loaded runners. The separate finite-backstop case checks prompt expiry.
+    const host = fixture({ ...manual, projectRoot: scratch(), spawn: processes.spawn, actionLimit: { kind: 'finite', durationMs: 5_000 } })
     const launch = executionValue(prepareNodeLaunch({ executionContext: host.context,
       executable: '/usr/bin/printf', argv: ['timer-close'], cwd: host.context.projectRoot,
       branchId: 'terminal.sync', adapterOptions: { stdio: 'ignore', detached: false, shell: false } }))
     const node = executionValue(dispatchNodeLaunch(executionValue(await admitNodeLaunch(launch, host.context.signal)), input =>
       processes.spawn(input.executable, input.argv, { cwd: input.cwd, env: input.env, signal: input.resourceSignal, stdio: 'ignore' })))
     expect(executionValue(await node.started).pid).toBeGreaterThan(0)
-    expect((await closeWithin(node.child))[0]).toBe(0)
-    await delay(130)
+    expect(await closeWithin(node.child)).toEqual([0, null])
+    // Cross the captured native deadline without renewing its duration.
+    await delay(Math.ceil(node.remainingResourceMs()!) + 30)
     expect(node.scope.currentCleanup()?.signals.filter(signal => signal.result === 'delivered')).toEqual([])
     expect(node.resourceRefusal()).toBeUndefined()
-  })
+  }, 10_000)
 
   test('long finite cancellation grace survives native AbortError frames until close', async () => {
     const abort = new AbortController()
