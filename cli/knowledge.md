@@ -1,5 +1,9 @@
 # CLI Package Knowledge
 
+## Render-path performance checks
+
+The text-layout cost baseline warms all paths, calibrates sample duration and rotates adjacent measurements. It reports point estimates and gates conservative paired lower bounds against the original 2x/4x ceilings. A steady 2.4x slowdown is still rejected; deterministic wrap-pass and allocation checks remain. Only the bounded benchmark cases have a 20-second test budget for heavily loaded runners. CI command processes use Node 26.13.1 from `.node-version`, while the CLI runtime remains Bun 1.4.4.
+
 ## Listener ownership and turn responsiveness
 
 - `cli/src/hooks/use-terminal-dimensions.ts` shares one native `resize` subscription per renderer through a WeakMap-backed external store. Consumers subscribe through `useSyncExternalStore`; the final consumer removes the native listener. Do not attach one renderer listener for each message block or raise the listener limit to conceal accumulation.
@@ -16,7 +20,7 @@
 - `cli/src/utils/readable-output.ts` creates a display projection of captured field paths. Logical lines, exact scalar copy, original export text and lazy row details remain attached to the capture. `V` restores raw paths; `Enter` opens complete values; `?` opens the reader's keyboard guide. Opening a detail resets its horizontal offset and wrapping, and Back restores the original parent document and position.
 - Agent task instructions and Markdown summaries use native OpenTUI rendering. `ContentWithMarkdown`'s `eagerProse` option supplies readable prose while asynchronous highlighting initializes. Repeated inspect actions use quiet inset styling with hover/focus emphasis.
 - Decision panels span the available composer width while their height fits the content. Question and option text use that width, and roomy terminals separate the secondary actions and footer from the question. Choices are windowed with space reserved for focused descriptions and custom answers. Commands retain line breaks, clipped content is marked, and full inspection remains available. Submit takes one row, and batched arrows use the latest choice index. Mode menus paint above composer borders with a clear separating row.
-- Built-in dark primary green is `#a4e879`; primary headings, task boundaries, active modes and reader key hints use green while ordinary prose remains neutral. [Design contract](../DESIGN.md) and [polish validation and previews](../docs/design/cli-overhaul/UI-POLISH.md) describe the current presentation.
+- Built-in primary greens restore the pre-upgrade identity: `#9EFC62` in dark mode and `#33721e` in light mode. The compact Openbuff wordmark and focused default composer border show green even before the first task; primary headings, task boundaries, active modes and reader key hints use the same semantic role. Unfocused borders and ordinary prose stay neutral, and nondefault composer modes retain their warning/info/error distinctions. Modern secondary/status colors and controlled backgrounds remain because the older light `#65A83E` and some historical borders/status colors did not meet the existing contrast targets. [Design contract](../DESIGN.md) describes the current colors; [earlier polish validation and previews](../docs/design/cli-overhaul/UI-POLISH.md) records the preceding presentation.
 - Built-in themes paint a controlled main background and repaint it through the renderer on theme changes. Help and the command palette use available width; list labels resist shrinking before descriptions. Waiting/streaming status uses semantic static text with elapsed time and Stop. Memory receipts report reused evidence and reasons for full discovery, rather than estimating saved file reads.
 
 ## Filesystem sandbox configuration
