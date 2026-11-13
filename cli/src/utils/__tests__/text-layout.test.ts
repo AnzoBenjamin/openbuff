@@ -1180,6 +1180,39 @@ describe('render-path work-volume baseline', () => {
   }
 })
 
+test('ASCII arithmetic wraps preserve legacy rows and cursor-boundary gutters', () => {
+  for (const cols of [1, 2, 7, 20, 80, 1.5, 0.1]) {
+    for (const length of [1, 2, 7, 20, 80, 161]) {
+      for (const prefix of ['', 'ab ', '\n', 'x\n  ']) {
+        const value = prefix + 'a'.repeat(length)
+        const totalLines = referenceMeasureLines(value, cols)
+        for (const offset of [0, 1, cols - 1, cols, cols + 1, value.length]) {
+          const cursorOffset = Math.max(
+            0,
+            Math.min(Math.floor(offset), value.length),
+          )
+          const metrics = computeInputLayoutMetrics({
+            layoutContent: value,
+            cursorOffset,
+            cols,
+            maxHeight: 10,
+          })
+          expect(metrics.totalLines).toBe(totalLines)
+          // Prefix remeasurement is an oracle for uniform hard wraps and
+          // explicit newlines. A full-value word wrap can move a short prefix
+          // to the next row, so space-delimited words use the row oracle only.
+          if (prefix === '' || prefix.includes('\n')) {
+            expect(metrics.gutterEnabled).toBe(
+              totalLines === 2 &&
+                referenceMeasureLines(value.slice(0, cursorOffset), cols) === 2,
+            )
+          }
+        }
+      }
+    }
+  }
+})
+
 /**
  * The tokenizer this module used before it scanned the value by index:
  * `text.split(/(\s+)/)` plus a per-token loop. Kept here as an oracle - sharing

@@ -243,23 +243,24 @@ function isWhitespaceAt(text: string, index: number): boolean {
  * this scan replaced, which is a regression the operation-count seams could not
  * see.
  *
- * NON-REENTRANCY INVARIANT, and the reason these two module-level matchers carry
+ * NON-REENTRANCY INVARIANT, and the reason these module-level matchers carry
  * mutable `lastIndex` state at all: `lastIndex` is assigned immediately before
- * the one `exec` that reads it, with NO `await`, callback, or user code allowed
+ * the one `test` that reads it, with NO `await`, callback, or user code allowed
  * between the two statements. That is what makes a shared sticky matcher safe —
  * nothing can interleave, because there is nothing to interleave with. These are
  * deliberately NOT made per-call: allocating a fresh `RegExp` per token would
  * pay regex compilation on the per-keystroke path, which is the cost the scan
- * exists to avoid. Both matchers are used only by `measureLines`, which is
+ * exists to avoid. All matchers are used only by `measureLines`, which is
  * wholly synchronous, so the invariant holds today. Any change that introduces
  * an interleaving point — an `await`, a yield, or a call into code that measures
- * recursively — between the `lastIndex` assignment and its `exec` must instead
+ * recursively — between the `lastIndex` assignment and its `test` must instead
  * move the matchers to per-call scope (unlike the filesystem fan-out elsewhere,
  * which routes shared work through an explicit gate rather than relying on this
  * invariant).
  */
 const WHITESPACE_RUN_PATTERN = /\s+/y
 const NON_WHITESPACE_RUN_PATTERN = /\S+/y
+const NEWLINE_IN_WHITESPACE_RUN_PATTERN = /[^\S\n]*\n/y
 
 /**
  * Cursor row accounting filled in by the wrap pass: `offset` is the cursor's
@@ -308,7 +309,7 @@ function measureLines(
     // verdict anyway, and running the regex twice per segment (once in
     // measureWidth, once in the gate) measurably tightened the wall-clock
     // baseline's headroom. A printable-ASCII segment is exactly one column
-    // per code unit, so it hard-wraps by subtraction; the ASCII CLASS is the
+    // per code unit, so it hard-wraps by arithmetic; the ASCII CLASS is the
     // gate, NOT `segment.length === segmentWidth` — that equality also holds
     // for an all-astral segment (2 code units per 2-column grapheme), which
     // would then break surrogate pairs mid-character.
@@ -317,14 +318,33 @@ function measureLines(
     if (segmentWidth > cols) {
       if (flushBeforeOversize && current > 0) emitHardWrap(segmentStart)
       if (isAsciiSegment) {
-        let remaining = segment.length
-        let offset = 0
-        while (remaining > cols && cols > 0) {
-          offset += cols
-          emitHardWrap(segmentStart + offset)
-          remaining -= cols
+        // Each printable ASCII code unit occupies one column. Count uniform
+        // hard wraps directly instead of invoking cursor accounting per row.
+        // A cursor exactly at a wrap boundary still belongs to the prior row.
+        if (cols > 0 && Number.isInteger(cols)) {
+          const wraps = Math.ceil(segment.length / cols) - 1
+          lines += wraps
+          if (cursor) {
+            const wrapsBeforeCursor =
+              Math.ceil((cursor.offset - segmentStart) / cols) - 1
+            cursor.breaksBefore += Math.max(
+              0,
+              Math.min(wraps, wrapsBeforeCursor),
+            )
+          }
+          current = segment.length - wraps * cols
+        } else {
+          // Preserve the legacy behavior for nonintegral/invalid widths;
+          // native terminal column counts take the arithmetic path above.
+          let remaining = segment.length
+          let offset = 0
+          while (remaining > cols && cols > 0) {
+            offset += cols
+            emitHardWrap(segmentStart + offset)
+            remaining -= cols
+          }
+          current = remaining
         }
-        current = remaining
         return
       }
       let acc = 0
@@ -372,24 +392,29 @@ function measureLines(
     const whitespaceRun = isWhitespaceAt(text, tokenStart)
     // The run is located by the engine rather than by classifying every code
     // unit in it. The single classification above only decides which of the two
-    // complementary runs to read, so `exec` always matches at `tokenStart` here;
+    // complementary runs to read, so `test` always matches at `tokenStart` here;
     // the clamp is unreachable defensive width, not a semantic branch.
     const runPattern = whitespaceRun
       ? WHITESPACE_RUN_PATTERN
       : NON_WHITESPACE_RUN_PATTERN
     runPattern.lastIndex = tokenStart
-    const runMatch = runPattern.exec(text)
-    const tokenEnd = runMatch
-      ? tokenStart + runMatch[0].length
+    // `test` advances lastIndex without allocating an exec match array for
+    // every token. The only substring needed is the span measured below.
+    const runMatched = runPattern.test(text)
+    const tokenEnd = runMatched
+      ? runPattern.lastIndex
       : Math.min(tokenStart + 1, text.length)
 
     // Newline presence comes out of the run classification instead of a second
     // scan of the token: `\n` (0x0a) is whitespace under the class above, so it
-    // can only ever appear inside a whitespace run. Reading it off the matched
-    // run here replaces the per-token `token.includes('\n')` probe — one full
-    // re-scan of every token on the per-keystroke path.
-    const runHasNewline =
-      whitespaceRun && runMatch !== null && runMatch[0].includes('\n')
+    // can only ever appear inside a whitespace run. An allocation-free sticky
+    // probe of that run replaces the per-token `token.includes('\n')` probe —
+    // one full re-scan of every token on the per-keystroke path.
+    let runHasNewline = false
+    if (whitespaceRun) {
+      NEWLINE_IN_WHITESPACE_RUN_PATTERN.lastIndex = tokenStart
+      runHasNewline = NEWLINE_IN_WHITESPACE_RUN_PATTERN.test(text)
+    }
     const tokenOffset = tokenStart
     tokenStart = tokenEnd
 
@@ -406,11 +431,9 @@ function measureLines(
         const lineEnd =
           newlineAt === -1 || newlineAt >= tokenEnd ? tokenEnd : newlineAt
         if (lineEnd > lineStart) {
-          appendSegment(
-            text.slice(lineStart, lineEnd),
-            lineStart,
-            { flushBeforeOversize: false },
-          )
+          appendSegment(text.slice(lineStart, lineEnd), lineStart, {
+            flushBeforeOversize: false,
+          })
           measureLinesTokenSlices += 1
           measureLinesTokenChars += lineEnd - lineStart
         }
@@ -560,8 +583,7 @@ export function computeInputLayoutMetrics({
   // two rows (the gutter is drawn only there), so every other content shape
   // short-circuits. A row break strictly before the cursor offset means the
   // cursor sits on a row below that break.
-  const cursorLines =
-    totalLines !== 2 ? totalLines : 1 + cursorRow.breaksBefore
+  const cursorLines = totalLines !== 2 ? totalLines : 1 + cursorRow.breaksBefore
 
   // Add bottom gutter when cursor is on line 2 of exactly 2 lines
   const gutterEnabled =
