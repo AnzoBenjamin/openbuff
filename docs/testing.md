@@ -23,9 +23,10 @@ CLI hook testing note: React 19 + Bun + RTL `renderHook()` is unreliable; prefer
 ## Test-infra notes (bun)
 
 - **Code-map packaging tests need built grammars.** CI builds the SDK before
-  the code-map suite and sets `CODEBUFF_WASM_DIR` to `sdk/dist/wasm` so each
-  isolated test worker can load every advertised language. GDScript comes
-  from the checksum-pinned repair source rather than an installed dependency.
+  the code-map suite and sets `CODEBUFF_WASM_DIR` to the generated grammar
+  directory so each isolated test worker can load every advertised language.
+  GDScript comes from the checksum-pinned repair source rather than an installed
+  dependency.
   From the repository root, reproduce that prerequisite and suite with:
 
   ```bash

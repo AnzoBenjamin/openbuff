@@ -261,10 +261,10 @@ describe('CI bun toolchain alignment', () => {
 })
 
 describe('CI sdk dist build gating', () => {
-  test('sdk dist is built only for the cli matrix entries, not every package', () => {
+  test('sdk dist builds are limited to CLI imports and code-map grammar coverage', () => {
     // CLI tests import @openbuff/sdk through the ESM import condition, which
-    // resolves the dist bundle; every other package job must skip the sdk
-    // build instead of paying its cost across the whole matrix.
+    // resolves the dist bundle. Code-map unit tests need the packaged grammars;
+    // unrelated package jobs must skip the build.
     const lines = CI_WORKFLOW.split('\n')
     const buildIndexes = lines
       .map((line, index) =>
@@ -273,18 +273,38 @@ describe('CI sdk dist build gating', () => {
       .filter((index) => index !== -1)
     // Exactly one gated build per test job: `test` and `test-integration`.
     expect(buildIndexes.length).toBe(2)
-    for (const index of buildIndexes) {
+    const expectedSteps = [
+      {
+        name: 'Build SDK dist for CLI imports and code-map grammar coverage',
+        condition:
+          "matrix.package == 'cli' || matrix.package == 'packages/code-map'",
+      },
+      {
+        name: 'Build sdk dist (cli tests import @openbuff/sdk through the ESM import condition)',
+        condition: "matrix.package == 'cli'",
+      },
+    ]
+    for (const [position, index] of buildIndexes.entries()) {
+      const expectedStep = expectedSteps[position]!
       const stepLines = lines.slice(index - 2, index)
       expect(
-        stepLines.some((line) => line.trim() === "if: matrix.package == 'cli'"),
+        stepLines.some(
+          (line) => line.trim() === `if: ${expectedStep.condition}`,
+        ),
       ).toBe(true)
       expect(
-        stepLines.some((line) =>
-          line.includes(
-            'Build sdk dist (cli tests import @openbuff/sdk through the ESM import condition)',
-          ),
+        stepLines.some(
+          (line) => line.trim() === `- name: ${expectedStep.name}`,
         ),
       ).toBe(true)
     }
+  })
+
+  test('code-map tests select the packaged grammars through the job environment', () => {
+    expect(CI_WORKFLOW).toContain(
+      `      - name: Use packaged grammars for code-map tests
+        if: matrix.package == 'packages/code-map'
+        run: echo "CODEBUFF_WASM_DIR=$GITHUB_WORKSPACE/sdk/dist/wasm" >> "$GITHUB_ENV"`,
+    )
   })
 })
