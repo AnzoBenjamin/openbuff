@@ -44,12 +44,17 @@ function measureNonAsciiWidth(segment: string): number {
  */
 let lastMeasureWidthWasAscii = false
 
-export function measureWidth(segment: string): number {
+function measureKnownAsciiWidth(segment: string): number {
   measureWidthCalls += 1
+  lastMeasureWidthWasAscii = true
+  return segment.length
+}
+
+export function measureWidth(segment: string): number {
   if (ASCII_PRINTABLE_REGEX.test(segment)) {
-    lastMeasureWidthWasAscii = true
-    return segment.length
+    return measureKnownAsciiWidth(segment)
   }
+  measureWidthCalls += 1
   lastMeasureWidthWasAscii = false
   return measureNonAsciiWidth(segment)
 }
@@ -102,7 +107,7 @@ export function __getMeasureLinesCountForTest(): number {
 }
 
 /**
- * Test seam: how many times `measureWidth` was called.
+ * Test seam: how many span widths were measured, including known ASCII spans.
  *
  * This is a SPAN-COUNT EQUIVALENCE guard, not cost evidence, and it must not be
  * read as one. It counts calls into the width measurer — one per token span the
@@ -300,7 +305,10 @@ function measureLines(
   const appendSegment = (
     segment: string,
     segmentStart: number,
-    { flushBeforeOversize = true }: { flushBeforeOversize?: boolean } = {},
+    { flushBeforeOversize = true, knownAscii = false }: {
+      flushBeforeOversize?: boolean
+      knownAscii?: boolean
+    } = {},
   ) => {
     if (!segment) return
 
@@ -313,7 +321,9 @@ function measureLines(
     // gate, NOT `segment.length === segmentWidth` — that equality also holds
     // for an all-astral segment (2 code units per 2-column grapheme), which
     // would then break surrogate pairs mid-character.
-    const segmentWidth = measureWidth(segment)
+    const segmentWidth = knownAscii
+      ? measureKnownAsciiWidth(segment)
+      : measureWidth(segment)
     const isAsciiSegment = lastMeasureWidthWasAscii
     if (segmentWidth > cols) {
       if (flushBeforeOversize && current > 0) emitHardWrap(segmentStart)
@@ -364,6 +374,18 @@ function measureLines(
 
     if (current + segmentWidth > cols) emitHardWrap(segmentStart)
     current += segmentWidth
+  }
+
+  // An unbroken printable ASCII token needs only one character-class scan.
+  // indexOf rejects spaces cheaply; the ASCII gate excludes every other
+  // whitespace/control character. Reuse that verdict when measuring the span
+  // rather than scanning it with both the tokenizer and width regexes.
+  if (text.indexOf(' ') === -1 && ASCII_PRINTABLE_REGEX.test(text)) {
+    const token = text.slice(0)
+    measureLinesTokenSlices += 1
+    measureLinesTokenChars += token.length
+    appendSegment(token, 0, { knownAscii: true })
+    return lines
   }
 
   // Every keystroke measures the whole value, so splitting the string up front
