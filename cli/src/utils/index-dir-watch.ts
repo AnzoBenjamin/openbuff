@@ -1,6 +1,7 @@
 import { lstatSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { Worker } from 'node:worker_threads'
+import { directoryWatchWorkerSource } from './index-dir-watch-worker'
 
 import type { Dirent } from 'node:fs'
 import type {
@@ -343,11 +344,11 @@ export function startDirectoryIndexWatch(params: {
     projectRoot,
     spawn: () =>
       new Worker(
-        new URL('./index-dir-watch-worker.ts', import.meta.url),
+        directoryWatchWorkerSource,
         // The actual fs.watch handles live in a worker thread: Bun's Linux
         // watcher can SIGILL-trap, so never call fs.watch on the main thread
         // here.
-        { workerData: { dirs, maxWatchers } },
+        { eval: true, workerData: { dirs, maxWatchers } },
       ),
     onMessage: (message) => {
       if (message.type === 'event') {
