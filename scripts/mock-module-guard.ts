@@ -56,6 +56,9 @@ export type MockModuleFinding = {
 
 const SKIP_DIRECTORIES = new Set([
   '.git',
+  // Local validation copies contain intentionally invalid string fixtures;
+  // they are not active workspace tests. Keep untracked real source scanned.
+  '.tmp',
   'node_modules',
   'dist',
   'build',

@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { dirname, resolve } from 'node:path'
+import { dirname, resolve, join } from 'node:path'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 import { analyzeTestFile, runMockModuleGuard } from '../mock-module-guard'
@@ -153,6 +155,18 @@ describe('mock-module guard', () => {
     const findings = analyzeTestFile('fr7.test.ts', src)
     expect(findings).toHaveLength(2)
     expect(findings.every((f) => f.kind === 'full-replacement')).toBe(true)
+  })
+
+  test('scans active untracked tests but not temporary validation checkout copies', () => {
+    const root = mkdtempSync(join(tmpdir(), 'openbuff-mock-guard-'))
+    try {
+      mkdirSync(join(root, '.tmp', 'ci-validation', 'scripts', '__tests__'), { recursive: true })
+      mkdirSync(join(root, 'sdk', 'src', '__tests__'), { recursive: true })
+      const bad = "mock.module('../x', () => ({ x: 1 }))"
+      writeFileSync(join(root, '.tmp', 'ci-validation', 'scripts', '__tests__', 'fixture.test.ts'), bad)
+      writeFileSync(join(root, 'sdk', 'src', '__tests__', 'active.test.ts'), bad)
+      expect(runMockModuleGuard(root).map(finding => finding.path)).toEqual(['sdk/src/__tests__/active.test.ts'])
+    } finally { rmSync(root, { recursive: true, force: true }) }
   })
 
   test('the repository itself has no findings', () => {
