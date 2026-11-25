@@ -1,3 +1,4 @@
+import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import { DEFAULT_CONTEXT_ARCHIVE_TTL_MS } from '@codebuff/common/util/context-archive-body'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 import {
@@ -36,7 +37,7 @@ export const handleRecallContext = (async (params: {
   const { previousToolCallFinished, toolCall, agentState } = params
   await previousToolCallFinished
   const input = toolCall.input
-  const now = params.clock?.now() ?? Date.now()
+  const now = (params.clock ?? realClock).now()
   const retainedArchive = agentState.compactionArchive?.filter(
     (snapshot) =>
       (snapshot.expiresAt === undefined || snapshot.expiresAt > now) &&
