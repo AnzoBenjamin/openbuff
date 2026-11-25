@@ -6,6 +6,7 @@
 - Host-selected memory mode is resolved independently per registered actor/task before execution and stays immutable for prompt-source selection. Failed or missing V2 retrieval cannot silently inject V1; retrieved evidence never grants edit or execution authority.
 - Raw `cap.v4` reads now expose short signed host-local handles backed by a bounded registry. Scope/raw-byte/CAS semantics remain unchanged; decoded clones cannot mutate stored authority and tampering refuses. Signature spellings must round-trip canonical base64url, so equivalent padding-bit aliases are refused too. Regenerate all tool mirrors together after schema/default changes.
 - Per-request `usage` events omit unavailable counts instead of inventing zero; provider retry countdowns are observational. Productive roots/children/commands/hooks have no implicit local step/time cap unless explicitly selected; finite host limits, cancellation and I/O/metadata cleanup guards still apply.
+- The append-only run journal records an `llm_replay_boundary` when a background child is re-driven on its original run ID. The classifier retires earlier unfinished model requests and continues to track unresolved tool calls.
 
 ## Memory reuse receipt contract
 

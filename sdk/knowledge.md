@@ -27,6 +27,9 @@
 
 ## Routine execution and CI controls
 
+- Resource startup and restart use the registered target's captured mode and profile for admission, including run-owned MCP variants.
+- Diagnostic coverage treats a missing executable as unavailable. If a child has started, incomplete output drainage still prevents complete coverage.
+
 - Balanced approval permits routine Git reads and project scripts. Client-origin MCP startup retains separate process approval even when the interpreter is a known routine executable; trusted project/user startup registration and exact action binding stay authoritative.
 - Containment and sensitive-read fixtures select `sandbox.mode: "project"` explicitly. A host-profile control must choose a profile distinct from the captured default, and direct terminal fixtures inherit that captured profile.
 - `sdk/src/host-execution.ts` retains the run's selected portable execution profile for repository bootstrap observations. An installed native backend uses the portable default for bootstrap; a missing required native installation is reported at target preparation before policy approval or child dispatch.
