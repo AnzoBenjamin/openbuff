@@ -1,5 +1,12 @@
 # SDK Package Knowledge
 
+## Current captured run and memory boundaries
+
+- `run({ model, outputSchema })` captures root-only per-run overrides before asynchronous setup; configured failover still applies, and later turns do not inherit either override. JSON Schema is bounded object-root draft-7 with unsupported actual references refused; final output must be freshly validated rather than reusing previous output.
+- Native local `record_decision` completion is captured before UI through private actor/action/task correlation, including supervised children. Explicit facts/decisions remain unverified until supporting evidence is checked. Confirmed primary append is required before dependent supersession/citation; cancelled terminal metadata is finalized separately from the aborted work signal. See [repository intelligence](../docs/repository-intelligence.md).
+- `strictProjectReads` is admission-selected from authoritative definitions, monotonically inherited and enforced through actor-bound guarded filesystem callbacks. Strict roots withhold raw disk skill bootstrap and unguarded index/archive/control readers; ordinary non-opt-in filesystem policy is unchanged. Linux/proc and adapter capability limitations fail closed, not via raw fallback.
+- ACP preserves text/image/embedded resources and captures file links through the server's guarded project root. Unsupported blocks and unsafe/oversized/cancelled input return typed refusal before SDK entry; remote client files must embed bytes. See [agent/tool boundaries](../docs/agents-and-tools.md).
+
 ## Memory recall and local embeddings
 
 - `sdk/src/services/memory-v2/coordinator.ts` retrieves prior project evidence across task boundaries; the active task ID remains on lifecycle events and turn context rather than restricting startup retrieval to a new task with no observations.
@@ -15,7 +22,7 @@
 
 ## Command defaults and attached job lifetime
 
-- `sdk/src/tools/run-terminal-command.ts` resolves timeouts through `resolveTerminalTimeout`: an omitted SYNC timeout is a 120 s execution-time default armed at dispatch (approval waits excluded), explicit values keep their documented meaning, and a trusted `timeoutPolicy` can cap or forbid `-1`. SYNC stdin is closed (`ignore-pipe-pipe`). A 30 s silence adds `idleOutputHint`/`idleOutputMs` without stopping the command, and cancellation keeps partial output and the spool artifact.
+- `sdk/src/tools/run-terminal-command.ts` resolves timeouts through `resolveTerminalTimeout`: omission adds no automatic SYNC local timeout; explicit values and captured host defaults/caps remain effective. A selected default SYNC execution budget starts after admission, while explicit action limits include startup/approval. SYNC stdin is closed (`ignore-pipe-pipe`). A 30 s silence adds `idleOutputHint`/`idleOutputMs` without stopping the command, and cancellation keeps partial output and the spool artifact.
 - `sdk/src/tools/attached-job-lifetime.ts` owns attached BACKGROUND jobs: it unrefs their handles, runs the cooperative `owner-shutdown` scope stop on `beforeExit` and SIGINT/SIGTERM/SIGHUP, exits with 128 + signal only when no other listener owns the signal, and SIGTERM→SIGKILLs groups synchronously on `exit`. Hooks exist only while an attached job is live. Transferred jobs are not registered. Real-process coverage: `sdk/src/__tests__/attached-job-exit.test.ts`, `terminal-sync-defaults.test.ts`.
 
 ## Routine execution and CI controls

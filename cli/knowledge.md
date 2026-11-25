@@ -1,5 +1,11 @@
 # CLI Package Knowledge
 
+## Current local execution and maintenance boundaries
+
+- Headless `run` accepts stdin or `-p`, per-run `--model`, validated `--output-schema` and private project-scoped `--continue [id]`. Continuation starts a new turn and disables the legacy interrupted-effect reader; it is not uncertain-tool replay. Provider readiness uses the TUI checker before journal admission. See [local mode](../docs/local-mode.md).
+- The shipped `knowledge-retriever`, `knowledge-reviewer` and `memory-manager` return evidence-backed proposals only. Their authenticated strict reads require the guarded Linux descriptor backend; raw index/archive/control readers and disk skill bootstrap are withheld. Ordinary unrestricted defaults are unchanged. See [agent boundaries](../docs/agents-and-tools.md#read-only-knowledge-and-memory-agents).
+- Plan artifact prefix/page/resume reads validate held no-follow regular single-link targets; command discovery/menu/help share static metadata. Interrupt pauses queued work before abort listeners settle, so resume remains explicit. Current verification and formal acceptance limits stay in the [body checkpoint](../docs/execution/body-roadmap/STATE.md).
+
 ## Render-path performance checks
 
 The ASCII layout path counts uniform hard wraps arithmetically at integral widths and retains the legacy loop for nonintegral widths. Unbroken printable ASCII tokens reuse one character-class verdict for width measurement, avoiding a second full token scan. Spaces, controls, newlines and non-ASCII content retain the general tokenizer. Its sticky token scans use RegExp.test/lastIndex instead of allocating match arrays; newline detection stays bounded to whitespace runs. Row/cursor boundaries, token slices, span width measurements and one-pass reuse remain checked against the existing reference. The text-layout cost baseline warms all paths, calibrates sample duration and rotates adjacent measurements. It reports point estimates and gates conservative paired lower bounds against the original 2x/4x ceilings. A steady 2.4x slowdown is still rejected; deterministic wrap-pass and allocation checks remain. Only the bounded benchmark cases have a 20-second test budget for heavily loaded runners. CI command processes use Node 26.13.1 from `.node-version`, while the CLI runtime remains Bun 1.4.4.
