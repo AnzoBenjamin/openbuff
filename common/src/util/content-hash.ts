@@ -253,6 +253,7 @@ export function decodeReadCapabilityToken(
     digest.toString('base64url') !== match[3] ||
     !BASE64URL_SHA256_PATTERN.test(scopeFingerprint) ||
     signature.length !== expectedSignature.length ||
+    signature.toString('base64url') !== match[5] ||
     !timingSafeEqual(signature, expectedSignature)
   ) {
     return `Invalid basedOnRead capability token: authentication failed. Re-read the target range with read_files and copy the readCapability from the fresh editAnchor.`
@@ -284,6 +285,7 @@ function decodeRawReadCapabilityToken(
     const supplied = Buffer.from(handleMatch[2]!, 'base64url')
     if (
       supplied.length !== expected.length ||
+      supplied.toString('base64url') !== handleMatch[2] ||
       !timingSafeEqual(supplied, expected)
     ) {
       return invalid
@@ -299,6 +301,7 @@ function decodeRawReadCapabilityToken(
   const supplied = Buffer.from(match[2]!, 'base64url')
   if (
     supplied.length !== expected.length ||
+    supplied.toString('base64url') !== match[2] ||
     !timingSafeEqual(supplied, expected)
   )
     return invalid

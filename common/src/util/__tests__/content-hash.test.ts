@@ -126,6 +126,19 @@ describe('read capabilities', () => {
     expect(decodeReadCapabilityToken(tampered)).toContain('malformed or unauthenticated')
   })
 
+  it('rejects noncanonical signature spellings even when base64 padding decodes to identical bytes', () => {
+    const content = 'value\n'
+    const token = encodeReadCapabilityToken({ startLine: 1, endLine: 1, hash: getContentHash(content), scope,
+      rawBasis: getRawReadBasis(captureTextDocument(content), 1, 1, 'whole') })
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'
+    const original = token.at(-1)!
+    const alias = alphabet[alphabet.indexOf(original) ^ 1]!
+    const aliased = token.slice(0, -1) + alias
+    expect(aliased).not.toBe(token)
+    expect(Buffer.from(aliased.split('.').at(-1)!, 'base64url')).toEqual(Buffer.from(token.split('.').at(-1)!, 'base64url'))
+    expect(typeof decodeReadCapabilityToken(aliased)).toBe('string')
+  })
+
   it('accepts harmless wrappers copied from a read result', () => {
     const token = encodeReadCapabilityToken({
       startLine: 1,
