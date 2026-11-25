@@ -209,7 +209,10 @@ fn refused_prepare_sequence(
     input.write_all(&packet).unwrap();
     let mut channel = Channel::new(output.as_raw_fd(), output.as_raw_fd()).unwrap();
     let mut frames = Vec::new();
-    let until = Instant::now() + Duration::from_secs(3);
+    // The setup-refusal case verifies the debug artifact twice before reaching
+    // the injected filesystem failure. Allow the native setup window (10 s)
+    // plus its bounded cleanup and report window, even on loaded CI runners.
+    let until = Instant::now() + Duration::from_secs(if setup_failure { 12 } else { 3 });
     loop {
         for bytes in channel.read_turn(FRAME_LIMIT).unwrap() {
             frames.push(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap());
@@ -220,7 +223,7 @@ fn refused_prepare_sequence(
         if Instant::now() >= until {
             child.kill().unwrap();
             child.wait().unwrap();
-            panic!("refused prepare exceeded bounded cleanup");
+            panic!("refused prepare exceeded its setup and cleanup bound");
         }
         std::thread::sleep(Duration::from_millis(5));
     }
