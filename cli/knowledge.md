@@ -1,5 +1,12 @@
 # CLI Package Knowledge
 
+## Original archive and procedure continuation
+
+- `prepareUserMessage` retains canonical transcript history instead of discarding messages above 100; `use-chat-messages.ts` and `message-list-window.tsx` independently page and virtualize presentation. The real 500-send/save/fresh-process fixture and mounted earliest-message reveal controls are under `src/utils/__tests__/b13-transcript-restart.test.ts` and `src/hooks/__tests__/use-chat-messages-retention.test.tsx`.
+- Selected missing/corrupt session restoration blocks submission before draft/attachment drain and SDK entry. `session-restore-screen.tsx` exposes Retry/Cancel; cancel keeps drafts and pauses queued work, and late aborted loads cannot overwrite the new conversation.
+- The Memory V2 SQLite schema is 7. `context-archive-original-store.ts` stores verified original text once, publishes checked snapshot references transactionally and enforces host-captured rolling 32 MiB/30-day/500-snapshot policy. Pins protect their body closure; quota/expiry cutoffs prevent old-envelope resurrection, including current-run expiry. SQLite/WAL allocation is reported separately from logical bytes; incompatible older writers refuse the schema.
+- `/memory playbooks --apply` verification preserves enabled procedure loading/gating after SQLite reopen. B14's actual gate/operator fixtures measure outcomes rather than seeding success counters; inject-only rendering does not invent firings. Local/source verification is distinct from the still-blocked formal acceptance ledger.
+
 ## Current local execution and maintenance boundaries
 
 - Headless `run` accepts stdin or `-p`, per-run `--model`, validated `--output-schema` and private project-scoped `--continue [id]`. Continuation starts a new turn and disables the legacy interrupted-effect reader; it is not uncertain-tool replay. Provider readiness uses the TUI checker before journal admission. See [local mode](../docs/local-mode.md).

@@ -1,5 +1,12 @@
 # SDK Package Knowledge
 
+## Original recall, measured feedback and precise costs
+
+- `services/context-archive-reader.ts` authenticates registered actor/task identity before querying the host-selected project store, bounds UTF-8 pages and checks returned source/hash/range. Strict project-only readers have no guarded archive contract and remain refused; edited branches can disable project-wide archive hydration/lookup. The same callbacks cross supervised transport through private lineage registration.
+- `services/memory-v2/usage-observer.ts` correlates only complete actually emitted observations and matching source/digest/range read evidence. An unrelated full read, necessary verification refresh, changed bytes or clipped/unrendered record cannot increment ignored feedback. A matching unchanged reread is efficiency telemetry, not a claim that the memory was false. Compiler query IDs are correlated separately from lifecycle query IDs while user-input/project boundaries remain checked.
+- `impl/cost-accounting.ts` retains fractional USD cents and returns unknown for malformed/incomplete counts, impossible cache totals, positive unpriced components and unsupported currency. `impl/llm.ts` computes configured token costs independently of outbound metadata stripping, preserves explicit provider zero, distinguishes subscription telemetry and emits per-request cost status/reason. Built-in price lookup, cache-write cost handling and full durable strict spending admission remain separate work.
+- Actual source-SDK/SQLite/fresh-process B13 fixtures recover 30 original 32 KiB results through bounded recall without rerunning producer tools. B14 actual-request/read fixtures distinguish unchanged, unrelated, required-refresh and changed-after-emission cases. These local proofs and scoped accounting review do not renew missing historical acceptance receipts; see the existing body checkpoint.
+
 ## Current captured run and memory boundaries
 
 - `run({ model, outputSchema })` captures root-only per-run overrides before asynchronous setup; configured failover still applies, and later turns do not inherit either override. JSON Schema is bounded object-root draft-7 with unsupported actual references refused; final output must be freshly validated rather than reusing previous output.

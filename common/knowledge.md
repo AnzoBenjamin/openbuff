@@ -1,5 +1,12 @@
 # Common Package Knowledge
 
+## Original-result, usage and procedure contracts
+
+- `types/context-archive.ts` distinguishes original/excerpt/pointer/unknown fullness and immutable recalled-text SHA-256/UTF-8 lengths from serialized message digests. `util/context-archive-body.ts` validates lossless bodies and UTF-8 byte pages (16 KiB default/64 KiB maximum); an interior-code-point cursor is an explicit error. `recall_context` supports source-run disambiguation, expected hashes and bounded byte offsets; legacy fullness is never inferred original.
+- `AgentRuntimeDeps` exposes host-bound original-body paging and archive search with registered actor/task attribution. Archive results are evidence, not read/edit/execution authority. `AgentState` emission/query receipts restrict memory usage feedback to complete records actually packed into a model request; by-tool read observations retain source/digest/range and unchanged/required-refresh/unknown classification.
+- `util/playbook-scope-glob.ts` supports finite segment wildcards, recursive `**`, bounded comma braces and character classes. Unsupported scope is explicitly degraded/excluded rather than treated global. Quality status `verified` remains enabled; retired/expired procedures do not gate, and inject-only produces no gate outcome.
+- Streaming `PrintModeUsage` carries optional fractional `costCents`, `costStatus` and `costReason`. Unknown price/counts do not become zero; numeric legacy totals are known subtotals, not proof all requests were priced. These telemetry contracts do not implement restart-durable shared spend reservations.
+
 ## Current host-selected authority boundaries
 
 - `deriveProjectOnlyReadPolicy` narrows an authenticated captured read policy without reselecting roots. Strict actor reads exclude sensitive/alias/temp/external targets even when ordinary host access is unrestricted; serialized flags and rebound ambient policy cannot widen that token.
