@@ -1,0 +1,493 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-25T16:38:22.125Z",
+  "card": "B12",
+  "status": "complete-local-implementation-formal-acceptance-blocked",
+  "implementedOracle": [
+    "Actual local record_decision handler captures own fact/decision/rationale into canonical SQLite through private actor/action/task correlation; completed metadata is separate from UI/cancellation.",
+    "Completed/failed/cancelled run state reopens in a fresh process; next task receives applicable canonical evidence without old transcript/V1 context or prior internal task ID in query.",
+    "Precommit/lost-ack terminal checkpoints reconcile unchanged event identities; repeated exact append is idempotent.",
+    "Unconfirmed primary replacement capture cannot retract old claims or publish dependent citation/verification.",
+    "Host-selected memory source is immutable per run/actor and authenticated through supervised children, independent of retrieval success; degraded V2 never activates V1.",
+    "Ranked prompt keeps complete high-scored claim/rationale before bulky excerpts under12k; applicable explicit facts/decisions/constraints remain unverified until evidence is checked.",
+    "Independent bounded terminal metadata cleanup observes cancelled status persistence and parks unknown completion honestly."
+  ],
+  "tests": {
+    "completeBehavior": {
+      "files": 6,
+      "passed": 84,
+      "assertions": 1038,
+      "failed": 0
+    },
+    "finalRuntimeCompiler": {
+      "files": 3,
+      "passed": 115,
+      "assertions": 503,
+      "failed": 0
+    },
+    "realSqlReplacementAndCoordinator": {
+      "passed": 62,
+      "assertions": 294,
+      "failed": 0
+    },
+    "rootAuthorityMatrix": {
+      "passed": 6,
+      "assertions": 51,
+      "failed": 0
+    }
+  },
+  "acceptanceBlocker": "Missing B02 prerequisite receipt and complete current-source/installed/full-clause independent acceptance sealing; no ledger promotion or prerequisite renewal.",
+  "limitations": [
+    "Focused evidence, not full SDK/platform suite.",
+    "Native observer budget/storage/teardown may leave capture unconfirmed; no invented durability.",
+    "Source byte verification does not prove every semantic interpretation.",
+    "No B13 history-card or B15 interrupted-effect replay acceptance follows."
+  ],
+  "original": {
+    "plan": {
+      "path": ".agents/sessions/body-capability-review-2026-11-05/PLAN.md",
+      "sha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241"
+    },
+    "specification": {
+      "path": ".agents/sessions/body-capability-review-2026-11-05/SPEC.md",
+      "sha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31"
+    },
+    "ledger": {
+      "path": "docs/execution/body-roadmap/ledger.json",
+      "sha256": "4d46ede9a94b0420a7541f7cca3b75f78862b07ceb2ae731b1a8adcfc66678bb"
+    },
+    "registry": {
+      "path": "docs/execution/body-roadmap/execution-plan.json",
+      "sha256": "cab9beee96514eb3c9063c6e67090fe797ad90eaffeff8a4efe1b7a447e78095"
+    },
+    "addendum": {
+      "path": "docs/execution/body-roadmap/product-audit-addendum.md",
+      "sha256": "60ba6db455647d9cc4512631bcc887f0f3e70d910790f9509e5bf36623f0191f"
+    }
+  },
+  "sourceScope": {
+    "kind": "selected-source-and-tests-not-complete-dependency-closure",
+    "files": [
+      {
+        "path": "common/src/types/contracts/agent-runtime.ts",
+        "sha256": "ddc79f4a9f7afe6f431763a519e5627cb182846d1fe6229777a0fded4a31a1d9"
+      },
+      {
+        "path": "common/src/types/contracts/client.ts",
+        "sha256": "08fc66a079222142d946ecd27f64a2b9847775dba776d1ee1a555bffdca5affd"
+      },
+      {
+        "path": "common/src/types/filesystem.ts",
+        "sha256": "8cad9c3a6817c3eb7f72ac1183096f8df0604d0e52cb30d04106542efaed2762"
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "sha256": "04f27843e44aa405f876b98fa25362b71d6619948402a8e14bae035cc5ca0474"
+      },
+      {
+        "path": "sdk/src/run-state.ts",
+        "sha256": "d581226f79107d043a244471e29b6ca8e8741d4cd2e459acaae055bd93a9e344"
+      },
+      {
+        "path": "sdk/src/impl/agent-runtime.ts",
+        "sha256": "b3a2cfc21a60d542c2d4f1130699f86b0c5f4afa6684cd736300637432d6571b"
+      },
+      {
+        "path": "packages/agent-runtime/src/run-agent-step.ts",
+        "sha256": "11090733ec5bbd6a9a7ae5a68eb42a37bb9ebce149edc3e6c1732419f2be1ae2"
+      },
+      {
+        "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+        "sha256": "38b13a6aee5865d5fe9b7f287fe445d9c4e1d4aab8f30e04471555b5dae30773"
+      },
+      {
+        "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+        "sha256": "00b1b4d14f89545ce257f8b10eeaf6f2dcd800055fce1a62a8a61d7af61b7036"
+      },
+      {
+        "path": "packages/agent-runtime/src/supervision/bridge-protocol.ts",
+        "sha256": "f3147d1a3bf753b2f46dacd9765e307ffd67b24dba872462b565b943869e3b80"
+      },
+      {
+        "path": "packages/agent-runtime/src/supervision/child-bridge-client.ts",
+        "sha256": "e8d824d192411b78661fb2ff83d70327bccef57541187fbed0fb85ff16cc3bca"
+      },
+      {
+        "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+        "sha256": "efdb97e032e60000318808fc0ab1dfa7cd1a2d97a4ee5c75cc49f6cb7bbc0859"
+      },
+      {
+        "path": "packages/agent-runtime/src/supervision/child-entry.ts",
+        "sha256": "a6529cb50e203c70dcf8fdc636d029379bae7e5f921b2768216bb0ada8576032"
+      },
+      {
+        "path": "package.json",
+        "sha256": "ef4497b667ef263fc4ca80dd58f513f93b0f7efbbc1b6d2a5a77c5bdee368ca5"
+      },
+      {
+        "path": "sdk/package.json",
+        "sha256": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e"
+      },
+      {
+        "path": "cli/package.json",
+        "sha256": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e"
+      },
+      {
+        "path": "agents/package.json",
+        "sha256": "40afe33da8f72c1027973c8e4006d3538394a770c67cb5af499701b299960ef8"
+      },
+      {
+        "path": "bun.lock",
+        "sha256": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a"
+      },
+      {
+        "path": "sdk/src/services/memory-v2/coordinator.ts",
+        "sha256": "baed29b5340b317586acfc3f29f7b2e9d4b86f08240e9c07625f37621625c53b"
+      },
+      {
+        "path": "sdk/src/services/memory-v2/finish-turn.ts",
+        "sha256": "9de8b11cb8bd4554e2ab0588991a31c195845051024cce470f640a7b93264f5f"
+      },
+      {
+        "path": "sdk/src/services/memory-v2/__tests__/finish-turn.test.ts",
+        "sha256": "81f0151dec7a7a37ff031a74016636b82d2e944369877924d7564d4dfd872ea6"
+      },
+      {
+        "path": "sdk/src/services/memory-v2/__tests__/coordinator.test.ts",
+        "sha256": "9d6c6bd434b90d6cb62015ed78784868a5db5738987406b55b15394d28389f51"
+      },
+      {
+        "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+        "sha256": "1676b4112c5ce7daa4c137e20ef0084c30444fc8b82c62ae374c48209ee47bb7"
+      },
+      {
+        "path": "cli/src/services/memory-v2/__tests__/b12-explicit-knowledge.test.ts",
+        "sha256": "d76928b194ec8468c3cdcfcdca48a987333f018201ea93abaf69e5f25cbddc21"
+      },
+      {
+        "path": "cli/src/services/memory-v2/__tests__/concept-firewall.test.ts",
+        "sha256": "01ce7b2c99dff8185639e85e87d8ee0d96894f3531cf4e553daae8156704c519"
+      },
+      {
+        "path": "packages/agent-runtime/src/util/memory-v2-context.ts",
+        "sha256": "8b5a4eda80d51eab1bf8e29ebda41a1765d7427d2114152e40d5bcbfc88df3d3"
+      },
+      {
+        "path": "packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts",
+        "sha256": "ffbfef9ef1714197bc9a04fb8d2613d40bcd0755e9086defee8e707280e64564"
+      },
+      {
+        "path": "packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts",
+        "sha256": "a1b9970aa5fc3f75d312989a186f76aede9616d6ccbc225eff774eb506c92757"
+      },
+      {
+        "path": "packages/agent-runtime/src/__tests__/memory-v2-child-authority.test.ts",
+        "sha256": "2e26d24cc27e0f9ae8c02360e8b1857ca1f5b0dbd9bd9ce0b912cc732dc37452"
+      },
+      {
+        "path": "sdk/src/__tests__/memory-v2-roundtrip.test.ts",
+        "sha256": "477340d50a8fdeff5f07e5f79c5b9865213c90a456d16a6c28fa8a38a452c1ff"
+      },
+      {
+        "path": "sdk/src/__tests__/memory-v2-authority-wire.test.ts",
+        "sha256": "1af01184eb55d165e4b5eb704f51c54027741a8a1c51975a6eabadb443e87221"
+      },
+      {
+        "path": "sdk/src/__tests__/memory-v2-replacement-capture.test.ts",
+        "sha256": "095fad7686f9bc307918137450d2b06b31958dd350646f7940a66963a1421802"
+      },
+      {
+        "path": "sdk/src/__tests__/memory-v2-child-authority.test.ts",
+        "sha256": "d7a5636f543249d0e9989e2abc43a0bacbf14d48b8183f8f8fa80b2a9aaad889"
+      },
+      {
+        "path": "sdk/src/__tests__/native-tool-observation.test.ts",
+        "sha256": "71ccba1729a7197e2bbe66a733c0399a0facd2b3e838b7a4d542520a1a976a00"
+      },
+      {
+        "path": "sdk/src/__tests__/supervised-native-tool-observation.test.ts",
+        "sha256": "81c1f81818d1978a0790218458b793a808cf15bb9e545e5813a52e6d49f9dd06"
+      },
+      {
+        "path": "sdk/src/__tests__/fixtures/b12-memory-agents.ts",
+        "sha256": "1ec39f21e4813f89d0d634d89d5bbad9473ef26c1bb690183227f9e383cd0b92"
+      },
+      {
+        "path": "sdk/src/__tests__/fixtures/b12-memory-reader.ts",
+        "sha256": "781346c33987310caaa0e80b412ae1a3fa1a29049010c74a43a50a7eb086ad04"
+      },
+      {
+        "path": "docs/repository-intelligence.md",
+        "sha256": "555fa181c0b598f2ca53da834c7bd3a97637d994c55bc528c78f5345268efe21"
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/typecheck-recorded-final.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/agents-all-final-r2.log",
+      "sha256": "8d727faa037d88f8bb5f04d37ecaaf0a407c70d3055cc6df7c51d41e39d7a862"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/runtime-regression-final.log",
+      "sha256": "2e5e3fe64b72d3f8603fe179b9ceaa7e33d31d1e978880859eb2fc3be5e3499b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/cli-bounded.log",
+      "sha256": "93ca614bccf6e88ee697840534b2d216da55a0df12c7bd75343514b21b38bc37"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/cli-result.json",
+      "sha256": "8aa4d6abe4774c401f33b746346aa6cb91c52f752f1b89c334151ef8e3c0a303"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/cli-schedule.json",
+      "sha256": "b3c22cc056594c838d952107baba4dc9d95bfcbadffb6002eadf1fa30b73e4f8"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/cli-census-driver-post-pin.log",
+      "sha256": "5acfd04a2db5f8bbc372ea1f3cf01d7f5305126f1d007cbb664cbf49baa3ca8b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/cli-build-final-r2.log",
+      "sha256": "8eaf8ae75a91c6874c2ed8ec61636b2874cc8fd1639dc131e7267ce3fbd7ddbd"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/artifacts-final-before.txt",
+      "sha256": "c346baaad45c777506da8c3ac3bdebfb4afa8842ee02be38fb2b6fab2e45cd5a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/artifacts-final-after.txt",
+      "sha256": "c346baaad45c777506da8c3ac3bdebfb4afa8842ee02be38fb2b6fab2e45cd5a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/node-dist-consumers-final.log",
+      "sha256": "be6dbda803419bb4d2f6574b3940293e79330e7d13783188b2e34e6c9d3d69b7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/readme-esm-final.log",
+      "sha256": "89c4de291b97252b89cb7331aca61311e08fc009cda02d6bc5c9bfc92f50cd63"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/doc-defaults-postbuild.log",
+      "sha256": "4b5c51606e56d0bb4bf32da895db56fda8d5c542c0eee49fbcbcf7acf5cd346d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/format-recorded-final.log",
+      "sha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/whitespace-recorded-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/ledger-validator-final.json",
+      "sha256": "914231c451989b225f3b8836c39008558959b29773ef41f50daa793bc80bba77"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/concrete-evidence-final.log",
+      "sha256": "0f7d043fcbc6815538b254ca7cd66d1603b7520efd22cf1fecf38f49c20e58af"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/b12-behavior-post-pin.log",
+      "sha256": "68fa4f6c1a7c198e2d9aead2be2d8118c75c86effad9e3bbf490c8d978b3a927"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/roundtrip-initial.log",
+      "sha256": "f5bf5e8595db20a7457d875e9b4339665d27b0c4c834c03be2f4c88f51577107"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/roundtrip-all-r1.log",
+      "sha256": "4c1cc835123b0fea4043dadf2f422c9e81c40a26f18a5afce6bb9f88c1c49f6e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/context-red.log",
+      "sha256": "896450d7e93f0e50762ce478592ad4b307195ef6ee488bb169378ec2f0331f68"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/replacement-red.log",
+      "sha256": "01093c9c4860d5a4bbdb2ef91d31710b50a84544a5249b392bb427f5981a1817"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/replacement-final.log",
+      "sha256": "ac2ed242546ce34d6af07891cdff91921aa70876b320d731761778062295ff6d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/authority-wire-final-r2.log",
+      "sha256": "2b8e6137204f84a8f9caffe6cd807e36ac39cf3a03917446c9c070fdc7a20016"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/live-source-mutation-red.log",
+      "sha256": "43a4aaa3ae749005b243f52902711560267dfb3b8e93883d86ca64be807d92be"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/live-source-mutation-final-r3.log",
+      "sha256": "e9974ef92d04f79a21474e044bea66f9d8ab0849687340a222b4b3377f1b14a8"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/lifecycle-review.json",
+      "sha256": "6d55466e7c7158990f7cc7e68679663bfa61aef34907b26ef059a03775b801b4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/lifecycle-review-final.json",
+      "sha256": "a2e78c9dd8c176f6005c54c8bdca937b26dcf2ce529c006ccb0cb873862c7031"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/captures/retrieval-final-r2.log",
+      "sha256": "3e0280178cfd77a88589e032c902e009c9357b2980f0c281e82a2b22bead2a5e"
+    }
+  ],
+  "fixtureEvidence": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/fixtures/fresh-process-9543c7c6-28e9-42c4-a846-fdfbdfa025f3.json",
+      "sha256": "9a52e71842826d3e4705c5e84721dce3571525d3d62c69433eb8c38ce414dd34"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/fixtures/fresh-process-4e34d8d7-b715-4ed0-9034-8061a276fe85.json",
+      "sha256": "e402e8fec5afa64359cbdefd67cb4a0216cf7963a2a770eb56af5a4103c98335"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/fixtures/fresh-process-ab926e0c-040a-4809-a4ef-8eb63615e17f.json",
+      "sha256": "53686389d641b46adf53c4b89530cb810dea4f4283032704c6f81eef91145849"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/fixtures/fresh-process-98cc1ce9-c05c-4911-b36d-11d9fcd07d7b.json",
+      "sha256": "eb64fdb14be6cd757c7e295c2c0447456229589121ddcd1c45d951ba30432118"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/fixtures/fresh-process-d555990a-a228-4a12-8bcc-b655ab1f9ba3.json",
+      "sha256": "5a53f58f9e0279d32a687a7db30741cba63535a75931802ed0e22ba29acf1718"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/fixtures/fresh-process-436a515f-9e00-4a35-8aa5-4599889ab06c.json",
+      "sha256": "2ebfb647b724c37b9a988cde74315a44cfb6453a3809c2f62eb67cb76220d0e0"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/fixtures/fresh-process-fc8f2ca7-f434-469b-87e8-71ea79283286.json",
+      "sha256": "b855967348f8cd6c320ce90bd12a2a44e20b719fa02249c771e72653d37d1957"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/fixtures/fresh-process-27b014e4-67af-4e16-8e0f-bb873bb845c1.json",
+      "sha256": "75fc406c6a8c5ff8a84699f6b70684e1cc574e1597d13c6d6a721483232dae4e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/fixtures/fresh-process-51e8e34e-c754-4e21-8e8e-5d34e933810f.json",
+      "sha256": "6926cc23024f349e06a29ab4d66b65b91b6f17058dc7a812e5d0fe4592f5d928"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/B12/continuation-20261125/fixtures/fresh-process-b04a74b9-6d4c-4845-a81f-209dd780a976.json",
+      "sha256": "ca128fc527ea85f6fd896a03447cd1eb91639d2026c63fb9b15c1cf882208414"
+    }
+  ],
+  "cumulativeValidation": {
+    "allWorkspaceTypechecks": {
+      "passed": true,
+      "workspaces": 11,
+      "log": "typecheck-recorded-final.log"
+    },
+    "agents": {
+      "passed": 1390,
+      "skipped": 5,
+      "failed": 0,
+      "files": 58,
+      "assertions": 10161
+    },
+    "cli": {
+      "discoveredFiles": 314,
+      "selectedFiles": 313,
+      "excluded": [
+        "src/__tests__/utils/env.test.ts"
+      ],
+      "passed": 4895,
+      "skipped": 196,
+      "failed": 0,
+      "assertions": 22318,
+      "code": 0,
+      "timedOut": false,
+      "homeUnchanged": true,
+      "limitation": "Canonical discovery/order/preload/isolation minus one HOME-reassigning suite. Not exact CI; skips confer no execution credit."
+    },
+    "runtimePreFinalSourcePin": {
+      "passed": 340,
+      "failed": 0,
+      "assertions": 1810,
+      "files": 6
+    },
+    "finalSourcePinRuntime": {
+      "passed": 115,
+      "failed": 0,
+      "assertions": 503,
+      "files": 3
+    },
+    "docsDefaults": true,
+    "scopedFormatting": true,
+    "whitespace": true,
+    "fullSdkSuite": "Not run; focused source/consumer schedules only."
+  },
+  "artifacts": [
+    {
+      "path": "cli/bin/openbuff",
+      "sha256": "4010cb7a63a7c52786bdf9f1de0e721932107c52d9d67082372a5807e5528d9c",
+      "retention": "Local ignored build artifact, not public release/install proof."
+    },
+    {
+      "path": ".tmp/memory-management-agents/copied-cli-final/bin/openbuff",
+      "sha256": "4010cb7a63a7c52786bdf9f1de0e721932107c52d9d67082372a5807e5528d9c",
+      "retention": "Local ignored build artifact, not public release/install proof."
+    },
+    {
+      "path": "sdk/dist/index.mjs",
+      "sha256": "7384ac985042044bde69f25f527d7bbbb14d64f6fe66c2d4c8b19056631ea35a",
+      "retention": "Local ignored build artifact, not public release/install proof."
+    },
+    {
+      "path": "sdk/dist/index.cjs",
+      "sha256": "939f59e02d069c72393029e5889c2fdfe0834794cbbb7ded0654bc2f0b12af85",
+      "retention": "Local ignored build artifact, not public release/install proof."
+    },
+    {
+      "path": "sdk/dist/index.d.ts",
+      "sha256": "f2c8a77e75fb604c1b8411cbb810db4be57513b87e11f6f841fa3e322dd843d4",
+      "retention": "Local ignored build artifact, not public release/install proof."
+    }
+  ],
+  "historicalAcceptance": {
+    "status": "unchanged",
+    "accepted": 13,
+    "nodes": 39,
+    "validatorExitCode": 1,
+    "missingReceiptCount": 12,
+    "errors": [
+      "B01 acceptance receipt: missing docs/execution/body-roadmap/evidence/B01/accepted/20261111T235810377611Z-acceptance.json",
+      "B02 acceptance receipt: missing docs/execution/body-roadmap/evidence/B02/accepted/20261111T235810377611Z-acceptance.json",
+      "B03 acceptance receipt: missing docs/execution/body-roadmap/evidence/B03/accepted/20261111T235810377611Z-acceptance.json",
+      "B04 acceptance receipt: missing docs/execution/body-roadmap/evidence/B04/accepted/20261111T235810377611Z-acceptance.json",
+      "B05 acceptance receipt: missing docs/execution/body-roadmap/evidence/B05/accepted/20261111T235810377611Z-acceptance.json",
+      "B08 acceptance receipt: missing docs/execution/body-roadmap/evidence/B08/accepted/20261111T235810377611Z-acceptance.json",
+      "B18 acceptance receipt: missing docs/execution/body-roadmap/evidence/B18/accepted/20261111T235810377611Z-acceptance.json",
+      "B19 acceptance receipt: missing docs/execution/body-roadmap/evidence/B19/accepted/20261111T235810377611Z-acceptance.json",
+      "B20 acceptance receipt: missing docs/execution/body-roadmap/evidence/B20/accepted/20261111T235810377611Z-acceptance.json",
+      "B28 acceptance receipt: missing docs/execution/body-roadmap/evidence/B28/accepted/20261111T235810377611Z-acceptance.json",
+      "B30 acceptance receipt: missing docs/execution/body-roadmap/evidence/B30/accepted/20261111T235810377611Z-acceptance.json",
+      "B36 acceptance receipt: missing docs/execution/body-roadmap/evidence/B36/accepted/20261111T235810377611Z-acceptance.json"
+    ],
+    "limitation": "This verification packet does not replace missing prerequisite receipts, independently seal complete source closure, or promote roadmap acceptance."
+  },
+  "preserved": [
+    "Inherited HOME",
+    "User-installed binary and user configuration",
+    "Existing mixed worktree changes",
+    "Historical ledger/registry and frozen plan/spec"
+  ],
+  "notClaimed": [
+    "Public release/publish/registry install",
+    "Live-provider quality evaluations",
+    "OS sandbox or immutable same-inode snapshot guarantee",
+    "Cross-platform strict-read parity",
+    "Historical receipt recovery/renewal",
+    "Commit or push"
+  ]
+}

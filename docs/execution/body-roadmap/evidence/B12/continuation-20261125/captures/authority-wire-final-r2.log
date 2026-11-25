@@ -1,0 +1,15 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-authority-wire.test.ts:
+Using environment: dev
+(pass) B12 actual provider memory source and authority matrix > v2-unavailable metadata agrees with the actual first model messages [209.43ms]
+(pass) B12 actual provider memory source and authority matrix > v2-throws metadata agrees with the actual first model messages [124.11ms]
+(pass) B12 actual provider memory source and authority matrix > v2-invalid metadata agrees with the actual first model messages [74.22ms]
+(pass) B12 actual provider memory source and authority matrix > v2-empty metadata agrees with the actual first model messages [105.06ms]
+(pass) B12 actual provider memory source and authority matrix > v1-present metadata agrees with the actual first model messages [58.78ms]
+(pass) B12 actual provider memory source and authority matrix > v1-empty metadata agrees with the actual first model messages [62.01ms]
+
+ 6 pass
+ 0 fail
+ 51 expect() calls
+Ran 6 tests across 1 file. [1.71s]

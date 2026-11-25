@@ -1,0 +1,64 @@
+bun test v1.4.4 (38afee6c8)
+
+src/__tests__/run-continue-sdk.test.ts:
+Using environment: dev
+(pass) persisted headless conversation starts a new SDK turn without old journal replay admission [101.79ms]
+
+src/__tests__/run-continue.test.ts:
+Using environment: dev
+(pass) headless continuation admission > parser supports the last session and an explicit ID independently from prompt/model [4.22ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [0.83ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [0.60ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [0.17ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [0.11ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [0.18ms]
+--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.
+(pass) headless continuation admission > parser rejects unsafe explicit IDs [0.19ms]
+(pass) headless continuation admission > continues the saved agent with previousRun but never enables interrupted effect replay [0.84ms]
+(pass) headless continuation admission > explicit agent and model apply only to the new turn [0.20ms]
+(pass) headless continuation admission > missing or corrupt continuation fails before journal and provider dispatch, with no fresh-session fallback [0.25ms]
+(pass) headless continuation admission > the shared readiness message is preserved, with no journal or fresh-session creation [0.14ms]
+(pass) headless continuation admission > a cancelled or failed run is saved before its lease is released [0.35ms]
+(pass) headless continuation admission > continuation persistence failure is visible rather than a successful lost update [0.21ms]
+(pass) headless continuation admission > a throwing client releases only its acquired session [0.15ms]
+
+src/__tests__/run-command.test.ts:
+Using environment: dev
+(pass) runHeadlessCommand > stdin prompt admission > delivers exact split UTF-8 input before opening the journal and client [4.10ms]
+(pass) runHeadlessCommand > stdin prompt admission > does not consume piped bytes when an explicit prompt exists [0.49ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects empty stdin before opening state or dispatching [0.98ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects whitespace stdin before opening state or dispatching [0.40ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects invalid UTF-8 stdin before opening state or dispatching [0.24ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects too large stdin before opening state or dispatching [0.22ms]
+(pass) runHeadlessCommand > stdin prompt admission > rejects interactive stdin before opening state or dispatching [0.04ms]
+(pass) runHeadlessCommand > stdin prompt admission > interrupts stalled stdin through timeout without a run [38.03ms]
+(pass) runHeadlessCommand > stdin prompt admission > interrupts stalled stdin through caller without a run [0.28ms]
+(pass) runHeadlessCommand > resolved failed, exhausted and rejected outcomes fail without an error event [0.44ms]
+(pass) runHeadlessCommand > an accepted recovery succeeds while its failed action stays recorded [0.12ms]
+(pass) runHeadlessCommand > short JSON events flush before a deferred run completes [80.51ms]
+(pass) runHeadlessCommand > short human text flushes before a deferred run completes [81.02ms]
+(pass) runHeadlessCommand > --json emits one ndjson line per event and returns 0 [2.00ms]
+(pass) runHeadlessCommand > batches stdout writes without breaking ndjson line integrity [1.10ms]
+(pass) runHeadlessCommand > non-json writes only text event content to stdout [0.67ms]
+(pass) runHeadlessCommand > a throwing client returns 1 and writes an error ndjson line (json) [0.74ms]
+(pass) runHeadlessCommand > a throwing client returns 1 and writes the error to stderr (non-json) [0.59ms]
+(pass) runHeadlessCommand > threads prompt and agentId into client.run (defaulting to the current CLI root) [0.96ms]
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > the opened journal is threaded as BOTH journalWriter and journalReader, then closed [0.33ms]
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > a fail-open opener (undefined) runs WITHOUT journaling and never throws [0.14ms]
+(pass) runHeadlessCommand > P2-T7 live run journal wiring > an opener that throws is contained: fail-open, never crash the run [0.10ms]
+(pass) runHeadlessCommand > timeout (--timeout) > aborts a hung run after the deadline: exit 1 with a clean ndjson error event [50.80ms]
+(pass) runHeadlessCommand > timeout (--timeout) > non-json mode reports the timeout on stderr only [50.64ms]
+(pass) runHeadlessCommand > timeout (--timeout) > a run finishing before the deadline still succeeds [1.26ms]
+(pass) runHeadlessCommand > timeout (--timeout) > delayed client setup retains the original numeric deadline [30.80ms]
+(pass) runHeadlessCommand > timeout (--timeout) > the run receives a signal when a timeout is set (none before this change) [51.84ms]
+(pass) runHeadlessCommand > timeout (--timeout) > an injected deps.signal still aborts the run when a timeout is also set [14.90ms]
+
+ 43 pass
+ 0 fail
+ 176 expect() calls
+Ran 43 tests across 3 files. [2.34s]

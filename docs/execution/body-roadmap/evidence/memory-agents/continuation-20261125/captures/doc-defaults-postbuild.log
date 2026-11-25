@@ -1,0 +1,2 @@
+$ bun scripts/check-doc-defaults.ts
+Documentation defaults match code: hooks -1s/3600s; read windows 400/5; context 40/2; blocks 10 MiB; whole-file 10 MiB.

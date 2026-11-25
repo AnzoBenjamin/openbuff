@@ -1,0 +1,17 @@
+Using environment: dev
+Buffbench nightly: agent base2, 62 task(s) from eval-codebuff.json
+{
+  "dryRun": true,
+  "subset": "nightly",
+  "agent": "base2",
+  "evalFile": "eval-codebuff.json",
+  "taskIds": "all",
+  "taskCount": 62,
+  "staticPromptTokens": {
+    "total": 24798,
+    "promptTokens": 13795,
+    "toolTokens": 11003,
+    "toolCount": 23
+  },
+  "resultsOut": "/home/ben/Code/CLI/openbuff/evals/buffbench/results/nightly/FINAL_RESULTS.json"
+}

@@ -1,0 +1,236 @@
+[
+  {
+    "id": "@openbuff/sdk@0.11.0",
+    "name": "@openbuff/sdk",
+    "version": "0.11.0",
+    "size": 25623951,
+    "unpackedSize": 102559776,
+    "shasum": "6b0e2c6230d3e941365daea0480f3050e964e757",
+    "integrity": "sha512-sfR+XyFIlzPGWKmSOv9oWQuAN+owVEBRmiBYL4/FFXRKvW+yCMc29AO08YtlqAIgklv43mxprkLZQs52R47qXQ==",
+    "filename": "openbuff-sdk-0.11.0.tgz",
+    "files": [
+      {
+        "path": "CHANGELOG.md",
+        "size": 36991,
+        "mode": 420
+      },
+      {
+        "path": "README.md",
+        "size": 23609,
+        "mode": 420
+      },
+      {
+        "path": "dist/index.cjs",
+        "size": 7190410,
+        "mode": 420
+      },
+      {
+        "path": "dist/index.cjs.map",
+        "size": 15506594,
+        "mode": 420
+      },
+      {
+        "path": "dist/index.d.ts",
+        "size": 2077444,
+        "mode": 420
+      },
+      {
+        "path": "dist/index.mjs",
+        "size": 7306151,
+        "mode": 420
+      },
+      {
+        "path": "dist/index.mjs.map",
+        "size": 16213692,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-c_sharp-tags.scm",
+        "size": 441,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-c-tags.scm",
+        "size": 485,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-cpp-tags.scm",
+        "size": 858,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-gdscript-tags.scm",
+        "size": 875,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-go-tags.scm",
+        "size": 1226,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-java-tags.scm",
+        "size": 419,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-javascript-tags.scm",
+        "size": 1102,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-kotlin-tags.scm",
+        "size": 414,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-php-tags.scm",
+        "size": 309,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-python-tags.scm",
+        "size": 635,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-ruby-tags.scm",
+        "size": 868,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-rust-tags.scm",
+        "size": 1541,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-swift-tags.scm",
+        "size": 445,
+        "mode": 420
+      },
+      {
+        "path": "dist/tree-sitter-queries/tree-sitter-typescript-tags.scm",
+        "size": 1261,
+        "mode": 420
+      },
+      {
+        "path": "dist/vendor/ripgrep/arm64-darwin/rg",
+        "size": 4375216,
+        "mode": 493
+      },
+      {
+        "path": "dist/vendor/ripgrep/arm64-linux/rg",
+        "size": 5233424,
+        "mode": 493
+      },
+      {
+        "path": "dist/vendor/ripgrep/x64-darwin/rg",
+        "size": 5162504,
+        "mode": 493
+      },
+      {
+        "path": "dist/vendor/ripgrep/x64-linux/rg",
+        "size": 6597984,
+        "mode": 493
+      },
+      {
+        "path": "dist/vendor/ripgrep/x64-win32/rg.exe",
+        "size": 5407744,
+        "mode": 420
+      },
+      {
+        "path": "dist/wasm/tree-sitter-c-sharp.wasm",
+        "size": 3978594,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-c.wasm",
+        "size": 792959,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-cpp.wasm",
+        "size": 4662978,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-gdscript.wasm",
+        "size": 289796,
+        "mode": 384
+      },
+      {
+        "path": "dist/wasm/tree-sitter-go.wasm",
+        "size": 235957,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-java.wasm",
+        "size": 430239,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-javascript.wasm",
+        "size": 647334,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-kotlin.wasm",
+        "size": 4052705,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-manifest.json",
+        "size": 1605,
+        "mode": 420
+      },
+      {
+        "path": "dist/wasm/tree-sitter-php.wasm",
+        "size": 812594,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-python.wasm",
+        "size": 476105,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-ruby.wasm",
+        "size": 2106447,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-rust.wasm",
+        "size": 818756,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-swift.wasm",
+        "size": 3147876,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-tsx.wasm",
+        "size": 2411272,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter-typescript.wasm",
+        "size": 2342690,
+        "mode": 493
+      },
+      {
+        "path": "dist/wasm/tree-sitter.wasm",
+        "size": 205488,
+        "mode": 493
+      },
+      {
+        "path": "package.json",
+        "size": 3739,
+        "mode": 420
+      }
+    ],
+    "entryCount": 44,
+    "bundled": []
+  }
+]

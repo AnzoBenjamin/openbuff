@@ -1,0 +1,50 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/packages/agent-runtime/src/__tests__/memory-v2-child-authority.test.ts:
+(pass) host-selected child memory authority before execution > disabled cannot reactivate inherited V1 or restored V2 content [22.48ms]
+(pass) host-selected child memory authority before execution > missing cannot reactivate inherited V1 or restored V2 content [3.09ms]
+(pass) host-selected child memory authority before execution > throws cannot reactivate inherited V1 or restored V2 content [2.44ms]
+(pass) host-selected child memory authority before execution > invalid cannot reactivate inherited V1 or restored V2 content [2.20ms]
+(pass) host-selected child memory authority before execution > empty cannot reactivate inherited V1 or restored V2 content [3.37ms]
+(pass) host-selected child memory authority before execution > only a schema-valid correlated host knowledge packet supplies V2 content [3.33ms]
+(pass) host-selected child memory authority before execution > rejects actor substitution without changing source selection [1.94ms]
+(pass) host-selected child memory authority before execution > rejects task substitution without changing source selection [1.86ms]
+(pass) host-selected child memory authority before execution > rejects knowledge-task substitution without changing source selection [2.11ms]
+(pass) host-selected child memory authority before execution > rejects schema substitution without changing source selection [1.65ms]
+(pass) host-selected child memory authority before execution > json-v1 overrides restored/template authority and does not promote supplied knowledge [3.07ms]
+(pass) host-selected child memory authority before execution > shadow-v2 overrides restored/template authority and does not promote supplied knowledge [1.81ms]
+171 |         }
+172 |         yield 'STEP'
+173 |       }
+174 |       await loopAgentSteps(f.params)
+175 |       const text = JSON.stringify(f.observed())
+176 |       expect(text.includes(sentinel)).toBe(mode === 'json-v1')
+                                            ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/__tests__/memory-v2-child-authority.test.ts:176:39)
+(fail) host-selected child memory authority before execution > a live generator cannot override captured sqlite-v2-opt-in source selection [2.06ms]
+171 |         }
+172 |         yield 'STEP'
+173 |       }
+174 |       await loopAgentSteps(f.params)
+175 |       const text = JSON.stringify(f.observed())
+176 |       expect(text.includes(sentinel)).toBe(mode === 'json-v1')
+                                            ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/__tests__/memory-v2-child-authority.test.ts:176:39)
+(fail) host-selected child memory authority before execution > a live generator cannot override captured json-v1 source selection [1.46ms]
+(pass) host-selected child memory authority before execution > an absent host resolver retains standalone legacy V1 behavior [1.81ms]
+(pass) host-selected child memory authority before execution > an unresolved host selection cannot silently execute using restored or legacy authority [3.51ms]
+
+ 14 pass
+ 2 fail
+ 107 expect() calls
+Ran 16 tests across 1 file. [691.00ms]

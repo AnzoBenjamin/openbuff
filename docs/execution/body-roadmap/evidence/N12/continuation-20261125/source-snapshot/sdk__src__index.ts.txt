@@ -1,0 +1,455 @@
+export type * from '@codebuff/common/types/json'
+export type * from '@codebuff/common/types/messages/codebuff-message'
+export type * from '@codebuff/common/types/messages/data-content'
+export type * from '@codebuff/common/types/print-mode'
+export type * from '@codebuff/common/types/run-outcome'
+export type {
+  TextPart,
+  ImagePart,
+} from '@codebuff/common/types/messages/content-part'
+// `collectWorkspaceMoves` is published beside `run` so hosts that reconcile
+// persisted task-memory evidence OUTSIDE a run (the CLI `/memory` command)
+// can read the same journal-recorded moves hydration uses; without them,
+// moved-file evidence reconciles stale and prune deletes it.
+export { captureRunDeadline, collectWorkspaceMoves, run } from './run'
+export {
+  createDirectHostExecution,
+  createHostExecutionServices,
+} from './host-execution'
+export type {
+  ExecutionScope,
+  HostExecutionOptions,
+  RunHostServices,
+} from './host-execution'
+export { createConfiguredDirectHostExecution } from './services/direct-host-execution'
+export type { TerminalTimeoutPolicy, TerminalTimeoutResolution } from './services/terminal-timeout-policy'
+export type {
+  ConfiguredDirectHostExecution,
+  ConfiguredDirectHostExecutionOptions,
+  ConfiguredDirectHostExecutionResult,
+} from './services/direct-host-execution'
+export {
+  verifyNativeInstallation,
+  calibrateNativeClock,
+} from './services/native-exec'
+export type {
+  NativeArtifactIdentity,
+  NativeToolIdentity,
+  NativeClockMapping,
+  NativeCalibrationSetup,
+  VerifiedNativeInstallation,
+} from './services/native-exec'
+export type { NativeHostExecution } from './services/native-host-execution'
+export {
+  captureAmbientHostInputs,
+  loadHostConfigSnapshot,
+  nodeConfigReadFs,
+} from './host-config'
+export type {
+  CapturedCredentialPort,
+  DeepReadonly,
+  HostConfigurationInputs,
+  HostConfigSnapshot,
+  ProviderHostContext,
+  SnapshotResult,
+} from './host-config'
+export { captureRootDeadline } from '@codebuff/common/util/execution-context'
+export type * from '@codebuff/common/types/contracts/execution-context'
+export type { CodebuffSpawn } from '@codebuff/common/types/spawn'
+export type { JobOwner } from '@codebuff/common/util/job-registry'
+export type { HostReadPolicy } from '@codebuff/common/util/project-path-containment'
+export { getFilesStructured } from './tools/read-files'
+export { changeFile, changeFiles } from './tools/change-file'
+// The `changeFiles` `intentLog` parameter above is typed with
+// TransactionIntentLog, so the type closure and its factory/recovery helpers
+// are published beside it: external consumers must be able to name the
+// parameter type (and construct/recover a log) without reaching into
+// unpublished internals.
+export {
+  createTransactionIntentLog,
+  createTransactionIntentLogForWorkspace,
+  recoverAndRevertInterruptedTransactions,
+  revertPathToPreImage,
+  transactionIntentLogFileName,
+} from './tools/transaction-intent-log'
+export type {
+  BeginTransactionParams,
+  IntentOutcome,
+  RecoveredInterruptedTransaction,
+  RecoveryOutcome,
+  RevertTransactionOutcome,
+  TransactionIntentEntry,
+  TransactionIntentLog,
+} from './tools/transaction-intent-log'
+export { replaceRange } from './tools/replace-range'
+export { readImages } from './tools/read-image'
+export { edit3dAsset, inspect3dAsset, render3dPreview } from './tools/3d-assets'
+export { createNodeFileSystem } from './tools/node-filesystem'
+export type { NodeFileSystemOptions } from './tools/node-filesystem'
+export {
+  diagnosticParsers,
+  parseLanguageDiagnostics,
+  structuredDiagnosticParsers,
+} from './tools/language-diagnostics'
+export type {
+  DiagnosticParser,
+  DiagnosticParserInput,
+  LanguageDiagnostic,
+  LanguageDiagnosticPosition,
+  LanguageDiagnosticRange,
+  LanguageDiagnosticRelatedInfo,
+  LanguageDiagnosticSeverity,
+  LanguageDiagnosticTextEdit,
+  LanguageDiagnosticTextEditApplicability,
+} from './tools/language-diagnostics'
+export {
+  FilesystemAuthority,
+  allowAllFilesystemPolicy,
+  composeFilesystemPolicies,
+  detectFilesystemCapabilities,
+  expectedStateMatches,
+  hashFileContent,
+} from './tools/filesystem-authority'
+// Capability detection for the optional `streamDirectory` capability. Kept with
+// the shared bounded directory read that consumes the capability so the
+// published predicate and the listing behaviour cannot diverge; presence of
+// the member alone is not sufficient, since the `readdirView` pairing is part
+// of the contract.
+//
+// `MAX_LIST_DIRECTORY_ENTRIES` is published alongside it because the bounded
+// listing no longer reports the observed entry count: it is the supported way
+// for consumers to obtain the cap instead of parsing it out of the
+// `list_directory` error message.
+export { MAX_LIST_DIRECTORY_ENTRIES } from './tools/list-directory'
+export { supportsStreamDirectory } from './tools/bounded-readdir'
+export type { FileFilter, FileFilterResult } from './tools/read-files'
+export type {
+  FilesystemError,
+  ReadFilesItemV1,
+  ReadFilesResultV1,
+} from '@codebuff/common/tools/results/filesystem'
+export type {
+  OpenbuffClientOptions,
+  CodebuffClientOptions,
+  RunOptions,
+  MessageContent,
+  TextContent,
+  ImageContent,
+  FilesystemMutationEvent,
+} from './run'
+export { buildUserMessageContent } from '@codebuff/agent-runtime/util/messages'
+// Agent type exports
+export type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
+export type { ToolName } from '@codebuff/common/tools/constants'
+export {
+  codebuffFsToNodePromises,
+  inspectPersistedTaskMemoryV1,
+  loadPersistedTaskMemory,
+  pruneStaleTaskMemoryEvidence,
+  reconcileTaskMemoryEvidence,
+  saveMergedTaskMemory,
+} from './services/task-memory-store'
+export type {
+  TaskMemoryPruneOutcome,
+  TaskMemoryStoreFs,
+  TaskMemoryV1Inspection,
+  WorkspaceMoveRecord,
+} from './services/task-memory-store'
+// The persisted-record type closure the task-memory API above is typed with.
+// Published so external consumers can name the parameter/return types of
+// loadPersistedTaskMemory, reconcileTaskMemoryEvidence, and
+// saveMergedTaskMemory instead of reaching into @codebuff/common internals.
+export type {
+  TaskMemoryDraftV1,
+  TaskMemoryEvidenceV1,
+  TaskMemoryV1,
+} from '@codebuff/common/types/task-memory'
+
+// Additive Memory V2 contracts. V1 remains exported above for compatibility.
+export * from '@codebuff/common/types/memory-v2'
+export {
+  classifyMemoryArtifactPath,
+  isMemoryArtifactPersistenceAllowed,
+  normalizeMemoryArtifactPath,
+} from '@codebuff/common/util/memory-artifact-policy'
+export type {
+  MemoryArtifactPathKind,
+  MemoryArtifactPolicyDecision,
+  MemoryGeneratedArtifactProvenance,
+  MemoryGeneratedDisposition,
+} from '@codebuff/common/util/memory-artifact-policy'
+export type * from './services/memory-v2/types'
+export { MemoryV2Coordinator } from './services/memory-v2/coordinator'
+export {
+  auditTaskMemoryV1Migration,
+  getV1MigrationIdentity,
+  importTaskMemoryV1,
+} from './services/memory-v2/v1-migration'
+export type {
+  V1MigrationAuditOutcome,
+  V1MigrationAuditReader,
+  V1MigrationOutcome,
+  V1MigrationSourceItemCounts,
+  V1MigrationWarningCode,
+} from './services/memory-v2/v1-migration'
+export { MemoryV2OperatorService } from './services/memory-v2/operator-service'
+export {
+  createMemoryEventDraft,
+  deriveMemoryEventId,
+  deriveMemorySessionId,
+  deriveObservationId,
+  deriveQueryId,
+  deriveTaskId,
+} from './services/memory-v2/event-factory'
+
+export type {
+  ClientToolCall,
+  ClientToolName,
+  CodebuffToolOutput,
+} from '@codebuff/common/tools/list'
+export * from './client'
+// P1-T3 backend seam + ACP-remote backend.
+export type { ClientBackend } from './client/backend'
+export { InProcessBackend, resolveClientBackend } from './client/backend'
+export {
+  AcpRemoteBackend,
+  acpSessionUpdateToPrintModeEvents,
+} from './client/acp-client'
+export { createServeBridge } from './serve/bridge'
+export type { ServeBridgeClient, ServeBridgeOptions } from './serve/bridge'
+export { sanitizeOutbound } from './serve/outbound-filter'
+// Published so hosts (the CLI serve command) can build a credential-only
+// `credentialEnv` for runServe: the well-known holdback keys plus every
+// `apiKeyEnv` name the provider configuration declares.
+export {
+  getConfiguredCredentialEnvKeys,
+  CREDENTIAL_ENV_KEYS as WELL_KNOWN_CREDENTIAL_ENV_KEYS,
+} from './serve/outbound'
+export { serveAcpOverSocket } from './serve/socket-listener'
+export type { ServeAcpOverSocketOptions } from './serve/socket-listener'
+export { runServe } from './serve/serve'
+export type { RunServeOptions } from './serve/serve'
+// P2-T7: local dashboard over run journals, receipts, and gate timelines —
+// a localhost+token HTTP server (127.0.0.1 ONLY, constant-time bearer/query
+// token auth) plus a static HTML export that inlines the data (never the
+// token). The provider is injectable; createDashProviderFromJournal adapts
+// a P2-T2 JournalReader (plus optional receipt/gate seams).
+export {
+  startDashServer,
+  generateDashToken,
+  renderDashHtml,
+  DASH_MAX_EVENTS,
+} from './dash/server'
+export type {
+  DashDataProvider,
+  DashRunEvent,
+  DashRunSummary,
+  DashServerHandle,
+  DashSnapshot,
+  StartDashServerParams,
+} from './dash/server'
+export {
+  createDashProviderFromJournal,
+  summarizePayload,
+} from './dash/provider'
+export type { CreateDashProviderFromJournalParams } from './dash/provider'
+export { exportDashStatic } from './dash/export'
+export type {
+  ExportDashStaticParams,
+  ExportDashStaticResult,
+} from './dash/export'
+export { createMcpServer, runMcp } from './mcp/server'
+export type {
+  CreateMcpServerOptions,
+  McpIndexManager,
+  McpServerClient,
+  McpSessionData,
+  RunMcpOptions,
+} from './mcp/server'
+export { AcpSessionData } from './services/acp/session-data'
+export type { AcpSessionDataOptions } from './services/acp/session-data'
+export * from './custom-tool'
+export * from './native/ripgrep'
+export * from './run-state'
+export { ToolHelpers } from './tools'
+export * from './constants'
+export * from './provider-config'
+export * from './project-trust'
+export * from './model-discovery'
+export { getUserInfoFromApiKey } from './impl/database'
+export * from './credentials'
+export { loadLocalAgents } from './agents/load-agents'
+export { loadMCPConfig, loadMCPConfigSync } from './agents/load-mcp-config'
+export { loadSkills } from './skills/load-skills'
+export { formatAvailableSkillsXml } from '@codebuff/common/util/skills'
+export type { LoadSkillsOptions } from './skills/load-skills'
+export type { SkillDefinition, SkillsMap } from '@codebuff/common/types/skill'
+export type {
+  LoadedAgents,
+  LoadedAgentDefinition,
+  LoadLocalAgentsResult,
+  AgentValidationError,
+} from './agents/load-agents'
+export type { MCPFileConfig, LoadedMCPConfig } from './agents/load-mcp-config'
+
+export { validateAgents } from './validate-agents'
+export type { ValidationResult, ValidateAgentsOptions } from './validate-agents'
+
+// Error utilities
+export {
+  isRetryableStatusCode,
+  getErrorStatusCode,
+  sanitizeErrorMessage,
+  RETRYABLE_STATUS_CODES,
+  createHttpError,
+  createAuthError,
+  createForbiddenError,
+  createPaymentRequiredError,
+  createServerError,
+  createNetworkError,
+} from './error-utils'
+export type { HttpError } from './error-utils'
+
+// Retry configuration constants
+export {
+  MAX_RETRIES_PER_MESSAGE,
+  RETRY_BACKOFF_BASE_DELAY_MS,
+  RETRY_BACKOFF_MAX_DELAY_MS,
+  RETRY_BACKOFF_JITTER_FRACTION,
+  RECONNECTION_MESSAGE_DURATION_MS,
+  RECONNECTION_RETRY_DELAY_MS,
+  computeBackoffDelayMs,
+} from './retry-config'
+// Session route health (N07): `/provider` clears auth-degraded routes.
+export { clearDegradedProviderRoutes } from './impl/failover'
+
+// The complete `CodebuffFileSystem` type closure. Every alias the adapter
+// surface reaches is published, so a consumer's generated `.d.ts` resolves an
+// adapter implementation without reaching into unpublished internals.
+export type {
+  CodebuffFileContent,
+  CodebuffFileSystem,
+  CodebuffFileSystemBase,
+  CodebuffFileSystemCapabilities,
+  CodebuffRangeReadResult,
+  CodebuffConditionalCommitOptions,
+  CodebuffConditionalCommitResult,
+  CodebuffConditionalDeleteResult,
+  CodebuffConditionalMoveOptions,
+  CodebuffConditionalMoveResult,
+  // Required to implement the public `streamDirectory` capability, including
+  // its mandatory `readdirView` pairing.
+  CodebuffStreamDirectory,
+  CodebuffTextRangeReadResult,
+  CodebuffTextReadOptions,
+  CodebuffTextRangeRead,
+  CodebuffTextFileRead,
+} from '@codebuff/common/types/filesystem'
+export type { RawReadBasisV1 } from '@codebuff/common/util/raw-read-basis'
+
+// Tree-sitter / code-map exports
+export {
+  getFileTokenScores,
+  setWasmDir,
+  setTreeSitterWasmPath,
+} from '@codebuff/code-map'
+export type { FileTokenData, TokenCallerMap } from '@codebuff/code-map'
+
+export { runTerminalCommand } from './tools/run-terminal-command'
+export type { CapturedTerminalLaunchMetadata } from './tools/run-terminal-command'
+export type {
+  CapturedHookConfiguration,
+  FileChangeHook,
+} from './tools/file-change-hooks'
+export type { LlmHostDeps } from './impl/llm'
+export { evaluateTerminalCommandPolicy } from './tools/terminal-command-policy'
+export type {
+  TerminalPermissionProfile,
+  TerminalPolicyDecision,
+} from './tools/terminal-command-policy'
+export { inspectWorkspace } from './tools/inspect-workspace'
+export { getTask } from './tools/get-task'
+export { getChangeReviewBundle } from './tools/get-change-review-bundle'
+export { runTargetedValidation } from './tools/run-targeted-validation'
+export { inspectEnvironment } from './tools/inspect-environment'
+export { getAffectedTests } from './tools/get-affected-tests'
+export { getBuildTargets } from './tools/get-build-targets'
+export {
+  inspectCodebaseStructureTool,
+  inspectFeatureCompletenessTool,
+  evaluateAuditCoverageTool,
+} from './tools/audit-intelligence'
+export {
+  inspectCodebaseStructure,
+  inspectFeatureCompleteness,
+  evaluateAuditCoverage,
+} from './services/audit-intelligence'
+export type {
+  CodebaseInventory,
+  FeatureCompletenessRecord,
+} from './services/audit-intelligence'
+export {
+  promptAiSdk,
+  promptAiSdkStream,
+  promptAiSdkStructured,
+} from './impl/llm'
+export { resetChatGptOAuthRateLimit } from './impl/model-provider'
+export { LocalHarnessStore } from './services/local-harness-store'
+export { WorkspaceJournalService } from './services/workspace-journal'
+export type { WorkspaceIdentitySource } from './services/workspace-bootstrap'
+export {
+  WORKSPACE_MUTATION_AUTHORITY,
+  WorkspaceMutationBroker,
+  WorkspaceMutationBrokerRecoveryError,
+} from './services/workspace-mutation-broker'
+export type {
+  WorkspaceMutationBrokerOptions,
+  WorkspaceMutationCommitResult,
+  WorkspaceMutationDeleteResult,
+  WorkspaceMutationMoveResult,
+  WorkspaceMutationReceipt,
+  WorkspaceMutationReceiptReference,
+} from './services/workspace-mutation-broker'
+export type {
+  HarnessRecordKind,
+  LocalHarnessRecord,
+} from './services/local-harness-store'
+export {
+  ChangeOwnershipService,
+  HarnessApprovalService,
+  classifyTerminalHarnessAction,
+  evaluateHarnessActionPolicy,
+} from './services/harness-enforcement'
+export type {
+  ClassifiedHarnessAction,
+  HarnessApprovalMode,
+  HarnessApprovalRequest,
+} from './services/harness-enforcement'
+export {
+  VerifiedKnowledgeService,
+  WorkspaceLeaseService,
+  classifyConnectorOperation,
+  createContextPacket,
+  getAffectedTestTargets,
+  getBuildTargets as getHarnessBuildTargets,
+  inspectHarnessEnvironment,
+} from './services/harness-intelligence'
+export type {
+  AffectedTestTarget,
+  BuildTarget,
+  ConnectorOperation,
+  ContextPacketItem,
+  EnvironmentInspection,
+  KnowledgeRecord,
+  WorkspaceLeaseRecord,
+} from './services/harness-intelligence'
+export type {
+  ApprovalRecord,
+  HarnessPolicyDecision,
+  OwnershipRecord,
+} from './services/harness-enforcement'
+export { createConfiguredEmbedder } from './impl/embeddings'
+export type { EmbedFn } from './impl/embeddings'
+
+export { RepositoryIntelligenceService, createRepositoryIntelligenceSource, createVirtualRepositoryIntelligenceSource } from './services/repository-intelligence'
+export type { RepositoryIntelligenceSource, RepositoryContextPacket, PrepareRepositoryContextRequest } from '@codebuff/common/types/contracts/repository-intelligence'

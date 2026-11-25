@@ -1,0 +1,506 @@
+{
+  "schemaVersion": 1,
+  "card": "N12",
+  "status": "implementation-verified-formal-acceptance-blocked",
+  "recordedAt": "2026-11-25T12:51:12.007Z",
+  "originalPlan": {
+    "path": ".agents/sessions/body-capability-review-2026-11-05/PLAN.md",
+    "sha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241"
+  },
+  "specification": {
+    "path": ".agents/sessions/body-capability-review-2026-11-05/SPEC.md",
+    "sha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31"
+  },
+  "addendum": {
+    "path": "docs/execution/body-roadmap/product-audit-addendum.md",
+    "sha256": "60ba6db455647d9cc4512631bcc887f0f3e70d910790f9509e5bf36623f0191f"
+  },
+  "sourceScope": {
+    "kind": "selected-source-and-test-snapshot-not-complete-dependency-closure",
+    "files": [
+      {
+        "path": "cli/src/commands/run-command.ts",
+        "sha256": "b9d8e889c6517b80dcf56cc0306956631fafd34e445fe6d311260aef4758ec76"
+      },
+      {
+        "path": "cli/src/cli-args.ts",
+        "sha256": "73e15a22f0fef2e97a62d1f7f735ee8c9e9abd5665e9e97d58744ee21c1907d8"
+      },
+      {
+        "path": "cli/src/utils/headless-sessions.ts",
+        "sha256": "ddc2db9b96ff6cbbd732b61b53dc42963aeee1b067a5a956cc7a199c139d9ed2"
+      },
+      {
+        "path": "cli/src/utils/openbuff-provider.ts",
+        "sha256": "eae5e6b38ad17df0c8c526f1a3886f6aa3a2bed992d7079152bf57a8ab5a3b2a"
+      },
+      {
+        "path": "cli/src/utils/run-output-schema.ts",
+        "sha256": "0df4b08939e96d5f74bcece864f3580f3e9037efe1c3d3617a0e7379db48908d"
+      },
+      {
+        "path": "cli/src/utils/headless-prompt.ts",
+        "sha256": "179d150b3237e364b3e6aeaf0110467b1708d296a78133d94be8f9ab4308c190"
+      },
+      {
+        "path": "common/src/util/run-output-schema.ts",
+        "sha256": "07b5fbf67cb8d23d763c8c6974eac14616ae05275b0a6992f9f167010d01f2a1"
+      },
+      {
+        "path": "common/src/util/json-schema.ts",
+        "sha256": "18f7849d29f8b8dd84f776a9dcc433dbeb6ff51565a4c77607b148642c3071d6"
+      },
+      {
+        "path": "common/src/types/print-mode.ts",
+        "sha256": "a6487f968c0cea194be1bb6542c2413b5adc454ff00f2e5914f62f7fbef8c89c"
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "sha256": "4d917628c3a1566aa16ab7812f49ec4fe4166ece6d1f713673dbcb0dcfa83bfe"
+      },
+      {
+        "path": "sdk/src/index.ts",
+        "sha256": "89369098624d73da74330efbc8fbe1c11a784627af211474c5dc968b138ddf51"
+      },
+      {
+        "path": "sdk/src/client/acp-client.ts",
+        "sha256": "3693ba9e481d893b5b146336888f6c28d5b178f3a26cd94257ebc87d62f6158a"
+      },
+      {
+        "path": "sdk/src/impl/llm.ts",
+        "sha256": "0cf014c61705cfa32c1eb4e52553637eff895989f7abeb1dab7400d92b724902"
+      },
+      {
+        "path": "packages/agent-runtime/src/run-agent-step.ts",
+        "sha256": "af0a760442efaa51c37edb37ce2d5fa42c2e5ade3c1d577c68b716cee36f63f7"
+      },
+      {
+        "path": "sdk/src/serve/prompt-content.ts",
+        "sha256": "f01bdc64d23075ee80339c86f0b44440437d5ce4b096a7284287cadb0d6a12d7"
+      },
+      {
+        "path": "sdk/src/serve/prompt-resource-file.ts",
+        "sha256": "aebefd41408c8e426cdb03efba23af838258beca76833a17d75bc938ef687075"
+      },
+      {
+        "path": "sdk/src/serve/bridge.ts",
+        "sha256": "5f5d76182f9578c93100d9389ab899129d6aca6758a6d6d7cbb8497b93789a93"
+      },
+      {
+        "path": "sdk/src/serve/serve.ts",
+        "sha256": "e9ee47c4c761af0b845933d8482927d772574f5ef930d3fa0e8835c0c524f5a8"
+      },
+      {
+        "path": "sdk/src/serve/event-bridge.ts",
+        "sha256": "3a0345beb36fe6d15d7471c547a447ca4fbcebd118e1dc18fab26b68a6be1391"
+      },
+      {
+        "path": "sdk/src/services/acp/acp-agent.ts",
+        "sha256": "a6adb379a9252c1be7108aecf5f95de199401bffda9b63b40dcc15d7a4b2a53e"
+      },
+      {
+        "path": "sdk/README.md",
+        "sha256": "420da5e8f5e705c8c56b261687f2d5b3c856365ebd1780cfdd946af434b0b694"
+      },
+      {
+        "path": "sdk/e2e/readme-examples.test.ts",
+        "sha256": "6300fdeb1889b421d5ee79f2672dd5e724a9e7020595efd0709fa79e63d15d87"
+      },
+      {
+        "path": "docs/local-mode.md",
+        "sha256": "264001e8bfcd663265680f2ec6abf2934921dd77b372b17ff8441d6bff1cae49"
+      },
+      {
+        "path": "cli/src/__tests__/run-continue.test.ts",
+        "sha256": "3229c083d85ece90ad29a8f9db958fc54a871b0dc0980f99f274fbd90d1a21a8"
+      },
+      {
+        "path": "cli/src/__tests__/run-continue-wire.test.ts",
+        "sha256": "c09d97b209649bbc3154f03e4d213c62b2fdd93f59bcbd27168ebca97653ca20"
+      },
+      {
+        "path": "cli/src/__tests__/run-continue-sdk.test.ts",
+        "sha256": "2baef746d393990b986ae9c1cd04561577d5a8e3be228f33202de8d2c6f36cf9"
+      },
+      {
+        "path": "cli/src/utils/__tests__/headless-sessions.test.ts",
+        "sha256": "a82c6a61fb551a7a53cf592c830f12d6f0000fe66f2a1a63d4c5b0b4d1708be8"
+      },
+      {
+        "path": "cli/src/__tests__/run-output-schema.test.ts",
+        "sha256": "9be57e7cdad3dbb16577cd56e4c0be50d5bdab579cbc8775be1f2e31fd725d48"
+      },
+      {
+        "path": "cli/src/__tests__/protocol-stdout.test.ts",
+        "sha256": "3ce4403bc50f152f442b590b242b359d39bc6dedb115b77fbd481e21b2716ab0"
+      },
+      {
+        "path": "sdk/src/__tests__/run-output-schema.test.ts",
+        "sha256": "ec400528620b70c6932cb5c1c9a3deea1cf0994a07493dcdd1acc0d4f5db71ae"
+      },
+      {
+        "path": "sdk/src/__tests__/run-output-schema-wire.test.ts",
+        "sha256": "e7728254862adecf2e97936bc9d56c2a7a40e79f6f3fbd583ad5cb81d2ccc58c"
+      },
+      {
+        "path": "sdk/src/__tests__/run-output-schema-node.test.ts",
+        "sha256": "e306cf957fc0dc5c9aa7db2f8f67786ce71af846b0cb7bba377351d7d84d7a40"
+      },
+      {
+        "path": "sdk/src/__tests__/acp-prompt-content.test.ts",
+        "sha256": "2f47510166eba399b4254ffeff658728427650effb0a6c1b568fa55c2592beca"
+      },
+      {
+        "path": "sdk/src/__tests__/acp-prompt-content-encoding.test.ts",
+        "sha256": "439641770e43a021b3921ad0d4ff9ec33fd610f79d96ec0c6abd089e19bf2b72"
+      },
+      {
+        "path": "sdk/src/__tests__/acp-prompt-content-wire.test.ts",
+        "sha256": "356560af7d490d6f7b883014c8c470511bfb7243e610398f540337f746d815e5"
+      },
+      {
+        "path": "sdk/src/__tests__/acp-prompt-content-uri.test.ts",
+        "sha256": "f7fc2a416d9630c03e08bb4daaa809776c2fa4ec02b216366f1885257c93e2f4"
+      },
+      {
+        "path": "sdk/src/__tests__/acp-prompt-content-races.test.ts",
+        "sha256": "9aba5ab954adf5898521c8f9039d193f6eab45d6615f36b548d4646a3b5e5a47"
+      },
+      {
+        "path": "sdk/src/__tests__/acp-prompt-content-files.test.ts",
+        "sha256": "72181234a22dba92b30b13d143598ddaf139cae90e64e488bfc561a46a91ca6b"
+      },
+      {
+        "path": "sdk/src/__tests__/fixtures/acp-prompt-content.ts",
+        "sha256": "35cb2c665617354caa72fb64941068e5c7fe175ae20c6257a508b3ab87d1c74f"
+      },
+      {
+        "path": "common/src/util/__tests__/run-output-schema.test.ts",
+        "sha256": "9fd26d0afcd91e81dd8890ca08f9c9f1f23eda02fd0076af75d5c132e36967ec"
+      },
+      {
+        "path": "common/src/types/__tests__/print-mode-usage.test.ts",
+        "sha256": "b025622bce7a1a186b93b38b2a0334a763547d5cd647ba4affef47973d3b3f7d"
+      },
+      {
+        "path": "package.json",
+        "sha256": "ef4497b667ef263fc4ca80dd58f513f93b0f7efbbc1b6d2a5a77c5bdee368ca5"
+      },
+      {
+        "path": "sdk/package.json",
+        "sha256": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e"
+      },
+      {
+        "path": "cli/package.json",
+        "sha256": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e"
+      },
+      {
+        "path": "bun.lock",
+        "sha256": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a"
+      }
+    ]
+  },
+  "acceptanceBehaviors": [
+    "Owned stdin/model/schema CLI requests deliver schema-valid JSON; intermediate prose is absent in plain schema mode.",
+    "A new process continues the last or explicit private project-scoped headless conversation; saved per-run model choice is not inherited.",
+    "Busy, missing, corrupt, aliased, unsafe and oversized selected state fails closed; failed/cancelled histories remain inspectable.",
+    "Disk conversation continuation disables the legacy interrupted-effect reader and retains the new turn writer; original transcript and run IDs remain separate.",
+    "Headless and TUI missing-key readiness messages match exactly before provider/journal/fresh-session admission.",
+    "Actual ACP wire delivers contained file content plus images to one user-role provider request; typed negatives start zero SDK/provider runs.",
+    "Every README TypeScript fence executes and typechecks in source, ESM and CJS lanes; actual Node CJS/ESM consumers cover model/schema/usage/previousRun."
+  ],
+  "results": {
+    "headless": {
+      "files": 8,
+      "passed": 171,
+      "assertions": 473,
+      "failed": 0,
+      "note": "Pre-replay-guard focused schedule; successor and canonical census cover the final guard."
+    },
+    "replayGuardSuccessor": {
+      "files": 3,
+      "passed": 43,
+      "assertions": 176,
+      "failed": 0
+    },
+    "acp": {
+      "files": 6,
+      "passed": 87,
+      "assertions": 651,
+      "failed": 0
+    },
+    "sdkRegression": {
+      "files": 13,
+      "passed": 190,
+      "assertions": 733,
+      "failed": 0
+    },
+    "commonSchema": {
+      "files": 3,
+      "passed": 43,
+      "assertions": 428,
+      "failed": 0
+    },
+    "readmeEachLane": {
+      "lanes": [
+        "source",
+        "built-esm",
+        "built-cjs"
+      ],
+      "passed": 8,
+      "assertions": 94,
+      "failed": 0
+    },
+    "actualNodeConsumers": {
+      "formats": [
+        "cjs",
+        "esm"
+      ],
+      "passed": 2,
+      "assertions": 18,
+      "failed": 0,
+      "nodeVersion": "v26.1.0"
+    },
+    "copiedStandaloneCli": {
+      "platform": "linux-x64",
+      "passed": 4,
+      "assertions": 35,
+      "failed": 0
+    },
+    "cliCensus": {
+      "discovered": 313,
+      "selected": 312,
+      "excluded": [
+        "src/__tests__/utils/env.test.ts"
+      ],
+      "passed": 4882,
+      "skipped": 196,
+      "failed": 0,
+      "assertions": 22045,
+      "exitCode": 0,
+      "timedOut": false,
+      "homeUnchanged": true,
+      "limitation": "Canonical discovery/order/preload/isolation minus one HOME-reassigning suite; skipped cells confer no execution credit, not the exact CI schedule."
+    },
+    "workspaceTypechecks": {
+      "workspaces": 11,
+      "passed": true
+    },
+    "sdkBuild": {
+      "formats": [
+        "esm",
+        "cjs",
+        "declarations"
+      ],
+      "passed": true
+    },
+    "cliBuild": {
+      "platform": "linux-x64",
+      "opentuiSmokePassed": true,
+      "nativeIntelligence": "Existing explicitly selected sidecar; not a new native sandbox build."
+    },
+    "packageDryRun": {
+      "requiredFiles": [
+        "dist/index.mjs",
+        "dist/index.cjs",
+        "dist/index.d.ts",
+        "README.md"
+      ],
+      "passed": true,
+      "queryCount": 14
+    }
+  },
+  "artifacts": [
+    {
+      "path": "cli/bin/openbuff",
+      "sha256": "588bc596ada2256c0ea37ca0645eb964bac6f0f7987fcf345644e7ccfc75ed77",
+      "retention": "Local ignored build artifact; pins do not assert publication or registry install."
+    },
+    {
+      "path": ".tmp/n12-card-continuation/copied-cli/bin/openbuff",
+      "sha256": "588bc596ada2256c0ea37ca0645eb964bac6f0f7987fcf345644e7ccfc75ed77",
+      "retention": "Local ignored build artifact; pins do not assert publication or registry install."
+    },
+    {
+      "path": "sdk/dist/index.mjs",
+      "sha256": "9c339e995c822246581d342d5af0c54e9b12d5106704235514552fd4fcf1e548",
+      "retention": "Local ignored build artifact; pins do not assert publication or registry install."
+    },
+    {
+      "path": "sdk/dist/index.cjs",
+      "sha256": "7612c98d3e3d51abfd53dcad0db39516540cf159e25044e1f9f6271cfa21c8ca",
+      "retention": "Local ignored build artifact; pins do not assert publication or registry install."
+    },
+    {
+      "path": "sdk/dist/index.d.ts",
+      "sha256": "b7777bd8ad975fc5e71396dfe83c89f438d2feee6c89ec0b989aac944a06d6a7",
+      "retention": "Local ignored build artifact; pins do not assert publication or registry install."
+    }
+  ],
+  "evidence": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/headless-final-r1.log",
+      "sha256": "40fa65662718a21fd4c4ab508d4571140ded49ba2e58168799cfeeaf83a4f45a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/continuation-replay-final.log",
+      "sha256": "1bbf35500b24ebcfd51b10d49f5b436d81f70635c44b2fcec327d74df1c239ab"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/continuation-replay-red.log",
+      "sha256": "a80dba3a5370e4fd608b44954d5d5441098b67e15ac07f0f3cffec46c15793ad"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/schema-reference-red.log",
+      "sha256": "fcaf4868dcaf549af225cf1f51026a547c4497eeac5cf9f065de427904589e6f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/schema-reference-final.log",
+      "sha256": "a72d4849e759e69147fe1be41b112ffa6e4c97d8bc3ac453c2e9d8431fad92cc"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/common-schema-final.log",
+      "sha256": "be145e507806034f1d5a61d3736b6129ea05b9072646c5b3081b60be4b13c573"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/acp-final-r1.log",
+      "sha256": "863e287ca683251c9047131222471ef2585501227e3f4bf92a35da94142ae091"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/sdk-regression-final.log",
+      "sha256": "73a7d6427d75e69216629172b72bed0504b20011d48cfd78d471297280be108a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/readme-source-final-r1.log",
+      "sha256": "8e69588144331e07254572a7cc494176df6a6af85ea345f62abbb6ce46e3a7a6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/readme-esm-stable.log",
+      "sha256": "5256cecfdb583f677645a6c9a572e43382e8cd3afa33b2477d77a4b9d722b0d4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/readme-cjs-stable.log",
+      "sha256": "a782a22a5452716b9df981d16e64c5306e5b6b51e15d6d823ce176e39fbdfb8f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/node-consumers-final.log",
+      "sha256": "1fcb5d49ee50bc8c51f509406eb329afe867a23d7ccfd0c977eb80781e5afc0c"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/sdk-build-final.log",
+      "sha256": "e8d378fb0480dc81953da65f10750df8b0870e4798a979ae7ba17df7cb78478a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/cli-build-final.log",
+      "sha256": "8eaf8ae75a91c6874c2ed8ec61636b2874cc8fd1639dc131e7267ce3fbd7ddbd"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/copied-cli-wire.log",
+      "sha256": "91910e85395fc0db09a07035a2855db1eb6d540288c53001abf37c6f87b4f5f6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/copied-version.log",
+      "sha256": "59854984853104df5c353e2f681a15fc7924742f9a2e468c29af248dce45ce03"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/copied-run-help.log",
+      "sha256": "467c4417c2ddbe9e4bf0a05ada02dfa9e940200902dd653cf825f45ced073083"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/artifact-hashes-before-consumers.txt",
+      "sha256": "91087d242385f8a0e814ea091a5fc6fbaa424ac28704651b61caa666af8b7292"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/artifact-hashes-after-consumers.txt",
+      "sha256": "91087d242385f8a0e814ea091a5fc6fbaa424ac28704651b61caa666af8b7292"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/cli-bounded.log",
+      "sha256": "766dddb9f88ae7459c5cd8166c0e6ac849355110c20b6804faa1cbce5c66e3a7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/cli-result.json",
+      "sha256": "6fbafc8e9685b6e0835a767b219ad1e11460b88431633eed416913418cd7cce7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/cli-schedule.json",
+      "sha256": "9900085512dd6c7939f5fe52a21daebf31c9dbf0102e49965f5810d37a8ea51e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/cli-census-driver.log",
+      "sha256": "8611c28e58a38d738d2a80efc4eeb4f7314b45245b9dcab56a903a9623ddea83"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/protocol-repair-focused.log",
+      "sha256": "5db284314f5f766d355a558d2cb5298487eba7bd66d54d720eacf6f4f228283b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/typecheck-final-r3.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/doc-defaults-final.log",
+      "sha256": "4b5c51606e56d0bb4bf32da895db56fda8d5c542c0eee49fbcbcf7acf5cd346d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/format-check-final.log",
+      "sha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/ledger-validation.log",
+      "sha256": "914231c451989b225f3b8836c39008558959b29773ef41f50daa793bc80bba77"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/headless-review.json",
+      "sha256": "0f7e4ec81ccd8838ecd2555497a14ed04a212460ca43822f06a26dfcbd9f32c2"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/headless-review-postfix.json",
+      "sha256": "7bc909594cf0303656cdb4c6098042d54667c528122c541af0b6f04a5084b170"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/acp-security-review.json",
+      "sha256": "1af16c017ff436504e87eda66b7c9803ca5577fe8d1fda88c1aeaf60a34b7af9"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/N12/continuation-20261125/sdk-pack-dry-run.json",
+      "sha256": "f24df5fb79adeeb19ca171a3a9d8e5fd0f78030e5ba86e3c3d94d64cb0898c33"
+    }
+  ],
+  "review": {
+    "scope": "Independent focused static reviews, not complete-clause/source-bound acceptance sealing.",
+    "confirmedDefect": "Literal $ref fields were mistakenly rejected; red regression and schema-aware repair retained."
+  },
+  "historicalLedger": {
+    "sha256": "4d46ede9a94b0420a7541f7cca3b75f78862b07ceb2ae731b1a8adcfc66678bb",
+    "registrySha256": "cab9beee96514eb3c9063c6e67090fe797ad90eaffeff8a4efe1b7a447e78095",
+    "acceptedNodes": 13,
+    "totalNodes": 39,
+    "validationExitCode": 1,
+    "errors": [
+      "B01 acceptance receipt: missing docs/execution/body-roadmap/evidence/B01/accepted/20261111T235810377611Z-acceptance.json",
+      "B02 acceptance receipt: missing docs/execution/body-roadmap/evidence/B02/accepted/20261111T235810377611Z-acceptance.json",
+      "B03 acceptance receipt: missing docs/execution/body-roadmap/evidence/B03/accepted/20261111T235810377611Z-acceptance.json",
+      "B04 acceptance receipt: missing docs/execution/body-roadmap/evidence/B04/accepted/20261111T235810377611Z-acceptance.json",
+      "B05 acceptance receipt: missing docs/execution/body-roadmap/evidence/B05/accepted/20261111T235810377611Z-acceptance.json",
+      "B08 acceptance receipt: missing docs/execution/body-roadmap/evidence/B08/accepted/20261111T235810377611Z-acceptance.json",
+      "B18 acceptance receipt: missing docs/execution/body-roadmap/evidence/B18/accepted/20261111T235810377611Z-acceptance.json",
+      "B19 acceptance receipt: missing docs/execution/body-roadmap/evidence/B19/accepted/20261111T235810377611Z-acceptance.json",
+      "B20 acceptance receipt: missing docs/execution/body-roadmap/evidence/B20/accepted/20261111T235810377611Z-acceptance.json",
+      "B28 acceptance receipt: missing docs/execution/body-roadmap/evidence/B28/accepted/20261111T235810377611Z-acceptance.json",
+      "B30 acceptance receipt: missing docs/execution/body-roadmap/evidence/B30/accepted/20261111T235810377611Z-acceptance.json",
+      "B36 acceptance receipt: missing docs/execution/body-roadmap/evidence/B36/accepted/20261111T235810377611Z-acceptance.json"
+    ],
+    "blocker": "B02 prerequisite receipt is missing. No acceptance promotion, renewal or waiver is made."
+  },
+  "failedAttemptRetention": {
+    "initialCliCensus": "Two failures remain in the retained driver summary; the full initial log was overwritten by the second driver invocation and receives no provenance credit.",
+    "otherControls": "Schema-reference, sparse streaming, continuation and replay-reader red logs remain under .tmp; selected canonical red controls are copied above."
+  },
+  "limitations": [
+    "Verified headless storage and ACP file capture require Linux /proc/self/fd; unsupported backends fail closed.",
+    "No remote client-file dereference, ACP remote model/schema negotiation, ACP service-restart continuity, or B15/B17 replay assurance is claimed.",
+    "Stable host-selected roots are assumed; cooperative leases do not exclude arbitrary same-user writers, reclaim abandoned owners, or establish kernel-I/O cancellation latency.",
+    "No provider-backed eval, public release/install, new native enforcement, missing historical receipt reconstruction, commit or push occurred."
+  ]
+}

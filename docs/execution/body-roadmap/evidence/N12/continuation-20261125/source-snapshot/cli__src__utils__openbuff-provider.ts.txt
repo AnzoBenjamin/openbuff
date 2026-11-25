@@ -1,0 +1,1052 @@
+import path from 'path'
+import {
+  OPENBUFF_PROVIDER_PRESETS,
+  addDiscoveredModelToProviderConfig,
+  createProviderPresetConfig,
+  describeLoadedProviderConfig,
+  discoverProviderModels,
+  formatDiscoveredModels,
+  formatModelCapabilitiesSummary,
+  getCachedProviderModels,
+  getMissingProviderEnvVars,
+  getProviderDiscoveryConfig,
+  loadProviderConfigSync,
+  readModelDiscoveryCache,
+  recommendConfiguredModel,
+  resolveConfiguredAgentModel,
+  resolveConfiguredAgentModelConfig,
+  resolveConfiguredProviderModel,
+  resolveModelCapabilities,
+  writeProviderConfigFile,
+  providerConfigFileSchema,
+} from '@openbuff/sdk'
+
+import type { ModelDiscoveryFetch } from '@openbuff/sdk'
+
+import { getProjectRoot } from '../project-files'
+import { disconnectChatGptOAuth, getChatGptOAuthStatus } from './chatgpt-oauth'
+import { AGENT_MODE_TO_ID } from './constants'
+
+import type {
+  AgentDefinition,
+  OpenbuffReasoningEffort,
+  ProviderConfigFileInput,
+} from '@openbuff/sdk'
+import type { AgentMode } from './constants'
+
+function asAgentId(
+  agent: AgentDefinition | string,
+  fallbackMode: AgentMode,
+): string {
+  return typeof agent === 'string'
+    ? agent
+    : agent.id || AGENT_MODE_TO_ID[fallbackMode]
+}
+
+function asAgentModel(agent: AgentDefinition | string): string {
+  return typeof agent === 'string' ? '' : (agent.model ?? '')
+}
+
+const REASONING_EFFORTS = [
+  'default',
+  'low',
+  'medium',
+  'high',
+  'minimal',
+  'none',
+] as const
+
+export type ReasoningEffortInput =
+  | OpenbuffReasoningEffort
+  | 'default'
+  | undefined
+
+export type ModelRouteTarget =
+  | { type: 'default' }
+  | { type: 'mode'; mode: 'default' | 'plan' | 'executePlan' }
+  | { type: 'agent'; agentId: string }
+
+export type KnownModelOption = {
+  model: string
+  capabilitiesSummary?: string
+  /** True if this model was discovered from a provider endpoint but is not yet in the user's config. */
+  discovered?: boolean
+}
+
+function formatReasoningEffort(
+  effort: OpenbuffReasoningEffort | undefined,
+): string {
+  return effort ? ` (reasoning: ${effort})` : ''
+}
+
+function getProviderIdForModel(
+  model: string,
+  loadedConfig = loadProviderConfigSync(),
+): string | undefined {
+  const prefix = model.split('/')[0]
+  if (prefix && loadedConfig.config.providers[prefix]) {
+    return prefix
+  }
+
+  for (const [providerId, provider] of Object.entries(
+    loadedConfig.config.providers,
+  )) {
+    if (Array.isArray(provider.models)) {
+      if (provider.models.some((providerModel) => providerModel === model)) {
+        return providerId
+      }
+      continue
+    }
+    if (
+      model in provider.models ||
+      Object.values(provider.models).some(
+        (providerModel) => providerModel === model,
+      )
+    ) {
+      return providerId
+    }
+  }
+
+  return undefined
+}
+
+function formatCapabilitiesForModel(
+  model: string,
+  loadedConfig = loadProviderConfigSync(),
+): string {
+  const providerId = getProviderIdForModel(model, loadedConfig)
+  if (!providerId) return ''
+
+  return formatModelCapabilitiesSummary(
+    resolveModelCapabilities({
+      providerId,
+      model,
+      loadedConfig,
+    }),
+  )
+}
+
+function formatCapabilitiesSuffix(
+  model: string,
+  loadedConfig = loadProviderConfigSync(),
+): string {
+  const summary = formatCapabilitiesForModel(model, loadedConfig)
+  return summary ? ` | ${summary}` : ''
+}
+
+function parseReasoningEffort(value: string | undefined): ReasoningEffortInput {
+  if (!value) {
+    return undefined
+  }
+  if (value === '-' || value.toLowerCase() === 'default') {
+    return 'default'
+  }
+  const normalized = value.toLowerCase()
+  if (!['low', 'medium', 'high', 'minimal', 'none'].includes(normalized)) {
+    throw new Error(
+      'Reasoning effort must be one of: low, medium, high, minimal, none, default',
+    )
+  }
+  return normalized as OpenbuffReasoningEffort
+}
+
+export function setRouteModel(
+  config: ProviderConfigFileInput,
+  target: ModelRouteTarget,
+  model: string,
+  reasoningEffort?: ReasoningEffortInput,
+): void {
+  if (target.type === 'default') {
+    config.defaultModel = model
+    if (reasoningEffort === 'default') {
+      delete config.defaultReasoningEffort
+    } else if (reasoningEffort) {
+      config.defaultReasoningEffort = reasoningEffort
+    }
+    return
+  }
+
+  if (target.type === 'mode') {
+    config.modes = {
+      ...(config.modes ?? {}),
+      [target.mode]: model,
+    }
+    if (reasoningEffort === 'default') {
+      delete config.modeReasoningEfforts?.[target.mode]
+    } else if (reasoningEffort) {
+      config.modeReasoningEfforts = {
+        ...(config.modeReasoningEfforts ?? {}),
+        [target.mode]: reasoningEffort,
+      }
+    }
+    return
+  }
+
+  config.agents = {
+    ...(config.agents ?? {}),
+    [target.agentId]: model,
+  }
+  if (reasoningEffort === 'default') {
+    delete config.agentReasoningEfforts?.[target.agentId]
+  } else if (reasoningEffort) {
+    config.agentReasoningEfforts = {
+      ...(config.agentReasoningEfforts ?? {}),
+      [target.agentId]: reasoningEffort,
+    }
+  }
+}
+
+function setRouteReasoningEffort(
+  config: ProviderConfigFileInput,
+  target: ModelRouteTarget,
+  reasoningEffort: ReasoningEffortInput,
+): void {
+  if (target.type === 'default') {
+    if (reasoningEffort === 'default' || !reasoningEffort) {
+      delete config.defaultReasoningEffort
+    } else {
+      config.defaultReasoningEffort = reasoningEffort
+    }
+    return
+  }
+  if (target.type === 'mode') {
+    if (reasoningEffort === 'default' || !reasoningEffort) {
+      delete config.modeReasoningEfforts?.[target.mode]
+    } else {
+      config.modeReasoningEfforts = {
+        ...(config.modeReasoningEfforts ?? {}),
+        [target.mode]: reasoningEffort,
+      }
+    }
+    return
+  }
+  if (reasoningEffort === 'default' || !reasoningEffort) {
+    delete config.agentReasoningEfforts?.[target.agentId]
+  } else {
+    config.agentReasoningEfforts = {
+      ...(config.agentReasoningEfforts ?? {}),
+      [target.agentId]: reasoningEffort,
+    }
+  }
+}
+
+export { loadProviderConfigSync }
+
+export function formatOpenbuffProviderStatus(): string {
+  const loadedConfig = loadProviderConfigSync()
+  const codexStatus = getChatGptOAuthStatus()
+  const presetList = Object.values(OPENBUFF_PROVIDER_PRESETS)
+    .map((preset) => `- ${preset.id}: ${preset.description}`)
+    .join('\n')
+
+  return [
+    'Openbuff provider status',
+    '',
+    describeLoadedProviderConfig(loadedConfig),
+    `Codex subscription: ${codexStatus.connected ? 'connected' : 'not connected'}`,
+    '',
+    'Provider presets:',
+    presetList,
+    '',
+    'Use `/setup` (without args) or `/provider add` for the interactive wizard, `/provider connect codex` for Codex OAuth, or `/setup <preset>` for a preset.',
+  ].join('\n')
+}
+
+function getRelativeConfigPath(filePath: string): string {
+  try {
+    return path.relative(process.cwd(), filePath)
+  } catch {
+    return filePath
+  }
+}
+
+/**
+ * Resolve the short model id for the active agent mode from the openbuff
+ * provider config. Returns null if the config cannot be loaded or the
+ * route is unresolved / falls back to the agent default placeholder.
+ */
+export function resolveModelNameForAgent(agentId: string): string | null {
+  const loadedConfig = loadProviderConfigSync()
+  const route = resolveConfiguredAgentModelConfig({
+    agentId,
+    model: '(agent default)',
+    loadedConfig,
+  })
+  if (!route?.model || route.model === '(agent default)') return null
+  return route.model
+}
+
+export function formatOpenbuffModelStatus(): string {
+  const loadedConfig = loadProviderConfigSync()
+  const failover = getFailoverModels()
+  const lines = [
+    'Openbuff model routing',
+    '',
+    ...(failover.length > 0
+      ? [`Failover chain: ${failover.join(' → ')}`, '']
+      : []),
+  ]
+
+  for (const [mode, agentId] of Object.entries(AGENT_MODE_TO_ID)) {
+    const route = resolveConfiguredAgentModelConfig({
+      agentId,
+      model: '(agent default)',
+      loadedConfig,
+    })
+    const sourceFile =
+      loadedConfig.sourceFiles?.routes?.modes?.[mode.toLowerCase()] ??
+      loadedConfig.sourceFiles?.routes?.agents?.[agentId]
+    const sourceSuffix = sourceFile
+      ? ` (defined in ${getRelativeConfigPath(sourceFile)})`
+      : ''
+    lines.push(
+      `${mode.toLowerCase()}: ${agentId} -> ${route.model}${formatReasoningEffort(route.reasoningEffort)}${formatCapabilitiesSuffix(route.model, loadedConfig)}${sourceSuffix}`,
+    )
+  }
+
+  lines.push('')
+  lines.push(
+    `Config files: ${loadedConfig.sourceFilePaths.map(getRelativeConfigPath).join(', ') || 'not found'}`,
+  )
+  lines.push(
+    `Agent overrides: ${Object.keys(loadedConfig.config.agents ?? {}).length}`,
+  )
+
+  const missing = getMissingProviderEnvVars({ loadedConfig })
+  if (missing.length) {
+    lines.push('')
+    lines.push(`Missing env: ${missing.join(', ')}`)
+  }
+
+  lines.push('')
+  lines.push(
+    'Tip: Run `/models configure` to configure routing interactively in a graphical menu, or `/models set default <model-id>` to quickly route your defaults.',
+  )
+
+  return lines.join('\n')
+}
+
+export function writeMergedConfig(config: ProviderConfigFileInput): string {
+  return writeProviderConfigFile({
+    cwd: getProjectRoot(),
+    config,
+    force: true,
+  })
+}
+
+export function getEditableConfig(): ProviderConfigFileInput {
+  const loadedConfig = loadProviderConfigSync()
+  // Route/provider edits must start from the complete resolved config. A
+  // projection here silently reset unrelated settings when force-writing.
+  return structuredClone(loadedConfig.config)
+}
+
+/** Persist a discovered model into the provider's config file so it can be routed. */
+export function persistModelToProviderConfig(
+  providerId: string,
+  modelId: string,
+): string {
+  // Strip provider prefix if the caller passed a full routable ID like
+  // "ollama/llama3" so we store "llama3" rather than "ollama/llama3" inside
+  // the provider's models array.
+  const prefix = `${providerId}/`
+  const normalizedModelId = modelId.startsWith(prefix)
+    ? modelId.slice(prefix.length)
+    : modelId
+  return addDiscoveredModelToProviderConfig({
+    providerId,
+    modelId: normalizedModelId,
+    cwd: getProjectRoot(),
+  })
+}
+
+export function getKnownModelOptions(): KnownModelOption[] {
+  const loadedConfig = loadProviderConfigSync()
+  const models: KnownModelOption[] = []
+  const seen = new Set<string>()
+  for (const [providerId, provider] of Object.entries(
+    loadedConfig.config.providers,
+  )) {
+    const providerModels = provider.models
+    if (!providerModels || typeof providerModels !== 'object') {
+      continue
+    }
+
+    if (Array.isArray(providerModels)) {
+      for (const model of providerModels) {
+        if (typeof model !== 'string') continue
+        const routableModel = model.includes('/')
+          ? model
+          : `${providerId}/${model}`
+        seen.add(routableModel)
+        models.push({
+          model: routableModel,
+          capabilitiesSummary: formatCapabilitiesForModel(
+            routableModel,
+            loadedConfig,
+          ),
+        })
+      }
+    } else {
+      for (const requestedModel of Object.keys(providerModels)) {
+        const routableModel = requestedModel.includes('/')
+          ? requestedModel
+          : `${providerId}/${requestedModel}`
+        seen.add(routableModel)
+        models.push({
+          model: routableModel,
+          capabilitiesSummary: formatCapabilitiesForModel(
+            routableModel,
+            loadedConfig,
+          ),
+        })
+      }
+    }
+
+    // Append cached discovered models not yet in config
+    for (const discovered of getCachedProviderModels(providerId)) {
+      const routableModel = discovered.id.includes('/')
+        ? discovered.id
+        : `${providerId}/${discovered.id}`
+      if (seen.has(routableModel)) continue
+      seen.add(routableModel)
+      models.push({
+        model: routableModel,
+        capabilitiesSummary: discovered.capabilities
+          ? formatModelCapabilitiesSummary(discovered.capabilities)
+          : formatCapabilitiesForModel(routableModel, loadedConfig) ||
+            undefined,
+        discovered: true,
+      })
+    }
+  }
+  return models.sort((a, b) => a.model.localeCompare(b.model))
+}
+
+/**
+ * User-facing model display: a configured route is either a bare model id or
+ * a `{ model, reasoningEffort }` object; screens show the model part. Shared
+ * so pickers, status surfaces, and command output agree on one rendering.
+ */
+export function displayModelId(route: unknown): string | undefined {
+  if (!route) return undefined
+  if (typeof route === 'string') return route
+  if (typeof route === 'object' && 'model' in route) {
+    const model = (route as { model?: unknown }).model
+    if (typeof model === 'string' && model) return model
+  }
+  return undefined
+}
+
+/**
+ * The configured failover chain tried after the primary model fails
+ * (see provider-config `failoverModels`). Previously this existed only as a
+ * hand-edited openbuff.json key with no surface to view or change it.
+ */
+export function getFailoverModels(): string[] {
+  const config = getEditableConfig() as { failoverModels?: string[] }
+  return Array.isArray(config.failoverModels)
+    ? config.failoverModels.filter((m): m is string => typeof m === 'string')
+    : []
+}
+
+/** Replace the failover chain; returns the config path written. */
+export function setFailoverModels(models: string[]): string {
+  const config = getEditableConfig() as { failoverModels?: string[] }
+  config.failoverModels = models
+  return writeMergedConfig(config)
+}
+
+/**
+ * Live connection test for a configured provider: runs the same model
+ * discovery call `/provider models <id> --refresh` uses. A cheap models-list
+ * request proves the endpoint AND the API key work before the user relies on
+ * them mid-session.
+ */
+export async function testProviderConnection(
+  providerId: string,
+  signal?: AbortSignal,
+): Promise<{
+  ok: boolean
+  message: string
+}> {
+  const loadedConfig = loadProviderConfigSync()
+  const provider = loadedConfig.config.providers[providerId]
+  if (!provider) {
+    return { ok: false, message: `Provider '${providerId}' is not configured.` }
+  }
+  const discoveryConfig = getProviderDiscoveryConfig(providerId, provider)
+  if (!discoveryConfig) {
+    return {
+      ok: false,
+      message: `Provider '${providerId}' does not support live discovery; set its env key (${'apiKeyEnv' in provider && typeof provider.apiKeyEnv === 'string' ? provider.apiKeyEnv : 'its API key env'}).`,
+    }
+  }
+  try {
+    const result = await discoverProviderModels({
+      providerId,
+      loadedConfig,
+      fetch: globalThis.fetch as ModelDiscoveryFetch,
+      signal,
+    })
+    const count = Array.isArray(result.models) ? result.models.length : 0
+    return {
+      ok: true,
+      message: `✓ ${providerId}: connection OK, ${count} model${count === 1 ? '' : 's'} discoverable`,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: `✗ ${providerId}: ${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
+}
+
+export function getKnownModels(): string[] {
+  return getKnownModelOptions().map((option) => option.model)
+}
+
+function resolveModelChoice(input: string): string {
+  const trimmed = input.trim()
+  const models = getKnownModels()
+  const numeric = Number(trimmed)
+  if (Number.isInteger(numeric) && numeric >= 1 && numeric <= models.length) {
+    return models[numeric - 1]!
+  }
+  return trimmed
+}
+
+export function configureOpenbuffModelFromArgs(args: string): string {
+  const parts = args.trim().split(/\s+/).filter(Boolean)
+  if (parts[0] === 'configure' || parts[0] === 'wizard') {
+    return 'Run `/models` to open the model routing picker — the typed routing wizard was retired.'
+  }
+
+  if (parts[0] === 'recommend') {
+    const [language, taskType, agentRole] = parts.slice(1)
+    if (!language) {
+      throw new Error(
+        'Usage: /models recommend <language> [task-type] [agent-role]',
+      )
+    }
+    const recommendation = recommendConfiguredModel({
+      context: { language, taskType, agentRole },
+    })
+    if (!recommendation) {
+      return `No empirical model measurements match language=${language}${taskType ? `, task=${taskType}` : ''}${agentRole ? `, role=${agentRole}` : ''}. Add provider modelCapabilities.quality.coding measurements or run multilingual evaluations first.`
+    }
+    return [
+      `Recommended model: ${recommendation.model}`,
+      `Measured score: ${recommendation.score}/100${recommendation.sampleSize ? ` across ${recommendation.sampleSize} samples` : ''}`,
+      recommendation.benchmark
+        ? `Benchmark: ${recommendation.benchmark}`
+        : 'Benchmark: not recorded',
+      `Matched evidence: ${
+        Object.entries(recommendation.matchedContext)
+          .filter(([, value]) => value)
+          .map(([key, value]) => `${key}=${value}`)
+          .join(', ') || 'general coding measurement'
+      }`,
+      'This is an opt-in recommendation; explicit default, mode, and agent routes remain unchanged.',
+    ].join('\n')
+  }
+
+  if (parts[0] !== 'set') {
+    return [
+      formatOpenbuffModelStatus(),
+      '',
+      'Commands:',
+      '- /models configure',
+      '- /models recommend <language> [task-type] [agent-role]',
+      '- /models set default <provider/model> [reasoningEffort]',
+      '- /models set mode <default|plan|execute-plan> <provider/model> [reasoningEffort]',
+      '- /models set agent <agent-id> <provider/model> [reasoningEffort]',
+      '- /models set reasoning default|mode|agent ... <effort>',
+    ].join('\n')
+  }
+
+  const config = getEditableConfig()
+  const target = parts[1]
+  if (target === 'reasoning' || target === 'effort') {
+    const routeTarget = parts[2]
+    if (routeTarget === 'default') {
+      const effort = parseReasoningEffort(parts[3])
+      if (!effort)
+        throw new Error('Usage: /models set reasoning default <effort>')
+      setRouteReasoningEffort(config, { type: 'default' }, effort)
+    } else if (routeTarget === 'mode') {
+      const modeInput = parts[3]
+      const mode = (
+        modeInput === 'execute-plan' ? 'executePlan' : modeInput
+      ) as 'default' | 'plan' | 'executePlan'
+      const effort = parseReasoningEffort(parts[4])
+      if (
+        !mode ||
+        !['default', 'plan', 'executePlan'].includes(mode) ||
+        !effort
+      ) {
+        throw new Error(
+          'Usage: /models set reasoning mode <default|plan|execute-plan> <effort>',
+        )
+      }
+      setRouteReasoningEffort(config, { type: 'mode', mode }, effort)
+    } else if (routeTarget === 'agent') {
+      const agentId = parts[3]
+      const effort = parseReasoningEffort(parts[4])
+      if (!agentId || !effort) {
+        throw new Error(
+          'Usage: /models set reasoning agent <agent-id> <effort>',
+        )
+      }
+      setRouteReasoningEffort(config, { type: 'agent', agentId }, effort)
+    } else {
+      throw new Error(
+        'Usage: /models set reasoning default|mode|agent ... <effort>',
+      )
+    }
+  } else if (target === 'default') {
+    const model = parts[2]
+    if (!model)
+      throw new Error(
+        'Usage: /models set default <provider/model> [reasoningEffort]',
+      )
+    setRouteModel(
+      config,
+      { type: 'default' },
+      resolveModelChoice(model),
+      parseReasoningEffort(parts[3]),
+    )
+  } else if (target === 'mode') {
+    const modeInput = parts[2]
+    const mode = (modeInput === 'execute-plan' ? 'executePlan' : modeInput) as
+      | 'default'
+      | 'plan'
+      | 'executePlan'
+    const model = parts[3]
+    if (!mode || !['default', 'plan', 'executePlan'].includes(mode) || !model) {
+      throw new Error(
+        'Usage: /models set mode <default|plan|execute-plan> <provider/model> [reasoningEffort]',
+      )
+    }
+    setRouteModel(
+      config,
+      { type: 'mode', mode },
+      resolveModelChoice(model),
+      parseReasoningEffort(parts[4]),
+    )
+  } else if (target === 'agent') {
+    const agentId = parts[2]
+    const model = parts[3]
+    if (!agentId || !model) {
+      throw new Error(
+        'Usage: /models set agent <agent-id> <provider/model> [reasoningEffort]',
+      )
+    }
+    setRouteModel(
+      config,
+      { type: 'agent', agentId },
+      resolveModelChoice(model),
+      parseReasoningEffort(parts[4]),
+    )
+  } else {
+    throw new Error('Usage: /models set default|mode|agent|reasoning ...')
+  }
+
+  const configPath = writeMergedConfig(config)
+  return [`Updated ${configPath}`, '', formatOpenbuffModelStatus()].join('\n')
+}
+
+export function setupOpenbuffProviderFromArgs(args: string): string {
+  const parts = args.trim().split(/\s+/).filter(Boolean)
+  const force = parts.includes('--force')
+  const presetId = parts.find((part) => !part.startsWith('--'))
+
+  if (!presetId) {
+    return formatOpenbuffProviderStatus()
+  }
+
+  const preset =
+    OPENBUFF_PROVIDER_PRESETS[
+      presetId as keyof typeof OPENBUFF_PROVIDER_PRESETS
+    ]
+  if (!preset) {
+    return [
+      `Unknown Openbuff provider preset: ${presetId}`,
+      '',
+      'Available presets:',
+      ...Object.values(OPENBUFF_PROVIDER_PRESETS).map(
+        (candidate) => `- ${candidate.id}: ${candidate.label}`,
+      ),
+    ].join('\n')
+  }
+
+  const config = createProviderPresetConfig(presetId)
+  const configPath = writeProviderConfigFile({
+    cwd: getProjectRoot(),
+    config,
+    force,
+  })
+
+  return [
+    `Wrote ${configPath}`,
+    '',
+    `Preset: ${preset.label}`,
+    preset.description,
+    '',
+    preset.envHelp ? `Next: ${preset.envHelp}` : undefined,
+    'Then send a message, or run `/models` to inspect routing.',
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+type CustomOpenbuffProviderType = 'openai-compatible' | 'anthropic-compatible'
+
+export function validateCustomOpenbuffProvider(provider: {
+  id: string
+  type: CustomOpenbuffProviderType
+  baseURL: string
+  apiKeyEnv?: string
+  models: string[]
+}): {
+  field: 'id' | 'baseURL' | 'apiKeyEnv' | 'models' | 'providerType'
+  message: string
+} | null {
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(provider.id.trim())) {
+    return {
+      field: 'id',
+      message: 'Provider id must use letters, numbers, dashes, or underscores.',
+    }
+  }
+  try {
+    new URL(provider.baseURL.trim())
+  } catch {
+    return { field: 'baseURL', message: 'Enter a valid provider base URL.' }
+  }
+  const parsed = providerConfigFileSchema.safeParse({
+    providers: {
+      [provider.id.trim()]: {
+        type: provider.type,
+        baseURL: provider.baseURL.trim(),
+        ...(provider.apiKeyEnv?.trim()
+          ? { apiKeyEnv: provider.apiKeyEnv.trim() }
+          : {}),
+        models: provider.models.map((model) => model.trim()).filter(Boolean),
+      },
+    },
+  })
+  if (parsed.success) return null
+  const issue = parsed.error.issues[0]
+  const pathField = issue.path[2]
+  return {
+    field:
+      pathField === 'apiKeyEnv'
+        ? 'apiKeyEnv'
+        : pathField === 'models'
+          ? 'models'
+          : pathField === 'type'
+            ? 'providerType'
+            : 'baseURL',
+    message: issue.message,
+  }
+}
+
+export function clearAgentRouteOverride(
+  config: ProviderConfigFileInput,
+  agentId: string,
+): void {
+  delete config.agents?.[agentId]
+  delete config.agentReasoningEfforts?.[agentId]
+}
+
+function parseCustomOpenbuffProviderType(
+  value: string,
+): CustomOpenbuffProviderType | null {
+  const normalized = value.trim().toLowerCase()
+  if (
+    normalized === '1' ||
+    normalized === 'openai' ||
+    normalized === 'openai-compatible'
+  ) {
+    return 'openai-compatible'
+  }
+  if (
+    normalized === '2' ||
+    normalized === 'anthropic' ||
+    normalized === 'anthropic-compatible' ||
+    normalized === 'claude'
+  ) {
+    return 'anthropic-compatible'
+  }
+  return null
+}
+
+export function addCustomOpenbuffProvider(provider: {
+  id: string
+  type: CustomOpenbuffProviderType
+  baseURL: string
+  apiKeyEnv?: string
+  models: string[]
+}): string {
+  const id = provider.id.trim()
+  const type = provider.type
+  const baseURL = provider.baseURL.trim()
+  const apiKeyEnv = provider.apiKeyEnv?.trim()
+  const models = provider.models.map((model) => model.trim()).filter(Boolean)
+
+  const validation = validateCustomOpenbuffProvider({
+    ...provider,
+    id,
+    baseURL,
+    apiKeyEnv,
+    models,
+  })
+  if (validation) throw new Error(validation.message)
+
+  const config: ProviderConfigFileInput = {
+    providers: {
+      [id]: {
+        type,
+        baseURL,
+        ...(apiKeyEnv ? { apiKeyEnv } : {}),
+        models,
+      },
+    },
+  }
+  const configPath = writeProviderConfigFile({
+    cwd: getProjectRoot(),
+    config,
+  })
+
+  return [
+    `Wrote ${configPath}`,
+    '',
+    `Custom ${type} provider '${id}' added.`,
+    'Run `/models configure` to route a mode or agent to it.',
+  ].join('\n')
+}
+
+export async function handleOpenbuffProviderCommand(args: string): Promise<{
+  message: string
+  connectCodex?: true
+}> {
+  const parts = args.trim().split(/\s+/).filter(Boolean)
+  const [command, ...rest] = parts
+  if (!command || command === 'status' || command === 'info') {
+    return { message: formatOpenbuffProviderStatus() }
+  }
+
+  if (command === 'add' || command === 'wizard') {
+    if (rest.length === 0) {
+      return {
+        message:
+          'Run `/provider` (or `/setup`) to open the provider picker — the typed setup wizard was retired.',
+      }
+    }
+    return { message: setupOpenbuffProviderFromArgs(rest.join(' ')) }
+  }
+
+  if (command === 'remove') {
+    const providerId = rest[0]
+    if (!providerId) throw new Error('Usage: /provider remove <provider-id>')
+    const config = getEditableConfig()
+    const providers = { ...(config.providers ?? {}) }
+    delete providers[providerId]
+    config.providers = providers
+    const configPath = writeMergedConfig(config)
+    return { message: `Removed provider '${providerId}' from ${configPath}.` }
+  }
+
+  if (command === 'connect' && (rest[0] === 'codex' || rest[0] === 'chatgpt')) {
+    return {
+      message: 'Starting Codex/ChatGPT OAuth. Follow the banner instructions.',
+      connectCodex: true,
+    }
+  }
+
+  if (
+    ['disconnect', 'logout'].includes(command) &&
+    (rest[0] === 'codex' || rest[0] === 'chatgpt')
+  ) {
+    disconnectChatGptOAuth()
+    return { message: 'Disconnected Codex/ChatGPT subscription credentials.' }
+  }
+
+  if (command === 'models') {
+    const providerId = rest[0]
+    if (!providerId) {
+      return {
+        message: [
+          'Usage:',
+          '- /provider models <provider-id>              — list cached discovered models',
+          '- /provider models <provider-id> --refresh   — refresh from provider endpoint',
+          '- /provider models <provider-id> add <model-id> — add a model to config',
+        ].join('\n'),
+      }
+    }
+    const loadedConfig = loadProviderConfigSync()
+    const provider = loadedConfig.config.providers[providerId]
+    if (!provider) {
+      return {
+        message: `Provider '${providerId}' is not configured. Run /provider add first.`,
+      }
+    }
+
+    if (rest[1] === 'add') {
+      // Strip provider prefix if user pasted a full routable ID like "ollama/llama3"
+      // so we add "llama3" rather than "ollama/llama3" inside the provider models list.
+      const prefix = `${providerId}/`
+      const modelId = rest[2]?.startsWith(prefix)
+        ? rest[2].slice(prefix.length)
+        : rest[2]
+      if (!modelId) {
+        return {
+          message: 'Usage: /provider models <provider-id> add <model-id>',
+        }
+      }
+      try {
+        const configPath = addDiscoveredModelToProviderConfig({
+          providerId,
+          modelId,
+          loadedConfig,
+          cwd: getProjectRoot(),
+        })
+        return {
+          message: [
+            `Added model '${modelId}' to provider '${providerId}'.`,
+            `Updated ${configPath}`,
+            '',
+            formatOpenbuffModelStatus(),
+          ].join('\n'),
+        }
+      } catch (error) {
+        return {
+          message: `Failed to add model: ${error instanceof Error ? error.message : String(error)}`,
+        }
+      }
+    }
+
+    const shouldRefresh = rest.includes('--refresh')
+    if (shouldRefresh) {
+      const discoveryConfig = getProviderDiscoveryConfig(providerId, provider)
+      if (!discoveryConfig) {
+        return {
+          message: `Provider '${providerId}' does not support live model discovery. Add a 'discovery' field to its config in openbuff.json.`,
+        }
+      }
+      try {
+        const result = await discoverProviderModels({
+          providerId,
+          loadedConfig,
+          fetch: globalThis.fetch as ModelDiscoveryFetch,
+        })
+        return {
+          message: formatDiscoveredModels(providerId, result, loadedConfig),
+        }
+      } catch (error) {
+        return {
+          message: `Model discovery failed for '${providerId}': ${error instanceof Error ? error.message : String(error)}`,
+        }
+      }
+    }
+
+    // Show cached discovered models
+    const cache = readModelDiscoveryCache()
+    const cachedResult = cache[providerId]
+    const discoveryConfig = getProviderDiscoveryConfig(providerId, provider)
+    if (!cachedResult) {
+      const hint = discoveryConfig
+        ? `Run /provider models ${providerId} --refresh to discover available models, then /provider models ${providerId} add <model-id> to add one to config.`
+        : `Provider '${providerId}' does not support live model discovery.`
+      return {
+        message: `No cached discovered models for '${providerId}'. ${hint}`,
+      }
+    }
+    return {
+      message: formatDiscoveredModels(providerId, cachedResult, loadedConfig),
+    }
+  }
+
+  return {
+    message: [
+      formatOpenbuffProviderStatus(),
+      '',
+      'Commands:',
+      '- /provider status',
+      '- /provider add',
+      '- /provider add <preset>',
+      '- /provider remove <provider-id>',
+      '- /provider models <provider-id> [--refresh]',
+      '- /provider models <provider-id> add <model-id>',
+      '- /provider connect codex',
+      '- /provider disconnect codex',
+    ].join('\n'),
+  }
+}
+
+export function getOpenbuffProviderReadiness(params: {
+  agent: AgentDefinition | string
+  agentMode: AgentMode
+  /** An explicit run primary must be checked instead of the configured default route. */
+  model?: string
+}): { ok: true } | { ok: false; message: string } {
+  const loadedConfig = loadProviderConfigSync()
+  if (loadedConfig.diagnostics?.length) {
+    const details = loadedConfig.diagnostics
+      .map(({ filePath, message }) => `- ${filePath}: ${message}`)
+      .join('\n')
+    return {
+      ok: false,
+      message: `Openbuff provider configuration is invalid. Fix the configuration before running an agent:\n${details}`,
+    }
+  }
+  if (
+    loadedConfig.sourceFilePaths.length === 0 &&
+    Object.keys(loadedConfig.config.providers).length === 0
+  ) {
+    return {
+      ok: false,
+      message:
+        'Openbuff provider is not configured. Run `/setup opencode-go`, `/setup openai`, `/setup anthropic`, `/setup openrouter`, `/setup ollama`, or `/provider` for details.',
+    }
+  }
+
+  const agentId = asAgentId(params.agent, params.agentMode)
+  const fallbackModel = asAgentModel(params.agent)
+
+  try {
+    const requestedModel =
+      params.model ??
+      resolveConfiguredAgentModel({
+        agentId,
+        model: fallbackModel,
+        loadedConfig,
+      })
+    const resolvedProvider = resolveConfiguredProviderModel({
+      model: requestedModel,
+      loadedConfig,
+    })
+    if (!resolvedProvider) {
+      return {
+        ok: false,
+        message: `Openbuff could not route ${agentId} to model '${requestedModel}'. Run /models and add the model to openbuff.json.`,
+      }
+    }
+    if (
+      resolvedProvider.provider.type === 'chatgpt-oauth' &&
+      !getChatGptOAuthStatus().connected
+    ) {
+      return {
+        ok: false,
+        message: `Openbuff routed ${agentId} to '${requestedModel}', but Codex/ChatGPT is not connected. Run /provider connect codex.`,
+      }
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    }
+  }
+
+  return { ok: true }
+}

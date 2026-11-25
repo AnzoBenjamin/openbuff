@@ -1,0 +1,16 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/e2e/readme-examples.test.ts:
+(pass) SDK README executable TypeScript examples > typechecks ALL fences and this harness against the selected public exports [1861.37ms]
+(pass) SDK README executable TypeScript examples > sdk/README.md fence 1: quickstart.ts (line 13) [1251.51ms]
+(pass) SDK README executable TypeScript examples > sdk/README.md fence 2: example-setup.ts (line 77) [818.13ms]
+(pass) SDK README executable TypeScript examples > sdk/README.md fence 3: structured-output.ts (line 136) [972.74ms]
+(pass) SDK README executable TypeScript examples > sdk/README.md fence 4: continuation.ts (line 190) [908.31ms]
+(pass) SDK README executable TypeScript examples > sdk/README.md fence 5: deadline.ts (line 373) [924.83ms]
+(pass) SDK README executable TypeScript examples > quickstart reports missing provider configuration honestly without a fetch [798.98ms]
+(pass) SDK README executable TypeScript examples > structured example rejects invalid provider output and validates its repair before reporting success [961.57ms]
+
+ 8 pass
+ 0 fail
+ 94 expect() calls
+Ran 8 tests across 1 file. [8.68s]

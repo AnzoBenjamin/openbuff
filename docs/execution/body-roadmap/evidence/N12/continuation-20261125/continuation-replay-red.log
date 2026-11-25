@@ -1,0 +1,23 @@
+bun test v1.4.4 (38afee6c8)
+
+src/__tests__/run-continue-sdk.test.ts:
+Using environment: dev
+69 |           expect(actual.events(oldRunId!)).toEqual(original)
+70 |         }, async close() {},
+71 |       } } },
+72 |     }), stderr.join('\n')).toBe(0)
+73 |     expect(saved).toBe(true)
+74 |     expect(oldReads).toBe(0)
+                          ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 2
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/cli/src/__tests__/run-continue-sdk.test.ts:74:22)
+(fail) persisted headless conversation starts a new SDK turn without old journal replay admission [94.14ms]
+
+ 0 pass
+ 1 fail
+ 8 expect() calls
+Ran 1 test across 1 file. [949.00ms]

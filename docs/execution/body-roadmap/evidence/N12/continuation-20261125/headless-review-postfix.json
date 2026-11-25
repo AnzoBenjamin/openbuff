@@ -1,0 +1,24 @@
+{
+  "verdict": "prior finding fixed; no confirmed reference-admission bypass",
+  "verification": "Focused static review only; regression inspected, no tests rerun and no source changed.",
+  "reviewedFunctions": [
+    "common/src/util/run-output-schema.ts:captureRunOutputSchema",
+    "common/src/util/json-schema.ts:visitSchemas",
+    "common/src/util/json-schema.ts:assertInlineJsonSchema",
+    "common/src/util/json-schema.ts:jsonSchemaToZod admission checks"
+  ],
+  "currentSha256": {
+    "common/src/util/run-output-schema.ts": "07b5fbf67cb8d23d763c8c6974eac14616ae05275b0a6992f9f167010d01f2a1",
+    "common/src/util/json-schema.ts": "18f7849d29f8b8dd84f776a9dcc433dbeb6ff51565a4c77607b148642c3071d6",
+    "common/src/util/__tests__/run-output-schema.test.ts": "9fd26d0afcd91e81dd8890ca08f9c9f1f23eda02fd0076af75d5c132e36967ec"
+  },
+  "hashesStableDuringReview": true,
+  "staticAdversarialChecks": [
+    "Literal $ref property-map names and const/enum/examples data are not treated as schema keywords; the new regression checks preserved schema, valid literal-field output, and refusal of an incorrect field type.",
+    "An actual $ref in the child schema of a property named $ref is still refused: the walker visits map values, not map names.",
+    "Root and nested schema-node $ref fields are refused regardless of value, covering external URLs, local # pointers, relative references, and malformed values.",
+    "The canonical walker covers all draft-7 subschema locations: properties, patternProperties, definitions, combinators, single/tuple items, additionalProperties/additionalItems, contains, propertyNames, not, if/then/else, and schema-valued dependencies. Property-dependency arrays remain literal names.",
+    "captureRunOutputSchema invokes assertInlineJsonSchema before validator compilation. Unsupported newer dialects and unknown schema keywords remain refused by the existing dialect guard and strict Ajv compilation."
+  ],
+  "findings": []
+}

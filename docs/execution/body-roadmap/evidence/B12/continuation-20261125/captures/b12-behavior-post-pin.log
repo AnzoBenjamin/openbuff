@@ -1,0 +1,105 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-child-authority.test.ts:
+Using environment: dev
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=false, V2 unavailable [295.80ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=false, V2 throws [132.46ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=false, V2 invalid [97.74ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=false, V2 empty [200.12ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=true, V2 unavailable [221.91ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=true, V2 throws [210.36ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=true, V2 invalid [239.95ms]
+(pass) B12 real SDK child memory source selection > full, supervised=false, repositoryIntelligence=true, V2 empty [165.33ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=false, V2 unavailable [190.98ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=false, V2 throws [216.37ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=false, V2 invalid [166.15ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=false, V2 empty [212.17ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=true, V2 unavailable [163.11ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=true, V2 throws [146.69ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=true, V2 invalid [152.76ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=false, repositoryIntelligence=true, V2 empty [160.46ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=false, V2 unavailable [2599.27ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=false, V2 throws [1923.83ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=false, V2 invalid [1921.49ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=false, V2 empty [1806.11ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=true, V2 unavailable [1687.77ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=true, V2 throws [1682.04ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=true, V2 invalid [1650.60ms]
+(pass) B12 real SDK child memory source selection > full, supervised=true, repositoryIntelligence=true, V2 empty [2684.45ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=false, V2 unavailable [2419.10ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=false, V2 throws [2197.79ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=false, V2 invalid [1991.99ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=false, V2 empty [1861.85ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=true, V2 unavailable [1865.89ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=true, V2 throws [2011.04ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=true, V2 invalid [1988.05ms]
+(pass) B12 real SDK child memory source selection > pinned, supervised=true, repositoryIntelligence=true, V2 empty [1914.52ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: json-v1, supervised=false [112.42ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: shadow-v2, supervised=false [128.57ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: default-config, supervised=false [131.31ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: legacy-shadow, supervised=false [116.99ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: no-config, supervised=false [106.97ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: invalid-authority, supervised=false [112.17ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: json-v1, supervised=true [1691.35ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: shadow-v2, supervised=true [1635.85ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: default-config, supervised=true [1603.07ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: legacy-shadow, supervised=true [1615.06ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: no-config, supervised=true [1529.23ms]
+(pass) B12 real SDK child memory source selection > ordinary V1 child control: invalid-authority, supervised=true [1680.77ms]
+(pass) B12 real SDK child memory source selection > legacy inject selection is captured before setup awaits and cannot be changed by the caller [112.67ms]
+(pass) authenticated parent-mediated child memory selection > real socket resolution binds the full registered task and rejects parent/peer/task substitution [49.76ms]
+
+../home/ben/Code/CLI/openbuff/packages/agent-runtime/src/__tests__/memory-v2-child-authority.test.ts:
+(pass) host-selected child memory authority before execution > disabled cannot reactivate inherited V1 or restored V2 content [13.10ms]
+(pass) host-selected child memory authority before execution > missing cannot reactivate inherited V1 or restored V2 content [6.78ms]
+(pass) host-selected child memory authority before execution > throws cannot reactivate inherited V1 or restored V2 content [2.80ms]
+(pass) host-selected child memory authority before execution > invalid cannot reactivate inherited V1 or restored V2 content [4.22ms]
+(pass) host-selected child memory authority before execution > empty cannot reactivate inherited V1 or restored V2 content [7.00ms]
+(pass) host-selected child memory authority before execution > only a schema-valid correlated host knowledge packet supplies V2 content [7.05ms]
+(pass) host-selected child memory authority before execution > rejects actor substitution without changing source selection [3.24ms]
+(pass) host-selected child memory authority before execution > rejects task substitution without changing source selection [2.62ms]
+(pass) host-selected child memory authority before execution > rejects knowledge-task substitution without changing source selection [2.71ms]
+(pass) host-selected child memory authority before execution > rejects schema substitution without changing source selection [3.14ms]
+(pass) host-selected child memory authority before execution > json-v1 overrides restored/template authority and does not promote supplied knowledge [6.00ms]
+(pass) host-selected child memory authority before execution > shadow-v2 overrides restored/template authority and does not promote supplied knowledge [4.91ms]
+(pass) host-selected child memory authority before execution > a live generator cannot override captured sqlite-v2-opt-in source selection [3.92ms]
+(pass) host-selected child memory authority before execution > a live generator cannot override captured json-v1 source selection [3.77ms]
+(pass) host-selected child memory authority before execution > an absent host resolver retains standalone legacy V1 behavior [2.99ms]
+(pass) host-selected child memory authority before execution > an unresolved host selection cannot silently execute using restored or legacy authority [3.14ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-roundtrip.test.ts:
+Using environment: dev
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed retains explicit own fact, decision and rationale across a new process [2209.08ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed retains explicit own fact, decision and rationale across a new process [1935.06ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled retains explicit own fact, decision and rationale across a new process [1801.39ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed precommit terminal checkpoint reconciles unchanged identities after reopen [1593.26ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed lost-ack terminal checkpoint reconciles unchanged identities after reopen [1765.57ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed precommit terminal checkpoint reconciles unchanged identities after reopen [1825.12ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed lost-ack terminal checkpoint reconciles unchanged identities after reopen [1653.04ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled precommit terminal checkpoint reconciles unchanged identities after reopen [1768.60ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled lost-ack terminal checkpoint reconciles unchanged identities after reopen [1826.89ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > caller cancellation does not settle the SDK before its terminal memory append [170.65ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > genuinely captured ranked facts exceed 12k while the complete high-ranked claim survives [3052.84ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-authority-wire.test.ts:
+Using environment: dev
+(pass) B12 actual provider memory source and authority matrix > v2-unavailable metadata agrees with the actual first model messages [229.01ms]
+(pass) B12 actual provider memory source and authority matrix > v2-throws metadata agrees with the actual first model messages [134.62ms]
+(pass) B12 actual provider memory source and authority matrix > v2-invalid metadata agrees with the actual first model messages [108.24ms]
+(pass) B12 actual provider memory source and authority matrix > v2-empty metadata agrees with the actual first model messages [165.30ms]
+(pass) B12 actual provider memory source and authority matrix > v1-present metadata agrees with the actual first model messages [104.41ms]
+(pass) B12 actual provider memory source and authority matrix > v1-empty metadata agrees with the actual first model messages [85.89ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-replacement-capture.test.ts:
+(pass) precommit replacement observation does not retract a prior claim without confirmation [134.83ms]
+(pass) lost-ack replacement observation does not retract a prior claim without confirmation [104.27ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/finish-turn.test.ts:
+(pass) independent terminal memory finalization wait > an already aborted productive-run signal selects cancellation without abandoning persistence [0.62ms]
+(pass) independent terminal memory finalization wait > uncooperative optional maintenance remains bounded and late rejection is observed [10.67ms]
+(pass) independent terminal memory finalization wait > sync observer and logger failures never change the run effect [0.26ms]
+
+ 84 pass
+ 0 fail
+ 1038 expect() calls
+Ran 84 tests across 6 files. [69.78s]

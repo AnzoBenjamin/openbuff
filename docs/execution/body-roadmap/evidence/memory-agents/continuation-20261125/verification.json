@@ -1,0 +1,501 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-25T16:38:21.790Z",
+  "feature": "User-requested read-only-first knowledge and memory agents",
+  "status": "delivered-local-verified",
+  "agents": [
+    "knowledge-retriever",
+    "knowledge-reviewer",
+    "memory-manager"
+  ],
+  "invocation": "cli/bin/openbuff run --agent memory-manager -p \"Review knowledge.md against the current package scripts; propose changes only.\" --json",
+  "behavior": [
+    "Deterministic retrieval then independent review; child run outcomes and bounded failure diagnostics are preserved.",
+    "Output is untrusted suggestions: requiresUserApproval true, applied false; no canonical promotion/deletion, policy activation, graph rewrite or source mutation tools.",
+    "Host-captured strictProjectReads inherits monotonically and authenticates actual actor/task/read identity, including supervised children.",
+    "Guarded descriptors refuse sensitive/outside/temp/external/symlink/hardlink/special/replaced targets. Raw skill bootstrap is withheld on strict fresh/resumed roots.",
+    "Non-opt-in unrestricted defaults remain unchanged; no recurring sweep or new productive step/time cap."
+  ],
+  "tests": {
+    "deliverySafety": {
+      "files": 6,
+      "passed": 35,
+      "assertions": 228,
+      "failed": 0
+    },
+    "actualSourceAndCopiedCli": {
+      "passed": 7,
+      "assertions": 35,
+      "failed": 0
+    },
+    "staticPromptTokens": 24798,
+    "staticCoreTools": 23,
+    "registryAgents": 48
+  },
+  "boundaries": [
+    "Current verified strict reader requires Linux/proc; unsupported/custom/decorated views fail closed.",
+    "Supported declared reads: read_files, read_outline, glob, list_directory. Raw index/search/subtree/control/archive tools and raw disk skills are withheld.",
+    "Code-map/canonical-memory scope unavailable through guarded source/export or actual host context is an explicit omission, not a completed sweep.",
+    "Host indexing/observation bookkeeping can still occur; model judgments are not authenticated verification or execution authority.",
+    "No claim that arbitrary allowed source text contains no secrets or that same-inode writers are snapshot-isolated."
+  ],
+  "original": {
+    "plan": {
+      "path": ".agents/sessions/body-capability-review-2026-11-05/PLAN.md",
+      "sha256": "60f28ae636ac0511266526d80221caf09c34c7ff8b0c53b79aba2d85787f8241"
+    },
+    "specification": {
+      "path": ".agents/sessions/body-capability-review-2026-11-05/SPEC.md",
+      "sha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31"
+    },
+    "ledger": {
+      "path": "docs/execution/body-roadmap/ledger.json",
+      "sha256": "4d46ede9a94b0420a7541f7cca3b75f78862b07ceb2ae731b1a8adcfc66678bb"
+    },
+    "registry": {
+      "path": "docs/execution/body-roadmap/execution-plan.json",
+      "sha256": "cab9beee96514eb3c9063c6e67090fe797ad90eaffeff8a4efe1b7a447e78095"
+    },
+    "addendum": {
+      "path": "docs/execution/body-roadmap/product-audit-addendum.md",
+      "sha256": "60ba6db455647d9cc4512631bcc887f0f3e70d910790f9509e5bf36623f0191f"
+    }
+  },
+  "sourceScope": {
+    "kind": "selected-source-and-tests-not-complete-dependency-closure",
+    "files": [
+      {
+        "path": "agents/memory/contracts.ts",
+        "sha256": "ac7b26117f9f13161b8443c414465d385d9e692bed4807736cc9fd9a083c56f2"
+      },
+      {
+        "path": "agents/memory/memory-agents.test.ts",
+        "sha256": "4a3cb24a4a816f4b6582fbf46fd3dad00b401f235b9dfe2aefe16b92a8a3fbef"
+      },
+      {
+        "path": "agents/memory/memory-manager.ts",
+        "sha256": "7772b24bee70b1040a0736bb8c257753f3192317d4234630faf6264e06e51c2e"
+      },
+      {
+        "path": "agents/memory/knowledge-reviewer.ts",
+        "sha256": "f634eeb31fe19a60f3e8284cc87c1899ec8c486ccc88033324b9626012b441ed"
+      },
+      {
+        "path": "agents/memory/knowledge-retriever.ts",
+        "sha256": "cc17b6392c677f42af9215c0a33aaeac7d173f011334cbacf4b01620c7aadd7d"
+      },
+      {
+        "path": "agents/base2/base2.ts",
+        "sha256": "1633f20e240b91d13ad900d983769c3543ee9c56b24109f1afaacdbc677d050c"
+      },
+      {
+        "path": "agents/base2/spawn-contract.ts",
+        "sha256": "596d34a9d9d24514b76a9d3128ff98e438b9968c1a0d4be07dcf57296681ba84"
+      },
+      {
+        "path": "agents/base2/tool-tiers.ts",
+        "sha256": "18d1b46f171af48ea0b0092a3fc51319144db97d1a2117bbc0c306dbd56abf39"
+      },
+      {
+        "path": "agents/tool-reachability.test.ts",
+        "sha256": "f00046cb6f837e91f78a57d27f7c5043d05d8d6e5de261446c3c85d331e2a8ad"
+      },
+      {
+        "path": "agents/__tests__/base2.test.ts",
+        "sha256": "dd1525f1375eaa2d18e66de7f08a9f6e4b0424decb53e934e0c191fa7b2e222a"
+      },
+      {
+        "path": "agents/__tests__/base2-mode-policy.test.ts",
+        "sha256": "3e7f14d8d9c0b8944820097997a214f314e8de81722d8ceb6ba22aaebf96e6f8"
+      },
+      {
+        "path": "common/src/constants/agents.ts",
+        "sha256": "99f68bb21a5f6c6cc5b6ecb22f2b9d4108a29ce99150ae35f3d7dcc14c7364a0"
+      },
+      {
+        "path": "common/src/util/project-path-containment.ts",
+        "sha256": "fd533c2dbe8e911701096267a788ae29f2cb3502f29b4db71e9166fff322f0ea"
+      },
+      {
+        "path": "common/src/util/__tests__/strict-project-read-policy.test.ts",
+        "sha256": "47bc35e4d432b33091e9dfbaac9634124c51b180f465e8b2b850439ea832df26"
+      },
+      {
+        "path": "sdk/src/tools/node-filesystem.ts",
+        "sha256": "42e4d824ea80d5c9155d58fb712412a525079f62f4bf31c70c71d5aef82d6549"
+      },
+      {
+        "path": "sdk/src/tools/guarded-project-read.ts",
+        "sha256": "a8f24aad00e9a6dfda3bf03cb0c28c79bcbdbdac92d5727b02ef0e7581382ab1"
+      },
+      {
+        "path": "sdk/src/services/host-filesystem.ts",
+        "sha256": "da3f9745ecddb95ba6c02d7bef5dc332ef6bc5628b1d5f82da7c2c24bbf6db7b"
+      },
+      {
+        "path": "sdk/src/__tests__/memory-management-agents.test.ts",
+        "sha256": "44ba15bf654fae6e0af699012cd259fc936a2306a7a49dae62b47dadb6f8be88"
+      },
+      {
+        "path": "sdk/src/__tests__/strict-project-read-filesystem.test.ts",
+        "sha256": "95f3ef02f16a6fd9a4ede675b8be7c9fc9d26517571ef69adb8fa96e85a0e11c"
+      },
+      {
+        "path": "sdk/src/__tests__/strict-project-read-actors.test.ts",
+        "sha256": "446a85c61fc45bfb758dd90e18136754cbbbc833d42c42c34241d7d8a2905d02"
+      },
+      {
+        "path": "sdk/src/__tests__/strict-project-read-skills.test.ts",
+        "sha256": "3a0b98df2627bcbf9cbe5803b8a9cd5364b5b988a11ae40b0da57e3124030e23"
+      },
+      {
+        "path": "sdk/src/__tests__/strict-project-read-registry.test.ts",
+        "sha256": "40301caf917d19e81bde271814ac09718d2ccc88d0f852a0efa249eded8b5a50"
+      },
+      {
+        "path": "docs/agents-and-tools.md",
+        "sha256": "5e279a179ff2bf9efde962fb8c092ab3769ca654ceee9a65587d3bfff585c6ea"
+      },
+      {
+        "path": "docs/repository-intelligence.md",
+        "sha256": "555fa181c0b598f2ca53da834c7bd3a97637d994c55bc528c78f5345268efe21"
+      },
+      {
+        "path": "common/src/types/contracts/agent-runtime.ts",
+        "sha256": "ddc79f4a9f7afe6f431763a519e5627cb182846d1fe6229777a0fded4a31a1d9"
+      },
+      {
+        "path": "common/src/types/contracts/client.ts",
+        "sha256": "08fc66a079222142d946ecd27f64a2b9847775dba776d1ee1a555bffdca5affd"
+      },
+      {
+        "path": "common/src/types/filesystem.ts",
+        "sha256": "8cad9c3a6817c3eb7f72ac1183096f8df0604d0e52cb30d04106542efaed2762"
+      },
+      {
+        "path": "sdk/src/run.ts",
+        "sha256": "04f27843e44aa405f876b98fa25362b71d6619948402a8e14bae035cc5ca0474"
+      },
+      {
+        "path": "sdk/src/run-state.ts",
+        "sha256": "d581226f79107d043a244471e29b6ca8e8741d4cd2e459acaae055bd93a9e344"
+      },
+      {
+        "path": "sdk/src/impl/agent-runtime.ts",
+        "sha256": "b3a2cfc21a60d542c2d4f1130699f86b0c5f4afa6684cd736300637432d6571b"
+      },
+      {
+        "path": "packages/agent-runtime/src/run-agent-step.ts",
+        "sha256": "11090733ec5bbd6a9a7ae5a68eb42a37bb9ebce149edc3e6c1732419f2be1ae2"
+      },
+      {
+        "path": "packages/agent-runtime/src/tools/tool-executor.ts",
+        "sha256": "38b13a6aee5865d5fe9b7f287fe445d9c4e1d4aab8f30e04471555b5dae30773"
+      },
+      {
+        "path": "packages/agent-runtime/src/tools/handlers/tool/spawn-agent-utils.ts",
+        "sha256": "00b1b4d14f89545ce257f8b10eeaf6f2dcd800055fce1a62a8a61d7af61b7036"
+      },
+      {
+        "path": "packages/agent-runtime/src/supervision/bridge-protocol.ts",
+        "sha256": "f3147d1a3bf753b2f46dacd9765e307ffd67b24dba872462b565b943869e3b80"
+      },
+      {
+        "path": "packages/agent-runtime/src/supervision/child-bridge-client.ts",
+        "sha256": "e8d824d192411b78661fb2ff83d70327bccef57541187fbed0fb85ff16cc3bca"
+      },
+      {
+        "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+        "sha256": "efdb97e032e60000318808fc0ab1dfa7cd1a2d97a4ee5c75cc49f6cb7bbc0859"
+      },
+      {
+        "path": "packages/agent-runtime/src/supervision/child-entry.ts",
+        "sha256": "a6529cb50e203c70dcf8fdc636d029379bae7e5f921b2768216bb0ada8576032"
+      },
+      {
+        "path": "package.json",
+        "sha256": "ef4497b667ef263fc4ca80dd58f513f93b0f7efbbc1b6d2a5a77c5bdee368ca5"
+      },
+      {
+        "path": "sdk/package.json",
+        "sha256": "3669c54112026681f87a6f1b8e9a321aa306117379b533b597e63cc3134ff49e"
+      },
+      {
+        "path": "cli/package.json",
+        "sha256": "a161152e44033fecfb3ab87b49a7e62dd10840f050cf86ccbf3710a49f86a50e"
+      },
+      {
+        "path": "agents/package.json",
+        "sha256": "40afe33da8f72c1027973c8e4006d3538394a770c67cb5af499701b299960ef8"
+      },
+      {
+        "path": "bun.lock",
+        "sha256": "afa916c11dada1095d99f3709f9a58e4376273f3b4e2c95afcd725357036222a"
+      }
+    ]
+  },
+  "evidence": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/typecheck-recorded-final.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/agents-all-final-r2.log",
+      "sha256": "8d727faa037d88f8bb5f04d37ecaaf0a407c70d3055cc6df7c51d41e39d7a862"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/runtime-regression-final.log",
+      "sha256": "2e5e3fe64b72d3f8603fe179b9ceaa7e33d31d1e978880859eb2fc3be5e3499b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/cli-bounded.log",
+      "sha256": "93ca614bccf6e88ee697840534b2d216da55a0df12c7bd75343514b21b38bc37"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/cli-result.json",
+      "sha256": "8aa4d6abe4774c401f33b746346aa6cb91c52f752f1b89c334151ef8e3c0a303"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/cli-schedule.json",
+      "sha256": "b3c22cc056594c838d952107baba4dc9d95bfcbadffb6002eadf1fa30b73e4f8"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/cli-census-driver-post-pin.log",
+      "sha256": "5acfd04a2db5f8bbc372ea1f3cf01d7f5305126f1d007cbb664cbf49baa3ca8b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/cli-build-final-r2.log",
+      "sha256": "8eaf8ae75a91c6874c2ed8ec61636b2874cc8fd1639dc131e7267ce3fbd7ddbd"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/artifacts-final-before.txt",
+      "sha256": "c346baaad45c777506da8c3ac3bdebfb4afa8842ee02be38fb2b6fab2e45cd5a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/artifacts-final-after.txt",
+      "sha256": "c346baaad45c777506da8c3ac3bdebfb4afa8842ee02be38fb2b6fab2e45cd5a"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/node-dist-consumers-final.log",
+      "sha256": "be6dbda803419bb4d2f6574b3940293e79330e7d13783188b2e34e6c9d3d69b7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/readme-esm-final.log",
+      "sha256": "89c4de291b97252b89cb7331aca61311e08fc009cda02d6bc5c9bfc92f50cd63"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/doc-defaults-postbuild.log",
+      "sha256": "4b5c51606e56d0bb4bf32da895db56fda8d5c542c0eee49fbcbcf7acf5cd346d"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/format-recorded-final.log",
+      "sha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/whitespace-recorded-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/ledger-validator-final.json",
+      "sha256": "914231c451989b225f3b8836c39008558959b29773ef41f50daa793bc80bba77"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/concrete-evidence-final.log",
+      "sha256": "0f7d043fcbc6815538b254ca7cd66d1603b7520efd22cf1fecf38f49c20e58af"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/definitions-red.log",
+      "sha256": "ddebc9bf3801469682a95f8d1cbada597927bdee8b0f262043066955454dd600"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/contract-review-red-r2.log",
+      "sha256": "dd9a95ac7a83f3a521fd6d84eb125d83efc75e67d6cc0469adbbd3a887670ef7"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/contract-review-postfix.json",
+      "sha256": "90e4287e1ba20b2c81a417609ae3d821320c03df39d8caa2e9defd61f30d41d1"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/strict-skills-red.log",
+      "sha256": "c8cdc1b7b98d6934b165b2cd44406ecc6a0ee3dc2922468563edba184c4d7fc4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/strict-read-security-postfix.json",
+      "sha256": "3995170535c8bfbe19e7bc1c34bdefc513d7ba7e6c30d2db81e8d5c0342e04c2"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/delivery-safety-final.log",
+      "sha256": "e1ae176547d94118c3ace7890f863c3a9917afcbdea95ca02a8d670c1607578f"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/copied-cli-wire-final.log",
+      "sha256": "acc62cd789db1125a8c82a4724247eb2c4a9eac8210351f34ba1d6b26bbf4598"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/source-cli-wire-r1.log",
+      "sha256": "42480f038299d93982cb246255c27a7c6782313b7e7c173234f59019c0707e9e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/safety-regression-final-r1.log",
+      "sha256": "9863f13c456a3bc63f6216e781cb8a4394415543380abaef3ce7ae3df3040073"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/observer-trust-regression-final.log",
+      "sha256": "f8a0389f5ecbc34fb2029bf91a85a2e93172e976b3e3a137d19ec145c4744dbc"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/n12-cumulative-regression-final.log",
+      "sha256": "cc67570ddfcf0d5e2fb483a0909dfbd1029a9b2535220c1df2bde799e6b5aa7e"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/static-prompt-metrics-final.log",
+      "sha256": "4c43c76ff90871cfaced3da03bb943ffe8b67539934c2c858e7dc0216e346f44"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/agents-all-r1.log",
+      "sha256": "f84ed7f0c02fb3d0e344f234e7e0cc46658dd0d443bec23b00c2f63960106322"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/captures/runtime-regression-r1.log",
+      "sha256": "108923901151a5ec0b981aa3695f786bd7d617cca45ad24d0e9789f28421a060"
+    }
+  ],
+  "fixtureEvidence": [
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/fixtures/wire-a35b1def-2f51-4fe6-aa72-8071069b7659.json",
+      "sha256": "eab9393b2b64a62fb24976014aa8c3ad53d455be10d95660f21ab39da61d6bc6"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/fixtures/wire-ec9d5c3b-78d0-479e-b92d-51d722b82445.json",
+      "sha256": "8582ddb4940e2a11afa9140f5e5213a4f9ed47fa386acf3e2c981ae415c0140b"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/fixtures/wire-b86f2f6a-37db-42af-888a-bbb9d0501fbc.json",
+      "sha256": "1a8963db61b54fbc4d9b13522387734e388e4347f1c4e5571c25594560576781"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/fixtures/wire-f3d6c878-2fc6-4d4c-aba4-4f9c7e0ac2ae.json",
+      "sha256": "024519f35083afd02d24f72a2a3bd5c2a85407787fd03b901b4dc45d5c9d44f4"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/fixtures/wire-d7cd025a-60f8-4a60-a9ff-03fe1450fa01.json",
+      "sha256": "1540c40a41544e4e73dcad4e11f1221f54f994ac53a5691b40fbc1f5c4434396"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/fixtures/wire-04bef7bd-a908-4d74-91a0-4371da4d91d8.json",
+      "sha256": "3c60cdab08e834787639665076b2e3f582df030bf46b01b6fdae44d132b0f120"
+    },
+    {
+      "path": "docs/execution/body-roadmap/evidence/memory-agents/continuation-20261125/fixtures/wire-46d20ee1-c949-450f-be60-a5ce50866580.json",
+      "sha256": "f54c12d0c7959a2c956f01bf0c15f1b94349ddde4a44ea54a4d370f7b93dc17c"
+    }
+  ],
+  "cumulativeValidation": {
+    "allWorkspaceTypechecks": {
+      "passed": true,
+      "workspaces": 11,
+      "log": "typecheck-recorded-final.log"
+    },
+    "agents": {
+      "passed": 1390,
+      "skipped": 5,
+      "failed": 0,
+      "files": 58,
+      "assertions": 10161
+    },
+    "cli": {
+      "discoveredFiles": 314,
+      "selectedFiles": 313,
+      "excluded": [
+        "src/__tests__/utils/env.test.ts"
+      ],
+      "passed": 4895,
+      "skipped": 196,
+      "failed": 0,
+      "assertions": 22318,
+      "code": 0,
+      "timedOut": false,
+      "homeUnchanged": true,
+      "limitation": "Canonical discovery/order/preload/isolation minus one HOME-reassigning suite. Not exact CI; skips confer no execution credit."
+    },
+    "runtimePreFinalSourcePin": {
+      "passed": 340,
+      "failed": 0,
+      "assertions": 1810,
+      "files": 6
+    },
+    "finalSourcePinRuntime": {
+      "passed": 115,
+      "failed": 0,
+      "assertions": 503,
+      "files": 3
+    },
+    "docsDefaults": true,
+    "scopedFormatting": true,
+    "whitespace": true,
+    "fullSdkSuite": "Not run; focused source/consumer schedules only."
+  },
+  "artifacts": [
+    {
+      "path": "cli/bin/openbuff",
+      "sha256": "4010cb7a63a7c52786bdf9f1de0e721932107c52d9d67082372a5807e5528d9c",
+      "retention": "Local ignored build artifact, not public release/install proof."
+    },
+    {
+      "path": ".tmp/memory-management-agents/copied-cli-final/bin/openbuff",
+      "sha256": "4010cb7a63a7c52786bdf9f1de0e721932107c52d9d67082372a5807e5528d9c",
+      "retention": "Local ignored build artifact, not public release/install proof."
+    },
+    {
+      "path": "sdk/dist/index.mjs",
+      "sha256": "7384ac985042044bde69f25f527d7bbbb14d64f6fe66c2d4c8b19056631ea35a",
+      "retention": "Local ignored build artifact, not public release/install proof."
+    },
+    {
+      "path": "sdk/dist/index.cjs",
+      "sha256": "939f59e02d069c72393029e5889c2fdfe0834794cbbb7ded0654bc2f0b12af85",
+      "retention": "Local ignored build artifact, not public release/install proof."
+    },
+    {
+      "path": "sdk/dist/index.d.ts",
+      "sha256": "f2c8a77e75fb604c1b8411cbb810db4be57513b87e11f6f841fa3e322dd843d4",
+      "retention": "Local ignored build artifact, not public release/install proof."
+    }
+  ],
+  "historicalAcceptance": {
+    "status": "unchanged",
+    "accepted": 13,
+    "nodes": 39,
+    "validatorExitCode": 1,
+    "missingReceiptCount": 12,
+    "errors": [
+      "B01 acceptance receipt: missing docs/execution/body-roadmap/evidence/B01/accepted/20261111T235810377611Z-acceptance.json",
+      "B02 acceptance receipt: missing docs/execution/body-roadmap/evidence/B02/accepted/20261111T235810377611Z-acceptance.json",
+      "B03 acceptance receipt: missing docs/execution/body-roadmap/evidence/B03/accepted/20261111T235810377611Z-acceptance.json",
+      "B04 acceptance receipt: missing docs/execution/body-roadmap/evidence/B04/accepted/20261111T235810377611Z-acceptance.json",
+      "B05 acceptance receipt: missing docs/execution/body-roadmap/evidence/B05/accepted/20261111T235810377611Z-acceptance.json",
+      "B08 acceptance receipt: missing docs/execution/body-roadmap/evidence/B08/accepted/20261111T235810377611Z-acceptance.json",
+      "B18 acceptance receipt: missing docs/execution/body-roadmap/evidence/B18/accepted/20261111T235810377611Z-acceptance.json",
+      "B19 acceptance receipt: missing docs/execution/body-roadmap/evidence/B19/accepted/20261111T235810377611Z-acceptance.json",
+      "B20 acceptance receipt: missing docs/execution/body-roadmap/evidence/B20/accepted/20261111T235810377611Z-acceptance.json",
+      "B28 acceptance receipt: missing docs/execution/body-roadmap/evidence/B28/accepted/20261111T235810377611Z-acceptance.json",
+      "B30 acceptance receipt: missing docs/execution/body-roadmap/evidence/B30/accepted/20261111T235810377611Z-acceptance.json",
+      "B36 acceptance receipt: missing docs/execution/body-roadmap/evidence/B36/accepted/20261111T235810377611Z-acceptance.json"
+    ],
+    "limitation": "This verification packet does not replace missing prerequisite receipts, independently seal complete source closure, or promote roadmap acceptance."
+  },
+  "preserved": [
+    "Inherited HOME",
+    "User-installed binary and user configuration",
+    "Existing mixed worktree changes",
+    "Historical ledger/registry and frozen plan/spec"
+  ],
+  "notClaimed": [
+    "Public release/publish/registry install",
+    "Live-provider quality evaluations",
+    "OS sandbox or immutable same-inode snapshot guarantee",
+    "Cross-platform strict-read parity",
+    "Historical receipt recovery/renewal",
+    "Commit or push"
+  ]
+}

@@ -1,0 +1,57 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-management-agents.test.ts:
+Using environment: dev
+(pass) actual SDK read-only memory-management agents > the manager joins actual retrieval and independent source reads without a manager model call [530.04ms]
+(pass) actual SDK read-only memory-management agents > declared read-only roles refuse mutation, memory promotion, credentials and outside file reads [394.13ms]
+(pass) actual SDK read-only memory-management agents > the actual source or explicitly selected built CLI can run memory-manager from the shipped catalog [5318.81ms]
+(pass) actual SDK read-only memory-management agents > a strict manager cannot be widened by an unflagged retrieval child [360.91ms]
+(pass) actual SDK read-only memory-management agents > an explicit non-opt-in control retains existing unrestricted reads [284.27ms]
+(pass) actual SDK read-only memory-management agents > a real exhausted retrieval child cannot produce a falsely complete maintenance report [212.47ms]
+(pass) actual SDK read-only memory-management agents > a real exhausted reviewer preserves retrieval and reports partial, not applied work [267.32ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-filesystem.test.ts:
+(pass) opened-target strict project read views > benign byte/text/directory reads retain bounded view contracts [67.90ms]
+(pass) opened-target strict project read views > sensitive, owned-temp, external, symlink, hardlink and special-file targets never return bytes [47.04ms]
+(pass) opened-target strict project read views > a symlink substituted immediately before a body read is refused before capture [6.62ms]
+(pass) opened-target strict project read views > a newly created hardlink is refused before a body read [8.23ms]
+(pass) opened-target strict project read views > replacement after capture is refused instead of publishing the held old file [7.80ms]
+(pass) opened-target strict project read views > an intermediate directory swap cannot redirect a held traversal [3.26ms]
+(pass) opened-target strict project read views > unsupported/decorated adapters fail unavailable without reading raw host or custom bytes [1.83ms]
+(pass) opened-target strict project read views > an unverified custom descriptor-open seam cannot fall back to raw host files [0.90ms]
+(pass) opened-target strict project read views > rebound sandbox cannot weaken guarded reads and ordinary unrestricted access is unchanged [2.86ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-actors.test.ts:
+Using environment: dev
+(pass) SDK admission and scoped strict read attribution > static opt-in denies sensitive/temp reads despite actor/root/policy tool-param tampering [175.69ms]
+(pass) SDK admission and scoped strict read attribution > restored template JSON cannot discard admission strictness or select a different root [193.06ms]
+(pass) SDK admission and scoped strict read attribution > parent strictness inherits to a non-opt-in child (in process) [140.63ms]
+(pass) SDK admission and scoped strict read attribution > parent strictness inherits to a non-opt-in child (real supervised process) [2175.44ms]
+(pass) SDK admission and scoped strict read attribution > fresh root discovery uses the guarded read view instead of loading hard-linked knowledge [159.25ms]
+(pass) SDK admission and scoped strict read attribution > optional reads and metadata tools use the same strict actor view [212.06ms]
+(pass) SDK admission and scoped strict read attribution > strict children do not globally switch their non-opt-in parent to project mode [120.51ms]
+(pass) SDK admission and scoped strict read attribution > non-opt-in unrestricted control ignores forged strictness in restored JSON [141.02ms]
+(pass) SDK admission and scoped strict read attribution > unguarded search/index/control readers and cached repository source refuse before dispatch [71.87ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-registry.test.ts:
+Using environment: dev
+(pass) parent-owned supervised read registry > real guarded reads reject root/sibling/issuer/identity substitution and retain parent cancellation [73.11ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/strict-project-read-skills.test.ts:
+Using environment: dev
+(pass) strict root skill bootstrap read boundary > explicit outside skills are withheld on fresh strict startup, ordinary control unchanged [205.15ms]
+(pass) strict root skill bootstrap read boundary > strict continuation removes inherited outside skill bytes without disk fallback [128.09ms]
+(pass) strict root skill bootstrap read boundary > a hard-linked project skill is not loaded through raw bootstrap [35.51ms]
+
+../home/ben/Code/CLI/openbuff/common/src/util/__tests__/strict-project-read-policy.test.ts:
+(pass) authenticated opt-in project-only read policy > derivation reuses the admission capture and is monotonic [1.27ms]
+(pass) authenticated opt-in project-only read policy > both resolvers admit benign source and deny sensitive/temp/external targets [5.94ms]
+(pass) authenticated opt-in project-only read policy > ambient or rebound sandbox policy cannot widen strict reads [1.56ms]
+(pass) authenticated opt-in project-only read policy > forged, cloned and wrong-project tokens fail closed [1.19ms]
+(pass) authenticated opt-in project-only read policy > retargeting a selected root never recaptures the derived boundary [1.20ms]
+(pass) authenticated opt-in project-only read policy > non-opt-in unrestricted control is unchanged [1.71ms]
+
+ 35 pass
+ 0 fail
+ 228 expect() calls
+Ran 35 tests across 6 files. [14.57s]

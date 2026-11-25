@@ -1,0 +1,81 @@
+{
+  "name": "openbuff-project",
+  "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "workspaces": [
+    ".agents",
+    "common",
+    "packages/*",
+    "scripts",
+    "evals",
+    "sdk",
+    "agents",
+    "cli"
+  ],
+  "scripts": {
+    "dev": "bun start-cli",
+    "up": "bun scripts/start-services.ts",
+    "start-cli": "bun --cwd cli dev",
+    "down": "bun scripts/stop-services.ts",
+    "ps": "bun scripts/status-services.ts",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\"",
+    "release:cli": "bun run --cwd=cli release",
+    "release:sdk": "bun run --cwd=sdk release",
+    "smoke:openbuff": "OPENBUFF_LOCAL_MODE=true bun scripts/openbuff-smoke.ts",
+    "smoke:harness": "bun scripts/harness-smoke.mjs",
+    "clean-ts": "find . -name '*.tsbuildinfo' -type f -delete && find . -name '.next' -type d -exec rm -rf {} + 2>/dev/null || true && find . -name 'node_modules' -type d -exec rm -rf {} + 2>/dev/null || true && bun install",
+    "typecheck": "bun scripts/check-env-architecture.ts && bun --filter='*' run typecheck && echo '✅ All type checks passed!'",
+    "test": "bun --filter='{@codebuff/common,@codebuff/agents,@codebuff/agent-runtime,@codebuff/indexer,@openbuff/sdk,@codebuff/cli,@codebuff/evals,@codebuff/scripts}' run test",
+    "init-worktree": "bun scripts/init-worktree.ts",
+    "cleanup-worktree": "bun scripts/cleanup-worktree.ts",
+    "generate-tool-definitions": "bun scripts/generate-tool-definitions.ts",
+    "check-doc-defaults": "bun scripts/check-doc-defaults.ts",
+    "check:ci-local": "bun scripts/check-ci-local.ts",
+    "install:pre-push": "bun scripts/install-pre-push-hook.ts"
+  },
+  "dependencies": {
+    "canvas": "^3.2.0",
+    "gif-encoder-2": "^1.0.5",
+    "lodash": "4.17.23",
+    "zod": "^4.2.1"
+  },
+  "overrides": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "baseline-browser-mapping": "^2.9.14",
+    "caniuse-lite": "^1.0.30001792",
+    "zod": "^4.2.1",
+    "signal-exit": "3.0.7"
+  },
+  "//devDependencies": "The root is a workspace member too, so its own runtime dependencies (lodash, zod, canvas, gif-encoder-2) declare their typings here. Member packages declare their own typings in their own manifests and must not rely on this hoist.",
+  "devDependencies": {
+    "@tanstack/react-query": "^5.90.12",
+    "@types/bun": "1.4.4",
+    "@types/js-yaml": "^4.0.9",
+    "@types/lodash": "^4.17.21",
+    "@types/node": "^22.9.0",
+    "@types/node-fetch": "^2.6.12",
+    "@types/parse-path": "^7.1.0",
+    "@typescript-eslint/eslint-plugin": "^6.17",
+    "bun-types": "1.4.4",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.29.1",
+    "eslint-plugin-unused-imports": "^4.1.4",
+    "ignore": "^6.0.2",
+    "prettier": "^3.7.4",
+    "ts-node": "^10.9.2",
+    "ts-pattern": "^5.9.0",
+    "tsc-alias": "^1.8.16",
+    "tsconfig-paths": "4.2.0",
+    "typescript": "5.5.4",
+    "typescript-eslint": "^7.17.0"
+  },
+  "engines": {
+    "bun": "1.4.4"
+  },
+  "packageManager": "bun@1.4.4"
+}

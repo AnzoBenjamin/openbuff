@@ -1,0 +1,30 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-management-agents.test.ts:
+Using environment: dev
+(pass) actual SDK read-only memory-management agents > the manager joins actual retrieval and independent source reads without a manager model call [320.47ms]
+(pass) actual SDK read-only memory-management agents > declared read-only roles refuse mutation, memory promotion, credentials and outside file reads [118.43ms]
+(pass) actual SDK read-only memory-management agents > the actual source or explicitly selected built CLI can run memory-manager from the shipped catalog [1834.08ms]
+(pass) actual SDK read-only memory-management agents > a strict manager cannot be widened by an unflagged retrieval child [142.48ms]
+(pass) actual SDK read-only memory-management agents > an explicit non-opt-in control retains existing unrestricted reads [102.50ms]
+(pass) actual SDK read-only memory-management agents > a real exhausted retrieval child cannot produce a falsely complete maintenance report [85.00ms]
+(pass) actual SDK read-only memory-management agents > a real exhausted reviewer preserves retrieval and reports partial, not applied work [114.07ms]
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-v2-roundtrip.test.ts:
+Using environment: dev
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed retains explicit own fact, decision and rationale across a new process [1130.00ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed retains explicit own fact, decision and rationale across a new process [1032.53ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled retains explicit own fact, decision and rationale across a new process [1005.14ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed precommit terminal checkpoint reconciles unchanged identities after reopen [1072.75ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > completed lost-ack terminal checkpoint reconciles unchanged identities after reopen [1035.87ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed precommit terminal checkpoint reconciles unchanged identities after reopen [1060.27ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > failed lost-ack terminal checkpoint reconciles unchanged identities after reopen [1053.82ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled precommit terminal checkpoint reconciles unchanged identities after reopen [1014.93ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > cancelled lost-ack terminal checkpoint reconciles unchanged identities after reopen [1045.27ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > caller cancellation does not settle the SDK before its terminal memory append [68.40ms]
+(pass) B12 actual local handler → SQLite → fresh process → next core prompt > genuinely captured ranked facts exceed 12k while the complete high-ranked claim survives [1217.82ms]
+
+ 18 pass
+ 0 fail
+ 234 expect() calls
+Ran 18 tests across 2 files. [14.58s]

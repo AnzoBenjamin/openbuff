@@ -1,0 +1,16 @@
+bun test v1.4.4 (38afee6c8)
+
+../home/ben/Code/CLI/openbuff/sdk/src/__tests__/memory-management-agents.test.ts:
+Using environment: dev
+(pass) actual SDK read-only memory-management agents > the manager joins actual retrieval and independent source reads without a manager model call [364.85ms]
+(pass) actual SDK read-only memory-management agents > declared read-only roles refuse mutation, memory promotion, credentials and outside file reads [127.68ms]
+(pass) actual SDK read-only memory-management agents > the actual source or explicitly selected built CLI can run memory-manager from the shipped catalog [2303.41ms]
+(pass) actual SDK read-only memory-management agents > a strict manager cannot be widened by an unflagged retrieval child [150.36ms]
+(pass) actual SDK read-only memory-management agents > an explicit non-opt-in control retains existing unrestricted reads [103.58ms]
+(pass) actual SDK read-only memory-management agents > a real exhausted retrieval child cannot produce a falsely complete maintenance report [98.99ms]
+(pass) actual SDK read-only memory-management agents > a real exhausted reviewer preserves retrieval and reports partial, not applied work [123.95ms]
+
+ 7 pass
+ 0 fail
+ 35 expect() calls
+Ran 7 tests across 1 file. [4.07s]

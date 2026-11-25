@@ -1,0 +1,150 @@
+bun test v1.4.4 (38afee6c8)
+
+packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts:
+ 8 |         throw new core.$ZodAsyncError();
+ 9 |     }
+10 |     if (result.issues.length) {
+11 |         const e = new (_params?.Err ?? _Err)(result.issues.map((iss) => util.finalizeIssue(iss, ctx, core.config())));
+12 |         util.captureStackTrace(e, _params?.callee);
+13 |         throw e;
+                   ^
+ZodError: [
+  {
+    "origin": "array",
+    "code": "too_small",
+    "minimum": 1,
+    "inclusive": true,
+    "path": [
+      "result",
+      "verifiedKnowledge",
+      0,
+      "reasons"
+    ],
+    "message": "Too small: expected array to have >=1 items"
+  }
+]
+      at <anonymous> (/home/ben/Code/CLI/openbuff/node_modules/zod/v4/core/parse.js:13:15)
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts:147:45)
+(fail) compileMemoryV2Context > a high-ranked complete claim and rationale survive bulky verified excerpts [8.01ms]
+(pass) compileMemoryV2Context > is deterministic, bounded, sanitized, and retains warnings and explanations [2.00ms]
+(pass) compileMemoryV2Context > prioritizes correctness categories when the root budget overflows [0.52ms]
+(pass) compileMemoryV2Context > is byte-identical across all semantically unordered DTO arrays without mutating input [7.78ms]
+(pass) compileMemoryV2Context > is deterministic at exact root and child budget boundaries [4.12ms]
+(pass) compileMemoryV2Context > preserves selector granularity in verified output [0.47ms]
+(pass) compileMemoryV2Context > keeps the highest ranked complete fact before clipping instead of canonical ID order [0.48ms]
+(pass) compileMemoryV2Context > preserves score ordering across every ranked result category with deterministic ties [3.20ms]
+(pass) compileMemoryV2Context > schema-validates before compiling [0.66ms]
+(pass) compileMemoryV2Context > renders [currentCoverage] section when items are present [1.21ms]
+(pass) compileMemoryV2Context > omits [currentCoverage] section when array is empty [0.35ms]
+(pass) compileMemoryV2Context > includes bounded verified excerpt in verifiedKnowledge section [0.35ms]
+(pass) compileMemoryV2Context > renders chunk range digest excerpt and verifiedAt in verifiedKnowledge [1.32ms]
+(pass) compileMemoryV2Context > renders revision and snapshot in currentCoverage when present [0.77ms]
+(pass) countConceptAdvisoryEntries > is 0 for a context without concept-advisory entries [0.42ms]
+(pass) countConceptAdvisoryEntries > counts only reusableDiscovery entries carrying the concept-advisory code [0.35ms]
+(pass) countConceptAdvisoryEntries > the produced receipt satisfies its own schema with the counter set [1.00ms]
+
+packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts:
+(pass) loopAgentSteps > loads a tool tier between model steps without widening the initial surface [74.25ms]
+(pass) loopAgentSteps > routes spawned subagent model requests by stable agent type [6.04ms]
+(pass) loopAgentSteps > B02 stops a zero cost budget naturally without output correction or inference [2.18ms]
+(pass) loopAgentSteps > B02 finalizes a fatal generator as failed once and preserves its partial output [2.68ms]
+(pass) loopAgentSteps > B02 stops an exhausted step budget once before any generator tool dispatch [1.93ms]
+(pass) loopAgentSteps > B02 prevents generator restart and correction after the final permitted provider step [5.73ms]
+(pass) loopAgentSteps > B02 completes successful work on the final permitted provider step [8.45ms]
+(pass) loopAgentSteps > B02 candidate generation consumes the selected provider-step budget [4.10ms]
+(pass) loopAgentSteps > B02 candidate generation stops once after an observed token budget exhaustion [3.72ms]
+(pass) loopAgentSteps > B02 a single candidate request can finish on its final permitted step [3.17ms]
+(pass) loopAgentSteps > B02 preserves task rejection independently of a happy generator completion [2.36ms]
+(pass) loopAgentSteps > B02 retains a failed action after verified tool recovery and accepted task completion [11.37ms]
+(pass) loopAgentSteps > stops an infinite sequence of identical invalid tool calls [8.48ms]
+(pass) loopAgentSteps > allows correction after invalid tool calls [7.34ms]
+(pass) loopAgentSteps > resets the error streak when invalid arguments change [8.59ms]
+(pass) loopAgentSteps > does not treat repeated provider errors as identical invalid tool calls [5.60ms]
+(pass) loopAgentSteps > compares full invalid arguments, not just identical validation excerpts [8.09ms]
+(pass) loopAgentSteps > still stops repeated identical malformed XML tool calls [4.64ms]
+(pass) loopAgentSteps > calls the LLM once after STEP [12.40ms]
+(pass) loopAgentSteps > retries a prompt-only structured agent that ends without set_output [7.25ms]
+(pass) loopAgentSteps > preserves set_output when thinker harvest finds no plain assistant text [5.68ms]
+(pass) loopAgentSteps > harvests thinker plain-text final answer into structured output [3.52ms]
+(pass) loopAgentSteps > reports the resolved BYOK model context window before the LLM request [4.03ms]
+(pass) loopAgentSteps > preserves a pre-seeded contextWindowTokens when no resolver dep is present [3.52ms]
+(pass) loopAgentSteps > forwards a request-time SDK trim as a context_request_trim event [4.17ms]
+(pass) loopAgentSteps > stamps a nested run lineage on the context_request_trim event [3.32ms]
+(pass) loopAgentSteps > publishes the same compaction budget on context_window as on the compaction event [12.38ms]
+(pass) loopAgentSteps > keeps the window-derived compaction trigger when maxContextLength clamps max below it [3.81ms]
+(pass) loopAgentSteps > keeps the unknown-window fallback trigger above a small configured window [3.89ms]
+(pass) loopAgentSteps > runs semantic programmatic compaction before the mechanical brake [8.90ms]
+(pass) loopAgentSteps > does not report below-trigger semantic reductions as context compaction [5.79ms]
+(pass) loopAgentSteps > uses the injected small-model semantic budget before the first request [4.57ms]
+(pass) loopAgentSteps > emits exactly one run-correlated compaction status pair for an announced pass [5.45ms]
+(pass) loopAgentSteps > settles the compaction status when a pass declines to compact [7.36ms]
+(pass) loopAgentSteps > reports a failed generator-driven pruner on the parent compaction settle [23.95ms]
+(pass) loopAgentSteps > settles the compaction status exactly once when the programmatic step throws [3.99ms]
+(pass) loopAgentSteps > stamps a nested run lineage on compaction status and result events [4.57ms]
+(pass) loopAgentSteps > emits monotonic compaction progress strictly inside an announced pass [5.14ms]
+(pass) loopAgentSteps > emits no compaction progress for an iteration that announces no pass [5.64ms]
+(pass) loopAgentSteps > emits a recovery-rich event when emergency mechanical trim is required [10.46ms]
+(pass) loopAgentSteps > reports compaction thrash in the reason after two unproductive compactions [14.72ms]
+(pass) loopAgentSteps > does not report an announced semantic pass that reclaimed nothing as a compaction [8.52ms]
+(pass) loopAgentSteps > caps further semantic compaction for the turn after a zero-reclaim announced pass [8.09ms]
+(pass) loopAgentSteps > revokes implicit read authorizations when eviction rewrites read bodies out of history [29.79ms]
+(pass) loopAgentSteps > emits compaction progress only while an announced pass is unsettled [9.32ms]
+(pass) loopAgentSteps > leaves semantic compaction unsuppressed when a pass genuinely shrinks history [4.53ms]
+(pass) loopAgentSteps > resets suppressSemanticCompaction at loop entry [3.44ms]
+(pass) loopAgentSteps > announces and settles a runtime-driven semantic pass for a prompt-only template [11.89ms]
+(pass) loopAgentSteps > reports semantic_compaction when the runtime-driven pruner shrinks history [15.22ms]
+(pass) loopAgentSteps > stops announcing the runtime-driven pruner once the governor paces it [15.69ms]
+(pass) loopAgentSteps > skips the runtime-driven pruner when the template does not declare context-pruner [6.78ms]
+(pass) loopAgentSteps > spawns the declared publisher/version-qualified pruner for the runtime-driven pass [9.97ms]
+(pass) loopAgentSteps > injects the operative pruner contract for a publisher/version-qualified pruner [8.84ms]
+(pass) loopAgentSteps > paces inline pruner spawns under the governor for a publisher/version-qualified id [26.86ms]
+(pass) loopAgentSteps > runs the re-armed second pass after a productive pass and cooldown regrowth [32.14ms]
+(pass) loopAgentSteps > validates a suppressed pruner spawn before returning the anti-thrash skip envelope [3.42ms]
+(pass) loopAgentSteps > keeps the turn alive and settles when the runtime-driven pruner fails [5.81ms]
+(pass) loopAgentSteps > captures only the trusted root prompt and replaces a hydrated goal once [3.81ms]
+(pass) loopAgentSteps > uses the structured compaction envelope and newest pinned memory for /compact [3.79ms]
+(pass) loopAgentSteps > populates contextBudgetLedger on prompt-build turns and keeps it on cached-prompt turns [6.99ms]
+(pass) loopAgentSteps > keeps the saved system prompt when resuming an interrupted turn [7.16ms]
+(pass) loopAgentSteps > rebuilds legacy cached system prompts without a template identity [3.70ms]
+(pass) loopAgentSteps > clears template identity when using an inherited parent prompt [3.16ms]
+(pass) loopAgentSteps > annotates the retained contextBudgetLedger on a /compact turn [5.65ms]
+2767 |         yield createToolCallChunk('end_turn', {})
+2768 |         return promptSuccess('degraded-memory')
+2769 |       })
+2770 |       await loopAgentSteps({ ...baseParams, agentState, promptAiSdkStream: stream })
+2771 |       const tags = observed.flatMap(message => message.tags ?? [])
+2772 |       expect(tags).not.toContain('TASK_MEMORY_CONTEXT')
+                              ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "TASK_MEMORY_CONTEXT"
+Received: [ "USER_PROMPT", "INSTRUCTIONS_PROMPT", "TASK_MEMORY_CONTEXT", "STEP_PROMPT" ]
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts:2772:24)
+(fail) loopAgentSteps > degraded or malformed correlated V2 authority never injects the V1 shadow [5.28ms]
+(pass) loopAgentSteps > selects exactly one correlated prompt authority and defaults legacy states to V1 [15.59ms]
+(pass) loopAgentSteps > injects exactly one bounded active-playbooks band beside the authoritative V2 context [10.94ms]
+(pass) loopAgentSteps > rebuilds one bounded V2 context message per model iteration without accumulation [5.03ms]
+(pass) loopAgentSteps > repeats the missing-output nudge until the step cap ends the loop [6.06ms]
+(pass) loopAgentSteps > caps the missing-output nudge at maxMissingOutputRetries and returns a null structured value [3.17ms]
+(pass) loopAgentSteps > injects a retry message that names the recorded set_output rejection [31.82ms]
+(pass) loopAgentSteps > corrects a verdict-less stored reviewer receipt in the same child [6.09ms]
+(pass) loopAgentSteps > bounds repeated invalid reviewer receipts and reports schema_invalid [7.47ms]
+(pass) loopAgentSteps > repairs other reviewer schema errors without repeating the review [4.37ms]
+(pass) loopAgentSteps > lets a reviewer correct a rejected replacement after an earlier valid receipt [4.85ms]
+(pass) loopAgentSteps > does not require a verdict for a valid advisory specialist receipt [2.95ms]
+(pass) loopAgentSteps > repairs a reviewer-family specialist even when its id and stale output omit reviewer [3.99ms]
+(pass) loopAgentSteps > injects the generic missing-output message when there is no recorded rejection [11.55ms]
+(pass) loopAgentSteps > retries once and succeeds when the stream ends empty with no executed tool call [1012.90ms]
+(pass) loopAgentSteps > surfaces the exact failure output when attempt 2 also ends empty [1004.83ms]
+(pass) loopAgentSteps > does not retry when a tool call executed before the empty end [7.29ms]
+(pass) loopAgentSteps > compacts once before the retry when context exceeds 0.7 of the window [1021.31ms]
+
+2 tests failed:
+(fail) compileMemoryV2Context > a high-ranked complete claim and rationale survive bulky verified excerpts [8.01ms]
+(fail) loopAgentSteps > degraded or malformed correlated V2 authority never injects the V1 shadow [5.28ms]
+
+ 97 pass
+ 2 fail
+ 377 expect() calls
+Ran 99 tests across 2 files. [4.43s]

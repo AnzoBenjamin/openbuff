@@ -1,0 +1,12 @@
+bun test v1.4.4 (38afee6c8)
+
+src/__tests__/run-continue-wire.test.ts:
+(pass) actual headless continuation consumer > stdin/model/schema run persists; a new process continues all prior context without inheriting the model override [5615.98ms]
+(pass) actual headless continuation consumer > an explicit session ID is a real continuation, while a busy cross-process owner refuses provider entry [6596.66ms]
+(pass) actual headless continuation consumer > missing continuation does not create a journal, a conversation, or a provider request [1205.06ms]
+(pass) actual headless continuation consumer > a missing key produces the exact same readiness message as the TUI and no provider request [2134.35ms]
+
+ 4 pass
+ 0 fail
+ 35 expect() calls
+Ran 4 tests across 1 file. [15.64s]

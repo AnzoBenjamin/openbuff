@@ -1,0 +1,26 @@
+bun test v1.4.4 (38afee6c8)
+
+src/services/memory-v2/__tests__/b12-explicit-knowledge.test.ts:
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > fact retains its own summary, detail and rationale without inventing verification [72.10ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > decision retains its own summary, detail and rationale without inventing verification [53.21ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > constraint retains its own summary, detail and rationale without inventing verification [50.51ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > preserves query, project, task and artifact applicability for explicit knowledge [68.40ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > fact forgotten, superseded and corrected records remain historical only, even when pinned [43.50ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > decision forgotten, superseded and corrected records remain historical only, even when pinned [38.73ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > constraint forgotten, superseded and corrected records remain historical only, even when pinned [42.75ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > outcome does not enter lexical reuse, while discovery keeps its existing guidance [20.58ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > warning does not enter lexical reuse, while discovery keeps its existing guidance [20.44ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > fact invalidated evidence retains text but still requires a changed-selector reread [23.18ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > decision invalidated evidence retains text but still requires a changed-selector reread [20.57ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > constraint invalidated evidence retains text but still requires a changed-selector reread [19.77ms]
+(pass) B12 explicit knowledge lexical reuse (SQLite unit boundary) > category clipping keeps the existing ranked prefix, scores and cap degradation [37.25ms]
+
+src/services/memory-v2/__tests__/concept-firewall.test.ts:
+(pass) concept recall firewall > advisory expansion is additive and the authoritative view stays byte-identical [58.91ms]
+(pass) concept recall firewall > warm concept cache returns byte-identical results to the cold query [42.85ms]
+(pass) concept recall firewall > degraded expansion leaves every category byte-identical to semantics-off [41.82ms]
+
+ 16 pass
+ 0 fail
+ 290 expect() calls
+Ran 16 tests across 2 files. [845.00ms]

@@ -1,0 +1,13 @@
+bun test v1.4.4 (38afee6c8)
+
+common/src/util/__tests__/run-output-schema.test.ts:
+(pass) nonexecutable run-output schema capture > nonenumerable toJSON cannot replace the inspected schema or execute [0.49ms]
+(pass) nonexecutable run-output schema capture > accessors are rejected without evaluating their returned schema [0.05ms]
+(pass) nonexecutable run-output schema capture > symbol and sparse-array data refuse instead of disappearing during capture [0.06ms]
+(pass) nonexecutable run-output schema capture > literal $ref output property names and literal annotation data are not schema references [18.46ms]
+(pass) nonexecutable run-output schema capture > plain parsed JSON retains its exact prototype-like property names and validation constraints [5.01ms]
+
+ 5 pass
+ 0 fail
+ 13 expect() calls
+Ran 5 tests across 1 file. [56.00ms]

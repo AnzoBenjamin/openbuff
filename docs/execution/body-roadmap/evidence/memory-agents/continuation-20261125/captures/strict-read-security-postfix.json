@@ -1,0 +1,28 @@
+{
+  "scope": "Strict root skill bootstrap/continuation repair only",
+  "verdict": "Previous skill-bootstrap finding closed; no confirmed remaining bypass in the inspected loader/catalog paths",
+  "reviewMode": "Independent static inspection; no source edits, tests, or broad re-audit",
+  "checks": [
+    "initialSessionState short-circuits raw loadSkills for an authentic project-only fs.hostReadPolicy",
+    "applyOverridesToSessionState replaces inherited fileContext.skills with an empty map before the raw reload branch, independently of override presence",
+    "SDK fresh and resumed startup both supply admittedRootReadFileSystem",
+    "isProjectOnlyReadPolicy checks host-local WeakMap authority, not serialized flags",
+    "getInitialSessionState forwards the supplied skills map without a loader fallback",
+    "Non-opt-in skill-loader branches retain their existing inputs and behavior"
+  ],
+  "inspectedTests": "sdk/src/__tests__/strict-project-read-skills.test.ts: external explicit skills, weaker prior-turn skill catalog, hard-linked project SKILL.md, ordinary control",
+  "testsRun": false,
+  "remainingConfirmedFindings": [],
+  "limits": [
+    "Does not certify or scrub arbitrary historical conversation content or host-supplied context",
+    "Separate B12 child authority remains unreviewed and unfinished",
+    "No immutable-snapshot or OS-sandbox guarantee"
+  ],
+  "sha256": {
+    "sdk/src/run-state.ts": "d581226f79107d043a244471e29b6ca8e8741d4cd2e459acaae055bd93a9e344",
+    "sdk/src/__tests__/strict-project-read-skills.test.ts": "3a0b98df2627bcbf9cbe5803b8a9cd5364b5b988a11ae40b0da57e3124030e23",
+    "sdk/src/run.ts": "833bcd71923a02ac72318b1db2404aecd32053aa53a52cb200215ab73fa61c77",
+    "common/src/util/project-path-containment.ts": "fd533c2dbe8e911701096267a788ae29f2cb3502f29b4db71e9166fff322f0ea",
+    "sdk/src/skills/load-skills.ts": "d7370bcd04f2a7ebbd9964495b9e75d96b6b12b33784eb3b8cad22d425d12c36"
+  }
+}
