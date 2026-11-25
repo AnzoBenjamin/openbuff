@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "kind": "selected-local-capture-publication",
+  "verification": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/verification.json",
+  "verificationSha256": "8b342818918533cff98249f5f12ff6aa1b342ebe4b16720cb3fe8124cb4a0d2b",
+  "captures": [
+    {
+      "originalPath": ".tmp/b09-accounting/cli-build-final.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/cli-build-final.log",
+      "sha256": "33654e124bfbab97b93f5b9d986cecd5ab193a0e6f8ea4f8547f2911eb4f7845",
+      "bytes": 331
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/cli-help-final.txt",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/cli-help-final.txt",
+      "sha256": "2e113eb04bc57eafed9a1e6fb4e25d1a207a430c26c87ca8ee5f33d90aa9473b",
+      "bytes": 2563
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/cli-version-final.txt",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/cli-version-final.txt",
+      "sha256": "59854984853104df5c353e2f681a15fc7924742f9a2e468c29af248dce45ce03",
+      "bytes": 6
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/doc-defaults-final.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/doc-defaults-final.log",
+      "sha256": "4b5c51606e56d0bb4bf32da895db56fda8d5c542c0eee49fbcbcf7acf5cd346d",
+      "bytes": 156
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/focused-final.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/focused-final.log",
+      "sha256": "a520b7ae0c6115c1595435e9af772ac99a902b2d6a43e98557f819de31cf048f",
+      "bytes": 1093
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/focused-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/focused-r1.log",
+      "sha256": "ae6201c000e53a93379e242a210a8e4b0c527feff57df713efd30348f2e95b3b",
+      "bytes": 5216
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/focused-r2.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/focused-r2.log",
+      "sha256": "46b1b52f81b355dc673241e73cd7d0d47999187bfbac15433e544566f66d5c76",
+      "bytes": 4964
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/focused-r3.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/focused-r3.log",
+      "sha256": "fcfc04ab626819f3b4aad1b9ef8ce54fdd69bcfc551eb90338256676cca373c9",
+      "bytes": 2109
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/focused-r4.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/focused-r4.log",
+      "sha256": "94a77dc65773a51c3e6f356001dfca89360b4f51570a97f2aa108517233e1c08",
+      "bytes": 2264
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/format-final.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/format-final.log",
+      "sha256": "f8010b588c9eb6cdfa6e0b705a867bcffc05a7b76a7a1988b25ecccf0da9e491",
+      "bytes": 272
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/red.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/red.log",
+      "sha256": "be34d63d5b68bd6ee5d23474c5cb13c68412bbec7d125f1e73ecfc0397d0dae1",
+      "bytes": 4084
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/regression-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/regression-r1.log",
+      "sha256": "82781dc0b52a87750e38587978b2ce17e4835ad8ceeccb996e105f4a8f1e97cb",
+      "bytes": 40115
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/runtime-regression-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/runtime-regression-r1.log",
+      "sha256": "2c5fb0980d9270c210166cf0cb6d5cbbed7665fac8deaeecafaea384c487eaca",
+      "bytes": 7857
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/sdk-build-final.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/sdk-build-final.log",
+      "sha256": "e8d378fb0480dc81953da65f10750df8b0870e4798a979ae7ba17df7cb78478a",
+      "bytes": 1371
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/typecheck-final.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/typecheck-final.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/typecheck-r1.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/typecheck-r1.log",
+      "sha256": "3d3c45ecc39fd091f458f3c9ac69950e524cbbf36b64ebe261d051ca9be68c6d",
+      "bytes": 20
+    },
+    {
+      "originalPath": ".tmp/b09-accounting/typecheck-r2.log",
+      "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/published-captures/typecheck-r2.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    }
+  ],
+  "limits": [
+    "Copies preserve the recorded local observations; not formal roadmap acceptance or full source closure.",
+    "Original artifact hashes may name historical ignored builds; publication does not manufacture executable availability."
+  ]
+}

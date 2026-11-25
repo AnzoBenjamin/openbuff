@@ -96,6 +96,45 @@ describe('isPlaybookApplicable', () => {
     expect(isPlaybookApplicable(procedure, { affectedPaths: [] })).toBe(true)
   })
 
+  test('bounded brace and character-class language scopes do not silently become global rules', () => {
+    const procedure = rule({
+      repos: [],
+      glob: ['src/**/*.{ts,tsx}', 'lib/file[0-9].ts'],
+    })
+    expect(
+      isPlaybookApplicable(procedure, { affectedPaths: ['src/a.py'] }),
+    ).toBe(false)
+    expect(
+      isPlaybookApplicable(procedure, { affectedPaths: ['src/a.tsx'] }),
+    ).toBe(true)
+    expect(
+      isPlaybookApplicable(procedure, { affectedPaths: ['lib/file2.ts'] }),
+    ).toBe(true)
+    expect(
+      isPlaybookApplicable(procedure, { affectedPaths: ['lib/filex.ts'] }),
+    ).toBe(false)
+    expect(
+      isPlaybookApplicable(procedure, {
+        affectedPaths: ['lib/../other/file2.ts'],
+      }),
+    ).toBe(false)
+  })
+
+  test('unsupported scope syntax is excluded explicitly, never interpreted as universal', () => {
+    for (const pattern of [
+      'src/**/!(test).ts',
+      'src/[z-a].ts',
+      'src/{ts}',
+      'src/[.ts',
+      '{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}{a,b}',
+    ])
+      expect(
+        isPlaybookApplicable(rule({ repos: [], glob: [pattern] }), {
+          affectedPaths: ['src/file.py'],
+        }),
+      ).toBe(false)
+  })
+
   test('active and verified stay effective while retired, candidate and expired do not', () => {
     expect(isPlaybookApplicable(rule({ repos: [] }, 'active'))).toBe(true)
     expect(isPlaybookApplicable(rule({ repos: [] }, 'verified'))).toBe(true)

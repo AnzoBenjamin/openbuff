@@ -30,6 +30,12 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 
 import contextPruner from '../../agents/context-pruner'
+import {
+  evaluateFactualCoverage,
+  collectFactualEvidence,
+  MEMORY_FIXTURE_FACTS,
+  renderFixtureFact,
+} from '../compaction-fidelity/factual-oracle'
 
 import type { AgentState } from '../../agents/types/agent-definition'
 import type {
@@ -559,6 +565,29 @@ const SMALL_WINDOW_BUDGET: ScenarioBudget = {
 }
 
 describe('compaction retention scenario', () => {
+  test('B13 three real pruner passes preserve exact values, negation, blocker state and rationale', () => {
+    const claims = MEMORY_FIXTURE_FACTS.map((fact) => renderFixtureFact(fact))
+    const messages = [
+      ...seedHistory({ includeReviewReceipt: true }),
+      createMessage(
+        'assistant',
+        claims.map((claim) => `Decision: ${claim}`).join('\n'),
+      ),
+    ]
+    const measurement = measureMultiPassRetention({
+      id: 'B13-factual-three-pass',
+      claim:
+        'Exact factual values and compound rationale survive three real pruner rewrites',
+      messages,
+      budgets: [SMALL_WINDOW_BUDGET, SMALL_WINDOW_BUDGET, SMALL_WINDOW_BUDGET],
+      mustSurvive: claims,
+    })
+    const score = evaluateFactualCoverage(
+      collectFactualEvidence(measurement.block),
+    )
+    expect(score.identifierScore).toBe(1)
+    expect(score.factualScore).toBe(1)
+  })
   afterAll(() => {
     const header = [
       'scenario',
@@ -788,9 +817,13 @@ describe('compaction retention scenario', () => {
         const agentType =
           index % 2 === 0 ? 'code-reviewer' : 'security-reviewer'
         return [
-          createToolCallMessage(`ceiling-review-${index}`, 'spawn_agent_inline', {
-            agent_type: agentType,
-          }),
+          createToolCallMessage(
+            `ceiling-review-${index}`,
+            'spawn_agent_inline',
+            {
+              agent_type: agentType,
+            },
+          ),
           createToolResultMessage(
             `ceiling-review-${index}`,
             'spawn_agent_inline',
@@ -872,8 +905,10 @@ describe('compaction retention scenario', () => {
     // cap) keep the block over the 1,500-token ceiling even after the receipt
     // collapse, so the blocker collapse runs too: zero-padded ids keep the
     // substring assertions exact.
-    const residualBlockers = Array.from({ length: 12 }, (_, index) =>
-      `BLOCKING: RESOLVE-RESIDUAL-${String(index + 1).padStart(2, '0')} ${'q'.repeat(195)}`,
+    const residualBlockers = Array.from(
+      { length: 12 },
+      (_, index) =>
+        `BLOCKING: RESOLVE-RESIDUAL-${String(index + 1).padStart(2, '0')} ${'q'.repeat(195)}`,
     )
     const goalText = [
       'RESOLVE-GOAL-HEAD: verify resolved reviews stop consuming pinned budget.',
@@ -885,9 +920,13 @@ describe('compaction retention scenario', () => {
       ...Array.from({ length: 12 }, (_, index) => index).flatMap((index) => {
         const cleared = index === 11
         return [
-          createToolCallMessage(`resolve-review-${index}`, 'spawn_agent_inline', {
-            agent_type: 'code-reviewer',
-          }),
+          createToolCallMessage(
+            `resolve-review-${index}`,
+            'spawn_agent_inline',
+            {
+              agent_type: 'code-reviewer',
+            },
+          ),
           createToolResultMessage(
             `resolve-review-${index}`,
             'spawn_agent_inline',
@@ -1118,9 +1157,9 @@ describe('compaction retention scenario', () => {
     // Backward-parseable placement: the pointer section leads the block so a
     // legacy parser (a pre-archive-pointers SECTION_RE) never folds the
     // pointer lines into the persisted nextAction field.
-    expect(
-      finalMeasurement.block.indexOf('Archive Pointers:'),
-    ).toBeLessThan(finalMeasurement.block.indexOf('Goal:'))
+    expect(finalMeasurement.block.indexOf('Archive Pointers:')).toBeLessThan(
+      finalMeasurement.block.indexOf('Goal:'),
+    )
     for (const pointer of ARCHIVE_POINTERS) {
       expect(finalMeasurement.block).toContain(`  - ${pointer}`)
     }

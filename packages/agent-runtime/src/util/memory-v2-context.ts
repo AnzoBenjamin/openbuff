@@ -9,6 +9,7 @@ export const MEMORY_V2_CONTEXT_CHILD_MAX_CHARS = 2_000
 
 export type CompileMemoryV2ContextOptions = {
   maxChars?: number
+  emittedObservationIds?: string[]
   childMaxChars?: number
 }
 
@@ -21,12 +22,18 @@ const clipped = (value: string, maxChars: number): string => {
   return `${value.slice(0, maxChars - 1)}…`
 }
 
-const value = (label: string, input: string | number | undefined): string | undefined =>
+const value = (
+  label: string,
+  input: string | number | undefined,
+): string | undefined =>
   input === undefined ? undefined : `${label}: ${escapeText(String(input))}`
 
 const compareCodePoints = (left: string, right: string): number => {
   const leftPoints = Array.from(left, (character) => character.codePointAt(0)!)
-  const rightPoints = Array.from(right, (character) => character.codePointAt(0)!)
+  const rightPoints = Array.from(
+    right,
+    (character) => character.codePointAt(0)!,
+  )
   const length = Math.min(leftPoints.length, rightPoints.length)
   for (let index = 0; index < length; index++) {
     if (leftPoints[index] !== rightPoints[index]) {
@@ -43,9 +50,13 @@ const sortedByCanonicalJson = <Item>(items: readonly Item[]): Item[] =>
     compareCodePoints(canonicalJson(left), canonicalJson(right)),
   )
 
-const sortedByRanking = <Item extends { score: number }>(items: readonly Item[]): Item[] =>
-  [...items].sort((left, right) =>
-    right.score - left.score || compareCodePoints(canonicalJson(left), canonicalJson(right)),
+const sortedByRanking = <Item extends { score: number }>(
+  items: readonly Item[],
+): Item[] =>
+  [...items].sort(
+    (left, right) =>
+      right.score - left.score ||
+      compareCodePoints(canonicalJson(left), canonicalJson(right)),
   )
 
 const reasons = (items: RankingReason[]): string =>
@@ -76,14 +87,21 @@ const chunkRangeLine = (input: unknown): string | undefined => {
   return value('chunk', `${path}:${start}-${end} (${id})`)
 }
 
-function child(lines: Array<string | undefined>, childMaxChars: number): string {
-  return clipped(lines.filter((line): line is string => Boolean(line)).join('\n'), childMaxChars)
+function child(
+  lines: Array<string | undefined>,
+  childMaxChars: number,
+): string {
+  return clipped(
+    lines.filter((line): line is string => Boolean(line)).join('\n'),
+    childMaxChars,
+  )
 }
 
 function appendBounded(parts: string[], block: string, maxChars: number): void {
   if (!block || maxChars <= 0) return
   const separator = parts.length === 0 ? '' : '\n\n'
-  const used = parts.reduce((total, part) => total + part.length, 0) +
+  const used =
+    parts.reduce((total, part) => total + part.length, 0) +
     Math.max(0, parts.length - 1) * 2
   const remaining = maxChars - used - separator.length
   if (remaining <= 0) return
@@ -102,7 +120,10 @@ export function compileMemoryV2Context(
   options: CompileMemoryV2ContextOptions = {},
 ): string {
   const context = MemoryTurnContextV2Schema.parse(input)
-  const maxChars = Math.max(0, Math.floor(options.maxChars ?? MEMORY_V2_CONTEXT_MAX_CHARS))
+  const maxChars = Math.max(
+    0,
+    Math.floor(options.maxChars ?? MEMORY_V2_CONTEXT_MAX_CHARS),
+  )
   const childMaxChars = Math.max(
     1,
     Math.min(
@@ -257,7 +278,11 @@ export function compileMemoryV2Context(
             value('detail', item.observation.detail),
             value('confidence', item.observation.confidence),
             value('score', item.score),
-            `selectors: ${sortedByCanonicalJson(item.verifiedEvidence.map((evidence) => evidence.selector)).map(selector).join(', ')}`,
+            `selectors: ${sortedByCanonicalJson(
+              item.verifiedEvidence.map((evidence) => evidence.selector),
+            )
+              .map(selector)
+              .join(', ')}`,
             ...item.verifiedEvidence.flatMap((evidence) => {
               const record = evidence as {
                 contentDigest?: string
@@ -265,7 +290,9 @@ export function compileMemoryV2Context(
                 selector?: unknown
               }
               const excerpt =
-                typeof record.excerpt === 'string' ? record.excerpt.slice(0, 500) : undefined
+                typeof record.excerpt === 'string'
+                  ? record.excerpt.slice(0, 500)
+                  : undefined
               return [
                 value('digest', record.contentDigest),
                 chunkRangeLine(record.selector),
@@ -372,17 +399,41 @@ export function compileMemoryV2Context(
     appendBounded(
       parts,
       [`[${category.label}]`, ...category.entries].join('\n---\n'),
-      Math.max(
-        0,
-        maxChars - prefixText.length - (prefixText ? 2 : 0),
-      ),
+      Math.max(0, maxChars - prefixText.length - (prefixText ? 2 : 0)),
     )
   }
 
-  return clipped(
+  const compiled = clipped(
     [prefixText, parts.join('\n\n')].filter(Boolean).join('\n\n'),
     maxChars,
   )
+  if (options.emittedObservationIds) {
+    // A retrieved-but-clipped ID cannot manufacture a use/ignore signal. Require
+    // its complete claim and detail inside its own record, not elsewhere in text.
+    const records = compiled.split(/\n---\n|\n\n\[/)
+    for (const item of [
+      ...result.verifiedKnowledge,
+      ...result.reusableDiscovery,
+    ]) {
+      const observation = item.observation
+      const idLine = `observationId: ${escapeText(observation.observationId)}`
+      if (
+        records.some(
+          (record) =>
+            record.split('\n').includes(idLine) &&
+            record
+              .split('\n')
+              .includes(`summary: ${escapeText(observation.summary)}`) &&
+            record
+              .split('\n')
+              .includes(`detail: ${escapeText(observation.detail)}`),
+        ) &&
+        !options.emittedObservationIds.includes(observation.observationId)
+      )
+        options.emittedObservationIds.push(observation.observationId)
+    }
+  }
+  return compiled
 }
 
 /**

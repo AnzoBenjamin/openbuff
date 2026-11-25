@@ -5,7 +5,11 @@ import { rawReadBasisV1Schema } from '../util/raw-read-basis'
 import type { RawReadBasisV1 } from '../util/raw-read-basis'
 
 import type { Message } from './messages/codebuff-message'
-import type { ContextArchiveSnapshot } from './context-archive'
+import type {
+  ContextArchiveSnapshot,
+  ContextArchiveBody,
+  ContextArchiveRetentionReceipt,
+} from './context-archive'
 import type { ContextConsolidation } from './context-consolidation'
 import type { ProjectFileContext } from '../util/file'
 import type { TaskMemoryV1 } from './task-memory'
@@ -531,6 +535,12 @@ export type AgentState = {
    * `packages/agent-runtime/src/util/context-archive.ts`).
    */
   compactionArchive?: Array<ContextArchiveSnapshot>
+  /** Bounded single-copy originals, referenced by snapshot provenance rather than prompt text. */
+  contextArchiveBodies?: Record<string, ContextArchiveBody>
+  /** Storage/memory cutoff disclosure; not a source/edit/execution capability. */
+  contextArchiveRetention?: ContextArchiveRetentionReceipt
+  /** Persisted originals may be inline fallback data or confirmed host-only references. */
+  contextArchiveStorage?: 'inline' | 'references'
   /** Edited conversation branches must not hydrate later project-wide transcripts. */
   contextArchiveHydration?: 'project' | 'in-memory-only'
   /**
@@ -578,6 +588,10 @@ export type AgentState = {
   memoryReuse?: MemoryReuseReceiptV1
   /** Snapshot of the completed turn's reuse receipt handed to the SDK coordinator for usage correlation; cleared by coordinator finishTurn. */
   memoryUsageTurn?: MemoryReuseReceiptV1
+  /** Host/runtime compiler receipt: only complete records actually packed in model requests. */
+  memoryV2EmittedObservationIds?: string[]
+  /** Query identities actually packed by this actor; source compiler and coordinator may issue separate queries. */
+  memoryV2EmittedQueryIds?: string[]
   /** Monotonic workspace state shared by reads, mutations, indexing, validation, and review. */
   workspaceState?: WorkspaceStateV1
   /** Per-run recovery budget; reset at loop entry, independent of model retries. */

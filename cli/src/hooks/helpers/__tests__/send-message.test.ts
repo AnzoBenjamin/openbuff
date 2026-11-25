@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 
 import type { ChatMessage, CompactionContentBlock } from '../../../types/chat'
 import type { SendMessageTimerController } from '../../../utils/send-message-timer'
@@ -24,6 +27,7 @@ const { createStreamController } = await import('../../stream-state')
 const {
   cleanupProviderReadinessFailure,
   createRunOwnership,
+  prepareUserMessage,
   formatFileAttachmentForPrompt,
   formatQueuedMessageForHistory,
   setupStreamingContext,
@@ -165,6 +169,69 @@ describe('createRunOwnership', () => {
 
     expect(run.isCurrentRunOwner()).toBe(false)
     expect(activeRunOwnerRef.current).toBe(null)
+  })
+})
+
+describe('prepareUserMessage transcript retention', () => {
+  test('preserves prior IDs, order and objects when appending a user and post-user response', async () => {
+    const projectFiles = await import('../../../project-files')
+    const { useChatStore } = await import('../../../state/chat-store')
+    const owned = mkdtempSync(path.join(tmpdir(), 'openbuff-b13-prepare-'))
+    const project = path.join(owned, 'project')
+    mkdirSync(project)
+    const previousConfig = process.env.OPENBUFF_CONFIG_DIR
+    let previousProject: string | undefined
+    try {
+      previousProject = projectFiles.getProjectRoot()
+    } catch {}
+    process.env.OPENBUFF_CONFIG_DIR = path.join(owned, 'config')
+    projectFiles.setProjectRoot(project)
+    useChatStore.getState().reset()
+    const previous: ChatMessage[] = Array.from({ length: 240 }, (_, index) => ({
+      id: `retained-${index}`,
+      variant: index % 2 ? 'ai' : 'user',
+      content: `retained body ${index}`,
+      timestamp: 'now',
+    }))
+    let messages = previous
+    const response: ChatMessage = {
+      id: 'post-user-response',
+      variant: 'ai',
+      content: 'response',
+      timestamp: 'now',
+    }
+    try {
+      const prepared = await prepareUserMessage({
+        content: 'new prompt',
+        agentMode: 'DEFAULT',
+        attachments: [],
+        postUserMessage: (next) => [...next, response],
+        deps: {
+          setMessages: (update) => {
+            messages = typeof update === 'function' ? update(messages) : update
+          },
+          lastMessageMode: 'DEFAULT',
+          setLastMessageMode: () => {},
+          scrollToLatest: () => {},
+          setHasReceivedPlanResponse: () => {},
+        },
+      })
+      expect(messages).toHaveLength(242)
+      expect(messages.map((message) => message.id)).toEqual([
+        ...previous.map((message) => message.id),
+        prepared.userMessageId,
+        response.id,
+      ])
+      for (let index = 0; index < previous.length; index++)
+        expect(messages[index]).toBe(previous[index])
+      expect(messages.at(-1)).toBe(response)
+    } finally {
+      useChatStore.getState().reset()
+      if (previousConfig === undefined) delete process.env.OPENBUFF_CONFIG_DIR
+      else process.env.OPENBUFF_CONFIG_DIR = previousConfig
+      if (previousProject) projectFiles.setProjectRoot(previousProject)
+      rmSync(owned, { recursive: true, force: true })
+    }
   })
 })
 

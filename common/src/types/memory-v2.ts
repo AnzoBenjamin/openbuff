@@ -921,7 +921,10 @@ export const MemoryRetrievalRequestSchema = z
       .optional(),
     workspaceSnapshotId: z.string().min(1).max(256).optional(),
     /** Host-observed dependency digests; unrelated workspace changes do not invalidate facts. */
-    dependencyDigests: z.record(z.string().max(2_048), z.string().max(256).nullable()).refine(value => Object.keys(value).length <= 1_024).optional(),
+    dependencyDigests: z
+      .record(z.string().max(2_048), z.string().max(256).nullable())
+      .refine((value) => Object.keys(value).length <= 1_024)
+      .optional(),
     selectors: z.array(MemorySelectorSchema).max(32),
     artifactKinds: z.array(ArtifactClassificationSchema.shape.kind).max(16),
     includeHistorical: z.boolean(),
@@ -1466,6 +1469,24 @@ export const MemoryReuseReceiptV1Schema = z
           served: z.number().int().nonnegative(),
           gaps: z.number().int().nonnegative(),
           reason: z.string().max(64).optional(),
+          observedReads: z
+            .array(
+              z
+                .object({
+                  path: z.string().min(1).max(1024),
+                  contentDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+                  startLine: z.number().int().positive().optional(),
+                  endLine: z.number().int().positive().optional(),
+                  reason: z.enum([
+                    'unchanged-reread',
+                    'required-refresh',
+                    'unknown',
+                  ]),
+                })
+                .strict(),
+            )
+            .max(32)
+            .optional(),
           coveredStableChunkIds: z
             .array(z.string().min(1).max(128))
             .max(32)
@@ -1902,7 +1923,11 @@ export const MemoryCompactionOutcomeSchema = z.discriminatedUnion('outcome', [
       outcome: z.literal('preview'),
       candidateEventIds: z.array(MemoryEventIdSchema).max(10_000),
       candidateCount: z.number().int().nonnegative().max(10_000),
-      archiveByteEstimate: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+      archiveByteEstimate: z
+        .number()
+        .int()
+        .nonnegative()
+        .max(Number.MAX_SAFE_INTEGER),
       warnings: z.array(z.string().min(1).max(1_024)).max(100),
     })
     .strict(),

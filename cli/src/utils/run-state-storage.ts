@@ -17,6 +17,10 @@ import {
 import { logger } from './logger'
 import { sanitizeForChatPersistence } from './payload-sanitizer'
 import { runPersistenceCodec } from './persistence-codec'
+import {
+  normalizePersistedArchive,
+  projectCommittedArchive,
+} from './persisted-context-archive'
 
 import type { ChatMessage, ContentBlock } from '../types/chat'
 import type { RunState } from '@openbuff/sdk'
@@ -744,9 +748,22 @@ export function saveChatState(
       }),
     })
   } catch {
-    // Preserve support for unusual non-cloneable live state.
-    saveChatStateSynchronously(runState, messages)
-    return
+    try {
+      snapshot = {
+        runState: sanitizeForChatPersistence(runState),
+        messages: sanitizeForChatPersistence(
+          messages.map((message) => {
+            if (message.metadata?.runState === undefined) return message
+            const { runState: _historical, ...metadata } = message.metadata
+            return { ...message, metadata }
+          }),
+        ),
+      }
+    } catch {
+      // Preserve the previous fail-soft behavior for genuinely non-enumerable live state.
+      saveChatStateSynchronously(runState, messages)
+      return
+    }
   }
   schedulePersistenceWrite({
     targetKey: chatStatePath,
@@ -774,6 +791,15 @@ export function saveChatState(
           archive: cleanRunState,
         }
       }
+      const persistedState = JSON.parse(serialized.runState) as RunState
+      normalizePersistedArchive(persistedState)
+      const archiveOutcome = await flushContextArchiveSnapshots(
+        persistedState,
+        archiveOwner,
+      )
+      projectCommittedArchive(persistedState, archiveOutcome)
+      serialized.runState = JSON.stringify(persistedState)
+      serialized.archive = null
       let diskVersion: number | undefined
       try {
         const raw = await fs.promises.readFile(chatStatePath, 'utf8')

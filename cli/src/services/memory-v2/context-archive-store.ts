@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS context_archive_snapshots (
   steps_json TEXT,
   manifest_hash TEXT NOT NULL,
   message_count INTEGER NOT NULL,
+  provenance_json TEXT,
+  pinned INTEGER,
+  expires_at REAL,
   created_at TEXT NOT NULL
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS context_archive_snapshots_time ON context_archive_snapshots(archived_at);
@@ -125,6 +128,22 @@ export function migrateContextArchiveSchema(database: Database): void {
   )
     database.exec('DROP TABLE context_archive_migration_errors')
   database.exec(CONTEXT_ARCHIVE_STORE_DDL)
+  const currentColumns = new Set(
+    (
+      database
+        .query('PRAGMA table_info(context_archive_snapshots)')
+        .all() as Array<{ name: string }>
+    ).map((column) => column.name),
+  )
+  for (const [name, type] of [
+    ['provenance_json', 'TEXT'],
+    ['pinned', 'INTEGER'],
+    ['expires_at', 'REAL'],
+  ])
+    if (!currentColumns.has(name))
+      database.exec(
+        `ALTER TABLE context_archive_snapshots ADD COLUMN ${name} ${type}`,
+      )
   const hadFts = archiveFtsAvailable(database)
   try {
     database.exec(CONTEXT_ARCHIVE_EXTERNAL_FTS_DDL)
@@ -201,6 +220,45 @@ export function prepareArchiveSnapshot(
         snapshot.steps.some((step) => !Number.isInteger(step) || step < 0)))
   )
     return null
+  if (
+    (snapshot.pinned !== undefined && typeof snapshot.pinned !== 'boolean') ||
+    (snapshot.expiresAt !== undefined &&
+      !Number.isFinite(snapshot.expiresAt)) ||
+    (snapshot.provenance !== undefined &&
+      (!Array.isArray(snapshot.provenance) ||
+        snapshot.provenance.length !== snapshot.messages.length ||
+        snapshot.provenance.some(
+          (entry) =>
+            !entry ||
+            !['original', 'excerpt', 'pointer', 'unknown'].includes(
+              entry.kind,
+            ) ||
+            !Number.isSafeInteger(entry.step) ||
+            entry.step < 0 ||
+            (entry.sourceRunId !== undefined &&
+              (typeof entry.sourceRunId !== 'string' ||
+                !entry.sourceRunId ||
+                entry.sourceRunId.length > 2048)) ||
+            (entry.capturedAt !== undefined &&
+              !Number.isFinite(entry.capturedAt)) ||
+            (entry.body !== undefined &&
+              (!entry.body ||
+                !/^[a-f0-9]{64}$/.test(entry.body.sha256) ||
+                entry.body.bodyId !== `sha256:${entry.body.sha256}` ||
+                !Number.isSafeInteger(entry.body.utf8Bytes) ||
+                entry.body.utf8Bytes < 0)) ||
+            (entry.conflict !== undefined &&
+              typeof entry.conflict !== 'boolean') ||
+            (entry.retainedRange !== undefined &&
+              (!Number.isSafeInteger(entry.retainedRange.startByte) ||
+                !Number.isSafeInteger(entry.retainedRange.endByte) ||
+                entry.retainedRange.startByte < 0 ||
+                entry.retainedRange.endByte < entry.retainedRange.startByte ||
+                (entry.body !== undefined &&
+                  entry.retainedRange.endByte > entry.body.utf8Bytes))),
+        )))
+  )
+    return null
   try {
     const messages = snapshot.messages.map((message, index) => {
       if (
@@ -242,6 +300,13 @@ export function prepareArchiveSnapshot(
       reason: snapshot.reason ?? null,
       steps: snapshot.steps ?? null,
       messages: messages.map((message) => message.messageId),
+      ...(snapshot.provenance !== undefined
+        ? { provenance: snapshot.provenance }
+        : {}),
+      ...(snapshot.pinned !== undefined ? { pinned: snapshot.pinned } : {}),
+      ...(snapshot.expiresAt !== undefined
+        ? { expiresAt: snapshot.expiresAt }
+        : {}),
     })
     return { snapshot, hash: hash(manifest), stepsJson, messages }
   } catch {
@@ -304,7 +369,7 @@ export function putArchiveSnapshot(
   }
   database
     .query(
-      'INSERT INTO context_archive_snapshots(snapshot_id,run_id,archived_at,action,keep_recent_steps,step_base,reason,steps_json,manifest_hash,message_count,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)',
+      'INSERT INTO context_archive_snapshots(snapshot_id,run_id,archived_at,action,keep_recent_steps,step_base,reason,steps_json,manifest_hash,message_count,provenance_json,pinned,expires_at,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)',
     )
     .run(
       snapshotId,
@@ -317,6 +382,9 @@ export function putArchiveSnapshot(
       prepared.stepsJson,
       prepared.hash,
       prepared.messages.length,
+      s.provenance ? JSON.stringify(s.provenance) : null,
+      s.pinned === undefined ? null : s.pinned ? 1 : 0,
+      s.expiresAt ?? null,
       createdAt,
     )
   const membership = database.query(
@@ -360,6 +428,9 @@ export interface ArchiveManifestRow {
   steps_json: string | null
   manifest_hash: string
   message_count: number
+  provenance_json?: string | null
+  pinned?: number | null
+  expires_at?: number | null
 }
 
 type ArchiveMemberRow = {
@@ -375,7 +446,11 @@ function decodeArchiveSnapshot(
   checkIdentity: boolean,
 ): ContextArchiveSnapshot | null {
   try {
-    if (members.length !== row.message_count) return null
+    if (
+      members.length !== row.message_count ||
+      (row.pinned != null && row.pinned !== 0 && row.pinned !== 1)
+    )
+      return null
     const snapshot: ContextArchiveSnapshot = {
       runId: row.run_id,
       archivedAt: row.archived_at,
@@ -384,6 +459,11 @@ function decodeArchiveSnapshot(
       stepBase: row.step_base ?? undefined,
       reason: row.reason ?? undefined,
       steps: row.steps_json ? JSON.parse(row.steps_json) : undefined,
+      provenance: row.provenance_json
+        ? JSON.parse(row.provenance_json)
+        : undefined,
+      pinned: row.pinned == null ? undefined : row.pinned === 1,
+      expiresAt: row.expires_at ?? undefined,
       messages: members.map(
         (member) =>
           ({

@@ -8,7 +8,10 @@ import { isProtectedToolResult } from './tool-result-lifecycle'
 import { countTokensJson } from './token-counter'
 
 import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
-import type { Message, ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
+import type {
+  Message,
+  ToolMessage,
+} from '@codebuff/common/types/messages/codebuff-message'
 
 /**
  * Deterministic, zero-LLM-cost tool-result eviction — the "continuous light
@@ -59,7 +62,10 @@ const MAX_PROTECTED_PATHS = 512
  * '<kind>:' before the path check so those entries still protect their file.
  */
 const stripEvidenceKindPrefix = (value: string): string =>
-  value.replace(/^(read|edit|validation|review|note|decision|blocker|handoff|requirement):/, '')
+  value.replace(
+    /^(read|edit|validation|review|note|decision|blocker|handoff|requirement):/,
+    '',
+  )
 
 const TOMBSTONE_MARKER = '[tool result evicted to free context'
 
@@ -85,7 +91,8 @@ const buildTombstone = ({
   toolName?: string
   stepIndex: number
 }): string => {
-  const resolvedToolName = toolName && toolName.length > 0 ? toolName : 'unknown'
+  const resolvedToolName =
+    toolName && toolName.length > 0 ? toolName : 'unknown'
   const resolvedToolCallId =
     toolCallId && toolCallId.length > 0 ? toolCallId : 'unknown'
   // Single line, well under 400 chars: the tombstone is a POINTER, not a body.
@@ -112,10 +119,14 @@ const TOMBSTONE_PATTERN =
 
 const isEvicted = (message: ToolMessage): boolean =>
   message.content.some(
-    (part) => part.type === 'json' &&
+    (part) =>
+      part.type === 'json' &&
       typeof part.value === 'string' &&
       TOMBSTONE_PATTERN.test(part.value),
   )
+
+/** Shared exact-shape predicate: archives must never promote an eviction pointer to an original. */
+export const isEvictedToolResult = isEvicted
 
 /**
  * R4: a tool result whose json content is a commit_receipt is small
@@ -305,8 +316,7 @@ export function evictStaleToolResults(
   },
 ): ToolResultEvictionResult {
   const keepRecentSteps = opts?.keepRecentSteps ?? EVICTION_KEEP_RECENT_STEPS
-  const minSavingsTokens =
-    opts?.minSavingsTokens ?? EVICTION_MIN_SAVINGS_TOKENS
+  const minSavingsTokens = opts?.minSavingsTokens ?? EVICTION_MIN_SAVINGS_TOKENS
   const protectedPaths = opts?.protectedPaths
   // Precompute BOTH per-step artifacts once, before the candidate walk: the
   // protection matcher (one regex over all protected paths) so the candidate
@@ -334,7 +344,7 @@ export function evictStaleToolResults(
     if (message.role !== 'tool') return false
     if (isEvicted(message)) return false
     if (isSlimmedMutationResult(message)) return false
-    if ((newestStep - (stepIndexOf.get(message) ?? 0)) < keepRecentSteps) {
+    if (newestStep - (stepIndexOf.get(message) ?? 0) < keepRecentSteps) {
       return false
     }
     if (

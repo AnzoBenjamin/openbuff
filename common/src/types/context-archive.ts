@@ -49,4 +49,93 @@ export type ContextArchiveSnapshot = {
    */
   reason?: string
   messages: Message[]
+  /** Parallel, explicit fullness/source metadata; missing legacy metadata is unknown. */
+  provenance?: ContextArchiveMessageProvenance[]
+  /** Operator-selected retention only; pins protect the transitive body closure. */
+  pinned?: boolean
+  expiresAt?: number
 }
+
+/** Hashes describe recalled UTF-8 text, not the serialized message-content digest. */
+export type ContextArchiveBodyReference = {
+  bodyId: string
+  sha256: string
+  utf8Bytes: number
+}
+
+export interface ContextArchiveBody extends ContextArchiveBodyReference {
+  text: string
+}
+
+export type ContextArchiveMessageProvenance = {
+  kind: 'original' | 'excerpt' | 'pointer' | 'unknown'
+  sourceRunId?: string
+  toolCallId?: string
+  step: number
+  capturedAt?: number
+  body?: ContextArchiveBodyReference
+  retainedRange?: { startByte: number; endByte: number }
+  /** Conflicting originals cannot be resolved by choosing the newest copy. */
+  conflict?: boolean
+}
+
+export interface ContextArchiveRetentionPolicy {
+  mode: 'rolling' | 'keep-until-delete'
+  maxBytes?: number
+  ttlMs?: number
+  maxSnapshots?: number
+}
+
+export interface ContextArchiveRetentionReceipt {
+  schemaVersion: 1
+  status: 'ok' | 'cutoff' | 'retention-capacity'
+  mode: ContextArchiveRetentionPolicy['mode']
+  logicalBytes: number
+  retainedSnapshots: number
+  retainedBodies: number
+  droppedSnapshots: number
+  expiredSnapshots: number
+  cutoffArchivedAt?: number
+  maxBytes?: number
+  ttlMs?: number
+  reasons?: string[]
+  /** Allocated storage overhead is separate from the logical retention charge. */
+  sqliteBytes?: number
+  walBytes?: number
+}
+
+export interface ContextArchiveBodyPageRequest {
+  toolCallId: string
+  sourceRunId?: string
+  expectedSha256?: string
+  offsetBytes?: number
+  maxBytes?: number
+}
+
+export type ContextArchiveBodyPageOutcome =
+  | {
+      status: 'ok'
+      runId: string
+      step: number
+      toolName: string
+      toolCallId: string
+      bodyId: string
+      sha256: string
+      utf8Bytes: number
+      startByte: number
+      endByte: number
+      nextOffset: number | null
+      text: string
+      retention?: ContextArchiveRetentionReceipt
+    }
+  | {
+      status:
+        | 'missing'
+        | 'expired'
+        | 'ambiguous'
+        | 'corrupt'
+        | 'unavailable'
+        | 'invalid-cursor'
+      reason: string
+      retention?: ContextArchiveRetentionReceipt
+    }

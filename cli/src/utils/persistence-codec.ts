@@ -22,7 +22,8 @@ parentPort.on('message', ({ kind, value }) => {
       const main = runState?.sessionState?.mainAgentState;
       parentPort.postMessage({ ok: true, value: {
         runState: JSON.stringify(runState), messages: JSON.stringify(messages),
-        archive: main ? { sessionState: { mainAgentState: { runId: main.runId, compactionArchive: main.compactionArchive } } } : null,
+        archive: main ? { sessionState: { mainAgentState: { runId: main.runId, compactionArchive: main.compactionArchive,
+          contextArchiveBodies: main.contextArchiveBodies, contextArchiveRetention: main.contextArchiveRetention } } } : null,
       } });
     }
   } catch (error) {

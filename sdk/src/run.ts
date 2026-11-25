@@ -1,4 +1,5 @@
 import { createValidationReceiptRegistry } from './services/validation-receipts'
+import { buildContextArchiveBodyReader, buildContextArchiveSearchReader } from './services/context-archive-reader'
 import {
   RepositoryIntelligenceService,
   createRepositoryIntelligenceSource,
@@ -2741,7 +2742,16 @@ async function runOnce(
           })
         : undefined
     const strictIntelligence = new Map<CodebuffFileSystem, RepositoryIntelligenceService>()
+    const archiveReaderParams = { repository: memoryV2?.repository,
+      allowProjectArchive: sessionState.mainAgentState.contextArchiveHydration !== 'in-memory-only', signal: runSignal,
+      registeredActor: (actor: ExecutionActor) => {
+        const registered = registeredActors.get(actorKey(actor))
+        return registered ? { actor: registered.actor, userInputId: registered.userInputId,
+          strictProjectReads: isProjectOnlyReadPolicy(registered.readPolicy) } : undefined
+      } }
     const agentRuntimeImpl = getAgentRuntimeImpl({
+      readContextArchiveBodyPage: memoryV2 ? buildContextArchiveBodyReader(archiveReaderParams) : undefined,
+      searchContextArchive: memoryV2 ? buildContextArchiveSearchReader(archiveReaderParams) : undefined,
       resolveMemoryAuthority: selectedMemoryAuthority === undefined ? undefined : ({ actor, userInputId }) => {
         const registered = registeredActors.get(actorKey(actor))
         if (!registered || !registered.userInputId || registered.userInputId !== userInputId)

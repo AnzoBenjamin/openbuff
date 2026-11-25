@@ -4,7 +4,10 @@ import { IndexManager } from '@codebuff/indexer'
 import { getExactContentHash } from '@codebuff/common/util/content-hash'
 import { memorySelectorKey } from '@codebuff/common/util/memory-selector-key'
 import { classifyMemoryArtifactPath } from '@codebuff/common/util/memory-artifact-policy'
-import { isPlaybookApplicable } from '@codebuff/common/util/playbook-applicability'
+import {
+  isPlaybookApplicable,
+  unsupportedPlaybookScope,
+} from '@codebuff/common/util/playbook-applicability'
 import {
   MemoryQueryOutcomeSchema,
   MemoryRetrievalRequestSchema,
@@ -334,6 +337,8 @@ export class RepositoryIntelligenceService {
           repository.listPlaybooks(projectId),
           request,
         )
+        if (this.lastPlaybooks.some(unsupportedPlaybookScope))
+          reasons.push('procedure-scope-unsupported')
         playbooks = this.lastPlaybooks.filter((rule) =>
           isPlaybookApplicable(rule, applicability),
         )

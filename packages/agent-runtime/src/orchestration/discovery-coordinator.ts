@@ -128,7 +128,10 @@ function extractCandidateSymbols(value: unknown): Map<string, string[]> {
       }
       if (typeof item !== 'object') return
       const record = item as Record<string, unknown>
-      if (typeof record['path'] === 'string' && record['symbols'] !== undefined) {
+      if (
+        typeof record['path'] === 'string' &&
+        record['symbols'] !== undefined
+      ) {
         addSymbols(record['path'], record['symbols'])
       }
       for (const nested of Object.values(record)) visit(nested, depth + 1)
@@ -156,11 +159,9 @@ export function getVerifiedMemoryExcerpts(
   const excerpts: VerifiedExcerpt[] = []
   try {
     if (!agentState || typeof agentState !== 'object') return excerpts
-    const memoryV2Context = (
-      agentState as { memoryV2Context?: unknown }
-    ).memoryV2Context
-    if (!memoryV2Context || typeof memoryV2Context !== 'object')
-      return excerpts
+    const memoryV2Context = (agentState as { memoryV2Context?: unknown })
+      .memoryV2Context
+    if (!memoryV2Context || typeof memoryV2Context !== 'object') return excerpts
     const contextRecord = memoryV2Context as Record<string, unknown>
     const resultRecord =
       contextRecord['result'] && typeof contextRecord['result'] === 'object'
@@ -255,10 +256,7 @@ export function getVerifiedMemoryExcerpts(
             }
           }
           const directSnapshot = evidenceRecord['workspaceSnapshotId']
-          if (
-            typeof directSnapshot === 'string' &&
-            directSnapshot.length > 0
-          ) {
+          if (typeof directSnapshot === 'string' && directSnapshot.length > 0) {
             workspaceSnapshotId = directSnapshot.slice(0, 256)
           } else {
             const entrySnapshot = entryRecord['workspaceSnapshotId']
@@ -291,11 +289,9 @@ export function getVerifiedMemoryPaths(
   const verified = new Set<string>()
   try {
     if (!agentState || typeof agentState !== 'object') return verified
-    const memoryV2Context = (
-      agentState as { memoryV2Context?: unknown }
-    ).memoryV2Context
-    if (!memoryV2Context || typeof memoryV2Context !== 'object')
-      return verified
+    const memoryV2Context = (agentState as { memoryV2Context?: unknown })
+      .memoryV2Context
+    if (!memoryV2Context || typeof memoryV2Context !== 'object') return verified
     const contextRecord = memoryV2Context as Record<string, unknown>
     const resultRecord =
       contextRecord['result'] && typeof contextRecord['result'] === 'object'
@@ -465,8 +461,7 @@ export function planDiscoveryBatch(params: {
     revision: (params.existing?.revision ?? -1) + 1,
     workspaceRevision: params.workspaceRevision,
     queryHash,
-    indexSnapshotId:
-      params.indexSnapshotId ?? params.existing?.indexSnapshotId,
+    indexSnapshotId: params.indexSnapshotId ?? params.existing?.indexSnapshotId,
     workspaceSnapshotId: params.workspaceSnapshotId,
     candidates: mergedCandidates.slice(-512),
     shards: params.existing?.shards ?? [],
@@ -529,11 +524,12 @@ export function claimDiscoveryShard(params: {
   const duplicate = existing.shards.find(
     (shard) =>
       shard.key === shardKey &&
-      (shard.status === 'active' || (
-        shard.status === 'completed' &&
-        shard.taskId === params.taskId &&
-        (!params.workspaceSnapshotId || !existing.workspaceSnapshotId || params.workspaceSnapshotId === existing.workspaceSnapshotId)
-      )),
+      (shard.status === 'active' ||
+        (shard.status === 'completed' &&
+          shard.taskId === params.taskId &&
+          (!params.workspaceSnapshotId ||
+            !existing.workspaceSnapshotId ||
+            params.workspaceSnapshotId === existing.workspaceSnapshotId))),
   )
   if (duplicate) {
     throw new Error(
@@ -543,7 +539,8 @@ export function claimDiscoveryShard(params: {
   const state = discoveryCoverageV1Schema.parse({
     ...existing,
     revision: existing.revision + 1,
-    workspaceSnapshotId: params.workspaceSnapshotId ?? existing.workspaceSnapshotId,
+    workspaceSnapshotId:
+      params.workspaceSnapshotId ?? existing.workspaceSnapshotId,
     shards: [
       ...existing.shards,
       {
@@ -853,6 +850,9 @@ export function recordMemoryReuse(
     gaps: number
     recordedDecisions?: number
     reason?: string
+    observedReads?: NonNullable<
+      MemoryReuseReceiptV1['byTool']
+    >[number]['observedReads']
     coveredStableChunkIds?: string[]
   },
 ): void {
@@ -891,6 +891,9 @@ export function recordMemoryReuse(
         served: Math.max(0, Math.trunc(entry.served)),
         gaps: Math.max(0, Math.trunc(entry.gaps)),
         ...(entry.reason ? { reason: entry.reason.slice(0, 64) } : {}),
+        ...(entry.observedReads?.length
+          ? { observedReads: entry.observedReads.slice(0, 32) }
+          : {}),
         ...(chunks && chunks.length > 0
           ? { coveredStableChunkIds: chunks }
           : {}),

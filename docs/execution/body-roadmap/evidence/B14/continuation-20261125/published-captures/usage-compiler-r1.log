@@ -1,0 +1,31 @@
+bun test v1.4.4 (38afee6c8)
+
+packages/agent-runtime/src/util/__tests__/memory-v2-context.test.ts:
+(pass) compileMemoryV2Context > a high-ranked complete claim and rationale survive bulky verified excerpts [11.19ms]
+(pass) compileMemoryV2Context > is deterministic, bounded, sanitized, and retains warnings and explanations [3.11ms]
+(pass) compileMemoryV2Context > prioritizes correctness categories when the root budget overflows [1.02ms]
+(pass) compileMemoryV2Context > is byte-identical across all semantically unordered DTO arrays without mutating input [4.64ms]
+(pass) compileMemoryV2Context > is deterministic at exact root and child budget boundaries [4.30ms]
+(pass) compileMemoryV2Context > preserves selector granularity in verified output [0.73ms]
+(pass) compileMemoryV2Context > keeps the highest ranked complete fact before clipping instead of canonical ID order [0.78ms]
+(pass) compileMemoryV2Context > preserves score ordering across every ranked result category with deterministic ties [2.54ms]
+(pass) compileMemoryV2Context > schema-validates before compiling [1.00ms]
+(pass) compileMemoryV2Context > renders [currentCoverage] section when items are present [1.30ms]
+(pass) compileMemoryV2Context > omits [currentCoverage] section when array is empty [0.57ms]
+(pass) compileMemoryV2Context > includes bounded verified excerpt in verifiedKnowledge section [0.31ms]
+(pass) compileMemoryV2Context > renders chunk range digest excerpt and verifiedAt in verifiedKnowledge [1.30ms]
+(pass) compileMemoryV2Context > renders revision and snapshot in currentCoverage when present [1.21ms]
+(pass) countConceptAdvisoryEntries > is 0 for a context without concept-advisory entries [0.30ms]
+(pass) countConceptAdvisoryEntries > counts only reusableDiscovery entries carrying the concept-advisory code [0.38ms]
+(pass) countConceptAdvisoryEntries > the produced receipt satisfies its own schema with the counter set [1.04ms]
+
+sdk/src/services/memory-v2/__tests__/b14-usage.test.ts:
+(pass) B14 source-specific emitted-memory usage > an unrelated full read cannot penalize either retrieved observation [0.33ms]
+(pass) B14 source-specific emitted-memory usage > only actual emitted matching-source unchanged reread gets an efficiency signal [0.07ms]
+(pass) B14 source-specific emitted-memory usage > required refresh, changed bytes, unknown use and incomplete reads never imply ignored [0.10ms]
+(pass) B14 source-specific emitted-memory usage > a skip for an unrendered observation is not measured use [0.05ms]
+
+ 21 pass
+ 0 fail
+ 90 expect() calls
+Ran 21 tests across 2 files. [86.00ms]

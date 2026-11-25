@@ -1,0 +1,9 @@
+bun test v1.4.4 (38afee6c8)
+
+packages/agent-runtime/src/util/__tests__/memory-read-observation.test.ts:
+(pass) B14 completed source read distinguishes unchanged reread from necessary refresh and unknown paths [3.24ms]
+
+ 1 pass
+ 0 fail
+ 4 expect() calls
+Ran 1 test across 1 file. [35.00ms]

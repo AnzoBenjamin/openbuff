@@ -1,0 +1,151 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/__tests__/b13-memory-restart.test.ts:
+Using environment: test
+(pass) B13 actual tool outputs → three production compactions → SQLite → fresh SDK first request and original pages [6395.25ms]
+
+sdk/src/__tests__/context-archive-reader.test.ts:
+(pass) B13 host-bound archive body reader > authenticates actors/tasks and never passes peer-selected authority to storage [1.11ms]
+(pass) B13 host-bound archive body reader > withholds strict-reader and edited-branch canonical archive bytes [0.38ms]
+(pass) B13 host-bound archive body reader > rejects wrong source/value/hash/range and preserves typed expiry [0.46ms]
+
+sdk/src/__tests__/run-state-targeted-copy.test.ts:
+Using environment: test
+(pass) withMessageHistory targeted copy > gives root, sessionState, and mainAgentState fresh identities and installs the new history [2.21ms]
+(pass) withMessageHistory targeted copy > shares copy-on-write memory but owns mutable runtime controls [1.38ms]
+(pass) withMessageHistory targeted copy > mutating a copy-on-write nested node after the copy does not corrupt either side [6.24ms]
+(pass) withMessageHistory targeted copy > copies gate controls before a prior run is frozen [0.55ms]
+(pass) withMessageHistory targeted copy > the shared nested nodes cross the targeted-copy boundary deep-frozen, so an in-place write cannot alias state across runs [0.37ms]
+(pass) applyOverridesToSessionState targeted copy > owns mutable controls without cloning transcript bodies (frozen base: %s) [1.22ms]
+(pass) applyOverridesToSessionState targeted copy > owns mutable controls without cloning transcript bodies (frozen base: %s) [0.66ms]
+(pass) applyOverridesToSessionState targeted copy > gate bookkeeping remains writable if the previous state is frozen after resuming [0.56ms]
+(pass) applyOverridesToSessionState targeted copy > returns a fresh root/fileContext/mainAgentState without mutating the base state [0.55ms]
+
+packages/agent-runtime/src/util/__tests__/context-archive.test.ts:
+(pass) archivePreCompaction > archives a snapshot with provenance and caps message count [0.49ms]
+(pass) archivePreCompaction > is identity-keyed: re-archiving the same array is a no-op [4.14ms]
+(pass) archivePreCompaction > evicts the oldest snapshot beyond MAX_ARCHIVE_SNAPSHOTS [4.17ms]
+(pass) archivePreCompaction > truncates oversized tool bodies instead of storing them whole [0.59ms]
+(pass) archivePreCompaction > caps oversized conversation text too [0.32ms]
+(pass) recallFromArchive > finds a planted fact across snapshots (AND semantics) [0.83ms]
+(pass) recallFromArchive > recalls archived conversation in addition to tool bodies [0.23ms]
+(pass) recallFromArchive > requires every term to match [0.25ms]
+(pass) recallFromArchive > is case-insensitive and returns bounded results [0.86ms]
+(pass) recallFromArchive > handles an empty or missing archive without throwing [0.12ms]
+(pass) recallFromArchive > reports the snapshots ACTUALLY searched when the result cap ends the scan early [0.98ms]
+(pass) archiveEvictedToolResults (D26) > round-trips an evicted fact back through recallFromArchive [936.83ms]
+(pass) archiveEvictedToolResults (D26) > is identity-keyed: the same toolCallId never duplicates a record [0.46ms]
+(pass) archiveEvictedToolResults (D26) > caps eviction snapshots at the DEDICATED MAX_EVICTION_ARCHIVE_SNAPSHOTS cap [23.86ms]
+(pass) archiveEvictedToolResults (D26) > does not count eviction snapshots against the semantic snapshot cap (D26 dedicated cap) [38.33ms]
+(pass) archiveEvictedToolResults (D26) > tolerates legacy snapshots without the D26 fields (additive contract) [0.38ms]
+(pass) archiveEvictedToolResults (D26) > bounds eviction snapshots to the persisted size contract with the dedicated 64k body bound [125.70ms]
+(pass) archiveEvictedToolResults (D26) > reports original-transcript steps from the steps provenance array [0.42ms]
+(pass) archiveEvictedToolResults (D26) > falls back to stepBase numbering for legacy eviction snapshots without steps [0.13ms]
+(pass) archiveEvictedToolResults (D26) > is a no-op on empty input [0.03ms]
+(pass) archiveEvictedToolResults (D26) > eviction body retention (D26 64k bound) > round-trips a >4k evicted body whole (the old 4k clip would have destroyed it) [6.84ms]
+(pass) archiveEvictedToolResults (D26) > eviction body retention (D26 64k bound) > still truncates a body beyond the 64k eviction bound (bounded persisted size) [3.78ms]
+(pass) archiveEvictedToolResults (D26) > eviction body retention (D26 64k bound) > keeps semantic-snapshot truncation at the 4k bound unchanged [4.17ms]
+(pass) recallFromArchiveByToolCallId (D26 exact-ID retrieval) > newest copy wins: the FULL newer body is returned, not a snippet cap [2.10ms]
+(pass) recallFromArchiveByToolCallId (D26 exact-ID retrieval) > miss returns empty matches with snapshotsSearched = archive length [0.25ms]
+(pass) recallFromArchiveByToolCallId (D26 exact-ID retrieval) > returns the empty result for a missing or empty archive [0.04ms]
+(pass) recallFromArchiveByToolCallId (D26 exact-ID retrieval) > reports the ORIGINAL-transcript step from the D26 steps provenance array [0.47ms]
+(pass) recallFromArchiveByToolCallId (D26 exact-ID retrieval) > returns the stored body VERBATIM — never double-encoded (real-path regression) [0.32ms]
+
+packages/agent-runtime/src/util/__tests__/context-archive-originals.test.ts:
+(pass) B13 original result provenance and bounded byte recall > a later real eviction pointer cannot shadow the original 32 KiB body [692.04ms]
+(pass) B13 original result provenance and bounded byte recall > captures the immutable original before either archive excerpt limit [16.07ms]
+(pass) B13 original result provenance and bounded byte recall > uses UTF-8 byte cursors without cutting a code point or accepting an interior cursor [0.70ms]
+(pass) B13 original result provenance and bounded byte recall > rejects conflicting originals and cannot overwrite an earlier immutable body [0.54ms]
+(pass) B13 original result provenance and bounded byte recall > requires source-run disambiguation and an expected body hash when supplied [0.80ms]
+
+packages/agent-runtime/src/util/__tests__/context-archive-context.test.ts:
+(pass) B13 bounded first-request archive references > checks the acting actor/task and emits copy-ready hashes, never original text [1.48ms]
+(pass) B13 bounded first-request archive references > does not advertise forbidden, unavailable or hash-mismatched sources [0.50ms]
+
+common/src/tools/params/__tests__/recall-context.test.ts:
+(pass) recall_context inputSchema (query or toolCallId) > keeps the documented query-only example valid (byte-identical input) [2.47ms]
+(pass) recall_context inputSchema (query or toolCallId) > accepts toolCallId alone (exact retrieval, no text search) [0.21ms]
+(pass) recall_context inputSchema (query or toolCallId) > accepts both params (the handler resolves the exact-ID path) [0.06ms]
+(pass) recall_context inputSchema (query or toolCallId) > rejects input with NEITHER param [0.44ms]
+(pass) recall_context inputSchema (query or toolCallId) > still enforces the query bounds when query is present [0.53ms]
+
+common/src/util/__tests__/context-archive-body.test.ts:
+(pass) immutable archive text bodies > binds exact UTF-8 text rather than JSON-encoded content [0.32ms]
+(pass) immutable archive text bodies > pages at real complete-code-point byte boundaries [0.23ms]
+(pass) immutable archive text bodies > rehashes sanitized bytes and consistently rebinds every reference [0.26ms]
+
+evals/compaction-fidelity/factual-oracle.test.ts:
+(pass) B13 deterministic factual oracle > the fixture binds the five exact facts and the decision/rationale from SPEC [0.06ms]
+(pass) B13 deterministic factual oracle > complete exact claims score 1 independently of identifier coverage [0.50ms]
+(pass) B13 deterministic factual oracle > identifier-only copies keep identifier coverage but score zero factual fidelity [0.12ms]
+(pass) B13 deterministic factual oracle > identifier substrings and unrelated path mentions are not fact claims [0.09ms]
+(pass) B13 deterministic factual oracle > an empty retrieval has no identifier or factual credit [0.03ms]
+(pass) B13 deterministic factual oracle > identifier-correct/value-wrong copies fail: zero timeout [0.20ms]
+(pass) B13 deterministic factual oracle > a correct duplicate cannot hide a conflicting claim: zero timeout [0.70ms]
+(pass) B13 deterministic factual oracle > identifier-correct/value-wrong copies fail: dropped push negation [0.16ms]
+(pass) B13 deterministic factual oracle > a correct duplicate cannot hide a conflicting claim: dropped push negation [0.37ms]
+(pass) B13 deterministic factual oracle > identifier-correct/value-wrong copies fail: contradicted push negation [0.08ms]
+(pass) B13 deterministic factual oracle > a correct duplicate cannot hide a conflicting claim: contradicted push negation [0.14ms]
+(pass) B13 deterministic factual oracle > identifier-correct/value-wrong copies fail: contradicted explicit-request flag [0.06ms]
+(pass) B13 deterministic factual oracle > a correct duplicate cannot hide a conflicting claim: contradicted explicit-request flag [0.15ms]
+(pass) B13 deterministic factual oracle > identifier-correct/value-wrong copies fail: closed blocker [0.05ms]
+(pass) B13 deterministic factual oracle > a correct duplicate cannot hide a conflicting claim: closed blocker [0.12ms]
+(pass) B13 deterministic factual oracle > identifier-correct/value-wrong copies fail: stale source revision [0.04ms]
+(pass) B13 deterministic factual oracle > a correct duplicate cannot hide a conflicting claim: stale source revision [0.15ms]
+(pass) B13 deterministic factual oracle > identifier-correct/value-wrong copies fail: wrong next action [0.06ms]
+(pass) B13 deterministic factual oracle > a correct duplicate cannot hide a conflicting claim: wrong next action [0.16ms]
+(pass) B13 deterministic factual oracle > identifier-correct/value-wrong copies fail: changed rationale [0.07ms]
+(pass) B13 deterministic factual oracle > a correct duplicate cannot hide a conflicting claim: changed rationale [0.20ms]
+(pass) B13 deterministic factual oracle > identifier-correct/value-wrong copies fail: changed decision [0.07ms]
+(pass) B13 deterministic factual oracle > a correct duplicate cannot hide a conflicting claim: changed decision [0.13ms]
+(pass) B13 deterministic factual oracle > identical duplicate claims are not extra credit or a contradiction [0.16ms]
+(pass) B13 deterministic factual oracle > compound fields must coexist in a complete claim, not be spliced across fragments [1.56ms]
+(pass) B13 deterministic factual oracle > values retain their types and are not substring-matched [0.45ms]
+(pass) B13 deterministic factual oracle > duplicate JSON fields fail in either order rather than using JSON last-wins [0.28ms]
+(pass) B13 deterministic factual oracle > JSON key order and whitespace are not value changes [0.16ms]
+(pass) B13 deterministic factual oracle > malformed, truncated, extra-field and wrong-path claims cannot fill a gap [0.33ms]
+(pass) B13 deterministic factual oracle > collects actual message bodies and decodes archive serialization without quoting loss [0.35ms]
+
+evals/compaction-fidelity/scenario.test.ts:
+(pass) compaction fidelity (F1–F5) > F1: eviction keeps cited-content results full [15.75ms]
+(pass) compaction fidelity (F1–F5) > F2: the verifier reports every fact a destructive rewrite dropped [0.98ms]
+(pass) compaction fidelity (F1–F5) > F3: recall_context recovers evicted facts verbatim from the archive [7.15ms]
+(pass) compaction fidelity (F1–F5) > F4: aggregate fidelity score is 1.0 for the fixture (retained + recallable) [9.03ms]
+(pass) compaction fidelity (F1–F5) > F5: consolidation recall survives archive aging (and detects an unfaithful summary) [9.02ms]
+
+evals/compaction-retention/scenario.test.ts:
+(pass) compaction retention scenario > B13 three real pruner passes preserve exact values, negation, blocker state and rationale [17.71ms]
+(pass) compaction retention scenario > S1 baseline records reference retention counts at the 100k target [5.13ms]
+(pass) compaction retention scenario > S2 small window bounds the pinned block but never drops the task contract [4.03ms]
+(pass) compaction retention scenario > S3 large window buys strictly deeper list retention than the baseline [7.12ms]
+(pass) compaction retention scenario > S4 trailing instruction after a long pasted diagnostic survives [7.23ms]
+(pass) compaction retention scenario > S5 open blocker and structured review receipt survive a pass [3.34ms]
+(pass) compaction retention scenario > S6 small window keeps both the open blocker and the review receipt fingerprint [3.54ms]
+(pass) compaction retention scenario > S7 worst-case pinned payload still lands under the hard ceiling [2.78ms]
+(pass) compaction retention scenario > S8 a passing review supersedes older receipts from the same reviewer [2.76ms]
+(pass) compaction retention scenario > S9 ceiling pressure drains ordinary lists before touching receipts or blockers [3.80ms]
+(pass) compaction retention scenario > S10 multi-pass small window: the D25 floor survives three compaction cycles [4.93ms]
+(pass) compaction retention scenario > S12 archive eviction pointers survive small-window passes verbatim [5.06ms]
+(pass) compaction retention scenario > S11 multi-pass mixed window: the D25 floor survives window-size oscillation [4.21ms]
+
+compaction retention metrics
+scenario                           recall  blockTok  compress  retainedEntries                                                                                              
+B13-factual-three-pass             1.00    1213      0.942     decisions=6 filesInspected=13 editsMade=3 validationResults=6 reviewReceipts=1 postEditAnchors=3 blockers=2  
+S1-baseline                        1.00    1444      0.411     decisions=12 filesInspected=25 editsMade=3 validationResults=12 reviewReceipts=0 postEditAnchors=3 blockers=1
+S2-small-window                    1.00    967       0.205     decisions=6 filesInspected=13 editsMade=3 validationResults=6 reviewReceipts=0 postEditAnchors=3 blockers=1  
+S3-baseline-reference              1.00    1444      0.411     decisions=12 filesInspected=25 editsMade=3 validationResults=12 reviewReceipts=0 postEditAnchors=3 blockers=1
+S3-large-window                    1.00    2047      0.457     decisions=20 filesInspected=40 editsMade=3 validationResults=20 reviewReceipts=0 postEditAnchors=3 blockers=1
+S4-trailing-instruction            1.00    2203      0.570     decisions=12 filesInspected=25 editsMade=3 validationResults=12 reviewReceipts=0 postEditAnchors=3 blockers=1
+S5-blocker-receipt                 1.00    1564      0.417     decisions=12 filesInspected=25 editsMade=3 validationResults=12 reviewReceipts=1 postEditAnchors=3 blockers=2
+S6-small-window-blocker-receipt    1.00    1088      0.215     decisions=6 filesInspected=13 editsMade=3 validationResults=6 reviewReceipts=1 postEditAnchors=3 blockers=2  
+S7-small-window-ceiling-enforced   1.00    1234      0.434     decisions=0 filesInspected=0 editsMade=0 validationResults=0 reviewReceipts=1 postEditAnchors=0 blockers=1   
+S8-resolved-review-reclaimed       1.00    819       0.461     decisions=0 filesInspected=0 editsMade=0 validationResults=0 reviewReceipts=1 postEditAnchors=0 blockers=1   
+S9-ceiling-eviction-order          1.00    1452      0.213     decisions=6 filesInspected=1 editsMade=3 validationResults=6 reviewReceipts=1 postEditAnchors=0 blockers=1   
+S10-multipass-small-window         1.00    1088      0.946     decisions=6 filesInspected=13 editsMade=3 validationResults=6 reviewReceipts=1 postEditAnchors=3 blockers=2  
+S12-archive-pointers-small-window  1.00    1195      0.948     decisions=6 filesInspected=13 editsMade=3 validationResults=6 reviewReceipts=1 postEditAnchors=3 blockers=2  
+S11-multipass-mixed-window         1.00    1088      0.468     decisions=6 filesInspected=13 editsMade=3 validationResults=6 reviewReceipts=1 postEditAnchors=3 blockers=2  
+
+ 104 pass
+ 0 fail
+ 1190 expect() calls
+Ran 104 tests across 11 files. [10.67s]

@@ -1,0 +1,107 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/impl/__tests__/b09-cost-precision.test.ts:
+(pass) B09 cost precision and unknown data > preserves sub-cent configured prices without per-request rounding [0.24ms]
+(pass) B09 cost precision and unknown data > missing or malformed counts never become a zero-cost completed request [0.06ms]
+(pass) B09 cost precision and unknown data > positive unpriced components and non-USD currency do not fabricate USD totals [0.07ms]
+
+sdk/src/__tests__/b09-cost-wire.test.ts:
+(pass) B09 real compatible late usage produces exactly21cents with metadata stripping=false [33.32ms]
+(pass) B09 real compatible late usage produces exactly21cents with metadata stripping=true [9.01ms]
+
+sdk/src/impl/__tests__/llm-cost.test.ts:
+(pass) computeCostCentsFromUsage > computes cost from input + output rates [0.05ms]
+(pass) computeCostCentsFromUsage > returns undefined when pricing is undefined [0.03ms]
+(pass) computeCostCentsFromUsage > returns undefined when pricing has neither input nor output rate [0.02ms]
+(pass) computeCostCentsFromUsage > uses cachedInputPerMillionTokens for cached input portion [0.03ms]
+(pass) computeCostCentsFromUsage > falls back to input rate for cached tokens when cached rate is absent [0.03ms]
+(pass) computeCostCentsFromUsage > returns 0 for zero usage [0.01ms]
+79 |     const pricing: ModelPricing = {
+80 |       inputPerMillionTokens: 3,
+81 |       outputPerMillionTokens: 15,
+82 |     }
+83 |     const usage: UsageTokenCounts = {}
+84 |     expect(computeCostCentsFromUsage({ usage, pricing })).toBe(0)
+                                                               ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-cost.test.ts:84:59)
+(fail) computeCostCentsFromUsage > returns 0 when usage token counts are missing [0.20ms]
+92 |     const usage: UsageTokenCounts = {
+93 |       inputTokens: -100,
+94 |       outputTokens: Number.NaN,
+95 |       cachedInputTokens: Number.POSITIVE_INFINITY,
+96 |     }
+97 |     expect(computeCostCentsFromUsage({ usage, pricing })).toBe(0)
+                                                               ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-cost.test.ts:97:59)
+(fail) computeCostCentsFromUsage > treats negative / non-finite token counts as zero [0.08ms]
+104 |     const usage: UsageTokenCounts = {
+105 |       inputTokens: 500_000,
+106 |       outputTokens: 200_000,
+107 |     }
+108 |     // input: 500K * $3/M = $1.50 ; output rate absent => 0 ; total 150 cents
+109 |     expect(computeCostCentsFromUsage({ usage, pricing })).toBe(150)
+                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: 150
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-cost.test.ts:109:59)
+(fail) computeCostCentsFromUsage > handles input-only pricing (no output rate) [0.05ms]
+116 |     const usage: UsageTokenCounts = {
+117 |       inputTokens: 500_000,
+118 |       outputTokens: 200_000,
+119 |     }
+120 |     // output: 200K * $15/M = $3.00 ; input rate absent => 0 ; total 300 cents
+121 |     expect(computeCostCentsFromUsage({ usage, pricing })).toBe(300)
+                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: 300
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-cost.test.ts:121:59)
+(fail) computeCostCentsFromUsage > handles output-only pricing (no input rate) [0.06ms]
+130 |       inputTokens: 1,
+131 |       outputTokens: 1,
+132 |     }
+133 |     // input: 1 * $3/M = $0.000003 ; output: 1 * $15/M = $0.000015
+134 |     // total = $0.000018 = 0.0018 cents -> rounds to 0
+135 |     expect(computeCostCentsFromUsage({ usage, pricing })).toBe(0)
+                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 0.0018
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-cost.test.ts:135:59)
+(fail) computeCostCentsFromUsage > rounds to whole cents [0.05ms]
+146 |       inputTokens: 100_000,
+147 |       outputTokens: 0,
+148 |       cachedInputTokens: 200_000,
+149 |     }
+150 |     // chargeableInput = max(0, 100K - 200K) = 0 ; cachedInput clamped to safe 200K @ $0.30/M = $0.06 = 6 cents
+151 |     expect(computeCostCentsFromUsage({ usage, pricing })).toBe(6)
+                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: 6
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/impl/__tests__/llm-cost.test.ts:151:59)
+(fail) computeCostCentsFromUsage > does not let cached tokens exceed raw input tokens [0.05ms]
+
+ 11 pass
+ 6 fail
+ 26 expect() calls
+Ran 17 tests across 3 files. [519.00ms]

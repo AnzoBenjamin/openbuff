@@ -1,0 +1,9 @@
+bun test v1.4.4 (38afee6c8)
+
+packages/agent-runtime/src/tools/handlers/tool/__tests__/recall-context-expiry.test.ts:
+(pass) local excerpt lookup and exact ID cannot bypass archive expiry, including current run [1.67ms]
+
+ 1 pass
+ 0 fail
+ 4 expect() calls
+Ran 1 test across 1 file. [405.00ms]

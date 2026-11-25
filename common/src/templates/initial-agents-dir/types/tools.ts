@@ -698,8 +698,16 @@ export interface HoverTypeParams {
 export interface RecallContextParams {
   /** Case-insensitive search terms for archived pre-compaction transcript content. ALL terms must match a verbatim result (AND); stored background summaries use best-effort OR matching. Pass toolCallId instead to retrieve one archived tool result by its exact call id. */
   query?: string
-  /** Exact retrieval: the toolCallId of an archived tool result (the id an eviction tombstone names). Returns the archived original pre-eviction body for that exact call. */
+  /** Exact call ID named by an eviction pointer. Retrieves bounded UTF-8 pages of the retained immutable original; legacy fullness remains unknown. */
   toolCallId?: string
+  /** Original source run; required when a call ID is ambiguous across runs. */
+  sourceRunId?: string
+  /** Expected SHA-256 of the complete original UTF-8 text, copied from the preceding result. */
+  expectedSha256?: string
+  /** UTF-8 byte cursor; copy page.nextOffset to retrieve the next page. */
+  offsetBytes?: number
+  /** Page budget in bytes (default 16384, maximum 65536); never splits a UTF-8 code point. */
+  maxBytes?: number
 }
 
 /**

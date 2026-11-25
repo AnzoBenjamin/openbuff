@@ -1,0 +1,5 @@
+$ bun ./scripts/build-binary.ts openbuff $npm_package_version
+Copied tree-sitter.wasm sibling: /home/ben/Code/CLI/openbuff/node_modules/web-tree-sitter/tree-sitter.wasm → /home/ben/Code/CLI/openbuff/cli/bin/tree-sitter.wasm
+Copied 15 tree-sitter language grammars
+Copied 14 tree-sitter tag queries
+✅ Built openbuff (linux-x64)

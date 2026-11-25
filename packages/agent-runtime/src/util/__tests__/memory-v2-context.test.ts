@@ -20,17 +20,18 @@ const rankingReason = {
   detail: 'Matched <system> & user query',
 }
 
-const observation = (id: string, summary: string) => MemoryObservationSchema.parse({
-  observationId: id,
-  taskId: 'task:1',
-  kind: 'discovery' as const,
-  summary,
-  detail: `Detail for ${summary}`,
-  confidence: 0.8,
-  evidence: [],
-  tags: ['memory'],
-  observedAt: timestamp,
-})
+const observation = (id: string, summary: string) =>
+  MemoryObservationSchema.parse({
+    observationId: id,
+    taskId: 'task:1',
+    kind: 'discovery' as const,
+    summary,
+    detail: `Detail for ${summary}`,
+    confidence: 0.8,
+    evidence: [],
+    tags: ['memory'],
+    observedAt: timestamp,
+  })
 
 const evidence = {
   artifact: {
@@ -133,11 +134,33 @@ function context(long = ''): MemoryTurnContextV2 {
   })
 }
 
+describe('B14 emitted record receipt', () => {
+  test('only complete actually packed claims receive compiler emission credit', () => {
+    const ids: string[] = []
+    compileMemoryV2Context(context(), { emittedObservationIds: ids })
+    expect(ids).toEqual(['observation:verified', 'observation:reusable'])
+    const clippedIds: string[] = []
+    compileMemoryV2Context(context('x'.repeat(700)), {
+      maxChars: 1000,
+      emittedObservationIds: clippedIds,
+    })
+    expect(clippedIds).toEqual([])
+    const emptyIds: string[] = []
+    compileMemoryV2Context(context(), {
+      maxChars: 0,
+      emittedObservationIds: emptyIds,
+    })
+    expect(emptyIds).toEqual([])
+  })
+})
+
 describe('compileMemoryV2Context', () => {
   test('a high-ranked complete claim and rationale survive bulky verified excerpts', () => {
     const base = context()
-    const summary = 'FACT 7049: do not remove the audit log; 7048 is the wrong value.'
-    const detail = 'Preserve this requirement because downstream recovery needs the complete audit trail.'
+    const summary =
+      'FACT 7049: do not remove the audit log; 7048 is the wrong value.'
+    const detail =
+      'Preserve this requirement because downstream recovery needs the complete audit trail.'
     const many = Array.from({ length: 8 }, (_, index) => ({
       ...evidence,
       artifact: { ...evidence.artifact, artifactId: `artifact:${index}` },
@@ -146,10 +169,26 @@ describe('compileMemoryV2Context', () => {
     }))
     const input = MemoryTurnContextV2Schema.parse({
       ...base,
-      result: { ...base.result,
-        verifiedKnowledge: [{ observation: { ...observation('critical-fact', summary), kind: 'fact', detail },
-          verifiedEvidence: many, verifiedAt: timestamp, score: 1, reasons: [rankingReason] }],
-        reusableDiscovery: [], matchedTasks: [], rereadRequired: [], historicalContext: [], rankingReasons: [],
+      result: {
+        ...base.result,
+        verifiedKnowledge: [
+          {
+            observation: {
+              ...observation('critical-fact', summary),
+              kind: 'fact',
+              detail,
+            },
+            verifiedEvidence: many,
+            verifiedAt: timestamp,
+            score: 1,
+            reasons: [rankingReason],
+          },
+        ],
+        reusableDiscovery: [],
+        matchedTasks: [],
+        rereadRequired: [],
+        historicalContext: [],
+        rankingReasons: [],
         degradation: { state: 'none' },
       },
     })
@@ -202,64 +241,99 @@ describe('compileMemoryV2Context', () => {
     const secondEvidence = {
       ...evidence,
       artifact: { ...evidence.artifact, artifactId: 'artifact:2' },
-      selector: { kind: 'line-range' as const, path: 'src/memory.ts', startLine: 2, endLine: 4 },
+      selector: {
+        kind: 'line-range' as const,
+        path: 'src/memory.ts',
+        startLine: 2,
+        endLine: 4,
+      },
       contentDigest: 'sha256:fedcba9876543210',
     }
     const first = MemoryTurnContextV2Schema.parse({
       ...base,
       result: {
         ...base.result,
-        verifiedKnowledge: [...base.result.verifiedKnowledge, {
-          observation: observation('observation:alpha', 'alpha verified'),
-          verifiedEvidence: [secondEvidence, evidence],
-          verifiedAt: timestamp,
-          score: 0.7,
-          reasons: [secondReason, rankingReason],
-        }],
-        matchedTasks: [...base.result.matchedTasks, {
-          taskId: 'task:alpha',
-          title: 'alpha task',
-          status: 'active',
-          summary: 'alpha summary',
-          score: 0.6,
-          reasons: [secondReason, rankingReason],
-        }],
-        reusableDiscovery: [...base.result.reusableDiscovery, {
-          observation: observation('observation:reusable-alpha', 'alpha reusable'),
-          reuseGuidance: 'Reuse alpha',
-          score: 0.6,
-          reasons: [secondReason, rankingReason],
-        }],
-        rereadRequired: [...base.result.rereadRequired, {
-          observationId: 'observation:reread-alpha',
-          selector: { kind: 'symbol', path: 'src/alpha.ts', symbol: 'alpha', occurrence: 1 },
-          reason: 'expired',
-          detail: 'Alpha must be reread',
-          score: 0.6,
-          reasons: [secondReason, rankingReason],
-        }],
-        historicalContext: [...base.result.historicalContext, {
-          taskId: 'task:historical-alpha',
-          summary: 'alpha historical',
-          eventIds: ['event:alpha'],
-          score: 0.4,
-          reasons: [secondReason, rankingReason],
-        }],
-        degradation: base.result.degradation.state === 'degraded'
-          ? {
-              state: 'degraded',
-              reasons: [...base.result.degradation.reasons, {
-                code: 'result-cap-reached',
-                detail: 'Result cap reached',
-                retryable: false,
-              }],
-            }
-          : base.result.degradation,
-        rankingReasons: [...base.result.rankingReasons, {
-          category: 'matchedTasks',
-          targetId: 'task:alpha',
-          reasons: [secondReason, rankingReason],
-        }],
+        verifiedKnowledge: [
+          ...base.result.verifiedKnowledge,
+          {
+            observation: observation('observation:alpha', 'alpha verified'),
+            verifiedEvidence: [secondEvidence, evidence],
+            verifiedAt: timestamp,
+            score: 0.7,
+            reasons: [secondReason, rankingReason],
+          },
+        ],
+        matchedTasks: [
+          ...base.result.matchedTasks,
+          {
+            taskId: 'task:alpha',
+            title: 'alpha task',
+            status: 'active',
+            summary: 'alpha summary',
+            score: 0.6,
+            reasons: [secondReason, rankingReason],
+          },
+        ],
+        reusableDiscovery: [
+          ...base.result.reusableDiscovery,
+          {
+            observation: observation(
+              'observation:reusable-alpha',
+              'alpha reusable',
+            ),
+            reuseGuidance: 'Reuse alpha',
+            score: 0.6,
+            reasons: [secondReason, rankingReason],
+          },
+        ],
+        rereadRequired: [
+          ...base.result.rereadRequired,
+          {
+            observationId: 'observation:reread-alpha',
+            selector: {
+              kind: 'symbol',
+              path: 'src/alpha.ts',
+              symbol: 'alpha',
+              occurrence: 1,
+            },
+            reason: 'expired',
+            detail: 'Alpha must be reread',
+            score: 0.6,
+            reasons: [secondReason, rankingReason],
+          },
+        ],
+        historicalContext: [
+          ...base.result.historicalContext,
+          {
+            taskId: 'task:historical-alpha',
+            summary: 'alpha historical',
+            eventIds: ['event:alpha'],
+            score: 0.4,
+            reasons: [secondReason, rankingReason],
+          },
+        ],
+        degradation:
+          base.result.degradation.state === 'degraded'
+            ? {
+                state: 'degraded',
+                reasons: [
+                  ...base.result.degradation.reasons,
+                  {
+                    code: 'result-cap-reached',
+                    detail: 'Result cap reached',
+                    retryable: false,
+                  },
+                ],
+              }
+            : base.result.degradation,
+        rankingReasons: [
+          ...base.result.rankingReasons,
+          {
+            category: 'matchedTasks',
+            targetId: 'task:alpha',
+            reasons: [secondReason, rankingReason],
+          },
+        ],
       },
     })
     const before = structuredClone(first)
@@ -294,21 +368,30 @@ describe('compileMemoryV2Context', () => {
         maxChars,
         childMaxChars: 64,
       })
-      expect(output).toBe(compileMemoryV2Context(input, { maxChars, childMaxChars: 64 }))
+      expect(output).toBe(
+        compileMemoryV2Context(input, { maxChars, childMaxChars: 64 }),
+      )
       expect(output.length).toBeLessThanOrEqual(maxChars)
     }
   })
 
   test('preserves selector granularity in verified output', () => {
     const input = context()
-    input.result.verifiedKnowledge[0]!.verifiedEvidence = [{
-      ...evidence,
-      selector: { kind: 'line-range', path: 'src/memory.ts', startLine: 10, endLine: 12 },
-    }]
+    input.result.verifiedKnowledge[0]!.verifiedEvidence = [
+      {
+        ...evidence,
+        selector: {
+          kind: 'line-range',
+          path: 'src/memory.ts',
+          startLine: 10,
+          endLine: 12,
+        },
+      },
+    ]
     const output = compileMemoryV2Context(input)
-    const verifiedSection = output
-      .split('[verifiedKnowledge]')[1]
-      ?.split('[reusableDiscovery]')[0] ?? ''
+    const verifiedSection =
+      output.split('[verifiedKnowledge]')[1]?.split('[reusableDiscovery]')[0] ??
+      ''
     expect(verifiedSection).toContain('"kind":"line-range"')
     expect(verifiedSection).toContain('"startLine":10')
     expect(verifiedSection).not.toContain('"kind":"file"')
@@ -323,28 +406,63 @@ describe('compileMemoryV2Context', () => {
     input.result.historicalContext = []
     input.result.rankingReasons = []
     input.result.reusableDiscovery = [
-      { ...base, observation: observation('observation:a-low', 'LOW-RANK '.repeat(80)), score: 0.1 },
-      { ...base, observation: observation('observation:z-high', 'Use SQLite because sessions must survive restarts.'), score: 0.99 },
+      {
+        ...base,
+        observation: observation('observation:a-low', 'LOW-RANK '.repeat(80)),
+        score: 0.1,
+      },
+      {
+        ...base,
+        observation: observation(
+          'observation:z-high',
+          'Use SQLite because sessions must survive restarts.',
+        ),
+        score: 0.99,
+      },
     ]
     const before = structuredClone(input)
-    const output = compileMemoryV2Context(input, { maxChars: 1_400, childMaxChars: 800 })
-    expect(output).toContain('Use SQLite because sessions must survive restarts.')
-    expect(output.indexOf('observation:z-high')).toBeLessThan(output.indexOf('observation:a-low') < 0 ? Infinity : output.indexOf('observation:a-low'))
+    const output = compileMemoryV2Context(input, {
+      maxChars: 1_400,
+      childMaxChars: 800,
+    })
+    expect(output).toContain(
+      'Use SQLite because sessions must survive restarts.',
+    )
+    expect(output.indexOf('observation:z-high')).toBeLessThan(
+      output.indexOf('observation:a-low') < 0
+        ? Infinity
+        : output.indexOf('observation:a-low'),
+    )
     expect(output.length).toBeLessThanOrEqual(1_400)
     expect(input).toEqual(before)
   })
 
   test('preserves score ordering across every ranked result category with deterministic ties', () => {
     const input = context()
-    for (const key of ['verifiedKnowledge', 'reusableDiscovery', 'matchedTasks', 'rereadRequired', 'historicalContext'] as const) {
-      const items = input.result[key] as Array<{ score: number; [key: string]: unknown }>
+    for (const key of [
+      'verifiedKnowledge',
+      'reusableDiscovery',
+      'matchedTasks',
+      'rereadRequired',
+      'historicalContext',
+    ] as const) {
+      const items = input.result[key] as Array<{
+        score: number
+        [key: string]: unknown
+      }>
       const low = structuredClone(items[0]!)
       const high = structuredClone(items[0]!)
       low.score = 0.1
       high.score = 0.99
       if ('observation' in low) {
-        low.observation = { ...(low.observation as Record<string, unknown>), observationId: `observation:${key}:a-low` }
-        high.observation = { ...(high.observation as Record<string, unknown>), observationId: `observation:${key}:z-high` }
+        low.observation = {
+          ...(low.observation as Record<string, unknown>),
+          observationId: `observation:${key}:a-low`,
+        }
+        high.observation = {
+          ...(high.observation as Record<string, unknown>),
+          observationId: `observation:${key}:z-high`,
+        }
       } else if ('observationId' in low) {
         low.observationId = `observation:${key}:a-low`
         high.observationId = `observation:${key}:z-high`
@@ -355,23 +473,45 @@ describe('compileMemoryV2Context', () => {
       items.splice(0, items.length, low, high)
     }
     const output = compileMemoryV2Context(input)
-    for (const key of ['verifiedKnowledge', 'reusableDiscovery', 'matchedTasks', 'rereadRequired', 'historicalContext']) {
+    for (const key of [
+      'verifiedKnowledge',
+      'reusableDiscovery',
+      'matchedTasks',
+      'rereadRequired',
+      'historicalContext',
+    ]) {
       const section = output.split(`[${key}]`)[1]?.split('\n\n[')[0] ?? ''
       expect(section.indexOf('z-high')).toBeGreaterThanOrEqual(0)
       expect(section.indexOf('z-high')).toBeLessThan(section.indexOf('a-low'))
     }
     const tied = structuredClone(input)
-    for (const key of ['verifiedKnowledge', 'reusableDiscovery', 'matchedTasks', 'rereadRequired', 'historicalContext'] as const)
-      tied.result[key].forEach((item) => { item.score = 0.5 })
+    for (const key of [
+      'verifiedKnowledge',
+      'reusableDiscovery',
+      'matchedTasks',
+      'rereadRequired',
+      'historicalContext',
+    ] as const)
+      tied.result[key].forEach((item) => {
+        item.score = 0.5
+      })
     const tieOutput = compileMemoryV2Context(tied)
-    for (const key of ['verifiedKnowledge', 'reusableDiscovery', 'matchedTasks', 'rereadRequired', 'historicalContext'] as const)
+    for (const key of [
+      'verifiedKnowledge',
+      'reusableDiscovery',
+      'matchedTasks',
+      'rereadRequired',
+      'historicalContext',
+    ] as const)
       tied.result[key].reverse()
     expect(compileMemoryV2Context(tied)).toBe(tieOutput)
   })
 
   test('schema-validates before compiling', () => {
     const invalid = { ...context(), queryId: 'query:other' }
-    expect(() => compileMemoryV2Context(invalid as MemoryTurnContextV2)).toThrow()
+    expect(() =>
+      compileMemoryV2Context(invalid as MemoryTurnContextV2),
+    ).toThrow()
   })
 
   test('renders [currentCoverage] section when items are present', () => {
@@ -381,7 +521,12 @@ describe('compileMemoryV2Context', () => {
       result: {
         ...base.result,
         currentCoverage: [
-          { dimension: 'requirements', state: 'covered', taskId: 'task:1', notes: 'All requirements addressed' },
+          {
+            dimension: 'requirements',
+            state: 'covered',
+            taskId: 'task:1',
+            notes: 'All requirements addressed',
+          },
           { dimension: 'tests', state: 'partial', taskId: 'task:1' },
         ],
       },
@@ -408,7 +553,9 @@ describe('compileMemoryV2Context', () => {
 
   test('includes bounded verified excerpt in verifiedKnowledge section', () => {
     const output = compileMemoryV2Context(context())
-    const verifiedSection = output.split('[verifiedKnowledge]')[1]?.split('[reusableDiscovery]')[0] ?? ''
+    const verifiedSection =
+      output.split('[verifiedKnowledge]')[1]?.split('[reusableDiscovery]')[0] ??
+      ''
     expect(verifiedSection).toContain('verified excerpt content')
   })
 
@@ -444,7 +591,9 @@ describe('compileMemoryV2Context', () => {
       },
     })
     const output = compileMemoryV2Context(ctx)
-    const verifiedSection = output.split('[verifiedKnowledge]')[1]?.split('[reusableDiscovery]')[0] ?? ''
+    const verifiedSection =
+      output.split('[verifiedKnowledge]')[1]?.split('[reusableDiscovery]')[0] ??
+      ''
     expect(verifiedSection).toContain('chunk-abc-123')
     expect(verifiedSection).toContain('10')
     expect(verifiedSection).toContain('20')
@@ -529,8 +678,19 @@ describe('countConceptAdvisoryEntries', () => {
         ...base.result,
         reusableDiscovery: [
           { ...reusable, reasons: [advisoryReason] },
-          { ...reusable, observation: observation('observation:advisory-2', 'advisory two'), reasons: [advisoryReason] },
-          { ...reusable, observation: observation('observation:advisory-3', 'advisory three'), reasons: [advisoryReason] },
+          {
+            ...reusable,
+            observation: observation('observation:advisory-2', 'advisory two'),
+            reasons: [advisoryReason],
+          },
+          {
+            ...reusable,
+            observation: observation(
+              'observation:advisory-3',
+              'advisory three',
+            ),
+            reasons: [advisoryReason],
+          },
         ],
       },
     })

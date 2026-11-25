@@ -275,12 +275,7 @@ export type SupervisedSpawnRequest = {
  * supervisor module keeps its full concrete type and re-exports this one.
  */
 export type SettledSubagentResult = {
-  outcome:
-    | 'ok'
-    | 'missing_output'
-    | 'schema_invalid'
-    | 'truncated'
-    | 'crashed'
+  outcome: 'ok' | 'missing_output' | 'schema_invalid' | 'truncated' | 'crashed'
   crashReason?: string
   /** Host admission refusal is distinct from a child process crash. */
   executionRefusal?: import('./execution-context').Refusal
@@ -368,13 +363,37 @@ export type AgentRuntimeDeps = {
    * the admission-captured mode. This grants no execution/read/edit authority.
    * Omitted (or undefined for an unwired host) preserves standalone legacy behavior.
    */
-  resolveMemoryAuthority?: (request: Readonly<{
+  resolveMemoryAuthority?: (
+    request: Readonly<{
+      actor: ExecutionActor
+      userInputId: string
+    }>,
+  ) =>
+    | MemoryAuthorityMode
+    | undefined
+    | Promise<MemoryAuthorityMode | undefined>
+  prepareRepositoryContext?: import('./repository-intelligence').PrepareRepositoryContext
+  /** Host-bound archive read; the actor/task is authenticated separately from model selectors. */
+  readContextArchiveBodyPage?: (
+    request: import('../context-archive').ContextArchiveBodyPageRequest & {
+      actor: ExecutionActor
+      userInputId: string
+    },
+  ) => Promise<import('../context-archive').ContextArchiveBodyPageOutcome>
+  searchContextArchive?: (request: {
     actor: ExecutionActor
     userInputId: string
-  }>) => MemoryAuthorityMode | undefined | Promise<MemoryAuthorityMode | undefined>
-  prepareRepositoryContext?: import('./repository-intelligence').PrepareRepositoryContext
-  classifyPlaybookTerminalActions?: (command: string) => Promise<readonly ('git-commit' | 'git-push' | 'git-stage')[]>
-  getPlaybookValidationEvidence?: (actor: import('./client').ExecutionActor) => Promise<import('../memory-playbook').ValidationEvidenceContext | undefined>
+    query: string
+    limit?: number
+  }) => Promise<import('../context-archive-search').ContextArchiveSearchOutcome>
+  classifyPlaybookTerminalActions?: (
+    command: string,
+  ) => Promise<readonly ('git-commit' | 'git-push' | 'git-stage')[]>
+  getPlaybookValidationEvidence?: (
+    actor: import('./client').ExecutionActor,
+  ) => Promise<
+    import('../memory-playbook').ValidationEvidenceContext | undefined
+  >
   synchronizeWorkspace?: import('./client').SynchronizeWorkspace
   /** Before native/cache/process dispatch, consult the captured actor read boundary. */
   authorizeToolRead?: import('./client').AuthorizeToolRead
@@ -387,7 +406,9 @@ export type AgentRuntimeDeps = {
    * absence, failure or timeout must not change the completed tool outcome.
    * Cancellation is retained on the signal, not used to reauthorize metadata.
    */
-  onNativeToolObservation?: (observation: NativeToolObservation) => void | Promise<void>
+  onNativeToolObservation?: (
+    observation: NativeToolObservation,
+  ) => void | Promise<void>
   /** Select the host's canonical terminal outcome before journal publication. */
   resolveRunOutcome?: (params: {
     runId: string

@@ -1,0 +1,21 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/__tests__/b14-memory-usage.test.ts:
+Using environment: test
+(pass) B14 actual SDK request/read unchanged-a retains only justified efficiency signals [391.05ms]
+(pass) B14 actual SDK request/read unrelated-c retains only justified efficiency signals [335.20ms]
+(pass) B14 actual SDK request/read required-refresh retains only justified efficiency signals [251.05ms]
+(pass) B14 actual SDK request/read changed-after-emission retains only justified efficiency signals [337.99ms]
+
+common/src/util/__tests__/playbook-applicability.test.ts:
+(pass) isPlaybookApplicable > uses the acting role rather than a child target and preserves global procedures [1.33ms]
+(pass) isPlaybookApplicable > requires known repository and role matches, including aliases and qualification [1.87ms]
+(pass) isPlaybookApplicable > matches recursive and segment globs and retains unknown path scope [1.81ms]
+(pass) isPlaybookApplicable > bounded brace and character-class language scopes do not silently become global rules [1.35ms]
+(pass) isPlaybookApplicable > unsupported scope syntax is excluded explicitly, never interpreted as universal [2.63ms]
+(pass) isPlaybookApplicable > active and verified stay effective while retired, candidate and expired do not [0.93ms]
+
+ 10 pass
+ 0 fail
+ 78 expect() calls
+Ran 10 tests across 2 files. [2.17s]

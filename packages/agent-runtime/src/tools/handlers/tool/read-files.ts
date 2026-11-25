@@ -1,3 +1,5 @@
+import { recordMemoryReadObservation } from '../../../util/memory-read-observation'
+import type { AgentState } from '@codebuff/common/types/session-state'
 import {
   buildReadFilesResultV1,
   type FilesystemError,
@@ -70,6 +72,7 @@ export const handleReadFiles = (async (
     fileContext: ProjectFileContext
     fileProcessingState: FileProcessingState
     runId: string
+    agentState?: AgentState
   } & ParamsExcluding<typeof getFileReadingUpdates, 'requestedFiles'>,
 ): Promise<{ output: CodebuffToolOutput<ToolName> }> => {
   const {
@@ -203,6 +206,13 @@ export const handleReadFiles = (async (
     ...symbolBlockRequests.map((entry) => entry.path),
     ...symbolRequests.map((entry) => entry.path),
   ])
+  const requiredRefreshPaths = new Set(
+    [...requestedPaths].filter(
+      (path) =>
+        fileProcessingState.failedEditRequiresReadByPath[path] ||
+        getEditRereadRequirement(fileProcessingState, path),
+    ),
+  )
   const editedSinceLastRead = new Set<string>()
   for (const path of requestedPaths) {
     if ((fileProcessingState.promisesByPath[path]?.length ?? 0) > 0) {
@@ -258,6 +268,13 @@ export const handleReadFiles = (async (
       ...(refs && Object.keys(refs).length > 0 ? { referencedBy: refs } : {}),
     }
   })
+
+  if (params.agentState)
+    recordMemoryReadObservation({
+      state: params.agentState,
+      results: fileResults,
+      requiredRefreshPaths,
+    })
 
   const successfulReadPaths = new Set(
     fileResults

@@ -143,6 +143,7 @@ import {
   flushBufferedToolEvidenceIntoTaskMemory,
   mergeTaskMemoryDraft,
 } from './util/task-memory'
+import { prepareArchiveReferenceContext } from './util/context-archive-context'
 import {
   compileMemoryV2Context,
   countConceptAdvisoryEntries,
@@ -761,6 +762,17 @@ export const runAgentStep = async (
   )
 
   agentState.messageHistory = agentMessagesUntruncated
+  const emitted: string[] = []
+  const memory = MemoryTurnContextV2Schema.safeParse(agentState.memoryV2Context)
+  if (memory.success && memory.data.userInputId === userInputId.slice(0, 128)) {
+    const compiled = compileMemoryV2Context(memory.data, { emittedObservationIds: emitted })
+    const packed = agentMessagesUntruncated.some(message => message.tags?.includes('MEMORY_V2_CONTEXT') &&
+      message.content.some(part => part.type === 'text' && part.text.includes(compiled)))
+    if (packed) {
+      agentState.memoryV2EmittedObservationIds = [...new Set([...(agentState.memoryV2EmittedObservationIds ?? []), ...emitted])].slice(0, 256)
+      agentState.memoryV2EmittedQueryIds = [...new Set([...(agentState.memoryV2EmittedQueryIds ?? []), memory.data.queryId])].slice(0, 32)
+    }
+  }
 
   const { model } = agentTemplate
 
@@ -898,6 +910,10 @@ export const runAgentStep = async (
   // Correlation is keyed off the emitting run (`runId`/`ancestorRunIds`), never
   // `agentId`, which subagent forwarding rewrites at nesting depth >= 2.
   const onRequestContextTrimmed = (info: RequestContextTrimInfo) => {
+    // SDK emergency trimming does not attest which complete memory records
+    // survived. Prefer no usage signal over invented emission credit.
+    agentState.memoryV2EmittedObservationIds = []
+    agentState.memoryV2EmittedQueryIds = []
     onResponseChunk({
       type: 'context_request_trim',
       runId: agentState.runId,
@@ -2180,6 +2196,13 @@ export async function loopAgentSteps(
   }
   // A restored packet cannot confer current knowledge or execution authority.
   initialAgentState.repositoryContext = undefined
+  // This emitted-record accumulator belongs to the current root turn, not prior saved state.
+  initialAgentState.memoryV2EmittedObservationIds = []
+  initialAgentState.memoryV2EmittedQueryIds = []
+  initialAgentState.memoryReuse = undefined
+  initialAgentState.memoryUsageTurn = undefined
+  const archiveReferenceContextPromise = prepareArchiveReferenceContext({ state: initialAgentState, actor, userInputId,
+    read: params.readContextArchiveBodyPage, signal })
   if (params.prepareRepositoryContext) {
     try {
       const packet = await params.prepareRepositoryContext({
@@ -2237,6 +2260,8 @@ export async function loopAgentSteps(
       )
     }
   }
+
+  const archiveReferenceContext = await archiveReferenceContextPromise
 
   // P2-T2b: a BACKGROUND child journals its own job -> childRunId linkage under
   // the PARENT runId. The launch-time intent (spawn-agents.ts) could only
@@ -3006,14 +3031,9 @@ export async function loopAgentSteps(
           : false
       const buildCompiledMemoryV2Message = (state: AgentState) => {
         const context = getCorrelatedAuthoritativeV2(state)
-        return context
-          ? userMessage({
-              content: withSystemTags(compileMemoryV2Context(context)),
-              tags: ['MEMORY_V2_CONTEXT'],
-              timeToLive: 'agentStep' as const,
-              keepDuringTruncation: true,
-            })
-          : false
+        if (!context) return false
+        return userMessage({ content: withSystemTags(compileMemoryV2Context(context)), tags: ['MEMORY_V2_CONTEXT'],
+          timeToLive: 'agentStep' as const, keepDuringTruncation: true })
       }
       const buildCompiledPlaybooksMessage = (state: AgentState) => {
         // Validation can empty the set (restored-session garbage), so gate
@@ -3037,14 +3057,12 @@ export async function loopAgentSteps(
             })
           : false
       }
-      const buildCompiledRepositoryContextMessage = (state: AgentState) =>
-        state.repositoryContext?.userInputId === userInputId &&
-        userMessage({
-          content: withSystemTags(state.repositoryContext.briefing),
-          tags: ['REPOSITORY_CONTEXT'],
-          timeToLive: 'agentStep' as const,
-          keepDuringTruncation: true,
-        })
+      const buildCompiledRepositoryContextMessage = (state: AgentState) => {
+        const briefing = state.repositoryContext?.userInputId === userInputId ? state.repositoryContext.briefing : undefined
+        const content = [briefing, archiveReferenceContext].filter(Boolean).join('\n\n')
+        return content && userMessage({ content: withSystemTags(content),
+          tags: ['REPOSITORY_CONTEXT'], timeToLive: 'agentStep' as const, keepDuringTruncation: true })
+      }
       let messagesWithStepPrompt = buildArray(
         ...currentAgentState.messageHistory,
         buildCompiledRepositoryContextMessage(currentAgentState),

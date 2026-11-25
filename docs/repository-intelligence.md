@@ -55,9 +55,10 @@ query asset bytes, and changed assets reload parser/query objects.
 
 ## Knowledge and archive lifecycle
 
-Canonical events remain the reconstruction and audit source. Schema 6 maintains
-knowledge projections for querying, with indexed text candidates and dependency
-validity. Event-tail admission no longer controls whether an old pinned fact is
+Canonical events remain the reconstruction and audit source. Schema 7 retains
+schema 6's maintained knowledge projections and adds immutable original tool-text
+references with transactional archive retention. Indexed text candidates and dependency
+validity remain separate from archive fullness. Event-tail admission no longer controls whether an old pinned fact is
 retrievable. Optional semantic retrieval progresses through the eligible corpus
 instead of considering only a recent prefix.
 
@@ -117,7 +118,21 @@ use the existing execution-effect classifier. A rule targeting a committer spawn
 belongs to the spawning actor; a commit rule is checked on the commit action.
 Successful verification does not disable an otherwise active rule. Selected
 instructions retain their prerequisites and conditions together; a small budget
-may include a complete reference instead of an incomplete imperative.
+may include a complete reference instead of an incomplete imperative. Scope
+paths support bounded segment wildcards, recursive `**`, character classes and
+comma braces (for example `src/**/*.{ts,tsx}`). Unsupported scope syntax is
+excluded with a degraded `procedure-scope-unsupported` host-context reason,
+not silently treated as a global procedure. Unknown task focus remains explicit;
+this does not infer arbitrary shell-command paths or prove action-specific focus.
+
+Memory feedback is source-specific efficiency telemetry, not a factual-quality
+judgment. Only complete observation records actually packed into a model request
+are eligible. A completed authenticated native read records its exact source,
+digest/range and whether it was unchanged, a necessary refresh, or unknown.
+Reading another file, encountering changed bytes, satisfying a reread requirement,
+or clipping a record cannot penalize unrelated memories. Legacy aggregate
+`full` counts alone carry no ignored credit. Inject-only procedure rendering
+never invents gate firing counters.
 
 The two built-in warn-mode rules require validation before spawning
 `git-committer` and before a direct `git push`. They accept `ci-local` or
@@ -176,8 +191,29 @@ normalized manifests, message membership and body references before removing
 legacy duplicates; a corrupt staged migration stays degraded and retains its
 recoverable data.
 
-Archive retention defaults to 30 days and 500 snapshots, with bounded orphan
-collection. Migration frees reusable SQLite pages without automatically running
+Archive retention defaults to rolling 30-day, 500-snapshot and 32 MiB aggregate
+logical archive/original payload limits; a host can select another policy at store
+open or explicit unbounded `keep-until-delete`. The roadmap's 4 MiB envelope is a
+fixture input, not the product default. Explicit pins protect their complete body
+closure; protected overflow refuses atomically. Source-run/call cutoffs prevent old
+envelopes from resurrecting expired or evicted originals, and current-run records
+are not exempt. Required cutoff metadata is charged too; exhausted metadata capacity
+can require operator resolution rather than silently discarding those cutoffs.
+
+`recall_context` accepts an exact `toolCallId`, optional `sourceRunId` and
+`expectedSha256`, and UTF-8 `offsetBytes`/`maxBytes` pages (16 KiB default, 64 KiB
+maximum). Returned offsets never split a code point. A body hash covers complete
+recalled UTF-8 text, not serialized message JSON. New references distinguish
+original, excerpt and pointer; legacy fullness stays unknown. Ambiguous, expired,
+missing and corrupt results are explicit. Host lookup is actor/task-bound and
+withheld from strict project-only readers until a guarded archive contract exists.
+Sanitized originals are committed before reference-only chat publication, with
+bounded inline fallback for unconfirmed storage and explicit cutoff disclosure.
+The CLI keeps canonical transcript messages while rendering pageable/virtualized
+windows; missing/corrupt selected sessions block sending and expose Retry/Cancel.
+
+SQLite allocated pages, WAL/FTS overhead and logical payload are reported
+separately. Migration frees reusable SQLite pages without automatically running
 `VACUUM` or immediately shrinking allocated file size.
 
 For canonical memory rollback, stop writers and retain a consistent SQLite

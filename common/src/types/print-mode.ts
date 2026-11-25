@@ -126,6 +126,12 @@ export const printModeUsageSchema = z.object({
   totalTokens: z.number().int().nonnegative().optional(),
   /** True only when input and output usage were explicitly reported and valid. */
   complete: z.boolean(),
+  /** Cost telemetry is separate from count completeness and request metadata stripping. */
+  costCents: z.number().nonnegative().optional(),
+  costStatus: z
+    .enum(['observed', 'estimated', 'unknown', 'subscription'])
+    .optional(),
+  costReason: z.string().max(512).optional(),
 })
 export type PrintModeUsage = z.infer<typeof printModeUsageSchema>
 

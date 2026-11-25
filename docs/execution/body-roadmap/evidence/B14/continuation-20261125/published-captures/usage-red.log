@@ -1,0 +1,119 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/services/memory-v2/__tests__/b14-usage.test.ts:
+10 | const receipt = (entry: Record<string, unknown>): MemoryReuseReceiptV1 => ({ schemaVersion: 1, turnId: 'turn', skip: 0, narrow: 0, full: 1,
+11 |   recordsServed: 0, gapsRemaining: 0, recordedDecisions: 0, conceptExpanded: 0, byTool: [{ tool: 'read_files', decision: 'full', served: 0, gaps: 0, ...entry }] } as MemoryReuseReceiptV1)
+12 | 
+13 | describe('B14 source-specific emitted-memory usage', () => {
+14 |   test('an unrelated full read cannot penalize either retrieved observation', () => {
+15 |     expect(correlateUsage({ context, receipt: receipt({ observedReads: [{ path: 'src/c.ts', startLine: 1, endLine: 2, contentDigest: hash, reason: 'unchanged-reread' }] }), emittedObservationIds: ['a', 'b'] })).toEqual([])
+                                                                                                                                                                                                                        ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "kind": "ignored",
++     "mechanism": "reread-despite",
++     "observationId": "a",
++   },
++   {
++     "kind": "ignored",
++     "mechanism": "reread-despite",
++     "observationId": "b",
++   },
++ ]
+
+- Expected  - 1
++ Received  + 12
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/b14-usage.test.ts:15:212)
+(fail) B14 source-specific emitted-memory usage > an unrelated full read cannot penalize either retrieved observation [1.53ms]
+14 |   test('an unrelated full read cannot penalize either retrieved observation', () => {
+15 |     expect(correlateUsage({ context, receipt: receipt({ observedReads: [{ path: 'src/c.ts', startLine: 1, endLine: 2, contentDigest: hash, reason: 'unchanged-reread' }] }), emittedObservationIds: ['a', 'b'] })).toEqual([])
+16 |   })
+17 |   test('only actual emitted matching-source unchanged reread gets an efficiency signal', () => {
+18 |     const read = receipt({ observedReads: [{ path: 'src/a.ts', startLine: 1, endLine: 2, contentDigest: hash, reason: 'unchanged-reread' }] })
+19 |     expect(correlateUsage({ context, receipt: read, emittedObservationIds: ['a', 'b'] })).toEqual([{ observationId: 'a', kind: 'ignored', mechanism: 'reread-despite' }])
+                                                                                               ^
+error: expect(received).toEqual(expected)
+
+  [
+    {
+      "kind": "ignored",
+      "mechanism": "reread-despite",
+      "observationId": "a",
+    },
++   {
++     "kind": "ignored",
++     "mechanism": "reread-despite",
++     "observationId": "b",
++   },
+  ]
+
+- Expected  - 0
++ Received  + 5
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/b14-usage.test.ts:19:91)
+(fail) B14 source-specific emitted-memory usage > only actual emitted matching-source unchanged reread gets an efficiency signal [0.13ms]
+24 |     for (const entry of [
+25 |       { path: 'src/a.ts', startLine: 1, endLine: 2, contentDigest: hash, reason: 'required-refresh' },
+26 |       { path: 'src/a.ts', startLine: 1, endLine: 2, contentDigest: hash, reason: 'unknown' },
+27 |       { path: 'src/a.ts', startLine: 1, endLine: 2, contentDigest: `sha256:${'b'.repeat(64)}`, reason: 'unchanged-reread' },
+28 |       { path: 'src/a.ts', startLine: 1, endLine: 1, contentDigest: hash, reason: 'unchanged-reread' },
+29 |     ]) expect(correlateUsage({ context, receipt: receipt({ observedReads: [entry] }), emittedObservationIds: ['a'] })).toEqual([])
+                                                                                                                            ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "kind": "ignored",
++     "mechanism": "reread-despite",
++     "observationId": "a",
++   },
++   {
++     "kind": "ignored",
++     "mechanism": "reread-despite",
++     "observationId": "b",
++   },
++ ]
+
+- Expected  - 1
++ Received  + 12
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/b14-usage.test.ts:29:120)
+(fail) B14 source-specific emitted-memory usage > required refresh, changed bytes, unknown use and incomplete reads never imply ignored [0.13ms]
+29 |     ]) expect(correlateUsage({ context, receipt: receipt({ observedReads: [entry] }), emittedObservationIds: ['a'] })).toEqual([])
+30 |     expect(correlateUsage({ context, receipt: receipt({}), emittedObservationIds: ['a'] })).toEqual([])
+31 |   })
+32 |   test('a skip for an unrendered observation is not measured use', () => {
+33 |     const reuse = receipt({ decision: 'skip', coveredStableChunkIds: ['chunk-a'] })
+34 |     expect(correlateUsage({ context, receipt: reuse, emittedObservationIds: ['b'] })).toEqual([])
+                                                                                           ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "kind": "used",
++     "mechanism": "gate-skip",
++     "observationId": "a",
++   },
++   {
++     "kind": "ignored",
++     "mechanism": "reread-despite",
++     "observationId": "b",
++   },
++ ]
+
+- Expected  - 1
++ Received  + 12
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/sdk/src/services/memory-v2/__tests__/b14-usage.test.ts:34:87)
+(fail) B14 source-specific emitted-memory usage > a skip for an unrendered observation is not measured use [0.07ms]
+
+ 0 pass
+ 4 fail
+ 4 expect() calls
+Ran 4 tests across 1 file. [6.00ms]

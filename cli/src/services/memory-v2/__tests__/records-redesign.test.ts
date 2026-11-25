@@ -943,7 +943,13 @@ describe('single-copy archive objects', () => {
     const empty = await repository.searchContextArchive({
       query: 'does-not-exist',
     })
-    expect(empty).toEqual({ matches: [], snapshotsSearched: 0, status: 'ok' })
+    expect(empty).toMatchObject({
+      matches: [],
+      snapshotsSearched: 0,
+      status: 'ok',
+    })
+    expect(empty.retention?.status).toBe('ok')
+
     const raw = new Database(repository.databasePath)
     raw.exec('DROP TABLE context_archive_fts')
     raw.close()
@@ -992,7 +998,7 @@ describe('single-copy archive objects', () => {
       raw = new Database(path)
     try {
       raw.exec(
-        'DROP TRIGGER context_archive_bodies_ai;DROP TRIGGER context_archive_bodies_ad;DROP TRIGGER context_archive_bodies_au;DROP TABLE context_archive_fts;DROP TABLE context_archive_memberships;DROP TABLE context_archive_snapshots;DROP TABLE context_archive_messages;DROP TABLE context_archive_bodies;',
+        'DROP TABLE context_archive_original_refs;DROP TABLE context_archive_originals;DROP TABLE context_archive_original_bodies;DROP TABLE context_archive_cutoffs;DROP TRIGGER context_archive_bodies_ai;DROP TRIGGER context_archive_bodies_ad;DROP TRIGGER context_archive_bodies_au;DROP TABLE context_archive_fts;DROP TABLE context_archive_memberships;DROP TABLE context_archive_snapshots;DROP TABLE context_archive_messages;DROP TABLE context_archive_bodies;',
       )
       raw.exec(
         'CREATE TABLE context_archive_snapshots(run_id TEXT,archived_at REAL,action TEXT,keep_recent_steps INTEGER,step_base INTEGER,reason TEXT,messages_json TEXT,steps_json TEXT,created_at TEXT,PRIMARY KEY(run_id,archived_at));CREATE TABLE context_archive_messages(run_id TEXT,archived_at REAL,msg_index INTEGER,tool_call_id TEXT,tool_name TEXT,step INTEGER,body TEXT,PRIMARY KEY(run_id,archived_at,msg_index));CREATE VIRTUAL TABLE context_archive_fts USING fts5(run_id UNINDEXED,archived_at UNINDEXED,msg_index UNINDEXED,body);PRAGMA user_version=4;',
@@ -1103,6 +1109,10 @@ describe('single-copy archive objects', () => {
     const raw = new Database(repository.databasePath)
     try {
       raw.exec(`
+        DROP TABLE context_archive_original_refs;
+        DROP TABLE context_archive_originals;
+        DROP TABLE context_archive_original_bodies;
+        DROP TABLE context_archive_cutoffs;
         ALTER TABLE context_archive_memberships RENAME TO fixture_v6_memberships;
         ALTER TABLE context_archive_snapshots RENAME TO fixture_v6_snapshots;
         DROP INDEX context_archive_memberships_message;

@@ -1,0 +1,48 @@
+bun test v1.4.4 (38afee6c8)
+
+common/src/util/__tests__/context-archive-body.test.ts:
+(pass) immutable archive text bodies > binds exact UTF-8 text rather than JSON-encoded content [0.38ms]
+(pass) immutable archive text bodies > pages at real complete-code-point byte boundaries [0.28ms]
+(pass) immutable archive text bodies > rehashes sanitized bytes and consistently rebinds every reference [0.30ms]
+
+packages/agent-runtime/src/util/__tests__/context-archive-originals.test.ts:
+(pass) B13 original result provenance and bounded byte recall > a later real eviction pointer cannot shadow the original 32 KiB body [553.48ms]
+(pass) B13 original result provenance and bounded byte recall > captures the immutable original before either archive excerpt limit [14.20ms]
+(pass) B13 original result provenance and bounded byte recall > uses UTF-8 byte cursors without cutting a code point or accepting an interior cursor [0.40ms]
+(pass) B13 original result provenance and bounded byte recall > rejects conflicting originals and cannot overwrite an earlier immutable body [0.21ms]
+(pass) B13 original result provenance and bounded byte recall > requires source-run disambiguation and an expected body hash when supplied [0.21ms]
+
+packages/agent-runtime/src/util/__tests__/context-archive.test.ts:
+(pass) archivePreCompaction > archives a snapshot with provenance and caps message count [0.39ms]
+(pass) archivePreCompaction > is identity-keyed: re-archiving the same array is a no-op [0.43ms]
+(pass) archivePreCompaction > evicts the oldest snapshot beyond MAX_ARCHIVE_SNAPSHOTS [1.83ms]
+(pass) archivePreCompaction > truncates oversized tool bodies instead of storing them whole [0.44ms]
+(pass) archivePreCompaction > caps oversized conversation text too [0.15ms]
+(pass) recallFromArchive > finds a planted fact across snapshots (AND semantics) [0.38ms]
+(pass) recallFromArchive > recalls archived conversation in addition to tool bodies [0.08ms]
+(pass) recallFromArchive > requires every term to match [0.11ms]
+(pass) recallFromArchive > is case-insensitive and returns bounded results [0.29ms]
+(pass) recallFromArchive > handles an empty or missing archive without throwing [0.03ms]
+(pass) recallFromArchive > reports the snapshots ACTUALLY searched when the result cap ends the scan early [0.43ms]
+(pass) archiveEvictedToolResults (D26) > round-trips an evicted fact back through recallFromArchive [807.59ms]
+(pass) archiveEvictedToolResults (D26) > is identity-keyed: the same toolCallId never duplicates a record [0.41ms]
+(pass) archiveEvictedToolResults (D26) > caps eviction snapshots at the DEDICATED MAX_EVICTION_ARCHIVE_SNAPSHOTS cap [15.99ms]
+(pass) archiveEvictedToolResults (D26) > does not count eviction snapshots against the semantic snapshot cap (D26 dedicated cap) [25.73ms]
+(pass) archiveEvictedToolResults (D26) > tolerates legacy snapshots without the D26 fields (additive contract) [0.27ms]
+(pass) archiveEvictedToolResults (D26) > bounds eviction snapshots to the persisted size contract with the dedicated 64k body bound [98.86ms]
+(pass) archiveEvictedToolResults (D26) > reports original-transcript steps from the steps provenance array [0.28ms]
+(pass) archiveEvictedToolResults (D26) > falls back to stepBase numbering for legacy eviction snapshots without steps [0.07ms]
+(pass) archiveEvictedToolResults (D26) > is a no-op on empty input [0.02ms]
+(pass) archiveEvictedToolResults (D26) > eviction body retention (D26 64k bound) > round-trips a >4k evicted body whole (the old 4k clip would have destroyed it) [0.91ms]
+(pass) archiveEvictedToolResults (D26) > eviction body retention (D26 64k bound) > still truncates a body beyond the 64k eviction bound (bounded persisted size) [1.05ms]
+(pass) archiveEvictedToolResults (D26) > eviction body retention (D26 64k bound) > keeps semantic-snapshot truncation at the 4k bound unchanged [0.27ms]
+(pass) recallFromArchiveByToolCallId (D26 exact-ID retrieval) > newest copy wins: the FULL newer body is returned, not a snippet cap [0.26ms]
+(pass) recallFromArchiveByToolCallId (D26 exact-ID retrieval) > miss returns empty matches with snapshotsSearched = archive length [0.05ms]
+(pass) recallFromArchiveByToolCallId (D26 exact-ID retrieval) > returns the empty result for a missing or empty archive [0.04ms]
+(pass) recallFromArchiveByToolCallId (D26 exact-ID retrieval) > reports the ORIGINAL-transcript step from the D26 steps provenance array [0.21ms]
+(pass) recallFromArchiveByToolCallId (D26 exact-ID retrieval) > returns the stored body VERBATIM — never double-encoded (real-path regression) [0.16ms]
+
+ 36 pass
+ 0 fail
+ 609 expect() calls
+Ran 36 tests across 3 files. [1.93s]

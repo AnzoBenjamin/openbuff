@@ -144,6 +144,8 @@ export const BRIDGE_METHODS = [
   'synchronizeWorkspace',
   'prepareRepositoryContext',
   'resolveMemoryAuthority',
+  'readContextArchiveBodyPage',
+  'searchContextArchive',
   'classifyPlaybookTerminalActions',
   'getPlaybookValidationEvidence',
   'authorizeToolRead',

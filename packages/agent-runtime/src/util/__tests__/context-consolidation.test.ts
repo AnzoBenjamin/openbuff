@@ -1,12 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  describe,
-  expect,
-  it,
-  mock,
-  test,
-} from 'bun:test'
+import { afterAll, afterEach, describe, expect, it, mock, test } from 'bun:test'
 
 import {
   MAX_CONSOLIDATIONS,
@@ -32,7 +24,10 @@ import type { ContextArchiveSnapshot } from '@codebuff/common/types/context-arch
 import type { ContextConsolidation } from '@codebuff/common/types/context-consolidation'
 import type { CodebuffToolCall } from '@codebuff/common/tools/list'
 import type { AgentState } from '@codebuff/common/types/session-state'
-import type { Message, ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
+import type {
+  Message,
+  ToolMessage,
+} from '@codebuff/common/types/messages/codebuff-message'
 
 const snapshot = (archivedAt: number, steps = 1): ContextArchiveSnapshot => ({
   archivedAt,
@@ -42,13 +37,22 @@ const snapshot = (archivedAt: number, steps = 1): ContextArchiveSnapshot => ({
   messages: [
     {
       role: 'assistant',
-      content: [{ type: 'tool-call', toolCallId: `c-${archivedAt}`, toolName: 'read_files', input: { paths: [`src/f-${archivedAt}.ts`] } }],
+      content: [
+        {
+          type: 'tool-call',
+          toolCallId: `c-${archivedAt}`,
+          toolName: 'read_files',
+          input: { paths: [`src/f-${archivedAt}.ts`] },
+        },
+      ],
     } as Message,
     {
       role: 'tool',
       toolCallId: `c-${archivedAt}`,
       toolName: 'read_files',
-      content: [{ type: 'json', value: { output: `body keystone-${archivedAt}` } }],
+      content: [
+        { type: 'json', value: { output: `body keystone-${archivedAt}` } },
+      ],
     } as ToolMessage,
   ].slice(0, steps * 2),
 })
@@ -62,8 +66,20 @@ describe('selectUnconsolidatedSnapshots', () => {
   })
   it('skips snapshots a stored consolidation already covers', () => {
     const archive = [11, 12, 13].map((t) => snapshot(t))
-    const consolidations = [{ consolidatedAt: 99, sourceArchivedAts: [11], action: 'semantic_compaction', summary: 's', coveredMessages: 2 } as ContextConsolidation]
-    expect(selectUnconsolidatedSnapshots(archive, consolidations).map((s) => s.archivedAt)).toEqual([12, 13])
+    const consolidations = [
+      {
+        consolidatedAt: 99,
+        sourceArchivedAts: [11],
+        action: 'semantic_compaction',
+        summary: 's',
+        coveredMessages: 2,
+      } as ContextConsolidation,
+    ]
+    expect(
+      selectUnconsolidatedSnapshots(archive, consolidations).map(
+        (s) => s.archivedAt,
+      ),
+    ).toEqual([12, 13])
   })
   it('is empty for missing/empty archives', () => {
     expect(selectUnconsolidatedSnapshots(undefined, undefined)).toEqual([])
@@ -73,7 +89,13 @@ describe('selectUnconsolidatedSnapshots', () => {
     // Two snapshots archived in the same millisecond share archivedAt.
     const archive = [50, 50, 51].map((t) => snapshot(t))
     const consolidations = [
-      { consolidatedAt: 99, sourceArchivedAts: [50], action: 'semantic_compaction', summary: 's', coveredMessages: 2 } as ContextConsolidation,
+      {
+        consolidatedAt: 99,
+        sourceArchivedAts: [50],
+        action: 'semantic_compaction',
+        summary: 's',
+        coveredMessages: 2,
+      } as ContextConsolidation,
     ]
     // Only ONE of the two same-timestamp snapshots is covered; the other
     // must still be picked so it eventually gets consolidated.
@@ -83,7 +105,13 @@ describe('selectUnconsolidatedSnapshots', () => {
   it('marks all same-timestamp snapshots covered only after enough occurrences', () => {
     const archive = [50, 50].map((t) => snapshot(t))
     const consolidations = [
-      { consolidatedAt: 99, sourceArchivedAts: [50, 50], action: 'semantic_compaction', summary: 's', coveredMessages: 4 } as ContextConsolidation,
+      {
+        consolidatedAt: 99,
+        sourceArchivedAts: [50, 50],
+        action: 'semantic_compaction',
+        summary: 's',
+        coveredMessages: 4,
+      } as ContextConsolidation,
     ]
     expect(selectUnconsolidatedSnapshots(archive, consolidations)).toEqual([])
   })
@@ -118,7 +146,12 @@ describe('archivePreCompaction archivedAt collision safety (M3-T4)', () => {
     for (let i = 0; i < 12; i++) {
       archivePreCompaction(
         state,
-        [{ role: 'user', content: [{ type: 'text', text: `m-${i}` }] } as Message],
+        [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: `m-${i}` }],
+          } as Message,
+        ],
         'mechanical_trim',
         6,
       )
@@ -132,7 +165,9 @@ describe('archivePreCompaction archivedAt collision safety (M3-T4)', () => {
 describe('buildConsolidationPrompt', () => {
   it('wraps newest-first transcript content between markers', () => {
     const prompt = buildConsolidationPrompt([snapshot(11), snapshot(12)])
-    expect(prompt.startsWith('Summarize the following removed transcript content')).toBe(true)
+    expect(
+      prompt.startsWith('Summarize the following removed transcript content'),
+    ).toBe(true)
     expect(prompt).toContain('<removed-transcript>')
     expect(prompt).toContain('keystone-11')
     expect(prompt).toContain('keystone-12')
@@ -143,7 +178,12 @@ describe('extractLastText', () => {
   it('returns the last assistant text and empty for none', () => {
     const messages: Message[] = [
       { role: 'assistant', content: [{ type: 'text', text: 'draft' }] },
-      { role: 'tool', toolCallId: 'x', toolName: 'read_files', content: [{ type: 'json', value: {} }] },
+      {
+        role: 'tool',
+        toolCallId: 'x',
+        toolName: 'read_files',
+        content: [{ type: 'json', value: {} }],
+      },
       { role: 'assistant', content: [{ type: 'text', text: 'final summary' }] },
     ]
     expect(extractLastText(messages)).toBe('final summary')
@@ -155,7 +195,13 @@ describe('recordConsolidation', () => {
   it('appends capped by count and summary length', () => {
     const state: { contextConsolidations?: ContextConsolidation[] } = {}
     for (let i = 0; i < MAX_CONSOLIDATIONS + 2; i++) {
-      recordConsolidation(state, { consolidatedAt: i, sourceArchivedAts: [i], action: 'semantic_compaction', summary: 'x'.repeat(9_000), coveredMessages: 2 })
+      recordConsolidation(state, {
+        consolidatedAt: i,
+        sourceArchivedAts: [i],
+        action: 'semantic_compaction',
+        summary: 'x'.repeat(9_000),
+        coveredMessages: 2,
+      })
     }
     expect(state.contextConsolidations!.length).toBe(MAX_CONSOLIDATIONS)
     expect(state.contextConsolidations![0].consolidatedAt).toBe(2)
@@ -164,8 +210,20 @@ describe('recordConsolidation', () => {
 
 describe('searchConsolidations', () => {
   const consolidations: ContextConsolidation[] = [
-    { consolidatedAt: 1, sourceArchivedAts: [11], action: 'semantic_compaction', summary: 'Refactored the eviction floor in src/a.ts; kept retries.', coveredMessages: 4 },
-    { consolidatedAt: 2, sourceArchivedAts: [12], action: 'mechanical_trim', summary: 'Discussed token refresh cadence for the scheduler.', coveredMessages: 2 },
+    {
+      consolidatedAt: 1,
+      sourceArchivedAts: [11],
+      action: 'semantic_compaction',
+      summary: 'Refactored the eviction floor in src/a.ts; kept retries.',
+      coveredMessages: 4,
+    },
+    {
+      consolidatedAt: 2,
+      sourceArchivedAts: [12],
+      action: 'mechanical_trim',
+      summary: 'Discussed token refresh cadence for the scheduler.',
+      coveredMessages: 2,
+    },
   ]
   it('OR-ranks by matched terms; ties stay newest-first', () => {
     // Unambiguous winner: two terms beat one.
@@ -221,7 +279,7 @@ const flush = async (): Promise<void> => {
   await new Promise<void>((resolve) => setTimeout(resolve, 0))
 }
 
-const deferred = <T,>() => {
+const deferred = <T>() => {
   let resolve!: (value: T) => void
   let reject!: (error: unknown) => void
   const promise = new Promise<T>((res, rej) => {
@@ -241,11 +299,13 @@ const summaryHistory = (text: string) => [
 // createAgentState/executeSubagent and that the success path flows through
 // the mocked child.
 type ChildRun = { agentState: { messageHistory: unknown[] } }
-let pendingChild: {
-  promise: Promise<ChildRun>
-  resolve: (value: ChildRun) => void
-  reject: (error: unknown) => void
-} | undefined
+let pendingChild:
+  | {
+      promise: Promise<ChildRun>
+      resolve: (value: ChildRun) => void
+      reject: (error: unknown) => void
+    }
+  | undefined
 
 const executeSubagentSpy = mock((..._args: unknown[]) => {
   if (!pendingChild) throw new Error('test bug: no pending child configured')
@@ -278,13 +338,16 @@ describe('maybeRunBackgroundConsolidation', () => {
     // Re-register the untouched real module: mock.module registrations are
     // process-wide and survive mock.restore(), so sibling suites co-scheduled
     // in this worker keep resolving the real spawn-agent-utils.
-    mock.module(
-      '../../tools/handlers/tool/spawn-agent-utils',
-      () => ({ ...realSpawnAgentUtils }),
-    )
+    mock.module('../../tools/handlers/tool/spawn-agent-utils', () => ({
+      ...realSpawnAgentUtils,
+    }))
   })
   test('canary-off: no import/spawn and no record when the gate is not exactly true', () => {
-    for (const programmaticConfig of [undefined, {}, { backgroundSnapshotConsolidation: false }]) {
+    for (const programmaticConfig of [
+      undefined,
+      {},
+      { backgroundSnapshotConsolidation: false },
+    ]) {
       const agentState = buildRunnerState()
       invokeRunner(agentState, programmaticConfig)
       expect(createAgentStateSpy).not.toHaveBeenCalled()
@@ -295,7 +358,13 @@ describe('maybeRunBackgroundConsolidation', () => {
 
   test('empty-snapshot no-op: nothing to consolidate means no spawn', () => {
     const covered = [
-      { consolidatedAt: 1, sourceArchivedAts: [11, 12], action: 'semantic_compaction', summary: 'already covered', coveredMessages: 4 },
+      {
+        consolidatedAt: 1,
+        sourceArchivedAts: [11, 12],
+        action: 'semantic_compaction',
+        summary: 'already covered',
+        coveredMessages: 4,
+      },
     ] as ContextConsolidation[]
     const agentState = buildRunnerState({ contextConsolidations: covered })
     invokeRunner(agentState, { backgroundSnapshotConsolidation: true })
@@ -311,7 +380,9 @@ describe('maybeRunBackgroundConsolidation', () => {
     // before counting; the unresolved deferred keeps the guard held here.
     await flush()
     expect(executeSubagentSpy).toHaveBeenCalledTimes(1)
-    pendingChild.resolve({ agentState: { messageHistory: summaryHistory('done') } })
+    pendingChild.resolve({
+      agentState: { messageHistory: summaryHistory('done') },
+    })
     await flush()
   })
 
@@ -319,7 +390,9 @@ describe('maybeRunBackgroundConsolidation', () => {
     pendingChild = deferred()
     const agentState = buildRunnerState()
     invokeRunner(agentState, { backgroundSnapshotConsolidation: true })
-    pendingChild.resolve({ agentState: { messageHistory: summaryHistory('keystone summary') } })
+    pendingChild.resolve({
+      agentState: { messageHistory: summaryHistory('keystone summary') },
+    })
     await flush()
     expect(agentState.contextConsolidations).toHaveLength(1)
     const recorded = agentState.contextConsolidations![0]
@@ -341,7 +414,9 @@ describe('maybeRunBackgroundConsolidation', () => {
     invokeRunner(agentState, { backgroundSnapshotConsolidation: true })
     await flush()
     expect(executeSubagentSpy).toHaveBeenCalledTimes(2)
-    pendingChild.resolve({ agentState: { messageHistory: summaryHistory('later') } })
+    pendingChild.resolve({
+      agentState: { messageHistory: summaryHistory('later') },
+    })
     await flush()
   })
 
@@ -357,7 +432,9 @@ describe('maybeRunBackgroundConsolidation', () => {
     invokeRunner(agentState, { backgroundSnapshotConsolidation: true })
     await flush()
     expect(executeSubagentSpy).toHaveBeenCalledTimes(2)
-    pendingChild.resolve({ agentState: { messageHistory: summaryHistory('retry ok') } })
+    pendingChild.resolve({
+      agentState: { messageHistory: summaryHistory('retry ok') },
+    })
     await flush()
   })
 })
@@ -381,6 +458,7 @@ const invokeRecall = async (
       },
     } as CodebuffToolCall<'recall_context'>,
     agentState,
+    clock: { now: () => 100 },
   })
   return (output as Array<{ type: string; value: Record<string, unknown> }>)[0]
     .value as {
@@ -404,7 +482,9 @@ describe('handleRecallContext consolidation merge failure paths', () => {
   test('includes consolidation hits when searchConsolidations matches', async () => {
     // 'eviction' appears in no verbatim archived message, only in the summary.
     const agentState = buildRunnerState({
-      contextConsolidations: [consolidation('We raised the eviction floor to 4.')],
+      contextConsolidations: [
+        consolidation('We raised the eviction floor to 4.'),
+      ],
     })
     const value = await invokeRecall(agentState, 'eviction')
     expect(value.matches).toEqual([])
@@ -435,7 +515,9 @@ describe('handleRecallContext consolidation merge failure paths', () => {
 
     // Consolidation hit exists, verbatim search misses: no message either.
     const withConsolidation = buildRunnerState({
-      contextConsolidations: [consolidation('We raised the eviction floor to 4.')],
+      contextConsolidations: [
+        consolidation('We raised the eviction floor to 4.'),
+      ],
     })
     const consolidationOnly = await invokeRecall(withConsolidation, 'eviction')
     expect(consolidationOnly.consolidations).toHaveLength(1)
@@ -469,7 +551,13 @@ describe('handleRecallContext consolidation merge failure paths', () => {
     const warn = mock(() => {})
     const agentState = buildRunnerState({
       contextConsolidations: [
-        { consolidatedAt: 99, sourceArchivedAts: [11], action: 'semantic_compaction', summary: null, coveredMessages: 2 },
+        {
+          consolidatedAt: 99,
+          sourceArchivedAts: [11],
+          action: 'semantic_compaction',
+          summary: null,
+          coveredMessages: 2,
+        },
       ] as unknown as ContextConsolidation[],
     })
     const { output } = await handleRecallContext({
@@ -480,10 +568,21 @@ describe('handleRecallContext consolidation merge failure paths', () => {
         input: { query: 'keystone-11' },
       } as CodebuffToolCall<'recall_context'>,
       agentState,
-      logger: { debug: mock(() => {}), info: mock(() => {}), warn, error: mock(() => {}) },
+      clock: { now: () => 100 },
+      logger: {
+        debug: mock(() => {}),
+        info: mock(() => {}),
+        warn,
+        error: mock(() => {}),
+      },
     })
-    const value = (output as Array<{ type: string; value: Record<string, unknown> }>)[0]
-      .value as { matches: unknown[]; consolidations?: unknown; message?: string }
+    const value = (
+      output as Array<{ type: string; value: Record<string, unknown> }>
+    )[0].value as {
+      matches: unknown[]
+      consolidations?: unknown
+      message?: string
+    }
     expect(value.matches.length).toBeGreaterThan(0)
     expect(value.consolidations).toBeUndefined()
     expect(value.message).toBeUndefined()

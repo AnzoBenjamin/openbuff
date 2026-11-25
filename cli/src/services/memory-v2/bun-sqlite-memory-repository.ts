@@ -13,6 +13,19 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises'
 import { checkSQLiteIntegrity } from './sqlite-integrity-check'
 import {
+  ARCHIVE_ORIGINAL_DDL,
+  ArchiveInputError,
+  ArchiveCapacityError,
+  captureArchiveRetention,
+  archiveRetentionReceipt,
+  archiveSnapshotAdmissible,
+  putArchiveOriginals,
+  enforceArchiveRetention,
+  readOriginalBodyPage,
+  searchOriginalArchive,
+  prepareOriginalArchiveSnapshot,
+} from './context-archive-original-store'
+import {
   KNOWLEDGE_PROJECTION_DDL,
   KNOWLEDGE_FTS_DDL,
   KNOWLEDGE_PRODUCER_VERSION,
@@ -90,7 +103,14 @@ import {
   selectCompactionCandidates,
   type GCRelevantEnvelope,
 } from '../../../../common/src/util/compaction-eligibility'
-import type { ContextArchiveSnapshot } from '../../../../common/src/types/context-archive'
+import type {
+  ContextArchiveSnapshot,
+  ContextArchiveBody,
+  ContextArchiveBodyPageRequest,
+  ContextArchiveBodyPageOutcome,
+  ContextArchiveRetentionPolicy,
+  ContextArchiveRetentionReceipt,
+} from '../../../../common/src/types/context-archive'
 import { sanitizeFtsQuery } from '../../../../common/src/util/fts5-query'
 import type {
   ContextArchiveSearchMatch,
@@ -148,8 +168,10 @@ export type RuntimeNeutralMemoryEventV2 = MemoryEventEnvelope
  * Version 5 adds current knowledge and shared archive bodies. Version 6
  * gives each checked archive manifest an immutable identity; timestamp
  * collisions no longer overwrite actions or ordered message memberships.
+ * Version 7 adds immutable original-text references and transactional retention;
+ * older writers must not bypass pins, expiry or persistent cutoff records.
  */
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = 7
 const DEFAULT_DATABASE_PATH = join('.openbuff', 'memory', 'memory-v2.sqlite')
 const DEFAULT_BUSY_TIMEOUT_MS = 2_500
 const MAX_BUSY_TIMEOUT_MS = 10_000
@@ -310,6 +332,10 @@ export interface MemoryV2Health {
 }
 
 export interface BunSQLiteMemoryRepositoryOptions {
+  /** Host-selected once at open; never taken from model/persist request data. */
+  contextArchiveRetention?: ContextArchiveRetentionPolicy
+  /** Deterministic storage clock for owned fixtures/hosts. */
+  contextArchiveNow?: () => number
   repositoryRoot?: string
   databasePath?: string
   busyTimeoutMs?: number
@@ -550,6 +576,8 @@ export class BunSQLiteMemoryRepository
     private readonly database: Database,
     databasePath: string,
     private readonly recallExpander?: BunSQLiteMemoryRepositoryOptions['recallExpander'],
+    private readonly contextArchiveRetention: Readonly<ContextArchiveRetentionPolicy> = captureArchiveRetention(),
+    private readonly archiveNow: () => number = Date.now,
   ) {
     this.databasePath = databasePath
   }
@@ -588,6 +616,23 @@ export class BunSQLiteMemoryRepository
       if (options.requireSecureOpen === true) {
         throw new MemoryV2StorageError(insecureOpenUnavailableFailure())
       }
+      let archivePolicy: Readonly<ContextArchiveRetentionPolicy>
+      try {
+        archivePolicy = captureArchiveRetention(options.contextArchiveRetention)
+      } catch (error) {
+        throw new MemoryV2StorageError({
+          kind: 'invalid',
+          message: String(error),
+          retryable: false,
+        })
+      }
+      const archiveNow = options.contextArchiveNow ?? Date.now
+      if (typeof archiveNow !== 'function')
+        throw new MemoryV2StorageError({
+          kind: 'invalid',
+          message: 'Invalid archive clock.',
+          retryable: false,
+        })
       const preparedPath = prepareDatabasePath(options)
       const timeout = boundedBusyTimeout(options.busyTimeoutMs)
       await preflightExistingDatabase(preparedPath)
@@ -619,6 +664,8 @@ export class BunSQLiteMemoryRepository
           database,
           preparedPath.databasePath,
           options.recallExpander,
+          archivePolicy,
+          archiveNow,
         ),
         openPosture: SQLITE_OPEN_POSTURE,
       }
@@ -1320,15 +1367,34 @@ export class BunSQLiteMemoryRepository
     }
   }
 
-  /** Incremental immutable bodies/messages with ordered snapshot memberships. */
+  private archiveStorageStats(
+    receipt: ContextArchiveRetentionReceipt,
+  ): ContextArchiveRetentionReceipt {
+    try {
+      return {
+        ...receipt,
+        walBytes:
+          this.databasePath === ':memory:' ||
+          !existsSync(`${this.databasePath}-wal`)
+            ? 0
+            : statSync(`${this.databasePath}-wal`).size,
+      }
+    } catch {
+      return receipt
+    }
+  }
+
+  /** Original bodies, memberships, cutoffs and quota publish in the same transaction. */
   async persistContextArchiveSnapshots(request: {
     runId: string
     snapshots: ContextArchiveSnapshot[]
+    bodies?: Record<string, ContextArchiveBody>
   }): Promise<{
     persisted: number
     skipped: number
     status?: 'ok' | 'degraded' | 'unavailable'
     reasons?: string[]
+    retention?: ContextArchiveRetentionReceipt
   }> {
     const snapshots = Array.isArray(request?.snapshots) ? request.snapshots : []
     const unavailable = (reason: string) => ({
@@ -1339,96 +1405,190 @@ export class BunSQLiteMemoryRepository
     })
     if (this.requireOpen()) return unavailable('store-closed')
     const runId = typeof request?.runId === 'string' ? request.runId : ''
-    if (!runId || runId.length > 2048)
+    if (!runId || runId.length > 2048 || snapshots.length > 500)
       return {
         persisted: 0,
         skipped: snapshots.length,
         status: 'degraded',
-        reasons: ['invalid-run-id'],
+        reasons: ['invalid-archive-input'],
       }
-    if (!snapshots.length) return { persisted: 0, skipped: 0, status: 'ok' }
     try {
       const invalidLegacy = await this.ensureArchiveMigration()
-      const prepared = snapshots.map(prepareArchiveSnapshot)
-      const valid = prepared.filter(
-        (snapshot): snapshot is NonNullable<typeof snapshot> =>
-          snapshot !== null,
-      )
-      const now = new Date().toISOString()
-      const flush = this.database.transaction(() => {
-        if (!archiveFtsAvailable(this.database))
-          disableArchiveFtsTriggers(this.database)
-        // Retention removes references first; shared messages/bodies survive while referenced.
-        const stale = this.database
-          .query(
-            'SELECT snapshot_id FROM context_archive_snapshots WHERE archived_at<?1 AND run_id!=?2 ORDER BY archived_at LIMIT ?3',
-          )
-          .all(
-            Date.now() - CONTEXT_ARCHIVE_TTL_MS,
-            runId,
-            CONTEXT_ARCHIVE_PRUNE_CAP,
-          ) as Array<{ snapshot_id: string }>
-        for (const row of stale)
-          this.database
-            .query('DELETE FROM context_archive_snapshots WHERE snapshot_id=?1')
-            .run(row.snapshot_id)
-        for (const snapshot of valid)
-          putArchiveSnapshot(
+      const valid = snapshots
+        .map(prepareOriginalArchiveSnapshot)
+        .filter(
+          (snapshot): snapshot is NonNullable<typeof snapshot> =>
+            snapshot !== null,
+        )
+      const now = this.archiveNow()
+      const result = this.database
+        .transaction(() => {
+          if (!archiveFtsAvailable(this.database))
+            disableArchiveFtsTriggers(this.database)
+          const prior = enforceArchiveRetention(
             this.database,
-            snapshot.snapshot.runId ?? runId,
-            snapshot,
+            this.contextArchiveRetention,
             now,
           )
-        // A partially invalid incoming set cannot erase a valid prior archive.
-        if (valid.length === snapshots.length) {
-          const identities = valid
-            .filter((snapshot) => (snapshot.snapshot.runId ?? runId) === runId)
-            .map((snapshot) => archiveSnapshotId(runId, snapshot))
-          if (identities.length)
-            this.database
-              .query(
-                `DELETE FROM context_archive_snapshots WHERE run_id=? AND snapshot_id NOT IN (${identities.map(() => '?').join(',')})`,
+          const accepted = valid.filter((snapshot) =>
+            archiveSnapshotAdmissible(
+              this.database,
+              snapshot.snapshot.runId ?? runId,
+              snapshot,
+              this.contextArchiveRetention,
+              now,
+            ),
+          )
+          for (const snapshot of accepted) {
+            const owner = snapshot.snapshot.runId ?? runId
+            putArchiveSnapshot(
+              this.database,
+              owner,
+              snapshot,
+              new Date(now).toISOString(),
+            )
+            putArchiveOriginals(
+              this.database,
+              owner,
+              snapshot,
+              request.bodies,
+              this.contextArchiveRetention,
+              now,
+            )
+          }
+          if (accepted.length === snapshots.length && snapshots.length) {
+            const identities = accepted
+              .filter(
+                (snapshot) => (snapshot.snapshot.runId ?? runId) === runId,
               )
-              .run(runId, ...identities)
-        }
-        if (valid.length) {
+              .map((snapshot) => archiveSnapshotId(runId, snapshot))
+            if (identities.length)
+              this.database
+                .query(
+                  `DELETE FROM context_archive_snapshots WHERE run_id=? AND coalesce(pinned,0)=0 AND snapshot_id NOT IN (${identities.map(() => '?').join(',')})`,
+                )
+                .run(runId, ...identities)
+          }
+          const retention = enforceArchiveRetention(
+            this.database,
+            this.contextArchiveRetention,
+            now,
+          )
+          retention.expiredSnapshots += prior.expiredSnapshots
+          retention.droppedSnapshots += prior.droppedSnapshots
           for (const owner of new Set(
-            valid.map((snapshot) => snapshot.snapshot.runId ?? runId),
+            accepted.map((snapshot) => snapshot.snapshot.runId ?? runId),
           )) {
             const row = this.database
               .query(
-                'SELECT max(archived_at) AS max FROM context_archive_snapshots WHERE run_id=?1',
+                'SELECT max(archived_at) max FROM context_archive_snapshots WHERE run_id=?1',
               )
-              .get(owner) as { max: number }
+              .get(owner) as { max: number | null }
+            if (row.max !== null)
+              this.database
+                .query(
+                  `INSERT INTO context_archive_watermarks(run_id,max_archived_at,updated_at) VALUES (?1,?2,?3)
+            ON CONFLICT(run_id) DO UPDATE SET max_archived_at=max(max_archived_at,excluded.max_archived_at),updated_at=excluded.updated_at`,
+                )
+                .run(owner, row.max, new Date(now).toISOString())
+          }
+          this.database.exec(
+            'DELETE FROM context_archive_watermarks WHERE NOT EXISTS(SELECT 1 FROM context_archive_snapshots s WHERE s.run_id=context_archive_watermarks.run_id)',
+          )
+          const persisted = accepted.filter((snapshot) =>
             this.database
               .query(
-                'INSERT INTO context_archive_watermarks(run_id,max_archived_at,updated_at) VALUES (?1,?2,?3) ON CONFLICT(run_id) DO UPDATE SET max_archived_at=excluded.max_archived_at,updated_at=excluded.updated_at WHERE max_archived_at!=excluded.max_archived_at',
+                'SELECT 1 FROM context_archive_snapshots WHERE snapshot_id=?1',
               )
-              .run(owner, row.max, now)
-          }
-        }
-        this.database.exec(
-          'DELETE FROM context_archive_watermarks WHERE NOT EXISTS(SELECT 1 FROM context_archive_snapshots s WHERE s.run_id=context_archive_watermarks.run_id)',
-        )
-        collectArchiveOrphans(this.database)
-        return {
-          persisted: valid.length,
-          skipped: snapshots.length - valid.length,
-        }
-      })
-      const counts = flush.immediate()
+              .get(
+                archiveSnapshotId(snapshot.snapshot.runId ?? runId, snapshot),
+              ),
+          ).length
+          return { persisted, skipped: snapshots.length - persisted, retention }
+        })
+        .immediate()
       const reasons = [
-        ...(counts.skipped ? ['invalid-snapshot'] : []),
+        ...(valid.length < snapshots.length ? ['invalid-snapshot'] : []),
+        ...(result.skipped > snapshots.length - valid.length
+          ? ['retention-cutoff']
+          : []),
         ...(invalidLegacy ? ['legacy-migration-incomplete'] : []),
         ...(!archiveFtsAvailable(this.database) ? ['fts-unavailable'] : []),
       ]
       return {
-        ...counts,
+        ...result,
+        retention: this.archiveStorageStats(result.retention),
         status: reasons.length ? 'degraded' : 'ok',
         ...(reasons.length ? { reasons } : {}),
       }
-    } catch {
+    } catch (error) {
+      if (
+        error instanceof ArchiveInputError ||
+        error instanceof ArchiveCapacityError
+      )
+        return {
+          persisted: 0,
+          skipped: snapshots.length,
+          status: 'degraded',
+          reasons: [
+            error instanceof ArchiveCapacityError
+              ? 'retention-capacity'
+              : `invalid-original: ${error.message}`,
+          ],
+          retention: this.archiveStorageStats(
+            archiveRetentionReceipt(
+              this.database,
+              this.contextArchiveRetention,
+              { capacity: error instanceof ArchiveCapacityError },
+            ),
+          ),
+        }
       return unavailable('storage-failed')
+    }
+  }
+
+  async readContextArchiveBodyPage(
+    request: ContextArchiveBodyPageRequest,
+  ): Promise<ContextArchiveBodyPageOutcome> {
+    if (this.requireOpen())
+      return { status: 'unavailable', reason: 'The archive store is closed.' }
+    if (
+      !request ||
+      typeof request.toolCallId !== 'string' ||
+      !request.toolCallId ||
+      request.toolCallId.length > 2048 ||
+      (request.sourceRunId !== undefined &&
+        (typeof request.sourceRunId !== 'string' ||
+          !request.sourceRunId ||
+          request.sourceRunId.length > 2048))
+    )
+      return {
+        status: 'invalid-cursor',
+        reason: 'Invalid original source-run/call selector.',
+      }
+    try {
+      await this.ensureArchiveMigration()
+      return this.database
+        .transaction(() => {
+          const retention = enforceArchiveRetention(
+            this.database,
+            this.contextArchiveRetention,
+            this.archiveNow(),
+          )
+          return {
+            ...readOriginalBodyPage(this.database, request),
+            retention: this.archiveStorageStats(retention),
+          }
+        })
+        .immediate()
+    } catch (error) {
+      return {
+        status: 'unavailable',
+        reason:
+          error instanceof ArchiveCapacityError
+            ? 'Archive protected capacity requires operator resolution.'
+            : 'Original archive storage could not be verified.',
+      }
     }
   }
 
@@ -1438,6 +1598,7 @@ export class BunSQLiteMemoryRepository
     snapshots: ContextArchiveSnapshot[]
     status?: 'ok' | 'degraded' | 'unavailable'
     reasons?: string[]
+    retention?: ContextArchiveRetentionReceipt
   }> {
     if (this.requireOpen())
       return { snapshots: [], status: 'unavailable', reasons: ['store-closed'] }
@@ -1451,6 +1612,15 @@ export class BunSQLiteMemoryRepository
         : CONTEXT_ARCHIVE_LOAD_LIMIT_DEFAULT
     try {
       const invalidLegacy = await this.ensureArchiveMigration()
+      const retention = this.database
+        .transaction(() =>
+          enforceArchiveRetention(
+            this.database,
+            this.contextArchiveRetention,
+            this.archiveNow(),
+          ),
+        )
+        .immediate()
       const rows = this.database
         .query(
           `SELECT * FROM context_archive_snapshots${runId ? ' WHERE run_id=?' : ''} ORDER BY archived_at DESC,run_id,snapshot_id LIMIT ?`,
@@ -1468,6 +1638,7 @@ export class BunSQLiteMemoryRepository
       ]
       return {
         snapshots,
+        retention: this.archiveStorageStats(retention),
         status: reasons.length ? 'degraded' : 'ok',
         ...(reasons.length ? { reasons } : {}),
       }
@@ -1502,7 +1673,42 @@ export class BunSQLiteMemoryRepository
         : CONTEXT_ARCHIVE_SEARCH_LIMIT_DEFAULT
     try {
       const invalidLegacy = await this.ensureArchiveMigration()
-      const reasons = invalidLegacy ? ['legacy-migration-incomplete'] : []
+      const retention = this.database
+        .transaction(() =>
+          enforceArchiveRetention(
+            this.database,
+            this.contextArchiveRetention,
+            this.archiveNow(),
+          ),
+        )
+        .immediate()
+      const literalTerms = terms.map((term) =>
+        term.slice(1, -1).replaceAll('""', '"'),
+      )
+      const originals = searchOriginalArchive(
+        this.database,
+        literalTerms,
+        limit,
+      )
+      const mergeMatches = (legacy: ContextArchiveSearchMatch[]) => {
+        const seen = new Set<string>()
+        return [...originals.matches, ...legacy]
+          .filter((match) => {
+            const key = JSON.stringify([
+              match.runId,
+              match.toolCallId,
+              match.step,
+            ])
+            if (seen.has(key)) return false
+            seen.add(key)
+            return true
+          })
+          .slice(0, limit)
+      }
+      const reasons = [
+        ...(invalidLegacy ? ['legacy-migration-incomplete'] : []),
+        ...(originals.capped ? ['original-search-scan-cap'] : []),
+      ]
       const from = `FROM context_archive_bodies b JOIN context_archive_messages m ON m.content_digest=b.content_digest JOIN context_archive_memberships r ON r.message_id=m.message_id JOIN context_archive_snapshots s ON s.snapshot_id=r.snapshot_id`
       const select =
         'SELECT s.snapshot_id,s.run_id,s.archived_at,m.tool_name,m.tool_call_id,r.step,b.body'
@@ -1520,8 +1726,16 @@ export class BunSQLiteMemoryRepository
             term.slice(1, -1).replaceAll('""', '"'),
           )
           return {
-            matches: buildArchiveSearchMatches(rows, literalTerms, limit),
-            snapshotsSearched: countDistinctArchiveSnapshots(rows),
+            matches: mergeMatches(
+              buildArchiveSearchMatches(rows, literalTerms, limit),
+            ),
+            snapshotsSearched: new Set([
+              ...originals.snapshotIds,
+              ...rows.map(
+                (row) => row.snapshot_id ?? `${row.run_id}:${row.archived_at}`,
+              ),
+            ]).size,
+            retention: this.archiveStorageStats(retention),
             status: reasons.length ? 'degraded' : 'ok',
             ...(reasons.length ? { reasons } : {}),
           }
@@ -1544,8 +1758,16 @@ export class BunSQLiteMemoryRepository
           CONTEXT_ARCHIVE_SEARCH_SCAN_CAP,
         ) as ContextArchiveMessageRow[]
       return {
-        matches: buildArchiveSearchMatches(rows, loweredTerms, limit),
-        snapshotsSearched: countDistinctArchiveSnapshots(rows),
+        matches: mergeMatches(
+          buildArchiveSearchMatches(rows, loweredTerms, limit),
+        ),
+        snapshotsSearched: new Set([
+          ...originals.snapshotIds,
+          ...rows.map(
+            (row) => row.snapshot_id ?? `${row.run_id}:${row.archived_at}`,
+          ),
+        ]).size,
+        retention: this.archiveStorageStats(retention),
         status: 'degraded',
         reasons,
       }
@@ -3193,6 +3415,17 @@ function validateSchemaShape(database: Database, version: number): void {
     'memory_store_capabilities',
   ]
   if (version >= 2) requiredTables.push(...PROJECTION_TABLES)
+  if (version >= 7)
+    requiredTables.push(
+      'context_archive_snapshots',
+      'context_archive_messages',
+      'context_archive_bodies',
+      'context_archive_memberships',
+      'context_archive_original_bodies',
+      'context_archive_originals',
+      'context_archive_original_refs',
+      'context_archive_cutoffs',
+    )
   const tables = database
     .query(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${requiredTables.map(() => '?').join(',')})`,
@@ -3232,6 +3465,42 @@ function validateSchemaShape(database: Database, version: number): void {
     }
   }
 
+  if (version >= 7) {
+    assertTableColumns(database, 'context_archive_snapshots', [
+      'snapshot_id',
+      'manifest_hash',
+      'provenance_json',
+      'pinned',
+      'expires_at',
+    ])
+    assertTableColumns(database, 'context_archive_original_bodies', [
+      'body_id',
+      'sha256',
+      'utf8_bytes',
+      'text',
+    ])
+    assertTableColumns(database, 'context_archive_originals', [
+      'run_id',
+      'tool_call_id',
+      'body_id',
+      'captured_at',
+      'step',
+      'tool_name',
+      'retired_reason',
+    ])
+    assertTableColumns(database, 'context_archive_original_refs', [
+      'snapshot_id',
+      'msg_index',
+      'run_id',
+      'tool_call_id',
+      'body_id',
+    ])
+    assertTableColumns(database, 'context_archive_cutoffs', [
+      'run_id',
+      'archived_at',
+      'reason',
+    ])
+  }
   const triggers = database
     .query(
       `SELECT name, sql FROM sqlite_master
@@ -3399,6 +3668,7 @@ function migrate(database: Database): void {
     // Bodies and manifests migrate transactionally, with payload backfill
     // deferred to bounded resumable pages on the archive surface.
     migrateContextArchiveSchema(database)
+    database.exec(ARCHIVE_ORIGINAL_DDL)
     // Additive procedural-memory table: created idempotently on every open so
     // existing stores gain it without a structural migration. Nothing here
     // touches the canonical event log or its append-only triggers.

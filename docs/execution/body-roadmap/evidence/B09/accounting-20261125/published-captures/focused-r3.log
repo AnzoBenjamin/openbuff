@@ -1,0 +1,30 @@
+bun test v1.4.4 (38afee6c8)
+
+sdk/src/impl/__tests__/b09-cost-precision.test.ts:
+(pass) B09 cost precision and unknown data > preserves sub-cent configured prices without per-request rounding [0.22ms]
+(pass) B09 cost precision and unknown data > missing or malformed counts never become a zero-cost completed request [0.06ms]
+(pass) B09 cost precision and unknown data > provider metadata preserves exact zero and fractional cost but never converts absent/null/invalid into zero [0.09ms]
+(pass) B09 cost precision and unknown data > positive unpriced components and non-USD currency do not fabricate USD totals [0.03ms]
+
+sdk/src/impl/__tests__/llm-cost.test.ts:
+(pass) computeCostCentsFromUsage > computes cost from input + output rates [0.04ms]
+(pass) computeCostCentsFromUsage > returns undefined when pricing is undefined [0.01ms]
+(pass) computeCostCentsFromUsage > returns undefined when pricing has neither input nor output rate [0.01ms]
+(pass) computeCostCentsFromUsage > uses cachedInputPerMillionTokens for cached input portion [0.02ms]
+(pass) computeCostCentsFromUsage > falls back to input rate for cached tokens when cached rate is absent [0.01ms]
+(pass) computeCostCentsFromUsage > returns 0 for zero usage [0.01ms]
+(pass) computeCostCentsFromUsage > returns unknown when usage token counts are missing [0.02ms]
+(pass) computeCostCentsFromUsage > rejects negative / non-finite token counts as unknown [0.02ms]
+(pass) computeCostCentsFromUsage > handles input-only pricing (no output rate) [0.03ms]
+(pass) computeCostCentsFromUsage > handles output-only pricing (no input rate) [0.03ms]
+(pass) computeCostCentsFromUsage > preserves fractional cents until display formatting [0.02ms]
+(pass) computeCostCentsFromUsage > does not let cached tokens exceed raw input tokens [0.01ms]
+
+sdk/src/__tests__/b09-cost-wire.test.ts:
+(pass) B09 real compatible late usage produces exactly21cents with metadata stripping=false [28.90ms]
+(pass) B09 real compatible late usage produces exactly21cents with metadata stripping=true [6.03ms]
+
+ 18 pass
+ 0 fail
+ 38 expect() calls
+Ran 18 tests across 3 files. [457.00ms]

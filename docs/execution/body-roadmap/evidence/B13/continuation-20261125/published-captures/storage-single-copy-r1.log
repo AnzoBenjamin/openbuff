@@ -1,0 +1,36 @@
+bun test v1.4.4 (38afee6c8)
+
+src/services/memory-v2/__tests__/b13-archive-originals.test.ts:
+(pass) B13 normalized original archive policy > persists 30 distinct originals, reopens, and pages the exact hash and tail [477.03ms]
+(pass) B13 normalized original archive policy > discloses quota cutoff and an old envelope cannot resurrect a removed original [12.14ms]
+(pass) B13 normalized original archive policy > expiry includes the current run and protected overflow refuses atomically [13.98ms]
+(pass) B13 normalized original archive policy > source-run ambiguity, Unicode cursors, conflicting originals and corruption fail closed [15.00ms]
+(pass) B13 normalized original archive policy > new pointer timestamps cannot renew an original TTL, while an explicit pin protects its closure [11.68ms]
+(pass) B13 normalized original archive policy > constructor policy is captured, 4MiB quota is logical bytes, and shared originals are charged once [145.52ms]
+(pass) B13 normalized original archive policy > keep-until-delete is explicitly unbounded aggregate storage, and malformed policy never opens a store [7.17ms]
+
+src/services/memory-v2/__tests__/records-redesign.test.ts:
+(pass) old pinned verified knowledge survives both former admission limits, reopen and repair [1883.86ms]
+(pass) current dependency hashes preserve unrelated-workspace reuse and invalidate a relevant change [40.51ms]
+(pass) operational workspace assertions remain bound to the producing workspace [22.11ms]
+(pass) late reinforcement, supersession and forgetting are reflected independently of log admission [58.78ms]
+(pass) exact cross-task consolidation preserves verification and usage while changed dependencies stay distinct [44.91ms]
+(pass) bounded exact maintenance skips pin-only groups and reaches unpinned sources beyond sixteen pins [19.89ms]
+(pass) single-copy archive objects > repeated snapshots grow by new content and references; reference-safe GC and FTS repair roundtrip [22.72ms]
+(pass) single-copy archive objects > TTL removes a snapshot but retains content referenced by a live snapshot [7.26ms]
+(pass) single-copy archive objects > same-run same-time actions and changed manifests retain separate immutable snapshots [28.08ms]
+(pass) single-copy archive objects > hydrated historical snapshots keep their owner and do not erase that owner's other snapshots [11.37ms]
+(pass) single-copy archive objects > degraded FTS and unavailable storage are distinguishable from successful empty [8.40ms]
+(pass) single-copy archive objects > legacy snapshots migrate resumably with checked bodies, order, lineage and no canonical-event loss [48.66ms]
+(pass) single-copy archive objects > normalized v5 snapshot references migrate in resumable checked pages without orphaning staged bodies [50.38ms]
+(pass) the same symbol key cannot reuse verification from another occurrence [75.28ms]
+(pass) FTS relevance admits an older strong match before the bounded lexical candidate cutoff [192.14ms]
+(pass) owned seed migration preserves operator text, lifecycle and quality while user legacy rules stay untouched [8.72ms]
+(pass) owned seed signature collisions merge counters without duplicate active rules [6.10ms]
+(pass) an existing user policy owns a migrated seed signature and keeps its text and status [6.64ms]
+(pass) optional semantic retrieval persists and searches the whole eligible corpus beyond 256 records [178.58ms]
+
+ 26 pass
+ 0 fail
+ 930 expect() calls
+Ran 26 tests across 2 files. [3.98s]

@@ -22,6 +22,7 @@ import { PromptHistorySearchScreen } from './components/prompt-history-search-sc
 import { ModelRoutePicker } from './components/model-route-picker'
 import { PlanSessionPickerScreen } from './components/plan-session-picker-screen'
 import { PermissionsScreen } from './components/permissions-screen'
+import { SessionRestoreScreen } from './components/session-restore-screen'
 import {
   ProviderPickerScreen,
   type ProviderPickerSelection,
@@ -736,7 +737,7 @@ export const Chat = ({
     }
   }, [isStreaming, pendingBashMessages, setMessages])
 
-  const { sendMessage, clearMessages } = useSendMessage({
+  const { sendMessage, clearMessages, retryRestore, cancelRestore } = useSendMessage({
     inputRef,
     activeSubagentsRef,
     isChainInProgressRef,
@@ -757,10 +758,12 @@ export const Chat = ({
     isQueuePausedRef,
     isProcessingQueueRef,
     resumeQueue,
+    pauseQueue,
     continueChat,
     continueChatId,
   })
 
+  const sessionRestore = useChatStore(state => state.sessionRestore)
   sendMessageRef.current = sendMessage
 
   const onSubmitPrompt = useEvent(
@@ -775,6 +778,10 @@ export const Chat = ({
         propagateError?: boolean
       },
     ) => {
+      if (useChatStore.getState().sessionRestore) {
+        showClipboardMessage('Resolve saved-session restoration with Retry or Cancel before submitting. Your draft is preserved.')
+        return
+      }
       let preserveInput = options?.preserveInputValue === true
       const editId = options?.editMessageId
       if (
@@ -1920,6 +1927,10 @@ export const Chat = ({
       handleCommandResult,
     ],
   )
+
+  if (sessionRestore) {
+    return <SessionRestoreScreen state={sessionRestore} onRetry={retryRestore} onCancel={cancelRestore} />
+  }
 
   if (permissionsOpen) {
     return (

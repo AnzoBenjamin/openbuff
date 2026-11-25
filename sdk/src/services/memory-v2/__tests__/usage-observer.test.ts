@@ -39,10 +39,7 @@ const chunkEvidence = (chunkId: string) => ({
   contentDigest: digest,
 })
 
-const verifiedKnowledgeItem = (
-  observationId: string,
-  chunkIds: string[],
-) => ({
+const verifiedKnowledgeItem = (observationId: string, chunkIds: string[]) => ({
   observation: {
     observationId,
     taskId: 'task-1',
@@ -109,20 +106,36 @@ const byToolEntry = (
   ...overrides,
 })
 
+const correlateEmitted = (params: Parameters<typeof correlateUsage>[0]) =>
+  correlateUsage({
+    ...params,
+    emittedObservationIds: params.context.result.verifiedKnowledge.map(
+      (item) => item.observation.observationId,
+    ),
+  })
+
 describe('correlateUsage', () => {
   test('gate-skip: chunk covered by a skip entry yields exactly one used signal', () => {
-    const context = buildContext([verifiedKnowledgeItem('observation:one', ['c1'])])
+    const context = buildContext([
+      verifiedKnowledgeItem('observation:one', ['c1']),
+    ])
     const reuse = receipt({
       byTool: [byToolEntry({ coveredStableChunkIds: ['c1'] })],
     })
 
-    expect(correlateUsage({ context, receipt: reuse })).toEqual([
-      { observationId: 'observation:one', kind: 'used', mechanism: 'gate-skip' },
+    expect(correlateEmitted({ context, receipt: reuse })).toEqual([
+      {
+        observationId: 'observation:one',
+        kind: 'used',
+        mechanism: 'gate-skip',
+      },
     ])
   })
 
   test('dedup: the same chunk covered by two tools produces one signal', () => {
-    const context = buildContext([verifiedKnowledgeItem('observation:one', ['c1'])])
+    const context = buildContext([
+      verifiedKnowledgeItem('observation:one', ['c1']),
+    ])
     const reuse = receipt({
       byTool: [
         byToolEntry({ tool: 'query_index', coveredStableChunkIds: ['c1'] }),
@@ -134,12 +147,16 @@ describe('correlateUsage', () => {
       ],
     })
 
-    expect(correlateUsage({ context, receipt: reuse })).toEqual([
-      { observationId: 'observation:one', kind: 'used', mechanism: 'gate-skip' },
+    expect(correlateEmitted({ context, receipt: reuse })).toEqual([
+      {
+        observationId: 'observation:one',
+        kind: 'used',
+        mechanism: 'gate-skip',
+      },
     ])
   })
 
-  test('ignored: full>=1 marks non-used injected observations reread-despite and never double-marks used ones', () => {
+  test('aggregate full count alone marks no injected observation ignored', () => {
     const context = buildContext([
       verifiedKnowledgeItem('observation:used', ['c1']),
       verifiedKnowledgeItem('observation:missed', ['c2']),
@@ -149,24 +166,29 @@ describe('correlateUsage', () => {
       byTool: [byToolEntry({ coveredStableChunkIds: ['c1'] })],
     })
 
-    expect(correlateUsage({ context, receipt: reuse })).toEqual([
+    expect(correlateEmitted({ context, receipt: reuse })).toEqual([
       {
-        observationId: 'observation:missed',
-        kind: 'ignored',
-        mechanism: 'reread-despite',
+        observationId: 'observation:used',
+        kind: 'used',
+        mechanism: 'gate-skip',
       },
-      { observationId: 'observation:used', kind: 'used', mechanism: 'gate-skip' },
     ])
   })
 
   test('no ignored signals when the turn performed no full read', () => {
-    const context = buildContext([verifiedKnowledgeItem('observation:one', ['c1'])])
+    const context = buildContext([
+      verifiedKnowledgeItem('observation:one', ['c1']),
+    ])
     const reuse = receipt({
       byTool: [byToolEntry({ coveredStableChunkIds: ['c1'] })],
     })
 
-    expect(correlateUsage({ context, receipt: reuse })).toEqual([
-      { observationId: 'observation:one', kind: 'used', mechanism: 'gate-skip' },
+    expect(correlateEmitted({ context, receipt: reuse })).toEqual([
+      {
+        observationId: 'observation:one',
+        kind: 'used',
+        mechanism: 'gate-skip',
+      },
     ])
   })
 
@@ -178,50 +200,45 @@ describe('correlateUsage', () => {
     ])
     const reuse = receipt({
       full: 1,
-      byTool: [
-        byToolEntry({ coveredStableChunkIds: ['cB', 'cA'] }),
-      ],
+      byTool: [byToolEntry({ coveredStableChunkIds: ['cB', 'cA'] })],
     })
 
-    const first = correlateUsage({ context, receipt: reuse })
-    const second = correlateUsage({ context, receipt: reuse })
+    const first = correlateEmitted({ context, receipt: reuse })
+    const second = correlateEmitted({ context, receipt: reuse })
     expect(first).toEqual(second)
     const ids = first.map((signal: UsageSignal) => signal.observationId)
     expect([...ids].sort()).toEqual(ids)
     expect(first).toEqual([
       { observationId: 'observation:a', kind: 'used', mechanism: 'gate-skip' },
       { observationId: 'observation:b', kind: 'used', mechanism: 'gate-skip' },
-      {
-        observationId: 'observation:c',
-        kind: 'ignored',
-        mechanism: 'reread-despite',
-      },
     ])
   })
 
   test('caps: more than 128 signals is sliced to 128 after sorting', () => {
     const observations = Array.from({ length: 140 }, (_, index) =>
-      verifiedKnowledgeItem(`observation:cap-${String(index).padStart(3, '0')}`, [
-        `chunk-${String(index).padStart(3, '0')}`,
-      ]),
+      verifiedKnowledgeItem(
+        `observation:cap-${String(index).padStart(3, '0')}`,
+        [`chunk-${String(index).padStart(3, '0')}`],
+      ),
     )
     const context = buildContext(observations)
     const reuse = receipt({
       byTool: [
         byToolEntry({
-          coveredStableChunkIds: observations.map((item) =>
-            (item.observation.evidence[0].selector as { chunkId: string }).chunkId,
+          coveredStableChunkIds: observations.map(
+            (item) =>
+              (item.observation.evidence[0].selector as { chunkId: string })
+                .chunkId,
           ),
         }),
       ],
     })
 
-    const signals = correlateUsage({ context, receipt: reuse })
+    const signals = correlateEmitted({ context, receipt: reuse })
     expect(signals).toHaveLength(128)
     expect(
       signals.every(
-        (signal) =>
-          signal.kind === 'used' && signal.mechanism === 'gate-skip',
+        (signal) => signal.kind === 'used' && signal.mechanism === 'gate-skip',
       ),
     ).toBe(true)
   })
@@ -230,9 +247,9 @@ describe('correlateUsage', () => {
     const populated = buildContext([
       verifiedKnowledgeItem('observation:one', ['c1']),
     ])
-    expect(
-      correlateUsage({ context: populated, receipt: receipt() }),
-    ).toEqual([])
+    expect(correlateUsage({ context: populated, receipt: receipt() })).toEqual(
+      [],
+    )
     expect(
       correlateUsage({
         context: buildContext([]),

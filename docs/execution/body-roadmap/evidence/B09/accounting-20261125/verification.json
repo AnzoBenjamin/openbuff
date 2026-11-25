@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 1,
+  "card": "B09",
+  "scope": "focused-precision-and-unknown-cost-slice",
+  "status": "local-verified-not-full-card-acceptance",
+  "head": "492049274d4dc52736de6fb5f4026e0f2b70f1d9",
+  "sourcePins": [
+    {
+      "path": "sdk/src/impl/cost-accounting.ts",
+      "sha256": "cf935d85ac5c45d6abff8179e87e7db6b3413e70521f4d0c5f7718088d6d1231",
+      "bytes": 3323
+    },
+    {
+      "path": "sdk/src/impl/llm.ts",
+      "sha256": "421095a068957872bfe5d71eb07acb8c11808f9e4e5c5b469be1fdeafca4bd62",
+      "bytes": 96826
+    },
+    {
+      "path": "sdk/src/impl/__tests__/b09-cost-precision.test.ts",
+      "sha256": "6772defe13457141faa194a7970dd545526198779be90932b248028af588beac",
+      "bytes": 2370
+    },
+    {
+      "path": "sdk/src/impl/__tests__/llm-cost.test.ts",
+      "sha256": "c33db14bedea00405a2801695685b1de3df5841c3426342cdabac2937f41e95a",
+      "bytes": 5475
+    },
+    {
+      "path": "sdk/src/__tests__/b09-cost-wire.test.ts",
+      "sha256": "03d008c97bd094654e6158a4b1a00eabb490447cedc5c8571bf30901d7acda08",
+      "bytes": 3169
+    },
+    {
+      "path": "sdk/src/__tests__/b09-cost-unknown-wire.test.ts",
+      "sha256": "df3040f85bcd6987ebce658e81838b3b41ab85903a7e348832f8d7f2079c9dea",
+      "bytes": 1942
+    },
+    {
+      "path": "common/src/types/print-mode.ts",
+      "sha256": "b8a092fdadda68837cccdb908c87b0b20cb584da0323756dc249e30357954963",
+      "bytes": 33318
+    },
+    {
+      "path": "docs/local-mode.md",
+      "sha256": "dbfb5a971eb10b746dadcd17a0a3f0453742c1964901a0e3b7cbda93c90c3ab6",
+      "bytes": 26730
+    }
+  ],
+  "captures": [
+    {
+      "path": ".tmp/b09-accounting/cli-build-final.log",
+      "sha256": "33654e124bfbab97b93f5b9d986cecd5ab193a0e6f8ea4f8547f2911eb4f7845",
+      "bytes": 331
+    },
+    {
+      "path": ".tmp/b09-accounting/cli-help-final.txt",
+      "sha256": "2e113eb04bc57eafed9a1e6fb4e25d1a207a430c26c87ca8ee5f33d90aa9473b",
+      "bytes": 2563
+    },
+    {
+      "path": ".tmp/b09-accounting/cli-version-final.txt",
+      "sha256": "59854984853104df5c353e2f681a15fc7924742f9a2e468c29af248dce45ce03",
+      "bytes": 6
+    },
+    {
+      "path": ".tmp/b09-accounting/doc-defaults-final.log",
+      "sha256": "4b5c51606e56d0bb4bf32da895db56fda8d5c542c0eee49fbcbcf7acf5cd346d",
+      "bytes": 156
+    },
+    {
+      "path": ".tmp/b09-accounting/focused-final.log",
+      "sha256": "a520b7ae0c6115c1595435e9af772ac99a902b2d6a43e98557f819de31cf048f",
+      "bytes": 1093
+    },
+    {
+      "path": ".tmp/b09-accounting/focused-r1.log",
+      "sha256": "ae6201c000e53a93379e242a210a8e4b0c527feff57df713efd30348f2e95b3b",
+      "bytes": 5216
+    },
+    {
+      "path": ".tmp/b09-accounting/focused-r2.log",
+      "sha256": "46b1b52f81b355dc673241e73cd7d0d47999187bfbac15433e544566f66d5c76",
+      "bytes": 4964
+    },
+    {
+      "path": ".tmp/b09-accounting/focused-r3.log",
+      "sha256": "fcfc04ab626819f3b4aad1b9ef8ce54fdd69bcfc551eb90338256676cca373c9",
+      "bytes": 2109
+    },
+    {
+      "path": ".tmp/b09-accounting/focused-r4.log",
+      "sha256": "94a77dc65773a51c3e6f356001dfca89360b4f51570a97f2aa108517233e1c08",
+      "bytes": 2264
+    },
+    {
+      "path": ".tmp/b09-accounting/format-final.log",
+      "sha256": "f8010b588c9eb6cdfa6e0b705a867bcffc05a7b76a7a1988b25ecccf0da9e491",
+      "bytes": 272
+    },
+    {
+      "path": ".tmp/b09-accounting/red.log",
+      "sha256": "be34d63d5b68bd6ee5d23474c5cb13c68412bbec7d125f1e73ecfc0397d0dae1",
+      "bytes": 4084
+    },
+    {
+      "path": ".tmp/b09-accounting/regression-r1.log",
+      "sha256": "82781dc0b52a87750e38587978b2ce17e4835ad8ceeccb996e105f4a8f1e97cb",
+      "bytes": 40115
+    },
+    {
+      "path": ".tmp/b09-accounting/runtime-regression-r1.log",
+      "sha256": "2c5fb0980d9270c210166cf0cb6d5cbbed7665fac8deaeecafaea384c487eaca",
+      "bytes": 7857
+    },
+    {
+      "path": ".tmp/b09-accounting/sdk-build-final.log",
+      "sha256": "e8d378fb0480dc81953da65f10750df8b0870e4798a979ae7ba17df7cb78478a",
+      "bytes": 1371
+    },
+    {
+      "path": ".tmp/b09-accounting/typecheck-final.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "path": ".tmp/b09-accounting/typecheck-r1.log",
+      "sha256": "3d3c45ecc39fd091f458f3c9ac69950e524cbbf36b64ebe261d051ca9be68c6d",
+      "bytes": 20
+    },
+    {
+      "path": ".tmp/b09-accounting/typecheck-r2.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    }
+  ],
+  "review": {
+    "path": "docs/execution/body-roadmap/evidence/B09/accounting-20261125/review.json",
+    "sha256": "25fd0498fbd7c9635f93eec03001c3fd0786a757e300fa9b5179fb1d82830034",
+    "bytes": 795
+  },
+  "artifacts": [
+    {
+      "path": "sdk/dist/index.mjs",
+      "sha256": "148008d12fa27b052496953294785c39cd17cf599540f36d08e26048d9546ce9",
+      "bytes": 7391973
+    },
+    {
+      "path": "sdk/dist/index.cjs",
+      "sha256": "9aec54faf6d8282b0f4fd3789df9fc7f0b86bdbb4f4c0164b9f7dbc3fcbf4fb7",
+      "bytes": 7277378
+    },
+    {
+      "path": "sdk/dist/index.d.ts",
+      "sha256": "71064dd07f64477e8fd7ebd6eb061bd71c6b1d554e38804176229f938017ba44",
+      "bytes": 2084509
+    },
+    {
+      "path": "cli/bin/openbuff",
+      "sha256": "cbf91d6847c4250b3f9199d70856aeb830be8d1ecfa13b3008ef5cb9eaa29aba",
+      "bytes": 149715120
+    }
+  ],
+  "validation": {
+    "accounting": {
+      "pass": 19,
+      "assertions": 44
+    },
+    "providerRegression": {
+      "pass": 178,
+      "assertions": 552
+    },
+    "runtimeInternal": {
+      "pass": 54,
+      "assertions": 112
+    },
+    "workspaceTypechecks": 11,
+    "stream21centCells": 2,
+    "unknownPriceWireCells": 1
+  },
+  "unchangedLedger": {
+    "path": "docs/execution/body-roadmap/ledger.json",
+    "sha256": "4d46ede9a94b0420a7541f7cca3b75f78862b07ceb2ae731b1a8adcfc66678bb",
+    "bytes": 145983
+  },
+  "unchangedRegistry": {
+    "path": "docs/execution/body-roadmap/execution-plan.json",
+    "sha256": "cab9beee96514eb3c9063c6e67090fe797ad90eaffeff8a4efe1b7a447e78095",
+    "bytes": 10989
+  },
+  "limits": [
+    "No full-B09 acceptance or missing historical prerequisite renewal.",
+    "No built-inmodels.devprice lookup,/usageUI/cachewritecosts or stream_usage negotiation added.",
+    "Legacy finish/session numeric costs are known subtotals; per-request unknown status is separate.",
+    "No durable shared requestreservation/concurrentchild/restart cap or exactremotebilling claim.",
+    "BroadCLIcensus predates this accounting slice; focusedwire/regressions/typechecks/builds are current.",
+    "Read-only scopedreview is not complete sourceclosure independent acceptance.",
+    "No commit/push/publicpublish/userconfig/userinstallationchange."
+  ]
+}

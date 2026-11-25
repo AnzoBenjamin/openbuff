@@ -81,6 +81,7 @@ interface UseSendMessageOptions {
   isQueuePausedRef?: React.MutableRefObject<boolean>
   isProcessingQueueRef?: React.MutableRefObject<boolean>
   resumeQueue?: () => void
+  pauseQueue?: () => void
   continueChat: boolean
   continueChatId?: string
 }
@@ -134,11 +135,14 @@ export const useSendMessage = ({
   isQueuePausedRef,
   isProcessingQueueRef,
   resumeQueue,
+  pauseQueue,
   continueChat,
   continueChatId,
 }: UseSendMessageOptions): {
   sendMessage: SendMessageFn
   clearMessages: (runState?: RunState | null) => void
+  retryRestore: () => void
+  cancelRestore: () => void
 } => {
   // Read store setters fresh on each callback invocation via useChatStore.getState()
   // rather than capturing them once at component scope. If the zustand store is ever
@@ -168,6 +172,9 @@ export const useSendMessage = ({
   const snapshotCompletionRef = useRef<Promise<void> | null>(null)
   const restorePromiseRef = useRef<Promise<void> | null>(null)
   const restoreAbortRef = useRef<AbortController | null>(null)
+  const restoreBlockedRef = useRef(continueChat && !previousRunStateRef.current)
+  const restoreRetryRef = useRef<(() => void) | null>(null)
+  const restoreOwnerRef = useRef(Symbol('selected-session-restore'))
 
   // Keep the latest scrollToLatest reachable without putting it in the restore
   // effect's dependency array: scrollToLatest's useCallback (useChatScrollbox)
@@ -186,14 +193,24 @@ export const useSendMessage = ({
     if (!continueChat || previousRunStateRef.current) return
     let cancelled = false
     let scrollTimer: ReturnType<typeof setTimeout> | undefined
-    const controller = new AbortController()
-    restoreAbortRef.current = controller
+    let activeRestoreController: AbortController | null = null
     const restore = async () => {
+      activeRestoreController?.abort()
+      const controller = new AbortController()
+      activeRestoreController = controller
+      restoreAbortRef.current = controller
+      restoreBlockedRef.current = true
+      useChatStore.getState().setSessionRestore({ status: 'loading', chatId: continueChatId, owner: restoreOwnerRef.current })
       const loadedState = await loadMostRecentChatStateAsync(
         continueChatId ?? undefined,
         controller.signal,
       )
-      if (cancelled || controller.signal.aborted || !loadedState) return
+      if (cancelled || controller.signal.aborted || useChatStore.getState().sessionRestore?.owner !== restoreOwnerRef.current) return
+      if (!loadedState) {
+        useChatStore.getState().setSessionRestore({ status: 'error', chatId: continueChatId, owner: restoreOwnerRef.current,
+          message: 'The selected saved session is missing, corrupt, or unreadable. Retry restoration or cancel to start a new session; your draft is preserved.' })
+        return
+      }
       // The effect's own one-shot cancellation token: effect cleanup sets
       // `cancelled` (a replaced run) and clearMessages aborts `controller`.
       // Every late store write below is gated on it so a completed send or a
@@ -205,6 +222,8 @@ export const useSendMessage = ({
       previousRunStateRef.current = loadedState.runState
       setRunState(loadedState.runState)
       setMessages(loadedState.messages)
+      restoreBlockedRef.current = false
+      useChatStore.getState().setSessionRestore(null)
       // Wait for React to commit the restored messages before targeting the
       // bottom. scrollToLatestRef reads the latest scrollToLatest without
       // making it a dependency of this effect. scrollToLatest also verifies
@@ -319,14 +338,27 @@ export const useSendMessage = ({
         }
       }
     }
-    const restorePromise = restore()
-    restorePromiseRef.current = restorePromise
+    let latestRestorePromise: Promise<void> | null = null
+    const launchRestore = () => {
+      if (cancelled) return
+      const pending = restore().catch(() => {
+        if (cancelled || restorePromiseRef.current !== pending || useChatStore.getState().sessionRestore?.owner !== restoreOwnerRef.current) return
+        restoreBlockedRef.current = true
+        useChatStore.getState().setSessionRestore({ status: 'error', chatId: continueChatId, owner: restoreOwnerRef.current,
+          message: 'Saved-session restoration failed. Retry or cancel to start a new session; your draft is preserved.' })
+      })
+      latestRestorePromise = pending
+      restorePromiseRef.current = pending
+    }
+    restoreRetryRef.current = launchRestore
+    launchRestore()
     return () => {
       cancelled = true
-      controller.abort()
-      if (restoreAbortRef.current === controller) restoreAbortRef.current = null
-      if (restorePromiseRef.current === restorePromise)
-        restorePromiseRef.current = null
+      activeRestoreController?.abort()
+      if (restoreRetryRef.current === launchRestore) restoreRetryRef.current = null
+      if (restoreAbortRef.current === activeRestoreController) restoreAbortRef.current = null
+      if (restorePromiseRef.current === latestRestorePromise) restorePromiseRef.current = null
+      if (useChatStore.getState().sessionRestore?.owner === restoreOwnerRef.current) useChatStore.getState().setSessionRestore(null)
       if (scrollTimer !== undefined) clearTimeout(scrollTimer)
     }
     // Deps intentionally exclude scrollToLatest (reached through
@@ -389,10 +421,25 @@ export const useSendMessage = ({
     setStreamStatus('idle')
     setCanProcessQueue(!stillCancelling && !isQueuePausedRef?.current)
     restoreAbortRef.current?.abort()
+    restoreBlockedRef.current = false
+    if (useChatStore.getState().sessionRestore?.owner === restoreOwnerRef.current) useChatStore.getState().setSessionRestore(null)
     previousRunStateRef.current = runState
     resumableCheckpointRef.current = null
     useChatStore.getState().setRunState(runState)
   }
+
+  const retryRestore = useCallback(() => {
+    if (restoreBlockedRef.current && sdkExecutionRef.current === null) restoreRetryRef.current?.()
+  }, [])
+  const cancelRestore = useCallback(() => {
+    restoreRetryRef.current = null
+    clearMessages()
+    setCurrentChatId(crypto.randomUUID())
+    useChatStore.getState().setMessages([])
+    pauseQueue?.()
+    if (isQueuePausedRef) isQueuePausedRef.current = true
+    setCanProcessQueue(false)
+  }, [clearMessages, pauseQueue, isQueuePausedRef, setCanProcessQueue])
 
   const prepareUserMessage = useCallback(
     (params: {
@@ -478,6 +525,12 @@ export const useSendMessage = ({
         // and append after its messages, rather than being overwritten by it.
         await restorePromiseRef.current
         if (!isCurrentRunOwner()) return
+        if (restoreBlockedRef.current) {
+          resetEarlyReturnState({ setCanProcessQueue: () => setCanProcessQueue(false), updateChainInProgress,
+            isProcessingQueueRef, isQueuePausedRef })
+          releaseRunOwner()
+          return
+        }
         // A replaced conversation can bypass the queue while the previous
         // turn is still staging its tracked-tree snapshot.
         await snapshotCompletionRef.current
@@ -968,5 +1021,7 @@ export const useSendMessage = ({
   return {
     sendMessage,
     clearMessages,
+    retryRestore,
+    cancelRestore,
   }
 }

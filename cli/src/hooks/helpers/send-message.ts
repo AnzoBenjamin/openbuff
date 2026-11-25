@@ -349,9 +349,9 @@ export const prepareUserMessage = async (params: {
     if (postUserMessage) {
       next = postUserMessage(next)
     }
-    if (next.length > 100) {
-      next = next.slice(-100)
-    }
+    // Keep the durable transcript complete. Pagination and viewport windowing
+    // bound presentation independently; slicing here permanently loses IDs,
+    // bodies and chronological history before saveChatState can persist them.
     return next
   })
 

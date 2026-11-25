@@ -282,81 +282,9 @@ function valueContainsImageInput(value: unknown): boolean {
   return valueContainsImageInput(record.content)
 }
 
-function calculateProviderCostCents(params: { costDollars: number }): number {
-  const { costDollars } = params
-
-  return Math.round(costDollars * 100)
-}
-
-/**
- * Configured per-million-token pricing for a model (from openbuff.json
- * `modelCapabilities.pricing`). Used to compute BYOK cost when the provider
- * does not return OpenRouter-style cost metadata.
- */
-export interface ModelPricing {
-  inputPerMillionTokens?: number
-  outputPerMillionTokens?: number
-  cachedInputPerMillionTokens?: number
-}
-
-/**
- * Token usage reported by the AI SDK for a completed request.
- * `cachedInputTokens` is the cache-hit portion of `inputTokens` and is billed
- * at the (usually discounted) `cachedInputPerMillionTokens` rate when present.
- */
-export interface UsageTokenCounts {
-  inputTokens?: number
-  outputTokens?: number
-  cachedInputTokens?: number
-}
-
-/**
- * Compute cost in cents for a BYOK request from token usage and the
- * configured `modelCapabilities.pricing` capability. Returns `undefined` when
- * pricing is unavailable or insufficient (no input/output rates) so callers
- * can fall back to provider-reported cost or skip cost tracking.
- *
- * `cachedInputTokens` is charged at `cachedInputPerMillionTokens` when that
- * rate is configured, otherwise at the regular `inputPerMillionTokens` rate.
- * Only non-negative token counts contribute; NaN/undefined contribute 0.
- */
-export function computeCostCentsFromUsage(params: {
-  usage: UsageTokenCounts
-  pricing: ModelPricing | undefined
-}): number | undefined {
-  const { usage, pricing } = params
-  if (!pricing) return undefined
-
-  const inputRate = pricing.inputPerMillionTokens
-  const outputRate = pricing.outputPerMillionTokens
-  if (inputRate === undefined && outputRate === undefined) {
-    return undefined
-  }
-
-  const safeNonNeg = (value: number | undefined): number =>
-    typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
-
-  const rawInputTokens = safeNonNeg(usage.inputTokens)
-  const cachedInputTokens = safeNonNeg(usage.cachedInputTokens)
-  const chargeableInputTokens = Math.max(0, rawInputTokens - cachedInputTokens)
-  const outputTokens = safeNonNeg(usage.outputTokens)
-
-  const effectiveInputRate = inputRate !== undefined ? inputRate : 0
-  const cachedInputRate =
-    pricing.cachedInputPerMillionTokens !== undefined
-      ? pricing.cachedInputPerMillionTokens
-      : effectiveInputRate
-  const effectiveOutputRate = outputRate !== undefined ? outputRate : 0
-
-  const inputCostDollars =
-    (chargeableInputTokens * effectiveInputRate +
-      cachedInputTokens * cachedInputRate) /
-    1_000_000
-  const outputCostDollars = (outputTokens * effectiveOutputRate) / 1_000_000
-
-  const totalCents = Math.round((inputCostDollars + outputCostDollars) * 100)
-  return totalCents > 0 ? totalCents : 0
-}
+export { computeCostCentsFromUsage } from './cost-accounting'
+export type { ModelPricing, UsageTokenCounts } from './cost-accounting'
+import { computeCostCentsFromUsage, calculateProviderCostCents, providerCostDollars } from './cost-accounting'
 
 export function getProviderOptions(params: {
   model?: string
@@ -418,15 +346,6 @@ export function getProviderOptions(params: {
       },
       provider: providerConfig,
     },
-  }
-}
-
-// Provider usage accounting type for OpenRouter-compatible responses.
-// Forked from https://github.com/OpenRouterTeam/ai-sdk-provider/
-type OpenRouterUsageAccounting = {
-  cost: number | null
-  costDetails: {
-    upstreamInferenceCost: number | null
   }
 }
 
@@ -2037,6 +1956,14 @@ export async function* promptAiSdkStream(
               usage: usageResult,
             })
           }
+          const metadata = !isChatGptOAuth ? await awaitOptionalPostStreamMetadata({
+            promise: response.providerMetadata, label: 'provider cost metadata', logger,
+          }) : undefined
+          const reportedCost = calculateProviderCostCents(providerCostDollars(metadata))
+          const requestCostCents = isChatGptOAuth ? undefined : reportedCost ??
+            (usageResult ? computeCostCentsFromUsage({ usage: usageResult, pricing }) : undefined)
+          const costStatus = isChatGptOAuth ? 'subscription' as const : reportedCost !== undefined ? 'observed' as const :
+            requestCostCents !== undefined ? 'estimated' as const : 'unknown' as const
           // Per-request NDJSON telemetry uses observed counts only. Missing
           // metadata remains unknown; an observer cannot trigger model retries.
           const tokenCount = (value: unknown) =>
@@ -2060,6 +1987,12 @@ export async function* promptAiSdkStream(
                   cachedInputTokens: tokenCount(usageResult?.cachedInputTokens),
                   totalTokens: tokenCount(usageResult?.totalTokens),
                   complete: inputTokens !== undefined && outputTokens !== undefined,
+                  costCents: requestCostCents,
+                  costStatus,
+                  ...(costStatus === 'unknown' ? { costReason: !usageResult || inputTokens === undefined || outputTokens === undefined
+                    ? 'Provider usage is incomplete; request cost is unknown.' : !pricing
+                      ? 'No provider cost or configured USD token pricing is available.'
+                      : 'Configured pricing/usage is incomplete, invalid, or not USD; request cost is unknown.' } : {}),
                 },
               },
             })
@@ -2067,57 +2000,8 @@ export async function* promptAiSdkStream(
             logger.debug({ error }, 'Provider usage observer failed (non-fatal)')
           }
 
-          // Skip provider-cost tracking for ChatGPT OAuth because the request runs
-          // under the user's provider-owned ChatGPT/Codex subscription.
-          if (!isChatGptOAuth && !compatibility.stripProviderMetadata) {
-            const providerMetadataResult =
-              await awaitOptionalPostStreamMetadata({
-                promise: response.providerMetadata,
-                label: 'provider usage metadata',
-                logger,
-              })
-            const providerMetadata = providerMetadataResult ?? {}
-
-            let costOverrideDollars: number | undefined
-            if (providerMetadata.codebuff) {
-              if (providerMetadata.codebuff.usage) {
-                const openrouterUsage = providerMetadata.codebuff
-                  .usage as OpenRouterUsageAccounting
-
-                costOverrideDollars =
-                  (openrouterUsage.cost ?? 0) +
-                  (openrouterUsage.costDetails?.upstreamInferenceCost ?? 0)
-              }
-            }
-
-            // Fallback (M8.2): when the provider does not return OpenRouter-style
-            // cost metadata, compute cost from token usage × the configured
-            // `modelCapabilities.pricing` capability so BYOK providers get cost
-            // tracking too.
-            if (costOverrideDollars === undefined && pricing) {
-              const usageResult = await awaitOptionalPostStreamMetadata({
-                promise: response.usage,
-                label: 'provider usage metadata for cost',
-                logger,
-              })
-              if (usageResult) {
-                const fallbackCents = computeCostCentsFromUsage({
-                  usage: usageResult,
-                  pricing,
-                })
-                if (fallbackCents !== undefined && params.onCostCalculated) {
-                  await params.onCostCalculated(fallbackCents)
-                }
-              }
-            } else if (params.onCostCalculated && costOverrideDollars) {
-              // Report provider cost in cents for local/BYOK telemetry only.
-              await params.onCostCalculated(
-                calculateProviderCostCents({
-                  costDollars: costOverrideDollars,
-                }),
-              )
-            }
-          }
+          // Report a zero only when it is explicitly attested, not because metadata was absent.
+          if (requestCostCents !== undefined && params.onCostCalculated) await params.onCostCalculated(requestCostCents)
 
           if (attempt > 0 || failoverIndex > 0) {
             // Deliberately NO `model` on recovery: `failoverModel` names the
@@ -2448,38 +2332,9 @@ export async function promptAiSdk(
   })
   const content = response.text
 
-  const providerMetadata = response.providerMetadata ?? {}
-  let costOverrideDollars: number | undefined
-  if (providerMetadata.codebuff) {
-    if (providerMetadata.codebuff.usage) {
-      const openrouterUsage = providerMetadata.codebuff
-        .usage as OpenRouterUsageAccounting
-
-      costOverrideDollars =
-        (openrouterUsage.cost ?? 0) +
-        (openrouterUsage.costDetails?.upstreamInferenceCost ?? 0)
-    }
-  }
-
-  // Report provider cost in cents for local/BYOK telemetry only.
-  // Fallback (M8.2): when the provider does not return OpenRouter-style
-  // cost metadata, compute cost from token usage × the configured
-  // `modelCapabilities.pricing` capability so BYOK providers get cost
-  // tracking too.
-  if (costOverrideDollars === undefined && pricing) {
-    const fallbackCents = computeCostCentsFromUsage({
-      usage: response.usage,
-      pricing,
-    })
-    if (fallbackCents !== undefined && params.onCostCalculated) {
-      await params.onCostCalculated(fallbackCents)
-    }
-  } else if (params.onCostCalculated && costOverrideDollars) {
-    // Report provider cost in cents for local/BYOK telemetry only.
-    await params.onCostCalculated(
-      calculateProviderCostCents({ costDollars: costOverrideDollars }),
-    )
-  }
+  const reported = calculateProviderCostCents(providerCostDollars(response.providerMetadata))
+  const cents = reported ?? computeCostCentsFromUsage({ usage: response.usage, pricing })
+  if (cents !== undefined && params.onCostCalculated) await params.onCostCalculated(cents)
 
   return promptSuccess(content)
 }
@@ -2616,37 +2471,9 @@ export async function promptAiSdkStructured<T>(
 
   const content = response.object
 
-  const providerMetadata = response.providerMetadata ?? {}
-  let costOverrideDollars: number | undefined
-  if (providerMetadata.codebuff) {
-    if (providerMetadata.codebuff.usage) {
-      const openrouterUsage = providerMetadata.codebuff
-        .usage as OpenRouterUsageAccounting
-
-      costOverrideDollars =
-        (openrouterUsage.cost ?? 0) +
-        (openrouterUsage.costDetails?.upstreamInferenceCost ?? 0)
-    }
-  }
-
-  // Fallback (M8.2): when the provider does not return OpenRouter-style
-  // cost metadata, compute cost from token usage × the configured
-  // `modelCapabilities.pricing` capability so BYOK providers get cost
-  // tracking too.
-  if (costOverrideDollars === undefined && pricing) {
-    const fallbackCents = computeCostCentsFromUsage({
-      usage: response.usage,
-      pricing,
-    })
-    if (fallbackCents !== undefined && params.onCostCalculated) {
-      await params.onCostCalculated(fallbackCents)
-    }
-  } else if (params.onCostCalculated && costOverrideDollars) {
-    // Report provider cost in cents for local/BYOK telemetry only.
-    await params.onCostCalculated(
-      calculateProviderCostCents({ costDollars: costOverrideDollars }),
-    )
-  }
+  const reported = calculateProviderCostCents(providerCostDollars(response.providerMetadata))
+  const cents = reported ?? computeCostCentsFromUsage({ usage: response.usage, pricing })
+  if (cents !== undefined && params.onCostCalculated) await params.onCostCalculated(cents)
 
   return promptSuccess(content)
 }

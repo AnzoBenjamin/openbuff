@@ -1,0 +1,863 @@
+{
+  "schemaVersion": 1,
+  "card": "B13",
+  "status": "implemented-local-verified-not-formally-accepted",
+  "basisHead": "3d7583fbc0d6c72afa81c9226d2b6ac217fe21e9",
+  "sourcePins": [
+    {
+      "path": ".agents/types/tools.ts",
+      "sha256": "a88381b534dbc625622d10a3aebbe7f098bc99960bc4f6c99912816ac831b84a",
+      "bytes": 61643
+    },
+    {
+      "path": "agents/types/tools.ts",
+      "sha256": "a88381b534dbc625622d10a3aebbe7f098bc99960bc4f6c99912816ac831b84a",
+      "bytes": 61643
+    },
+    {
+      "path": "cli/src/chat.tsx",
+      "sha256": "881669520d1bb52b61330f44a9c1348d40b0e045571fd91726d6205111db2316",
+      "bytes": 87800
+    },
+    {
+      "path": "cli/src/components/session-restore-screen.tsx",
+      "sha256": "31fd4fd400986cab7d23e7e7eadc6a5d9867afa3ac7af186f2d24c0d4bcf79ae",
+      "bytes": 1735
+    },
+    {
+      "path": "cli/src/data/initial-agent-type-sources.generated.ts",
+      "sha256": "6b74a0af7787f90ebb0e6dcddf2d454671d14c96bcb7f4d112dae58bd9248317",
+      "bytes": 85365
+    },
+    {
+      "path": "cli/src/hooks/__tests__/use-chat-messages-retention.test.tsx",
+      "sha256": "4139e508af0ae6cdce078f1067f5c6773c2bd84ae5328edd13da25eec9fdcd30",
+      "bytes": 5545
+    },
+    {
+      "path": "cli/src/hooks/__tests__/use-send-message-restore.test.tsx",
+      "sha256": "7a7e0be0cdfd13e9cb305b77bf50036d76069b1e2cdc4fe45199c0cb65024442",
+      "bytes": 9286
+    },
+    {
+      "path": "cli/src/hooks/helpers/__tests__/send-message.test.ts",
+      "sha256": "fdf10a5a3f1634f2d23bc9ad5a90270651173c5d789b2932d199a17d2335e02b",
+      "bytes": 75018
+    },
+    {
+      "path": "cli/src/hooks/helpers/send-message.ts",
+      "sha256": "2d5fe863490025c6b02f8becb6b0d70c5fa9fc977305cfc98430d63e6d6c6a41",
+      "bytes": 22709
+    },
+    {
+      "path": "cli/src/hooks/use-send-message.ts",
+      "sha256": "6c5f88d64b06aed8d9ae4776b04ad62548eb76d92621e1a1c4cd0c1d0050d7cd",
+      "bytes": 39761
+    },
+    {
+      "path": "cli/src/services/memory-v2/__tests__/b13-archive-originals.test.ts",
+      "sha256": "d30ea19e534db59297b3088fa81f01524519ad9370f0bda73224ee6c8f304829",
+      "bytes": 14185
+    },
+    {
+      "path": "cli/src/services/memory-v2/__tests__/bun-sqlite-memory-repository.test.ts",
+      "sha256": "827aaba1d7ea98b951ca7d682d2afebecad5dd11660901d0b7b9a6817e0878ea",
+      "bytes": 187675
+    },
+    {
+      "path": "cli/src/services/memory-v2/__tests__/records-redesign.test.ts",
+      "sha256": "ff8778c8207bd14e12d5c87d6480a639af86afa346440ad6cb3be732178d441b",
+      "bytes": 57275
+    },
+    {
+      "path": "cli/src/services/memory-v2/bun-sqlite-memory-repository.ts",
+      "sha256": "ba65612a8c722498d359c76ae18294ada08e14d746c8792f11899a58d6736cb2",
+      "bytes": 212822
+    },
+    {
+      "path": "cli/src/services/memory-v2/context-archive-original-store.ts",
+      "sha256": "905def74b716113be5fd85b8b8222bbe4204807c657348493dcf5e2a6dd148c4",
+      "bytes": 23170
+    },
+    {
+      "path": "cli/src/services/memory-v2/context-archive-store.ts",
+      "sha256": "cb8d2c80166a327fd0f51a122fa8ca31d7075d1d4dbfa74b5995da48aefd3778",
+      "bytes": 24165
+    },
+    {
+      "path": "cli/src/services/memory-v2/context-archive-sync.ts",
+      "sha256": "e4882dc6e1cfd335c9728cd31b0ada320fe6042daf1d46a4e38e806b741f3352",
+      "bytes": 15892
+    },
+    {
+      "path": "cli/src/state/chat-store.ts",
+      "sha256": "2f516deae560730bdbdbbccd8c288c5356427bf2c40545099982855efb27cd7f",
+      "bytes": 24863
+    },
+    {
+      "path": "cli/src/utils/__tests__/b13-transcript-restart.test.ts",
+      "sha256": "8f93719caadf5443d17f6f3130c5582765220f8d640b7b251e9b0987d7f05728",
+      "bytes": 7471
+    },
+    {
+      "path": "cli/src/utils/__tests__/persisted-context-archive.test.ts",
+      "sha256": "a25a0b6e19ef705cd8feb8587f4fa3a1a6dd7f0270ece9341d72d99d7c77c77a",
+      "bytes": 4513
+    },
+    {
+      "path": "cli/src/utils/persisted-context-archive.ts",
+      "sha256": "3e6f80a9809cf85d1db1be55128e2256a1ea8d38d8a4d3c20d198ca426221781",
+      "bytes": 3907
+    },
+    {
+      "path": "cli/src/utils/persistence-codec.ts",
+      "sha256": "fbf35657aa1829ce9a92f48e82a32ea73cbc42e9f88ad7d1c5e931b9ce283442",
+      "bytes": 4625
+    },
+    {
+      "path": "cli/src/utils/run-state-storage.ts",
+      "sha256": "0c820ca5a625bce4b32b47161893482a3261a63f808440b96a36af8bcf66a532",
+      "bytes": 44442
+    },
+    {
+      "path": "common/src/templates/initial-agents-dir/types/tools.ts",
+      "sha256": "a88381b534dbc625622d10a3aebbe7f098bc99960bc4f6c99912816ac831b84a",
+      "bytes": 61643
+    },
+    {
+      "path": "common/src/tools/params/tool/recall-context.ts",
+      "sha256": "316e3562fb22ffed7d7d45f67de4602b16fcffd4ce2a7a1575d744bd9d9582c1",
+      "bytes": 5591
+    },
+    {
+      "path": "common/src/types/context-archive-search.ts",
+      "sha256": "82a12ddeaed8c492ace6c5189ece11359f3e9b69d826a69f6d3a69983dfcc594",
+      "bytes": 523
+    },
+    {
+      "path": "common/src/types/context-archive.ts",
+      "sha256": "9583f1c9930893b9fff63bb7a920e85a939e3899591252ab5d209be7372d6116",
+      "bytes": 4869
+    },
+    {
+      "path": "common/src/types/contracts/agent-runtime.ts",
+      "sha256": "f8121cac88a3da37249b67650b52cbbf32d7224c7d8f0864d6c5144f5d1e5607",
+      "bytes": 23127
+    },
+    {
+      "path": "common/src/types/session-state.ts",
+      "sha256": "58227b765f2ea6358393aa2ee8e1464b6fa85138b1b7bceed75bd385454c4ec6",
+      "bytes": 29516
+    },
+    {
+      "path": "common/src/util/__tests__/context-archive-body.test.ts",
+      "sha256": "4a73cdc41384a8603c916523bfff4c8414b2702e3d321d80e6f6d1e4e37a4b6a",
+      "bytes": 2585
+    },
+    {
+      "path": "common/src/util/context-archive-body.ts",
+      "sha256": "e617388ee47e6e387171a57da3a6c496884bd3458021781ebb483d2c72883c2f",
+      "bytes": 7610
+    },
+    {
+      "path": "evals/compaction-fidelity/factual-oracle.test.ts",
+      "sha256": "9f5c72715d8536434cdbb9c0a75b81dd601e4e80dada006b89eb30690cc566ab",
+      "bytes": 7622
+    },
+    {
+      "path": "evals/compaction-fidelity/factual-oracle.ts",
+      "sha256": "42940b290dbabadd65dc82099722b591af664c5a2c631a57ec85db7c9d87ddd0",
+      "bytes": 9345
+    },
+    {
+      "path": "evals/compaction-fidelity/scenario.test.ts",
+      "sha256": "034af308552a78064b02b9e56114ce833dea2a4f431c6f5f5dbd3f009affea99",
+      "bytes": 13253
+    },
+    {
+      "path": "evals/compaction-retention/scenario.test.ts",
+      "sha256": "8fb8dcddfe56134a1b332beee2249f65f28805fb14972fdabc13c06dff80bbd1",
+      "bytes": 46088
+    },
+    {
+      "path": "packages/agent-runtime/src/run-agent-step.ts",
+      "sha256": "82aab14341d8177de73a962749f3380f35f3e3c088887b114db2d45dd66c2e93",
+      "bytes": 192487
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/bridge-protocol.ts",
+      "sha256": "e5e9457b0b5313a6c3842e95f60262e1a6e5822af3eddc68082af5eef232a6f9",
+      "bytes": 41700
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/child-bridge-client.ts",
+      "sha256": "ed8cb2557b62ca9ab9881ed4a18669962fef8639488fe914bde847f491a3d4e2",
+      "bytes": 57937
+    },
+    {
+      "path": "packages/agent-runtime/src/supervision/parent-bridge-server.ts",
+      "sha256": "98a9cf5974d41f5e2b8422d1786d93db1b16facb0c50397176ffbce5b7b57480",
+      "bytes": 73222
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/__tests__/recall-context-expiry.test.ts",
+      "sha256": "1de18ccecd2099fdd740ad0f14314c63a8cd8ec4383395975b002606440e7182",
+      "bytes": 1436
+    },
+    {
+      "path": "packages/agent-runtime/src/tools/handlers/tool/recall-context.ts",
+      "sha256": "1027816c85c781925acec1e6052e68eb388ce15add244efa6366b38cdfd9824f",
+      "bytes": 8825
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/context-archive-context.test.ts",
+      "sha256": "d596bc9121322d53799cac4bda3ed60536e2e566310778ba781c830d0cfb14f9",
+      "bytes": 3160
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/context-archive-originals.test.ts",
+      "sha256": "e38ffdb8ab2a22aa6acee30c2b46e116d1be3df0eac66d95126054278bdd9b85",
+      "bytes": 6316
+    },
+    {
+      "path": "packages/agent-runtime/src/util/__tests__/context-consolidation.test.ts",
+      "sha256": "a221c2ec373f7fae9b237007c1a38f0a1c16e0e5353e90a68a69d9626766dd15",
+      "bytes": 26079
+    },
+    {
+      "path": "packages/agent-runtime/src/util/context-archive-bodies.ts",
+      "sha256": "2f7eaeb788b121fa381fb5af0b7797e6e8f8ece504c645854e01138e1a3f265c",
+      "bytes": 9899
+    },
+    {
+      "path": "packages/agent-runtime/src/util/context-archive-context.ts",
+      "sha256": "0ab445883daa380a2d02ab802bf8e9e269d44c83fb18787357653e2c12158ae8",
+      "bytes": 4587
+    },
+    {
+      "path": "packages/agent-runtime/src/util/context-archive.ts",
+      "sha256": "88f6e228be2f4fdc84143157e8bf05a174c9e9354d1a64797a17abfea30d8aa3",
+      "bytes": 25750
+    },
+    {
+      "path": "packages/agent-runtime/src/util/tool-result-eviction.ts",
+      "sha256": "c7b42d665f3ce86cbafb9b2c4b0a63daf7ff0786d23c22244e132fa9920fabac",
+      "bytes": 20325
+    },
+    {
+      "path": "sdk/src/__tests__/b13-memory-restart.test.ts",
+      "sha256": "d91fe97369f721cdb66577a40aebaf2c3055996b889ef1a5372d939155944627",
+      "bytes": 1195
+    },
+    {
+      "path": "sdk/src/__tests__/context-archive-reader.test.ts",
+      "sha256": "a30a3f47996569ffff873ef740e5f30d7d02fa1514acd208c53c3ab4982a2256",
+      "bytes": 3687
+    },
+    {
+      "path": "sdk/src/impl/agent-runtime.ts",
+      "sha256": "596bf951f97a23abef445d65481c6a627fa0464f27a663d446ea384a5fa7a928",
+      "bytes": 46287
+    },
+    {
+      "path": "sdk/src/run-state.ts",
+      "sha256": "301e83942f2d5ed7f812951448e2eecc678686e8958551683e839fd06ac0b226",
+      "bytes": 46948
+    },
+    {
+      "path": "sdk/src/run.ts",
+      "sha256": "8c36c580424ac24d349e2caf6cdde8335aac1877b37b9a597c71334478a2055d",
+      "bytes": 216234
+    },
+    {
+      "path": "sdk/src/services/context-archive-reader.ts",
+      "sha256": "e9e6a0feeb20e6497ac7492bdfa272a11ed57bc229bab91b866b072cb3bd0b9e",
+      "bytes": 9151
+    },
+    {
+      "path": "sdk/src/services/memory-v2/types.ts",
+      "sha256": "196ea3e6404535a7f3bfdae1a26b65c9c4fc0b195136e84ba73e1146bbc1414a",
+      "bytes": 12196
+    },
+    {
+      "path": "test/fixtures/body/memory-restart.ts",
+      "sha256": "a2643932829c62f34c10d822f454e85277add7881ef0f166d39787b82f22edfb",
+      "bytes": 23891
+    }
+  ],
+  "evidencePins": [
+    {
+      "path": ".tmp/b13-continuation/originals-red.log",
+      "sha256": "436a5301c598bc8c51f8d0a3fb2fcfefcf10a09dfa7628137d94d2ed517243fb",
+      "bytes": 4973
+    },
+    {
+      "path": ".tmp/b13-continuation/originals-focused-r1.log",
+      "sha256": "160cd046b415fe1543f47bb24a42c8ff0ead0a2ccc8bd4b7dc6aa87395579ea3",
+      "bytes": 4646
+    },
+    {
+      "path": ".tmp/b13-continuation/storage-red.log",
+      "sha256": "041f3b4073a7816ae47440d30c093ee1d4bf733c23f9c3965ed42b1354f0f004",
+      "bytes": 3679
+    },
+    {
+      "path": ".tmp/b13-continuation/storage-single-copy-r1.log",
+      "sha256": "8a53becca664d54297b2bf1aa56c742421ddb910a216df2fdeac2ce7fa83b374",
+      "bytes": 3479
+    },
+    {
+      "path": ".tmp/b13-continuation/storage-adverse-r2.log",
+      "sha256": "284df31ac40e2d7cd5196456d94174a9b6be2978c15ea6498bf302b3e7bef755",
+      "bytes": 1187
+    },
+    {
+      "path": ".tmp/b13-continuation/repository-regression-r2.log",
+      "sha256": "4af4b11e8f490f274c6a4cff9509159f733510669ecbc64d6bea839a9c5f03c6",
+      "bytes": 11801
+    },
+    {
+      "path": ".tmp/b13-continuation/cli-schedule.json",
+      "sha256": "e6d8bae0ef29e5f492ca90ed02a86bcc53a5c7d2ba609e9a5fe126e5a0c0dd63",
+      "bytes": 17966
+    },
+    {
+      "path": ".tmp/b13-continuation/cli-result.json",
+      "sha256": "81314de5a5b1214528cfc1c9abd42346ed3e9fe087514f4430f398a805edb92f",
+      "bytes": 18043
+    },
+    {
+      "path": ".tmp/b13-continuation/cli-bounded.log",
+      "sha256": "c1a9438a706d1f1108e6e7fe575177945808a0aaf887c69d342b380f58dcaee3",
+      "bytes": 587981
+    },
+    {
+      "path": ".tmp/b13-continuation/runtime-regression-r1.log",
+      "sha256": "eec06e74d02b39850a5b31d49a3008854f8ce7dbb8503922ccf4bb4fdde94d76",
+      "bytes": 51248
+    },
+    {
+      "path": ".tmp/b13-continuation/sdk-regression-r1.log",
+      "sha256": "2fb67ac9f15345aa5210cb167be9913e2a89332d625265589abd20f1029ca6c8",
+      "bytes": 21003
+    },
+    {
+      "path": ".tmp/b13-continuation/cli-focused-r4.log",
+      "sha256": "61b766a5818c14ff106bcd5c118e0d83fc7ca065e3767650b3309582ce3de8f9",
+      "bytes": 22219
+    },
+    {
+      "path": ".tmp/b13-continuation/final-core.log",
+      "sha256": "92e6e2ec3098059af49c30c20a569aa3754b7ea43b4eaed5a904d3039919ed6e",
+      "bytes": 16112
+    },
+    {
+      "path": ".tmp/b13-continuation/final-cli-core.log",
+      "sha256": "29662ab5d0631dbe7fa415d58d9dc9b9a4c1db29da5a818e232a8e01988fd707",
+      "bytes": 6005
+    },
+    {
+      "path": ".tmp/b13-continuation/runtime-latest.log",
+      "sha256": "db26a5492d1bab216d0b7a0bb1f5c503e0af0245ce6f39771b3483397902a11f",
+      "bytes": 4063
+    },
+    {
+      "path": ".tmp/b13-continuation/expiry-only-final.log",
+      "sha256": "ed0666c0d5550cd8d3b5f716631adac921ddcceab72ce8d97c27e365cf24fd30",
+      "bytes": 291
+    },
+    {
+      "path": ".tmp/b13-continuation/typecheck-latest.log",
+      "sha256": "cb2ed269d2c834d44a70f13ec30946ccb03b7603cc445741d345dda2080068dd",
+      "bytes": 669
+    },
+    {
+      "path": ".tmp/b13-continuation/sdk-build-latest.log",
+      "sha256": "e8d378fb0480dc81953da65f10750df8b0870e4798a979ae7ba17df7cb78478a",
+      "bytes": 1371
+    },
+    {
+      "path": ".tmp/b13-continuation/cli-build-latest.log",
+      "sha256": "33654e124bfbab97b93f5b9d986cecd5ab193a0e6f8ea4f8547f2911eb4f7845",
+      "bytes": 331
+    },
+    {
+      "path": ".tmp/b13-continuation/cli-help-latest.txt",
+      "sha256": "2e113eb04bc57eafed9a1e6fb4e25d1a207a430c26c87ca8ee5f33d90aa9473b",
+      "bytes": 2563
+    },
+    {
+      "path": ".tmp/b13-continuation/cli-version-latest.txt",
+      "sha256": "59854984853104df5c353e2f681a15fc7924742f9a2e468c29af248dce45ce03",
+      "bytes": 6
+    },
+    {
+      "path": ".tmp/b13-continuation/doc-defaults-final.log",
+      "sha256": "4b5c51606e56d0bb4bf32da895db56fda8d5c542c0eee49fbcbcf7acf5cd346d",
+      "bytes": 156
+    },
+    {
+      "path": ".tmp/b13-continuation/ledger-validation-final.json",
+      "sha256": "914231c451989b225f3b8836c39008558959b29773ef41f50daa793bc80bba77",
+      "bytes": 2352
+    },
+    {
+      "path": ".tmp/b13-continuation/restart-final/receipt.json",
+      "sha256": "131607ed9e554b32a86d19517954176848b3782ed9fc5199ef9559a67ef662a4",
+      "bytes": 3034743
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "sdk/dist/index.mjs",
+      "sha256": "cd1751882c222701776f59c2d6cb0a60c5170c340d030e08a37f0cf5cb05da27",
+      "bytes": 7386140
+    },
+    {
+      "path": "sdk/dist/index.cjs",
+      "sha256": "8cfd880f3eb2788879608ea189dcff51a2e91ed87ef23d43bce45d9c85c59e81",
+      "bytes": 7271475
+    },
+    {
+      "path": "sdk/dist/index.d.ts",
+      "sha256": "b1e2ddcb8bd79bc44ccc7f241da0763d647217d646e0413066cc4ed69b166c39",
+      "bytes": 2082625
+    },
+    {
+      "path": "cli/bin/openbuff",
+      "sha256": "c9f02b92f1921cee190e108b47ce1cd0d030a5f9a2c911ec89cf4414d53bf5ac",
+      "bytes": 149711024
+    }
+  ],
+  "validated": {
+    "runtime": {
+      "tests": 336,
+      "assertions": 2617
+    },
+    "sdk": {
+      "tests": 122,
+      "assertions": 1195
+    },
+    "focusedCli": {
+      "tests": 153,
+      "assertions": 2516
+    },
+    "latestCore": {
+      "tests": 104,
+      "assertions": 1190
+    },
+    "latestCliCore": {
+      "tests": 42,
+      "assertions": 1925
+    },
+    "latestExpiryRuntime": {
+      "tests": 30,
+      "assertions": 104
+    },
+    "workspaceTypechecks": 11,
+    "boundedCli": {
+      "discovered": 319,
+      "selected": 318,
+      "excluded": [
+        "src/__tests__/utils/env.test.ts"
+      ],
+      "reason": "Preserve inherited HOME; excluded suite reassigns it",
+      "files": [
+        "src/__tests__/bash-mode.test.ts",
+        "src/__tests__/binary-entry-fast-path.test.ts",
+        "src/__tests__/build-binary-libc.test.ts",
+        "src/__tests__/chat-mention-helpers.test.ts",
+        "src/__tests__/cli-args.test.ts",
+        "src/__tests__/deferred-registries.test.ts",
+        "src/__tests__/e2e-cli.test.ts",
+        "src/__tests__/home-directory-detection.test.ts",
+        "src/__tests__/init-command.test.ts",
+        "src/__tests__/init-type-sources.test.ts",
+        "src/__tests__/integration-tmux.test.ts",
+        "src/__tests__/integration/api-integration.test.ts",
+        "src/__tests__/integration/local-agents.test.ts",
+        "src/__tests__/new-chat-identity.test.ts",
+        "src/__tests__/open-tui-legacy-patch.test.ts",
+        "src/__tests__/path-completion.test.ts",
+        "src/__tests__/project-files.test.ts",
+        "src/__tests__/protocol-stdout.test.ts",
+        "src/__tests__/release-script.test.ts",
+        "src/__tests__/release-wrapper.test.ts",
+        "src/__tests__/release/proxy-http-get.test.ts",
+        "src/__tests__/replay-command.test.ts",
+        "src/__tests__/run-cli-tests.test.ts",
+        "src/__tests__/run-command.test.ts",
+        "src/__tests__/run-continue-sdk.test.ts",
+        "src/__tests__/run-continue-wire.test.ts",
+        "src/__tests__/run-continue.test.ts",
+        "src/__tests__/run-model-args.test.ts",
+        "src/__tests__/run-output-schema.test.ts",
+        "src/__tests__/serve-command.test.ts",
+        "src/__tests__/unit/agent-mode-toggle.test.ts",
+        "src/__tests__/unit/auth.test.ts",
+        "src/__tests__/unit/copy-button.test.ts",
+        "src/__tests__/unit/create-run-config.test.ts",
+        "src/__tests__/unit/openbuff-provider-readiness.test.ts",
+        "src/__tests__/unit/publish-confirmation.test.ts",
+        "src/__tests__/unit/segmented-control.test.ts",
+        "src/__tests__/use-viewport-window.test.ts",
+        "src/__tests__/utils/project-picker.test.ts",
+        "src/__tests__/wrapper-secondary-ui.test.ts",
+        "src/commands/__tests__/bash-command.test.ts",
+        "src/commands/__tests__/bash-execution-context.test.ts",
+        "src/commands/__tests__/command-args.test.ts",
+        "src/commands/__tests__/command-discovery-parity.test.ts",
+        "src/commands/__tests__/command-suggestions.test.ts",
+        "src/commands/__tests__/context.test.ts",
+        "src/commands/__tests__/git-command-args.test.ts",
+        "src/commands/__tests__/image.test.ts",
+        "src/commands/__tests__/index-command.test.ts",
+        "src/commands/__tests__/index-execution-branch-controls.test.ts",
+        "src/commands/__tests__/init.test.ts",
+        "src/commands/__tests__/mcp-command.test.ts",
+        "src/commands/__tests__/memory-command.test.ts",
+        "src/commands/__tests__/plan-artifact-containment.test.ts",
+        "src/commands/__tests__/plan-timeline.test.ts",
+        "src/commands/__tests__/prompt-dispatch.test.ts",
+        "src/commands/__tests__/router-connect-chatgpt.test.ts",
+        "src/commands/__tests__/router-input.test.ts",
+        "src/commands/__tests__/router.test.ts",
+        "src/commands/__tests__/secondary-surfaces.test.ts",
+        "src/components/__tests__/agent-branch-overflow.test.tsx",
+        "src/components/__tests__/agent-checklist.test.ts",
+        "src/components/__tests__/answer-copy-recovery.test.tsx",
+        "src/components/__tests__/attachment-recovery.test.tsx",
+        "src/components/__tests__/build-mode-buttons.test.tsx",
+        "src/components/__tests__/button.test.ts",
+        "src/components/__tests__/captured-diagnostic-readers.test.tsx",
+        "src/components/__tests__/chat-history-screen.test.tsx",
+        "src/components/__tests__/command-disclosure.test.tsx",
+        "src/components/__tests__/command-palette-screen.test.ts",
+        "src/components/__tests__/compact-queue-status.test.tsx",
+        "src/components/__tests__/completion-input-boundaries.test.tsx",
+        "src/components/__tests__/completion-summary-box.test.tsx",
+        "src/components/__tests__/context-box.test.tsx",
+        "src/components/__tests__/conversation-state-recovery.test.tsx",
+        "src/components/__tests__/doctor-box.test.tsx",
+        "src/components/__tests__/editor-native-recovery.test.tsx",
+        "src/components/__tests__/gate-state-box.test.tsx",
+        "src/components/__tests__/grid-layout.integration.test.tsx",
+        "src/components/__tests__/grid-layout.test.tsx",
+        "src/components/__tests__/history-reveal.test.tsx",
+        "src/components/__tests__/index-status-box.test.tsx",
+        "src/components/__tests__/info-box.test.tsx",
+        "src/components/__tests__/memory-box.test.tsx",
+        "src/components/__tests__/message-block.completion.test.tsx",
+        "src/components/__tests__/message-block.streaming.test.tsx",
+        "src/components/__tests__/message-with-agents.test.tsx",
+        "src/components/__tests__/multiline-input-height.test.ts",
+        "src/components/__tests__/multiline-input.test.tsx",
+        "src/components/__tests__/nested-agent-recovery.test.tsx",
+        "src/components/__tests__/output-reader-screen.test.tsx",
+        "src/components/__tests__/overhaul-final-readers.test.tsx",
+        "src/components/__tests__/permissions-screen.test.tsx",
+        "src/components/__tests__/plan-box.test.tsx",
+        "src/components/__tests__/plan-catalog-partial.test.tsx",
+        "src/components/__tests__/plan-session-picker-screen.test.ts",
+        "src/components/__tests__/plan-status-box.test.tsx",
+        "src/components/__tests__/primitives-recovery.test.tsx",
+        "src/components/__tests__/project-picker-recovery.test.tsx",
+        "src/components/__tests__/project-trust-screen.test.tsx",
+        "src/components/__tests__/prompt-history-search-screen.test.ts",
+        "src/components/__tests__/provider-recovery.test.tsx",
+        "src/components/__tests__/question-answer-display.test.tsx",
+        "src/components/__tests__/question-validation-ownership.test.tsx",
+        "src/components/__tests__/queue-screen.test.tsx",
+        "src/components/__tests__/saved-transcript-inspection.test.tsx",
+        "src/components/__tests__/scroll-to-bottom-button.test.ts",
+        "src/components/__tests__/search-navigation.test.tsx",
+        "src/components/__tests__/selectable-list.test.ts",
+        "src/components/__tests__/session-route-recovery.test.tsx",
+        "src/components/__tests__/single-block-markdown.test.tsx",
+        "src/components/__tests__/source-range-reader.test.tsx",
+        "src/components/__tests__/status-bar.test.tsx",
+        "src/components/__tests__/status-indicator.test.tsx",
+        "src/components/__tests__/streaming-grid.test.tsx",
+        "src/components/__tests__/subagent-card-layout.test.tsx",
+        "src/components/__tests__/sweep-boxes.test.tsx",
+        "src/components/__tests__/terminal-background.test.tsx",
+        "src/components/__tests__/text-nesting.test.tsx",
+        "src/components/__tests__/thinking-identity.test.tsx",
+        "src/components/__tests__/tool-branch-fallback-markdown.test.tsx",
+        "src/components/__tests__/ui-polish.test.tsx",
+        "src/components/__tests__/unicode-input.test.tsx",
+        "src/components/__tests__/user-error-banner.test.tsx",
+        "src/components/__tests__/user-prompt-disclosure.test.tsx",
+        "src/components/ask-user/__tests__/multiple-choice-form.test.ts",
+        "src/components/ask-user/__tests__/skip-guard.test.ts",
+        "src/components/ask-user/__tests__/structured-answer.test.ts",
+        "src/components/ask-user/__tests__/validation.test.ts",
+        "src/components/blocks/__tests__/code-block.test.tsx",
+        "src/components/blocks/__tests__/content-with-markdown.test.tsx",
+        "src/components/blocks/__tests__/image-block.test.tsx",
+        "src/components/blocks/__tests__/user-content-copy.test.ts",
+        "src/components/tools/__tests__/apply-patch.test.tsx",
+        "src/components/tools/__tests__/code-search.test.tsx",
+        "src/components/tools/__tests__/diff-viewer.test.tsx",
+        "src/components/tools/__tests__/discovery-highlighting.test.ts",
+        "src/components/tools/__tests__/discovery-tools.test.tsx",
+        "src/components/tools/__tests__/edit-transaction.test.ts",
+        "src/components/tools/__tests__/edit-transaction.test.tsx",
+        "src/components/tools/__tests__/humanized-renderers.test.ts",
+        "src/components/tools/__tests__/inline-results.test.tsx",
+        "src/components/tools/__tests__/language-intelligence.test.tsx",
+        "src/components/tools/__tests__/output-adapter-boundaries.test.tsx",
+        "src/components/tools/__tests__/output-adapter-native.test.tsx",
+        "src/components/tools/__tests__/query-index.test.tsx",
+        "src/components/tools/__tests__/read-files.test.tsx",
+        "src/components/tools/__tests__/registry-metadata.test.ts",
+        "src/components/tools/__tests__/render-ui.test.tsx",
+        "src/components/tools/__tests__/run-file-change-hooks.test.ts",
+        "src/components/tools/__tests__/run-terminal-command.test.ts",
+        "src/components/tools/__tests__/set-output.test.ts",
+        "src/components/tools/__tests__/spawn-agents-recovery.test.tsx",
+        "src/components/tools/__tests__/str-replace.test.tsx",
+        "src/components/tools/__tests__/suggest-followups.test.tsx",
+        "src/data/__tests__/slash-commands.test.ts",
+        "src/hooks/__tests__/agent-validation-cache.test.ts",
+        "src/hooks/__tests__/interrupt-queue.test.tsx",
+        "src/hooks/__tests__/launch-intent.test.tsx",
+        "src/hooks/__tests__/queued-mode.test.tsx",
+        "src/hooks/__tests__/use-activity-query.test.ts",
+        "src/hooks/__tests__/use-ask-user-bridge.test.ts",
+        "src/hooks/__tests__/use-chat-input.test.ts",
+        "src/hooks/__tests__/use-chat-messages-retention.test.tsx",
+        "src/hooks/__tests__/use-connection-status.test.ts",
+        "src/hooks/__tests__/use-conversation-controls.test.tsx",
+        "src/hooks/__tests__/use-directory-browser.test.ts",
+        "src/hooks/__tests__/use-grid-layout.test.ts",
+        "src/hooks/__tests__/use-input-history.test.ts",
+        "src/hooks/__tests__/use-path-tab-completion.test.ts",
+        "src/hooks/__tests__/use-queue-controls.test.ts",
+        "src/hooks/__tests__/use-searchable-list.test.ts",
+        "src/hooks/__tests__/use-send-message-journal.test.ts",
+        "src/hooks/__tests__/use-send-message-ownership.test.ts",
+        "src/hooks/__tests__/use-send-message-restore.test.tsx",
+        "src/hooks/__tests__/use-send-message-timer.test.ts",
+        "src/hooks/__tests__/use-sheen-animation.test.ts",
+        "src/hooks/__tests__/use-suggestion-engine-mention.test.ts",
+        "src/hooks/__tests__/use-suggestion-engine.test.ts",
+        "src/hooks/__tests__/use-terminal-dimensions.test.tsx",
+        "src/hooks/__tests__/use-terminal-layout.test.ts",
+        "src/hooks/__tests__/use-timeout.test.ts",
+        "src/hooks/helpers/__tests__/exit-queue-drain.test.ts",
+        "src/hooks/helpers/__tests__/send-message.test.ts",
+        "src/hooks/helpers/__tests__/turn-completion-snapshot.test.ts",
+        "src/init/__tests__/init-direnv.test.ts",
+        "src/native/__tests__/ripgrep.test.ts",
+        "src/services/__tests__/repository-intelligence-native.test.ts",
+        "src/services/memory-v2/__tests__/b12-explicit-knowledge.test.ts",
+        "src/services/memory-v2/__tests__/b13-archive-originals.test.ts",
+        "src/services/memory-v2/__tests__/bun-sqlite-memory-repository.test.ts",
+        "src/services/memory-v2/__tests__/concept-firewall.test.ts",
+        "src/services/memory-v2/__tests__/concept-index.test.ts",
+        "src/services/memory-v2/__tests__/contained-file-io.test.ts",
+        "src/services/memory-v2/__tests__/context-archive-sync.test.ts",
+        "src/services/memory-v2/__tests__/coordinator-lifecycle.test.ts",
+        "src/services/memory-v2/__tests__/memory-playbooks.test.ts",
+        "src/services/memory-v2/__tests__/memory-v1-migration-sqlite-roundtrip.test.ts",
+        "src/services/memory-v2/__tests__/playbook-lifecycle.test.ts",
+        "src/services/memory-v2/__tests__/playbook-proposal.test.ts",
+        "src/services/memory-v2/__tests__/provider.test.ts",
+        "src/services/memory-v2/__tests__/records-redesign.test.ts",
+        "src/services/memory-v2/__tests__/sqlite-integrity-check.test.ts",
+        "src/services/memory-v2/__tests__/two-session-cold-start.test.ts",
+        "src/services/memory-v2/usefulness-scorer.test.ts",
+        "src/state/__tests__/chat-store.test.ts",
+        "src/state/__tests__/feedback-store.test.ts",
+        "src/utils/__tests__/activity-tracker.test.ts",
+        "src/utils/__tests__/agent-display.test.ts",
+        "src/utils/__tests__/agent-registry-epoch.test.ts",
+        "src/utils/__tests__/analytics-client.test.ts",
+        "src/utils/__tests__/arrays.test.ts",
+        "src/utils/__tests__/attach-session.test.ts",
+        "src/utils/__tests__/attachment-retry.test.ts",
+        "src/utils/__tests__/b13-transcript-restart.test.ts",
+        "src/utils/__tests__/bash-context-processor.test.ts",
+        "src/utils/__tests__/block-processor.test.ts",
+        "src/utils/__tests__/capability-tiers.test.ts",
+        "src/utils/__tests__/captured-diagnostic-document.test.ts",
+        "src/utils/__tests__/chat-history.test.ts",
+        "src/utils/__tests__/chat-input-key-intercept.test.ts",
+        "src/utils/__tests__/chatgpt-oauth.test.ts",
+        "src/utils/__tests__/clipboard.test.ts",
+        "src/utils/__tests__/code-map-smoke.test.ts",
+        "src/utils/__tests__/code-search-summary.test.ts",
+        "src/utils/__tests__/codebuff-client.test.ts",
+        "src/utils/__tests__/collapse-helpers.test.ts",
+        "src/utils/__tests__/command-approvals.test.ts",
+        "src/utils/__tests__/command-mru.test.ts",
+        "src/utils/__tests__/completion-summary.test.ts",
+        "src/utils/__tests__/conversation-fork.test.ts",
+        "src/utils/__tests__/directory-listing-recovery.test.ts",
+        "src/utils/__tests__/draft-writer.test.ts",
+        "src/utils/__tests__/early-input-capture.test.ts",
+        "src/utils/__tests__/error-handling.test.ts",
+        "src/utils/__tests__/fallback-input-summary.test.ts",
+        "src/utils/__tests__/feedback-helpers.test.ts",
+        "src/utils/__tests__/feedback-storage.test.ts",
+        "src/utils/__tests__/feedback-submission.test.ts",
+        "src/utils/__tests__/fingerprint.test.ts",
+        "src/utils/__tests__/followup-request.test.ts",
+        "src/utils/__tests__/format-elapsed-time.test.ts",
+        "src/utils/__tests__/format-helpers.test.ts",
+        "src/utils/__tests__/format-timeout.test.ts",
+        "src/utils/__tests__/fuzzy-match.test.ts",
+        "src/utils/__tests__/git.test.ts",
+        "src/utils/__tests__/headless-sessions.test.ts",
+        "src/utils/__tests__/image-dimensions.test.ts",
+        "src/utils/__tests__/image-processor.test.ts",
+        "src/utils/__tests__/implementor-helpers.test.ts",
+        "src/utils/__tests__/index-status.test.ts",
+        "src/utils/__tests__/index-watch-binary.test.ts",
+        "src/utils/__tests__/index-workspace-watcher.test.ts",
+        "src/utils/__tests__/keyboard-actions.test.ts",
+        "src/utils/__tests__/layout-helpers.test.ts",
+        "src/utils/__tests__/logger.test.ts",
+        "src/utils/__tests__/markdown-agent-registry.test.ts",
+        "src/utils/__tests__/markdown-renderer.test.tsx",
+        "src/utils/__tests__/mcp-result-projection.test.ts",
+        "src/utils/__tests__/message-block-helpers.test.ts",
+        "src/utils/__tests__/message-history.test.ts",
+        "src/utils/__tests__/message-tree-utils.test.ts",
+        "src/utils/__tests__/message-updater.test.ts",
+        "src/utils/__tests__/native-reading-anchor.test.ts",
+        "src/utils/__tests__/open-file.test.ts",
+        "src/utils/__tests__/openbuff-provider.test.ts",
+        "src/utils/__tests__/opentui-syntax-style.test.ts",
+        "src/utils/__tests__/osc-timeout-scenarios.test.ts",
+        "src/utils/__tests__/output-adapters.test.ts",
+        "src/utils/__tests__/output-document.test.ts",
+        "src/utils/__tests__/output-export.test.ts",
+        "src/utils/__tests__/output-hygiene.test.ts",
+        "src/utils/__tests__/output-kind-filter.test.ts",
+        "src/utils/__tests__/output-outcome.test.ts",
+        "src/utils/__tests__/payload-sanitizer.test.ts",
+        "src/utils/__tests__/pending-attachments.test.ts",
+        "src/utils/__tests__/persisted-context-archive.test.ts",
+        "src/utils/__tests__/persistence-codec.test.ts",
+        "src/utils/__tests__/persistence-queue.test.ts",
+        "src/utils/__tests__/plan-mode-spawnable-filter.test.ts",
+        "src/utils/__tests__/project-transition.test.ts",
+        "src/utils/__tests__/project-trust-gate.test.ts",
+        "src/utils/__tests__/project-trust-launch.test.ts",
+        "src/utils/__tests__/provider-diagnostics.test.ts",
+        "src/utils/__tests__/queued-preview.test.ts",
+        "src/utils/__tests__/readable-output.test.ts",
+        "src/utils/__tests__/reading-state.test.ts",
+        "src/utils/__tests__/registry-load-ownership.test.ts",
+        "src/utils/__tests__/renderer-cleanup.test.ts",
+        "src/utils/__tests__/restore-shape-and-identity.test.ts",
+        "src/utils/__tests__/run-config-digest.test.ts",
+        "src/utils/__tests__/run-journal-path.test.ts",
+        "src/utils/__tests__/run-state-storage.test.ts",
+        "src/utils/__tests__/saved-transcript-inspection.test.ts",
+        "src/utils/__tests__/sdk-event-handlers.test.ts",
+        "src/utils/__tests__/send-message-helpers.test.ts",
+        "src/utils/__tests__/send-message-timer.test.ts",
+        "src/utils/__tests__/snapshot-preview.test.ts",
+        "src/utils/__tests__/spawn-agent-matcher.test.ts",
+        "src/utils/__tests__/status-bar-chips.test.ts",
+        "src/utils/__tests__/strings.test.ts",
+        "src/utils/__tests__/structured-preview.test.ts",
+        "src/utils/__tests__/terminal-color-detection.test.ts",
+        "src/utils/__tests__/terminal-enter-detection.test.ts",
+        "src/utils/__tests__/terminal-images.test.ts",
+        "src/utils/__tests__/terminal-notify.test.ts",
+        "src/utils/__tests__/text-boundaries.test.ts",
+        "src/utils/__tests__/text-layout.test.ts",
+        "src/utils/__tests__/theme-contrast.test.ts",
+        "src/utils/__tests__/think-tag-parser.test.ts",
+        "src/utils/__tests__/thinking-stream-boundaries.test.ts",
+        "src/utils/__tests__/tool-display-output.test.ts",
+        "src/utils/__tests__/tool-result-normalizer.test.ts",
+        "src/utils/__tests__/tree-sitter-client.test.ts",
+        "src/utils/__tests__/trusted-roots.test.ts",
+        "src/utils/__tests__/turn-checkpoint.test.ts",
+        "src/utils/__tests__/turn-snapshots.test.ts",
+        "src/utils/__tests__/validation-error-formatting.test.ts"
+      ],
+      "code": 0,
+      "signal": null,
+      "timedOut": false,
+      "homeUnchanged": true
+    }
+  },
+  "actualRestartFixture": {
+    "status": "local-verified",
+    "customCalls": 30,
+    "chronologicalMessages": 200,
+    "originalResults": 30,
+    "originalBytes": 32768,
+    "compactions": 3,
+    "factualScore": 1,
+    "identifierScore": 1,
+    "providerRequests": 1,
+    "externalProviderRequests": 0,
+    "homeUnchanged": true,
+    "retention": {
+      "schemaVersion": 1,
+      "status": "ok",
+      "mode": "rolling",
+      "maxBytes": 4194304,
+      "ttlMs": 2592000000,
+      "logicalBytes": 1165775,
+      "retainedSnapshots": 4,
+      "retainedBodies": 30,
+      "droppedSnapshots": 0,
+      "expiredSnapshots": 0,
+      "sqliteBytes": 1740800,
+      "walBytes": 2443192
+    },
+    "toolchain": {
+      "bun": "1.4.4",
+      "executable": "/home/ben/.bun/bin/bun",
+      "sha256": "10702245766b225e70bbf6235fd6b47214fd94b4760d00ffaed8ab0df57ac235"
+    }
+  },
+  "acceptance": {
+    "ledgerUnchanged": {
+      "path": "docs/execution/body-roadmap/ledger.json",
+      "sha256": "4d46ede9a94b0420a7541f7cca3b75f78862b07ceb2ae731b1a8adcfc66678bb",
+      "bytes": 145983
+    },
+    "registryUnchanged": {
+      "path": "docs/execution/body-roadmap/execution-plan.json",
+      "sha256": "cab9beee96514eb3c9063c6e67090fe797ad90eaffeff8a4efe1b7a447e78095",
+      "bytes": 10989
+    },
+    "acceptedNodes": 13,
+    "totalNodes": 39,
+    "validatorErrors": [
+      "B01 acceptance receipt: missing docs/execution/body-roadmap/evidence/B01/accepted/20261111T235810377611Z-acceptance.json",
+      "B02 acceptance receipt: missing docs/execution/body-roadmap/evidence/B02/accepted/20261111T235810377611Z-acceptance.json",
+      "B03 acceptance receipt: missing docs/execution/body-roadmap/evidence/B03/accepted/20261111T235810377611Z-acceptance.json",
+      "B04 acceptance receipt: missing docs/execution/body-roadmap/evidence/B04/accepted/20261111T235810377611Z-acceptance.json",
+      "B05 acceptance receipt: missing docs/execution/body-roadmap/evidence/B05/accepted/20261111T235810377611Z-acceptance.json",
+      "B08 acceptance receipt: missing docs/execution/body-roadmap/evidence/B08/accepted/20261111T235810377611Z-acceptance.json",
+      "B18 acceptance receipt: missing docs/execution/body-roadmap/evidence/B18/accepted/20261111T235810377611Z-acceptance.json",
+      "B19 acceptance receipt: missing docs/execution/body-roadmap/evidence/B19/accepted/20261111T235810377611Z-acceptance.json",
+      "B20 acceptance receipt: missing docs/execution/body-roadmap/evidence/B20/accepted/20261111T235810377611Z-acceptance.json",
+      "B28 acceptance receipt: missing docs/execution/body-roadmap/evidence/B28/accepted/20261111T235810377611Z-acceptance.json",
+      "B30 acceptance receipt: missing docs/execution/body-roadmap/evidence/B30/accepted/20261111T235810377611Z-acceptance.json",
+      "B36 acceptance receipt: missing docs/execution/body-roadmap/evidence/B36/accepted/20261111T235810377611Z-acceptance.json"
+    ],
+    "independentReview": "unavailable: reviewer attempts twice stopped by provider peak-capacity failures; no approval"
+  },
+  "limits": [
+    "Selected source pins and local captures are not an immutable complete source-closure acceptance receipt.",
+    "B12 formal acceptance and its B02 prerequisite receipt remain missing; no acceptance-node promotion.",
+    "Canonical bounded CLI census excludes src/__tests__/utils/env.test.ts to preserve inherited HOME, selects318/319 files and runs production React with200skips; mounted development controls run separately.",
+    "The broad census predates final local-expiry handler and submit/cutoff guards; those source changes have later focused tests/typechecks/builds, not a new full census.",
+    "Loopback provider proves message delivery, not live model reasoning/quality.",
+    "Storage retains explicit rejection/cutoff tombstones; metadata exhaustion can refuse retention-capacity rather than silently dropping anti-resurrection state.",
+    "Partial storage cutoff conservatively omits unattested incoming original references instead of publishing dangling refs or an overquota inline shadow.",
+    "SQLite open remains pathname-best-effort; no new OS isolation or cross-platform native assurance.",
+    "No public publish, commit, push, user installation or user configuration changes."
+  ]
+}

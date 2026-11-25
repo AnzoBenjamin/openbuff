@@ -407,7 +407,8 @@ function normalizeChunkHint(candidate: unknown): CollectedChunk | undefined {
   if (!path) return undefined
   const startLine = boundedLineNumber(candidate.startLine)
   const endLine = boundedLineNumber(candidate.endLine)
-  if (startLine === undefined || endLine === undefined || endLine < startLine) return undefined
+  if (startLine === undefined || endLine === undefined || endLine < startLine)
+    return undefined
   const rawChunkId = candidate.chunkId
   let chunkId: string | undefined
   if (typeof rawChunkId === 'string' && rawChunkId.length > 0) {
@@ -421,13 +422,18 @@ function normalizeChunkHint(candidate: unknown): CollectedChunk | undefined {
       const sanitized = rawSymbol.replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 64)
       const occurrence = boundedLineNumber(candidate.occurrence) ?? startLine
       const synth = `${sanitized}:${occurrence}`.slice(0, 128)
-      chunkId = CHUNK_ID_RE.test(synth) ? synth : `lines-${startLine}-${endLine}`
+      chunkId = CHUNK_ID_RE.test(synth)
+        ? synth
+        : `lines-${startLine}-${endLine}`
     } else {
       chunkId = `lines-${startLine}-${endLine}`
     }
   }
   const rawQualified =
-    candidate.qualifiedName ?? candidate.symbol ?? candidate.name ?? candidate.title
+    candidate.qualifiedName ??
+    candidate.symbol ??
+    candidate.name ??
+    candidate.title
   let qualifiedName: string
   if (typeof rawQualified === 'string' && rawQualified.trim().length > 0) {
     qualifiedName = rawQualified.slice(0, 512)
@@ -445,7 +451,10 @@ function normalizeChunkHint(candidate: unknown): CollectedChunk | undefined {
   let observedDigest: string | undefined
   for (const key of ['hash', 'contentDigest', 'observedDigest', 'digest']) {
     const digestCandidate = candidate[key]
-    if (typeof digestCandidate === 'string' && VERIFY_DIGEST_RE.test(digestCandidate)) {
+    if (
+      typeof digestCandidate === 'string' &&
+      VERIFY_DIGEST_RE.test(digestCandidate)
+    ) {
       observedDigest = digestCandidate
       break
     }
@@ -590,7 +599,8 @@ export function extractV1MigrationExtras(migration: V1MigrationOutcome): {
   sourceItemCount?: number
   truncatedFields?: number
 } {
-  if (migration.outcome !== 'imported' && migration.outcome !== 'no-op') return {}
+  if (migration.outcome !== 'imported' && migration.outcome !== 'no-op')
+    return {}
   const marker: unknown = migration
   if (!isRecord(marker)) return {}
   const extras: {
@@ -698,7 +708,11 @@ function countSummary(
       if (Array.isArray(item)) {
         count += Math.min(item.length, 100)
         recognized = true
-      } else if (typeof item === 'number' && Number.isInteger(item) && item >= 0) {
+      } else if (
+        typeof item === 'number' &&
+        Number.isInteger(item) &&
+        item >= 0
+      ) {
         count += Math.min(item, 100)
         recognized = true
       }
@@ -823,9 +837,14 @@ export class MemoryV2Coordinator {
         },
         'Memory V2 append was not committed',
       )
-      const conflict = outcome.error.code === 'conflict' && outcome.error.retryable
+      const conflict =
+        outcome.error.code === 'conflict' && outcome.error.retryable
       if (!conflict || attempt >= MAX_CONFLICT_RETRIES) return false
-      const tail = await this.deriveRepositoryTail(repository, preparation, current)
+      const tail = await this.deriveRepositoryTail(
+        repository,
+        preparation,
+        current,
+      )
       if (!current() || tail.kind === 'failed') return false
       expectedTail =
         tail.kind === 'empty'
@@ -865,7 +884,8 @@ export class MemoryV2Coordinator {
         }
         if (outcome.rawTailEventId) tail = outcome.rawTailEventId
         const next = outcome.nextAfterEventId
-        if (!next) return tail ? { kind: 'found', eventId: tail } : { kind: 'empty' }
+        if (!next)
+          return tail ? { kind: 'found', eventId: tail } : { kind: 'empty' }
         if (next === afterEventId || seenCursors.has(next)) {
           return { kind: 'failed' }
         }
@@ -1145,7 +1165,10 @@ export class MemoryV2Coordinator {
           omittedFields: migration.omittedFields,
           warningCodes: migration.warnings,
         }
-      } else if (migration.outcome === 'rejected' || migration.outcome === 'failed') {
+      } else if (
+        migration.outcome === 'rejected' ||
+        migration.outcome === 'failed'
+      ) {
         const reason: MemoryAuthorityReasonCode =
           migration.reason === 'checksum-mismatch'
             ? 'migration-checksum-mismatch'
@@ -1154,8 +1177,12 @@ export class MemoryV2Coordinator {
               : 'migration-failed'
         params.agentState.memoryAuthority!.v1Import = {
           status: 'failed',
-          ...(migration.revision !== undefined ? { revision: migration.revision } : {}),
-          ...(migration.checksum ? { checksum: migration.checksum.slice(0, 256) } : {}),
+          ...(migration.revision !== undefined
+            ? { revision: migration.revision }
+            : {}),
+          ...(migration.checksum
+            ? { checksum: migration.checksum.slice(0, 256) }
+            : {}),
           reason,
         }
         this.applyDegradedState(params.agentState, reason)
@@ -1238,7 +1265,8 @@ export class MemoryV2Coordinator {
       if (authority === 'sqlite-v2-opt-in') return
     }
 
-    const query = params.query.trim().slice(0, MAX_QUERY_LENGTH) || 'SDK agent turn'
+    const query =
+      params.query.trim().slice(0, MAX_QUERY_LENGTH) || 'SDK agent turn'
     const queryRequest = MemoryRetrievalRequestSchema.parse({
       schemaVersion: 2,
       queryId,
@@ -1369,7 +1397,10 @@ export class MemoryV2Coordinator {
       // SELECT; ensureSeedPlaybooks is idempotent and provides the baseline
       // CI-before-commit rule on first turn.
       const playbookRepository = this.config.repository
-      if (playbookRepository?.ensureSeedPlaybooks && playbookRepository.listPlaybooks) {
+      if (
+        playbookRepository?.ensureSeedPlaybooks &&
+        playbookRepository.listPlaybooks
+      ) {
         try {
           await playbookRepository.ensureSeedPlaybooks(this.config.projectId)
           params.agentState.playbookContext =
@@ -1423,11 +1454,13 @@ export class MemoryV2Coordinator {
       const preparation = this.activePreparation
       const repository = this.config.repository
       if (!this.preparationReady || !runtimeState || !repository) return
-      if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
+      if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState)
+        return
       const entries = this.lastCapturedVerifies.slice(0, MAX_VERIFY_STORED)
       if (entries.length === 0) return
       for (const entry of entries) {
-        if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
+        if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState)
+          return
         if (!VERIFY_DIGEST_RE.test(entry.observedDigest)) continue
         try {
           const request = MemoryVerifyRequestSchema.parse({
@@ -1471,12 +1504,21 @@ export class MemoryV2Coordinator {
   }): Promise<void> {
     const runtimeState = this.runtimeState
     const preparation = this.activePreparation
-    const completed = params.completed === true && params.toolName === 'record_decision' && params.native && !params.mcp
+    const completed =
+      params.completed === true &&
+      params.toolName === 'record_decision' &&
+      params.native &&
+      !params.mcp
     // Completed local outcomes outlive cancellation, but never their registered
     // preparation generation or active turn. Query/finish guards are unchanged.
-    const current = () => this.runtimeState === runtimeState &&
-      (completed ? runtimeState?.turn.status === 'active' && preparation !== undefined &&
-        this.activePreparation === preparation && preparation.generation === this.preparationGeneration : this.isCurrent(preparation))
+    const current = () =>
+      this.runtimeState === runtimeState &&
+      (completed
+        ? runtimeState?.turn.status === 'active' &&
+          preparation !== undefined &&
+          this.activePreparation === preparation &&
+          preparation.generation === this.preparationGeneration
+        : this.isCurrent(preparation))
     if (
       this.config.capture !== 'safe' ||
       !current() ||
@@ -1512,12 +1554,18 @@ export class MemoryV2Coordinator {
           const normalizedDestination = action.destinationPath
             ? normalizeProjectPath(action.destinationPath)
             : undefined
-          if (!normalizedPath || (action.destinationPath && !normalizedDestination)) return []
+          if (
+            !normalizedPath ||
+            (action.destinationPath && !normalizedDestination)
+          )
+            return []
           return [
             {
               action: action.action,
               path: normalizedPath,
-              ...(normalizedDestination ? { destinationPath: normalizedDestination } : {}),
+              ...(normalizedDestination
+                ? { destinationPath: normalizedDestination }
+                : {}),
               beforeHash: action.beforeHash,
               afterHash: action.afterHash,
             },
@@ -1750,7 +1798,9 @@ export class MemoryV2Coordinator {
           // so the strict MemorySelector chunk schema never gains a field.
           // Old captures without it still verify (metadata is optional).
           metadata: {
-            ...(hint.stableChunkId ? { stableChunkId: hint.stableChunkId } : {}),
+            ...(hint.stableChunkId
+              ? { stableChunkId: hint.stableChunkId }
+              : {}),
           },
         },
         capturedAt: observedAt,
@@ -1759,12 +1809,14 @@ export class MemoryV2Coordinator {
       }
     })
     const evidence = [...fileEvidence, ...chunkEvidence].slice(0, 32)
-    const preservedDecisionText = recordDecisionText === undefined
-      ? undefined
-      : redactSecretValues(recordDecisionText).slice(0, 1024)
-    const preservedDecisionExcerpt = recordDecisionText && typeof recordDecisionValue?.excerpt === 'string'
-      ? redactSecretValues(recordDecisionValue.excerpt).slice(0, 1024)
-      : undefined
+    const preservedDecisionText =
+      recordDecisionText === undefined
+        ? undefined
+        : redactSecretValues(recordDecisionText).slice(0, 1024)
+    const preservedDecisionExcerpt =
+      recordDecisionText && typeof recordDecisionValue?.excerpt === 'string'
+        ? redactSecretValues(recordDecisionValue.excerpt).slice(0, 1024)
+        : undefined
     const event = createMemoryEventDraft({
       projectId: this.config.projectId,
       sessionId: runtimeState.sessionId,
@@ -1780,7 +1832,8 @@ export class MemoryV2Coordinator {
           kind: observationKindHint,
           // Explicitly recorded decisions are the reusable fact/rationale,
           // not merely an index entry saying that record_decision was called.
-          summary: preservedDecisionText ??
+          summary:
+            preservedDecisionText ??
             `${toolNameBounded} ${captureKind} ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(
               0,
               1024,
@@ -1791,7 +1844,9 @@ export class MemoryV2Coordinator {
               ? `Supporting excerpt: ${preservedDecisionExcerpt}`
               : undefined,
             `Captured ${paths.length} path(s), counts ${countsJson.slice(0, 2000)}, digest ${outputDigest.slice(0, 64)}`,
-          ].filter(Boolean).join('\n\n'),
+          ]
+            .filter(Boolean)
+            .join('\n\n'),
           confidence: 0.5,
           evidence,
           selectors: [
@@ -1834,7 +1889,12 @@ export class MemoryV2Coordinator {
         })
       : event
     if (!current()) return
-    const captureCommitted = await this.append([mainEvent], runtimeState, preparation, current)
+    const captureCommitted = await this.append(
+      [mainEvent],
+      runtimeState,
+      preparation,
+      current,
+    )
     // Dependent retractions/citations/verification need the confirmed primary
     // record (or reinforcement). A failed/lost-ack capture cannot erase an old
     // useful claim or cite a replacement that has not been confirmed stored.
@@ -1872,8 +1932,7 @@ export class MemoryV2Coordinator {
             ? statusRead.entries
                 .filter(
                   (entry) =>
-                    entry.status === 'active' &&
-                    entry.taskId === activeTaskId,
+                    entry.status === 'active' && entry.taskId === activeTaskId,
                 )
                 .map((entry) => entry.observationId)
             : [],
@@ -1963,7 +2022,11 @@ export class MemoryV2Coordinator {
         observedAt,
         workspaceState: params.workspaceState,
       })
-      if (coverageEvents.length > 0 && this.isCurrent(preparation) && this.runtimeState === runtimeState) {
+      if (
+        coverageEvents.length > 0 &&
+        this.isCurrent(preparation) &&
+        this.runtimeState === runtimeState
+      ) {
         await this.append(coverageEvents, runtimeState, preparation)
       }
     }
@@ -2064,7 +2127,11 @@ export class MemoryV2Coordinator {
         const repository = this.config.repository
         if (repository) {
           for (const entry of verifyEntries) {
-            if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
+            if (
+              !this.isCurrent(preparation) ||
+              this.runtimeState !== runtimeState
+            )
+              return
             try {
               const request = MemoryVerifyRequestSchema.parse({
                 schemaVersion: 2,
@@ -2182,8 +2249,7 @@ export class MemoryV2Coordinator {
           ? 'failed'
           : 'completed')
     const endedAt = parked?.endedAt ?? this.now()
-    const query =
-      parked?.query ??
+    const query = parked?.query ??
       this.queryTerminal ?? {
         outcome: 'failed' as const,
         error: 'Memory query did not produce a result',
@@ -2225,7 +2291,10 @@ export class MemoryV2Coordinator {
     // maintenance waits or fails. Maintenance grants no lifecycle authority.
     if (status === 'completed' && this.config.repository?.consolidateExact) {
       try {
-        await this.config.repository.consolidateExact({ projectId: this.config.projectId, maxGroups: 16 })
+        await this.config.repository.consolidateExact({
+          projectId: this.config.projectId,
+          maxGroups: 16,
+        })
       } catch (error) {
         this.logger?.warn({ error }, 'Exact knowledge maintenance deferred')
       }
@@ -2240,8 +2309,12 @@ export class MemoryV2Coordinator {
       value.status !== 'completed' &&
       value.status !== 'failed' &&
       value.status !== 'cancelled'
-    ) return undefined
-    if (typeof value.endedAt !== 'string' || Number.isNaN(Date.parse(value.endedAt))) {
+    )
+      return undefined
+    if (
+      typeof value.endedAt !== 'string' ||
+      Number.isNaN(Date.parse(value.endedAt))
+    ) {
       return undefined
     }
     if (!isRecord(value.query)) return undefined
@@ -2267,7 +2340,8 @@ export class MemoryV2Coordinator {
       value.query.error.length < 1 ||
       value.query.error.length > 1_024 ||
       typeof value.query.retryable !== 'boolean'
-    ) return undefined
+    )
+      return undefined
     return {
       status: value.status,
       endedAt: value.endedAt,
@@ -2293,9 +2367,22 @@ export class MemoryV2Coordinator {
     try {
       const receipt = agentState.memoryUsageTurn
       const context = agentState.memoryV2Context
-      if (!receipt || receipt.turnId !== runtimeState.turn.userInputId) return []
-      if (!context || context.queryId !== runtimeState.turn.queryId) return []
-      const signals = correlateUsage({ context, receipt })
+      if (!receipt || receipt.turnId !== runtimeState.turn.userInputId)
+        return []
+      if (
+        !context ||
+        context.userInputId !== runtimeState.turn.userInputId.slice(0, 128) ||
+        context.result.projectId !== this.config.projectId ||
+        context.result.queryId !== context.queryId ||
+        (context.queryId !== runtimeState.turn.queryId &&
+          !agentState.memoryV2EmittedQueryIds?.includes(context.queryId))
+      )
+        return []
+      const signals = correlateUsage({
+        context,
+        receipt,
+        emittedObservationIds: agentState.memoryV2EmittedObservationIds,
+      })
       if (signals.length === 0) return []
       const used = signals
         .filter((signal) => signal.kind === 'used')

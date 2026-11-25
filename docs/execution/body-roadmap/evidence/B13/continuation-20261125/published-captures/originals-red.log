@@ -1,0 +1,79 @@
+bun test v1.4.4 (38afee6c8)
+
+packages/agent-runtime/src/util/__tests__/context-archive-originals.test.ts:
+31 |     archiveEvictedToolResults(state, evicted.evicted!, 100)
+32 |     for (let pass = 0; pass < 3; pass++) {
+33 |       archivePreCompaction(state, structuredClone(evicted.messages), 'semantic_compaction', 0, 101 + pass)
+34 |     }
+35 |     const recalled = recallFromArchiveByToolCallId(state.compactionArchive, 'result-000', optionsFor(state))
+36 |     expect(recalled.matches[0]?.snippet).toBe(text)
+                                              ^
+error: expect(received).toBe(expected)
+
+- "RESULT-000
+- xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx... (32548 bytes truncated) ...xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+- TAIL-000"
++ "[tool result evicted to free context (~8k tokens) — tool=read_files toolCallId=result-000 step=0. The full original output is archived; retrieve it with recall_context (search the archived text) instead of re-running the tool.]"
+
+- Expected  - 3
++ Received  + 1
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/__tests__/context-archive-originals.test.ts:36:42)
+(fail) B13 original result provenance and bounded byte recall > a later real eviction pointer cannot shadow the original 32 KiB body [546.77ms]
+51 |       const match = recalled.matches[0]
+52 |       expect(match).toBeDefined()
+53 |       expect(Buffer.byteLength(match.snippet)).toBeLessThanOrEqual(4_096)
+54 |       pages.push(match.snippet)
+55 |       if (match.page?.nextOffset === null) break
+56 |       expect(match.page?.nextOffset).toBeGreaterThan(offsetBytes)
+                                          ^
+error: Expected and actual values must be numbers or bigints
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/__tests__/context-archive-originals.test.ts:56:38)
+(fail) B13 original result provenance and bounded byte recall > captures the immutable original before either archive excerpt limit [0.27ms]
+61 | 
+62 |   it('uses UTF-8 byte cursors without cutting a code point or accepting an interior cursor', () => {
+63 |     const state = stateFor()
+64 |     archiveEvictedToolResults(state, [{ toolCallId: 'unicode', toolName: 'read_files', content: result('unicode', 'A🙂€B').content, stepIndex: 7 }], 100)
+65 |     const first = recallFromArchiveByToolCallId(state.compactionArchive, 'unicode', optionsFor(state, { maxBytes: 5 }))
+66 |     expect(first.matches[0]?.snippet).toBe('A🙂')
+                                           ^
+error: expect(received).toBe(expected)
+
+Expected: "A🙂"
+Received: "A🙂€B"
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/__tests__/context-archive-originals.test.ts:66:39)
+(fail) B13 original result provenance and bounded byte recall > uses UTF-8 byte cursors without cutting a code point or accepting an interior cursor [0.15ms]
+76 |   it('rejects conflicting originals and cannot overwrite an earlier immutable body', () => {
+77 |     const state = stateFor()
+78 |     archivePreCompaction(state, [result('same', 'first original')], 'semantic_compaction', 0, 100)
+79 |     archivePreCompaction(state, [result('same', 'different original')], 'mechanical_trim', 0, 101)
+80 |     const recalled = recallFromArchiveByToolCallId(state.compactionArchive, 'same', optionsFor(state))
+81 |     expect(recalled.status).toBe('corrupt')
+                                 ^
+error: expect(received).toBe(expected)
+
+Expected: "corrupt"
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/__tests__/context-archive-originals.test.ts:81:29)
+(fail) B13 original result provenance and bounded byte recall > rejects conflicting originals and cannot overwrite an earlier immutable body [0.11ms]
+87 |     const one = stateFor('run-one'), two = stateFor('run-two')
+88 |     archivePreCompaction(one, [result('shared-id', 'one')], 'semantic_compaction', 0, 100)
+89 |     archivePreCompaction(two, [result('shared-id', 'two')], 'semantic_compaction', 0, 101)
+90 |     const archive = [...one.compactionArchive!, ...two.compactionArchive!]
+91 |     const bodies = { ...one.contextArchiveBodies, ...two.contextArchiveBodies }
+92 |     expect(recallFromArchiveByToolCallId(archive, 'shared-id', { bodies }).status).toBe('ambiguous')
+                                                                                        ^
+error: expect(received).toBe(expected)
+
+Expected: "ambiguous"
+Received: undefined
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/packages/agent-runtime/src/util/__tests__/context-archive-originals.test.ts:92:84)
+(fail) B13 original result provenance and bounded byte recall > requires source-run disambiguation and an expected body hash when supplied [0.10ms]
+
+ 0 pass
+ 5 fail
+ 10 expect() calls
+Ran 5 tests across 1 file. [937.00ms]

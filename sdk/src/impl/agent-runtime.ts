@@ -209,6 +209,8 @@ export function createSupervisedExecutionScope(p: {
   synchronizeWorkspace?: AgentRuntimeDeps['synchronizeWorkspace']
   prepareRepositoryContext?: AgentRuntimeDeps['prepareRepositoryContext']
   resolveMemoryAuthority?: AgentRuntimeDeps['resolveMemoryAuthority']
+  readContextArchiveBodyPage?: AgentRuntimeDeps['readContextArchiveBodyPage']
+  searchContextArchive?: AgentRuntimeDeps['searchContextArchive']
   classifyPlaybookTerminalActions?: AgentRuntimeDeps['classifyPlaybookTerminalActions']
   getPlaybookValidationEvidence?: AgentRuntimeDeps['getPlaybookValidationEvidence']
   startAgentRun: StartAgentRunFn
@@ -411,12 +413,25 @@ export function createSupervisedExecutionScope(p: {
       throw new Error('Supervised memory source selection does not match its registered actor/task')
     return p.resolveMemoryAuthority!({ actor, userInputId: registered.userInputId })
   } : undefined
+  const readContextArchiveBodyPage: AgentRuntimeDeps['readContextArchiveBodyPage'] = p.readContextArchiveBodyPage ? async input => {
+    const actor = requireActor(input.actor)
+    const registered = actors.get(actor.runId)!
+    if (!registered.userInputId || input.userInputId !== registered.userInputId)
+      throw new Error('Supervised archive recall does not match its registered actor/task')
+    return p.readContextArchiveBodyPage!({ ...input, actor, userInputId: registered.userInputId })
+  } : undefined
+  const searchContextArchive: AgentRuntimeDeps['searchContextArchive'] = p.searchContextArchive ? async input => {
+    const actor = requireActor(input.actor), registered = actors.get(actor.runId)!
+    if (!registered.userInputId || input.userInputId !== registered.userInputId)
+      throw new Error('Supervised archive search does not match its registered actor/task')
+    return p.searchContextArchive!({ ...input, actor, userInputId: registered.userInputId })
+  } : undefined
   const getPlaybookValidationEvidence: AgentRuntimeDeps['getPlaybookValidationEvidence'] = actor =>
     p.getPlaybookValidationEvidence?.(requireActor(actor)) ?? Promise.resolve(undefined)
   return { startAgentRun, onExecutionActionStart, synchronizeWorkspace, requestToolCall, requestMcpToolData,
     requestFiles, requestOptionalFile, authorizeToolRead,
     ...(onNativeToolObservation ? { onNativeToolObservation } : {}),
-    prepareRepositoryContext, resolveMemoryAuthority, getPlaybookValidationEvidence, classifyPlaybookTerminalActions: p.classifyPlaybookTerminalActions }
+    prepareRepositoryContext, resolveMemoryAuthority, readContextArchiveBodyPage, searchContextArchive, getPlaybookValidationEvidence, classifyPlaybookTerminalActions: p.classifyPlaybookTerminalActions }
 }
 
 export function getAgentRuntimeImpl(
@@ -448,6 +463,8 @@ export function getAgentRuntimeImpl(
     | 'playbookGateMode'
     | 'prepareRepositoryContext'
     | 'resolveMemoryAuthority'
+    | 'readContextArchiveBodyPage'
+    | 'searchContextArchive'
     | 'classifyPlaybookTerminalActions'
     | 'getPlaybookValidationEvidence'
   > &
@@ -679,6 +696,8 @@ export function getAgentRuntimeImpl(
                   synchronizeWorkspace: params.synchronizeWorkspace,
                   prepareRepositoryContext: params.prepareRepositoryContext,
                   resolveMemoryAuthority: params.resolveMemoryAuthority,
+                  readContextArchiveBodyPage: params.readContextArchiveBodyPage,
+                  searchContextArchive: params.searchContextArchive,
                   classifyPlaybookTerminalActions: params.classifyPlaybookTerminalActions,
                   getPlaybookValidationEvidence: params.getPlaybookValidationEvidence,
                   executionForAction: params.executionForAction, executionForActorOperation: params.executionForActorOperation,
@@ -703,6 +722,8 @@ export function getAgentRuntimeImpl(
                     authorizeToolRead: executionScope?.authorizeToolRead ?? params.authorizeToolRead,
                     prepareRepositoryContext: executionScope?.prepareRepositoryContext,
                     resolveMemoryAuthority: executionScope?.resolveMemoryAuthority,
+                    readContextArchiveBodyPage: executionScope?.readContextArchiveBodyPage,
+                    searchContextArchive: executionScope?.searchContextArchive,
                     classifyPlaybookTerminalActions: executionScope?.classifyPlaybookTerminalActions,
                     getPlaybookValidationEvidence: executionScope?.getPlaybookValidationEvidence,
                     requestFiles: executionScope?.requestFiles ?? requestFiles,
@@ -750,6 +771,8 @@ export function getAgentRuntimeImpl(
     playbookGateMode: params.playbookGateMode ?? resolvePlaybookGateMode(params.hostServices?.provider.snapshot.inputs.environment ?? clientEnv),
     prepareRepositoryContext: params.prepareRepositoryContext,
     resolveMemoryAuthority: params.resolveMemoryAuthority,
+    readContextArchiveBodyPage: params.readContextArchiveBodyPage,
+    searchContextArchive: params.searchContextArchive,
     classifyPlaybookTerminalActions: params.classifyPlaybookTerminalActions,
     getPlaybookValidationEvidence: params.getPlaybookValidationEvidence,
 

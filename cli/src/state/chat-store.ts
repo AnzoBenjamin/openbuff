@@ -51,6 +51,10 @@ export type {
   ClickedFollowupsMap,
 }
 
+export type SessionRestoreState =
+  | { status: 'loading'; chatId?: string; owner: symbol }
+  | { status: 'error'; chatId?: string; message: string; owner: symbol }
+
 export type ChatStoreState = {
   /** Unique ID for this chat session, regenerated on /new */
   chatSessionId: string
@@ -73,6 +77,8 @@ export type ChatStoreState = {
   hasReceivedPlanResponse: boolean
   lastMessageMode: AgentMode | null
   runState: RunState | null
+  /** Blocking selected-session recovery; this UI state is never persisted as model history. */
+  sessionRestore?: SessionRestoreState | null
   /** The currently active top banner, or null if none */
   activeTopBanner: TopBannerType
   inputMode: InputMode
@@ -151,6 +157,7 @@ type ChatStoreActions = {
   setHasReceivedPlanResponse: (value: boolean) => void
   setLastMessageMode: (mode: AgentMode | null) => void
   setRunState: (runState: RunState | null) => void
+  setSessionRestore: (value: SessionRestoreState | null) => void
   setActiveTopBanner: (banner: TopBannerType) => void
   closeTopBanner: () => void
   setInputMode: (mode: InputMode) => void
@@ -258,6 +265,7 @@ const initialState: ChatStoreState = {
   hasReceivedPlanResponse: false,
   lastMessageMode: null,
   runState: null,
+  sessionRestore: null,
   activeTopBanner: null,
   inputMode: 'default' as InputMode,
   isRetrying: false,
@@ -460,6 +468,10 @@ export const useChatStore = create<ChatStore>()(
     setRunState: (runState) =>
       set((state) => {
         state.runState = runState ? castDraft(runState) : null
+      }),
+    setSessionRestore: (value) =>
+      set((state) => {
+        state.sessionRestore = value
       }),
 
     setActiveTopBanner: (banner) =>
@@ -682,6 +694,7 @@ export const useChatStore = create<ChatStore>()(
       useOutputReaderStore.getState().close()
       set((state) => {
         state.chatSessionId = generateSessionId()
+        state.sessionRestore = null
         state.messages = initialState.messages.slice()
         state.streamingAgents = new Set(initialState.streamingAgents)
         state.focusedAgentId = initialState.focusedAgentId

@@ -1,0 +1,60 @@
+bun test v1.4.4 (38afee6c8)
+
+common/src/util/__tests__/playbook-applicability.test.ts:
+(pass) isPlaybookApplicable > uses the acting role rather than a child target and preserves global procedures [5.63ms]
+(pass) isPlaybookApplicable > requires known repository and role matches, including aliases and qualification [0.39ms]
+(pass) isPlaybookApplicable > matches recursive and segment globs and retains unknown path scope [0.38ms]
+ 96 |     expect(isPlaybookApplicable(procedure, { affectedPaths: [] })).toBe(true)
+ 97 |   })
+ 98 | 
+ 99 |   test('bounded brace and character-class language scopes do not silently become global rules', () => {
+100 |     const procedure = rule({ repos: [], glob: ['src/**/*.{ts,tsx}', 'lib/file[0-9].ts'] })
+101 |     expect(isPlaybookApplicable(procedure, { affectedPaths: ['src/a.py'] })).toBe(false)
+                                                                                   ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/ben/Code/CLI/openbuff/common/src/util/__tests__/playbook-applicability.test.ts:101:78)
+(fail) isPlaybookApplicable > bounded brace and character-class language scopes do not silently become global rules [0.32ms]
+(pass) isPlaybookApplicable > active and verified stay effective while retired, candidate and expired do not [0.26ms]
+
+packages/agent-runtime/src/memory/playbook-context.test.ts:
+(pass) compileActivePlaybooksContext > renders nothing for empty or wholly invalid input and never throws [1.53ms]
+(pass) compileActivePlaybooksContext > compiles byte-identical bands regardless of input order [1.20ms]
+(pass) compileActivePlaybooksContext > caps the band while preserving complete conditions and omitting oversized prose whole [1.17ms]
+(pass) compileActivePlaybooksContext > renders only the lowest triggerSignature values past the playbook cap [1.17ms]
+(pass) compileActivePlaybooksContext > drops schema-invalid entries without vouching any fragment of them [0.54ms]
+(pass) compileActivePlaybooksContext > frames host validation as reusable evidence without claiming every rule was operator authored [0.20ms]
+(pass) compileActivePlaybooksContext > describes triggers and required evidence in the gate verdict vocabulary [0.08ms]
+(pass) compileActivePlaybooksContext > keeps the header within its dedicated budget [0.09ms]
+(pass) compileActivePlaybooksContext > handles a single playbook and degenerate budgets without breaking [0.18ms]
+(pass) compileActivePlaybooksContext > preserves full scope and prerequisites before a long instruction under budget [0.21ms]
+(pass) compileActivePlaybooksContext > keeps verified procedures effective and prioritizes enforcement before hash order [0.26ms]
+
+packages/agent-runtime/src/memory/__tests__/playbook-gate.test.ts:
+(pass) resolvePlaybookGateMode > defaults to warn and never upgrades past the env mode [0.06ms]
+(pass) session evidence log > caps at the most-recent entries [0.23ms]
+(pass) session evidence log > matches by tool, wildcard-wrapped substring, and recency window [0.15ms]
+(pass) evaluatePlaybookGate > (a) no playbooks -> no verdicts [0.13ms]
+(pass) evaluatePlaybookGate > (b) env mode 'off' -> no verdicts [0.27ms]
+(pass) evaluatePlaybookGate > (c) missing evidence warns by default and blocks under block mode [0.44ms]
+(pass) evaluatePlaybookGate > (d) matching evidence recorded in-session yields an allowed verdict carrying the playbook [1.53ms]
+(pass) evaluatePlaybookGate > (e) evidence older than withinMs still warns [0.25ms]
+(pass) evaluatePlaybookGate > (f) a non-matching agent type is allowed [0.28ms]
+(pass) evaluatePlaybookGate > (g) git push matches a git-push playbook and unrelated commands do not [0.20ms]
+(pass) evaluatePlaybookGate > (h) retired and expired playbooks never fire [0.16ms]
+(pass) evaluatePlaybookGate > (i) unknown evidence kinds fail closed [0.12ms]
+(pass) evaluatePlaybookGate > (j) an inject-only playbook surfaces no verdict in either mode, even when satisfied [0.10ms]
+(pass) evaluatePlaybookGate > rendering and gating share repo, acting-role and path applicability [0.74ms]
+(pass) evaluatePlaybookGate > an echo cannot satisfy validation and a valid child receipt can until dependencies change [0.38ms]
+(pass) describePlaybookTrigger > describes spawn and terminal triggers in the verdict vocabulary [0.22ms]
+
+1 tests failed:
+(fail) isPlaybookApplicable > bounded brace and character-class language scopes do not silently become global rules [0.32ms]
+
+ 31 pass
+ 1 fail
+ 144 expect() calls
+Ran 32 tests across 3 files. [77.00ms]

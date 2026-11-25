@@ -265,10 +265,12 @@ async function openResult(root: string) {
 async function open(
   root: string,
   busyTimeoutMs?: number,
+  contextArchiveRetention?: import('../../../../../common/src/types/context-archive').ContextArchiveRetentionPolicy,
 ): Promise<BunSQLiteMemoryRepository> {
   const result = await BunSQLiteMemoryRepository.open({
     repositoryRoot: root,
     busyTimeoutMs,
+    contextArchiveRetention,
   })
   if (result.status === 'error') throw new Error(result.error.message)
   repositories.push(result.repository)
@@ -319,10 +321,10 @@ describe('BunSQLiteMemoryRepository', () => {
       const version = database.query('PRAGMA user_version').get() as {
         user_version: number
       }
-      // SCHEMA_VERSION 6 (immutable archive manifests): an older build
+      // SCHEMA_VERSION 7 (original-body retention): an older build
       // sharing this store fails closed at its own open because its version
       // check rejects user_version values above its own SCHEMA_VERSION.
-      expect(version.user_version).toBe(6)
+      expect(version.user_version).toBe(7)
       const names = (
         database
           .query(
@@ -817,7 +819,7 @@ describe('BunSQLiteMemoryRepository', () => {
     const repository = await open(temporaryRepository())
     const health = await repository.kernelHealth()
     expect(['healthy', 'degraded']).toContain(health.status)
-    expect(health.schemaVersion).toBe(6)
+    expect(health.schemaVersion).toBe(7)
     expect(health.journalMode).toBeTruthy()
     expect(health.synchronous).toBeTruthy()
 
@@ -969,7 +971,7 @@ describe('BunSQLiteMemoryRepository', () => {
     expect(migratedState.projectBinding).toBe('project-1')
     expect(migratedState.capabilities.length).toBeGreaterThan(0)
     expect(migratedState.projectionCursor).toBe('1')
-    expect(migratedState.userVersion).toBe(6)
+    expect(migratedState.userVersion).toBe(7)
     expect(migratedState.quickCheck).toBe('ok')
 
     const reopened = await open(root)
@@ -984,7 +986,7 @@ describe('BunSQLiteMemoryRepository', () => {
     expect(reopenedState.projectBinding).toBe(migratedState.projectBinding)
     expect(reopenedState.capabilities).toEqual(migratedState.capabilities)
     expect(reopenedState.projectionCursor).toBe(migratedState.projectionCursor)
-    expect(reopenedState.userVersion).toBe(6)
+    expect(reopenedState.userVersion).toBe(7)
     expect(reopenedState.quickCheck).toBe('ok')
     expect(afterMigration).not.toEqual(before)
   })
@@ -4813,7 +4815,7 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
     ).toBe(true)
   })
 
-  test('mixed-version repair: a pre-P7 store (user_version 2) is upgraded to 6 and stale claim_dedup rows are reconciled on open', async () => {
+  test('mixed-version repair: a pre-P7 store (user_version 2) is upgraded to 7 and stale claim_dedup rows are reconciled on open', async () => {
     const root = temporaryRepository()
     const claimId = 'd'.repeat(64)
     const staleClaimId = 'e'.repeat(64)
@@ -4883,7 +4885,7 @@ describe('P7 contradictions, reinforcement, and claim dedup', () => {
             user_version: number
           }
         ).user_version,
-      ).toBe(6)
+      ).toBe(7)
     } finally {
       versionCheck.close()
     }
@@ -5145,6 +5147,10 @@ describe('context archive persistence', () => {
           'context_archive_bodies',
           'context_archive_messages',
           'context_archive_memberships',
+          'context_archive_cutoffs',
+          'context_archive_original_bodies',
+          'context_archive_originals',
+          'context_archive_original_refs',
           'context_archive_migration_errors',
           'context_archive_snapshots',
           'context_archive_watermarks',
@@ -5168,7 +5174,7 @@ describe('context archive persistence', () => {
       const version = check.query('PRAGMA user_version').get() as {
         user_version: number
       }
-      expect(version.user_version).toBe(6)
+      expect(version.user_version).toBe(7)
     } finally {
       check.close()
     }
@@ -5261,7 +5267,9 @@ describe('context archive persistence', () => {
   })
 
   test('cap idempotency: re-persisting the same run fully replaces its rows', async () => {
-    const repository = await open(temporaryRepository())
+    const repository = await open(temporaryRepository(), undefined, {
+      mode: 'keep-until-delete',
+    })
     const snapshots = [
       archiveSnapshotFixture({ archivedAt: 1000 }),
       archiveSnapshotFixture({ archivedAt: 2000 }),
@@ -5315,7 +5323,9 @@ describe('context archive persistence', () => {
   })
 
   test('search hit through the durable FTS index with provenance and AND semantics', async () => {
-    const repository = await open(temporaryRepository())
+    const repository = await open(temporaryRepository(), undefined, {
+      mode: 'keep-until-delete',
+    })
     await repository.persistContextArchiveSnapshots({
       runId: 'run-search',
       snapshots: [
@@ -5375,7 +5385,9 @@ describe('context archive persistence', () => {
 
   test('fail-open: with the FTS table absent the search degrades to the LIKE scan', async () => {
     const root = temporaryRepository()
-    const repository = await open(root)
+    const repository = await open(root, undefined, {
+      mode: 'keep-until-delete',
+    })
     await repository.persistContextArchiveSnapshots({
       runId: 'run-like',
       snapshots: [
@@ -5451,7 +5463,9 @@ describe('context archive persistence', () => {
   })
 
   test('rejects and skips: empty runId, empty list, invalid action, closed store', async () => {
-    const repository = await open(temporaryRepository())
+    const repository = await open(temporaryRepository(), undefined, {
+      mode: 'keep-until-delete',
+    })
     expect(
       await repository.persistContextArchiveSnapshots({
         runId: '',

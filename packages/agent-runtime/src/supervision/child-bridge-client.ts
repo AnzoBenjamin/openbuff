@@ -507,14 +507,20 @@ export function sanitizeBridgeParams(
     bridgeNonce === undefined
       ? BRIDGE_LOGGER_MARKER
       : createBridgeWireMarker('logger', bridgeNonce)
-  const walk = (value: unknown, depth: number, path: string[] = []): unknown => {
+  const walk = (
+    value: unknown,
+    depth: number,
+    path: string[] = [],
+  ): unknown => {
     const key = path.at(-1)
     const isPromptSchema =
-      (path.length === 3 && path[0] === 'tools' &&
+      (path.length === 3 &&
+        path[0] === 'tools' &&
         (key === 'inputSchema' || key === 'outputSchema')) ||
       (path[0] === 'localAgentTemplates' &&
         ((path.length === 3 && key === 'outputSchema') ||
-          (path.length === 4 && path[2] === 'inputSchema' &&
+          (path.length === 4 &&
+            path[2] === 'inputSchema' &&
             (key === 'prompt' || key === 'params'))))
     // JSON-only members (including schemas forwarded by a parent) must not
     // enter the generic depth-limited marker walk. Preserve all constraints
@@ -586,7 +592,9 @@ export function sanitizeBridgeParams(
       return structuredClone(value.jsonSchema)
     }
     if (Array.isArray(value)) {
-      return value.map((item, index) => walk(item, depth + 1, [...path, String(index)]))
+      return value.map((item, index) =>
+        walk(item, depth + 1, [...path, String(index)]),
+      )
     }
     const out: Record<string, unknown> = {}
     for (const [key, item] of Object.entries(value)) {
@@ -633,14 +641,30 @@ export function toBridgeJsonSchema(
  * boundary (documented per-method below).
  */
 export type BridgedChildDeps = {
-  resolveMemoryAuthority: NonNullable<import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['resolveMemoryAuthority']>
-  prepareRepositoryContext: NonNullable<import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['prepareRepositoryContext']>
-  classifyPlaybookTerminalActions: NonNullable<import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['classifyPlaybookTerminalActions']>
-  getPlaybookValidationEvidence: NonNullable<import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['getPlaybookValidationEvidence']>
+  resolveMemoryAuthority: NonNullable<
+    import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['resolveMemoryAuthority']
+  >
+  readContextArchiveBodyPage: NonNullable<
+    import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['readContextArchiveBodyPage']
+  >
+  searchContextArchive: NonNullable<
+    import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['searchContextArchive']
+  >
+  prepareRepositoryContext: NonNullable<
+    import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['prepareRepositoryContext']
+  >
+  classifyPlaybookTerminalActions: NonNullable<
+    import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['classifyPlaybookTerminalActions']
+  >
+  getPlaybookValidationEvidence: NonNullable<
+    import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['getPlaybookValidationEvidence']
+  >
   synchronizeWorkspace: import('@codebuff/common/types/contracts/client').SynchronizeWorkspace
   authorizeToolRead: import('@codebuff/common/types/contracts/client').AuthorizeToolRead
   onExecutionActionStart: import('@codebuff/common/types/contracts/client').OnExecutionActionStart
-  onNativeToolObservation: NonNullable<import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['onNativeToolObservation']>
+  onNativeToolObservation: NonNullable<
+    import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['onNativeToolObservation']
+  >
   promptAiSdkStream: PromptAiSdkStreamFn
   promptAiSdk: PromptAiSdkFn
   promptAiSdkStructured: PromptAiSdkStructuredFn
@@ -1231,23 +1255,64 @@ export function buildBridgedChildDeps(
     onNativeToolObservation: async (params) => {
       await client.call('onNativeToolObservation', callParams(params))
     },
-    resolveMemoryAuthority: async params => {
-      const mode = await client.call('resolveMemoryAuthority', callParams(params))
+    resolveMemoryAuthority: async (params) => {
+      const mode = await client.call(
+        'resolveMemoryAuthority',
+        callParams(params),
+      )
       return mode == null ? undefined : MemoryAuthorityModeSchema.parse(mode)
     },
-    prepareRepositoryContext: async params =>
-      (await client.call('prepareRepositoryContext', callParams(params)) as import('@codebuff/common/types/contracts/repository-intelligence').RepositoryContextPacket | null) ?? undefined,
-    classifyPlaybookTerminalActions: async command =>
-      await client.call('classifyPlaybookTerminalActions', { command }) as readonly ('git-commit' | 'git-push' | 'git-stage')[],
-    getPlaybookValidationEvidence: async actor =>
-      (await client.call('getPlaybookValidationEvidence', callParams(actor)) as import('@codebuff/common/types/memory-playbook').ValidationEvidenceContext | null) ?? undefined,
+    readContextArchiveBodyPage: async (params) => {
+      const { isContextArchiveBodyPageOutcome } =
+        await import('@codebuff/common/util/context-archive-body')
+      const outcome = await client.call(
+        'readContextArchiveBodyPage',
+        callParams(params),
+      )
+      return isContextArchiveBodyPageOutcome(outcome)
+        ? outcome
+        : {
+            status: 'corrupt',
+            reason: 'The parent returned an invalid original-body page.',
+          }
+    },
+    searchContextArchive: async (params) =>
+      (await client.call(
+        'searchContextArchive',
+        callParams(params),
+      )) as import('@codebuff/common/types/context-archive-search').ContextArchiveSearchOutcome,
+    prepareRepositoryContext: async (params) =>
+      ((await client.call('prepareRepositoryContext', callParams(params))) as
+        | import('@codebuff/common/types/contracts/repository-intelligence').RepositoryContextPacket
+        | null) ?? undefined,
+    classifyPlaybookTerminalActions: async (command) =>
+      (await client.call('classifyPlaybookTerminalActions', {
+        command,
+      })) as readonly ('git-commit' | 'git-push' | 'git-stage')[],
+    getPlaybookValidationEvidence: async (actor) =>
+      ((await client.call(
+        'getPlaybookValidationEvidence',
+        callParams(actor),
+      )) as
+        | import('@codebuff/common/types/memory-playbook').ValidationEvidenceContext
+        | null) ?? undefined,
     synchronizeWorkspace: async (actor) =>
-      (await client.call('synchronizeWorkspace', callParams(actor)) as import('@codebuff/common/types/workspace-state').WorkspaceStateV1 | null) ?? undefined,
-    authorizeToolRead: async params => {
-      const result = await client.call('authorizeToolRead', callParams(params)) as { allowed?: unknown; reason?: unknown } | null
+      ((await client.call('synchronizeWorkspace', callParams(actor))) as
+        | import('@codebuff/common/types/workspace-state').WorkspaceStateV1
+        | null) ?? undefined,
+    authorizeToolRead: async (params) => {
+      const result = (await client.call(
+        'authorizeToolRead',
+        callParams(params),
+      )) as { allowed?: unknown; reason?: unknown } | null
       if (result?.allowed === true) return { allowed: true }
-      if (result?.allowed === false && typeof result.reason === 'string') return { allowed: false, reason: result.reason }
-      return { allowed: false, reason: 'Strict project read dispatch availability is unavailable from the parent.' }
+      if (result?.allowed === false && typeof result.reason === 'string')
+        return { allowed: false, reason: result.reason }
+      return {
+        allowed: false,
+        reason:
+          'Strict project read dispatch availability is unavailable from the parent.',
+      }
     },
     requestToolCall: (params) =>
       client.call('requestToolCall', callParams(params)) as ReturnType<

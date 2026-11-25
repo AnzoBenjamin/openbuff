@@ -1,4 +1,9 @@
-import type { ContextArchiveSnapshot } from '@codebuff/common/types/context-archive'
+import type {
+  ContextArchiveSnapshot,
+  ContextArchiveBody,
+  ContextArchiveRetentionReceipt,
+} from '@codebuff/common/types/context-archive'
+import type { ArchiveFlushOutcome } from '../../utils/persisted-context-archive'
 import type { RunState } from '@openbuff/sdk'
 
 import { logger } from '../../utils/logger'
@@ -49,11 +54,13 @@ const HYDRATION_SNAPSHOT_LIMIT = 24
 type PersistContextArchiveSnapshots = (request: {
   runId: string
   snapshots: ContextArchiveSnapshot[]
+  bodies?: Record<string, ContextArchiveBody>
 }) => Promise<{
   persisted: number
   skipped: number
   status?: 'ok' | 'degraded' | 'unavailable'
   reasons?: string[]
+  retention?: ContextArchiveRetentionReceipt
 }>
 
 /** Narrowed shape of the repository's optional context-archive load. */
@@ -94,12 +101,17 @@ const optionalMethod = <F>(repository: unknown, key: string): F | undefined => {
  */
 export async function persistContextArchiveSnapshotsToRepository(
   repository: unknown,
-  request: { runId: string; snapshots: ContextArchiveSnapshot[] },
+  request: {
+    runId: string
+    snapshots: ContextArchiveSnapshot[]
+    bodies?: Record<string, ContextArchiveBody>
+  },
 ): Promise<{
   persisted: number
   skipped: number
   status?: 'ok' | 'degraded' | 'unavailable'
   reasons?: string[]
+  retention?: ContextArchiveRetentionReceipt
 } | null> {
   const persist = optionalMethod<PersistContextArchiveSnapshots>(
     repository,
@@ -195,7 +207,7 @@ export async function flushContextArchiveSnapshots(
     root: string
     authority: ReturnType<typeof getMemoryAuthoritySelection>
   },
-): Promise<void> {
+): Promise<ArchiveFlushOutcome | undefined> {
   const mainAgentState = runState.sessionState?.mainAgentState
   const runId = mainAgentState?.runId
   const archive = mainAgentState?.compactionArchive
@@ -227,6 +239,7 @@ export async function flushContextArchiveSnapshots(
         providerResult.repository,
         {
           runId,
+          bodies: mainAgentState.contextArchiveBodies,
           snapshots: archive.map((snapshot) => ({
             ...snapshot,
             runId: snapshot.runId ?? runId,
@@ -245,9 +258,10 @@ export async function flushContextArchiveSnapshots(
           },
           '[context-archive] Flushed context archive snapshots to memory-v2',
         )
+        return outcome
       }
     } finally {
-      void providerResult.release().catch((error) => {
+      await providerResult.release().catch((error) => {
         logger.debug(
           { error: error instanceof Error ? error.message : String(error) },
           '[context-archive] Provider lease release failed (non-fatal)',
@@ -260,6 +274,7 @@ export async function flushContextArchiveSnapshots(
       '[context-archive] Context archive flush failed (non-fatal)',
     )
   }
+  return undefined
 }
 
 /**
@@ -304,7 +319,7 @@ export async function hydrateContextArchiveSnapshots(
       '[context-archive] Context archive hydration failed (non-fatal)',
     )
   } finally {
-    void release?.().catch((error) => {
+    await release?.().catch((error) => {
       logger.debug(
         { error: error instanceof Error ? error.message : String(error) },
         '[context-archive] Provider lease release failed (non-fatal)',

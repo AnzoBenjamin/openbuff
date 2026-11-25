@@ -493,7 +493,17 @@ child schemas or tool permissions. Without `--json`, stdout contains only the
 validated final JSON, not intermediate prose; with `--json`, streamed SDK events
 are followed by one explicit `result` event. Sparse events flush during a slow
 run. Per-request `usage` events retain missing counts as unknown rather than
-zero. Provider readiness uses the same route/credential checker and messages
+zero. Per-request streaming `usage` also carries `costStatus` (`observed`,
+`estimated`, `unknown`, or `subscription`), optional fractional `costCents`, and
+an unknown-cost reason. Configured USD token pricing works even when request
+provider metadata is stripped. Missing/malformed counts, positive unpriced
+components and non-USD pricing do not become zero-cost estimates; explicit
+zero-rate/zero-cost observations remain distinct. Totals in legacy finish/session
+fields are known subtotals, not proof that unpriced requests were free. There is
+no automatic model-price lookup, cache-write price handling or restart-durable
+shared spending reservation implied by this telemetry.
+
+Provider readiness uses the same route/credential checker and messages
 as the TUI, including explicit model selection.
 
 ## Local semantic search

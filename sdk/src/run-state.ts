@@ -576,14 +576,28 @@ async function getGitChanges(params: {
   lastCommitMessages: string
 }> {
   const { cwd, spawn, logger } = params
-  const executionContext = params.executionContext && spawn
-    ? Object.freeze({ ...params.executionContext, spawn }) : params.executionContext
-  const read = async (argv: readonly string[], branchId: string, message: string) => {
+  const executionContext =
+    params.executionContext && spawn
+      ? Object.freeze({ ...params.executionContext, spawn })
+      : params.executionContext
+  const read = async (
+    argv: readonly string[],
+    branchId: string,
+    message: string,
+  ) => {
     const result = await runGit(argv, cwd, executionContext?.signal, {
-      executionContext, branchId, timeoutMs: GIT_CHANGES_TIMEOUT_MS,
+      executionContext,
+      branchId,
+      timeoutMs: GIT_CHANGES_TIMEOUT_MS,
     })
     if (result.exitCode !== 0) {
-      logger.debug?.({ exitCode: result.exitCode, executionRefusal: result.executionRefusal }, message)
+      logger.debug?.(
+        {
+          exitCode: result.exitCode,
+          executionRefusal: result.executionRefusal,
+        },
+        message,
+      )
       return ''
     }
     return result.stdout
@@ -591,15 +605,29 @@ async function getGitChanges(params: {
   const [status, diff, diffCached, shortlog] = await Promise.all([
     read(['status'], 'session.git.status', 'Failed to get git status'),
     read(['diff'], 'session.git.diff', 'Failed to get git diff'),
-    read(['diff', '--cached'], 'session.git.diff-cached', 'Failed to get git diff --cached'),
-    read(['shortlog', 'HEAD~10..HEAD'], 'session.git.shortlog', 'Failed to get lastCommitMessages'),
+    read(
+      ['diff', '--cached'],
+      'session.git.diff-cached',
+      'Failed to get git diff --cached',
+    ),
+    read(
+      ['shortlog', 'HEAD~10..HEAD'],
+      'session.git.shortlog',
+      'Failed to get lastCommitMessages',
+    ),
   ])
 
   return {
     status,
     diff,
     diffCached,
-    lastCommitMessages: shortlog.trim().split('\n').slice(1).reverse().map(line => line.trim()).join('\n'),
+    lastCommitMessages: shortlog
+      .trim()
+      .split('\n')
+      .slice(1)
+      .reverse()
+      .map((line) => line.trim())
+      .join('\n'),
   }
 }
 
@@ -761,7 +789,14 @@ async function loadKnowledgeFilesFromPaths(params: {
 export async function initialSessionState(
   params: InitialSessionStateOptions,
 ): Promise<SessionState> {
-  const { cwd, maxAgentSteps, skillsDir, homeDir, includeGlobalSkills, includeProjectSkills } = params
+  const {
+    cwd,
+    maxAgentSteps,
+    skillsDir,
+    homeDir,
+    includeGlobalSkills,
+    includeProjectSkills,
+  } = params
   let {
     agentDefinitions,
     customToolDefinitions,
@@ -821,7 +856,9 @@ export async function initialSessionState(
     processedAgentTemplates = processAgentDefinitions(agentDefinitions)
   } else if (homeDir !== null) {
     processedAgentTemplates = await loadLocalAgents({
-      ...(homeDir === undefined ? {} : { agentsPath: path.join(homeDir, '.agents') }),
+      ...(homeDir === undefined
+        ? {}
+        : { agentsPath: path.join(homeDir, '.agents') }),
       includeProjectAgents: false,
       verbose: false,
     })
@@ -848,7 +885,12 @@ export async function initialSessionState(
 
   // Gather git changes if cwd is available
   const gitChanges = cwd
-    ? await getGitChanges({ cwd, spawn, logger, executionContext: params.executionContext })
+    ? await getGitChanges({
+        cwd,
+        spawn,
+        logger,
+        executionContext: params.executionContext,
+      })
     : {
         status: '',
         diff: '',
@@ -857,7 +899,11 @@ export async function initialSessionState(
       }
 
   // Load user knowledge files from home directory and merge with any provided ones
-  const homeKnowledgeFiles = await loadUserKnowledgeFiles({ fs, logger, homeDir })
+  const homeKnowledgeFiles = await loadUserKnowledgeFiles({
+    fs,
+    logger,
+    homeDir,
+  })
   const userKnowledgeFiles = {
     ...homeKnowledgeFiles,
     ...providedUserKnowledgeFiles,
@@ -867,14 +913,16 @@ export async function initialSessionState(
   const contextCwd = cwd ?? params.contextCwd ?? process.cwd()
   // Raw skill discovery has no authenticated guarded-reader contract yet.
   // A strict root must not bypass its read policy during bootstrap.
-  const skills = isProjectOnlyReadPolicy(fs.hostReadPolicy) ? {} : await loadSkills({
-    cwd: contextCwd,
-    skillsPath: skillsDir,
-    homeDir,
-    includeGlobalSkills,
-    includeProjectSkills,
-    verbose: false,
-  })
+  const skills = isProjectOnlyReadPolicy(fs.hostReadPolicy)
+    ? {}
+    : await loadSkills({
+        cwd: contextCwd,
+        skillsPath: skillsDir,
+        homeDir,
+        includeGlobalSkills,
+        includeProjectSkills,
+        verbose: false,
+      })
 
   const initialState = getInitialSessionState({
     projectRoot: contextCwd,
@@ -1063,6 +1111,7 @@ function copyAgentStateForResume(state: AgentState): AgentState {
   const {
     messageHistory,
     compactionArchive,
+    contextArchiveBodies,
     contextConsolidations,
     taskMemory,
     workspaceState,
@@ -1077,6 +1126,9 @@ function copyAgentStateForResume(state: AgentState): AgentState {
     ...(compactionArchive === undefined
       ? {}
       : { compactionArchive: [...compactionArchive] }),
+    ...(contextArchiveBodies === undefined
+      ? {}
+      : { contextArchiveBodies: { ...contextArchiveBodies } }),
     ...(contextConsolidations === undefined
       ? {}
       : { contextConsolidations: [...contextConsolidations] }),
@@ -1229,13 +1281,25 @@ export async function applyOverridesToSessionState(
     // Persisted sessions do not distinguish automatically loaded home files
     // from caller values at those same keys. Refresh that namespace from the
     // current policy; callers can explicitly supply an override again.
-    const retained = Object.fromEntries(Object.entries(
-      baseSessionState.fileContext.userKnowledgeFiles ?? {},
-    ).filter(([key]) => !(key.startsWith('~/.') &&
-      KNOWLEDGE_FILE_NAMES_LOWERCASE.includes(key.slice(3).toLowerCase()))))
+    const retained = Object.fromEntries(
+      Object.entries(
+        baseSessionState.fileContext.userKnowledgeFiles ?? {},
+      ).filter(
+        ([key]) =>
+          !(
+            key.startsWith('~/.') &&
+            KNOWLEDGE_FILE_NAMES_LOWERCASE.includes(key.slice(3).toLowerCase())
+          ),
+      ),
+    )
     const homeKnowledgeFiles = await loadUserKnowledgeFiles({
       fs: runtime?.fs ?? (require('fs') as typeof fsType).promises,
-      logger: runtime?.logger ?? { debug() {}, info() {}, warn() {}, error() {} },
+      logger: runtime?.logger ?? {
+        debug() {},
+        info() {},
+        warn() {},
+        error() {},
+      },
       homeDir: overrides.homeDir,
     })
     sessionState.fileContext.userKnowledgeFiles = {
@@ -1258,9 +1322,13 @@ export async function applyOverridesToSessionState(
     // Clear inherited JSON as well; returning an old skills map would still
     // disclose bytes loaded under a weaker previous-turn policy.
     sessionState.fileContext.skills = {}
-  } else if (overrides.contextCwd !== undefined || overrides.homeDir !== undefined ||
-    overrides.includeGlobalSkills !== undefined || overrides.skillsDir !== undefined ||
-    overrides.includeProjectSkills !== undefined) {
+  } else if (
+    overrides.contextCwd !== undefined ||
+    overrides.homeDir !== undefined ||
+    overrides.includeGlobalSkills !== undefined ||
+    overrides.skillsDir !== undefined ||
+    overrides.includeProjectSkills !== undefined
+  ) {
     sessionState.fileContext.skills = await loadSkills({
       cwd: cwd ?? overrides.contextCwd ?? baseSessionState.fileContext.cwd,
       homeDir: overrides.homeDir,
@@ -1269,7 +1337,8 @@ export async function applyOverridesToSessionState(
       skillsPath: overrides.skillsDir,
       verbose: false,
     })
-    if (overrides.includeProjectSkills === false) sessionState.fileContext.projectSkillsTrusted = false
+    if (overrides.includeProjectSkills === false)
+      sessionState.fileContext.projectSkillsTrusted = false
     else delete sessionState.fileContext.projectSkillsTrusted
   }
 
