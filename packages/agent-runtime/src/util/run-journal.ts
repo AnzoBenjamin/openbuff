@@ -1838,8 +1838,9 @@ export function createRunJournal(params: {
  * Pure crash classifier (design §4a). Scans every retained event and matches
  * each result to at most one preceding request with the same non-null
  * correlation. Unmatched tool calls are returned before unmatched model
- * requests because their effects may be uncertain. Null-correlated requests
- * cannot be matched and remain in flight.
+ * requests because their effects may be uncertain. A model replay boundary
+ * retires pre-replay model requests. Null-correlated requests cannot be
+ * matched by a response.
  *
  * `clean` describes the retained events only: retention may have removed
  * earlier rows, so it is not proof of a complete prefix or replay eligibility.
@@ -1897,6 +1898,10 @@ export function classifyRunResume(
         break
       case 'llm_response':
         settleRequest(llmRequests, event.correlation ?? null)
+        break
+      case 'llm_replay_boundary':
+        pendingLlm.length = 0
+        llmRequests.clear()
         break
     }
   }

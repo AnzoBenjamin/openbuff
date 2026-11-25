@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -14,20 +14,23 @@ const stat = (pid) => {
     return null
   }
 }
+function publishReadiness(path, data) {
+  const pending = `${path}.pending`
+  writeFileSync(pending, JSON.stringify(data))
+  renameSync(pending, path)
+}
+
 const announce = (extra = {}) =>
-  writeFileSync(
-    readyPath,
-    JSON.stringify({
-      leaderPid: process.pid,
-      leaderStat: stat(process.pid),
-      runtime: {
-        node: process.versions.node,
-        bun: process.versions.bun ?? null,
-      },
-      readyAtMs: performance.now(),
-      ...extra,
-    }),
-  )
+  publishReadiness(readyPath, {
+    leaderPid: process.pid,
+    leaderStat: stat(process.pid),
+    runtime: {
+      node: process.versions.node,
+      bun: process.versions.bun ?? null,
+    },
+    readyAtMs: performance.now(),
+    ...extra,
+  })
 
 if (mode === 'normal') {
   process.stdout.write('first\n')
@@ -60,13 +63,10 @@ if (mode === 'normal') {
   process.on('SIGTERM', () =>
     writeFileSync(join(root, 'descendant-term'), String(performance.now())),
   )
-  writeFileSync(
-    join(root, 'descendant-ready.json'),
-    JSON.stringify({
-      descendantPid: process.pid,
-      descendantStat: stat(process.pid),
-    }),
-  )
+  publishReadiness(join(root, 'descendant-ready.json'), {
+    descendantPid: process.pid,
+    descendantStat: stat(process.pid),
+  })
   setTimeout(() => writeFileSync(markerPath, 'descendant survived'), 900)
   setInterval(() => {
     if (variant === 'inherited') process.stdout.write('descendant-write\n')

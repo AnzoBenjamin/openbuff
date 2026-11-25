@@ -631,10 +631,11 @@ describe('B19 actual programmatic run host wiring', () => {
     expect(f.configReads.every((file) => file === f.configFile)).toBe(true)
   }, 15_000)
 
-  test('configured hooks default to 300 seconds, honor -1, and do not infer repository scripts', async () => {
+  test('configured hooks honor the selected cap, default to unbounded, and do not infer repository scripts', async () => {
     const f = fixture({
       fileChangeHooks: [
-        { name: 'default-cap', command: 'printf default-hook' },
+        { name: 'default', command: 'printf default-hook' },
+        { name: 'bounded', command: 'printf bounded-hook', timeoutSeconds: 300 },
         {
           name: 'unbounded',
           command: 'printf unbounded-hook',
@@ -663,7 +664,7 @@ describe('B19 actual programmatic run host wiring', () => {
         event.phase === 'spawn-observed' &&
         event.facts.family === 'configured-hook',
     )
-    expect(hooks).toHaveLength(2)
+    expect(hooks).toHaveLength(3)
     expect(
       hooks.every(
         (event) => event.facts.branchId === 'hook.configured.project',
@@ -674,14 +675,14 @@ describe('B19 actual programmatic run host wiring', () => {
     )!
     const deadline = bounded.facts.deadlines.requestAdmission
     if (deadline.kind !== 'finite')
-      throw new Error('Default hook deadline must be finite')
+      throw new Error('Explicit hook deadline must be finite')
     expect(deadline.expiresAtMs).toBeGreaterThanOrEqual(before + 300_000)
     expect(deadline.expiresAtMs).toBeLessThanOrEqual(after + 300_000)
     expect(
       hooks.filter(
         (event) => event.facts.deadlines.requestAdmission.kind === 'unbounded',
       ),
-    ).toHaveLength(1)
+    ).toHaveLength(2)
     expect(fs.existsSync(forbidden)).toBe(false)
     expect(
       f.launches.some((launch) => /^(npm|pnpm|bun)$/.test(launch.command)),

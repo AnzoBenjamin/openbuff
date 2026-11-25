@@ -287,6 +287,13 @@ export async function resumeBackgroundFromOwnJournal(
 
   if (writer) {
     try {
+      // The re-drive issues a fresh model request. Retire the interrupted
+      // model attempts in this stream while preserving unresolved tool calls.
+      writer.append(linkage.childRunId, {
+        eventType: 'llm_replay_boundary',
+        stepNumber: 0,
+        payload: { jobId },
+      })
       writer.append(parentRunId, {
         eventType: 'spawn',
         stepNumber: 0,
@@ -302,7 +309,7 @@ export async function resumeBackgroundFromOwnJournal(
     } catch (error) {
       logger.warn(
         { jobId, childRunId: linkage.childRunId, error: String(error) },
-        'Background respawn marker journal append failed; continuing without the marker',
+        'Background replay journal append failed; continuing the re-drive',
       )
     }
   }

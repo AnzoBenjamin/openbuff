@@ -52,6 +52,7 @@ export interface JournalEvent {
   eventType:
     | 'llm_request'
     | 'llm_response'
+    | 'llm_replay_boundary'
     | 'tool_call'
     | 'tool_result'
     | 'spawn'

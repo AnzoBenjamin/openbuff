@@ -6,8 +6,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { captureRootDeadline } from '@codebuff/common/util/execution-context'
+import { hashActionInput } from '@codebuff/common/util/action-outcomes'
 import { agentReceiptSchema } from '@codebuff/common/types/agent-handoff'
-import { connectChildBridge } from '@codebuff/agent-runtime/supervision/child-bridge-client'
+import { buildBridgedChildDeps, connectChildBridge } from '@codebuff/agent-runtime/supervision/child-bridge-client'
 import * as supervised from '@codebuff/agent-runtime/supervision/supervised-spawn'
 import * as supervisor from '@codebuff/agent-runtime/supervision/process-supervisor'
 import * as runtime from '../../impl/agent-runtime'
@@ -155,6 +156,37 @@ export async function runSupervisionSdkControl(branch: SupervisionBranch, contro
     }
   })
   restores.push(() => factorySpy.mockRestore())
+  const probeChildBridge = async (attempt: typeof attempts[number]) => {
+    const request = attempt.request
+    assert(request.rpcSocketPath && request.rpcBridgeNonce, 'SDK-created parent bridge must be live before settle')
+    assert(request.child && request.ancestorRunIds && request.executionIdentity)
+    const bridge = await connectChildBridge(request.rpcSocketPath)
+    try {
+      const child = buildBridgedChildDeps(bridge, { bridgeNonce: request.rpcBridgeNonce })
+      const registration = {
+        apiKey: '',
+        agentId: request.agentType,
+        ancestorRunIds: request.ancestorRunIds,
+        agentState: { agentId: request.child.agentId },
+        logger: { debug() {}, info() {}, warn() {}, error() {} },
+      }
+      const runId = await child.startAgentRun(registration)
+      assert(runId, 'SDK bridge must register the fixture child')
+      const actor = { runId, rootRunId: request.executionIdentity.rootRunId, agentId: request.child.agentId }
+      const filePath = 'bridge-probe.txt'
+      const toolName = 'read_files'
+      const input = { paths: [filePath] }
+      const basis = { inputHash: hashActionInput(toolName, input) }
+      const identity = {
+        ...actor, actionId: randomUUID(), attemptId: randomUUID(), basis,
+        basisId: hashActionInput('openbuff.execution-b02-basis.v1', { basis, workspaceSnapshotId: null }),
+      }
+      await child.onExecutionActionStart({ identity, toolName, input, signal: new AbortController().signal })
+      attempt.bridgeReply = await child.requestOptionalFile({
+        filePath, executionActor: actor, executionIdentity: identity,
+      })
+    } finally { bridge.close() }
+  }
   const settleSpy = spyOn(supervisor, 'spawnSettledSubagent').mockImplementation(async options => {
     const requestPath = options.args?.[0]
     assert(requestPath && options.cwd && options.execution)
@@ -162,10 +194,6 @@ export async function runSupervisionSdkControl(branch: SupervisionBranch, contro
     const attempt: typeof attempts[number] = { branch: options.branchId, requestPath, request, cwd: options.cwd,
       mode: statSync(options.cwd).mode & 0o777, requestMode: statSync(requestPath).mode & 0o777 }
     attempts.push(attempt)
-    assert(request.rpcSocketPath && request.rpcBridgeNonce, 'SDK-created parent bridge must be live before settle')
-    const bridge = await connectChildBridge(request.rpcSocketPath)
-    try { attempt.bridgeReply = await bridge.call('requestOptionalFile', { filePath: 'bridge-probe.txt' }) }
-    finally { bridge.close() }
     if (options.branchId === targetBranch) {
       if (control === 'pre-aborted') stop.abort(new Error('Pre-aborted at target adapter entry'))
     }
@@ -185,7 +213,8 @@ export async function runSupervisionSdkControl(branch: SupervisionBranch, contro
       boundary.failure = 'Injected process boundary throw before OS spawn'
       throw new Error(boundary.failure)
     }
-    const childRequest = attempts.at(-1)!.request
+    const attempt = attempts.at(-1)!
+    const childRequest = attempt.request
     const receipt = agentReceiptSchema.parse({ schemaVersion: 1, receiptId: `fixture-receipt-${id}`, taskId: `spawn-${childRequest.child!.agentId}`,
       role: 'specialist', agentId: childRequest.child!.agentId, status: control === 'failed-child-receipt' ? 'failed' : 'completed',
       runOutcome: control === 'failed-child-receipt' ? { termination: 'failed', cause: { code: 'fixture-child-failure', message: 'Schema-valid child failure' } } : { termination: 'completed' },
@@ -201,7 +230,8 @@ export async function runSupervisionSdkControl(branch: SupervisionBranch, contro
     if (observed && !observed.ok) throw new Error(observed.cause)
     // The explicit spawn seam uses the supervisor's injected scope driver,
     // which owns these synthetic stream EOF and exit promises without OS credit.
-    return { pid: boundary.syntheticPid, stdout: stream(JSON.stringify(receipt) + '\n'), stderr: stream(''), exited: Promise.resolve(0), kill() {} }
+    const exited = probeChildBridge(attempt).then(() => 0)
+    return { pid: boundary.syntheticPid, stdout: stream(JSON.stringify(receipt) + '\n'), stderr: stream(''), exited, kill() {} }
   }
   const forbid = () => { networkCalls++; throw new Error('Provider/network calls forbidden in supervision control') }
   const networkSpy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async () => forbid(), { preconnect: forbid }))

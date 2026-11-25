@@ -304,7 +304,14 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
           reuse: 'exact-host-scope-lifetime-owner', restartPolicy: { kind: 'explicit-host-startup', maxAttempts: 2 } })
         if (!resource.ok) return resource
         let holder = resourceHolders.get(resource.value)
-        if (!holder) { holder = { resource: resource.value, target, trustedStartup: origin.value !== 'client', key: randomUUID() }; resourceHolders.set(resource.value, holder) }
+        if (!holder) {
+          const capturedTarget = Object.freeze({
+            ...target,
+            profile: Object.freeze({ ...target.profile, required: Object.freeze([...target.profile.required]) }),
+          })
+          holder = { resource: resource.value, target: capturedTarget, trustedStartup: origin.value !== 'client', key: randomUUID() }
+          resourceHolders.set(resource.value, holder)
+        }
         return ok(holder)
       }
       function startup(holder: Holder, action: ActionExecutionPort): Result<ResourceRequestPort> {
@@ -318,7 +325,7 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
         const budget = execution.deriveBudget({ parent: initial.value.budget, memoKey: `resource-startup:${holder.key}`, limit: { kind: 'finite', durationMs: 15_000 } })
         if (!budget.ok) return budget
         // Waiting request cancellation releases its lease, not this bounded startup request.
-        const context = contextFor(owner, budget.value, undefined, inheritedBounds?.profile ?? profile, 'assistant', inheritedBounds)
+        const context = contextFor(owner, budget.value, undefined, holder.target.profile, holder.target.mode, inheritedBounds)
         if (!context.ok) return context
         const requested = context.value.execution.requestResource(holder.resource)
         if (!requested.ok) return requested
@@ -335,7 +342,7 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
         if (!resource.ok) return resource
         const budget = execution.deriveBudget({ parent: maintenance.value.budget, memoKey: 'startup', limit: { kind: 'finite', durationMs: 15_000 } })
         if (!budget.ok) return budget
-        const context = contextFor(owner, budget.value, undefined, inheritedBounds?.profile ?? profile, 'assistant', inheritedBounds)
+        const context = contextFor(owner, budget.value, undefined, holder.target.profile, holder.target.mode, inheritedBounds)
         if (!context.ok) return context
         const requested = context.value.execution.requestResource(resource.value)
         if (!requested.ok) return requested

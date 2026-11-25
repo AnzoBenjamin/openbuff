@@ -132,9 +132,9 @@ describeUnix('serveAcpOverSocket (SEC-4 unix socket transport)', () => {
     expect(initialized.agentCapabilities).toEqual({
       loadSession: true,
       promptCapabilities: {
-        image: false,
+        image: true,
         audio: false,
-        embeddedContext: false,
+        embeddedContext: true,
       },
       mcpCapabilities: { http: true, sse: true },
     })

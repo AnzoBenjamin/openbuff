@@ -7,6 +7,7 @@ import path from 'node:path'
 import { captureRootDeadline } from '@codebuff/common/util/execution-context'
 import { parseProcStat, readLinuxProcessIdentity } from '@codebuff/common/util/linux-process-scope'
 import { captureNodeTarget, dispatchNodeLaunch } from '../services/execution-launch'
+import { bindNodeLaunchClock } from '../services/node-scope-clock'
 import { createRealExecutionProcessRecorder, createTerminalExecutionFixture, executionValue } from './fixtures/b19-terminal-execution'
 
 import type { Limit, ResourceHandle } from '@codebuff/common/types/contracts/execution-context'
@@ -108,6 +109,7 @@ async function withRealLaunch(name: string, run: (control: {
     }))
     const lease = executionValue(host.authority.acquireLease({ owner: sender.owner, resource, request: sender.request }))
     const launch = executionValue(host.authority.prepareLaunch({ budget: sender.budget, request: sender.request, resource, lease }))
+    bindNodeLaunchClock(launch, host.clock)
     const permit = executionValue(await launch.admit()).permit
     dispatch = executionValue(dispatchNodeLaunch({ launch, permit }, input => recorder.spawn(input.executable, input.argv, {
       cwd: input.cwd, env: input.env, signal: input.resourceSignal,

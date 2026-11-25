@@ -55,7 +55,9 @@ describe('B19 sdk.supervision actual OpenbuffClient.run producer', () => {
           for (const attempt of f.attempts) {
             expect(attempt.mode).toBe(0o700)
             expect(attempt.requestMode).toBe(0o600)
-            expect(JSON.stringify(attempt.bridgeReply)).toContain('captured SDK parent bridge')
+            const launched = f.boundaries.some(boundary => boundary.cwd === attempt.cwd && boundary.syntheticPid !== undefined)
+            if (launched) expect(JSON.stringify(attempt.bridgeReply)).toContain('captured SDK parent bridge')
+            else expect(attempt.bridgeReply).toBeUndefined()
             expect(attempt.request.executionIdentity).toEqual(f.attempts[0]!.request.executionIdentity)
             expect(attempt.request.ancestorRunIds).toEqual(f.attempts[0]!.request.ancestorRunIds)
           }

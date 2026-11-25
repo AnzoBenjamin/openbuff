@@ -167,6 +167,8 @@ export function createDiagnosticCommandRunner(params: {
       let settled = false
       let stopRefusal: Refusal | undefined
       let cancelTimer: (() => void) | undefined
+      let observedStart = false
+      void node.started.then(start => { observedStart = start.ok })
       const finish = (result: DiagnosticRunResult, cleanup?: CleanupResult, joinedStop = false) => {
         if (settled || (stopRefusal && !joinedStop)) return
         settled = true
@@ -183,7 +185,8 @@ export function createDiagnosticCommandRunner(params: {
           ...(errorMessage ? { errorMessage } : {}),
           stdout: result.stdout ?? stdoutCapture.text(),
           stderr: result.stderr ?? stderrCapture.text(),
-          outputTruncated: stdoutCapture.truncated || stderrCapture.truncated || !cleanup?.output.complete,
+          outputTruncated: stdoutCapture.truncated || stderrCapture.truncated ||
+            ((observedStart || node.observation().ok) && !cleanup?.output.complete),
         })
       }
       const stop = (refusal: Refusal) => {

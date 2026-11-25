@@ -309,15 +309,16 @@ function assertHappyCapture(fixture: TerminalBranchFixtureR3, result: unknown, i
     if (privateExpiry !== null && resourceExpiry !== null) expect(resourceExpiry).toBeLessThanOrEqual(privateExpiry)
     if (fixture.testCase.rootUnbounded && fixture.testCase.branchId.startsWith('hook.configured.')) {
       expect(registered.initialDeadline.kind).toBe('unbounded')
-      if (fixture.testCase.hookTimeout === -1) {
+      if (fixture.testCase.hookTimeout === undefined || fixture.testCase.hookTimeout === -1) {
         expect(input.facts.deadlines.requestAdmission.kind).toBe('unbounded')
         expect(input.facts.deadlines.resourceLifetime.kind).toBe('unbounded')
       } else {
         expect(resourceExpiry).not.toBeNull()
         const observedAt = fixture.policyObservedAtMs.get(input.facts.launchId)
         if (observedAt === undefined || resourceExpiry === null) throw new Error('Configured hook deadline lacks a private clock observation')
-        expect(resourceExpiry - observedAt).toBeGreaterThan(295_000)
-        expect(resourceExpiry - observedAt).toBeLessThanOrEqual(300_000)
+        const capMs = fixture.testCase.hookTimeout * 1_000
+        expect(resourceExpiry - observedAt).toBeGreaterThan(capMs - 5_000)
+        expect(resourceExpiry - observedAt).toBeLessThanOrEqual(capMs)
       }
     }
     if (fixture.testCase.phase) expect(input.target.adapterOptions.phase).toBe(fixture.testCase.phase)

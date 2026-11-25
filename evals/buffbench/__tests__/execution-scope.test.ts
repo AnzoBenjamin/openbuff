@@ -301,7 +301,8 @@ describe.skipIf(process.platform !== 'linux')(
       const { captured, processCleanup, receipt } = await runControl(
         'early-leader',
         {
-          finite: true,
+          // The caller abort triggers this case after both processes are ready.
+          durationMs: 5_000,
           abortAfterReady: true,
           variant: 'redirected',
         },

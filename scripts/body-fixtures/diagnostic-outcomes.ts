@@ -42,6 +42,8 @@ export async function runDiagnosticOutcomeFixtures() {
   const root = await mkdtemp(path.join(tmpdir(), 'openbuff-b36-'))
   const stateDir = path.join(root, 'state')
   const configPath = path.join(root, 'config.json')
+  const git = Bun.which('git')
+  if (!git) throw new Error('Diagnostic outcome fixtures require Git')
   await mkdir(stateDir)
   // An explicit fixture config excludes user hooks and provider configuration.
   await writeFile(
@@ -60,10 +62,12 @@ export async function runDiagnosticOutcomeFixtures() {
       const commandResults: Record<string, unknown>[] = []
       let launches = 0
       const cancel = new AbortController()
+      const hostLifetime = new AbortController()
       let cancellationTimer: ReturnType<typeof setTimeout> | undefined
       const bin = path.join(root, name, 'bin')
       await mkdir(bin, { recursive: true })
       await symlink('/bin/bash', path.join(bin, 'bash'))
+      await symlink(git, path.join(bin, 'git'))
       const countPath = path.join(bin, 'launch-count')
       let code = 'process.exit(0)'
       if (name === 'timeout' || name === 'cancelled')
@@ -134,7 +138,7 @@ process.exit(message.message.level === 'error' ? 101 : 0);
         return child
       }
       const captured = createDirectHostExecution({
-        cwd: root, spawn, signal: cancel.signal, approvalMode: 'allow-all',
+        cwd: root, spawn, signal: hostLifetime.signal, approvalMode: 'allow-all',
         profile: { policy: 'full-access', preferredBackend: 'portable-ts',
           required: ['exact-env'], allowBackendFallback: false },
         hostConfiguration: {
@@ -250,7 +254,7 @@ process.exit(message.message.level === 'error' ? 101 : 0);
           if (child.exitCode === null && child.signalCode === null)
             child.kill('SIGKILL')
         await Promise.all(closed)
-        cancel.abort(new Error('Diagnostic fixture host disposed'))
+        hostLifetime.abort(new Error('Diagnostic fixture host disposed'))
       }
     }
   } finally {

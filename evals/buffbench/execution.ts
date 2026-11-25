@@ -10,6 +10,11 @@ import type {
 import { createNodeProcessScope } from '@codebuff/common/util/node-process-scope'
 import { isExecutionDeadlineSignal } from '@codebuff/common/util/execution-context'
 import { createDirectHostExecution } from '../../sdk/src/host-execution'
+import {
+  inheritNodeScopeClock,
+  nodeLaunchClock,
+  registerNodeLaunchClock,
+} from '../../sdk/src/services/node-scope-clock'
 
 const captureLimitBytes = 10 * 1024 * 1024
 const childScopes = new WeakMap<ChildProcess, OwnedProcessScope>()
@@ -280,6 +285,7 @@ export async function prepareEvaluationCommand(
     },
   })
   if (!prepared.ok) throw refusal(prepared)
+  registerNodeLaunchClock(execution.execution, prepared.value)
   const admitted = await prepared.value.admit()
   if (!admitted.ok) throw refusal(admitted)
   return (onResourceSignal) => {
@@ -303,6 +309,7 @@ export async function prepareEvaluationCommand(
           {
             detached: input.adapterOptions.detached === true,
             signal: input.resourceSignal,
+            clock: nodeLaunchClock(prepared.value, input.deadlines.resourceLifetime),
             originalDeadline: input.deadlines.resourceLifetime,
             launchFacts: () => prepared.value.facts(),
             onStop: () => { observer.cleanupCommitted() },
@@ -591,6 +598,7 @@ export function deriveEvaluationExecution(
         : { kind: 'finite', durationMs },
   })
   if (!derived.ok) throw refusal(derived)
+  inheritNodeScopeClock(context.execution, derived.value)
   return {
     ...context,
     execution: derived.value,

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { registerInjectedNodeScopeDriver } from '@codebuff/common/util/node-process-scope'
 
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import type { LaunchFacts } from '@codebuff/common/types/contracts/execution-context'
@@ -87,11 +88,45 @@ export function createBranchProcessRecorderR3(options: {
         call.closed = true
         child.exitCode = signal ? null : exitCode
         child.signalCode = signal ?? null
+        stdout.emit('end')
+        stderr.emit('end')
         child.emit('exit', child.exitCode, child.signalCode)
         child.emit('close', child.exitCode, child.signalCode)
       },
     }
     calls.push(call)
+    const leader = new Promise<'exited-reaped'>(resolve => {
+      child.once('exit', () => resolve('exited-reaped'))
+    })
+    const drained = { stdin: 'closed', stdout: 'drained', stderr: 'drained' } as const
+    const nodeChild = child as unknown as ChildProcess
+    // Synthetic PIDs have no /proc membership. Report only the fixture's
+    // observed exit and stream events through the injected process driver.
+    registerInjectedNodeScopeDriver(nodeChild, {
+      leaderExited: leader,
+      streamsFinished: leader.then(() => drained),
+      async observe() {
+        return {
+          sampledAtMs: performance.now(),
+          clockDomainId: 'injected-terminal-branch',
+          leader: call.closed ? 'exited-reaped' : 'running',
+          scopePresence: call.closed ? 'absent' : 'living',
+          members: [],
+          membershipComplete: true,
+          identity: 'verified',
+          streams: call.closed ? drained : { stdin: 'closed', stdout: 'open', stderr: 'open' },
+        }
+      },
+      async signal(signal) {
+        return {
+          signal,
+          atMs: performance.now(),
+          targetTier: 'injected',
+          result: call.closed ? 'already-absent' : child.kill(signal) ? 'delivered' : 'unknown',
+        }
+      },
+      closeInput() {},
+    })
     queueMicrotask(() => {
       if (call.closed) return
       child.emit('spawn')
@@ -101,7 +136,7 @@ export function createBranchProcessRecorderR3(options: {
       if (facts.branchId === options.keepOpenBranch) return
       call.finish(reply.exitCode ?? 0)
     })
-    return child as unknown as ChildProcess
+    return nodeChild
   }
   function close() {
     for (const call of calls) if (!call.closed) call.finish(undefined, 'SIGKILL')

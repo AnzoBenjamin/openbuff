@@ -309,10 +309,8 @@ describe('P2-T2b background-agent resume-from-own-journal', () => {
         resumedFromJournal: true,
       })
 
-      // Idempotent re-planning, phase 1: the child tail is STILL llm_response
-      // (non-terminal), so respawnMarkerIsSettled is false and the planner
-      // keeps re-planning the respawn — the pre-existing planner contract,
-      // unchanged by this slice.
+      // The replay boundary is not terminal, so the planner can still
+      // re-drive a child interrupted before its first fresh model request.
       const before = planBackgroundAgentResume({
         intents: [interruptedIntent],
         reader: journal,

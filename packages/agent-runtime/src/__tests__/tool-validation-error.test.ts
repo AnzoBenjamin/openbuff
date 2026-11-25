@@ -5688,6 +5688,7 @@ describe('executeToolCall queued → running transition', () => {
 
   it('flags the tool_call as queued and emits tool_start only after the barrier resolves', async () => {
     const chunks: unknown[] = []
+    const callPublished = Promise.withResolvers<void>()
     let resolveBarrier!: () => void
     const previousToolCallFinished = new Promise<void>((resolve) => {
       resolveBarrier = resolve
@@ -5697,12 +5698,15 @@ describe('executeToolCall queued → running transition', () => {
       buildQueuedParams({
         queued: true,
         previousToolCallFinished,
-        onResponseChunk: (chunk) => chunks.push(chunk),
+        onResponseChunk: (chunk) => {
+          chunks.push(chunk)
+          if ((chunk as { type?: string }).type === 'tool_call')
+            callPublished.resolve()
+        },
       }),
     )
-    promise.catch(() => {})
-
-    // The tool_call is published synchronously and carries the queued flag...
+    // Preflight can await before publishing the queued call.
+    await Promise.race([callPublished.promise, promise])
     expect(chunks).toContainEqual(
       expect.objectContaining({
         type: 'tool_call',
@@ -5746,6 +5750,7 @@ describe('executeToolCall queued → running transition', () => {
 
   it('does not emit a tool_start transition for a non-queued call', async () => {
     const chunks: unknown[] = []
+    const callPublished = Promise.withResolvers<void>()
     let resolveBarrier!: () => void
     const previousToolCallFinished = new Promise<void>((resolve) => {
       resolveBarrier = resolve
@@ -5754,10 +5759,14 @@ describe('executeToolCall queued → running transition', () => {
     const promise = executeToolCall(
       buildQueuedParams({
         previousToolCallFinished,
-        onResponseChunk: (chunk) => chunks.push(chunk),
+        onResponseChunk: (chunk) => {
+          chunks.push(chunk)
+          if ((chunk as { type?: string }).type === 'tool_call')
+            callPublished.resolve()
+        },
       }),
     )
-    promise.catch(() => {})
+    await Promise.race([callPublished.promise, promise])
 
     // A non-queued tool_call carries no queued flag...
     const toolCall = chunks.find(

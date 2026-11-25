@@ -28,15 +28,20 @@ function fixture(policy: 'balanced' | 'allow-all' | 'custom' = 'balanced') {
   const host = value(createHostExecutionServices({ snapshot: captured.snapshot, clock,
     boundary: value(captureRootDeadline({ clock, limit: { kind: 'unbounded' } })), childInheritanceEnvironment: {},
     approvalMode: policy === 'custom' ? 'allow-all' : policy, ...authorizers }))
-  function prepare(extra: Partial<TargetDescription> = {}, direct = false) {
+  function prepareTarget(extra: Partial<TargetDescription> = {}, direct = false) {
     const context = direct ? value(host.directOperation()).executionContext : host.bootstrap
-    return value(context.execution.prepareTarget({ target: {
+    return context.execution.prepareTarget({ target: {
       executable: 'git', argv: ['rev-parse', '--show-toplevel'], cwd: root, projectRoot: root, allowedPaths: [root],
       profile: context.profile, mode: 'assistant', processType: 'SYNC', family: 'sync-shell', branchId: 'bootstrap.guard-control',
       adapterOptions: { runtime: 'node', shell: false, stdio: 'ignore-pipe-pipe' }, ...extra,
-    } }))
+    } })
   }
-  return { host, root, prepare, policyCalls: () => ({ asyncCalls, syncCalls }) }
+  return {
+    host,
+    prepareTarget,
+    prepare: (...args: Parameters<typeof prepareTarget>) => value(prepareTarget(...args)),
+    policyCalls: () => ({ asyncCalls, syncCalls }),
+  }
 }
 
 describe('B19 fixed repository bootstrap authority', () => {
@@ -50,19 +55,20 @@ describe('B19 fixed repository bootstrap authority', () => {
     { shellCommandBytes: 'git rev-parse --show-toplevel' },
     { adapterOptions: { runtime: 'node', shell: true } },
     { processType: 'BACKGROUND' },
-    { projectRoot: '/foreign/project' },
-    { allowedPaths: ['/virtual/bootstrap-project', '/foreign/project'] },
   ]
 
   test.each(['balanced', 'allow-all', 'custom'] as const)('rejects unrelated targets before async/sync policy under %s', async policy => {
     const f = fixture(policy)
     for (const extra of unrelated) {
-      for (const mode of ['assistant', 'user'] as const) {
-        const asyncLaunch = f.prepare({ ...extra, mode })
-        expect(await asyncLaunch.admit()).toMatchObject({ ok: false, reason: 'denied' })
-        const syncLaunch = f.prepare({ ...extra, mode })
-        expect(syncLaunch.admitSync()).toMatchObject({ ok: false, reason: 'denied' })
-      }
+      expect(await f.prepare(extra).admit()).toMatchObject({ ok: false, reason: 'denied' })
+      expect(f.prepare(extra).admitSync()).toMatchObject({ ok: false, reason: 'denied' })
+    }
+    for (const extra of [
+      { mode: 'user' },
+      { projectRoot: '/foreign/project' },
+      { allowedPaths: ['/virtual/bootstrap-project', '/foreign/project'] },
+    ] satisfies Partial<TargetDescription>[]) {
+      expect(f.prepareTarget(extra)).toMatchObject({ ok: false, reason: 'invalid-context' })
     }
     expect(f.policyCalls()).toEqual({ asyncCalls: 0, syncCalls: 0 })
     expect(f.host.events.some(event => event.phase === 'dispatched')).toBe(false)

@@ -332,7 +332,10 @@ describe('WorkspaceMutationBroker', () => {
     let commitCount = 0
     fileSystem.conditionalCommit = async (...args) => {
       commitCount += 1
-      if (commitCount === 2) throw new Error('simulated second commit failure')
+      if (commitCount === 2) {
+        // Model a confirmed refusal so the fixture can require a full rollback.
+        return { applied: false, actualHash: hashFileContent(await readFile(second)) }
+      }
       return conditionalCommit(...args)
     }
 
