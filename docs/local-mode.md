@@ -506,6 +506,19 @@ shared spending reservation implied by this telemetry.
 Provider readiness uses the same route/credential checker and messages
 as the TUI, including explicit model selection.
 
+## Local usage observations
+
+`/usage` reports the current conversation's observed request events from this
+CLI process, including descendant run/model attribution, input/output/cache-read
+token counts, known fractional-cost subtotals, unknown-cost reasons and the last
+prompt-build context snapshot. It runs locally without contacting a provider.
+Missing counts remain incomplete, subscription usage is separate, and cache-write
+tokens are explicitly not reported yet. The store retains 100 detail rows and
+shows the newest 20; cumulative observed totals and omitted-row counts remain.
+Only eight recent process-local conversations are retained. Restored sessions and
+provider failures with no usage event are not reconstructed, and this is neither
+a provider invoice nor a durable spending-limit authority.
+
 ## Local semantic search
 
 Vector search ranks files by the similarity of their embedding vectors to a

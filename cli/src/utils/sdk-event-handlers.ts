@@ -1,3 +1,5 @@
+import { useChatStore } from '../state/chat-store'
+import { recordUsageObservation } from './usage-observations'
 import { match } from 'ts-pattern'
 import {
   runFailureMessage,
@@ -2424,8 +2426,10 @@ export const createStreamChunkHandler =
   }
 
 export const createEventHandler =
-  (state: EventHandlerState) => (event: SDKEvent) => {
-    return match(event)
+  (state: EventHandlerState) => {
+    const usageSessionId = useChatStore.getState().chatSessionId
+    return (event: SDKEvent) => match(event)
+      .with({ type: 'usage' }, event => recordUsageObservation(usageSessionId, state.message.aiMessageId, event))
       .with({ type: 'subagent_start' }, (e) => handleSubagentStart(state, e))
       .with({ type: 'subagent_finish' }, (e) => handleSubagentFinish(state, e))
       .with({ type: 'tool_call' }, (e) => handleToolCall(state, e))

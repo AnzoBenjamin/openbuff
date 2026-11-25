@@ -7,6 +7,10 @@
 - `impl/cost-accounting.ts` retains fractional USD cents and returns unknown for malformed/incomplete counts, impossible cache totals, positive unpriced components and unsupported currency. `impl/llm.ts` computes configured token costs independently of outbound metadata stripping, preserves explicit provider zero, distinguishes subscription telemetry and emits per-request cost status/reason. Built-in price lookup, cache-write cost handling and full durable strict spending admission remain separate work.
 - Actual source-SDK/SQLite/fresh-process B13 fixtures recover 30 original 32 KiB results through bounded recall without rerunning producer tools. B14 actual-request/read fixtures distinguish unchanged, unrelated, required-refresh and changed-after-emission cases. These local proofs and scoped accounting review do not renew missing historical acceptance receipts; see the existing body checkpoint.
 
+## Usage model attribution
+
+- Streaming `usage.model` names the captured effective provider/model route (`attemptModel`), not only the adapter's bare model ID. This keeps identically named models at different configured providers distinguishable in CLI `/usage` observations without changing routing or retry ownership.
+
 ## Current captured run and memory boundaries
 
 - `run({ model, outputSchema })` captures root-only per-run overrides before asynchronous setup; configured failover still applies, and later turns do not inherit either override. JSON Schema is bounded object-root draft-7 with unsupported actual references refused; final output must be freshly validated rather than reusing previous output.

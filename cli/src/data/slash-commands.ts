@@ -46,6 +46,11 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     aliases: ['ctx'],
   },
   {
+    id: 'usage',
+    label: 'usage',
+    description: 'Inspect observed session tokens, cache reads, known costs and unknown coverage',
+  },
+  {
     id: 'compact',
     label: 'compact',
     description:

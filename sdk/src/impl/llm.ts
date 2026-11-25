@@ -1981,7 +1981,7 @@ export async function* promptAiSdkStream(
                   type: 'usage',
                   runId: params.runId,
                   agentId: params.agentId,
-                  model: typeof aiSDKModel === 'string' ? aiSDKModel : aiSDKModel.modelId,
+                  model: attemptModel,
                   inputTokens,
                   outputTokens,
                   cachedInputTokens: tokenCount(usageResult?.cachedInputTokens),

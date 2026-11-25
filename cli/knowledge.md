@@ -7,6 +7,11 @@
 - The Memory V2 SQLite schema is 7. `context-archive-original-store.ts` stores verified original text once, publishes checked snapshot references transactionally and enforces host-captured rolling 32 MiB/30-day/500-snapshot policy. Pins protect their body closure; quota/expiry cutoffs prevent old-envelope resurrection, including current-run expiry. SQLite/WAL allocation is reported separately from logical bytes; incompatible older writers refuse the schema.
 - `/memory playbooks --apply` verification preserves enabled procedure loading/gating after SQLite reopen. B14's actual gate/operator fixtures measure outcomes rather than seeding success counters; inject-only rendering does not invent firings. Local/source verification is distinct from the still-blocked formal acceptance ledger.
 
+## Local usage event inspection
+
+- `/usage` is a local, discoverable command. `usage-observations.ts` captures actual SDK usage events by the handler's original chat-session identity, preserving descendant run/model attribution and fractional cost. Late events from a replaced conversation cannot charge the new conversation.
+- Reports distinguish known token/cost subtotals, missing counts, unknown reasons and subscription usage. Detail retention is 100 rows per session, newest 20 shown, with cumulative counts and explicit row omissions; only eight recent process-local sessions remain. Aggregate overflow stays explicit and finite. This view does not reconstruct saved history, provider invoices or failed requests without events; cache-write pricing and durable spending admission remain separate work.
+
 ## Current local execution and maintenance boundaries
 
 - Headless `run` accepts stdin or `-p`, per-run `--model`, validated `--output-schema` and private project-scoped `--continue [id]`. Continuation starts a new turn and disables the legacy interrupted-effect reader; it is not uncertain-tool replay. Provider readiness uses the TUI checker before journal admission. See [local mode](../docs/local-mode.md).

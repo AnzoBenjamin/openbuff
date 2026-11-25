@@ -6,6 +6,7 @@ import { clearDegradedProviderRoutes } from '@openbuff/sdk'
 
 import { registerPlanTimelineCommand } from './plan-timeline'
 import { SLASH_COMMANDS } from '../data/slash-commands'
+import { handleUsageCommand } from './usage'
 import { handleContextCommand } from './context'
 import { formatQueuedMessageForHistory } from '../hooks/helpers/send-message'
 import { handleIndexCommandBlocks } from './index-command'
@@ -1143,6 +1144,15 @@ const ALL_COMMANDS: CommandDefinition[] = [
           ),
         ])
       }
+      params.saveToHistory(params.inputValue.trim())
+      clearInput(params)
+    },
+  }),
+  defineCommand({
+    name: 'usage',
+    handler: params => {
+      const { postUserMessage } = handleUsageCommand()
+      params.setMessages(previous => postUserMessage(previous))
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
     },
