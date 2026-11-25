@@ -12,6 +12,7 @@ import {
 import { getProjectRoot } from './project-files'
 import { getSystemProcessEnv } from './utils/env'
 import { getCodebuffClient } from './utils/codebuff-client'
+import { AGENT_MODE_TO_ID } from './utils/constants'
 import { resolveTrustedRootsPath } from './utils/trusted-roots'
 
 import type { ServeBridgeClient } from '@openbuff/sdk'
@@ -152,6 +153,7 @@ export async function runAcpServeCommand(
   // deps.projectRoot so tests never call getProjectRoot(). Resolved lazily
   // here (after initializeApp has run in index.tsx), never at module load.
   const projectRoot = deps?.projectRoot ?? getProjectRoot()
+  const agentId = args.agentId ?? AGENT_MODE_TO_ID.DEFAULT
   const journalDir =
     deps?.journalDir ?? path.join(projectRoot, '.openbuff', 'acp-journal')
 
@@ -180,7 +182,7 @@ export async function runAcpServeCommand(
       client,
       sessionData,
       transport: { kind: 'stdio' },
-      agentId: args.agentId,
+      agentId,
       signal: deps?.signal,
       // NEW-3 (§12.8): hand the credential-allowlisted env to runServe so
       // the SDK collects the configured credential VALUES for the streaming
@@ -203,7 +205,7 @@ export async function runAcpServeCommand(
     client,
     sessionData,
     transport: { kind: 'socket', socketPath: args.socketPath, token },
-    agentId: args.agentId,
+    agentId,
     signal: deps?.signal,
     // NEW-3 (§12.8): same credential-allowlisted collection for the socket
     // transport.

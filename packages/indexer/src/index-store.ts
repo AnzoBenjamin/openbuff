@@ -91,6 +91,23 @@ export function getIndexDir(
   return path.join(projectRoot, sanitizeIndexCacheDir(cacheDir))
 }
 
+export async function hasNormalizedIndex(
+  projectRoot: string,
+  cacheDir = DEFAULT_CACHE_DIR,
+): Promise<boolean> {
+  try {
+    await fs.promises.access(
+      path.join(
+        getIndexDir(projectRoot, cacheDir),
+        '.openbuff-normalized-index',
+      ),
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Dedupes loadIndex's oversized-skip warning: index-manager calls loadIndex
  * twice per build cycle (initial load + post-save verification), so an
@@ -120,11 +137,35 @@ export function getIndexPublicationToken(
   return publicationTokens.get(index)
 }
 
+/** Attach the exact backend generation version, distinct from source identity. */
+export function setIndexPublicationToken(
+  index: MetadataIndex,
+  token: string,
+): void {
+  publicationTokens.set(index, token)
+}
+
 function publicationToken(content: string | Uint8Array): string {
   return createHash('sha256').update(content).digest('hex')
 }
 
 export async function loadIndex(
+  projectRoot: string,
+  cacheDir = '.codebuff-index',
+  options?: { expectedSnapshotId?: string },
+): Promise<MetadataIndex | null> {
+  if (await hasNormalizedIndex(projectRoot, cacheDir)) {
+    const { loadIndexGeneration } = await import('./durable-index-store')
+    return loadIndexGeneration(projectRoot, cacheDir, {
+      ...options,
+      migrateLegacy: false,
+    })
+  }
+  return loadLegacyIndex(projectRoot, cacheDir, options)
+}
+
+/** Read-only, size-bounded importer for the previous metadata.json format. */
+export async function loadLegacyIndex(
   projectRoot: string,
   cacheDir = '.codebuff-index',
   options?: { expectedSnapshotId?: string },
@@ -190,6 +231,22 @@ export async function loadIndex(
 }
 
 export async function saveIndex(
+  index: MetadataIndex,
+  projectRoot: string,
+  cacheDir = '.codebuff-index',
+  options: {
+    expectedBuiltAt?: number | null
+    expectedSnapshotId?: string | null
+    expectedPublicationToken?: string | null
+    onVerifiedWrite?: (verified: boolean) => void
+  } = {},
+): Promise<boolean> {
+  const { saveIndexGeneration } = await import('./durable-index-store')
+  return saveIndexGeneration(index, projectRoot, cacheDir, options)
+}
+
+/** Legacy writer retained for callers managing existing JSON artifacts. */
+export async function saveLegacyIndex(
   index: MetadataIndex,
   projectRoot: string,
   cacheDir = '.codebuff-index',
@@ -563,9 +620,26 @@ export async function saveSemanticVectors(
   })
 }
 
-async function assertCacheOwnership(dir: string): Promise<void> {
+export async function assertCacheOwnership(dir: string): Promise<void> {
   try {
+    const directoryStat = await fs.promises.lstat(dir)
+    if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+      throw new Error(`Refusing to use non-owned index cache directory: ${dir}`)
+    }
     const entries = await fs.promises.readdir(dir)
+    if (entries.includes(OWNER_FILE)) {
+      const ownerPath = path.join(dir, OWNER_FILE)
+      const ownerStat = await fs.promises.lstat(ownerPath)
+      if (
+        !ownerStat.isFile() ||
+        ownerStat.isSymbolicLink() ||
+        (await fs.promises.readFile(ownerPath, 'utf8')) !== 'openbuff-index\n'
+      ) {
+        throw new Error(
+          `Refusing to use non-owned index cache directory: ${dir}`,
+        )
+      }
+    }
     const legacyOwned = entries.every(
       (entry) =>
         entry === INDEX_FILE ||
@@ -592,7 +666,7 @@ async function assertCacheOwnership(dir: string): Promise<void> {
   }
 }
 
-async function writeOwnerFile(dir: string): Promise<void> {
+export async function writeOwnerFile(dir: string): Promise<void> {
   await fs.promises
     .writeFile(path.join(dir, OWNER_FILE), 'openbuff-index\n', { flag: 'wx' })
     .catch((error: NodeJS.ErrnoException) => {
@@ -695,8 +769,11 @@ function isValidVector(value: unknown): value is number[] {
 }
 
 export function computeIndexSnapshotId(index: MetadataIndex): string {
+  const scopeIdentity = index.repositoryId
+    ? `${index.repositoryId}\0${index.worktreeId ?? ''}`
+    : index.projectRoot
   const hash = createHash('sha256').update(
-    `${index.version}\0${index.projectRoot}\0${index.workspaceRevision ?? 'unknown'}\0`,
+    `${index.version}\0${scopeIdentity}\0${index.workspaceRevision ?? 'unknown'}\0`,
   )
   for (const filePath of Object.keys(index.files).sort()) {
     hash.update(filePath).update('\0').update(index.files[filePath]!.hash)
@@ -839,6 +916,10 @@ export async function loadChunkSidecar(
   projectRoot: string,
   cacheDir = DEFAULT_CACHE_DIR,
 ): Promise<ChunkSidecar | null> {
+  if (await hasNormalizedIndex(projectRoot, cacheDir)) {
+    const index = await loadIndex(projectRoot, cacheDir)
+    return index ? buildChunkSidecarDocument(index) : null
+  }
   const sidecarPath = path.join(getIndexDir(projectRoot, cacheDir), CHUNKS_FILE)
   try {
     // Stat-first byte cap (MAX_CHUNK_SIDECAR_BYTES): refuse to read+parse an
@@ -1028,7 +1109,7 @@ export class IndexCacheLockRecoveryError extends Error {
   }
 }
 
-async function withCacheLock<T>(
+export async function withCacheLock<T>(
   dir: string,
   operation: () => Promise<T>,
 ): Promise<T> {

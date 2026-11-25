@@ -19,7 +19,10 @@
  */
 import { describe, expect, it } from 'bun:test'
 
-import { MemoryPlaybookSchema } from '@codebuff/common/types/memory-playbook'
+import {
+  MemoryPlaybookSchema,
+  computeValidationDependencyFingerprint,
+} from '@codebuff/common/types/memory-playbook'
 import { jsonToolResult } from '@codebuff/common/util/messages'
 
 import { createSessionEvidenceLog } from '../../memory/session-evidence-log'
@@ -30,7 +33,10 @@ import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type {
   MemoryPlaybook,
   PlaybookGateOutcomeEvent,
+  ValidationEvidenceContext,
+  ValidationReceipt,
 } from '@codebuff/common/types/memory-playbook'
+import type { ExecutionActor } from '@codebuff/common/types/contracts/client'
 
 const logger: Logger = {
   debug: () => undefined,
@@ -97,6 +103,44 @@ const ciSuccessOutput = () =>
     output: 'all checks passed',
   })
 
+const validationPlaybook = MemoryPlaybookSchema.parse({
+  ...ciPlaybook,
+  trigger: {
+    ...ciPlaybook.trigger,
+    requireEvidence: [
+      {
+        kind: 'validationSucceeded',
+        validationKinds: ['ci-local', 'package-checks'],
+        withinMs: 10_000,
+      },
+    ],
+  },
+})
+const receiptDependencies = {
+  'source:file.ts': 'hash-1',
+  'config:package.json': 'hash-2',
+}
+const validationReceipt: ValidationReceipt = {
+  receiptId: 'receipt-seam',
+  workspaceId: 'ws-1',
+  rootRunId: 'root-seam',
+  checkKind: 'ci-local',
+  command: 'bun run check:ci-local',
+  cwd: '/tmp/playbook-gate-seam',
+  exitCode: 0,
+  completedAt: 1_000,
+  producer: { runId: 'validation-child', agentId: 'basher' },
+  dependencyHashes: receiptDependencies,
+  dependencyFingerprint:
+    computeValidationDependencyFingerprint(receiptDependencies),
+}
+const validationEvidence: ValidationEvidenceContext = {
+  workspaceId: 'ws-1',
+  rootRunId: 'root-seam',
+  receipts: [validationReceipt],
+  currentDependencyHashes: receiptDependencies,
+}
+
 const entriesOf = (agentState: Record<string, unknown>) =>
   (agentState.sessionEvidenceLog as { entries: unknown[] }).entries
 
@@ -113,6 +157,16 @@ const gateHistoryEntriesOf = (agentState: Record<string, unknown>) =>
 const dispatchGatedSpawn = async (
   agentState: Record<string, unknown>,
   overrides?: {
+    agentTemplateId?: string
+    toolName?: 'spawn_agents' | 'run_terminal_command'
+    input?: Record<string, unknown>
+    clock?: { now(): number }
+    getPlaybookValidationEvidence?: (
+      actor: ExecutionActor,
+    ) => Promise<ValidationEvidenceContext | undefined>
+    classifyPlaybookTerminalActions?: (
+      command: string,
+    ) => Promise<readonly ('git-commit' | 'git-push' | 'git-stage')[]>
     /** Gate-mode env; defaults to block mode like the original harness. */
     clientEnv?: Record<string, string | undefined>
     /** Producer-outcome stub riding the additive AgentRuntimeDeps seam. */
@@ -124,13 +178,15 @@ const dispatchGatedSpawn = async (
   const chunks: Array<Record<string, unknown>> = []
   const toolResults: unknown[] = []
   await executeToolCall({
-    toolName: 'spawn_agents',
-    input: spawnGitCommitterInput,
+    toolName: overrides?.toolName ?? 'spawn_agents',
+    input: overrides?.input ?? spawnGitCommitterInput,
+    runId: 'run-seam',
+    ancestorRunIds: ['root-seam'],
     agentState,
     agentTemplate: {
-      id: 'test-agent',
-      toolNames: ['spawn_agents'],
-      programmaticToolNames: ['spawn_agents'],
+      id: overrides?.agentTemplateId ?? 'test-agent',
+      toolNames: [overrides?.toolName ?? 'spawn_agents'],
+      programmaticToolNames: [overrides?.toolName ?? 'spawn_agents'],
       spawnableAgents: [],
     },
     logger,
@@ -138,6 +194,9 @@ const dispatchGatedSpawn = async (
     clientEnv: overrides?.clientEnv ?? { OPENBUFF_PLAYBOOK_GATE: 'block' },
     // The producer-outcome seam dep: absent (the default) reports nothing.
     onPlaybookGateOutcome: overrides?.onPlaybookGateOutcome,
+    getPlaybookValidationEvidence: overrides?.getPlaybookValidationEvidence,
+    classifyPlaybookTerminalActions: overrides?.classifyPlaybookTerminalActions,
+    clock: overrides?.clock,
     // Once the gate allows the call, post-seam dispatch dereferences
     // fileContext.projectRoot for filesystem containment; a virtual tree keeps
     // the harness free of real filesystem paths.
@@ -163,6 +222,153 @@ const dispatchGatedSpawn = async (
 }
 
 describe('executeToolCall playbook gate seam', () => {
+  it('accepts reusable host receipts only, binds lookup to the acting run and invalidates changed inputs', async () => {
+    const agentState: Record<string, unknown> = {
+      agentId: 'agent-receipts',
+      playbookContext: [validationPlaybook],
+    }
+    const clock = { now: () => 1_500 }
+    // Model-facing JSON can contain an arbitrary receipt claim. The recorder
+    // treats it only as legacy tool success; it cannot attest validation.
+    recordToolEvidence({
+      agentState,
+      toolName: 'run_terminal_command',
+      input: { command: 'echo check:ci-local' },
+      output: jsonToolResult({ output: 'passed', validationReceipt }),
+      atMs: 1_000,
+    } as any)
+    const withoutHostReceipt = await dispatchGatedSpawn(agentState, { clock })
+    expect(withoutHostReceipt.toolResults).toHaveLength(0)
+    expect(withoutHostReceipt.chunks[0]?.type).toBe('error')
+
+    const actors: ExecutionActor[] = []
+    const allowed = await dispatchGatedSpawn(agentState, {
+      clock,
+      getPlaybookValidationEvidence: async (actor) => {
+        actors.push(actor)
+        return validationEvidence
+      },
+    })
+    expect(actors).toEqual([
+      { runId: 'run-seam', rootRunId: 'root-seam', agentId: 'agent-receipts' },
+    ])
+    expect(allowed.toolResults).toHaveLength(1)
+    expect(entriesOf(agentState)).toHaveLength(2)
+    expect((entriesOf(agentState)[1] as { kind: string }).kind).toBe(
+      'validationSucceeded',
+    )
+
+    const invalidated = await dispatchGatedSpawn(agentState, {
+      clock,
+      getPlaybookValidationEvidence: async () => ({
+        ...validationEvidence,
+        currentDependencyHashes: {
+          ...receiptDependencies,
+          'source:file.ts': 'new-hash',
+        },
+      }),
+    })
+    expect(invalidated.toolResults).toHaveLength(0)
+    expect(invalidated.chunks[0]?.type).toBe('error')
+  })
+
+  it('keeps validation unsatisfied when the trusted registry is unavailable', async () => {
+    const blocked = await dispatchGatedSpawn(
+      { agentId: 'actor-unavailable', playbookContext: [validationPlaybook] },
+      {
+        getPlaybookValidationEvidence: async () => {
+          throw new Error('registry unavailable')
+        },
+      },
+    )
+    expect(blocked.toolResults).toHaveLength(0)
+    expect(blocked.chunks[0]?.type).toBe('error')
+  })
+
+  it('uses the actual editor role and path focus while keeping global and unknown-path obligations', async () => {
+    const scopedToCommitter = {
+      ...validationPlaybook,
+      scope: { repos: [], agentTypes: ['git-committer'] },
+    }
+    const excluded = await dispatchGatedSpawn(
+      {
+        agentId: 'editor-actor',
+        playbookContext: [scopedToCommitter],
+        playbookApplicability: { actorAgentType: 'git-committer' },
+      },
+      { agentTemplateId: 'editor' },
+    )
+    expect(excluded.toolResults).toHaveLength(1)
+    expect(
+      excluded.chunks.some((chunk) =>
+        String(chunk.message).includes('Playbook'),
+      ),
+    ).toBe(false)
+
+    const scopedToPaths = {
+      ...validationPlaybook,
+      scope: { repos: [], glob: ['cli/**'] },
+    }
+    const outside = await dispatchGatedSpawn(
+      {
+        agentId: 'editor-paths',
+        playbookContext: [scopedToPaths],
+        playbookApplicability: { affectedPaths: ['sdk/file.ts'] },
+      },
+      { agentTemplateId: 'editor' },
+    )
+    expect(outside.toolResults).toHaveLength(1)
+    const unknown = await dispatchGatedSpawn(
+      { agentId: 'editor-paths', playbookContext: [scopedToPaths] },
+      { agentTemplateId: 'editor' },
+    )
+    expect(unknown.toolResults).toHaveLength(0)
+    const global = await dispatchGatedSpawn(
+      {
+        agentId: 'editor-global',
+        playbookContext: [{ ...validationPlaybook, status: 'verified' }],
+      },
+      { agentTemplateId: 'editor' },
+    )
+    expect(global.toolResults).toHaveLength(0)
+  })
+
+  it('consumes canonical host terminal actions for wrapped and compound commands', async () => {
+    const push = {
+      ...validationPlaybook,
+      trigger: {
+        ...validationPlaybook.trigger,
+        tool: 'run_terminal_command',
+        terminalAction: 'git-push',
+        spawnAgentType: undefined,
+      },
+    }
+    const commands: string[] = []
+    const command = 'git status && env git -C "repo with spaces" push'
+    const blocked = await dispatchGatedSpawn(
+      { agentId: 'push-actor', playbookContext: [push] },
+      {
+        toolName: 'run_terminal_command',
+        input: { command },
+        classifyPlaybookTerminalActions: async (captured) => {
+          commands.push(captured)
+          return ['git-push']
+        },
+      },
+    )
+    expect(commands).toEqual([command])
+    expect(blocked.toolResults).toHaveLength(0)
+    const echo = await dispatchGatedSpawn(
+      { agentId: 'echo-actor', playbookContext: [push] },
+      {
+        toolName: 'run_terminal_command',
+        input: { command: 'echo git push' },
+        classifyPlaybookTerminalActions: async () => [],
+      },
+    )
+    expect(echo.toolResults).toHaveLength(1)
+  })
+
   it('refuses the gated spawn before dispatch, then allows it once the CI evidence is recorded', async () => {
     const agentState: Record<string, unknown> = {
       agentId: 'agent-1',
@@ -371,9 +577,9 @@ describe('executeToolCall playbook gate seam', () => {
 
     expect(without.chunks).toEqual(withStub.chunks)
     expect(without.toolResults).toEqual(withStub.toolResults)
-    expect(
-      without.chunks.some((chunk) => chunk.type === 'tool_call'),
-    ).toBe(false)
+    expect(without.chunks.some((chunk) => chunk.type === 'tool_call')).toBe(
+      false,
+    )
   })
 
   it('records a satisfied playbook as an allowed verdict that is invisible to dispatch and to the store', async () => {
@@ -533,9 +739,7 @@ describe('executeToolCall playbook gate seam', () => {
         outcome: 'warned',
       },
     ])
-    expect(warned.chunks.some((chunk) => chunk.type === 'tool_call')).toBe(
-      true,
-    )
+    expect(warned.chunks.some((chunk) => chunk.type === 'tool_call')).toBe(true)
 
     recordToolEvidence({
       agentState,

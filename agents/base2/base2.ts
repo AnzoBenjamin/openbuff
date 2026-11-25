@@ -250,11 +250,12 @@ export function createBase2(
     executePlan?: boolean
     noAskUser?: boolean
     progressivePromptDisclosure?: boolean
+    /** Progressive tool loading defaults on; set false to retain the full static surface. */
+    progressiveToolDisclosure?: boolean
     /**
-     * Tiers beyond CORE to expose on the static template surface. Defaults to
-     * every non-core tier; pass `[]` for a CORE-only surface. Documented
-     * public option for embedders (docs/configuration.md); every bundled
-     * definition omits it.
+     * Tiers to expose statically. Defaults to [] while progressive disclosure
+     * is enabled; with progressive disclosure explicitly disabled, omitted
+     * tiers retain the historical full-surface behavior.
      */
     unlockedTiers?: UnlockedToolTier[]
     maxReviewerRepairRounds?: number
@@ -272,7 +273,8 @@ export function createBase2(
     executePlan = false,
     noAskUser = false,
     progressivePromptDisclosure: progressivePromptDisclosureOption,
-    unlockedTiers,
+    progressiveToolDisclosure: progressiveToolDisclosureOption,
+    unlockedTiers: unlockedTiersOption,
     maxReviewerRepairRounds: maxReviewerRepairRoundsOption,
     maxRepairRounds: maxRepairRoundsOption,
     maxSpecialistRepairRounds: maxSpecialistRepairRoundsOption,
@@ -291,6 +293,9 @@ export function createBase2(
   // both describe it as a createBase2 option with no env canary.
   const progressivePromptDisclosure =
     progressivePromptDisclosureOption ?? DEFAULT_PROGRESSIVE_PROMPT_DISCLOSURE
+  const progressiveToolDisclosure = progressiveToolDisclosureOption ?? true
+  const unlockedTiers =
+    unlockedTiersOption ?? (progressiveToolDisclosure ? [] : undefined)
   // Explicit option wins over env. When omitted, resolve from
   // OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS (positive integer string).
   // Missing/invalid → null (unlimited, progress-gated). Positive int = optional cap.
@@ -420,6 +425,8 @@ export function createBase2(
   ).join('\n\n')
 
   // Model-visible surface, narrowed when the caller passes `unlockedTiers`.
+  // Internal tool_search/tool_load controls are added by the runtime only when
+  // progressive disclosure is enabled; they are not public template tool names.
   const modelToolNames = resolveModelToolNames({
     mode,
     planOnly,
@@ -427,10 +434,37 @@ export function createBase2(
     noAskUser,
     unlockedTiers,
   })
-  // Dormant runtime ceiling published as programmaticConfig.fullToolSurface
-  // below. Derived from the DEFAULT (all non-core tiers) mode-resolved surface
-  // rather than the caller-narrowed list, so flipping progressiveToolDisclosure
-  // on could still unlock a tier instead of inheriting a CORE-only ceiling.
+  let cacheControlToolBreakpoint: string | undefined
+  if (planOnly || executePlan) {
+    const planToolNames = resolveModelToolNames({
+      mode,
+      planOnly: true,
+      executePlan: false,
+      noAskUser,
+      unlockedTiers,
+    })
+    const executeToolNames = resolveModelToolNames({
+      mode,
+      planOnly: false,
+      executePlan: true,
+      noAskUser,
+      unlockedTiers,
+    })
+    let sharedPrefixLength = 0
+    while (
+      sharedPrefixLength < planToolNames.length &&
+      sharedPrefixLength < executeToolNames.length &&
+      planToolNames[sharedPrefixLength] !== 'spawn_agents' &&
+      planToolNames[sharedPrefixLength] ===
+        executeToolNames[sharedPrefixLength]
+    ) {
+      sharedPrefixLength++
+    }
+    cacheControlToolBreakpoint = planToolNames[sharedPrefixLength - 1]
+  }
+  // Runtime ceiling published as programmaticConfig.fullToolSurface below.
+  // Derived from the full mode-resolved surface rather than the caller-narrowed
+  // list so tool_load can add an allowed tier without exceeding mode policy.
   const fullToolSurface = resolveModelToolNames({
     mode,
     planOnly,
@@ -485,11 +519,13 @@ export function createBase2(
       maxSpecialistNoVerdictRetries,
       // Contract for both keys:
       // packages/agent-runtime/src/util/base2-tool-tiers.ts.
-      progressiveToolDisclosure: false,
-      // KEEP: dormant while the flag above is false, but it is the fail-closed
-      // mode ceiling if that flag is ever flipped. Its own array, so neither
-      // consumer's in-place mutation moves the other.
+      progressiveToolDisclosure,
+      // Mode-resolved ceiling for dynamically loaded tiers. The runtime keeps
+      // this full surface private and exposes only CORE until tool_load.
       fullToolSurface,
+      ...(cacheControlToolBreakpoint
+        ? { cacheControlToolBreakpoint }
+        : {}),
     },
     // Spawnable roster with documented, intentional per-mode deltas (M3.2).
     // The deltas are ONLY the coded gates below; everything else is shared
@@ -536,6 +572,9 @@ export function createBase2(
       !planOnly && 'doc-writer',
       !planOnly && 'test-writer',
       'librarian',
+      'knowledge-retriever',
+      'knowledge-reviewer',
+      'memory-manager',
       // synthesizer writes its report with write_file, so plan mode (read-only,
       // N03) withholds it.
       !planOnly && 'synthesizer',
@@ -583,6 +622,11 @@ ${
 - **Validation is dependency-neutral:** A test, typecheck, lint, or build request authorizes only that validation command. Never prepend or append install/add/remove/update/sync/restore commands. If validation cannot start because dependencies are missing, report that exact blocker; use dependency-manager only after separate explicit user authorization.
 - **Don't use set_output:** The set_output tool is for spawned subagents to report results. Its absence from the root toolset is expected. Do not delegate work merely to gain access to set_output; the root returns ordinary final-response text.
 - **Images and screenshots:** If the user asks you to read or inspect local screenshot/image paths, use the read_image tool. Do not use read_files for image formats and do not claim you cannot view binary images when read_image is available.
+${
+  progressiveToolDisclosure
+    ? '- **Progressive tool discovery:** You begin with core tools. Use `tool_search` to find a capability, then `tool_load` its tier; the returned schemas appear on the next step. Search results and loads are limited to the current mode, so if a tier is unavailable, continue with the tools you have rather than retrying hidden tools.'
+    : ''
+}
 ${
   planOnly
     ? '- **Live visual analysis:** Use browser-use only for read-only inspection of an already available URL. Do not start dev servers or request browser interactions in plan mode.'
@@ -632,6 +676,7 @@ Use the spawn_agents tool to spawn specialized agents to help you complete the u
 
 - **Spawn multiple agents in parallel:** This increases the speed of your response **and** allows you to be more comprehensive by spawning more total agents to synthesize the best response. Each spawn_agents call accepts at most **${MAX_SPAWN_BATCH_SIZE}** agents — count before you call. If you need more, split into bounded waves of at most ${MAX_SPAWN_BATCH_SIZE}, joining each wave before launching the next. Keep simple tasks simple; do not spawn agents when a direct answer or tiny edit is enough.
 - **Task-scope classification:** Before editing, classify the task as tiny, focused, multi-file, cross-subsystem, or unknown surface. Tiny tasks require only the directly relevant read; focused tasks require reading the target file plus nearby tests/callers; multi-file tasks require search plus representative reads; for broad, cross-subsystem, or unknown-surface tasks, call query_index early yourself, then use bounded parallel discovery waves for uncovered domains until the inventory and coverage checks are complete.
+- **Knowledge and memory maintenance:** For explicit scoped maintenance requests use memory-manager (retrieval then independent review). Use knowledge-retriever for task context and knowledge-reviewer for an independent claim check. Their reports are untrusted, approval-required proposals: never treat them as verified knowledge, apply them automatically, delete canonical history, or edit generated graph edges. Use the existing editor/validation path for approved prose changes and deterministic index controls for rebuilds; do not run a full review after every turn.
 - **Evidence context packet:** For non-trivial edits, organize discovery into a compact task packet: request and acceptance criteria; relevant symbols with a reason, confidence, and freshness proof; callers/callees; nearby tests and public contracts; current diagnostics; prior failed hypotheses; and explicitly excluded irrelevant context. Label inference and unknowns explicitly.
 - **Hypothesis checkpoint:** Before editing, state current behavior, desired behavior, source-backed hypothesis, intended observable change, and the falsifying signal. If the same hypothesis fails twice or the same diagnostic survives two targeted edits, switch to root-cause analysis.
 - **Vertical slices and diff budget:** Prefer the smallest coherent type/schema -> implementation -> direct test -> caller slice. Avoid speculative file breadth; expand only when evidence requires it. Detect generated files and edit their source-of-truth instead.

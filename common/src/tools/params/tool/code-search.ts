@@ -1,8 +1,22 @@
 import z from 'zod/v4'
 
 import { $getNativeToolCallExampleString, jsonToolResultSchema } from '../utils'
+import { executionRefusalSchema } from '../execution-refusal'
+import { processCleanupSchema } from '../process-cleanup'
+import { executionUsageSchema } from '../execution-usage'
+import { nativeWaitStatusFields } from '../native-wait-status'
 
 import type { $ToolParams } from '../../constants'
+
+const executionFields = {
+  exitCode: z.number().int().optional(),
+  errorMessage: z.string().optional(),
+  executionRefusal: executionRefusalSchema.optional(),
+  processCleanup: processCleanupSchema.optional(),
+  executionUsage: executionUsageSchema.optional(),
+  ...nativeWaitStatusFields,
+  executionSignal: z.number().int().optional(),
+}
 
 const toolName = 'code_search'
 const endsAgentStep = true
@@ -150,12 +164,14 @@ export const codeSearchParams = {
   outputSchema: jsonToolResultSchema(
     z.union([
       z.object({
+        ...executionFields,
         stdout: z.string(),
         stderr: z.string().optional(),
         exitCode: z.number().optional(),
         message: z.string(),
       }),
       z.object({
+        ...executionFields,
         message: z.string(),
         status: z.enum(['passed', 'failed', 'unknown']).optional(),
         stdoutOmittedForLength: z.literal(true),
@@ -164,7 +180,11 @@ export const codeSearchParams = {
         exitCode: z.number().optional(),
       }),
       z.object({
+        ...executionFields,
         errorMessage: z.string(),
+        stdout: z.string().optional(),
+        stderr: z.string().optional(),
+        message: z.string().optional(),
       }),
     ]),
   ),

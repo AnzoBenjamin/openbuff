@@ -357,9 +357,14 @@ export const fileMutationResultV1Schema = z
           (action) => action.rollback?.attempted && !action.rollback.succeeded,
         )) ||
       (value.outcome === 'unconfirmed' &&
-        outcomes.some(
-          (outcome) => outcome !== 'unconfirmed' && outcome !== 'not_applied',
-        ))
+        (outcomes.some(
+          (outcome) =>
+            outcome !== 'unconfirmed' &&
+            outcome !== 'not_applied' &&
+            outcome !== 'rolled_back',
+        ) ||
+          (outcomes.includes('rolled_back') &&
+            !outcomes.includes('unconfirmed'))))
     ) {
       ctx.addIssue({
         code: 'custom',
@@ -415,6 +420,21 @@ export const fileMutationResultV1Schema = z
         code: 'custom',
         message:
           'applied or rollback mutation outcomes require an authority tier',
+      })
+    }
+    if (
+      value.outcome === 'unconfirmed' &&
+      value.actions.some((action) => action.outcome === 'rolled_back') &&
+      (!value.authorityReceipt ||
+        value.actions.some(
+          (action, index) =>
+            action.outcome === 'rolled_back' &&
+            value.authorityReceipt?.actions[index]?.status !== 'rolled_back',
+        ))
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'rolled-back actions require matching authority evidence',
       })
     }
     if (
@@ -1291,7 +1311,10 @@ function mutationActionFromReceipt(
         : 'rollback_incomplete'
   } else if (action.forward?.outcome === 'not_applied') {
     outcome = 'not_applied'
-  } else if (receiptStatus === 'failed') {
+  } else if (
+    action.forward?.outcome === 'unconfirmed' ||
+    receiptStatus === 'failed'
+  ) {
     outcome = 'unconfirmed'
   } else {
     outcome = 'not_applied'
@@ -1362,7 +1385,9 @@ export function buildFileMutationResultFromReceiptV1(
       : validatedReceipt.status === 'not_started'
         ? 'not_applied'
         : validatedReceipt.status === 'rolled_back'
-          ? 'rolled_back'
+          ? actions.some((action) => action.outcome === 'unconfirmed')
+            ? 'unconfirmed'
+            : 'rolled_back'
           : validatedReceipt.status === 'rollback_incomplete'
             ? 'rollback_incomplete'
             : actions.some((action) => action.outcome === 'applied')

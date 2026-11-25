@@ -1,9 +1,4 @@
 import {
-  clearMockedModules,
-  mockModule,
-} from '@codebuff/common/testing/mock-modules'
-import {
-  createMockChildProcess,
   asCodeSearchResult,
   createRgJsonMatch,
   createRgJsonContext,
@@ -14,25 +9,46 @@ import path from 'path'
 import { describe, expect, it, mock, beforeEach, afterEach } from 'bun:test'
 
 import { getBundledRgPath } from '../native/ripgrep'
-import { codeSearch } from '../tools/code-search'
+import { codeSearch as executeSearch } from '../tools/code-search'
+
+import {
+  createSearchExecutionFixture,
+  createSearchMockChild,
+  searchMockChildClosed,
+  waitForSearchSpawn,
+} from './fixtures/search-execution'
 
 import type { MockChildProcess } from '@codebuff/common/testing/mocks'
 
 describe('codeSearch', () => {
   let mockSpawn: ReturnType<typeof mock>
   let mockProcess: MockChildProcess
+  let fixture: Awaited<ReturnType<typeof createSearchExecutionFixture>>
+  let expectedSpawnCount = 0
+  const codeSearch = (input: Parameters<typeof executeSearch>[0]) => {
+    if (searchMockChildClosed(mockProcess))
+      mockProcess = createSearchMockChild()
+    expectedSpawnCount = mockSpawn.mock.calls.length + 1
+    return executeSearch({
+      ...input,
+      executionContext: fixture.context(input.signal),
+    })
+  }
+  const waitForSpawn = () =>
+    waitForSearchSpawn(() => mockSpawn.mock.calls.length >= expectedSpawnCount)
 
   beforeEach(async () => {
-    mockProcess = createMockChildProcess()
+    mockProcess = createSearchMockChild()
     mockSpawn = mock(() => mockProcess)
-    await mockModule('child_process', () => ({
-      spawn: mockSpawn,
-    }))
+    fixture = await createSearchExecutionFixture({
+      projectPath: '/test/project',
+      spawn: (command, argv, options) => mockSpawn(command, argv, options),
+    })
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    await fixture.close()
     mock.restore()
-    clearMockedModules()
   })
 
   describe('ripgrep path resolution', () => {
@@ -88,12 +104,27 @@ describe('codeSearch', () => {
   })
 
   describe('basic search', () => {
+    it('reports an actual signal from the child close event', async () => {
+      const search = codeSearch({
+        projectPath: '/test/project',
+        pattern: 'needle',
+        flags: '-l',
+      })
+      await waitForSpawn()
+      mockProcess.emit('close', null, 'SIGTERM')
+      const result = asCodeSearchResult((await search)[0])
+      expect(result.errorMessage).toContain(
+        'ripgrep terminated by signal SIGTERM',
+      )
+    })
+
     it('lists matching files when requested and preserves ripgrep diagnostics', async () => {
       const search = codeSearch({
         projectPath: '/test/project',
         pattern: '[',
         flags: '-l',
       })
+      await waitForSpawn()
       const args = mockSpawn.mock.calls[0]![1] as string[]
       expect(args).toContain('-l')
       expect(args).not.toContain('--json')
@@ -110,6 +141,7 @@ describe('codeSearch', () => {
         pattern: 'needle',
         flags: '--files-with-matches',
       })
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from('src/a.ts\nsrc/b.ts\n'))
       mockProcess.emit('close', 0)
       const result = asCodeSearchResult((await search)[0])
@@ -130,6 +162,7 @@ describe('codeSearch', () => {
         createRgJsonMatch('file2.ts', 10, 'import React from "react"'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -147,6 +180,7 @@ describe('codeSearch', () => {
         projectPath: '/test/project',
         pattern: 'token',
       })
+      await waitForSpawn()
       mockProcess.stdout.emit(
         'data',
         Buffer.from(
@@ -176,6 +210,7 @@ describe('codeSearch', () => {
           status: filePath === 'blocked.ts' ? 'blocked' : 'allow',
         }),
       })
+      await waitForSpawn()
       mockProcess.stdout.emit(
         'data',
         Buffer.from(
@@ -212,6 +247,7 @@ describe('codeSearch', () => {
         createRgJsonContext('allowed.ts', 2, 'public context'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit(
         'data',
         Buffer.from(remainderWithoutTrailingNewline),
@@ -248,6 +284,7 @@ describe('codeSearch', () => {
         createRgJsonContext('other.ts', 7, 'const port = env.PORT'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -289,6 +326,7 @@ describe('codeSearch', () => {
         createRgJsonMatch('utils.ts', 10, 'export function helper() {}'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -319,6 +357,7 @@ describe('codeSearch', () => {
         createRgJsonContext('code.ts', 7, '  return null'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -347,6 +386,7 @@ describe('codeSearch', () => {
         createRgJsonContext('file.ts', 4, ''),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -371,6 +411,7 @@ describe('codeSearch', () => {
       // First line match has no before context
       const output = createRgJsonMatch('file.ts', 1, 'import foo from "foo"')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -393,6 +434,7 @@ describe('codeSearch', () => {
         createRgJsonMatch('file2.ts', 5, 'another test'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -417,6 +459,7 @@ describe('codeSearch', () => {
         createRgJsonMatch('other-file.ts', 5, 'import bar'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -443,6 +486,7 @@ describe('codeSearch', () => {
         'test content',
       )
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -467,6 +511,7 @@ describe('codeSearch', () => {
         createRgJsonMatch('other.ts', 1, 'import env'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -502,6 +547,7 @@ describe('codeSearch', () => {
         createRgJsonContext('file.ts', 16, 'context 4'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -535,6 +581,7 @@ describe('codeSearch', () => {
         createRgJsonMatch('file.ts', 2, 'test 2'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -564,6 +611,7 @@ describe('codeSearch', () => {
         createRgJsonContext('file2.ts', 6, 'context 4'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -596,6 +644,7 @@ describe('codeSearch', () => {
         createRgJsonContext('file.ts', 5, 'context after 2'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -626,6 +675,7 @@ describe('codeSearch', () => {
         createRgJsonMatch('file.ts', 2, 'another valid line'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -643,6 +693,7 @@ describe('codeSearch', () => {
         pattern: 'nonexistent',
       })
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(''))
       mockProcess.emit('close', 1)
 
@@ -664,6 +715,7 @@ describe('codeSearch', () => {
 
       const output = createRgJsonMatch('file.ts', 1, 'const x = -foo')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -692,6 +744,7 @@ describe('codeSearch', () => {
         },
       })
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -719,6 +772,7 @@ describe('codeSearch', () => {
       // Send as one chunk without trailing newline to simulate remainder scenario
       const output = `${match1}\n${match2}\n${match3}`
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -733,11 +787,8 @@ describe('codeSearch', () => {
 
     it('rejects output-shape flags like -v/-c for code_search', async () => {
       for (const flags of ['-v', '-c', '--count-matches']) {
-        mockProcess = createMockChildProcess()
+        mockProcess = createSearchMockChild()
         mockSpawn = mock(() => mockProcess)
-        await mockModule('child_process', () => ({
-          spawn: mockSpawn,
-        }))
 
         const result = await codeSearch({
           projectPath: '/test/project',
@@ -775,6 +826,7 @@ describe('codeSearch', () => {
       }
       const output = matches.join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -811,6 +863,7 @@ describe('codeSearch', () => {
         },
       })
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -836,6 +889,7 @@ describe('codeSearch', () => {
         createRgJsonMatch('file.ts', 5, 'import { baz } from "qux"'),
       ].join('\n')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -864,6 +918,7 @@ describe('codeSearch', () => {
         'import React from "react"',
       )
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -892,6 +947,7 @@ describe('codeSearch', () => {
           pattern: 'import',
           flags,
         })
+        await waitForSpawn()
         mockProcess.stdout.emit(
           'data',
           Buffer.from(createRgJsonMatch('src/file.ts', 1, 'import x')),
@@ -913,6 +969,7 @@ describe('codeSearch', () => {
           pattern: 'import',
           flags,
         })
+        await waitForSpawn()
         mockProcess.stdout.emit(
           'data',
           Buffer.from(createRgJsonMatch('file.ts', 1, 'import x')),
@@ -944,6 +1001,7 @@ describe('codeSearch', () => {
         'auth content',
       )
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -966,6 +1024,7 @@ describe('codeSearch', () => {
 
       const output = createRgJsonMatch('file.ts', 1, 'import foo')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -987,6 +1046,7 @@ describe('codeSearch', () => {
 
       const output = createRgJsonMatch('file.tsx', 1, 'import React')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -1012,6 +1072,7 @@ describe('codeSearch', () => {
         'import React from "react"',
       )
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -1038,17 +1099,14 @@ describe('codeSearch', () => {
     it('should timeout after specified seconds', async () => {
       // Create a mock process that doesn't auto-emit close when killed
       // to properly test the timeout path
-      const slowMockProcess = createMockChildProcess()
+      const slowMockProcess = createSearchMockChild()
       // Override kill to not emit close (simulating a hung process)
       slowMockProcess.kill = mock(() => {
         slowMockProcess.killed = true
         return true
       })
 
-      const slowMockSpawn = mock(() => slowMockProcess)
-      await mockModule('child_process', () => ({
-        spawn: slowMockSpawn,
-      }))
+      mockSpawn = mock(() => slowMockProcess)
 
       const searchPromise = codeSearch({
         projectPath: '/test/project',
@@ -1079,6 +1137,7 @@ describe('codeSearch', () => {
 
       const output = createRgJsonMatch('file.ts', 1, 'test content')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -1111,6 +1170,7 @@ describe('codeSearch', () => {
 
       const output = createRgJsonMatch('file.ts', 1, 'test content')
 
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -1140,6 +1200,7 @@ describe('codeSearch', () => {
         })
 
         const output = createRgJsonMatch('file.ts', 1, 'test content')
+        await waitForSpawn()
         mockProcess.stdout.emit('data', Buffer.from(output))
         mockProcess.emit('close', 0)
 
@@ -1183,6 +1244,7 @@ describe('codeSearch', () => {
         cwd: 'evil',
       })
       const output = createRgJsonMatch('file.ts', 1, 'test content')
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -1205,6 +1267,7 @@ describe('codeSearch', () => {
       })
 
       const output = createRgJsonMatch('package.json', 1, 'test content')
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -1244,6 +1307,7 @@ describe('codeSearch', () => {
         1,
         'export const x = 1',
       )
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -1270,6 +1334,7 @@ describe('codeSearch', () => {
       })
 
       const output = createRgJsonMatch('subdir/file.ts', 1, 'const y = 2')
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
 
@@ -1292,6 +1357,7 @@ describe('codeSearch', () => {
         cwd: 'link',
       })
       const output = createRgJsonMatch('file.ts', 1, 'test content')
+      await waitForSpawn()
       mockProcess.stdout.emit('data', Buffer.from(output))
       mockProcess.emit('close', 0)
       const result = await searchPromise
@@ -1326,6 +1392,7 @@ describe('codeSearch', () => {
         signal: controller.signal,
       })
       // Verify a child was spawned.
+      await waitForSpawn()
       expect(mockSpawn).toHaveBeenCalledTimes(1)
       // Abort mid-flight. `controller.abort()` with no reason defaults to a
       // DOMException whose message is "The operation was aborted."; the

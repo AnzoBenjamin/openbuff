@@ -146,6 +146,8 @@ export type AgentTemplate<
    * tool-call payloads such as multi-edit transactions mid-JSON. Mirrors
    * DynamicAgentDefinitionSchema.maxOutputTokens.
    */
+  /** Optional inference-step ceiling. Omitted/-1 adds no default cap and never refills a tighter remaining budget. */
+  maxSteps?: number
   maxOutputTokens?: number
 
   /**

@@ -90,6 +90,14 @@ describe('MessageBlock completion time', () => {
     expect(markup).toContain('cost $0.03')
   })
 
+  test('renders an explicit zero cache-hit rate when complete', () => {
+    const markup = renderToStaticMarkup(
+      <MessageBlock {...baseProps} isComplete={true} cacheHitRate={0} />,
+    )
+
+    expect(markup).toContain('cache 0%')
+  })
+
   test('omits completion line when not complete', () => {
     const markup = renderToStaticMarkup(
       <MessageBlock

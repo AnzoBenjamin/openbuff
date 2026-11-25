@@ -140,36 +140,61 @@ class RepositoryStub implements MemoryRepositoryV2 {
   exportCalls = 0
   healthCalls = 0
   storeStatsOverride?: { eventCount: number; bytes: number }
-  selectGCRequests: Array<{ projectId: typeof projectId; olderThanDays: number; maxEvents: number }> = []
-  privilegedCompactRequests: Array<{ eventIds: string[]; archivePath: string; archiveHash: string }> = []
+  selectGCRequests: Array<{
+    projectId: typeof projectId
+    olderThanDays: number
+    maxEvents: number
+  }> = []
+  privilegedCompactRequests: Array<{
+    eventIds: string[]
+    archivePath: string
+    archiveHash: string
+  }> = []
 
-  getStoreStats?: (request: { projectId: typeof projectId }) => Promise<{ eventCount: number; bytes: number }> = async (_request) => {
+  getStoreStats?: (request: {
+    projectId: typeof projectId
+  }) => Promise<{ eventCount: number; bytes: number }> = async (_request) => {
     if (this.storeStatsOverride) return this.storeStatsOverride
     const bytes = new TextEncoder().encode(JSON.stringify(this.events)).length
     return { eventCount: this.events.length, bytes }
   }
 
-  selectGCandidates?: (request: { projectId: typeof projectId; olderThanDays: number; maxEvents: number }) => Promise<{ eventIds: PrivilegedCompactionInput['eventIds'] }> = async (request) => {
+  selectGCandidates?: (request: {
+    projectId: typeof projectId
+    olderThanDays: number
+    maxEvents: number
+  }) => Promise<{ eventIds: PrivilegedCompactionInput['eventIds'] }> = async (
+    request,
+  ) => {
     this.selectGCRequests.push(request)
     return { eventIds: [] as unknown as PrivilegedCompactionInput['eventIds'] }
   }
 
-  privilegedCompact?: (input: PrivilegedCompactionInput) => Promise<PrivilegedCompactionResult> = async (input) => {
+  privilegedCompact?: (
+    input: PrivilegedCompactionInput,
+  ) => Promise<PrivilegedCompactionResult> = async (input) => {
     this.privilegedCompactRequests.push({
       eventIds: input.eventIds.map(String),
       archivePath: input.archivePath,
       archiveHash: input.archiveHash,
     })
     const beforeCount = this.events.length
-    const beforeBytes = new TextEncoder().encode(JSON.stringify(this.events)).length
+    const beforeBytes = new TextEncoder().encode(
+      JSON.stringify(this.events),
+    ).length
     const ids = new Set(input.eventIds.map(String))
     this.events = this.events.filter((event) => !ids.has(String(event.eventId)))
     const sequence = this.events.length + 1
     this.events.push(
-      MemoryEventEnvelopeSchema.parse({ ...(input.archiveClaimDraft as unknown as Record<string, unknown>), sequence }),
+      MemoryEventEnvelopeSchema.parse({
+        ...(input.archiveClaimDraft as unknown as Record<string, unknown>),
+        sequence,
+      }),
     )
     const afterCount = this.events.length
-    const afterBytes = new TextEncoder().encode(JSON.stringify(this.events)).length
+    const afterBytes = new TextEncoder().encode(
+      JSON.stringify(this.events),
+    ).length
     return {
       archivedEventIds: input.eventIds,
       beforeCount,
@@ -189,40 +214,62 @@ class RepositoryStub implements MemoryRepositoryV2 {
     if (this.appendRequests.length === this.appendFailureCall) {
       return {
         outcome: 'failed' as const,
-        error: { code: 'unavailable' as const, message: 'sensitive append error', retryable: true },
+        error: {
+          code: 'unavailable' as const,
+          message: 'sensitive append error',
+          retryable: true,
+        },
       }
     }
-    const conflictMutation = this.appendConflictMutations.get(this.appendRequests.length)
+    const conflictMutation = this.appendConflictMutations.get(
+      this.appendRequests.length,
+    )
     if (conflictMutation) {
       this.events.push(...conflictMutation)
       return {
         outcome: 'failed' as const,
-        error: { code: 'conflict' as const, message: 'sensitive conflict', retryable: true },
+        error: {
+          code: 'conflict' as const,
+          message: 'sensitive conflict',
+          retryable: true,
+        },
       }
     }
-    const expectedTail = parsed.expectedTail ?? (
-      parsed.expectedLastEventId === undefined
+    const expectedTail =
+      parsed.expectedTail ??
+      (parsed.expectedLastEventId === undefined
         ? { kind: 'any' as const }
-        : { kind: 'event' as const, eventId: parsed.expectedLastEventId }
-    )
+        : { kind: 'event' as const, eventId: parsed.expectedLastEventId })
     const actualLastEventId = this.events.at(-1)?.eventId
-    const tailMatches = expectedTail.kind === 'any'
-      || (expectedTail.kind === 'empty' && actualLastEventId === undefined)
-      || (expectedTail.kind === 'event' && expectedTail.eventId === actualLastEventId)
+    const tailMatches =
+      expectedTail.kind === 'any' ||
+      (expectedTail.kind === 'empty' && actualLastEventId === undefined) ||
+      (expectedTail.kind === 'event' &&
+        expectedTail.eventId === actualLastEventId)
     if (!tailMatches) {
       return {
         outcome: 'failed' as const,
-        error: { code: 'conflict' as const, message: 'cursor mismatch', retryable: true },
+        error: {
+          code: 'conflict' as const,
+          message: 'cursor mismatch',
+          retryable: true,
+        },
       }
     }
     const entries = parsed.events.map((draft) => {
-      const existing = this.events.find((event) => event.eventId === draft.eventId)
+      const existing = this.events.find(
+        (event) => event.eventId === draft.eventId,
+      )
       if (existing) {
         const { sequence: _sequence, ...existingDraft } = existing
         if (JSON.stringify(existingDraft) !== JSON.stringify(draft)) {
           throw new Error('deterministic event content conflict')
         }
-        return { eventId: draft.eventId, sequence: existing.sequence, duplicate: true }
+        return {
+          eventId: draft.eventId,
+          sequence: existing.sequence,
+          duplicate: true,
+        }
       }
       const sequence = this.events.length + 1
       this.events.push(MemoryEventEnvelopeSchema.parse({ ...draft, sequence }))
@@ -244,7 +291,11 @@ class RepositoryStub implements MemoryRepositoryV2 {
     return (
       this.verifyResults.shift() ?? {
         outcome: 'failed' as const,
-        error: { code: 'unavailable' as const, message: 'verification failed', retryable: true },
+        error: {
+          code: 'unavailable' as const,
+          message: 'verification failed',
+          retryable: true,
+        },
       }
     )
   }
@@ -255,9 +306,19 @@ class RepositoryStub implements MemoryRepositoryV2 {
     if (configured instanceof Error) throw configured
     if (configured) return configured
     if (this.mutateDuringRebuild) {
-      this.events.push(observationEvent(this.events.length + 1, 'observation:intruder', 'Changed'))
+      this.events.push(
+        observationEvent(
+          this.events.length + 1,
+          'observation:intruder',
+          'Changed',
+        ),
+      )
     }
-    return { outcome: 'rebuilt' as const, rebuildId: request.rebuildId, processedEvents: this.events.length }
+    return {
+      outcome: 'rebuilt' as const,
+      rebuildId: request.rebuildId,
+      processedEvents: this.events.length,
+    }
   }
 
   async health() {
@@ -272,7 +333,14 @@ class RepositoryStub implements MemoryRepositoryV2 {
         backendId: 'test',
         kind: 'in-memory',
         persistence: 'ephemeral',
-        capabilities: ['append', 'query', 'verify', 'rebuild', 'health', 'export'],
+        capabilities: [
+          'append',
+          'query',
+          'verify',
+          'rebuild',
+          'health',
+          'export',
+        ],
       },
       issues: [],
     })
@@ -283,11 +351,17 @@ class RepositoryStub implements MemoryRepositoryV2 {
     if (this.exportCalls === this.exportFailureCall) {
       return {
         outcome: 'failed' as const,
-        error: { code: 'unavailable' as const, message: 'sensitive export error', retryable: true },
+        error: {
+          code: 'unavailable' as const,
+          message: 'sensitive export error',
+          retryable: true,
+        },
       }
     }
     const start = request.afterEventId
-      ? this.events.findIndex((event) => event.eventId === request.afterEventId) + 1
+      ? this.events.findIndex(
+          (event) => event.eventId === request.afterEventId,
+        ) + 1
       : 0
     const events = this.events.slice(start, start + request.limit)
     const hasMore = start + events.length < this.events.length
@@ -295,7 +369,7 @@ class RepositoryStub implements MemoryRepositoryV2 {
       outcome: 'page' as const,
       events,
       nextAfterEventId: this.repeatExportCursor
-        ? request.afterEventId ?? events.at(-1)?.eventId ?? null
+        ? (request.afterEventId ?? events.at(-1)?.eventId ?? null)
         : hasMore
           ? events.at(-1)!.eventId
           : null,
@@ -327,13 +401,156 @@ describe('MemoryV2OperatorService', () => {
     expect(first.outcome).toBe('preview')
     expect(repository.appendRequests).toHaveLength(0)
 
-    const applied = await service.consolidate({ ...consolidationRequest, mode: 'apply' })
+    const applied = await service.consolidate({
+      ...consolidationRequest,
+      mode: 'apply',
+    })
     expect(applied.outcome).toBe('applied')
-    expect(repository.events.filter((event) => event.eventType === 'claim.consolidated')).toHaveLength(1)
-    expect(repository.events.filter((event) => event.eventType === 'claim.superseded')).toHaveLength(2)
-    expect(await service.consolidate({ ...consolidationRequest, mode: 'apply' })).toMatchObject({
+    expect(
+      repository.events.filter(
+        (event) => event.eventType === 'claim.consolidated',
+      ),
+    ).toHaveLength(0)
+    expect(
+      repository.events.filter(
+        (event) =>
+          event.eventType === 'observation.recorded' &&
+          event.payload.observation.tags.includes('consolidation-candidate'),
+      ),
+    ).toHaveLength(1)
+    expect(
+      repository.events.filter(
+        (event) => event.eventType === 'claim.superseded',
+      ),
+    ).toHaveLength(0)
+    expect(
+      await service.consolidate({ ...consolidationRequest, mode: 'apply' }),
+    ).toMatchObject({
       outcome: 'no-op',
     })
+  })
+
+  test('cross-task semantic candidates retain source facts and never inherit verification or policy authority', async () => {
+    const first = observationEvent(
+      1,
+      'observation:cross-task-one',
+      'Routing starts at the request boundary',
+      'src/a.ts',
+      'task:one',
+    )
+    const second = observationEvent(
+      2,
+      'observation:cross-task-two',
+      'Routing delegates to the repository service',
+      'src/a.ts',
+      'task:two',
+    )
+    const verification = MemoryEventEnvelopeSchema.parse({
+      schemaVersion: 2,
+      eventSchemaVersion: 1,
+      eventType: 'evidence.verified',
+      eventId: 'event:cross-task-verification',
+      projectId,
+      sessionId,
+      sequence: 3,
+      occurredAt: timestamp,
+      payload: {
+        payloadSchemaVersion: 1,
+        observationId: 'observation:cross-task-one',
+        selector: { kind: 'file', path: 'src/a.ts' },
+        observedDigest: `sha256:${'a'.repeat(64)}`,
+        verifiedAt: timestamp,
+        verifier: 'test-exact-read',
+      },
+    })
+    if (verification.eventType !== 'evidence.verified')
+      throw new Error('Invalid verification fixture')
+    const sources = [first, second, verification]
+    const repository = new RepositoryStub(structuredClone(sources))
+    const service = new MemoryV2OperatorService(repository)
+    const { taskId: _taskId, ...crossTaskRequest } = consolidationRequest
+    const applied = await service.consolidate({
+      ...crossTaskRequest,
+      mode: 'apply',
+    })
+    expect(applied.outcome).toBe('applied')
+    if (applied.outcome !== 'applied')
+      throw new Error('Cross-task candidate was not recorded')
+    expect(applied.candidates[0]?.sourceObservationIds.map(String)).toEqual([
+      'observation:cross-task-one',
+      'observation:cross-task-two',
+    ])
+    expect(applied.plannedEvents).toHaveLength(1)
+    const candidate = applied.plannedEvents[0]!
+    expect(candidate.eventType).toBe('observation.recorded')
+    if (candidate.eventType !== 'observation.recorded')
+      throw new Error('Semantic consolidation retracted a source')
+    expect(candidate.payload.observation.tags).toContain(
+      'consolidation-candidate',
+    )
+    expect(candidate.payload.observation.provenance).toMatchObject({
+      origin: 'derived',
+      sourceEventIds: [first.eventId, second.eventId],
+      metadata: {
+        sourceObservationIds: [
+          'observation:cross-task-one',
+          'observation:cross-task-two',
+        ],
+      },
+    })
+    expect(candidate.payload.observation.summary).toContain('Candidate summary')
+    expect(repository.events.slice(0, 3)).toEqual(sources)
+    expect(
+      repository.events.filter(
+        (event) => event.eventType === 'evidence.verified',
+      ),
+    ).toEqual([verification])
+    expect(
+      repository.events.filter((event) =>
+        [
+          'claim.consolidated',
+          'claim.superseded',
+          'claim.forgotten',
+          'playbook.activated',
+        ].includes(event.eventType),
+      ),
+    ).toEqual([])
+    expect(
+      await service.consolidate({ ...crossTaskRequest, mode: 'apply' }),
+    ).toMatchObject({ outcome: 'no-op' })
+    expect(repository.appendRequests).toHaveLength(1)
+  })
+
+  test('bounded consolidation progresses past groups with an existing candidate', async () => {
+    const repository = new RepositoryStub([
+      observationEvent(1, 'observation:group-a-one', 'First a', 'src/a.ts'),
+      observationEvent(2, 'observation:group-a-two', 'Second a', 'src/a.ts'),
+      observationEvent(3, 'observation:group-b-one', 'First b', 'src/b.ts'),
+      observationEvent(4, 'observation:group-b-two', 'Second b', 'src/b.ts'),
+    ])
+    const service = new MemoryV2OperatorService(repository)
+    const first = await service.consolidate({
+      ...consolidationRequest,
+      mode: 'apply',
+      maxGroups: 1,
+    })
+    const second = await service.consolidate({
+      ...consolidationRequest,
+      mode: 'apply',
+      maxGroups: 1,
+    })
+    expect(first.outcome).toBe('applied')
+    expect(second.outcome).toBe('applied')
+    if (first.outcome === 'applied' && second.outcome === 'applied')
+      expect(first.candidates[0]?.facet).not.toBe(second.candidates[0]?.facet)
+    expect(
+      await service.consolidate({
+        ...consolidationRequest,
+        mode: 'apply',
+        maxGroups: 1,
+      }),
+    ).toMatchObject({ outcome: 'no-op' })
+    expect(repository.appendRequests).toHaveLength(2)
   })
 
   test('export scans beyond the former 10-page ceiling return every page until cursor exhaustion', async () => {
@@ -348,9 +565,7 @@ describe('MemoryV2OperatorService', () => {
         ])
       }
 
-      async export(
-        request: Parameters<MemoryRepositoryV2['export']>[0],
-      ) {
+      async export(request: Parameters<MemoryRepositoryV2['export']>[0]) {
         this.exportCalls++
         if (this.exportCalls > pages) {
           // Defensive exhaustion page; the scan must stop before reaching it.
@@ -362,7 +577,13 @@ describe('MemoryV2OperatorService', () => {
         }
         return {
           outcome: 'page' as const,
-          events: [observationEvent(this.exportCalls, `observation:page-${this.exportCalls}`, `Page ${this.exportCalls}`)],
+          events: [
+            observationEvent(
+              this.exportCalls,
+              `observation:page-${this.exportCalls}`,
+              `Page ${this.exportCalls}`,
+            ),
+          ],
           nextAfterEventId:
             this.exportCalls < pages
               ? MemoryEventIdSchema.parse(`event:cursor-${this.exportCalls}`)
@@ -388,45 +609,75 @@ describe('MemoryV2OperatorService', () => {
     expect(repository.exportCalls).toBe(pages)
   })
 
-  test.each(['correct', 'forget', 'pin'] as const)('%s preview is no-write and apply appends one explicit event', async (kind) => {
-    const repository = new RepositoryStub([
-      observationEvent(1, 'observation:1', 'Original'),
-    ])
-    const service = new MemoryV2OperatorService(repository)
-    const action = (() => {
-      if (kind === 'correct') {
-        const payload = observationEvent(1, 'observation:correction', 'Corrected').payload
-        if (!('observation' in payload)) throw new Error('invalid fixture')
+  test.each(['correct', 'forget', 'pin'] as const)(
+    '%s preview is no-write and apply appends one explicit event',
+    async (kind) => {
+      const repository = new RepositoryStub([
+        observationEvent(1, 'observation:1', 'Original'),
+      ])
+      const service = new MemoryV2OperatorService(repository)
+      const action = (() => {
+        if (kind === 'correct') {
+          const payload = observationEvent(
+            1,
+            'observation:correction',
+            'Corrected',
+          ).payload
+          if (!('observation' in payload)) throw new Error('invalid fixture')
+          return {
+            kind,
+            observationId: 'observation:1',
+            correction: payload.observation,
+            reason: 'Correct the claim',
+          }
+        }
+        if (kind === 'forget') {
+          return {
+            kind,
+            observationIds: ['observation:1'],
+            reason: 'user-request' as const,
+            requestedBy: 'test',
+            evidenceDisposition: 'remove-references' as const,
+          }
+        }
         return {
           kind,
           observationId: 'observation:1',
-          correction: payload.observation,
-          reason: 'Correct the claim',
+          reason: 'Important',
+          pinnedBy: 'test',
         }
+      })()
+      const request = {
+        schemaVersion: 2,
+        projectId,
+        sessionId,
+        taskId: 'task:operator',
+        occurredAt: timestamp,
+        action,
       }
-      if (kind === 'forget') {
-        return {
-          kind,
-          observationIds: ['observation:1'],
-          reason: 'user-request' as const,
-          requestedBy: 'test',
-          evidenceDisposition: 'remove-references' as const,
-        }
-      }
-      return { kind, observationId: 'observation:1', reason: 'Important', pinnedBy: 'test' }
-    })()
-    const request = { schemaVersion: 2, projectId, sessionId, taskId: 'task:operator', occurredAt: timestamp, action }
-    expect(await service.correct({ ...request, mode: 'preview' })).toMatchObject({ outcome: 'preview' })
-    expect(repository.events).toHaveLength(1)
-    expect(await service.correct({ ...request, mode: 'apply' })).toMatchObject({ outcome: 'applied' })
-    expect(repository.events).toHaveLength(2)
-    expect(repository.events[1]!.eventType).toBe(`claim.${kind === 'correct' ? 'corrected' : kind === 'forget' ? 'forgotten' : 'pinned'}`)
-  })
+      expect(
+        await service.correct({ ...request, mode: 'preview' }),
+      ).toMatchObject({ outcome: 'preview' })
+      expect(repository.events).toHaveLength(1)
+      expect(
+        await service.correct({ ...request, mode: 'apply' }),
+      ).toMatchObject({ outcome: 'applied' })
+      expect(repository.events).toHaveLength(2)
+      expect(repository.events[1]!.eventType).toBe(
+        `claim.${kind === 'correct' ? 'corrected' : kind === 'forget' ? 'forgotten' : 'pinned'}`,
+      )
+    },
+  )
 
   test('correction actions reject missing and cross-task targets while same-task correction succeeds', async () => {
     const target = observationEvent(1, 'observation:1', 'Original')
-    const correctionPayload = observationEvent(2, 'observation:correction', 'Corrected').payload
-    if (!('observation' in correctionPayload)) throw new Error('invalid fixture')
+    const correctionPayload = observationEvent(
+      2,
+      'observation:correction',
+      'Corrected',
+    ).payload
+    if (!('observation' in correctionPayload))
+      throw new Error('invalid fixture')
     const action = {
       kind: 'correct' as const,
       observationId: 'observation:1',
@@ -442,7 +693,12 @@ describe('MemoryV2OperatorService', () => {
       mode: 'apply' as const,
     }
     const missingRepository = new RepositoryStub()
-    expect(await new MemoryV2OperatorService(missingRepository).correct({ ...base, action })).toMatchObject({
+    expect(
+      await new MemoryV2OperatorService(missingRepository).correct({
+        ...base,
+        action,
+      }),
+    ).toMatchObject({
       outcome: 'rejected',
       error: { code: 'invalid-request', retryable: false },
     })
@@ -465,11 +721,15 @@ describe('MemoryV2OperatorService', () => {
       'src/a.ts',
       'task:other',
     ).payload
-    if (!('observation' in crossTaskCorrectionPayload)) throw new Error('invalid fixture')
+    if (!('observation' in crossTaskCorrectionPayload))
+      throw new Error('invalid fixture')
     expect(
       await new MemoryV2OperatorService(new RepositoryStub([target])).correct({
         ...base,
-        action: { ...action, correction: crossTaskCorrectionPayload.observation },
+        action: {
+          ...action,
+          correction: crossTaskCorrectionPayload.observation,
+        },
       }),
     ).toMatchObject({ outcome: 'rejected', error: { code: 'invalid-request' } })
 
@@ -483,39 +743,52 @@ describe('MemoryV2OperatorService', () => {
     ).toMatchObject({ outcome: 'applied' })
   })
 
-  test.each(['forget', 'pin'] as const)('%s rejects missing and cross-task targets', async (kind) => {
-    const action = kind === 'forget'
-      ? {
-          kind,
-          observationIds: ['observation:1'],
-          reason: 'user-request' as const,
-          requestedBy: 'test',
-          evidenceDisposition: 'remove-references' as const,
-        }
-      : { kind, observationId: 'observation:1', reason: 'Important', pinnedBy: 'test' }
-    const request = {
-      schemaVersion: 2,
-      projectId,
-      sessionId,
-      taskId: 'task:operator',
-      occurredAt: timestamp,
-      mode: 'apply' as const,
-      action,
-    }
-    const missingRepository = new RepositoryStub()
-    expect(await new MemoryV2OperatorService(missingRepository).correct(request)).toMatchObject({
-      outcome: 'rejected',
-      error: { code: 'invalid-request' },
-    })
-    const crossTaskRepository = new RepositoryStub([
-      observationEvent(1, 'observation:1', 'Other', 'src/a.ts', 'task:other'),
-    ])
-    expect(await new MemoryV2OperatorService(crossTaskRepository).correct(request)).toMatchObject({
-      outcome: 'rejected',
-      error: { code: 'invalid-request' },
-    })
-    expect(crossTaskRepository.appendRequests).toHaveLength(0)
-  })
+  test.each(['forget', 'pin'] as const)(
+    '%s rejects missing and cross-task targets',
+    async (kind) => {
+      const action =
+        kind === 'forget'
+          ? {
+              kind,
+              observationIds: ['observation:1'],
+              reason: 'user-request' as const,
+              requestedBy: 'test',
+              evidenceDisposition: 'remove-references' as const,
+            }
+          : {
+              kind,
+              observationId: 'observation:1',
+              reason: 'Important',
+              pinnedBy: 'test',
+            }
+      const request = {
+        schemaVersion: 2,
+        projectId,
+        sessionId,
+        taskId: 'task:operator',
+        occurredAt: timestamp,
+        mode: 'apply' as const,
+        action,
+      }
+      const missingRepository = new RepositoryStub()
+      expect(
+        await new MemoryV2OperatorService(missingRepository).correct(request),
+      ).toMatchObject({
+        outcome: 'rejected',
+        error: { code: 'invalid-request' },
+      })
+      const crossTaskRepository = new RepositoryStub([
+        observationEvent(1, 'observation:1', 'Other', 'src/a.ts', 'task:other'),
+      ])
+      expect(
+        await new MemoryV2OperatorService(crossTaskRepository).correct(request),
+      ).toMatchObject({
+        outcome: 'rejected',
+        error: { code: 'invalid-request' },
+      })
+      expect(crossTaskRepository.appendRequests).toHaveLength(0)
+    },
+  )
 
   test('supersede preview is no-write and apply appends one claim.superseded event with the exact payload', async () => {
     const repository = new RepositoryStub([
@@ -593,7 +866,13 @@ describe('MemoryV2OperatorService', () => {
       name: 'cross-task',
       events: [
         observationEvent(1, 'observation:target', 'Target'),
-        observationEvent(2, 'observation:winner', 'Winner', 'src/a.ts', 'task:other'),
+        observationEvent(
+          2,
+          'observation:winner',
+          'Winner',
+          'src/a.ts',
+          'task:other',
+        ),
       ],
       action: {
         kind: 'supersede' as const,
@@ -622,21 +901,27 @@ describe('MemoryV2OperatorService', () => {
         reason: 'Cannot supersede itself',
       },
     },
-  ] as const)('supersede rejects $name without writing', async ({ events, action }) => {
-    const repository = new RepositoryStub([...events])
-    expect(
-      await new MemoryV2OperatorService(repository).correct({
-        schemaVersion: 2,
-        projectId,
-        sessionId,
-        taskId: 'task:operator',
-        occurredAt: timestamp,
-        mode: 'apply',
-        action,
-      }),
-    ).toMatchObject({ outcome: 'rejected', error: { code: 'invalid-request' } })
-    expect(repository.appendRequests).toHaveLength(0)
-  })
+  ] as const)(
+    'supersede rejects $name without writing',
+    async ({ events, action }) => {
+      const repository = new RepositoryStub([...events])
+      expect(
+        await new MemoryV2OperatorService(repository).correct({
+          schemaVersion: 2,
+          projectId,
+          sessionId,
+          taskId: 'task:operator',
+          occurredAt: timestamp,
+          mode: 'apply',
+          action,
+        }),
+      ).toMatchObject({
+        outcome: 'rejected',
+        error: { code: 'invalid-request' },
+      })
+      expect(repository.appendRequests).toHaveLength(0)
+    },
+  )
 
   test('revalidation preview is no-write and apply preserves failed verification results', async () => {
     const repository = new RepositoryStub([
@@ -650,10 +935,29 @@ describe('MemoryV2OperatorService', () => {
       reason: 'changed' as const,
       detail: 'Changed on disk',
     }
-    expect(await service.revalidate({ schemaVersion: 2, projectId, sessionId, taskId: 'task:operator', mode: 'preview', actions: [action] })).toMatchObject({ outcome: 'preview' })
+    expect(
+      await service.revalidate({
+        schemaVersion: 2,
+        projectId,
+        sessionId,
+        taskId: 'task:operator',
+        mode: 'preview',
+        actions: [action],
+      }),
+    ).toMatchObject({ outcome: 'preview' })
     expect(repository.verifyCalls).toBe(0)
-    const applied = await service.revalidate({ schemaVersion: 2, projectId, sessionId, taskId: 'task:operator', mode: 'apply', actions: [action] })
-    expect(applied).toMatchObject({ outcome: 'applied', results: [{ result: { outcome: 'failed' } }] })
+    const applied = await service.revalidate({
+      schemaVersion: 2,
+      projectId,
+      sessionId,
+      taskId: 'task:operator',
+      mode: 'apply',
+      actions: [action],
+    })
+    expect(applied).toMatchObject({
+      outcome: 'applied',
+      results: [{ result: { outcome: 'failed' } }],
+    })
     expect(repository.verifyCalls).toBe(1)
   })
 
@@ -674,7 +978,9 @@ describe('MemoryV2OperatorService', () => {
       actions: [action],
     }
     const missingRepository = new RepositoryStub()
-    expect(await new MemoryV2OperatorService(missingRepository).revalidate(request)).toMatchObject({
+    expect(
+      await new MemoryV2OperatorService(missingRepository).revalidate(request),
+    ).toMatchObject({
       outcome: 'rejected',
       error: { code: 'invalid-request' },
     })
@@ -683,7 +989,11 @@ describe('MemoryV2OperatorService', () => {
     const crossTaskRepository = new RepositoryStub([
       observationEvent(1, 'observation:1', 'Other', 'src/a.ts', 'task:other'),
     ])
-    expect(await new MemoryV2OperatorService(crossTaskRepository).revalidate(request)).toMatchObject({
+    expect(
+      await new MemoryV2OperatorService(crossTaskRepository).revalidate(
+        request,
+      ),
+    ).toMatchObject({
       outcome: 'rejected',
       error: { code: 'invalid-request' },
     })
@@ -691,7 +1001,9 @@ describe('MemoryV2OperatorService', () => {
   })
 
   test('repair verifies canonical count and hash and reports mutation mismatch', async () => {
-    const repository = new RepositoryStub([observationEvent(1, 'observation:1', 'One')])
+    const repository = new RepositoryStub([
+      observationEvent(1, 'observation:1', 'One'),
+    ])
     const service = new MemoryV2OperatorService(repository)
     const request = {
       schemaVersion: 2,
@@ -703,7 +1015,9 @@ describe('MemoryV2OperatorService', () => {
     }
     expect(await service.repair(request)).toMatchObject({ outcome: 'repaired' })
     repository.mutateDuringRebuild = true
-    expect(await service.repair({ ...request, rebuildId: 'rebuild:2' })).toMatchObject({ outcome: 'integrity-mismatch' })
+    expect(
+      await service.repair({ ...request, rebuildId: 'rebuild:2' }),
+    ).toMatchObject({ outcome: 'integrity-mismatch' })
   })
 
   test('exports deterministic sanitized manifests and labels optionally included stale sources', async () => {
@@ -727,21 +1041,35 @@ describe('MemoryV2OperatorService', () => {
     })
     const repository = new RepositoryStub([source, forgotten])
     const service = new MemoryV2OperatorService(repository)
-    const request = { schemaVersion: 2, projectId, generatedAt: timestamp, includeStale: false, rendering: 'json' }
+    const request = {
+      schemaVersion: 2,
+      projectId,
+      generatedAt: timestamp,
+      includeStale: false,
+      rendering: 'json',
+    }
     const first = await service.exportManifest(request)
     expect(first).toEqual(await service.exportManifest(request))
     expect(first.outcome).toBe('exported')
     if (first.outcome !== 'exported') return
-    expect(first.manifest.events.map(({ event }) => String(event.eventId))).toEqual([
-      'event:forgotten',
-    ])
+    expect(
+      first.manifest.events.map(({ event }) => String(event.eventId)),
+    ).toEqual(['event:forgotten'])
     expect(JSON.stringify(first.manifest)).not.toContain('do-not-export')
     expect(JSON.stringify(first.manifest)).not.toContain('raw source body')
 
-    const included = await service.exportManifest({ ...request, includeStale: true })
+    const included = await service.exportManifest({
+      ...request,
+      includeStale: true,
+    })
     expect(included).toMatchObject({
       outcome: 'exported',
-      manifest: { events: [{ lifecycle: 'stale', staleReasons: ['forgotten'] }, { lifecycle: 'active' }] },
+      manifest: {
+        events: [
+          { lifecycle: 'stale', staleReasons: ['forgotten'] },
+          { lifecycle: 'active' },
+        ],
+      },
     })
   })
 
@@ -751,7 +1079,8 @@ describe('MemoryV2OperatorService', () => {
       'observation:secrets',
       'Use ghp_abcdefghijklmnopqrstuvwxyz and github_pat_abcdefghijklmnopqrstuvwxyz',
     )
-    if (source.eventType !== 'observation.recorded') throw new Error('invalid fixture')
+    if (source.eventType !== 'observation.recorded')
+      throw new Error('invalid fixture')
     source.payload.observation.provenance = {
       origin: 'tool',
       recordedBy: 'test',
@@ -775,7 +1104,9 @@ describe('MemoryV2OperatorService', () => {
       'private-key-body',
       '-----END PRIVATE KEY-----',
     ].join('\n')
-    const outcome = await new MemoryV2OperatorService(new RepositoryStub([source])).exportManifest({
+    const outcome = await new MemoryV2OperatorService(
+      new RepositoryStub([source]),
+    ).exportManifest({
       schemaVersion: 2,
       projectId,
       generatedAt: timestamp,
@@ -805,12 +1136,16 @@ describe('MemoryV2OperatorService', () => {
     expect(encoded).not.toContain('free-refresh')
     expect(encoded).not.toContain('free-password')
     expect(encoded).toContain('[REDACTED]')
-    expect(outcome.manifest.warnings.join('\n')).toMatch(/Redacted \d+ sensitive value/)
+    expect(outcome.manifest.warnings.join('\n')).toMatch(
+      /Redacted \d+ sensitive value/,
+    )
     expect(outcome.manifest.warnings.length).toBeLessThanOrEqual(100)
   })
 
   test('round-trips into an empty target, exact retry rebuilds then no-ops, conflict and checksum tampering reject', async () => {
-    const source = new RepositoryStub([observationEvent(1, 'observation:1', 'One')])
+    const source = new RepositoryStub([
+      observationEvent(1, 'observation:1', 'One'),
+    ])
     const exported = await new MemoryV2OperatorService(source).exportManifest({
       schemaVersion: 2,
       projectId,
@@ -829,20 +1164,39 @@ describe('MemoryV2OperatorService', () => {
       projectionNames: ['all'],
       pageSize: 1,
     }
-    expect(await service.importManifest(request)).toMatchObject({ outcome: 'imported', importedEvents: 1 })
+    expect(await service.importManifest(request)).toMatchObject({
+      outcome: 'imported',
+      importedEvents: 1,
+    })
     expect(target.rebuildCalls).toBe(1)
-    expect(await service.importManifest(request)).toMatchObject({ outcome: 'no-op' })
+    expect(await service.importManifest(request)).toMatchObject({
+      outcome: 'no-op',
+    })
     expect(target.rebuildCalls).toBe(2)
 
-    const conflict = new RepositoryStub([observationEvent(1, 'observation:other', 'Other')])
-    expect(await new MemoryV2OperatorService(conflict).importManifest(request)).toMatchObject({ outcome: 'rejected' })
-    const invalid = MemoryExportManifestV2Schema.parse({ ...exported.manifest, checksum: `sha256:${'f'.repeat(64)}` })
-    expect(await new MemoryV2OperatorService(new RepositoryStub()).importManifest({ ...request, manifest: invalid })).toMatchObject({ outcome: 'rejected' })
+    const conflict = new RepositoryStub([
+      observationEvent(1, 'observation:other', 'Other'),
+    ])
+    expect(
+      await new MemoryV2OperatorService(conflict).importManifest(request),
+    ).toMatchObject({ outcome: 'rejected' })
+    const invalid = MemoryExportManifestV2Schema.parse({
+      ...exported.manifest,
+      checksum: `sha256:${'f'.repeat(64)}`,
+    })
+    expect(
+      await new MemoryV2OperatorService(new RepositoryStub()).importManifest({
+        ...request,
+        manifest: invalid,
+      }),
+    ).toMatchObject({ outcome: 'rejected' })
   })
 
   test('rejects an oversized manifest events value before schema work or repository writes', async () => {
     const repository = new RepositoryStub()
-    const outcome = await new MemoryV2OperatorService(repository).importManifest({
+    const outcome = await new MemoryV2OperatorService(
+      repository,
+    ).importManifest({
       schemaVersion: 2,
       projectId,
       manifest: { events: [{ detail: 'x'.repeat(32 * 1024 * 1024) }] },
@@ -892,8 +1246,11 @@ describe('MemoryV2OperatorService', () => {
       includeStale: true,
       rendering: 'json',
     })
-    if (exported.outcome !== 'exported') throw new Error('fixture export failed')
-    expect(exported.manifest.warnings.join('\n')).toContain('verification-state-stripped: 1')
+    if (exported.outcome !== 'exported')
+      throw new Error('fixture export failed')
+    expect(exported.manifest.warnings.join('\n')).toContain(
+      'verification-state-stripped: 1',
+    )
 
     const target = new RepositoryStub()
     const service = new MemoryV2OperatorService(target)
@@ -909,7 +1266,9 @@ describe('MemoryV2OperatorService', () => {
       outcome: 'imported',
       importedEvents: 1,
     })
-    expect(target.events.map((event) => event.eventType)).toEqual(['observation.recorded'])
+    expect(target.events.map((event) => event.eventType)).toEqual([
+      'observation.recorded',
+    ])
     expect(await service.importManifest(request)).toMatchObject({
       outcome: 'no-op',
       reason: expect.stringContaining('verification-state-stripped=1'),
@@ -922,14 +1281,17 @@ describe('MemoryV2OperatorService', () => {
       observationEvent(2, 'observation:2', 'Two'),
       observationEvent(3, 'observation:3', 'Three'),
     ]
-    const exported = await new MemoryV2OperatorService(new RepositoryStub(sourceEvents)).exportManifest({
+    const exported = await new MemoryV2OperatorService(
+      new RepositoryStub(sourceEvents),
+    ).exportManifest({
       schemaVersion: 2,
       projectId,
       generatedAt: timestamp,
       includeStale: true,
       rendering: 'json',
     })
-    if (exported.outcome !== 'exported') throw new Error('fixture export failed')
+    if (exported.outcome !== 'exported')
+      throw new Error('fixture export failed')
     const target = new RepositoryStub()
     const request = {
       schemaVersion: 2,
@@ -939,10 +1301,14 @@ describe('MemoryV2OperatorService', () => {
       projectionNames: ['all'],
       pageSize: 1,
     }
-    expect(await new MemoryV2OperatorService(target).importManifest(request)).toMatchObject({
+    expect(
+      await new MemoryV2OperatorService(target).importManifest(request),
+    ).toMatchObject({
       outcome: 'imported',
     })
-    expect(target.appendRequests.map(({ expectedTail }) => expectedTail)).toEqual([
+    expect(
+      target.appendRequests.map(({ expectedTail }) => expectedTail),
+    ).toEqual([
       { kind: 'empty' },
       { kind: 'event', eventId: sourceEvents[0]!.eventId },
       { kind: 'event', eventId: sourceEvents[1]!.eventId },
@@ -955,14 +1321,17 @@ describe('MemoryV2OperatorService', () => {
       observationEvent(2, 'observation:2', 'Two'),
       observationEvent(3, 'observation:3', 'Three'),
     ]
-    const exported = await new MemoryV2OperatorService(new RepositoryStub(sourceEvents)).exportManifest({
+    const exported = await new MemoryV2OperatorService(
+      new RepositoryStub(sourceEvents),
+    ).exportManifest({
       schemaVersion: 2,
       projectId,
       generatedAt: timestamp,
       includeStale: true,
       rendering: 'json',
     })
-    if (exported.outcome !== 'exported') throw new Error('fixture export failed')
+    if (exported.outcome !== 'exported')
+      throw new Error('fixture export failed')
     const target = new RepositoryStub()
     target.appendConflictMutations.set(2, [exported.manifest.events[1]!.event])
     const outcome = await new MemoryV2OperatorService(target).importManifest({
@@ -977,7 +1346,9 @@ describe('MemoryV2OperatorService', () => {
     expect(target.events.map(({ eventId }) => eventId)).toEqual(
       sourceEvents.map(({ eventId }) => eventId),
     )
-    expect(target.appendRequests.map(({ expectedTail }) => expectedTail)).toEqual([
+    expect(
+      target.appendRequests.map(({ expectedTail }) => expectedTail),
+    ).toEqual([
       { kind: 'empty' },
       { kind: 'event', eventId: sourceEvents[0]!.eventId },
       { kind: 'event', eventId: sourceEvents[1]!.eventId },
@@ -990,19 +1361,25 @@ describe('MemoryV2OperatorService', () => {
       observationEvent(1, 'observation:1', 'One'),
       observationEvent(2, 'observation:2', 'Two'),
     ]
-    const exported = await new MemoryV2OperatorService(new RepositoryStub(sourceEvents)).exportManifest({
+    const exported = await new MemoryV2OperatorService(
+      new RepositoryStub(sourceEvents),
+    ).exportManifest({
       schemaVersion: 2,
       projectId,
       generatedAt: timestamp,
       includeStale: true,
       rendering: 'json',
     })
-    if (exported.outcome !== 'exported') throw new Error('fixture export failed')
+    if (exported.outcome !== 'exported')
+      throw new Error('fixture export failed')
     const target = new RepositoryStub()
     const intruder = observationEvent(2, 'observation:intruder', 'Intruder')
-    if (intruder.eventType !== 'observation.recorded') throw new Error('invalid fixture')
+    if (intruder.eventType !== 'observation.recorded')
+      throw new Error('invalid fixture')
     delete intruder.payload.observation.evidence[0]!.excerpt
-    intruder.payload.observation.evidence[0]!.provenance.metadata = { safe: 'yes' }
+    intruder.payload.observation.evidence[0]!.provenance.metadata = {
+      safe: 'yes',
+    }
     target.appendConflictMutations.set(2, [intruder])
     const outcome = await new MemoryV2OperatorService(target).importManifest({
       schemaVersion: 2,
@@ -1026,23 +1403,38 @@ describe('MemoryV2OperatorService', () => {
         observationEvent(1, 'observation:1', 'One'),
         observationEvent(2, 'observation:2', 'Two'),
       ])
-      const exported = await new MemoryV2OperatorService(source).exportManifest({
-        schemaVersion: 2, projectId, generatedAt: timestamp, includeStale: true, rendering: 'json',
-      })
-      if (exported.outcome !== 'exported') throw new Error('fixture export failed')
+      const exported = await new MemoryV2OperatorService(source).exportManifest(
+        {
+          schemaVersion: 2,
+          projectId,
+          generatedAt: timestamp,
+          includeStale: true,
+          rendering: 'json',
+        },
+      )
+      if (exported.outcome !== 'exported')
+        throw new Error('fixture export failed')
       const target = new RepositoryStub()
       target.rebuildResults.push(
         kind === 'thrown'
           ? new Error('sensitive rebuild failure')
           : {
               outcome: 'failed',
-              error: { code: 'unavailable', message: 'rebuild unavailable', retryable: true },
+              error: {
+                code: 'unavailable',
+                message: 'rebuild unavailable',
+                retryable: true,
+              },
             },
       )
       const service = new MemoryV2OperatorService(target)
       const request = {
-        schemaVersion: 2, projectId, manifest: exported.manifest,
-        rebuildId: 'rebuild:recovery', projectionNames: ['all'], pageSize: 1,
+        schemaVersion: 2,
+        projectId,
+        manifest: exported.manifest,
+        rebuildId: 'rebuild:recovery',
+        projectionNames: ['all'],
+        pageSize: 1,
       }
       const failed = await service.importManifest(request)
       expect(failed).toMatchObject({ outcome: 'failed' })
@@ -1051,7 +1443,9 @@ describe('MemoryV2OperatorService', () => {
       expect(target.events).toHaveLength(2)
       expect(target.rebuildCalls).toBe(1)
 
-      expect(await service.importManifest(request)).toMatchObject({ outcome: 'no-op' })
+      expect(await service.importManifest(request)).toMatchObject({
+        outcome: 'no-op',
+      })
       expect(target.rebuildCalls).toBe(2)
       expect(target.events).toHaveLength(2)
       expect(new Set(target.events.map((event) => event.eventId)).size).toBe(2)
@@ -1065,22 +1459,36 @@ describe('MemoryV2OperatorService', () => {
       observationEvent(3, 'observation:3', 'Three'),
     ])
     const exported = await new MemoryV2OperatorService(source).exportManifest({
-      schemaVersion: 2, projectId, generatedAt: timestamp, includeStale: true, rendering: 'json',
+      schemaVersion: 2,
+      projectId,
+      generatedAt: timestamp,
+      includeStale: true,
+      rendering: 'json',
     })
-    if (exported.outcome !== 'exported') throw new Error('fixture export failed')
+    if (exported.outcome !== 'exported')
+      throw new Error('fixture export failed')
     const target = new RepositoryStub()
     target.appendFailureCall = 2
     const service = new MemoryV2OperatorService(target)
     const request = {
-      schemaVersion: 2, projectId, manifest: exported.manifest,
-      rebuildId: 'rebuild:paged', projectionNames: ['all'], pageSize: 1,
+      schemaVersion: 2,
+      projectId,
+      manifest: exported.manifest,
+      rebuildId: 'rebuild:paged',
+      projectionNames: ['all'],
+      pageSize: 1,
     }
-    expect(await service.importManifest(request)).toMatchObject({ outcome: 'failed' })
+    expect(await service.importManifest(request)).toMatchObject({
+      outcome: 'failed',
+    })
     expect(target.events).toHaveLength(1)
     expect(target.rebuildCalls).toBe(0)
 
     target.appendFailureCall = undefined
-    expect(await service.importManifest(request)).toMatchObject({ outcome: 'imported', importedEvents: 3 })
+    expect(await service.importManifest(request)).toMatchObject({
+      outcome: 'imported',
+      importedEvents: 3,
+    })
     expect(target.events.map((event) => event.eventId)).toEqual(
       exported.manifest.events.map(({ event }) => event.eventId),
     )
@@ -1090,19 +1498,35 @@ describe('MemoryV2OperatorService', () => {
   test.each(['page-failure', 'repeated-cursor', 'health-failure'] as const)(
     'returns a bounded retryable export failure for %s',
     async (failure) => {
-      const repository = new RepositoryStub([observationEvent(1, 'observation:1', 'One')])
+      const repository = new RepositoryStub([
+        observationEvent(1, 'observation:1', 'One'),
+      ])
       if (failure === 'page-failure') repository.exportFailureCall = 1
       if (failure === 'repeated-cursor') repository.repeatExportCursor = true
       if (failure === 'health-failure') repository.healthFailure = true
-      const outcome = await new MemoryV2OperatorService(repository).exportManifest({
-        schemaVersion: 2, projectId, generatedAt: timestamp, includeStale: true, rendering: 'json',
+      const outcome = await new MemoryV2OperatorService(
+        repository,
+      ).exportManifest({
+        schemaVersion: 2,
+        projectId,
+        generatedAt: timestamp,
+        includeStale: true,
+        rendering: 'json',
       })
       expect(outcome).toMatchObject({
         outcome: 'failed',
         error:
           failure === 'page-failure'
-            ? { code: 'unavailable', message: 'Memory repository export failed', retryable: true }
-            : { code: 'internal', message: 'Memory operator failed', retryable: true },
+            ? {
+                code: 'unavailable',
+                message: 'Memory repository export failed',
+                retryable: true,
+              }
+            : {
+                code: 'internal',
+                message: 'Memory operator failed',
+                retryable: true,
+              },
       })
       expect(JSON.stringify(outcome)).not.toContain('sensitive')
     },
@@ -1173,7 +1597,9 @@ describe('MemoryV2OperatorService', () => {
     // group for observation:1; adding the second group or the shared forgotten
     // event would exceed the budget, so the selection stops there.
     expect(capped.candidateCount).toBe(1)
-    expect(capped.candidateEventIds.map(String)).toEqual(['event:observation-1'])
+    expect(capped.candidateEventIds.map(String)).toEqual([
+      'event:observation-1',
+    ])
   })
 
   test('compact preview warns when maxEvents exceeds the single-apply cap', async () => {
@@ -1212,40 +1638,44 @@ describe('MemoryV2OperatorService', () => {
   })
 
   test('compact apply archives to a full-64-hex digest path and retries deterministically', async () => {
-  const build = () =>
-    new RepositoryStub([
-      observationEvent(1, 'observation:1', 'One'),
-      observationEvent(2, 'observation:2', 'Two'),
-      forgottenEvent(3, ['observation:1', 'observation:2']),
-    ])
-  const first = await new MemoryV2OperatorService(build()).compact({
-    schemaVersion: 2,
-    projectId,
-    sessionId,
-    mode: 'apply',
-    olderThanDays: 1,
-    maxEvents: 1000,
+    const build = () =>
+      new RepositoryStub([
+        observationEvent(1, 'observation:1', 'One'),
+        observationEvent(2, 'observation:2', 'Two'),
+        forgottenEvent(3, ['observation:1', 'observation:2']),
+      ])
+    const first = await new MemoryV2OperatorService(build()).compact({
+      schemaVersion: 2,
+      projectId,
+      sessionId,
+      mode: 'apply',
+      olderThanDays: 1,
+      maxEvents: 1000,
+    })
+    expect(first.outcome).toBe('applied')
+    if (first.outcome !== 'applied') return
+    expect(first.archiveHash.slice(7)).toHaveLength(64)
+    expect(first.archivePath).toBe(
+      `.openbuff/memory/archive/archive-${first.archiveHash.slice(7)}.jsonl`,
+    )
+    expect(first.archivePath.split('/').at(-1)!).toMatch(
+      /^archive-[a-f0-9]{64}\.jsonl$/,
+    )
+    const second = await new MemoryV2OperatorService(build()).compact({
+      schemaVersion: 2,
+      projectId,
+      sessionId,
+      mode: 'apply',
+      olderThanDays: 1,
+      maxEvents: 1000,
+    })
+    expect(second.outcome).toBe('applied')
+    if (second.outcome !== 'applied') return
+    expect(second.archiveHash).toBe(first.archiveHash)
+    expect(second.archivePath).toBe(first.archivePath)
   })
-  expect(first.outcome).toBe('applied')
-  if (first.outcome !== 'applied') return
-  expect(first.archiveHash.slice(7)).toHaveLength(64)
-  expect(first.archivePath).toBe(`.openbuff/memory/archive/archive-${first.archiveHash.slice(7)}.jsonl`)
-  expect(first.archivePath.split('/').at(-1)!).toMatch(/^archive-[a-f0-9]{64}\.jsonl$/)
-  const second = await new MemoryV2OperatorService(build()).compact({
-    schemaVersion: 2,
-    projectId,
-    sessionId,
-    mode: 'apply',
-    olderThanDays: 1,
-    maxEvents: 1000,
-  })
-  expect(second.outcome).toBe('applied')
-  if (second.outcome !== 'applied') return
-  expect(second.archiveHash).toBe(first.archiveHash)
-  expect(second.archivePath).toBe(first.archivePath)
-})
 
-test('compact apply echoes in-memory counts and bytes with threshold warnings', async () => {
+  test('compact apply echoes in-memory counts and bytes with threshold warnings', async () => {
     const repository = new RepositoryStub([
       observationEvent(1, 'observation:1', 'One'),
       observationEvent(2, 'observation:2', 'Two'),
@@ -1273,7 +1703,9 @@ test('compact apply echoes in-memory counts and bytes with threshold warnings', 
     expect(applied.afterBytes).toBeGreaterThanOrEqual(0)
     expect(applied.warnings.join('\n')).toContain('128MB')
     expect(applied.warnings.join('\n')).toContain('20000')
-    expect(repository.events.filter((event) => event.eventType === 'claim.archived')).toHaveLength(1)
+    expect(
+      repository.events.filter((event) => event.eventType === 'claim.archived'),
+    ).toHaveLength(1)
   })
 
   test('compact apply without privilegedCompact rejects as invalid-request', async () => {
@@ -1300,7 +1732,11 @@ test('compact apply echoes in-memory counts and bytes with threshold warnings', 
 
   test('compact invalid request rejects', async () => {
     const repository = new RepositoryStub()
-    expect(await new MemoryV2OperatorService(repository).compact({ schemaVersion: 2 })).toMatchObject({
+    expect(
+      await new MemoryV2OperatorService(repository).compact({
+        schemaVersion: 2,
+      }),
+    ).toMatchObject({
       outcome: 'rejected',
       error: { code: 'invalid-request' },
     })

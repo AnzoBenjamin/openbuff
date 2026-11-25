@@ -19,6 +19,7 @@ export function createOwnedProcessScope(options: ProcessScopeOptions): OwnedProc
   const grace = options.termGraceMs ?? 200
   const killGrace = options.killGraceMs ?? 200
   const allowance = options.observationMs ?? 1_000
+  const originalDeadline = Object.freeze({ ...(options.originalDeadline ?? { kind: 'unbounded' as const, limitId: options.scopeId }) })
   for (const value of [grace, killGrace, allowance, options.probeTimeoutMs ?? 50, options.pollMs ?? 10]) {
     if (!Number.isSafeInteger(value) || value < 0) throw new Error('Invalid process cleanup policy')
   }
@@ -30,6 +31,7 @@ export function createOwnedProcessScope(options: ProcessScopeOptions): OwnedProc
   let deadlineTimer: unknown
   let missedLimit = false
   let selectedLimitRequested = false
+  let pendingForcedDeadline = false
   const unknown = (): ScopeObservation => ({
     sampledAtMs: clock.nowMs(), clockDomainId: clock.domainId, leader: 'unknown',
     scopePresence: 'unknown', members: [], membershipComplete: false,
@@ -120,9 +122,6 @@ export function createOwnedProcessScope(options: ProcessScopeOptions): OwnedProc
       members: Object.freeze(final.members.map(member => Object.freeze({ ...member,
         identity: Object.freeze({ ...member.identity }) }))) })
     const satisfied = complete(final)
-    const observedWithinBound = clock.nowMs() <= observeUntilMs && final.sampledAtMs <= observeUntilMs
-    const selectedLimit = selectedLimitRequested
-    if (selectedLimit && (!satisfied || !observedWithinBound)) missedLimit = true
     if (!satisfied) {
       try { options.driver.abandonStreams?.() } catch { /* no cleanup credit */ }
     } else removeLifetime()
@@ -132,10 +131,21 @@ export function createOwnedProcessScope(options: ProcessScopeOptions): OwnedProc
     output = { ...output, complete: output.complete && final.streams.stdout === 'drained' && final.streams.stderr === 'drained' }
     let launchFacts: CleanupResult['launchFacts']
     try { launchFacts = options.launchFacts?.() } catch { /* no fabricated identity */ }
+    const now = clock.nowMs()
+    const absoluteBound = originalDeadline.kind === 'finite'
+      ? originalDeadline.expiresAtMs + grace + killGrace + allowance : Infinity
+    const absoluteBoundSatisfied = originalDeadline.kind !== 'finite' ||
+      (originalDeadline.domainId === clock.domainId && Number.isFinite(originalDeadline.expiresAtMs) &&
+        Number.isFinite(absoluteBound) && now <= absoluteBound && final.sampledAtMs <= absoluteBound)
+    const observedWithinBound = absoluteBoundSatisfied && final.clockDomainId === clock.domainId &&
+      Number.isFinite(now) && Number.isFinite(final.sampledAtMs) && Number.isFinite(observeUntilMs) &&
+      now <= observeUntilMs && final.sampledAtMs <= observeUntilMs
+    const selectedLimit = selectedLimitRequested
+    if (selectedLimit && (!satisfied || !observedWithinBound)) missedLimit = true
     const next: CleanupResult = Object.freeze({
       attemptId, scopeId: options.scopeId, status: satisfied ? 'complete' : final.scopePresence === 'living' ? 'failed' : 'unknown',
       selectedTier: options.tier, observedTier: options.tier, satisfiesSelectedTier: satisfied,
-      trigger: reason, originalDeadline: options.originalDeadline ?? { kind: 'unbounded' as const, limitId: options.scopeId },
+      trigger: reason, originalDeadline,
       firstStopAtMs, killAtMs, observeUntilMs, signals: Object.freeze(signals), finalObservation: final,
       output: Object.freeze({ ...output }),
       cleanupAuthorityRetained: !satisfied,
@@ -145,14 +155,22 @@ export function createOwnedProcessScope(options: ProcessScopeOptions): OwnedProc
     })
     result = next
     inFlight = undefined
+    const retryDeadline = pendingForcedDeadline
+    pendingForcedDeadline = false
     // Observer callbacks cannot prevent cleanup result publication.
     try { options.onCleanup?.(next) } catch { /* host observation only */ }
+    if (retryDeadline && !satisfied && !inFlight) void requestStop('deadline', true, true)
     return next
   }
   const requestStop = (reason: StopReason, force = false, retry = false): Promise<CleanupResult> => {
+    if (result && result.status !== 'complete' && (force || reason === 'deadline' || reason === 'owner-shutdown')) retry = true
     if (!result || retry) selectedLimitRequested ||= reason === 'deadline' || reason === 'owner-cancel' || reason === 'output-limit'
     forceRequested ||= force
-    if (inFlight) { if (force) upgrade?.(); return inFlight }
+    if (inFlight) {
+      if (force && reason === 'deadline') pendingForcedDeadline = true
+      if (force) upgrade?.()
+      return inFlight
+    }
     if (result && (!retry || result.status === 'complete')) return Promise.resolve(result)
     // Publish promise before any injected driver/callback can reenter.
     let resolve!: (result: CleanupResult) => void

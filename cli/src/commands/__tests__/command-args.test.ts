@@ -13,13 +13,13 @@ import path from 'path'
 
 import { setProjectRoot } from '../../project-files'
 import { useChatStore } from '../../state/chat-store'
-import { useFeedbackStore } from '../../state/feedback-store'
 import {
   COMMAND_REGISTRY,
   defineCommand,
   defineCommandWithArgs,
   findCommand,
   formatPlanListReport,
+  handleFeedbackCommand,
   planListActiveState,
 } from '../command-registry'
 import {
@@ -34,6 +34,7 @@ import {
 } from '../plan-artifacts'
 
 import type { RouterParams } from '../command-registry'
+import type { FeedbackCommandStorage } from '../command-registry'
 import type {
   ContentBlock,
   PlanStatusContentBlock,
@@ -1516,53 +1517,80 @@ describe('command factory pattern', () => {
   })
 
   describe('feedback command arg handling', () => {
-    test('disabled feedback preserves the submitted draft and keeps the remote form closed', () => {
-      const feedbackCmd = COMMAND_REGISTRY.find((c) => c.name === 'feedback')
-      expect(feedbackCmd).toBeDefined()
+    test('saves feedback locally without attaching conversation context', async () => {
+      const savedInputs: Array<{ category: string; text: string }> = []
+      const storage: FeedbackCommandStorage = {
+        save: async (input) => {
+          savedInputs.push(input)
+          return {
+            record: {
+              id: 'feedback-1',
+              createdAt: '2026-11-24T12:00:00.000Z',
+              category: input.category,
+              text: input.text,
+            },
+            filePath: '/private/openbuff/feedback.jsonl',
+          }
+        },
+        export: async () => '/tmp/feedback-export.jsonl',
+      }
+      const localMessages: unknown[] = []
+      const params = createMockParams({
+        inputValue: '/feedback my bug report',
+        setMessages: (update) => {
+          const messages =
+            typeof update === 'function' ? update([]) : update
+          localMessages.push(...messages)
+        },
+      })
 
-      // Reset the feedback store
-      useFeedbackStore.getState().reset()
+      await handleFeedbackCommand(params, 'my bug report', storage)
 
-      const params = createMockParams({ inputValue: '/feedback my bug report' })
-      feedbackCmd!.handler(params, 'my bug report')
+      expect(savedInputs).toEqual([
+        { category: 'other', text: 'my bug report' },
+      ])
+      expect(params.saveToHistory).not.toHaveBeenCalled()
+      expect(params.setInputValue).toHaveBeenCalled()
+      expect(localMessages).toHaveLength(1)
+      expect(JSON.stringify(localMessages)).not.toContain('my bug report')
+    })
 
-      // Check that feedback text was pre-populated
-      const state = useFeedbackStore.getState()
-      expect(state.feedbackText).toBe('')
-      expect(params.setInputValue).not.toHaveBeenCalled()
+    test('exports only when an explicit destination is provided', async () => {
+      const exported: string[] = []
+      const storage: FeedbackCommandStorage = {
+        save: async () => {
+          throw new Error('save should not run during export')
+        },
+        export: async (destination) => {
+          exported.push(destination)
+          return `/private/${destination}`
+        },
+      }
+      const params = createMockParams({
+        inputValue: '/feedback export feedback.jsonl',
+      })
+
+      await handleFeedbackCommand(params, 'export feedback.jsonl', storage)
+
+      expect(exported).toEqual(['feedback.jsonl'])
       expect(params.setMessages).toHaveBeenCalled()
     })
 
-    test('disabled feedback reports local capability without opening a form', () => {
-      const feedbackCmd = COMMAND_REGISTRY.find((c) => c.name === 'feedback')
-      expect(feedbackCmd).toBeDefined()
-
-      // Reset the feedback store
-      useFeedbackStore.getState().reset()
-
+    test('shows local usage without storing an empty submission', async () => {
+      let saveCalled = false
+      const storage: FeedbackCommandStorage = {
+        save: async () => {
+          saveCalled = true
+          throw new Error('unexpected save')
+        },
+        export: async () => '/private/feedback.jsonl',
+      }
       const params = createMockParams({ inputValue: '/feedback' })
-      const result = feedbackCmd!.handler(params, '')
 
-      // Should return openFeedbackMode
-      expect(result).toBeUndefined()
+      await handleFeedbackCommand(params, '', storage)
 
-      // Feedback text should remain empty
-      const state = useFeedbackStore.getState()
-      expect(state.feedbackText).toBe('')
-    })
-
-    test('disabled feedback stays closed with args', () => {
-      const feedbackCmd = COMMAND_REGISTRY.find((c) => c.name === 'feedback')
-      expect(feedbackCmd).toBeDefined()
-
-      // Reset the feedback store
-      useFeedbackStore.getState().reset()
-
-      const params = createMockParams({ inputValue: '/feedback test' })
-      const result = feedbackCmd!.handler(params, 'test')
-
-      // Should still return openFeedbackMode
-      expect(result).toBeUndefined()
+      expect(saveCalled).toBe(false)
+      expect(params.setMessages).toHaveBeenCalled()
     })
   })
 

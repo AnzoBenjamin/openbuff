@@ -5,6 +5,24 @@ import {
 } from './base2-tool-tiers'
 
 import type { AgentTemplate } from '../templates/types'
+import type { AgentState } from '@codebuff/common/types/session-state'
+
+/** Reset per-turn progressive grants without invalidating an interrupted resume. */
+export function prepareUnlockedToolTiersForTurn(params: {
+  agentState: Pick<AgentState, 'unlockedToolTiers'>
+  agentTemplate: AgentTemplate
+  resumeInterruptedTurn?: boolean
+}): void {
+  const config = params.agentTemplate.programmaticConfig as
+    | { progressiveToolDisclosure?: unknown }
+    | undefined
+  if (
+    config?.progressiveToolDisclosure === true &&
+    params.resumeInterruptedTurn !== true
+  ) {
+    params.agentState.unlockedToolTiers = []
+  }
+}
 
 /**
  * Resolve a template's published `programmaticConfig.fullToolSurface` into the
@@ -40,10 +58,10 @@ function resolveTierCeiling(rawSurface: unknown): TierToolCeiling {
  *     template's toolNames unchanged, even when a prior canary-on run persisted
  *     unlocks, so resume/canary-off cannot permanently shrink a full-surface
  *     template.
- *   - absent OR empty `agentState.unlockedToolTiers` → toolNames unchanged.
- *     Resume/checkpoint consumers treat `[]` the same as the field being
- *     absent; progressive base2 still works because its static template
- *     surface is already CORE-only before any unlock.
+ *   - progressive disclosure enabled → inject the two internal control tools
+ *     into the runtime-only core surface, then append only mode-ceiling tier
+ *     tools from `unlockedToolTiers`.
+ *   - absent OR empty `agentState.unlockedToolTiers` → no non-core tier tools.
  *   - non-empty `unlockedToolTiers` → delegate to `filterByUnlockedTiers` with
  *     the ceiling resolved from `programmaticConfig.fullToolSurface`.
  *
@@ -52,10 +70,15 @@ function resolveTierCeiling(rawSurface: unknown): TierToolCeiling {
  * effective surface for the current step — see run-agent-step.
  */
 export function getEffectiveAgentToolNames(
-  agentTemplate: AgentTemplate,
+  agentTemplate: {
+    toolNames?: readonly string[]
+    programmaticToolNames?: readonly string[]
+    outputMode?: string
+    programmaticConfig?: unknown
+  },
   agentState?: { unlockedToolTiers?: string[] },
 ): string[] {
-  const names = [...agentTemplate.toolNames]
+  const names = [...(agentTemplate.toolNames ?? [])]
   const programmaticToolNames = agentTemplate.programmaticToolNames ?? []
   if (
     agentTemplate.outputMode === 'structured_output' &&
@@ -69,6 +92,14 @@ export function getEffectiveAgentToolNames(
     | undefined
   if (programmaticConfig?.progressiveToolDisclosure === false) {
     return names
+  }
+  if (
+    programmaticConfig?.progressiveToolDisclosure === true &&
+    Array.isArray(programmaticConfig.fullToolSurface)
+  ) {
+    for (const controlTool of ['tool_search', 'tool_load'] as const) {
+      if (!names.includes(controlTool)) names.push(controlTool)
+    }
   }
   const unlockedTiers = agentState?.unlockedToolTiers
   if (!Array.isArray(unlockedTiers) || unlockedTiers.length === 0) {

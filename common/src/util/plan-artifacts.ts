@@ -305,7 +305,7 @@ export function clearPlanState(slug: string): boolean {
 }
 
 /** Defensively normalize a parsed STATE.json, filling missing fields. */
-function normalizePlanState(
+export function normalizePlanState(
   parsed: Partial<PlanSessionState>,
   slug: string,
 ): PlanSessionState {

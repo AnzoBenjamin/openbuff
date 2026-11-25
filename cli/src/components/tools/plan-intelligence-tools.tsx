@@ -639,6 +639,9 @@ export const RunTargetedValidationComponent = defineToolComponent({
     const failures = results.filter(
       (result) => typeof result.errorMessage === 'string',
     )
+    const diagnostics = results.filter(
+      (result) => result.hookName === 'diagnostic-delta',
+    )
 
     return {
       collapsedPreview: previewWithGlyph(
@@ -674,6 +677,52 @@ export const RunTargetedValidationComponent = defineToolComponent({
                 valueColor={theme.muted}
               />
             ) : null}
+            <InlineResults
+              items={diagnostics}
+              previewCount={MAX_ROWS}
+              noun="diagnostic result"
+              renderItem={(diagnostic, index) => {
+                const observations = isRecord(diagnostic.observations)
+                  ? diagnostic.observations
+                  : undefined
+                const before = isRecord(observations?.before)
+                  ? observations.before
+                  : undefined
+                const after = isRecord(observations?.after)
+                  ? observations.after
+                  : undefined
+                const counts = [
+                  Array.isArray(before?.diagnostics)
+                    ? `before: ${before.diagnostics.length}`
+                    : undefined,
+                  Array.isArray(after?.diagnostics)
+                    ? `after: ${after.diagnostics.length}`
+                    : undefined,
+                ].filter(Boolean)
+                const status =
+                  readString(diagnostic.diagnosticStatus) ??
+                  readString(diagnostic.validationStatus) ??
+                  'unknown'
+                const basis = readString(observations?.basis)
+                return (
+                  <box key={index} style={{ flexDirection: 'column' }}>
+                    <DetailRow
+                      label="Diagnostic"
+                      value={basis ? `${status} · ${basis}` : status}
+                      width={width}
+                    />
+                    {counts.length > 0 ? (
+                      <DetailRow
+                        label="Retained diagnostics"
+                        value={counts.join(', ')}
+                        width={width}
+                        valueColor={theme.muted}
+                      />
+                    ) : null}
+                  </box>
+                )
+              }}
+            />
             <InlineResults
               items={failures}
               previewCount={MAX_ROWS}

@@ -59,6 +59,8 @@ const READ_TOOLS = new Set<ToolName>([
   'read_logs',
   'read_outline',
   'read_subtree',
+  'tool_load',
+  'tool_search',
   'workspace_symbol',
 ])
 const MUTATION_TOOLS = new Set<ToolName>([

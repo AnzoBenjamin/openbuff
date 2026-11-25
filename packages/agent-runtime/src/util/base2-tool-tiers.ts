@@ -16,10 +16,9 @@
  *     it cannot widen beyond the template's mode-appropriate surface. The
  *     permissive branch is never implicit: allow-all requires the explicit
  *     `ALLOW_ALL_TIER_TOOLS` sentinel.
- *   - base2 pins `programmaticConfig.progressiveToolDisclosure: false`, so
- *     `getEffectiveAgentToolNames` returns early and base2 never reaches
- *     `filterByUnlockedTiers`. This runtime ceiling is therefore dormant for
- *     base2 and binds only a caller that does enable tier filtering.
+ *   - base2 starts with CORE and opts into tier loading through `tool_search`
+ *     and `tool_load`; each loaded tier is filtered by its mode-resolved full
+ *     surface before the model sees the next step's schemas.
  */
 
 import type { ToolName } from '@codebuff/common/tools/constants'
@@ -49,6 +48,8 @@ export const BASE2_CORE_TOOL_NAMES: readonly ToolName[] = [
   'check_job',
   'check_background_agent',
   'read_logs',
+  'tool_search',
+  'tool_load',
 ]
 
 export type ToolTier = 'core' | 'implement' | 'audit' | 'media_3d' | 'job_extra'
@@ -64,7 +65,7 @@ export type UnlockedToolTier = Exclude<ToolTier, 'core'>
 /** Tools unlocked by each non-core base2 tier. */
 export const BASE2_TIER_TOOL_NAMES: Record<
   UnlockedToolTier,
-  readonly ToolName[]
+  readonly Exclude<ToolName, 'tool_load' | 'tool_search'>[]
 > = {
   implement: [
     'edit_transaction',

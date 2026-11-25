@@ -174,6 +174,148 @@ describe('B19 captured hook execution', () => {
     expect(captured.policyInputs).toHaveLength(0)
   })
 
+  test('independent pre-aborted caller does not run hooks', async () => {
+    const captured = host({ projectRoot: '/repo' })
+    const caller = new AbortController()
+    const reason = new Error('caller cancelled')
+    caller.abort(reason)
+    const { run, calls } = fakeRunner({})
+    await expect(runFileChangeHooks({
+      cwd: '/repo', files: ['src/a.ts'], hooks: [{ command: 'check' }],
+      executionContext: captured.context, signal: caller.signal, runCommand: run,
+    })).rejects.toBe(reason)
+    expect(calls).toEqual([])
+    expect(captured.context.signal?.aborted).toBe(false)
+  })
+
+  test('independent caller cancellation during inference stops hook execution', async () => {
+    await withTempDirAsync(async cwd => {
+      writeFileSync(path.join(cwd, 'package.json'), '{}')
+      const captured = host({ projectRoot: cwd })
+      const caller = new AbortController()
+      const reason = new Error('caller cancelled inference')
+      const blocked = blockManifestRead()
+      const { run, calls } = fakeRunner({})
+      const pending = runFileChangeHooks({
+        cwd, files: ['src/a.ts'], executionContext: captured.context, signal: caller.signal,
+        capturedConfiguration: { autoFileChangeHooks: true, fileChangeHooks: [{ command: 'check' }] },
+        fileSystem: blocked.fileSystem, runCommand: run,
+      })
+      await blocked.waiting
+      caller.abort(reason)
+      blocked.release()
+      await expect(pending).rejects.toBe(reason)
+      expect(calls).toEqual([])
+      expect(captured.context.signal?.aborted).toBe(false)
+    })
+  })
+
+  test('forwards independent cancellation and waits for the hook to settle', async () => {
+    const captured = host({ projectRoot: '/repo' })
+    const caller = new AbortController()
+    const reason = new Error('caller cancelled hook')
+    let entered!: () => void
+    let release!: () => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let observedSignal: AbortSignal | undefined
+    const run = (async (params: { signal?: AbortSignal }) => {
+      observedSignal = params.signal
+      entered()
+      await gate
+      return [{ type: 'json', value: { exitCode: 0, stdout: '', stderr: '' } }]
+    }) as any
+    let settled = false
+    const pending = runFileChangeHooks({
+      cwd: '/repo', files: ['src/a.ts'], hooks: [{ command: 'check' }],
+      executionContext: captured.context, signal: caller.signal, runCommand: run,
+    }).finally(() => { settled = true })
+    await waiting
+    caller.abort(reason)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    release()
+    await expect(pending).rejects.toBe(reason)
+    expect(observedSignal).toBe(caller.signal)
+    expect(captured.context.signal?.aborted).toBe(false)
+  })
+
+  test('forwards independent cancellation to diagnostic preflight and waits for settlement', async () => {
+    const captured = host({ projectRoot: '/repo' })
+    const caller = new AbortController()
+    const reason = new Error('caller cancelled diagnostic')
+    let entered!: () => void
+    let release!: () => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let observedSignal: AbortSignal | undefined
+    let observedContext: unknown
+    const { run } = fakeRunner({})
+    let settled = false
+    const pending = runFileChangeHooks({
+      cwd: '/repo', files: ['src/a.ts'], hooks: [{ command: 'check' }],
+      executionContext: captured.context, signal: caller.signal, runCommand: run,
+      diagnosticPreflightEnabled: true,
+      diagnosticDelta: async params => {
+        observedSignal = params.signal
+        observedContext = params.executionContext
+        entered()
+        await gate
+        return { rejected: false, diagnosticStatus: 'unknown' }
+      },
+    }).finally(() => { settled = true })
+    await waiting
+    caller.abort(reason)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    release()
+    await expect(pending).rejects.toBe(reason)
+    expect(observedSignal).toBe(caller.signal)
+    expect(observedContext).toBe(captured.context)
+    expect(captured.context.signal?.aborted).toBe(false)
+  })
+
+  test('independent cancellation stops and joins the actual terminal hook adapter', async () => {
+    await withTempDirAsync(async cwd => {
+      const caller = new AbortController()
+      const reason = new Error('caller cancelled terminal hook')
+      const other = createExecutionProcessRecorder()
+      const running = createExecutionProcessRecorder({ autoClose: false, closeOnKill: false })
+      let dispatched!: () => void
+      let stopped!: () => void
+      const waiting = new Promise<void>(resolve => { dispatched = resolve })
+      const stopping = new Promise<void>(resolve => { stopped = resolve })
+      const spawn: typeof running.spawn = (executable, argv, options) => {
+        if (executable !== '/bin/bash') return other.spawn(executable, argv, options)
+        const child = running.spawn(executable, argv, options)
+        const kill = child.kill.bind(child)
+        child.kill = ((signal?: NodeJS.Signals | number) => {
+          const result = kill(signal)
+          stopped()
+          return result
+        }) as typeof child.kill
+        dispatched()
+        return child
+      }
+      const captured = host({ projectRoot: cwd, spawn })
+      let settled = false
+      const pending = runFileChangeHooks({
+        cwd, files: ['src/a.ts'], hooks: [{ command: 'printf hook' }],
+        executionContext: captured.context, signal: caller.signal,
+        terminalShell: { executable: '/bin/bash', args: ['-c'] },
+        getTerminalLaunchMetadata: captured.getTerminalLaunchMetadata,
+      }).finally(() => { settled = true })
+      await waiting
+      caller.abort(reason)
+      await stopping
+      expect(settled).toBe(false)
+      expect(captured.context.signal?.aborted).toBe(false)
+      running.calls[0].finish(0, 'SIGTERM')
+      await expect(pending).rejects.toBe(reason)
+      expect(running.calls[0].signals).toContain('SIGTERM')
+    })
+  })
+
   for (const [configured, perFile] of [[true, false], [true, true], [false, false], [false, true]] as const) {
     const branchId = `hook.${configured ? 'configured' : 'inferred-opt-in'}.${perFile ? 'per-file' : 'project'}`
     test(`${branchId} reaches one mediated hook launch`, async () => {
@@ -210,7 +352,7 @@ describe('B19 captured hook execution', () => {
   }
 
   test.each([
-    [undefined, undefined, 300_000],
+    [undefined, undefined, null],
     [-1, undefined, null],
     [10, undefined, 10_000],
     [-1, 20_000, 20_000],
@@ -497,7 +639,7 @@ describe('runFileChangeHooks', () => {
     })
   })
 
-  test('forwards the default 300s bound when a hook omits timeoutSeconds', async () => {
+  test('forwards no local bound when a hook omits timeoutSeconds', async () => {
     const { run, paramsList } = fakeRunner({
       tsc: { exitCode: 0 },
     })
@@ -511,11 +653,11 @@ describe('runFileChangeHooks', () => {
     expect(results).toBeDefined()
     expect(results).toHaveLength(1)
     expect(results![0]).toMatchObject({ hookName: 'typecheck', exitCode: 0 })
-    // No per-hook bound configured: the deliberate 300s default is forwarded.
+    // No per-hook bound selected: long productive checks remain cancellable but unbounded locally.
     expect(paramsList).toHaveLength(1)
     expect(paramsList[0]).toMatchObject({
       command: 'tsc',
-      timeout_seconds: 300,
+      timeout_seconds: -1,
     })
   })
 

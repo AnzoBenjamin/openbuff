@@ -432,7 +432,7 @@ mod native {
                                         plan_digest: d,
                                         artifact_sha256,
                                         plan_json,
-                                    } if initialized && plan.is_none() && stop.is_none() => {
+                                    } if initialized && plan.is_none() && nonce.is_empty() => {
                                         if n.is_empty()
                                             || n.len() > 128
                                             || !control::valid_digest(&d)
@@ -445,6 +445,22 @@ mod native {
                                         // granting plan admission or target-entry authority.
                                         nonce = n;
                                         digest = d;
+                                        let authenticated_at = control::monotonic_ns();
+                                        if authenticated_at >= setup_until {
+                                            cause.get_or_insert(
+                                                "native setup deadline exhausted".into(),
+                                            );
+                                            stop.get_or_insert(setup_until);
+                                        }
+                                        if expires.is_some_and(|e| authenticated_at >= e) {
+                                            cause.get_or_insert(
+                                                "native original action deadline exhausted".into(),
+                                            );
+                                            stop.get_or_insert(expires.unwrap());
+                                        }
+                                        if stop.is_some() {
+                                            return Ok(());
+                                        }
                                         let p: NativePlan =
                                             control::strict_json(plan_json.as_bytes())?;
                                         p.validate(expires)?;
@@ -1001,7 +1017,9 @@ mod native {
                                 .or(waiter.as_ref())
                                 .is_some_and(|(pid, s)| absent(*pid, s))
                         });
-                if complete || stop.is_some_and(|s| now >= s.saturating_add(1_400_000_000)) {
+                let observed_at = control::monotonic_ns();
+                if complete || stop.is_some_and(|s| observed_at >= s.saturating_add(1_400_000_000))
+                {
                     let wrapper_code = wait_status
                         .filter(|s| libc::WIFEXITED(*s))
                         .map(|s| libc::WEXITSTATUS(s));
@@ -1032,12 +1050,12 @@ mod native {
                             .into(),
                         );
                     }
-                    let final_report = serde_json::json!({"type":"final","nonce":nonce,"planDigest":digest,"artifactSha256":sha,"scopeId":scope_id,"waiterPid":waiter.as_ref().map(|v|v.0),"waiterStartTime":waiter.as_ref().map(|v|&v.1),"targetEntry":entry,"targetPid":target.as_ref().map(|v|v.0),"targetLocalPid":target_local,"targetStartTime":target.as_ref().map(|v|&v.1),"pidNamespace":ns,"namespaceDepth":ns_depth,"exitCode":code,"signal":signal,"waitStatusSource":wait_source,"wrapperExitCode":wrapper_code,"wrapperSignal":wrapper_signal,"targetUsage":if genuine.is_some(){target_usage.as_ref()}else{None},"cause":cause,"enforced":enforced,"usage":{"cpuMicros":cpu_us,"maxRssKiB":rss,"scope":"direct-and-adopted-wait4; maxrss is not aggregate tree memory"},"cleanup":{"complete":complete,"scopeTier":if ns.is_some(){"linux-pid-namespace"}else{"direct-child"},"pidNamespace":ns,"namespaceAbsent":ns_absent,"initAbsent":init_absent,"outerChildReaped":child.is_none()||wait_status.is_some(),"reapedPids":reaped,"allChildrenReaped":all_reaped,"reapCount":reap_count,"observationsTruncated":reap_count>reaped.len()||signals.len()>=128,"stopAtNs":stop.map(|s|s.to_string()),"observedAtNs":now.to_string(),"originalExpiryNs":expires.map(|s|s.to_string()),"signals":signals}});
+                    let final_report = serde_json::json!({"type":"final","nonce":nonce,"planDigest":digest,"artifactSha256":sha,"scopeId":scope_id,"waiterPid":waiter.as_ref().map(|v|v.0),"waiterStartTime":waiter.as_ref().map(|v|&v.1),"targetEntry":entry,"targetPid":target.as_ref().map(|v|v.0),"targetLocalPid":target_local,"targetStartTime":target.as_ref().map(|v|&v.1),"pidNamespace":ns,"namespaceDepth":ns_depth,"exitCode":code,"signal":signal,"waitStatusSource":wait_source,"wrapperExitCode":wrapper_code,"wrapperSignal":wrapper_signal,"targetUsage":if genuine.is_some(){target_usage.as_ref()}else{None},"cause":cause,"enforced":enforced,"usage":{"cpuMicros":cpu_us,"maxRssKiB":rss,"scope":"direct-and-adopted-wait4; maxrss is not aggregate tree memory"},"cleanup":{"complete":complete,"scopeTier":if ns.is_some(){"linux-pid-namespace"}else{"direct-child"},"pidNamespace":ns,"namespaceAbsent":ns_absent,"initAbsent":init_absent,"outerChildReaped":child.is_none()||wait_status.is_some(),"reapedPids":reaped,"allChildrenReaped":all_reaped,"reapCount":reap_count,"observationsTruncated":reap_count>reaped.len()||signals.len()>=128,"stopAtNs":stop.map(|s|s.to_string()),"observedAtNs":observed_at.to_string(),"originalExpiryNs":expires.map(|s|s.to_string()),"signals":signals}});
                     if host.enqueue(&final_report).is_err() {
                         process::exit(125);
                     }
                     final_sent = true;
-                    report_until = now.saturating_add(200_000_000).min(
+                    report_until = observed_at.saturating_add(200_000_000).min(
                         stop.map(|s| s.saturating_add(1_400_000_000))
                             .unwrap_or(u64::MAX),
                     );

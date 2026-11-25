@@ -5,6 +5,7 @@ import { STABLE_CHUNK_ID_RE } from '@codebuff/common/util/contradiction-detector
 import { classifyMemoryArtifactPath } from '@codebuff/common/util/memory-artifact-policy'
 import { decodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
 import { rawReadBasesMatch } from '@codebuff/common/util/raw-read-basis'
+import { redactSecretValues } from '@codebuff/common/util/redact-secrets'
 
 import {
   MemoryAppendOutcomeSchema,
@@ -745,10 +746,11 @@ export class MemoryV2Coordinator {
     events: MemoryEventDraft[],
     runtimeState: MemoryRuntimeStateV2,
     preparation?: PreparationOperation,
+    current = () => this.isCurrent(preparation),
   ): Promise<boolean> {
     let committed = false
     const queued = this.queue.then(async () => {
-      if (!this.isCurrent(preparation)) return
+      if (!current()) return
       if (events.length === 0) {
         committed = true
         return
@@ -760,13 +762,14 @@ export class MemoryV2Coordinator {
         events,
         runtimeState,
         preparation,
+        current,
       )
     })
     this.queue = queued.catch((error) => {
       this.logger?.warn({ error }, 'Memory V2 append failed')
     })
     await this.queue
-    return committed && this.isCurrent(preparation)
+    return committed && current()
   }
 
   private appendBounded(
@@ -789,11 +792,13 @@ export class MemoryV2Coordinator {
     events: MemoryEventDraft[],
     runtimeState: MemoryRuntimeStateV2,
     preparation?: PreparationOperation,
+    current = () => this.isCurrent(preparation),
   ): Promise<boolean> {
     let expectedTail = runtimeState.lastEventId
       ? { kind: 'event' as const, eventId: runtimeState.lastEventId }
       : { kind: 'empty' as const }
     for (let attempt = 0; ; attempt++) {
+      if (!current()) return false
       const outcome = MemoryAppendOutcomeSchema.parse(
         await repository.append(
           MemoryAppendRequestSchema.parse({
@@ -804,7 +809,7 @@ export class MemoryV2Coordinator {
           }),
         ),
       )
-      if (!this.isCurrent(preparation)) return false
+      if (!current()) return false
       if (outcome.outcome === 'appended') {
         runtimeState.lastEventId = outcome.lastEventId
         return true
@@ -820,8 +825,8 @@ export class MemoryV2Coordinator {
       )
       const conflict = outcome.error.code === 'conflict' && outcome.error.retryable
       if (!conflict || attempt >= MAX_CONFLICT_RETRIES) return false
-      const tail = await this.deriveRepositoryTail(repository, preparation)
-      if (!this.isCurrent(preparation) || tail.kind === 'failed') return false
+      const tail = await this.deriveRepositoryTail(repository, preparation, current)
+      if (!current() || tail.kind === 'failed') return false
       expectedTail =
         tail.kind === 'empty'
           ? { kind: 'empty' }
@@ -832,6 +837,7 @@ export class MemoryV2Coordinator {
   private async deriveRepositoryTail(
     repository: MemoryRepositoryV2,
     preparation?: PreparationOperation,
+    current = () => this.isCurrent(preparation),
   ): Promise<TailDerivationResult> {
     let afterEventId: MemoryEventId | undefined
     let tail: MemoryEventId | undefined
@@ -844,7 +850,7 @@ export class MemoryV2Coordinator {
           ...(afterEventId ? { afterEventId } : {}),
           limit: 1_000,
         })
-        if (!this.isCurrent(preparation)) return { kind: 'failed' }
+        if (!current()) return { kind: 'failed' }
         const parsed = MemoryExportOutcomeSchema.safeParse(rawOutcome)
         if (!parsed.success || parsed.data.outcome !== 'page') {
           return { kind: 'failed' }
@@ -1401,6 +1407,8 @@ export class MemoryV2Coordinator {
     workspaceState?: WorkspaceStateV1
     native: boolean
     mcp?: boolean
+    /** Host-correlated completed metadata only; does not authorize execution. */
+    completed?: boolean
   }): Promise<void> {
     return this.bestEffort(() => this.captureToolObservation(params))
   }
@@ -1459,11 +1467,19 @@ export class MemoryV2Coordinator {
     workspaceState?: WorkspaceStateV1
     native: boolean
     mcp?: boolean
+    completed?: boolean
   }): Promise<void> {
     const runtimeState = this.runtimeState
     const preparation = this.activePreparation
+    const completed = params.completed === true && params.toolName === 'record_decision' && params.native && !params.mcp
+    // Completed local outcomes outlive cancellation, but never their registered
+    // preparation generation or active turn. Query/finish guards are unchanged.
+    const current = () => this.runtimeState === runtimeState &&
+      (completed ? runtimeState?.turn.status === 'active' && preparation !== undefined &&
+        this.activePreparation === preparation && preparation.generation === this.preparationGeneration : this.isCurrent(preparation))
     if (
       this.config.capture !== 'safe' ||
+      !current() ||
       !this.preparationReady ||
       !runtimeState ||
       runtimeState.turn.status !== 'active' ||
@@ -1743,6 +1759,12 @@ export class MemoryV2Coordinator {
       }
     })
     const evidence = [...fileEvidence, ...chunkEvidence].slice(0, 32)
+    const preservedDecisionText = recordDecisionText === undefined
+      ? undefined
+      : redactSecretValues(recordDecisionText).slice(0, 1024)
+    const preservedDecisionExcerpt = recordDecisionText && typeof recordDecisionValue?.excerpt === 'string'
+      ? redactSecretValues(recordDecisionValue.excerpt).slice(0, 1024)
+      : undefined
     const event = createMemoryEventDraft({
       projectId: this.config.projectId,
       sessionId: runtimeState.sessionId,
@@ -1756,12 +1778,20 @@ export class MemoryV2Coordinator {
           observationId,
           taskId: runtimeState.activeTask.taskId,
           kind: observationKindHint,
-          summary:
+          // Explicitly recorded decisions are the reusable fact/rationale,
+          // not merely an index entry saying that record_decision was called.
+          summary: preservedDecisionText ??
             `${toolNameBounded} ${captureKind} ${paths.length} path(s): ${paths.slice(0, 5).join(', ')}`.slice(
               0,
               1024,
             ),
-          detail: `Captured ${paths.length} path(s), counts ${countsJson.slice(0, 2000)}, digest ${outputDigest.slice(0, 64)}`,
+          detail: [
+            preservedDecisionText,
+            preservedDecisionExcerpt
+              ? `Supporting excerpt: ${preservedDecisionExcerpt}`
+              : undefined,
+            `Captured ${paths.length} path(s), counts ${countsJson.slice(0, 2000)}, digest ${outputDigest.slice(0, 64)}`,
+          ].filter(Boolean).join('\n\n'),
           confidence: 0.5,
           evidence,
           selectors: [
@@ -1803,8 +1833,12 @@ export class MemoryV2Coordinator {
           },
         })
       : event
-    if (!this.isCurrent(preparation) || this.runtimeState !== runtimeState) return
-    await this.append([mainEvent], runtimeState, preparation)
+    if (!current()) return
+    const captureCommitted = await this.append([mainEvent], runtimeState, preparation, current)
+    // Dependent retractions/citations/verification need the confirmed primary
+    // record (or reinforcement). A failed/lost-ack capture cannot erase an old
+    // useful claim or cite a replacement that has not been confirmed stored.
+    if (!captureCommitted) return
 
     // P7 wave X: explicit record_decision supersedes targets emit a
     // best-effort second batch: one claim.superseded draft per validated,
@@ -1904,14 +1938,12 @@ export class MemoryV2Coordinator {
               ignored: [],
             },
           })
-          if (
-            this.isCurrent(preparation) &&
-            this.runtimeState === runtimeState
-          ) {
+          if (current()) {
             await this.append(
               [...supersededDrafts, reusedDraft],
               runtimeState,
               preparation,
+              current,
             )
           }
         }
@@ -2189,6 +2221,15 @@ export class MemoryV2Coordinator {
     runtimeState.activeTask.status = status
     runtimeState.pendingTerminal = undefined
     params.agentState.memoryV2 = runtimeState
+    // The committed terminal decision must not stay half-active while optional
+    // maintenance waits or fails. Maintenance grants no lifecycle authority.
+    if (status === 'completed' && this.config.repository?.consolidateExact) {
+      try {
+        await this.config.repository.consolidateExact({ projectId: this.config.projectId, maxGroups: 16 })
+      } catch (error) {
+        this.logger?.warn({ error }, 'Exact knowledge maintenance deferred')
+      }
+    }
   }
 
   private parsePendingTerminal(

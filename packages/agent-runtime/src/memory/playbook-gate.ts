@@ -1,11 +1,20 @@
-import { parseAgentId } from '@codebuff/common/util/agent-id-parsing'
-import { normalizeSpawnAgentType } from '../tools/handlers/tool/spawn-agent-utils'
-import { sessionEvidenceMatches } from './session-evidence-log'
+import { normalizeAgentIdForLookup } from '@codebuff/common/util/agent-id-parsing'
+import {
+  describePlaybookScope,
+  isPlaybookApplicable,
+  playbookAgentTypeMatches,
+} from '@codebuff/common/util/playbook-applicability'
+import {
+  sessionEvidenceMatches,
+  validationEvidenceMatches,
+} from './session-evidence-log'
 
 import type {
   MemoryPlaybook,
   PlaybookTrigger,
+  ValidationEvidenceContext,
 } from '@codebuff/common/types/memory-playbook'
+import type { PlaybookApplicabilityContext } from '@codebuff/common/util/playbook-applicability'
 import type { SessionEvidenceLog } from './session-evidence-log'
 
 /**
@@ -45,45 +54,23 @@ export const resolvePlaybookGateMode = (
   return 'warn'
 }
 
-type ClassifiedTerminalAction = 'git-push' | 'git-commit' | 'git-stage'
-
-/**
- * Classify a run_terminal_command line into one of the modeled git actions by
- * ARGV TOKENS only: the command is trimmed, split on whitespace, and only the
- * leading `git <subcommand>` pair is inspected. Leading git global options
- * (`-C <dir>`, `-c <key=value>`) are skipped so `git -C <dir> push` still
- * classifies as a push. Prose is never inspected — a command that merely
- * MENTIONS pushing does not classify.
- */
-const classifyTerminalAction = (
-  command: string,
-): ClassifiedTerminalAction | undefined => {
-  const tokens = command.trim().split(/\s+/).filter(Boolean)
-  if (tokens[0] !== 'git') return undefined
-  let index = 1
-  while (index < tokens.length && tokens[index].startsWith('-')) {
-    index += tokens[index] === '-C' || tokens[index] === '-c' ? 2 : 1
-  }
-  const subcommand = tokens[index]
-  if (subcommand === 'push') return 'git-push'
-  if (subcommand === 'commit') return 'git-commit'
-  if (subcommand === 'add' || subcommand === 'stage') return 'git-stage'
-  return undefined
-}
+/** Canonical captured execution facts supplied by the host's SDK classifier. */
+export type PlaybookTerminalAction = 'git-push' | 'git-commit' | 'git-stage'
 
 /**
  * The normalized agent types an input requests to spawn.
  *
  * `spawn_agents` carries `agents: [{ agent_type }]`; `spawn_agent_inline`
  * carries a single top-level `agent_type`. Both are run through
- * normalizeSpawnAgentType — the same canonicalizer the spawn gate and the tool
+ * normalizeAgentIdForLookup — the same canonicalizer the spawn gate and the tool
  * executor use — so an alias spelling (`git_committer`) cannot slip past a
  * playbook.
  */
 const spawnedAgentTypes = (input: Record<string, unknown>): string[] => {
   const agentTypes: string[] = []
   const collect = (agentType: string) => {
-    if (agentType.length > 0) agentTypes.push(normalizeSpawnAgentType(agentType))
+    if (agentType.length > 0)
+      agentTypes.push(normalizeAgentIdForLookup(agentType))
   }
   const agents = input.agents
   if (Array.isArray(agents)) {
@@ -99,41 +86,6 @@ const spawnedAgentTypes = (input: Record<string, unknown>): string[] => {
 }
 
 /**
- * Does a requested agent type refer to the playbook's agent?
- *
- * `normalizeSpawnAgentType` / `normalizeAgentIdForLookup` deliberately PRESERVE
- * the publisher segment and the `@version` suffix (they only canonicalize
- * `_` → `-`), because version and publisher are meaningful identity parts for
- * spawn resolution. A playbook names a bare agent id, so a version-pinned or
- * publisher-qualified spelling (`codebuff/git-committer@1.0.0`) would never
- * match under naive string equality — and would be a trivial bypass of the
- * rule it is meant to enforce. The comparison therefore parses both sides with
- * the shared `parseAgentId` (the SAME parser `getMatchingSpawn` uses): the
- * agent-name segment must match, and the requested publisher/version may only
- * constrain the match when it is actually specified. A version pin never
- * escapes the playbook that governs the underlying agent.
- */
-const agentTypeMatchesPlaybookTarget = (params: {
-  requestedAgentType: string
-  playbookAgentType: string
-}): boolean => {
-  const requested = parseAgentId(params.requestedAgentType)
-  const target = parseAgentId(params.playbookAgentType)
-  if (!requested.agentId || !target.agentId) return false
-  if (requested.agentId !== target.agentId) return false
-  // Publisher/version constraints apply only where the PLAYBOOK names them. A
-  // bare target (`git-committer`) governs EVERY publisher- and version-
-  // qualified spelling of that agent — a version pin must never be a bypass —
-  // while a target that itself names a publisher/version narrows the match to
-  // exactly that identity.
-  if (target.publisherId && target.publisherId !== requested.publisherId) {
-    return false
-  }
-  if (target.version && target.version !== requested.version) return false
-  return true
-}
-
-/**
  * Trigger match: does this playbook apply to this tool call? Every comparison
  * is deterministic and exact — no prose is ever parsed.
  */
@@ -141,6 +93,7 @@ const playbookTriggerMatches = (params: {
   playbook: MemoryPlaybook
   toolName: string
   input: Record<string, unknown>
+  terminalActions?: readonly PlaybookTerminalAction[]
 }): boolean => {
   const { playbook, toolName, input } = params
   const { trigger } = playbook
@@ -149,10 +102,10 @@ const playbookTriggerMatches = (params: {
   if (toolName === 'spawn_agents' || toolName === 'spawn_agent_inline') {
     if (!trigger.spawnAgentType) return false
     return spawnedAgentTypes(input).some((requestedAgentType) =>
-      agentTypeMatchesPlaybookTarget({
+      playbookAgentTypeMatches(
         requestedAgentType,
-        playbookAgentType: trigger.spawnAgentType as string,
-      }),
+        trigger.spawnAgentType as string,
+      ),
     )
   }
 
@@ -161,10 +114,10 @@ const playbookTriggerMatches = (params: {
     const terminalAction = trigger.terminalAction
     if (!command || !terminalAction) return false
     // 'any' is an explicit, opt-in wildcard. Every other action must match the
-    // token-classified git action, so an unrelated command never matches a
+    // host-classified git action, so an unrelated command never matches a
     // git-* playbook (and vice versa).
     if (terminalAction === 'any') return true
-    return classifyTerminalAction(command) === terminalAction
+    return params.terminalActions?.includes(terminalAction) ?? false
   }
 
   return false
@@ -187,6 +140,8 @@ const evidenceIsSatisfied = (params: {
   trigger: PlaybookTrigger
   evidenceLog: SessionEvidenceLog
   nowMs: number
+  validationEvidence?: ValidationEvidenceContext
+  workspaceId: string
 }): boolean => {
   const { evidence, trigger, evidenceLog, nowMs } = params
   if (evidence.kind === 'toolSucceeded') {
@@ -197,7 +152,15 @@ const evidenceIsSatisfied = (params: {
       nowMs,
     })
   }
-  // Phase 2 kinds: not verifiable yet — fail closed (see the doc comment).
+  if (evidence.kind === 'validationSucceeded') {
+    if (params.validationEvidence?.workspaceId !== params.workspaceId) return false
+    return validationEvidenceMatches(params.validationEvidence, {
+      validationKinds: evidence.validationKinds,
+      withinMs: evidence.withinMs,
+      nowMs,
+    })
+  }
+  // Kinds without a trusted producer remain unsatisfied.
   return false
 }
 
@@ -210,13 +173,18 @@ export const describeRequiredEvidence = (params: {
   trigger: PlaybookTrigger
 }): string => {
   const { evidence, trigger } = params
+  const freshness =
+    evidence.withinMs !== undefined ? ` within ${evidence.withinMs}ms` : ''
   if (evidence.kind === 'toolSucceeded') {
     const tool = evidence.tool ?? trigger.tool
     return evidence.commandPattern
-      ? `a successful ${tool} matching ${evidence.commandPattern}`
-      : `a successful ${tool}`
+      ? `a successful ${tool} matching ${evidence.commandPattern}${freshness}`
+      : `a successful ${tool}${freshness}`
   }
-  return `a ${evidence.kind} assertion (not yet verifiable by this runtime)`
+  if (evidence.kind === 'validationSucceeded') {
+    return `a host-verified validation receipt${evidence.validationKinds ? ` for ${evidence.validationKinds.join(' or ')}` : ''}${freshness} (same workspace/root run; unchanged dependency fingerprint)`
+  }
+  return `a ${evidence.kind} assertion ${JSON.stringify(evidence)} (not yet verifiable by this runtime)`
 }
 
 /**
@@ -253,8 +221,9 @@ const formatPlaybookVerdictMessage = (params: {
   const { playbook, toolName, missing } = params
   return [
     `Playbook "${playbook.title}" requires ${missing.join(' and ')} before ${toolName}.`,
+    `Applies to: ${describePlaybookTrigger(playbook)}; ${describePlaybookScope(playbook)}; enforcement=${playbook.enforcement}.`,
     `Instruction: ${playbook.instruction}`,
-    'Satisfy the requirement with a real tool call, then retry; do not claim the evidence exists without it.',
+    'Use a valid host receipt if already available; otherwise satisfy the requirement with a real tool call, then retry.',
   ].join(' ')
 }
 
@@ -272,10 +241,14 @@ const formatPlaybookVerdictMessage = (params: {
 export const evaluatePlaybookGate = (params: {
   toolName: string
   input: Record<string, unknown>
-  playbooks: MemoryPlaybook[] | undefined
+  playbooks: readonly MemoryPlaybook[] | undefined
   evidenceLog: SessionEvidenceLog
   nowMs: number
   env: Record<string, string | undefined>
+  applicability?: PlaybookApplicabilityContext
+  terminalActions?: readonly PlaybookTerminalAction[]
+  /** Only the trusted host registry may supply this, never tool-output JSON. */
+  validationEvidence?: ValidationEvidenceContext
 }): PlaybookGateVerdict[] => {
   const { toolName, input, playbooks, evidenceLog, nowMs } = params
   // Zero-cost fast path: no playbooks installed (the common case) or the gate
@@ -286,15 +259,21 @@ export const evaluatePlaybookGate = (params: {
 
   const verdicts: PlaybookGateVerdict[] = []
   for (const playbook of playbooks) {
-    if (playbook.status !== 'active') continue
-    if (playbook.expiresAt !== undefined && playbook.expiresAt <= nowMs) {
+    if (!isPlaybookApplicable(playbook, { ...params.applicability, nowMs }))
       continue
-    }
     // An inject-only playbook surfaces NO verdict: the compiled band
     // (./playbook-context.ts) is its only channel, so the gate stays silent
     // and dispatch is unaffected in every mode.
     if (playbook.enforcement === 'inject-only') continue
-    if (!playbookTriggerMatches({ playbook, toolName, input })) continue
+    if (
+      !playbookTriggerMatches({
+        playbook,
+        toolName,
+        input,
+        terminalActions: params.terminalActions,
+      })
+    )
+      continue
 
     const missing = playbook.trigger.requireEvidence
       .filter(
@@ -304,6 +283,8 @@ export const evaluatePlaybookGate = (params: {
             trigger: playbook.trigger,
             evidenceLog,
             nowMs,
+            validationEvidence: params.validationEvidence,
+            workspaceId: playbook.workspaceId,
           }),
       )
       .map((evidence) =>

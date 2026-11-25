@@ -1,3 +1,4 @@
+import { classifyTerminalProcedureActions } from '../services/harness-enforcement'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -769,5 +770,20 @@ describe('harness enforcement services', () => {
       token?: unknown
     }
     expect(owner.token).toBe('victim-token')
+  })
+})
+
+
+describe('procedural action facts from the shared shell scanner', () => {
+  test('staging facts do not turn routine staging into an approval effect', () => {
+    expect(classifyTerminalProcedureActions('git add -- src/owned.ts')).toEqual(['git-stage'])
+    expect(classifyTerminalHarnessAction('git add -- src/owned.ts')).toBeUndefined()
+  })
+  test('compound and wrapped actions preserve each procedural effect', () => {
+    expect(classifyTerminalProcedureActions("env MODE=local sh -c 'git add owned && git commit -m done' && git push origin topic")).toEqual(['git-stage', 'git-commit', 'git-push'])
+    expect(classifyTerminalProcedureActions("echo 'git add && git commit -m done'")).toEqual([])
+  })
+  test('unsupported context-changing syntax preserves potential obligations', () => {
+    expect(classifyTerminalProcedureActions('git -C elsewhere commit -m done')).toEqual(['git-commit', 'git-push', 'git-stage'])
   })
 })

@@ -36,9 +36,9 @@ async function runSync(params: Omit<Params, 'cwd' | 'process_type'> & { signal?:
 }
 
 describe('resolveTerminalTimeout', () => {
-  it('gives an omitted SYNC timeout a 120 s execution-time default and leaves BACKGROUND unbounded', () => {
-    expect(DEFAULT_SYNC_TIMEOUT_SECONDS).toBe(120)
-    expect(resolveTerminalTimeout(undefined, 'SYNC')).toEqual({ localSeconds: -1, defaultExecutionMs: 120_000 })
+  it('leaves omitted SYNC and BACKGROUND timeouts unbounded unless the host selects a limit', () => {
+    expect(DEFAULT_SYNC_TIMEOUT_SECONDS).toBe(-1)
+    expect(resolveTerminalTimeout(undefined, 'SYNC')).toEqual({ localSeconds: -1 })
     expect(resolveTerminalTimeout(undefined, 'BACKGROUND')).toEqual({ localSeconds: -1 })
   })
 
@@ -46,6 +46,7 @@ describe('resolveTerminalTimeout', () => {
     expect(resolveTerminalTimeout(600, 'SYNC')).toEqual({ localSeconds: 600 })
     expect(resolveTerminalTimeout(-1, 'SYNC')).toEqual({ localSeconds: -1 })
     expect(resolveTerminalTimeout(-1, 'SYNC', { allowUnbounded: false })).toEqual({ localSeconds: -1, defaultExecutionMs: 120_000 })
+    expect(resolveTerminalTimeout(undefined, 'SYNC', { allowUnbounded: false })).toEqual({ localSeconds: -1, defaultExecutionMs: 120_000 })
     expect(resolveTerminalTimeout(-1, 'SYNC', { maxSeconds: 900 })).toEqual({ localSeconds: 900 })
     expect(resolveTerminalTimeout(3_600, 'BACKGROUND', { maxSeconds: 900 })).toEqual({ localSeconds: 900 })
     expect(resolveTerminalTimeout(undefined, 'SYNC', { maxSeconds: 30 })).toEqual({ localSeconds: -1, defaultExecutionMs: 30_000 })

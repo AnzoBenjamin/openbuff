@@ -54,9 +54,9 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
 
 #### N01 — Prompt caching on the agent loop
 - **Findings:** providers-sdk-01 (confirmed: 0 `cache_control` markers in a 35 KB streaming request), memory-context-11, orchestration-08.
-- **Scope:** `sdk/src/impl/llm.ts:1412` uses `isChatGptOAuth && stripCacheControl === false`; change it to `compatibility.stripCacheControl === false` like the non-streaming path at `:2220`. Default OpenRouter routes to `anthropic/*` models to send markers. Keep one system prompt and tool list across plan/execute so the cached prefix survives a mode switch. Show cache-hit % per turn.
-- **Accept:** The fake-Anthropic wire test sees markers on the system, tools and last-user breakpoints for the anthropic-compatible and OpenRouter-Anthropic presets, and none for strict OpenAI-compatible presets. A 10-step fixture reports cache-read tokens on steps 2–10. A plan→execute switch keeps the same prefix hash.
-- **Verify:** `bun test sdk/src/__tests__/llm-cache-control-wire.test.ts` *(new; seed from `.agents/sessions/product-audit-2026-11-12/verification/probes/runtime/p7-cache.ts`)*, `bun test sdk/src/__tests__/llm.test.ts`.
+- **Scope:** `sdk/src/impl/llm.ts:1412` uses `isChatGptOAuth && stripCacheControl === false`; change it to `compatibility.stripCacheControl === false` like the non-streaming path at `:2220`. Default OpenRouter routes to `anthropic/*` models to send markers. Keep plan and execute prompts and tool surfaces mode-specific; mark only the byte-identical serialized provider-tool prefix before catalog- or mode-specific schemas. Show cache-hit % per turn only when usage is complete.
+- **Accept (user-authorized practical scope, 2026-11-24):** The fake-Anthropic wire test sees markers on the system, tools and last-user breakpoints for the anthropic-compatible and OpenRouter-Anthropic presets, and none for strict OpenAI-compatible presets. A 10-step fixture reports cache-read tokens on steps 2–10. Actual base2 plan and execute requests have the same SHA-256 for their serialized marked tool prefix, while their instructions and suffixes remain distinct; changing a schema inside the shared prefix causes a miss in the fake provider. Existing plan-mode dispatch controls continue to prove mutation tools are refused. This scope does not claim identical full prompts, real-provider routing, cache thresholds, or real cache hits.
+- **Verify:** `bun test sdk/src/__tests__/llm-cache-control-wire.test.ts`, `bun test agents/__tests__/base2-progressive-tool-disclosure.test.ts packages/agent-runtime/src/__tests__/plan-mode-dispatch.test.ts`, `bun test packages/agent-runtime/src/__tests__/cache-token-aggregation.test.ts packages/agent-runtime/src/__tests__/main-prompt.test.ts packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts packages/agent-runtime/src/system-prompt/__tests__/prompts-ledger.test.ts`, and `bun test cli/src/hooks/helpers/__tests__/send-message.test.ts cli/src/components/__tests__/message-block.completion.test.tsx`. The prior sdk/src/__tests__/llm.test.ts path is not present; use these existing wire and runtime suites instead.
 - **Prereqs:** none.
 
 #### N02 — Project trust gate for executable and credential-bearing config
@@ -75,7 +75,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - After trust is granted, the same fixtures behave as configured.
   - A config change after trust re-prompts.
   - `--trust-project-agents` still works for CI and is recorded as an explicit grant.
-- **Verify:** `bun test sdk/src/__tests__/project-trust-gate.test.ts` *(new)*, `bun test sdk/src/__tests__/host-config.test.ts sdk/src/__tests__/provider-config.test.ts`, plus a tmux CLI check of the trust screen.
+- **Verify:** `bun test cli/src/components/__tests__/project-trust-screen.test.tsx cli/src/utils/__tests__/project-trust-gate.test.ts`, `bun test sdk/src/__tests__/project-trust-gate.test.ts sdk/src/__tests__/host-config.test.ts sdk/src/__tests__/provider-config.test.ts`, plus a tmux CLI startup check of the trust screen.
 - **Prereqs:** none (B29 later binds it).
 
 #### N03 — Plan mode is read-only
@@ -86,7 +86,8 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - The `p4.ts` and `p5.ts` probes become tests: plan-mode rename and `rm` are refused with a typed `plan_mode_read_only` error, and the files are unchanged.
   - Execute mode is unaffected.
   - Non-plan agents with declared `read-only`/`workspace-write` profiles run under those profiles. This changes the B19 choice to keep full-access; record that in B19's next renewal.
-- **Verify:** `bun test agents/tool-reachability.test.ts packages/agent-runtime/src/tools/handlers/tool/__tests__/` and `bun test packages/agent-runtime/src/__tests__/plan-mode-dispatch.test.ts` *(new)*.
+- **Provisioning/enforcement decision (user-authorized 2026-11-25):** Native provisioning stays opt-in. Plan terminal actions are bound to authenticated native-only read-only authority, retaining required host/parent capabilities and requiring verified filesystem, network and process-tree enforcement before target entry. No verified enforcement means typed refusal, not portable/lexical fallback; file/search tools and execute-mode behavior remain unchanged. Host-mounted paths are read-only while sandbox-private scratch space may be writable. Non-plan declarations retain their existing lexical ceilings. This decision and the focused local proof do not promote N03 or renew accepted prerequisite receipts.
+- **Verify:** `bun test agents/tool-reachability.test.ts packages/agent-runtime/src/tools/handlers/tool/__tests__/` and `bun test packages/agent-runtime/src/__tests__/plan-mode-dispatch.test.ts` *(new)*. Authenticated plan controls: `common/src/util/__tests__/execution-target-bounds.test.ts`, `sdk/src/__tests__/plan-terminal-enforcement.test.ts`, `sdk/src/__tests__/plan-terminal-identity.test.ts`, and missing-enforcement controls in `sdk/src/__tests__/native-host-integration.test.ts`. The explicit Linux native fixture is `sdk/src/__tests__/plan-terminal-native.integration.test.ts`; see [the testing instructions](../../testing.md#opt-in-linux-plan-terminal-enforcement) for its opt-in invocation.
 - **Prereqs:** none.
 
 #### N04 — Typed results instead of silent empty or false success
@@ -101,7 +102,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - The extractive compaction pass is labelled extractive.
   - Pruner skips and failures appear in the compaction card.
 - **Accept:** Each listed tool has a negative test reproducing its failure state and asserting the typed status, a reason and a next step. The `glob('Dockerfile', cwd:'src')` probe with only src/auth/login.ts in memory returns no match.
-- **Verify:** `bun test packages/agent-runtime/src/tools/handlers/tool/__tests__/discovery-coordinator.test.ts sdk/src/__tests__/language-intelligence.test.ts packages/agent-runtime/src/tools/handlers/tool/__tests__/web-search.test.ts` plus new negative cases in each.
+- **Verify:** `bun test packages/agent-runtime/src/orchestration/__tests__/discovery-coordinator.test.ts sdk/src/__tests__/language-intelligence.test.ts packages/agent-runtime/src/tools/handlers/tool/__tests__/web-search.test.ts` plus the negative cases in each.
 - **Prereqs:** none.
 
 #### N05 — Web egress safety
@@ -114,7 +115,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
 #### N06 — Command execution defaults and job lifetime
 - **Findings:** exec-jobs-01 (confirmed hang), exec-jobs-09 (**HIGH**, confirmed orphans), exec-jobs-18.
 - **Scope:**
-  - SYNC commands default to a 120 s timeout (the model may raise it, with a user cap) and `stdin: ignore`.
+  - SYNC commands have no automatic local timeout; a selected `timeout_seconds` or host cap still applies, and stdin remains closed (`stdin: ignore`). This supersedes the original 120-second default under the user-authorized productive-work policy (2026-11-25).
   - An idle-output watchdog reports "waiting for input?" after 30 s.
   - Cancelling keeps partial output.
   - On SDK/CLI exit (normal, SIGINT, SIGTERM), attached jobs are terminated by process group. Detached jobs follow the existing ownership transfer.
@@ -141,7 +142,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - Retry-After 45 s is honoured with an injected clock.
   - An `http://[::1]:11434/v1` provider resolves as local.
   - After one 401 failover, later requests go to the backup until restart or `/provider`.
-- **Verify:** `bun test sdk/src/__tests__/retry-config.test.ts sdk/src/__tests__/failover.test.ts sdk/src/__tests__/llm.test.ts`.
+- **Verify:** `bun test sdk/src/__tests__/retry-config.test.ts sdk/src/__tests__/provider-resilience-wire.test.ts sdk/src/__tests__/provider-local-endpoint.test.ts sdk/src/impl/__tests__/failover.test.ts sdk/src/impl/__tests__/failover-integration.test.ts`.
 - **Prereqs:** B08 (accepted).
 
 #### N08 — `/compact` and context controls
@@ -161,9 +162,9 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
 
 #### N09 — Ship tree-sitter queries in release builds (early B24 split)
 - **Findings:** language-intel-05 (confirmed: an 18-entry tarball with 0 `.scm` files).
-- **Scope:** Add `tree-sitter-queries/` to the release workflow tar lists and the npm wrapper `files`, or embed the queries in the binary. `/index status` reports `degraded: no queries` when they are missing.
-- **Accept:** The tarball built by the release workflow's file list contains every query file. The installed smoke test indexes a TS fixture and finds symbols, calls and imports. With the queries removed, `/index status` says degraded.
-- **Verify:** The release smoke script in `.github/workflows/` plus `bun test packages/code-map`.
+- **Scope:** The CLI release tar list and SDK npm package both ship every `TAG_QUERY_FILES` entry. `/index status` reports `degraded: no queries` when query assets are unavailable.
+- **Accept (user-authorized practical scope, 2026-11-24):** The release workflow retains its explicit source-count guard; the SDK build copies every query into `dist/tree-sitter-queries/`, and `npm pack --dry-run` includes all 14. Strict CJS and ESM SDK consumers with workspace `@codebuff/code-map` resolution blocked parse a TypeScript fixture and produce the cross-file caller edge; code-map tests validate imports, and missing-query status controls report degraded. This scope does not claim that every platform-specific CLI binary/tarball was freshly built and smoked.
+- **Verify:** `bun run --cwd sdk build`; strict CJS/ESM runs of `sdk/test/tree-sitter-queries/test-query-files.js`; `npm pack --dry-run --json --ignore-scripts` with a 14-query assertion; `CODEBUFF_WASM_DIR=<sdk-dist>/wasm bun test --isolate` from `packages/code-map`; and `bun test --isolate src/commands/__tests__/index-command.test.ts` from `cli`.
 - **Prereqs:** none. B24 binds this task.
 
 #### N10 — Eval regression gate
@@ -173,8 +174,8 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - Fix or delete the `[buffbench]` workflow and the dead `evals/package.json` scripts.
   - Run a small task subset on PRs that touch `agents/`, `common/src/tools/params/` or system prompts.
   - Report per model the edit-commit rate, tool error rate, LSP call rate and static prompt tokens.
-- **Accept:** A deliberately broken prompt change fails the PR subset. The nightly writes a results artifact and fails on regression. Every `evals/package.json` script resolves to an existing file.
-- **Verify:** run `bun evals/buffbench/main-nightly.ts --dry-run` and the nightly against a two-task subset, and a workflow dry run via `act` or CI.
+- **Accept (user-authorized practical scope, 2026-11-24):** Offline nightly and two-task PR dry-runs validate `base2`, the full nightly eval file, selected PR task IDs and static prompt metrics. Injected-runner tests prove results are copied to the requested artifact path, report per-model metrics, and reject a deliberately regressed score; every package script that names a file resolves. The scheduled/manual nightly and PR-subset workflows remain canonical; the redundant manual-only `buffbench.yml` was removed. This gate does not claim a provider-backed nightly, an actual hosted workflow run, or live model-quality results (`act` is unavailable in this environment).
+- **Verify:** `bun evals/buffbench/main-nightly.ts --dry-run`; `bun evals/buffbench/main-nightly.ts --subset pr --tasks autodetect-knowledge,update-tool-gen --dry-run`; `bun test --isolate evals/buffbench/__tests__/main-nightly.test.ts evals/buffbench/__tests__/regression-gate.test.ts evals/buffbench/__tests__/quality-metrics.test.ts`; plus the `evals/package.json` file-target check.
 - **Prereqs:** B30 (accepted).
 
 ### Wave 2 — cost, onboarding and command UX
@@ -182,21 +183,12 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
 #### N11 — Static prompt budget and deferred tools
 - **Findings:** orchestration-02 (about 47k fixed tokens), extensions-01, read-search-07, read-search-08, read-search-09, exec-jobs-14, language-intel-12, orchestration-03, orchestration-09, write-edit-07.
 - **Scope:** Apply REPORT.md "Minimalism vs breadth".
-  - **Turn on deferral:** enable `progressiveToolDisclosure` and add a `tool_search`/`tool_load` tool.
-  - **Declared core:** about 15 tools.
-  - **Merges:** job tools into one `jobs` tool, and `inspect_workspace` with `inspect_environment`.
-  - **Defer:** the audit trio, review bundle, 3D tier, LSP tools (unless a server is detected), `browser_logs`, `read_docs`, git tools, the plan tools outside plan mode, and MCP tools above a token threshold (per-server `direct|deferred|hidden`).
-  - **Programmatic only:** the validation tools.
-  - **Remove:** unreachable tools (`add_subgoal`, `update_subgoal`, `think_deeply`, `end_turn`), quarantined tools (`find_files`, `find_files_matching_content`), and the standalone legacy edit registrations.
-  - **Catalog:** one line per agent, with contracts served through `lookup_agent_info`.
-  - **Prompt text:** fix the false `code_search` description, state read policy once, remove `cap.v3` mentions, and settle on one planning surface (`write_todos` with ids, status and `depends_on`; `create_plan` stays plan-mode only).
-- **Accept:**
-  - A CI test fails when base2's system prompt, tools, catalog and instructions exceed 25k tokens.
-  - A deferred tool is callable after `tool_load` in the same turn.
-  - With a 60-tool MCP server configured, the fixed token count is unchanged.
-  - The tool-reachability test passes with no unreachable registered tools.
-  - The N10 eval subset shows no regression against the pre-change baseline.
-- **Verify:** `bun test agents/tool-reachability.test.ts agents/__tests__/prompt-budget.test.ts` *(new)* and the N10 PR subset.
+-  - Default base2 exposes a core surface with mode-filtered `tool_search`/`tool_load`; additional tiers are loaded on demand and their schemas arrive on the next model step.
+  - Keep `fullToolSurface` as a private mode-resolved ceiling. Plan-mode tier searches/loads must never reveal or append mutating tools.
+  - Reset tier grants on a new turn and preserve them when resuming an interrupted turn.
+  - Preserve an explicit `progressiveToolDisclosure: false` full-surface compatibility option.
+- **Accept (user-authorized practical scope, 2026-11-24):** Offline base2 static prompt measurement is **24,663 tokens / 23 tools**, below the 25k budget. A same-turn fake loop proves `edit_transaction` absent → `tool_search` → `tool_load(implement)` → `edit_transaction` visible on the following request; plan-mode search/load never exposes it. Fresh turns reset unlocked tiers, checkpoint resumes retain them, and the explicit opt-out preserves the historical full surface. This scope defers tool merging/removal, MCP catalog thresholding, and provider-backed N10 quality comparisons; it does not claim live model edit-rate improvement.
+- **Verify:** `bun test agents/__tests__/base2-progressive-tool-disclosure.test.ts agents/__tests__/base2-tool-loading.test.ts`, `bun test packages/agent-runtime/src/util/__tests__/agent-tool-names.test.ts packages/agent-runtime/src/__tests__/loop-agent-steps.test.ts`, `bun test evals/buffbench/__tests__/quality-metrics.test.ts`, and `bun evals/buffbench/main-nightly.ts --dry-run`.
 - **Prereqs:** N10 (for the regression check).
 
 #### N12 — Headless run and ACP intake
@@ -212,7 +204,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - A missing key gives the same message as the TUI.
   - An ACP prompt with a file link delivers the file content.
   - Every README example runs under `bun test sdk/e2e/readme-examples.test.ts` *(new)*.
-- **Verify:** `bun test cli/src/__tests__/cli-args.test.ts cli/src/commands/__tests__/run-command.test.ts sdk/src/services/acp/__tests__/`.
+- **Verify:** `bun test cli/src/__tests__/cli-args.test.ts cli/src/__tests__/run-command.test.ts sdk/src/__tests__/acp-agent.test.ts sdk/src/__tests__/acp-agent-p1t2.test.ts sdk/src/__tests__/acp-client.test.ts sdk/src/__tests__/acp-extensions.test.ts sdk/src/__tests__/acp-outcomes.test.ts sdk/src/__tests__/acp-session-data.test.ts sdk/src/services/acp/__tests__/ext-methods.test.ts`.
 - **Prereqs:** B02 (accepted).
 
 #### N13 — First-run onboarding and credential entry
@@ -224,7 +216,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - Refresh the stale presets (current model IDs, Bedrock region as a parameter) and record a date per preset.
   - Ship a self-contained `openbuff.json.example`.
 - **Accept:** In a fresh `HOME`, launching the TUI, pasting a key and sending a prompt works without a restart (tmux test). The key file is 0600 and absent from `git status`. Every preset model ID resolves through discovery when online.
-- **Verify:** `bun test cli/src/components/__tests__/provider-picker-screen.test.tsx sdk/src/__tests__/credentials.test.ts` plus the tmux scenario in `docs/testing.md` style.
+- **Verify:** `bun test cli/src/components/__tests__/provider-picker-screen.test.tsx` *(new)* and `bun test cli/src/components/__tests__/provider-recovery.test.tsx sdk/src/__tests__/credentials.test.ts`, plus the tmux scenario in `docs/testing.md` style.
 - **Prereqs:** N02 (credential trust rules).
 
 #### N14 — Approval rules and an honest prompt
@@ -243,7 +235,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - In `ask-edits`, each edit shows a diff and waits.
   - Writing `.env` asks in every mode.
   - A 92%-similar edit shows "applied with near-match (92%)".
-- **Verify:** `bun test sdk/src/__tests__/harness-enforcement.test.ts cli/src/utils/__tests__/create-run-config.test.ts cli/src/components/__tests__/permissions-screen.test.tsx`.
+- **Verify:** `bun test sdk/src/__tests__/harness-enforcement.test.ts cli/src/__tests__/unit/create-run-config.test.ts cli/src/components/__tests__/permissions-screen.test.tsx`.
 - **Prereqs:** B18 (accepted), N02.
 
 #### N15 — Startup budget
@@ -254,7 +246,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - Load the wasm asynchronously.
   - Make the direnv spawn asynchronous and off the critical path.
 - **Accept:** On CI hardware, `--version` is under 100 ms and ready-to-type under 800 ms, with idle RSS reported. The numbers are recorded in `PERFORMANCE.json` and gated by B32.
-- **Verify:** `bun run scripts/measure-startup.ts` *(new)* in CI.
+- **Verify:** `bun test --isolate cli/src/__tests__/binary-entry-fast-path.test.ts` and measure source `--version` from the repository root with `TIMEFORMAT='elapsed=%3R seconds'; time bun run cli/src/binary-entry.ts --version`. Full ready-to-type and RSS collection still requires a CI benchmark script.
 - **Prereqs:** none.
 
 #### N16 — Bounded tool outputs
@@ -272,7 +264,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - `inspect_codebase_structure` on this checkout finishes in under 3 s and returns under 25k tokens.
   - The `read-search-03` probe shows `complete:false` and no anchor after trim.
   - A 1 MB command output can be paged.
-- **Verify:** `bun test sdk/src/__tests__/read-files.test.ts packages/agent-runtime/src/__tests__/simplify-tool-results.test.ts sdk/src/__tests__/audit-intelligence.test.ts`.
+- **Verify:** `bun test sdk/src/__tests__/read-files.test.ts packages/agent-runtime/src/util/__tests__/simplify-tool-results.test.ts sdk/src/__tests__/audit-intelligence.test.ts`.
 - **Prereqs:** B05 (accepted).
 
 #### N17 — Isolated parallel work on git worktrees (interim B34)
@@ -299,7 +291,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - After a failed turn that created two files and edited one, `/rewind code` restores the pre-turn tree and deletes the new files.
   - A cancelled turn rewinds only itself, not the previous good turn.
   - `git push --mirror` publishes no snapshot refs.
-- **Verify:** `bun test cli/src/utils/__tests__/turn-snapshots.test.ts cli/src/commands/__tests__/snapshot-commands.test.ts`.
+- **Verify:** `bun test cli/src/utils/__tests__/turn-snapshots.test.ts cli/src/utils/__tests__/snapshot-preview.test.ts cli/src/hooks/helpers/__tests__/turn-completion-snapshot.test.ts`. Command-routing coverage for `/restore` and `/undo-turn` is still to be added.
 - **Prereqs:** B04 (accepted).
 
 ### Wave 3 — breadth and parity
@@ -318,13 +310,8 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
 
 #### N20 — Media and document inputs
 - **Findings:** read-search-05, read-search-06, web-media-evals-09.
-- **Scope:**
-  - PDF reads with a `pages` parameter, as text with an image fallback.
-  - `.ipynb` reads as cells with outputs.
-  - Latin-1 and UTF-16 decoding with the detected encoding reported.
-  - `read_image` downscales to the model's limit and drops BMP/TIFF claims unless converted.
-  - One image pipeline for user attachments and model reads.
-- **Accept:** Fixtures for a 30-page PDF (pages 3–5), a notebook, a UTF-16 file and a 12 MB PNG each return usable bounded content.
+- **Scope (user-authorized practical reduction, 2026-11-24):** Keep supported `read_image` formats and make `.ipynb` source cells plus BOM-marked UTF-16LE/BE readable. Notebook outputs and derived byte encodings are display-only and never mint edit authority. PDF page extraction, Latin-1 decoding, 12 MB image downscaling and a unified attachment pipeline are deferred.
+- **Accept:** A notebook fixture renders indexed Markdown/code source, omits stored outputs and carries no edit anchor. BOM-marked UTF-16LE/BE fixtures return usable text with incomplete metadata and no edit anchor. Existing supported image reads remain valid.
 - **Verify:** `bun test sdk/src/__tests__/read-files.test.ts sdk/src/__tests__/read-image.test.ts`.
 - **Prereqs:** N16.
 
@@ -332,7 +319,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
 - **Findings:** write-edit-06, write-edit-10 (06-F10, 06-F12 residuals).
 - **Scope:** `write_file`/whole-file replacement preserves the original BOM and dominant EOL unless the content explicitly changes them. Close the 06-F12 residual.
 - **Accept:** CRLF and BOM fixtures round-trip through a whole-file write with only the intended bytes changed.
-- **Verify:** `bun test sdk/src/__tests__/change-file.test.ts`.
+- **Verify:** `bun test packages/agent-runtime/src/__tests__/process-file-block.test.ts packages/agent-runtime/src/tools/handlers/tool/__tests__/write-file.test.ts sdk/src/__tests__/change-file.test.ts`.
 - **Prereqs:** B05 (accepted).
 
 #### N22 — Job and background-agent control
@@ -350,7 +337,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
 - **Findings:** orchestration-04, orchestration-06, orchestration-07, extensions-11, extensions-12.
 - **Scope:**
   - Markdown agent definitions (front matter: name, description, tools, model, `max_steps`, `timeout`) in `.agents/*.md` and `~/.agents/*.md`, alongside the TS format.
-  - Default limits for subagents: 40 steps and 15 minutes, overridable.
+  - Agent step and duration ceilings are opt-in, not blanket productive-work cutoffs (user-authorized 2026-11-25). Explicit template/Markdown step budgets, configured host limits and parent deadlines remain enforced; no implicit 40-step/15-minute child cap is introduced.
   - A `helper` model role for discovery and summary agents, defaulting to the provider's small model.
   - Custom tools and MCP tools default to `endsAgentStep: false`.
   - Remove hosted leftovers from `AgentDefinition`.
@@ -359,7 +346,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - A Markdown agent loads, is spawnable and respects its tools list.
   - A runaway subagent stops at its limit with a typed result.
   - File-explorer runs on the helper model when one is configured.
-- **Verify:** `bun test cli/src/utils/__tests__/local-agent-registry.test.ts packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils.test.ts`.
+- **Verify:** `bun test cli/src/__tests__/integration/local-agents.test.ts cli/src/utils/__tests__/agent-registry-epoch.test.ts cli/src/utils/__tests__/spawn-agent-matcher.test.ts cli/src/components/tools/__tests__/spawn-agents-recovery.test.tsx packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-cancel.test.ts packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-clone-cache.test.ts packages/agent-runtime/src/tools/handlers/tool/__tests__/spawn-agent-utils-output.test.ts`. Markdown-loader and default step/time-limit tests are still needed.
 - **Prereqs:** N03 (plan filtering must see Markdown agents too).
 
 #### N24 — Composer and session UX
@@ -376,7 +363,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - `@src/a.ts:10-20` attaches that range.
   - Ctrl+V does not block input.
   - Streaming into a 2,000-message transcript stays under 16 ms per frame.
-- **Verify:** `bun test cli/src/` affected suites plus tmux scenarios.
+- **Verify:** `bun test cli/src/hooks/helpers/__tests__/send-message.test.ts cli/src/utils/__tests__/clipboard.test.ts cli/src/utils/__tests__/output-export.test.ts cli/src/__tests__/chat-mention-helpers.test.ts cli/src/hooks/__tests__/use-suggestion-engine-mention.test.ts`, plus tmux coverage for steering, fork and range attachments.
 - **Prereqs:** B10.
 
 #### N25 — Provider breadth and reasoning control
@@ -391,7 +378,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - A Claude route with effort `high` sends a `thinking` block (wire test).
   - Gemini and Bedrock fixtures stream tool calls.
   - No SDK export calls `openbuff.com`.
-- **Verify:** `bun test sdk/src/__tests__/model-provider.test.ts sdk/src/__tests__/llm.test.ts`.
+- **Verify:** `bun test sdk/src/__tests__/model-provider.test.ts sdk/src/__tests__/provider-resilience-wire.test.ts packages/agent-runtime/src/llm-api/__tests__/gemini-with-fallbacks.test.ts packages/agent-runtime/src/__tests__/stream-parser-reasoning.test.ts`. Bedrock Converse wire coverage is still needed.
 - **Prereqs:** N07.
 
 #### N26 — MCP and skills intake
@@ -406,7 +393,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - A config with one bad server loads the others and shows the error in `/mcp`.
   - An OAuth fixture server connects after browser authorization.
   - A skill can reference its own `scripts/` file.
-- **Verify:** `bun test common/src/types/__tests__/mcp.test.ts sdk/src/mcp/__tests__/ cli/src/commands/__tests__/mcp-command.test.ts`.
+- **Verify:** `bun test common/src/mcp/__tests__/catalog.test.ts common/src/mcp/__tests__/client.test.ts common/src/mcp/__tests__/dns-pinning.test.ts common/src/mcp/__tests__/eviction.test.ts common/src/mcp/__tests__/provenance.test.ts common/src/mcp/__tests__/result-client.test.ts common/src/mcp/__tests__/result.test.ts common/src/mcp/__tests__/stdio-transport.test.ts cli/src/commands/__tests__/mcp-command.test.ts cli/src/utils/__tests__/mcp-result-projection.test.ts sdk/src/__tests__/mcp-server.test.ts sdk/src/__tests__/external-tool-consumers.test.ts common/src/util/__tests__/skills.test.ts sdk/src/__tests__/load-skills.test.ts packages/agent-runtime/src/__tests__/mcp-tool-schema.test.ts`.
 - **Prereqs:** B28 (accepted), N02.
 
 #### N27 — Web search backends and direct fetch
@@ -416,7 +403,7 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - A `web_fetch` tool in base2's core that returns Markdown, using N05's egress policy.
   - Align the researcher-web docs with its behaviour.
 - **Accept:** With a Brave key configured, search uses Brave. With no key, it uses DuckDuckGo and reports `blocked` when blocked (N04). base2 fetches a URL without spawning a subagent.
-- **Verify:** `bun test packages/agent-runtime/src/tools/handlers/tool/__tests__/web-search.test.ts` plus `web-fetch.test.ts` *(new)*.
+- **Verify:** `bun test packages/agent-runtime/src/tools/handlers/tool/__tests__/web-search.test.ts packages/agent-runtime/src/tools/handlers/tool/__tests__/web-search-security.test.ts packages/agent-runtime/src/tools/handlers/tool/__tests__/web-search-utils.test.ts`.
 - **Prereqs:** N05.
 
 #### N28 — Windows and macOS parity
@@ -439,11 +426,8 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - A Terminal-Bench 2.0 adapter and an Aider-polyglot-style edit benchmark run through BuffBench, with results published per release.
   - Re-enable `/feedback`, writing locally and exportable.
   - Opt-in OpenTelemetry export of usage, tool and error metrics. It feeds B31's candidate channel.
-- **Accept:**
-  - A release run records a Terminal-Bench score and cost alongside the release.
-  - `/feedback` writes a record.
-  - With OTel enabled, a local collector receives spans. With it disabled, nothing leaves the machine.
-- **Verify:** run the new benchmark adapters through BuffBench on a two-task subset, and `bun test sdk/src/__tests__/telemetry-export.test.ts` *(new)*.
+- **Accept (user-authorized practical scope, 2026-11-24):** `/feedback <text>` stores only the explicit text/category in a private local JSONL file; `/feedback export <path>` writes a new 0600 export and never overwrites. Nothing is sent to a provider. Terminal-Bench/Aider adapters and opt-in OTel delivery are deferred; this scope does not claim release scores or telemetry spans.
+- **Verify:** `bun test cli/src/utils/__tests__/feedback-storage.test.ts cli/src/commands/__tests__/command-args.test.ts`.
 - **Prereqs:** N10.
 
 #### N30 — Docs, prompt drift and repo hygiene
@@ -454,24 +438,21 @@ Format follows the base cards: **Findings**, **Scope**, **Accept**, **Verify**, 
   - Remove or implement the shell-shim docs.
   - Add web, browser, image, MCP config, `serve`, skills and trust to the README.
   - Ignore `.tmp/`.
-  - Remove `cli/src/index-05.tsx`, `bun.lockb` (if `bun.lock` is canonical) and the tracked eval error JSONs.
+  - Remove cli/src/index-05.tsx, `bun.lockb` (if `bun.lock` is canonical) and the tracked eval error JSONs.
   - Delete the unwired components listed in cli-ux-15.
 - **Accept:** A docs check script compares documented defaults (hook timeout, `autoFileChangeHooks`, read limits) with the code constants and passes. `git status` is clean after a test run.
-- **Verify:** `bun run scripts/check-doc-defaults.ts` *(new)*.
+- **Verify:** `bun run check-doc-defaults`.
 - **Prereqs:** N11 (tool and prompt changes land first).
 
 #### N31 — Short capability handles for edits
-- **Findings:** write-edit-01 (HIGH: each `cap.v4` token is about 795 characters and must be copied verbatim; `edit_transaction` costs about 11.3k characters of definition; `agents/editor/editor.ts:24-29` records non-Opus models landing zero edits).
+- **Findings:** write-edit-01 (HIGH: historical full-basis `cap.v4` tokens were about 795 characters and copied verbatim; `edit_transaction` costs about 11.3k characters of definition; `agents/editor/editor.ts:24-29` records non-Opus models landing zero edits).
 - **Scope:**
   - Keep the authenticated capability on the host.
   - The model receives a short handle per read (for example `r7`), resolved at dispatch to the full bound token.
   - Strict read-before-edit, CAS bases and the run/project binding are unchanged.
   - Trim the `edit_transaction` description to the fields models use.
-- **Accept:**
-  - A forged, stale or cross-run handle is refused exactly like the full token is today.
-  - The edit description and schema are under 4k characters.
-  - On the N10 subset, the edit-commit rate for a non-Opus model rises over the pre-change baseline, and no model gets worse.
-- **Verify:** `bun test packages/agent-runtime/src/__tests__/process-edit-transaction.test.ts sdk/src/__tests__/read-capability.test.ts` and the N10 subset.
+- **Accept (user-authorized practical scope, 2026-11-24):** Raw-basis `cap.v4` output uses a short authenticated handle under 100 characters; the host retains the full scoped capability in a bounded in-process registry. Tampered, stale and cross-run handles fail closed, and legacy full v4 tokens remain readable. The original 4k schema cap and non-Opus N10 edit-rate comparison are deferred: provider JSON schema alone currently measures 7,443 characters, and no provider-backed eval is available here.
+- **Verify:** `bun test common/src/util/__tests__/content-hash.test.ts common/src/tools/params/__tests__/edit-transaction.schema.test.ts sdk/src/__tests__/mutation-capabilities.test.ts sdk/src/__tests__/read-files.test.ts sdk/src/__tests__/replace-range.test.ts packages/agent-runtime/src/__tests__/process-edit-transaction.test.ts`.
 - **Prereqs:** B05 (accepted), N10.
 
 #### N32 — Sandbox reach

@@ -340,7 +340,9 @@ describe('metadata indexer', () => {
       // silently drop a still-existing file from the index; the previous
       // entry is retained until a later refresh can re-read it.
       expect(second.files['docs/a.md']).toBeDefined()
-      expect(second.files['docs/a.md']?.hash).toBe(first.files['docs/a.md']?.hash)
+      expect(second.files['docs/a.md']?.hash).toBe(
+        first.files['docs/a.md']?.hash,
+      )
       expect(second.graph.nodes['file:docs/a.md']).toBeDefined()
     } finally {
       readFileSpy.mockRestore()
@@ -431,7 +433,7 @@ describe('metadata indexer', () => {
       // count float with the pipeline.
       const readFailureDiagnostics = (index.parseDiagnostics ?? []).filter(
         (diagnostic) =>
-          diagnostic.stage === 'parse' &&
+          (diagnostic.stage === 'parse' || diagnostic.stage === 'read') &&
           diagnostic.message === 'simulated sync read failure',
       )
       expect(readFailureDiagnostics.length).toBeGreaterThanOrEqual(1)
@@ -841,8 +843,7 @@ describe('metadata indexer', () => {
     // NOT to the referenced config's other/* target.
     expect(
       index.graph.edges.some(
-        (edge) =>
-          edge.type === 'references' && edge.to === 'file:src/util.ts',
+        (edge) => edge.type === 'references' && edge.to === 'file:src/util.ts',
       ),
     ).toBe(true)
   })
@@ -948,9 +949,7 @@ describe('updateMetadataIndex self-heals stale parse diagnostics', () => {
         },
       ],
       parseData: Object.fromEntries(
-        Object.entries(first.parseData ?? {}).filter(
-          ([p]) => p !== 'src/a.ts',
-        ),
+        Object.entries(first.parseData ?? {}).filter(([p]) => p !== 'src/a.ts'),
       ),
       coverage: first.coverage
         ? {

@@ -8,6 +8,7 @@
  * pure-helper precedent).
  */
 
+import { createHmac, randomBytes } from 'node:crypto'
 import { NoOutputGeneratedError } from 'ai'
 
 import {
@@ -154,8 +155,83 @@ export function createRouteHealthRegistry(
 export const sessionRouteHealth: RouteHealthRegistry =
   createRouteHealthRegistry()
 
+const routeScopeKey = randomBytes(32)
+const MAX_ROUTE_HEALTH_SCOPES = 64
+const scopedRouteHealth = new Map<string, RouteHealthRegistry>()
+
+/**
+ * Default health belongs to a captured route configuration and environment
+ * credential selection, not just a model ID shared by unrelated SDK hosts.
+ * Custom credential ports are separated by their host-owned source identity;
+ * stored OAuth metadata revisions can be supplied without resolving secrets.
+ * A host that rotates credentials in place inside one custom port must clear
+ * health (or inject a separate registry); there is no new public version API.
+ * Keyed HMACs retain neither keys nor configuration text in this registry.
+ */
+export function getScopedSessionRouteHealth(params: {
+  loadedConfig: LoadedProviderConfig
+  configurationIdentity?: string
+  credentialSourceIdentity?: string | ((model: string) => string)
+  environment: Readonly<Record<string, string | undefined>>
+  apiKey?: string
+}): RouteHealthRegistry {
+  if (typeof params.credentialSourceIdentity === 'function') {
+    const identityForModel = params.credentialSourceIdentity
+    const visited = new Set<RouteHealthRegistry>()
+    const forModel = (model: string) => {
+      const health = getScopedSessionRouteHealth({
+        ...params,
+        credentialSourceIdentity: identityForModel(model),
+      })
+      visited.add(health)
+      return health
+    }
+    return {
+      markDegraded: (route) => forModel(route.model).markDegraded(route),
+      get: (model) => forModel(model).get(model),
+      clear: () => {
+        for (const health of visited) health.clear()
+      },
+    }
+  }
+  const names = new Set([
+    'OPENBUFF_CHATGPT_OAUTH_TOKEN',
+    'CODEBUFF_CHATGPT_OAUTH_TOKEN',
+  ])
+  for (const provider of Object.values(params.loadedConfig.config.providers))
+    if ('apiKeyEnv' in provider && provider.apiKeyEnv)
+      names.add(provider.apiKeyEnv)
+  const key = createHmac('sha256', routeScopeKey)
+    .update(
+      JSON.stringify([
+        'openbuff.route-health.v1',
+        params.configurationIdentity ??
+          params.loadedConfig.sourceFilePaths ??
+          [],
+        params.loadedConfig.config,
+        params.credentialSourceIdentity ?? null,
+        [...names]
+          .sort()
+          .map((name) => [name, params.environment[name] ?? null]),
+        params.apiKey ?? null,
+      ]),
+    )
+    .digest('hex')
+  let health = scopedRouteHealth.get(key)
+  if (health) scopedRouteHealth.delete(key)
+  else {
+    health = createRouteHealthRegistry()
+    if (scopedRouteHealth.size >= MAX_ROUTE_HEALTH_SCOPES)
+      scopedRouteHealth.delete(scopedRouteHealth.keys().next().value!)
+  }
+  scopedRouteHealth.set(key, health)
+  return health
+}
+
 export function clearDegradedProviderRoutes(): void {
   sessionRouteHealth.clear()
+  for (const health of scopedRouteHealth.values()) health.clear()
+  scopedRouteHealth.clear()
 }
 
 /**

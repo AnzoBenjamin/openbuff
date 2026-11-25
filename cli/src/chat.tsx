@@ -546,6 +546,7 @@ export const Chat = ({
     stopStreaming,
     setCanProcessQueue,
     pauseQueue,
+    interruptStreaming,
     resumeQueue,
     clearQueue,
     isQueuePausedRef,
@@ -1393,12 +1394,7 @@ export const Chat = ({
             }),
       onCancelEdit: restoreEditDraft,
       onBackspaceExitMode: () => setInputMode('default'),
-      onInterruptStream: () => {
-        abortControllerRef.current?.abort()
-        if (queuedMessages.length > 0) {
-          pauseQueue()
-        }
-      },
+      onInterruptStream: () => interruptStreaming(abortControllerRef.current),
       onSlashMenuDown: () => setSlashSelectedIndex((prev) => prev + 1),
       onSlashMenuUp: () => setSlashSelectedIndex((prev) => prev - 1),
       onSlashMenuTab: () => {
@@ -1606,8 +1602,7 @@ export const Chat = ({
       setFeedbackText,
       setInputValue,
       abortControllerRef,
-      queuedMessages.length,
-      pauseQueue,
+      interruptStreaming,
       setSlashSelectedIndex,
       slashMatches,
       slashSelectedIndex,

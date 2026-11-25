@@ -1,5 +1,7 @@
 import { Command, Option } from 'commander'
 import { COMMAND_APPROVAL_MODES } from './utils/command-approvals'
+import { AGENT_MODE_TO_ID } from './utils/constants'
+import { isHeadlessSessionId } from './utils/headless-sessions'
 
 import type { AgentMode } from './utils/constants'
 import type { HarnessApprovalMode } from '@openbuff/sdk'
@@ -14,6 +16,7 @@ export type ParsedArgs = {
   initialMode?: AgentMode
   trustProjectAgents: boolean
   approvalMode?: HarnessApprovalMode
+  init?: { cwd?: string }
   /**
    * Populated ONLY when the `serve` subcommand ran (undefined otherwise).
    * `trustProjectAgents` mirrors the serve-level `--trust-project-agents`
@@ -41,11 +44,21 @@ export type ParsedArgs = {
    * P1-T5: headless/CI mode — run the agent non-interactively on a prompt.
    * `json` selects the machine-readable ndjson event stream on stdout
    * (otherwise only `text` events stream); `agentId` overrides the default
-   * 'base' agent; `timeout` is the explicit `--timeout <seconds>` deadline
+   * 'base2' agent; `timeout` is the explicit `--timeout <seconds>` deadline
    * (undefined = no timeout, the previous behavior). The process exit code
    * reflects the run outcome.
    */
-  run?: { prompt: string; json: boolean; agentId?: string; timeout?: number }
+  run?: {
+    prompt: string
+    readFromStdin?: boolean
+    json: boolean
+    agentId?: string
+    model?: string
+    outputSchema?: string
+    continue?: boolean
+    continueId?: string
+    timeout?: number
+  }
   /**
    * Populated ONLY when the `replay` subcommand ran (undefined otherwise).
    * P2-T3: deterministic replay/fork of a P2-T2 run journal. `runId` names
@@ -99,7 +112,39 @@ export type ParsedArgs = {
  * paths to preserve protocol-wire exclusivity of stdin/stdout.
  */
 export function isRendererCommand(args: ParsedArgs): boolean {
-  return !args.serve && !args.mcp && !args.run && !args.replay && !args.dash
+  return (
+    !args.init &&
+    !args.serve &&
+    !args.mcp &&
+    !args.run &&
+    !args.replay &&
+    !args.dash
+  )
+}
+
+export function getCliUserArgs(argv: string[]): string[] {
+  const rawUserArgs = argv.slice(2)
+  const approvalPrefixLength =
+    rawUserArgs[0] === '--approval-mode'
+      ? 2
+      : rawUserArgs[0]?.startsWith('--approval-mode=')
+        ? 1
+        : 0
+  const subcommand = rawUserArgs[approvalPrefixLength]
+  return approvalPrefixLength && ['run', 'serve'].includes(subcommand)
+    ? [
+        subcommand,
+        ...rawUserArgs.slice(0, approvalPrefixLength),
+        ...rawUserArgs.slice(approvalPrefixLength + 1),
+      ]
+    : rawUserArgs
+}
+
+/** Early diagnostic routing must agree with the parser before SDK imports run. */
+export function isNonRendererCommandArgv(argv: string[]): boolean {
+  return ['init', 'run', 'serve', 'mcp', 'replay', 'dash'].includes(
+    getCliUserArgs(argv)[0],
+  )
 }
 
 export function parseCliArgs(
@@ -125,28 +170,36 @@ export function parseCliArgs(
   // Registering `.command('serve')` on the same program that parses prompts
   // makes commander treat the first positional prompt as an unknown command,
   // so the two paths are kept fully separate.
-  const rawUserArgs = argv.slice(2)
-  const approvalPrefixLength =
-    rawUserArgs[0] === '--approval-mode'
-      ? 2
-      : rawUserArgs[0]?.startsWith('--approval-mode=')
-        ? 1
-        : 0
-  const subcommand = rawUserArgs[approvalPrefixLength]
-  // Support a session-wide flag before the command, including shell aliases.
-  const userArgs =
-    approvalPrefixLength && ['run', 'serve'].includes(subcommand)
-      ? [
-          subcommand,
-          ...rawUserArgs.slice(0, approvalPrefixLength),
-          ...rawUserArgs.slice(approvalPrefixLength + 1),
-        ]
-      : rawUserArgs
+  const userArgs = getCliUserArgs(argv)
   const approvalOption = () =>
     new Option(
       '--approval-mode <mode>',
       'Command approvals: balanced (routine commands run freely), strict, or allow-all (no prompts)',
     ).choices([...COMMAND_APPROVAL_MODES])
+
+  if (userArgs[0] === 'init') {
+    const initProgram = new Command()
+      .name('openbuff init')
+      .description(
+        'Create starter project knowledge and agent types locally, without a provider',
+      )
+      .option(
+        '--cwd <directory>',
+        'Existing project directory (default: current directory)',
+      )
+      .allowExcessArguments(false)
+    if (options.exitOverride) initProgram.exitOverride()
+    initProgram.parse([argv[0], argv[1], ...userArgs.slice(1)])
+    const cwd = initProgram.opts().cwd as string | undefined
+    return {
+      initialPrompt: null,
+      clearLogs: false,
+      continue: false,
+      continueId: null,
+      trustProjectAgents: false,
+      init: cwd === undefined ? {} : { cwd },
+    }
+  }
 
   if (userArgs[0] === 'serve') {
     // `openbuff serve` subcommand (P1-T2 Wave-2). This wave only PARSES it
@@ -170,7 +223,7 @@ export function parseCliArgs(
       )
       .option(
         '--agent <id>',
-        'Run a specific agent id for served prompt turns (default: base)',
+        `Run a specific agent id for served prompt turns (default: ${AGENT_MODE_TO_ID.DEFAULT})`,
       )
       .option(
         '--trust-project-agents',
@@ -287,27 +340,81 @@ export function parseCliArgs(
         '--json',
         'Emit machine-readable events (one JSON object per line) on stdout',
       )
-      .option('--agent <id>', 'Run a specific agent id (default: base)')
+      .option(
+        '--agent <id>',
+        `Run a specific agent id (default: ${AGENT_MODE_TO_ID.DEFAULT})`,
+      )
       .option(
         '--trust-project-agents',
         'Trust this project (agents, skills, MCP config and openbuff.json); recorded as an explicit grant',
       )
       .option(
+        '--output-schema <file>',
+        'Require a bounded JSON object output schema; print validated JSON or a final --json result event',
+      )
+      .option(
+        '--model <id>',
+        'Primary provider/model for this run and its descendants; does not change configuration',
+      )
+      .option(
         '--timeout <seconds>',
         'Abort the run after this many seconds (default: no timeout)',
       )
-      .argument('<prompt...>', 'Prompt to send to the agent')
+      .option(
+        '-p, --prompt <text>',
+        'Prompt text (otherwise use positional text or piped UTF-8 stdin)',
+      )
+      .option(
+        '--continue [id]',
+        'Continue the last saved headless conversation or an explicit session ID; supply a new prompt with -p or stdin',
+      )
+      .argument(
+        '[prompt...]',
+        'Prompt to send; omitted or a lone - reads stdin',
+      )
       .allowExcessArguments(true)
     if (options.exitOverride) {
       runProgram.exitOverride()
     }
-    // Re-attach the node/script prefix and drop the leading `run` token so
-    // commander parses only the run-specific options. `.argument('<prompt...>')
-    // is required, so a run with no prompt errors via commander's error path
-    // (exitOverride in tests, process exit in production) and never launches.
+    // Prompt admission is deferred only for the explicit stdin case; the
+    // command refuses TTY/empty/oversized input before creating a client.
     runProgram.parse([argv[0], argv[1], ...userArgs.slice(1)])
     const runOpts = runProgram.opts()
-    const prompt = runProgram.args.join(' ')
+    const continueId =
+      typeof runOpts.continue === 'string' ? runOpts.continue : undefined
+    if (continueId !== undefined && !isHeadlessSessionId(continueId))
+      runProgram.error(
+        '--continue requires a safe session ID (1–128 letters, digits, dots, underscores or hyphens), not a path.',
+      )
+    if (runOpts.prompt !== undefined && runProgram.args.length)
+      runProgram.error(
+        'Provide either --prompt/-p or positional prompt text, not both.',
+      )
+    const readFromStdin =
+      runOpts.prompt === undefined &&
+      (runProgram.args.length === 0 ||
+        (runProgram.args.length === 1 && runProgram.args[0] === '-'))
+    const prompt = readFromStdin
+      ? ''
+      : (runOpts.prompt ?? runProgram.args.join(' '))
+    if (!readFromStdin && !prompt.trim())
+      runProgram.error('The explicit prompt must not be empty.')
+    const outputSchema = runOpts.outputSchema as string | undefined
+    if (
+      outputSchema !== undefined &&
+      (!outputSchema.trim() || outputSchema.includes('\0'))
+    )
+      runProgram.error('--output-schema must be a non-empty file path.')
+    const runModel = runOpts.model as string | undefined
+    if (
+      runModel !== undefined &&
+      (!runModel ||
+        runModel.length > 1024 ||
+        /[\s\x00-\x1f\x7f]/.test(runModel))
+    )
+      runProgram.error(
+        '--model must be a non-empty provider/model identifier without whitespace or control characters.',
+      )
     const runAgentId =
       typeof runOpts.agent === 'string' ? runOpts.agent : undefined
     // Fail-closed --timeout validation, mirroring the --from-step contract:
@@ -338,8 +445,13 @@ export function parseCliArgs(
       ...(runOpts.approvalMode ? { approvalMode: runOpts.approvalMode } : {}),
       run: {
         prompt,
+        ...(readFromStdin ? { readFromStdin: true } : {}),
         json: runOpts.json === true,
         ...(runAgentId ? { agentId: runAgentId } : {}),
+        ...(runModel !== undefined ? { model: runModel } : {}),
+        ...(outputSchema !== undefined ? { outputSchema } : {}),
+        ...(runOpts.continue !== undefined ? { continue: true } : {}),
+        ...(continueId !== undefined ? { continueId } : {}),
         ...(timeoutSeconds !== undefined ? { timeout: timeoutSeconds } : {}),
       },
     }

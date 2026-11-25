@@ -827,16 +827,30 @@ describe('base2 validation/reviewer coordination prompts', () => {
     expect(base2.systemPrompt).not.toContain('Initial Git Changes')
     expect(base2.spawnableAgentToolMode).toBe('generic')
     expect(base2.toolNames).not.toContain('git_status')
-    // get_change_review_bundle and inspect_codebase_structure are audit-tier,
-    // and every non-core tier is unlocked by default, so both are on the
-    // model-visible surface. They stay declared programmatically as well.
-    expect(base2.toolNames).toContain('get_change_review_bundle')
+    // Audit-tier tools are absent from the initial core-only model surface,
+    // but remain loadable through the mode ceiling and callable by the gate.
+    for (const tool of [
+      'get_change_review_bundle',
+      'inspect_codebase_structure',
+    ] as const) {
+      expect(base2.toolNames).not.toContain(tool)
+      expect(base2.programmaticConfig?.fullToolSurface).toContain(tool)
+    }
     expect(base2.toolNames).not.toContain('run_file_change_hooks')
-    expect(base2.toolNames).toContain('inspect_codebase_structure')
     expect(base2.programmaticToolNames).toEqual(
       expect.arrayContaining([
         'git_status',
         'run_file_change_hooks',
+        'inspect_codebase_structure',
+        'get_change_review_bundle',
+      ]),
+    )
+    const fullSurfaceBase2 = createBase2('default', {
+      progressiveToolDisclosure: false,
+    })
+    expect(fullSurfaceBase2.toolNames).toEqual(
+      expect.arrayContaining([
+        'get_change_review_bundle',
         'inspect_codebase_structure',
       ]),
     )
@@ -906,21 +920,23 @@ describe('base2 validation/reviewer coordination prompts', () => {
     )
   })
 
-  test('base2 exposes update_plan_status alongside create_plan', () => {
+  test('base2 keeps create_plan and update_plan_status gated to plan mode', () => {
     const base2 = createBase2('default')
-    // create_plan/update_plan_status are implement-tier, and every non-core
-    // tier is unlocked by default now, so both are on the default surface.
-    expect(base2.toolNames).toContain('create_plan')
-    expect(base2.toolNames).toContain('update_plan_status')
-
-    // Plan artifact tools are not mode-gated, so plan mode keeps both
-    // create_plan and update_plan_status (it is the mode that creates and
-    // maintains plan artifacts). What plan mode still withholds are the
-    // mutation/execution tools (edit_transaction, run_terminal_command,
-    // run_targeted_validation, write_todos).
+    const fullSurfaceBase2 = createBase2('default', {
+      progressiveToolDisclosure: false,
+    })
     const planBase2 = createBase2('default', { planOnly: true })
-    expect(planBase2.toolNames).toContain('create_plan')
-    expect(planBase2.toolNames).toContain('update_plan_status')
+
+    // Plan artifacts are mode-gated, not merely tier-locked. Disabling
+    // disclosure must not expose them in ordinary implementation mode;
+    // plan mode keeps them in both its initial surface and runtime ceiling.
+    for (const tool of ['create_plan', 'update_plan_status'] as const) {
+      expect(base2.toolNames).not.toContain(tool)
+      expect(base2.programmaticConfig?.fullToolSurface).not.toContain(tool)
+      expect(fullSurfaceBase2.toolNames).not.toContain(tool)
+      expect(planBase2.toolNames).toContain(tool)
+      expect(planBase2.programmaticConfig?.fullToolSurface).toContain(tool)
+    }
   })
 
   test('plan mode exposes broad read-only analysis agents without mutation agents', () => {
@@ -947,10 +963,18 @@ describe('base2 validation/reviewer coordination prompts', () => {
       expect(spawnable).not.toContain(agent)
     }
     expect(planBase2.toolNames).toContain('check_background_agent')
-    // inspect_codebase_structure is audit-tier, and every non-core tier is
-    // unlocked by default, so it is present in the plan surface too (it is a
-    // read-only analysis tool, so plan mode does not gate it).
-    expect(planBase2.toolNames).toContain('inspect_codebase_structure')
+    // Read-only audit tools remain available to plan mode, but only after
+    // disclosure (or through the gate's declared programmatic tools).
+    expect(planBase2.toolNames).not.toContain('inspect_codebase_structure')
+    expect(planBase2.programmaticConfig?.fullToolSurface).toContain(
+      'inspect_codebase_structure',
+    )
+    expect(planBase2.programmaticToolNames).toContain('inspect_codebase_structure')
+    const planDisclosureOff = createBase2('default', {
+      planOnly: true,
+      progressiveToolDisclosure: false,
+    })
+    expect(planDisclosureOff.toolNames).toContain('inspect_codebase_structure')
     expect(planBase2.toolNames).not.toContain('edit_transaction')
     expect(planBase2.toolNames).not.toContain('run_file_change_hooks')
     expect(planBase2.toolNames).not.toContain('git_status')
@@ -1078,9 +1102,15 @@ describe('base-deep prompt naming and tool guidance', () => {
     expect(baseDeep.toolNames).toEqual(
       expect.arrayContaining(['read_outline', 'list_directory', 'glob']),
     )
-    // edit_transaction is implement-tier and every non-core tier is unlocked
-    // by default, so base-deep exposes it (it inherits createBase2's surface).
-    expect(baseDeep.toolNames).toContain('edit_transaction')
+    // base-deep inherits the core-first surface; implementation tools stay
+    // in its runtime ceiling and become model-visible after a tier grant.
+    expect(baseDeep.toolNames).not.toContain('edit_transaction')
+    expect(baseDeep.programmaticConfig?.fullToolSurface).toContain(
+      'edit_transaction',
+    )
+    expect(
+      getEffectiveAgentToolNames(baseDeep, { unlockedToolTiers: ['implement'] }),
+    ).toContain('edit_transaction')
     expect(baseDeep.toolNames).not.toContain('str_replace')
     expect(baseDeep.toolNames).not.toContain('replace_range')
     expect(baseDeep.toolNames).not.toContain('rewrite_symbol')
@@ -1101,22 +1131,26 @@ describe('base-deep gate lifecycle parity with base2', () => {
     expect(typeof baseDeep.handleSteps).toBe('function')
 
     // Mutating/control gate tools remain generator-only. The read-only review
-    // bundle is also model-visible so the orchestrator can recover a fresh
-    // snapshot after compaction without hitting a tool-availability error.
+    // bundle stays declared programmatically and in the audit-tier ceiling,
+    // so it can refresh a snapshot after compaction once that tier is loaded.
     expect(baseDeep.programmaticToolNames).toEqual(
       expect.arrayContaining([
         'spawn_agent_inline',
         'git_status',
         'run_file_change_hooks',
         'inspect_codebase_structure',
+        'get_change_review_bundle',
       ]),
     )
-    // create_plan/update_plan_status are implement-tier and
-    // get_change_review_bundle is audit-tier; every non-core tier is unlocked
-    // by default, so all three appear on the base-deep model surface.
-    expect(baseDeep.toolNames).toContain('create_plan')
-    expect(baseDeep.toolNames).toContain('update_plan_status')
-    expect(baseDeep.toolNames).toContain('get_change_review_bundle')
+    // Plan artifacts remain PLAN-only even in the full default-mode ceiling.
+    for (const tool of ['create_plan', 'update_plan_status'] as const) {
+      expect(baseDeep.toolNames).not.toContain(tool)
+      expect(baseDeep.programmaticConfig?.fullToolSurface).not.toContain(tool)
+    }
+    expect(baseDeep.toolNames).not.toContain('get_change_review_bundle')
+    expect(baseDeep.programmaticConfig?.fullToolSurface).toContain(
+      'get_change_review_bundle',
+    )
 
     // editor is required for the gate repair loop (spawned on validation
     // failure). code-reviewer runs the reviewer half of the gate.
@@ -1170,12 +1204,7 @@ describe('base-deep gate lifecycle parity with base2', () => {
   })
 })
 
-describe('base2 resume safety: persisted unlockedToolTiers cannot narrow the surface', () => {
-  // progressiveToolDisclosure is pinned false, so getEffectiveAgentToolNames
-  // returns template.toolNames unchanged even when an older session persisted a
-  // NON-EMPTY agentState.unlockedToolTiers — fail-closed by construction, with
-  // no per-step clearer to forget. Contract:
-  // packages/agent-runtime/src/util/base2-tool-tiers.ts.
+describe('base2 progressive grants are scoped to a turn', () => {
   // createBase2 returns the authoring-time SecretAgentDefinition shape
   // (JSON-schema inputSchema, no id), so the structural conversion to the
   // runtime AgentTemplate goes through `unknown`. The annotated return type is
@@ -1184,25 +1213,28 @@ describe('base2 resume safety: persisted unlockedToolTiers cannot narrow the sur
   const asTemplate = (base2: ReturnType<typeof createBase2>): AgentTemplate =>
     ({ ...base2, id: 'base2' }) as unknown as AgentTemplate
 
-  test('every mode publishes progressiveToolDisclosure: false (runtime tier filtering off)', () => {
+  test('bundled modes enable progressive disclosure and explicit false restores the full surface', () => {
     const agents = [
       createBase2('default'),
       createBase2('fast'),
       createBase2('default', { planOnly: true }),
       createBase2('default', { executePlan: true }),
-      // The published runtime-filtering key is false for every mode, and also
-      // when the caller narrows the static surface with `unlockedTiers`.
       createBase2('default', { unlockedTiers: [] }),
       createBase2('default', { unlockedTiers: ['implement'] }),
     ]
     for (const base2 of agents) {
       expect(base2.programmaticConfig).toMatchObject({
-        progressiveToolDisclosure: false,
+        progressiveToolDisclosure: true,
       })
     }
+    const legacy = createBase2('default', {
+      progressiveToolDisclosure: false,
+    })
+    expect(legacy.programmaticConfig?.progressiveToolDisclosure).toBe(false)
+    expect(legacy.toolNames).toContain('edit_transaction')
   })
 
-  test('a stale non-empty unlockedToolTiers leaves the full surface intact', () => {
+  test('the current turn surface reflects its progressive tier grants', () => {
     const base2 = createBase2('default')
     for (const staleTiers of [
       ['implement'],
@@ -1212,10 +1244,14 @@ describe('base2 resume safety: persisted unlockedToolTiers cannot narrow the sur
       const effective = getEffectiveAgentToolNames(asTemplate(base2), {
         unlockedToolTiers: staleTiers,
       } as any)
-      expect(effective).toEqual(base2.toolNames ?? [])
-      expect(effective).toContain('edit_transaction')
-      expect(effective).toContain('kill_job')
-      expect(effective).toContain('read_image')
+      expect(effective.includes('edit_transaction')).toBe(
+        staleTiers.includes('implement'),
+      )
+      expect(effective.includes('inspect_feature_completeness')).toBe(
+        staleTiers.includes('audit'),
+      )
+      expect(effective).not.toContain('kill_job')
+      expect(effective).not.toContain('read_image')
     }
   })
 
@@ -1246,18 +1282,18 @@ describe('base2 resume safety: persisted unlockedToolTiers cannot narrow the sur
 
     // No per-step mutation of the persisted list is performed or needed...
     expect(agentState.unlockedToolTiers).toBe(staleTiers)
-    // ...because the surface offered to the model is unaffected by it.
+    // ...because tool_load grants are retained across programmatic steps.
     const effective = getEffectiveAgentToolNames(
       asTemplate(base2),
       agentState as any,
     )
-    expect(effective).toEqual(base2.toolNames ?? [])
     expect(effective).toContain('edit_transaction')
-    expect(effective).toContain('kill_job')
-    expect(effective).toContain('read_image')
+    expect(effective).not.toContain('inspect_feature_completeness')
+    expect(effective).not.toContain('kill_job')
+    expect(effective).not.toContain('read_image')
   })
 
-  test('conversational fast path also leaves persisted tiers untouched', () => {
+  test('programmatic conversation steps do not clear a current-turn grant', () => {
     const base2 = createBase2('default')
     const staleTiers = ['audit']
     const agentState: Record<string, unknown> = {
@@ -1277,9 +1313,12 @@ describe('base2 resume safety: persisted unlockedToolTiers cannot narrow the sur
     })
     expect(generator.next({ toolResult: [] } as any).value).toBe('STEP')
     expect(agentState.unlockedToolTiers).toBe(staleTiers)
-    expect(
-      getEffectiveAgentToolNames(asTemplate(base2), agentState as any),
-    ).toEqual(base2.toolNames ?? [])
+    const effective = getEffectiveAgentToolNames(
+      asTemplate(base2),
+      agentState as any,
+    )
+    expect(effective).toContain('inspect_feature_completeness')
+    expect(effective).not.toContain('edit_transaction')
   })
 
   test('an absent unlockedToolTiers is never introduced by handleSteps', () => {
@@ -8258,11 +8297,16 @@ describe('base2 verification and reviewer gates', () => {
     expect(base2.stepPrompt).not.toContain(
       'Read STATUS.md and PLAN.md before acting',
     )
-    // edit_transaction and run_terminal_command are implement-tier; every
-    // non-core tier is unlocked by default and executePlan opens the terminal
-    // mode gate, so both are on the execute-plan surface.
+    // executePlan opens the terminal mode gate, but implementation tools
+    // still require disclosure rather than appearing in the initial surface.
+    const fullSurfaceBase2 = createBase2('default', {
+      executePlan: true,
+      progressiveToolDisclosure: false,
+    })
     for (const tool of ['edit_transaction', 'run_terminal_command'] as const) {
-      expect(base2.toolNames).toContain(tool)
+      expect(base2.toolNames).not.toContain(tool)
+      expect(base2.programmaticConfig?.fullToolSurface).toContain(tool)
+      expect(fullSurfaceBase2.toolNames).toContain(tool)
     }
     for (const tool of [
       'str_replace',

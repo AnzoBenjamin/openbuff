@@ -1,3 +1,5 @@
+import { resolve } from 'node:path'
+
 import { createServeBridge } from './bridge'
 import { serveAcpOverSocket } from './socket-listener'
 import { collectCredentialValues } from './outbound'
@@ -95,10 +97,9 @@ export function runServe(options: RunServeOptions): {
     sessionData,
     logger,
     agentId,
-    // When the host supplied a project root, the bridge also resolves
-    // `tool_call` locations against it; omitted keeps locations relative
-    // (the bridge's own default), so only the containment boundary changes.
-    projectRoot: options.projectRoot,
+    // Bind file attachments and event locations to the SAME captured host root
+    // the transports use for session containment, including the default root.
+    projectRoot: containmentRoot,
     // NEW-3 (§12.8): collect the configured credential VALUES from the
     // host-supplied environment so the streaming holdback can enforce the
     // no-split invariant for real credentials (an empty environment yields
@@ -146,7 +147,7 @@ function resolveServeContainmentRoot(options: {
   projectRoot?: string
   logger?: Logger
 }): string {
-  if (options.projectRoot !== undefined) return options.projectRoot
+  if (options.projectRoot !== undefined) return resolve(options.projectRoot)
   // No raw host paths in the payload: this warning may be shared, and the
   // codebase convention keeps raw paths out of shared logs.
   options.logger?.warn(

@@ -1,3 +1,5 @@
+import { selectAgentStepBudget } from '@codebuff/common/util/agent-limits'
+import { isPlaybookApplicable } from '@codebuff/common/util/playbook-applicability'
 import { realClock } from '@codebuff/common/deps/real-runtime-deps'
 import { bindMcpSession } from '@codebuff/common/mcp/provenance'
 import {
@@ -182,6 +184,12 @@ export function extractSubagentContextParams(
     processSupervision: params.processSupervision,
     spawnSupervised: params.spawnSupervised,
     onExecutionActionStart: params.onExecutionActionStart,
+    synchronizeWorkspace: params.synchronizeWorkspace,
+    playbookGateMode: params.playbookGateMode,
+    prepareRepositoryContext: params.prepareRepositoryContext,
+    resolveMemoryAuthority: params.resolveMemoryAuthority,
+    classifyPlaybookTerminalActions: params.classifyPlaybookTerminalActions,
+    getPlaybookValidationEvidence: params.getPlaybookValidationEvidence,
     executionIdentity: params.executionIdentity,
     executionHostOperation: params.executionHostOperation,
 
@@ -3470,12 +3478,11 @@ export function validateAgentInput(
  * Per-spawn-batch memo slots for the structuredClone calls inside
  * {@link createAgentState}. Each optional slot holds the source object it was
  * cloned FROM alongside the clone, so a caller that REPLACES the parent's
- * taskMemory/playbookContext/workspaceState object mid-batch gets a fresh
+ * taskMemory/workspaceState object mid-batch gets a fresh
  * clone instead of a stale memo (slots are keyed by source identity).
  */
 export type SharedSpawnCloneCache = {
   taskMemory?: { source?: TaskMemoryV1; clone?: TaskMemoryV1 }
-  playbookContext?: { source?: MemoryPlaybook[]; clone?: MemoryPlaybook[] }
   workspaceState?: { source?: WorkspaceStateV1; clone?: WorkspaceStateV1 }
 }
 
@@ -3548,11 +3555,10 @@ function memoizedStructuredClone<T extends object>(
 /**
  * Creates a new agent state for spawned agents.
  *
- * `sharedSpawnCloneCache` (optional) memoizes the parent's
- * taskMemory/playbookContext/workspaceState structuredClones for ONE spawn
- * handler invocation, so a multi-child batch performs 1 deep clone per field
- * instead of N. A fresh cache object must be created per invocation; without
- * a cache, each call keeps exactly one clone per field as before.
+ * `sharedSpawnCloneCache` (optional) memoizes the parent's taskMemory and
+ * workspaceState structured clones for ONE spawn handler invocation. The
+ * playbook context is filtered and cloned separately for each child. A fresh
+ * cache object must be created per invocation.
  */
 export function createAgentState(
   agentType: string,
@@ -3625,7 +3631,7 @@ export function createAgentState(
     subagents: [],
     childRunIds: [],
     messageHistory,
-    stepsRemaining: MAX_AGENT_STEPS_DEFAULT,
+    stepsRemaining: selectAgentStepBudget(MAX_AGENT_STEPS_DEFAULT, agentTemplate.maxSteps, true),
     creditsUsed: 0,
     directCreditsUsed: 0,
     cacheInputTokens: 0,
@@ -3660,21 +3666,19 @@ export function createAgentState(
               parentAgentState.taskMemory,
             )
           : undefined,
-    // Active procedural playbooks (the playbook gate and the compiled band
-    // both key on agentState.playbookContext) transfer to EVERY child —
-    // deliberately NOT gated on messageHistoryMode like taskMemory above: a
-    // transcript-isolated child (includeMessageHistory: false, e.g.
-    // git-committer) is precisely the case the parent's rules must reach, so
-    // its own run_terminal_command git calls stay gated and its band renders
-    // (the band module has no parentId guard by design). Cloned so a child
-    // cannot mutate the parent's rule rows; playbook rows originate as
-    // parsed store JSON, so they are structuredClone-safe.
+    // Host preparation replaces this fallback with the child's independently
+    // resolved complete procedure set before execution, even without history.
     playbookContext: parentAgentState.playbookContext
-      ? memoizedStructuredClone(
-          (cloneCache.playbookContext ??= {}),
-          parentAgentState.playbookContext,
+      ? structuredClone(
+          parentAgentState.playbookContext.filter((rule) =>
+            isPlaybookApplicable(rule, {
+              ...parentAgentState.playbookApplicability,
+              actorAgentType: agentType,
+            }),
+          ),
         )
       : undefined,
+    playbookApplicability: { ...parentAgentState.playbookApplicability, actorAgentType: agentType },
     workspaceState: parentAgentState.workspaceState
       ? memoizedStructuredClone(
           (cloneCache.workspaceState ??= {}),
@@ -3908,6 +3912,7 @@ function createSupervisedCancellationError(agentType: string): Error {
  *    parent-visible output becomes the failure message.
  */
 async function runSupervisedSubagent(params: {
+  playbookGateMode?: 'off' | 'warn' | 'block'
   executionIdentity?: SupervisedSpawnRequest['executionIdentity']
   executionHostOperation?: SupervisedSpawnRequest['executionHostOperation']
   spawnSupervised: SpawnSupervisedFn
@@ -3997,11 +4002,11 @@ async function runSupervisedSubagent(params: {
     agentType: agentTemplate.id,
     prompt,
     spawnParams,
-    // Supervised spawns gain a wall-clock deadline in-process spawns do not
-    // have; no caller override is threaded in this slice, so the supervisor
-    // default (SETTLE_DEFAULT_TIMEOUT_MS) applies.
+    // No implicit supervised duration. A caller-selected timeoutMs, parent
+    // deadline or cancellation may still bound the actual child process.
     child: {
       agentId: agentState.agentId,
+      stepsRemaining: selectAgentStepBudget(agentState.stepsRemaining, agentTemplate.maxSteps, true),
       ...(agentState.messageHistory
         ? { messageHistory: agentState.messageHistory }
         : {}),
@@ -4033,6 +4038,7 @@ async function runSupervisedSubagent(params: {
     userId: params.userId,
     clientSessionId: params.clientSessionId,
     userInputId: params.userInputId,
+    playbookGateMode: params.playbookGateMode,
     fingerprintId: params.fingerprintId,
     // parentAgentState.runId may be unset (top-level orchestrators, tests,
     // some programmatic runs). An empty string is not a valid runId and would
@@ -4406,7 +4412,7 @@ export async function executeSubagent(
   if (spawnSupervised !== undefined) {
     try {
       result = await runSupervisedSubagent({
-        executionIdentity: withDefaults.executionIdentity,
+        playbookGateMode: withDefaults.playbookGateMode,        executionIdentity: withDefaults.executionIdentity,
         executionHostOperation: withDefaults.executionHostOperation,
         spawnSupervised,
         // cancel-softlock fix: the parent's own signal gates the supervised

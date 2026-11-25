@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { hashActionInput } from '@codebuff/common/util/action-outcomes'
+import { createInitialWorkspaceState, advanceWorkspaceState } from '@codebuff/common/types/workspace-state'
 import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 import type { ExecutionActor, OnExecutionActionStart, RequestToolCallFn, ToolExecutionIdentity } from '@codebuff/common/types/contracts/client'
 import type { StartAgentRunFn } from '@codebuff/common/types/contracts/database'
@@ -20,7 +21,7 @@ function identity(owner: ExecutionActor, input: unknown, actionId = 'action'): T
   return { ...owner, actionId, attemptId: 'attempt', basis,
     basisId: hashActionInput('openbuff.execution-b02-basis.v1', { basis, workspaceSnapshotId: null }) }
 }
-function fixture(onStart?: OnExecutionActionStart, hostOperation = false) {
+function fixture(onStart?: OnExecutionActionStart, hostOperation = false, synchronizeWorkspace?: import('@codebuff/common/types/contracts/client').SynchronizeWorkspace) {
   const controller = new AbortController()
   const executionContext = { execution: { signal: controller.signal }, signal: controller.signal } as ExecutionAdapterContext
   const registrations: Parameters<RegisterExecutionActor>[0][] = []
@@ -33,6 +34,7 @@ function fixture(onStart?: OnExecutionActionStart, hostOperation = false) {
         executionHostOperation: { actor, purpose: 'snapshot-consolidation' as const },
       } : { executionIdentity: identity(actor, { agents: [] }, 'spawn') }) },
     executionContext, registerExecutionActor: value => { registrations.push(value) },
+    synchronizeWorkspace,
     executionForAction: () => executionContext,
     executionForActorOperation: () => executionContext,
     onExecutionActionStart: async start => { starts.push(start); await onStart?.(start) },
@@ -174,6 +176,27 @@ describe('supervised descendant authority with real host registries', () => {
 })
 
 describe('parent-scoped supervised execution identity', () => {
+  test('workspace snapshots cross the bridge only for registered child actors, without renewing actions', async () => {
+    let workspace = createInitialWorkspaceState(1)
+    const f = fixture(undefined, false, () => structuredClone(workspace))
+    const handlers = buildSupervisedBridgeHandlers({ ...TEST_AGENT_RUNTIME_IMPL, ...f.scope, apiKey: 'fixture', logger })
+    const child = buildBridgedChildDeps({ call: async (method, input) => {
+      const result = await handlers[method]!(JSON.parse(JSON.stringify(input)) as never)
+      return JSON.parse(JSON.stringify(result))
+    }, notify() {}, close() {}, onClose() {} })
+    const runId = (await child.startAgentRun({ apiKey: '', agentId: 'fixture', ancestorRunIds: ['root-run', 'parent-run'], logger,
+      agentState: { agentId: 'child-agent' } } as Parameters<StartAgentRunFn>[0]))!
+    const registered = { runId, rootRunId: 'root-run', agentId: 'child-agent' }
+    const before = await child.synchronizeWorkspace(registered)
+    expect(before).toEqual(workspace)
+    workspace = advanceWorkspaceState(workspace, { source: 'sibling', actions: [{ action: 'unknown' }] })
+    expect(await child.synchronizeWorkspace(registered)).toEqual(workspace)
+    expect(before?.revision).toBe(0)
+    expect(f.starts).toHaveLength(0)
+    await expect(child.synchronizeWorkspace(actor)).rejects.toThrow('Unregistered supervised execution actor')
+    f.controller.abort()
+    await expect(child.synchronizeWorkspace(registered)).rejects.toThrow()
+  })
   test('initial supervised host-operation child uses the captured actor and context without a fabricated B02 attempt', async () => {
     const f = fixture(undefined, true)
     const runId = await f.startRun()

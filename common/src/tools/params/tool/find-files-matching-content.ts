@@ -1,8 +1,23 @@
 import z from 'zod/v4'
 
 import { $getNativeToolCallExampleString, jsonToolResultSchema } from '../utils'
+import { executionRefusalSchema } from '../execution-refusal'
+import { processCleanupSchema } from '../process-cleanup'
+import { executionUsageSchema } from '../execution-usage'
+import { nativeWaitStatusFields } from '../native-wait-status'
 
 import type { $ToolParams } from '../../constants'
+
+const executionFields = {
+  exitCode: z.number().int().optional(),
+  stderr: z.string().optional(),
+  errorMessage: z.string().optional(),
+  executionRefusal: executionRefusalSchema.optional(),
+  processCleanup: processCleanupSchema.optional(),
+  executionUsage: executionUsageSchema.optional(),
+  ...nativeWaitStatusFields,
+  executionSignal: z.number().int().optional(),
+}
 
 const toolName = 'find_files_matching_content'
 const endsAgentStep = true
@@ -76,23 +91,21 @@ const flagsSchema = z
       if (typeof value === 'string') return value.split(/\s+/).filter(Boolean)
       return value
     },
-    z
-      .array(z.string())
-      .superRefine((tokens, ctx) => {
-        let prevFlag: string | undefined
-        for (const [index, token] of tokens.entries()) {
-          if (isAllowedFlagToken(token, prevFlag)) {
-            prevFlag = token.startsWith('-') ? token : undefined
-            continue
-          }
-          ctx.addIssue({
-            code: 'custom',
-            path: [index],
-            message: `Flag "${token}" is not on the allowed ripgrep flag allowlist (allowed: ${(FLAG_ALLOWLIST as readonly string[]).join(', ')}, plus values for ${[...VALUE_FLAGS].join(', ')}).`,
-          })
+    z.array(z.string()).superRefine((tokens, ctx) => {
+      let prevFlag: string | undefined
+      for (const [index, token] of tokens.entries()) {
+        if (isAllowedFlagToken(token, prevFlag)) {
           prevFlag = token.startsWith('-') ? token : undefined
+          continue
         }
-      }),
+        ctx.addIssue({
+          code: 'custom',
+          path: [index],
+          message: `Flag "${token}" is not on the allowed ripgrep flag allowlist (allowed: ${(FLAG_ALLOWLIST as readonly string[]).join(', ')}, plus values for ${[...VALUE_FLAGS].join(', ')}).`,
+        })
+        prevFlag = token.startsWith('-') ? token : undefined
+      }
+    }),
   )
   .optional()
 
@@ -105,8 +118,8 @@ const inputSchema = z
         `Regex pattern (ripgrep syntax) to match file content against.`,
       ),
     flags: flagsSchema.describe(
-        `Optional safe ripgrep flags as one string or argv tokens. Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. Examples: "-g *.ts -g *.tsx" or ["-g", "*.ts", "-g", "*.tsx"]. Do not quote the entire expression inside the JSON string. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, context -A/-B/-C, -r/--replace, --exec, and -z/--null are rejected (this tool forces -l or --json itself). Redundant -n/--line-number inputs are ignored.`,
-      ),
+      `Optional safe ripgrep flags as one string or argv tokens. Allowed: -i/--ignore-case, -S/--smart-case, -s/--case-sensitive, -w/--word-regexp, -F/--fixed-strings, -U/--multiline, --multiline-dotall, -g/--glob, -t/--type, -T/--type-not. Examples: "-g *.ts -g *.tsx" or ["-g", "*.ts", "-g", "*.tsx"]. Do not quote the entire expression inside the JSON string. Output-shape flags such as -c/--count, --count-matches, -l, -v/--invert-match, context -A/-B/-C, -r/--replace, --exec, and -z/--null are rejected (this tool forces -l or --json itself). Redundant -n/--line-number inputs are ignored.`,
+    ),
     cwd: z
       .string()
       .optional()
@@ -201,6 +214,7 @@ export const findFilesMatchingContentParams = {
   outputSchema: jsonToolResultSchema(
     z.union([
       z.object({
+        ...executionFields,
         files: z
           .array(z.string())
           .describe('Unique file paths matching the pattern'),
@@ -231,7 +245,21 @@ export const findFilesMatchingContentParams = {
         message: z.string(),
       }),
       z.object({
+        ...executionFields,
         errorMessage: z.string(),
+        files: z.array(z.string()).optional(),
+        count: z.number().int().min(0).max(MAX_MATCH_COUNT).optional(),
+        truncated: z.boolean().optional(),
+        groups: z
+          .array(
+            z.object({
+              file: z.string(),
+              matchCount: z.number(),
+              symbols: z.array(z.string()),
+            }),
+          )
+          .optional(),
+        message: z.string().optional(),
       }),
     ]),
   ),

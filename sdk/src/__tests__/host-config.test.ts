@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 
-import { assertProviderHostContext, createProviderHostContext, credentialRoster, getAncestorProviderConfigPathsForContext, getCapturedProviderConfig, getConfigDirForContext, loadHostConfigSnapshot } from '../host-config'
+import { assertProviderHostContext, createProviderHostContext, credentialRoster, getAncestorProviderConfigPathsForContext, getCapturedProviderConfig, getProviderCredentialHealthIdentity, getConfigDirForContext, loadHostConfigSnapshot } from '../host-config'
 import type { HostConfigurationInputs, HostConfigSnapshot, ProviderHostContext } from '../host-config'
 import type { ConfigReadFs } from '../provider-config'
 
@@ -274,6 +274,36 @@ describe('strict host configuration capture', () => {
     } finally {
       for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name] }
     }
+  })
+
+  test('credential health identity isolates custom ports without resolving dormant credentials', () => {
+    const snapshot = capture(inputs(), memoryFs().port)
+    let reads = 0
+    const first = { async getValidChatGptOAuthCredentials() { reads++; throw new Error('Dormant credential read') } }
+    const second = { async getValidChatGptOAuthCredentials() { reads++; throw new Error('Dormant credential read') } }
+    const a = createProviderHostContext(snapshot, first)
+    const again = createProviderHostContext(capture(inputs(), memoryFs().port), first)
+    const b = createProviderHostContext(snapshot, second)
+    expect(getProviderCredentialHealthIdentity(a)).toBe(getProviderCredentialHealthIdentity(again))
+    expect(getProviderCredentialHealthIdentity(a)).not.toBe(getProviderCredentialHealthIdentity(b))
+    expect(reads).toBe(0)
+    expect(() => getProviderCredentialHealthIdentity({ ...a })).toThrow('Invalid provider host context')
+  })
+
+  test('stored OAuth metadata changes health identity without reading its secret values', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openbuff-credential-health-'))
+    roots.push(root)
+    const context = createProviderHostContext(capture(inputs({ globals: { kind: 'directory', path: root } }), memoryFs().port))
+    const byokIdentity = getProviderCredentialHealthIdentity(context)
+    const before = getProviderCredentialHealthIdentity(context, true)
+    fs.writeFileSync(path.join(root, 'credentials.json'), '{"chatgptOAuth":{"accessToken":"not-a-real-secret"}}')
+    const after = getProviderCredentialHealthIdentity(context, true)
+    expect(after).not.toBe(before)
+    expect(after).not.toContain('not-a-real-secret')
+    expect(getProviderCredentialHealthIdentity(context)).toBe(byokIdentity)
+    fs.renameSync(path.join(root, 'credentials.json'), path.join(root, 'old-credentials.json'))
+    fs.writeFileSync(path.join(root, 'credentials.json'), 'new fixture credential revision')
+    expect(getProviderCredentialHealthIdentity(context, true)).not.toBe(after)
   })
 
   test('captured custom credential ports retain their original receiver', async () => {

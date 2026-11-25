@@ -7,9 +7,13 @@ import type {
 } from '../../tools/results/filesystem'
 import type { ReadCapabilityIssuer } from '../../util/content-hash'
 import type { ActionOutcome } from '../run-outcome'
+import type { WorkspaceStateV1 } from '../workspace-state'
 
 /** Runtime description; only the receiving host registers executable authority. */
 export type ExecutionActor = Readonly<{ runId: string; rootRunId: string; agentId: string }>
+/** Refresh descriptive state before a NEW attempt; never renew an existing action. */
+export type SynchronizeWorkspace = (actor: ExecutionActor) =>
+  WorkspaceStateV1 | undefined | Promise<WorkspaceStateV1 | undefined>
 /** Descriptive runtime-internal origin; only a registered host can resolve authority. */
 export type ExecutionHostOperationOrigin = Readonly<{
   actor: ExecutionActor
@@ -20,6 +24,13 @@ export type ToolExecutionIdentity = ExecutionActor & Readonly<{
   basis: Readonly<ActionOutcome['basis']>
   workspaceSnapshotId?: string
 }>
+
+/** Read dispatch availability comes from the registered host actor, not tool parameters. */
+export type AuthorizeToolRead = (request: Readonly<{
+  identity: ToolExecutionIdentity
+  toolName: string
+}>) => Readonly<{ allowed: true } | { allowed: false; reason: string }> |
+  Promise<Readonly<{ allowed: true } | { allowed: false; reason: string }>>
 
 /** Root callbacks register synchronously; a supervised peer awaits the parent acknowledgement. */
 export type OnExecutionActionStart = (start: Readonly<{
@@ -46,6 +57,8 @@ export type RequestToolCallFn = (params: {
 }) => Promise<{
   output: ToolResultOutput[]
   canonicalReceipt?: CommitReceiptV1
+  /** Host-authored workspace view after the tool has settled. */
+  workspaceState?: WorkspaceStateV1
 }>
 
 export type RequestMcpToolDataFn = (params: {
@@ -76,11 +89,17 @@ export type RequestFilesFn = (params: {
   ranges?: FileLineRange[]
   /** Runtime-only issuer scope used to mint non-replayable raw-basis capabilities. */
   capabilityIssuer?: ReadCapabilityIssuer
+  /** Stamped by scoped runtime callbacks; caller/model fields never select an actor. */
+  executionActor?: ExecutionActor
+  executionIdentity?: ToolExecutionIdentity
   signal?: AbortSignal
 }) => Promise<ReadFilesResultV1>
 
 export type RequestOptionalFileFn = (params: {
   filePath: string
+  /** Runtime-only read attribution, validated against the host registry. */
+  executionActor?: ExecutionActor
+  executionIdentity?: ToolExecutionIdentity
   signal?: AbortSignal
 }) => Promise<string | null>
 

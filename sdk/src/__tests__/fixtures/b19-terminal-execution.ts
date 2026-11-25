@@ -117,8 +117,8 @@ export function createExecutionProcessRecorder(options: {
         call.closed = true
         childState.exitCode = signal ? null : exitCode
         childState.signalCode = signal ?? null
-        childState.emit('exit', signal ? null : exitCode, signal)
-        childState.emit('close', signal ? null : exitCode, signal)
+        childState.emit('exit', signal ? null : exitCode, signal ?? null)
+        childState.emit('close', signal ? null : exitCode, signal ?? null)
         retainControlTrace({
           kind: 'injected-node-option-control', syntheticPid: childState.pid,
           executable, argv: [...argv],
@@ -215,6 +215,7 @@ type FixtureOptions = {
   authorizeSync?: (input: PolicyInput) => SyncDecision
   resolveProfile?: HostAuthorityInputs['resolveProfile']
   record?: HostAuthorityInputs['record']
+  isCurrentBasis?: HostAuthorityInputs['isCurrentBasis']
 }
 
 /**
@@ -318,7 +319,7 @@ export function createTerminalExecutionFixture(options: FixtureOptions = {}) {
         ? options.authorizeSync(input)
         : { ok: true, basis: 'explicit-sync-policy', decisionId: `fixture-sync-policy-${randomUUID()}` }
     },
-    isCurrentBasis: () => true,
+    isCurrentBasis: options.isCurrentBasis ?? (() => true),
     record(event) { events.push(event); options.record?.(event) },
   })
   const boundary = executionValue(captureRootDeadline({ clock, limit: options.rootLimit ?? { kind: 'unbounded' } }))

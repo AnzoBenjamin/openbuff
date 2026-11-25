@@ -46,6 +46,14 @@ describe('tool registration consistency', () => {
     }
   })
 
+  it('base2 progressive controls are runtime-registered but not public SDK tools', () => {
+    for (const name of ['tool_search', 'tool_load'] as const) {
+      expect(toolNames).toContain(name)
+      expect(toolParams[name].toolName).toBe(name)
+      expect(publishedTools).not.toContain(name)
+    }
+  })
+
   it('quarantined compatibility tools remain registered and published', () => {
     for (const toolName of quarantinedToolNames) {
       expect(toolNames).toContain(toolName)
@@ -90,6 +98,8 @@ describe('tool registration consistency', () => {
       'create_plan',
       'replace_range',
       'spawn_agent_inline',
+      'tool_load',
+      'tool_search',
       'update_subgoal',
     ])
     const expected = new Set(

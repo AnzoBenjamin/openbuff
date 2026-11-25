@@ -7,6 +7,8 @@ import path from 'node:path'
 import { computeWorktreeSnapshotIdentity, getChangeReviewBundle } from '../tools/get-change-review-bundle'
 import { runGitBounded } from '../tools/git-status'
 import { runTargetedValidation } from '../tools/run-targeted-validation'
+import { runFileChangeHooks } from '../tools/file-change-hooks'
+import { preflightDiagnosticDelta } from '../services/diagnostic-delta'
 import {
   advanceWorkspaceState,
   createInitialWorkspaceState,
@@ -407,6 +409,99 @@ describe('runTargetedValidation', () => {
       },
     })
   })
+
+  test.each([
+    ['failed', 'failed', 'none'],
+    ['cancelled', 'failed', 'none'],
+    ['unavailable', 'failed', 'none'],
+    ['incomplete', 'failed', 'none'],
+    ['unknown', 'failed', 'none'],
+  ] as const)(
+    'retains diagnostic %s without inventing validation assurance',
+    async (diagnosticStatus, status, assurance) => {
+      const cwd = createRepository()
+      const bundle = await getMediatedBundle({ cwd })
+      const bundleValue = bundle[0]?.type === 'json' ? bundle[0].value : undefined
+      if (!bundleValue || !('snapshotId' in bundleValue)) {
+        throw new Error('Expected a change review bundle')
+      }
+      const diagnostic = {
+        hookName: 'diagnostic-delta' as const,
+        validationStatus: `diagnostic_delta_${diagnosticStatus}` as const,
+        diagnosticStatus,
+        observations: { basis: 'unknown' as const, reason: 'fixture' },
+      }
+      const result = await runMediatedValidation({
+        cwd,
+        snapshotId: bundleValue.snapshotId,
+        files: ['README.md'],
+        runHooks: async () => [
+          {
+            type: 'json',
+            value: [
+              { hookName: 'check', command: 'check', exitCode: 0 },
+              diagnostic,
+            ],
+          },
+        ],
+      })
+
+      expect(result[0]).toMatchObject({
+        type: 'json',
+        value: { status, assurance, results: [expect.anything(), diagnostic] },
+      })
+    },
+  )
+
+  test.each([
+    [127, 'unavailable', 'failed', 'none'],
+    [0, 'passed', 'passed', 'full'],
+  ] as const)(
+    'propagates actual hook diagnostic status for command exit %i',
+    async (exitCode, diagnosticStatus, status, assurance) => {
+      const cwd = createRepository()
+      const bundle = await getMediatedBundle({ cwd })
+      const bundleValue = bundle[0]?.type === 'json' ? bundle[0].value : undefined
+      if (!bundleValue || !('snapshotId' in bundleValue)) {
+        throw new Error('Expected a change review bundle')
+      }
+      const result = await runMediatedValidation({
+        cwd,
+        snapshotId: bundleValue.snapshotId,
+        files: ['src/a.ts'],
+        capturedConfiguration: {
+          autoFileChangeHooks: false,
+          fileChangeHooks: [{ name: 'check', command: 'check' }],
+        },
+        diagnosticPreflightEnabled: true,
+        diagnosticDelta: (params) => preflightDiagnosticDelta({
+          ...params,
+          applyEdit: () => {},
+          runCommand: async () => ({ exitCode }),
+        }),
+        runHooks: (params) => runFileChangeHooks({
+          ...params,
+          runCommand: async () => [{
+            type: 'json',
+            value: { command: 'check', exitCode: 0, stdout: '', stderr: '' },
+          }],
+        }),
+      })
+      expect(result[0]).toMatchObject({
+        type: 'json',
+        value: {
+          status,
+          assurance,
+          results: expect.arrayContaining([expect.objectContaining({
+            hookName: 'diagnostic-delta',
+            diagnosticStatus,
+            validationStatus: `diagnostic_delta_${diagnosticStatus}`,
+            observations: expect.objectContaining({ basis: 'before_after' }),
+          })]),
+        },
+      })
+    },
+  )
 
   test('skips the after-bundle semgrep rescan when a securityScanRunner is provided', async () => {
     const cwd = createRepository()

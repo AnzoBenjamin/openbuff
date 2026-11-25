@@ -196,6 +196,8 @@ export interface ContextArchiveSearchMatch {
 
 /** Runtime-neutral persisted context-archive search outcome. */
 export interface ContextArchiveSearchOutcome {
+  status?: 'ok' | 'degraded' | 'unavailable'
+  reasons?: string[]
   matches: ContextArchiveSearchMatch[]
   /** Count of distinct (runId, archivedAt) snapshots actually scanned. */
   snapshotsSearched: number
@@ -210,6 +212,8 @@ export interface ContextArchiveSearchOutcome {
  * expose no database or runtime driver types.
  */
 export interface MemoryRepositoryV2 {
+  /** Bounded background maintenance over exact, source-compatible duplicates. */
+  consolidateExact?(request: { projectId: ProjectId; maxGroups?: number; now?: number }): Promise<{ status: 'ok' | 'degraded'; reinforced: number; superseded: number; reason?: string }>
   append(request: MemoryAppendRequest): Promise<MemoryAppendOutcome>
   query(request: MemoryRetrievalRequest): Promise<MemoryQueryOutcome>
   verify(request: MemoryVerifyRequest): Promise<MemoryVerifyOutcome>
@@ -282,7 +286,7 @@ export interface MemoryRepositoryV2 {
   persistContextArchiveSnapshots?(request: {
     runId: string
     snapshots: ContextArchiveSnapshot[]
-  }): Promise<{ persisted: number; skipped: number }>
+  }): Promise<{ persisted: number; skipped: number; status?: 'ok' | 'degraded' | 'unavailable'; reasons?: string[] }>
   /**
    * Optional bounded load of persisted compaction-archive snapshots, newest
    * first (the caller reverses as needed). Without runId, returns snapshots
@@ -292,7 +296,7 @@ export interface MemoryRepositoryV2 {
   loadContextArchiveSnapshots?(request: {
     runId?: string
     limit?: number
-  }): Promise<{ snapshots: ContextArchiveSnapshot[] }>
+  }): Promise<{ snapshots: ContextArchiveSnapshot[]; status?: 'ok' | 'degraded' | 'unavailable'; reasons?: string[] }>
   /**
    * Optional bounded search over the persisted compaction archive. Must never
    * throw on query failure — an unusable index degrades to a bounded scan or

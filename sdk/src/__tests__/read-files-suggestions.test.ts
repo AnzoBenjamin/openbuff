@@ -63,6 +63,25 @@ describe('read_files not_found candidates', () => {
     expect(item.error?.code).toBe('not_found')
     expect(item.error?.candidates ?? []).not.toContain('.env')
   })
+
+  test.each([false, true])(
+    'cancellation during suggestion listing is propagated when readdir throws=%s',
+    async (throws) => {
+      const controller = new AbortController()
+      const fs = createNodeFileSystem()
+      fs.readdir = (async () => {
+        controller.abort(new Error('suggestion listing cancelled'))
+        if (throws) throw new Error('listing failed')
+        return []
+      }) as typeof fs.readdir
+      await expect(getFilesStructured({
+        filePaths: ['src/missng.ts'],
+        cwd: root,
+        fs,
+        signal: controller.signal,
+      })).rejects.toThrow('suggestion listing cancelled')
+    },
+  )
 })
 
 describe('rankNearPaths', () => {

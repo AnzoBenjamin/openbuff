@@ -225,6 +225,13 @@ export async function resolvePinnedMcpAddress(
   let publicTarget: string | null = null
   let allowlistedTarget: string | null = null
   for (const address of addresses) {
+    // DNS answers must be literal socket targets, not another hostname (which
+    // would re-enter DNS) or a zone-qualified URL setter that may be ignored.
+    if (isIP(address) === 0 || address.includes('%'))
+      throw new McpDnsRebindingError(
+        host,
+        'DNS resolution returned an invalid IP literal',
+      )
     if (isBlockedMcpAddress(address)) {
       if (!isAllowedLoopbackMcpAuthority(address, port, allowed)) {
         throw new McpDnsRebindingError(

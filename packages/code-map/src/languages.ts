@@ -1,5 +1,6 @@
 import * as fs from 'fs'
 import * as path from 'path'
+import { createHash } from 'node:crypto'
 
 // Import some types for wasm & .scm files
 import './types'
@@ -27,11 +28,14 @@ export interface LanguageConfig {
   parser?: Parser
   query?: Query
   language?: Language
+  /** Identity of the grammar and query bytes actually loaded into this config. */
+  extractionIdentity?: string
 }
 
 export interface RuntimeLanguageLoader {
   loadLanguage(wasmFile: string): Promise<Language>
   initParser(): Promise<void>
+  getLoadedLanguageFingerprint?(wasmFile: string): string | undefined
 }
 
 /* ------------------------------------------------------------------ */
@@ -176,6 +180,133 @@ export function getWasmDir(): string | undefined {
   return customWasmDir
 }
 
+const extractionAssetDigests = new Map<
+  string,
+  { stamp: string; digest: string }
+>()
+const MAX_EXTRACTION_ASSET_DIGESTS = 128
+const loadedWasmAssets = new Map<
+  string,
+  { candidates: string; digest: string }
+>()
+const loadedConfigAssets = new WeakMap<
+  LanguageConfig,
+  { parser: Parser; wasm: string; query: string }
+>()
+const configLoads = new WeakMap<LanguageConfig, Promise<void>>()
+/** Bump when parse-summary extraction semantics change. */
+export const PARSE_EXTRACTION_VERSION = '3'
+
+/** Content and grammar/query identity for immutable per-source parse objects. */
+export function getParserExtractionFingerprint(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase()
+  const config = languageTable.find((entry) =>
+    entry.extensions.includes(extension),
+  )
+  return extractionFingerprint(
+    extension,
+    config
+      ? extractionIdentity(
+          getWasmAssetIdentity(config.wasmFile),
+          getQueryAssetIdentity(config),
+        )
+      : 'unsupported',
+  )
+}
+
+/** Capture this before asynchronous source reads so later asset changes cannot relabel a parse. */
+export function getLoadedParserExtractionFingerprint(
+  filePath: string,
+  config: LanguageConfig,
+): string {
+  return extractionFingerprint(
+    path.extname(filePath).toLowerCase(),
+    config.extractionIdentity ??
+      extractionIdentity(
+        getWasmAssetIdentity(config.wasmFile),
+        getQueryAssetIdentity(config),
+      ),
+  )
+}
+
+function extractionFingerprint(extension: string, identity: string): string {
+  return createHash('sha256')
+    .update(
+      `parse:${PARSE_EXTRACTION_VERSION};web-tree-sitter:0.25.10;${extension};${identity}`,
+    )
+    .digest('hex')
+}
+
+function extractionIdentity(wasm: string, query: string): string {
+  return JSON.stringify([wasm, query])
+}
+
+function getAssetIdentity(assetPath: string): string {
+  try {
+    const stat = fs.statSync(assetPath)
+    const stamp = `${stat.mtimeMs}:${stat.ctimeMs}:${stat.size}`
+    let cached = extractionAssetDigests.get(assetPath)
+    if (!cached || cached.stamp !== stamp) {
+      cached = {
+        stamp,
+        digest: createHash('sha256')
+          .update(fs.readFileSync(assetPath))
+          .digest('hex'),
+      }
+      if (extractionAssetDigests.size >= MAX_EXTRACTION_ASSET_DIGESTS) {
+        const oldest = extractionAssetDigests.keys().next().value
+        if (oldest !== undefined) extractionAssetDigests.delete(oldest)
+      }
+      extractionAssetDigests.set(assetPath, cached)
+    }
+    return cached.digest
+  } catch {
+    return `unavailable:${path.basename(assetPath)}`
+  }
+}
+
+function getWasmCandidates(wasmFile: string): {
+  primary: string
+  fallback: string | null
+  identity: string
+} {
+  const primary = resolveWasmPath(wasmFile)
+  const fallback = tryResolveFromPackage(wasmFile)
+  return {
+    primary,
+    fallback,
+    identity: JSON.stringify([
+      primary,
+      getAssetIdentity(primary),
+      fallback,
+      fallback ? getAssetIdentity(fallback) : null,
+    ]),
+  }
+}
+
+function getWasmAssetIdentity(wasmFile: string): string {
+  const candidates = getWasmCandidates(wasmFile)
+  const loaded = loadedWasmAssets.get(wasmFile)
+  if (loaded?.candidates === candidates.identity) return loaded.digest
+  const availableIdentity = getAssetIdentity(
+    fs.existsSync(candidates.primary) || !candidates.fallback
+      ? candidates.primary
+      : candidates.fallback,
+  )
+  // A removed/unmounted asset cannot replace a valid grammar already in
+  // memory. Keep identifying those loaded bytes; available replacements
+  // still invalidate the parser when their bytes differ.
+  return availableIdentity.startsWith('unavailable:') && loaded
+    ? loaded.digest
+    : availableIdentity
+}
+
+function getQueryAssetIdentity(config: LanguageConfig): string {
+  return config.queryPathOrContent.endsWith('.scm')
+    ? getAssetIdentity(resolveQueryPath(config.queryPathOrContent))
+    : createHash('sha256').update(config.queryPathOrContent).digest('hex')
+}
+
 /**
  * Validate the untrusted `CODEBUFF_WASM_DIR` environment override. Rejects
  * relative paths (which could escape the intended sandbox depending on CWD)
@@ -218,7 +349,7 @@ function resolveWasmPath(wasmFileName: string): string {
 
   // Get the directory of this module
   const moduleDir = (() => {
-    const dirname = getDirnameDynamically()
+    const dirname = getDirnameDynamically(import.meta.url)
     if (typeof dirname !== 'undefined') {
       return dirname
     }
@@ -263,8 +394,11 @@ function tryResolveFromPackage(wasmFileName: string): string | null {
  * `createLanguageConfig`).
  */
 function resolveQueryPath(queryFileName: string): string {
+  if (path.isAbsolute(queryFileName)) return queryFileName
   const candidates = getQueryCandidatePaths(queryFileName)
-  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0]
+  return (
+    candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0]
+  )
 }
 
 /**
@@ -275,7 +409,7 @@ function resolveQueryPath(queryFileName: string): string {
 function getQueryCandidatePaths(queryFileName: string): string[] {
   // Get the directory of this module
   const moduleDir = (() => {
-    const dirname = getDirnameDynamically()
+    const dirname = getDirnameDynamically(import.meta.url)
     if (typeof dirname !== 'undefined') {
       return dirname
     }
@@ -293,7 +427,11 @@ function getQueryCandidatePaths(queryFileName: string): string[] {
     path.join(moduleDir, 'src', 'tree-sitter-queries', queryFileName),
     // Compiled binaries: the release tarball ships `tree-sitter-queries/`
     // next to the executable (see cli/scripts/release-tarball-files.sh).
-    path.join(path.dirname(process.execPath), 'tree-sitter-queries', queryFileName),
+    path.join(
+      path.dirname(process.execPath),
+      'tree-sitter-queries',
+      queryFileName,
+    ),
     // Fallback for development/monorepo layouts where the module directory
     // doesn't contain the queries directly.
     path.join(process.cwd(), 'tree-sitter-queries', queryFileName),
@@ -434,18 +572,27 @@ class UnifiedLanguageLoader implements RuntimeLanguageLoader {
   }
 
   async loadLanguage(wasmFile: string): Promise<Language> {
-    // Resolve WASM file path
-    let wasmPath = resolveWasmPath(wasmFile)
+    const candidates = getWasmCandidates(wasmFile)
+    const load = async (wasmPath: string): Promise<Language> => {
+      // Load the exact bytes whose digest labels the persisted parse objects.
+      const bytes = fs.readFileSync(wasmPath)
+      const language = await Language.load(bytes)
+      loadedWasmAssets.set(wasmFile, {
+        candidates: candidates.identity,
+        digest: createHash('sha256').update(bytes).digest('hex'),
+      })
+      return language
+    }
 
     // Try to load the language using Node.js-specific method if available
     let lang: Language
     try {
-      lang = await Language.load(wasmPath)
+      lang = await load(candidates.primary)
     } catch (err) {
       // Fallback: try resolving from the original package (development)
-      const fallbackPath = tryResolveFromPackage(wasmFile)
+      const fallbackPath = candidates.fallback
       if (fallbackPath) {
-        lang = await Language.load(fallbackPath)
+        lang = await load(fallbackPath)
       } else {
         // Legacy npm wrappers update the compiled binary but preserved only
         // tree-sitter.wasm. A compiled CLI can securely repair a missing
@@ -457,11 +604,15 @@ class UnifiedLanguageLoader implements RuntimeLanguageLoader {
             ? await repairGrammarWasm({ wasmFile, targetDir: repairDir })
             : null
         if (!repairedPath) throw err
-        lang = await Language.load(repairedPath)
+        lang = await load(repairedPath)
       }
     }
 
     return lang
+  }
+
+  getLoadedLanguageFingerprint(wasmFile: string): string | undefined {
+    return loadedWasmAssets.get(wasmFile)?.digest
   }
 }
 
@@ -495,8 +646,26 @@ export async function createLanguageConfig(
     return undefined
   }
 
-  if (!cfg.parser) {
-    try {
+  const pending = configLoads.get(cfg)
+  if (pending) await pending
+  const wasmIdentity = getWasmAssetIdentity(cfg.wasmFile)
+  const queryIdentity = getQueryAssetIdentity(cfg)
+  let loaded = loadedConfigAssets.get(cfg)
+  // Public callers may inject or replace a parser on the language table.
+  if (cfg.parser && loaded?.parser !== cfg.parser) {
+    loaded = { parser: cfg.parser, wasm: wasmIdentity, query: queryIdentity }
+    loadedConfigAssets.set(cfg, loaded)
+    cfg.extractionIdentity = extractionIdentity(wasmIdentity, queryIdentity)
+  }
+  if (
+    cfg.parser &&
+    loaded?.wasm === wasmIdentity &&
+    loaded.query === queryIdentity
+  )
+    return cfg
+
+  const loading = (async () => {
+    if (!cfg.parser || loaded?.wasm !== wasmIdentity) {
       await runtimeLoader.initParser()
 
       // Load the language using the runtime-specific loader
@@ -516,59 +685,71 @@ export async function createLanguageConfig(
 
       cfg.language = lang
       cfg.parser = parser
+      cfg.query = undefined
+      loaded = {
+        parser,
+        wasm:
+          runtimeLoader.getLoadedLanguageFingerprint?.(cfg.wasmFile) ??
+          getWasmAssetIdentity(cfg.wasmFile),
+        query: '',
+      }
+    }
 
-      // The language table stores bare .scm file names. Normalize them to
-      // absolute paths at query-load time (module load performs no fs
-      // reads). Resolve LOCALLY: do NOT mutate the shared languageTable
-      // entry. Table configs are module-level singletons; rewriting
-      // queryPathOrContent from the bare .scm filename to an absolute path
-      // made repeated loads and any consumer holding a config (including
-      // the table-consistency test, which joins the name onto the queries
-      // dir) order-dependent on which grammar loaded first.
-      //
-      // The whole query block is FAIL-OPEN: a missing/unreadable .scm file
-      // or a Query compile failure leaves `cfg.query` undefined and the
-      // cached grammar untouched. P3-T5 note: the tags queries include the
-      // AST import-capture tier (@import.* patterns), so a bad capture
-      // addition degrades to "no import captures" for that language rather
-      // than breaking all parsing for it. Unavailability is logged at most
-      // once per language (DEBUG_PARSING only)
+    // The language table stores bare .scm file names. Normalize them to
+    // absolute paths at query-load time (module load performs no fs
+    // reads). Resolve LOCALLY: do NOT mutate the shared languageTable
+    // entry. Table configs are module-level singletons; rewriting
+    // queryPathOrContent from the bare .scm filename to an absolute path
+    // made repeated loads and any consumer holding a config (including
+    // the table-consistency test, which joins the name onto the queries
+    // dir) order-dependent on which grammar loaded first.
+    //
+    // The whole query block is FAIL-OPEN: a missing/unreadable .scm file
+    // or a Query compile failure leaves `cfg.query` undefined and the
+    // cached grammar untouched. P3-T5 note: the tags queries include the
+    // AST import-capture tier (@import.* patterns), so a bad capture
+    // addition degrades to "no import captures" for that language rather
+    // than breaking all parsing for it. Unavailability is logged at most
+    // once per language (DEBUG_PARSING only)
+    try {
+      cfg.query = undefined
+      const queryContent = cfg.queryPathOrContent.endsWith('.scm')
+        ? fs.readFileSync(resolveQueryPath(cfg.queryPathOrContent), 'utf8')
+        : cfg.queryPathOrContent
+      loaded!.query = createHash('sha256').update(queryContent).digest('hex')
       try {
-        let querySource = cfg.queryPathOrContent
-        if (!path.isAbsolute(querySource)) {
-          querySource = resolveQueryPath(querySource)
-        }
-        const queryContent = path.isAbsolute(querySource)
-          ? fs.readFileSync(querySource, 'utf8')
-          : querySource
-        try {
-          cfg.query = new Query(lang, queryContent)
-        } catch {
-          // Query content rejected as written (e.g. a bad @import.* pattern):
-          // retry ONCE with the import-capture patterns stripped. If even the
-          // stripped query fails to compile, the block's catch below leaves
-          // `cfg.query` undefined without throwing away the cached grammar.
-          const stripped = stripImportCapturePatterns(queryContent)
-          if (stripped !== queryContent) {
-            cfg.query = new Query(lang, stripped)
-          }
-        }
-      } catch (err) {
-        if (
-          DEBUG_PARSING &&
-          !loggedQueryUnavailable.has(cfg.wasmFile) &&
-          loggedQueryUnavailable.add(cfg.wasmFile)
-        ) {
-          console.error(
-            `[tree-sitter] Tags query unavailable for ${cfg.wasmFile} (grammar stays cached, query disabled):`,
-            err,
-          )
+        cfg.query = new Query(cfg.language!, queryContent)
+      } catch {
+        // Query content rejected as written (e.g. a bad @import.* pattern):
+        // retry ONCE with the import-capture patterns stripped. If even the
+        // stripped query fails to compile, the block's catch below leaves
+        // `cfg.query` undefined without throwing away the cached grammar.
+        const stripped = stripImportCapturePatterns(queryContent)
+        if (stripped !== queryContent) {
+          cfg.query = new Query(cfg.language!, stripped)
         }
       }
     } catch (err) {
-      // Let the runtime-specific implementation handle error logging
-      throw err
+      loaded!.query = queryIdentity
+      if (
+        DEBUG_PARSING &&
+        !loggedQueryUnavailable.has(cfg.wasmFile) &&
+        loggedQueryUnavailable.add(cfg.wasmFile)
+      ) {
+        console.error(
+          `[tree-sitter] Tags query unavailable for ${cfg.wasmFile} (grammar stays cached, query disabled):`,
+          err,
+        )
+      }
     }
+    loadedConfigAssets.set(cfg, loaded!)
+    cfg.extractionIdentity = extractionIdentity(loaded!.wasm, loaded!.query)
+  })()
+  configLoads.set(cfg, loading)
+  try {
+    await loading
+  } finally {
+    if (configLoads.get(cfg) === loading) configLoads.delete(cfg)
   }
 
   return cfg

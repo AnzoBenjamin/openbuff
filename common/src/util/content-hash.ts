@@ -57,6 +57,10 @@ export type ReplacementReadCapability = {
   rawBasis?: RawReadBasisV1
 }
 
+const MAX_ACTIVE_RAW_READ_CAPABILITY_HANDLES = 16_384
+// Raw bases stay in process memory; read output carries only a short signed ID.
+const rawReadCapabilityHandles = new Map<string, ReplacementReadCapability>()
+
 export type ReadCapabilityScope = {
   /** Stable project/root identity for the current runtime view. */
   projectId: string
@@ -124,9 +128,10 @@ export function readCapabilityMatchesScope(
 }
 
 /**
- * Encodes cap.v4 when the original raw basis is supplied, or historical cap.v3
- * otherwise. Both authenticate the project/path/run scope, bounds and
- * observation hash; only v4 authenticates raw facts for fresh edit authority.
+ * Encodes a short cap.v4 host-local handle when the original raw basis is
+ * supplied, or a historical cap.v3 token otherwise. The v4 record retains
+ * authenticated project/path/run scope, bounds, observation hash and raw facts
+ * in a bounded in-process registry; legacy full-payload v4 tokens still decode.
  */
 export function encodeReadCapabilityToken(params: {
   startLine: number
@@ -162,22 +167,41 @@ export function encodeReadCapabilityToken(params: {
         'Raw read capabilities require valid inclusive line bounds',
       )
     }
+    const rawBasis = parseRawReadBasis(params.rawBasis)
     const payload = Buffer.from(
-      JSON.stringify({
-        startLine,
-        endLine,
-        hash,
-        scopeFingerprint,
-        rawBasis: parseRawReadBasis(params.rawBasis),
-      }),
+      JSON.stringify({ startLine, endLine, hash, scopeFingerprint, rawBasis }),
     ).toString('base64url')
-    const signedPayload = `v4.${payload}`
-    const signature = createHmac('sha256', READ_CAPABILITY_SIGNING_KEY)
-      .update(signedPayload)
-      .digest('base64url')
-    const token = `${READ_CAPABILITY_TOKEN_PREFIX}${signedPayload}.${signature}`
-    if (token.length > 4096)
+    if (
+      READ_CAPABILITY_TOKEN_PREFIX.length +
+        `v4.${payload}`.length +
+        1 +
+        43 >
+      4096
+    ) {
       throw new RangeError('Raw read capability exceeds its encoded byte limit')
+    }
+
+    let handle: string
+    do {
+      handle = randomBytes(16).toString('base64url')
+    } while (rawReadCapabilityHandles.has(handle))
+    const signedHandle = `v4.handle.${handle}`
+    const signature = createHmac('sha256', READ_CAPABILITY_SIGNING_KEY)
+      .update(signedHandle)
+      .digest('base64url')
+    const token = `${READ_CAPABILITY_TOKEN_PREFIX}v4.h.${handle}.${signature}`
+    rawReadCapabilityHandles.set(handle, {
+      startLine,
+      endLine,
+      hash,
+      scopeFingerprint,
+      tokenVersion: 'v4',
+      rawBasis,
+    })
+    if (rawReadCapabilityHandles.size > MAX_ACTIVE_RAW_READ_CAPABILITY_HANDLES) {
+      const oldest = rawReadCapabilityHandles.keys().next()
+      if (!oldest.done) rawReadCapabilityHandles.delete(oldest.value)
+    }
     return token
   }
   const signedPayload = `${READ_CAPABILITY_TOKEN_VERSION}.${startLine}.${endLine}.${digest}.${scopeFingerprint}`
@@ -249,6 +273,24 @@ function decodeRawReadCapabilityToken(
   const invalid =
     'Invalid basedOnRead capability: malformed or unauthenticated cap.v4 raw basis. Re-read the target and copy its fresh readCapability.'
   if (token.length > 4096) return invalid
+  const handleMatch = token.match(
+    /^cap\.v4\.h\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/,
+  )
+  if (handleMatch) {
+    const signedHandle = `v4.handle.${handleMatch[1]}`
+    const expected = createHmac('sha256', READ_CAPABILITY_SIGNING_KEY)
+      .update(signedHandle)
+      .digest()
+    const supplied = Buffer.from(handleMatch[2]!, 'base64url')
+    if (
+      supplied.length !== expected.length ||
+      !timingSafeEqual(supplied, expected)
+    ) {
+      return invalid
+    }
+    const capability = rawReadCapabilityHandles.get(handleMatch[1]!)
+    return capability ? structuredClone(capability) : invalid
+  }
   const match = token.match(/^cap\.v4\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]{43})$/)
   if (!match) return invalid
   const expected = createHmac('sha256', READ_CAPABILITY_SIGNING_KEY)

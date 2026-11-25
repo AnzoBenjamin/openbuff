@@ -291,8 +291,42 @@ function decodeText(
   input: string | Uint8Array,
   options: TextCaptureOptions = {},
 ):
-  | { ok: true; document: CapturedTextDocument }
+  | {
+      ok: true
+      document: CapturedTextDocument
+      metadataComplete: boolean
+    }
   | { ok: false; error: FilesystemError } {
+  const utf16Encoding =
+    typeof input !== 'string' && input[0] === 0xff && input[1] === 0xfe
+      ? 'utf-16le'
+      : typeof input !== 'string' && input[0] === 0xfe && input[1] === 0xff
+        ? 'utf-16be'
+        : undefined
+  if (utf16Encoding && typeof input !== 'string') {
+    try {
+      const text = new TextDecoder(utf16Encoding, { fatal: true }).decode(input)
+      return {
+        ok: true,
+        document: captureTextDocument(text, {
+          ...options,
+          view: options.view ?? 'adapter_bytes',
+          coherence: options.coherence ?? 'observed',
+        }),
+        metadataComplete: false,
+      }
+    } catch {
+      return {
+        ok: false,
+        error: filesystemError(
+          'unsupported_encoding',
+          `${UNSUPPORTED_ENCODING_MARKER} The UTF-16 byte stream is malformed.`,
+          { retryable: false, recovery: 'use_supported_encoding' },
+        ),
+      }
+    }
+  }
+
   if (typeof input === 'string' ? input.includes('\0') : input.includes(0)) {
     return {
       ok: false,
@@ -321,6 +355,7 @@ function decodeText(
     return {
       ok: true,
       document: captureTextDocument(input, options),
+      metadataComplete: true,
     }
   } catch {
     return {
@@ -400,6 +435,7 @@ function decodeBoundedResult(
   if (!decoded.ok) return decoded
   const { document } = decoded
   if (
+    decoded.metadataComplete &&
     basis &&
     (basis.rawHash !== document.rawHash ||
       basis.endByteExclusive - basis.startByte !== document.byteLength ||
@@ -407,6 +443,7 @@ function decodeBoundedResult(
   )
     return invalid()
   if (
+    decoded.metadataComplete &&
     result.endLine > result.totalLines &&
     (result.endLine !== result.totalLines + 1 ||
       !basis ||
@@ -417,7 +454,9 @@ function decodeBoundedResult(
     return invalid()
   // Missing pairing/basis/metadata is a legacy display tier, never new edit authority.
   const verifiedBasis =
-    paired && result.metadataComplete === true ? basis : undefined
+    paired && result.metadataComplete === true && decoded.metadataComplete
+      ? basis
+      : undefined
   return {
     ok: true,
     window: {
@@ -427,7 +466,8 @@ function decodeBoundedResult(
       endLine: result.endLine,
       totalLines: result.totalLines,
       complete: result.complete,
-      metadataComplete: result.metadataComplete,
+      metadataComplete:
+        result.metadataComplete === true && decoded.metadataComplete,
       ...(verifiedBasis ? { rawBasis: verifiedBasis } : {}),
     },
   }
@@ -602,6 +642,37 @@ async function readCanonicalSnapshot(params: {
       : { state: 'error', error: decoded.error }
   } catch (error) {
     throwIfAborted(signal)
+    if (errorCode(error) === 'UNSUPPORTED_ENCODING' && sizeBytes <= MAX_FILE_BYTES) {
+      try {
+        const raw = await fs.readFile(operationPath)
+        throwIfAborted(signal)
+        const actualBytes =
+          typeof raw === 'string' ? Buffer.byteLength(raw) : raw.byteLength
+        if (actualBytes > MAX_FILE_BYTES) {
+          return { state: 'large', sizeBytes: actualBytes }
+        }
+        const decoded = decodeText(
+          typeof raw === 'string' ? raw : toBytes(raw),
+          {
+            view: typeof raw === 'string' ? 'text_view' : 'adapter_bytes',
+            coherence: 'observed',
+          },
+        )
+        if (!decoded.ok) return { state: 'error', error: decoded.error }
+        if (!decoded.metadataComplete) {
+          return {
+            state: 'full',
+            content: decoded.document.observation,
+            document: decoded.document,
+            sizeBytes: actualBytes,
+            metadataComplete: false,
+          }
+        }
+      } catch (fallbackError) {
+        throwIfAborted(signal)
+        return { state: 'error', error: snapshotReadError(fallbackError) }
+      }
+    }
     return { state: 'error', error: snapshotReadError(error) }
   }
 }
@@ -753,6 +824,67 @@ function errorItem(
   }
 }
 
+function renderNotebookView(
+  filePath: string,
+  content: string,
+): { content: string; truncated: boolean } | undefined {
+  if (!filePath.toLowerCase().endsWith('.ipynb')) return undefined
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    return undefined
+  }
+  if (typeof parsed !== 'object' || parsed === null || !('cells' in parsed)) {
+    return undefined
+  }
+  const cells = (parsed as { cells?: unknown }).cells
+  if (!Array.isArray(cells)) return undefined
+
+  let rendered = ''
+  let truncated = false
+  for (let index = 0; index < cells.length; index++) {
+    const cell = cells[index]
+    if (typeof cell !== 'object' || cell === null) continue
+    const record = cell as Record<string, unknown>
+    const cellType =
+      typeof record.cell_type === 'string' ? record.cell_type : 'unknown'
+    const source =
+      typeof record.source === 'string'
+        ? record.source
+        : Array.isArray(record.source)
+          ? record.source.filter((part): part is string => typeof part === 'string').join('')
+          : ''
+    const outputsOmitted =
+      cellType === 'code' &&
+      Array.isArray(record.outputs) &&
+      record.outputs.length > 0
+    const block = [
+      `[Notebook cell ${index + 1}/${cells.length}: ${cellType}]`,
+      source,
+      ...(outputsOmitted ? ['[cell outputs omitted]'] : []),
+    ].join('\n')
+    const separator = rendered ? '\n\n' : ''
+    if (rendered.length + separator.length + block.length > MAX_RENDER_CHARS) {
+      const marker = `\n\n[Notebook view truncated; ${cells.length - index} cells omitted.]`
+      const available = Math.max(
+        0,
+        MAX_RENDER_CHARS - rendered.length - separator.length - marker.length,
+      )
+      rendered += `${separator}${block.slice(0, available)}${marker}`
+      truncated = true
+      break
+    }
+    rendered += `${separator}${block}`
+  }
+
+  return {
+    content: rendered || '[Notebook contains no displayable cells.]',
+    truncated,
+  }
+}
+
 function renderWholeFileItem(
   selector: Extract<PlannedSelector, { selector: 'file' }>,
   snapshot: ReadSnapshot,
@@ -785,8 +917,11 @@ function renderWholeFileItem(
     )
   }
 
-  const { content } = snapshot
-  const partial = content.length > MAX_RENDER_CHARS
+  const sourceContent = snapshot.content
+  const notebookView = renderNotebookView(target.displayPath, sourceContent)
+  const content = notebookView?.content ?? sourceContent
+  const sourcePartial = sourceContent.length > MAX_RENDER_CHARS
+  const partial = sourcePartial || notebookView?.truncated === true
   let renderedContent = content
   let truncation:
     | {
@@ -794,8 +929,10 @@ function renderWholeFileItem(
         omittedStartLine?: number
         omittedEndLine?: number
       }
-    | undefined
-  if (partial) {
+    | undefined = notebookView?.truncated
+    ? { reason: 'character_limit' }
+    : undefined
+  if (sourcePartial) {
     // Defensive/retained code: unreachable while MAX_RENDER_CHARS ===
     // MAX_FILE_BYTES, because content.length (UTF-16 code units) is always <=
     // the file's byte size, so a sub-10MB full snapshot never has
@@ -818,9 +955,13 @@ function renderWholeFileItem(
       }
     }
   }
-  const contentHash = !partial ? snapshot.document.observationHash : undefined
+  const derivedView = notebookView !== undefined
+  const contentHash =
+    !partial && !derivedView ? snapshot.document.observationHash : undefined
   const rawBasis =
-    !partial && snapshot.metadataComplete ? snapshot.rawBasis : undefined
+    !partial && !derivedView && snapshot.metadataComplete
+      ? snapshot.rawBasis
+      : undefined
   const capabilityScope = capabilityIssuer
     ? { ...capabilityIssuer, path: target.displayPath }
     : undefined
@@ -844,7 +985,7 @@ function renderWholeFileItem(
     status: partial ? 'partial' : 'ok',
     content: renderedContent,
     complete: !partial,
-    metadataComplete: snapshot.metadataComplete,
+    metadataComplete: snapshot.metadataComplete && !derivedView,
     template: target.isExampleFile,
     ...(contentHash && readCapability
       ? {
@@ -1097,6 +1238,7 @@ export async function getFilesStructured(params: {
     fileFilter,
     signal,
   })
+  throwIfAborted(signal)
   return buildReadFilesResultV1(results)
 }
 
@@ -1137,9 +1279,11 @@ async function listNearbyFiles(
         withFileTypes: true,
       })) as unknown as typeof entries
     } catch {
+      throwIfAborted(signal)
       if (first) return undefined
       continue
     }
+    throwIfAborted(signal)
     first = false
     for (const entry of entries) {
       const child = rel === '.' || rel === '' ? entry.name : `${rel}/${entry.name}`

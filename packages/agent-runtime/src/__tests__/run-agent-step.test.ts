@@ -231,6 +231,54 @@ describe('loopAgentSteps (N08)', () => {
     ).toHaveLength(1)
   })
 
+  it('keeps cache usage incomplete when one step omits provider metadata', async () => {
+    const { baseParams } = setup()
+    let llmCalls = 0
+    const promptAiSdkStream = mock(async function* (params: any) {
+      llmCalls++
+      if (llmCalls === 1) {
+        params.onCacheDebugUsageReceived?.({
+          inputTokens: 100,
+          cachedInputTokens: 0,
+          outputTokens: 10,
+          totalTokens: 110,
+          cacheUsageComplete: true,
+        })
+        yield createToolCallChunk('read_files', { paths: ['README.md'] })
+      } else {
+        yield createToolCallChunk('end_turn', {})
+      }
+      return promptSuccess(`step-${llmCalls}`)
+    })
+
+    const result = await loopAgentSteps({ ...baseParams, promptAiSdkStream })
+
+    expect(llmCalls).toBe(2)
+    expect(result.agentState.cacheInputTokens).toBe(0)
+    expect(result.agentState.cacheTotalInputTokens).toBe(100)
+    expect(result.agentState.cacheUsageComplete).toBe(false)
+  })
+
+  it('rejects malformed cache token counts as incomplete usage', async () => {
+    const { baseParams } = setup()
+    const promptAiSdkStream = mock(async function* (params: any) {
+      params.onCacheDebugUsageReceived?.({
+        inputTokens: 10.5,
+        cachedInputTokens: 2,
+        outputTokens: 1,
+        totalTokens: 13.5,
+        cacheUsageComplete: true,
+      })
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('malformed-usage')
+    })
+
+    const result = await loopAgentSteps({ ...baseParams, promptAiSdkStream })
+
+    expect(result.agentState.cacheUsageComplete).toBe(false)
+    expect(result.agentState.cacheTotalInputTokens).toBe(0)
+  })
+
   it('/compact keep the API notes compacts and keeps that focus', async () => {
     const { baseParams } = setup()
     let sentMessages: any[] = []

@@ -73,6 +73,25 @@ export async function killJob(params: {
     await new Promise((resolve) => setTimeout(resolve, KILL_JOB_EXIT_POLL_MS))
     current = getBackgroundJob(params.jobId)
   }
+  if (current?.status === 'lost') {
+    return [
+      {
+        type: 'json',
+        value: {
+          jobId: params.jobId,
+          status: 'lost',
+          killed: false,
+          exitObserved: false,
+          signal,
+          exitCode: current.exitCode,
+          reason:
+            'Job tracking was lost after the signal was sent; the process exit is unconfirmed.',
+          nextStep:
+            'Verify the process identity and inspect its ports or files before assuming it stopped. A lost job is not proof of cleanup.',
+        },
+      },
+    ]
+  }
   if (current && isTerminalStatus(current.status)) {
     return [
       {

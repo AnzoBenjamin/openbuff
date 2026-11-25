@@ -1052,7 +1052,7 @@ export function startBackgroundJob(params: {
   jobs.set(jobId, job)
   if (params.attached) {
     registerAttachedJob({
-      jobId, child,
+      jobId, child, started: nodeLaunch.started,
       // Same cooperative scope stop as kill_job, with the owner-shutdown reason.
       stop: () => {
         if (job.processCleanup?.status === 'complete') return Promise.resolve(job.processCleanup)

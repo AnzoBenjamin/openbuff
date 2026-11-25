@@ -345,12 +345,15 @@ describe('private dispatch installation ownership', () => {
     if (!result.ok) throw new Error(result.cause)
     return result.value
   }
-  async function registered() {
+  async function registered(
+    options: Parameters<typeof createTerminalExecutionFixture>[0] = {},
+  ) {
     const controlled = createControlledExecutionClock()
     // Only the fixture's separately owned Bash supplies executable identity;
     // all native entry/status/control bytes in these tests are injected.
     const f = await createNativeRunCleanupFixture(controlled.clock)
     const h = createTerminalExecutionFixture({
+      ...options,
       ...controlled,
       resolveProfile: (requested) => ({
         requested,
@@ -498,6 +501,203 @@ describe('private dispatch installation ownership', () => {
       await r.f.dispose()
     }
   }
+
+  async function hostRefusalControl(
+    interruption: 'stale' | 'cancel' | 'deadline',
+    boundary: 'native-prepared' | 'native-entry-committed',
+    corruption?:
+      | 'wrong-scope'
+      | 'wrong-waiter'
+      | 'target-created'
+      | 'target-entered'
+      | 'entered-final'
+      | 'corrupt-frame'
+      | 'trailing-eof',
+  ) {
+    let basisCurrent = true
+    let boundaryObserved = false
+    const cancelled = new AbortController()
+    const r = await registered({
+      actionLimit: { kind: 'finite', durationMs: 100 },
+      signal: cancelled.signal,
+      isCurrentBasis: () => basisCurrent,
+      record(event) {
+        if (event.phase !== boundary) return
+        boundaryObserved = true
+        if (interruption === 'stale') basisCurrent = false
+        else if (interruption === 'cancel')
+          cancelled.abort(new Error('host refusal fixture cancellation'))
+        else r.controlled.advance(100)
+      },
+    })
+    try {
+      const dispatched = value(
+        dispatchNativeLaunch(r.admitted, {
+          installation: r.f.native.installation,
+          mapping: r.f.native.mapping,
+          clock: r.controlled.clock,
+          mounts: r.mounts,
+          ...r.selection,
+          spawn(command, argv, options) {
+            const child = r.f.spawn(command, argv, options)
+            const original = child.stdio[4] as PassThrough
+            const reports = new PassThrough()
+            const decoder = new NativeFrameDecoder()
+            original.on('data', (bytes: Buffer) => {
+              for (const frame of decoder.push(bytes)) {
+                if (frame.type !== 'final') {
+                  reports.write(encodeNativeFrame(frame))
+                  continue
+                }
+                const final = {
+                  ...frame,
+                  cause: 'Native target was not entered after host refusal',
+                  cleanup: {
+                    ...(frame.cleanup as Record<string, unknown>),
+                    complete: true,
+                    outerChildReaped: true,
+                    allChildrenReaped: true,
+                  },
+                }
+                const target = {
+                  ...frame,
+                  targetPid: Number(frame.waiterPid) + 1,
+                  targetLocalPid: Number(frame.waiterPid) + 1,
+                  targetStartTime: '43',
+                }
+                if (corruption === 'corrupt-frame')
+                  reports.write(Buffer.alloc(4))
+                if (corruption === 'target-created')
+                  reports.write(
+                    encodeNativeFrame({ ...target, type: 'target-created' }),
+                  )
+                if (corruption === 'target-entered')
+                  reports.write(
+                    encodeNativeFrame({
+                      ...target,
+                      type: 'target-entered',
+                      pid: target.targetPid,
+                      observation: 'exec-image',
+                    }),
+                  )
+                const delivered =
+                  corruption === 'wrong-scope'
+                    ? { ...final, scopeId: 'wrong-prepared-scope' }
+                    : corruption === 'wrong-waiter'
+                      ? { ...final, waiterStartTime: '99' }
+                      : corruption === 'entered-final'
+                        ? {
+                            ...successfulFinal({
+                              ...final,
+                              ...target,
+                              cleanup: final.cleanup,
+                            }),
+                            type: 'final',
+                            targetEntry: 'entered',
+                          }
+                        : final
+                reports.write(encodeNativeFrame(delivered))
+                if (corruption === 'trailing-eof')
+                  reports.write(Buffer.from([2, 0]))
+              }
+            })
+            original.once('end', () => reports.end())
+            Object.assign(child, {
+              stdio: [...child.stdio.slice(0, 4), reports],
+            })
+            return child
+          },
+        }),
+      )
+      const drained = Promise.all(
+        [dispatched.child.stdout!, dispatched.child.stderr!].map((stream) =>
+          stream.readableEnded
+            ? Promise.resolve()
+            : new Promise<void>((resolve) => stream.once('end', resolve)),
+        ),
+      )
+      const native = dispatched as NativeDispatchHandle
+      const started = await native.started
+      const result = await native.nativeResult
+      await drained
+      const cleanup = await dispatched.scope.requestStop('normal-leader-exit')
+      const retained = retainedNativeScopes(
+        r.admitted.launch.facts().hostContextId,
+      )
+      const commands = r.f.calls[0].commands
+      return {
+        started,
+        result,
+        cleanup,
+        retainedCount: retained.length,
+        commands,
+        boundaryObserved,
+        entered: r.f.calls[0].entered,
+      }
+    } finally {
+      r.h.dispose()
+      await r.f.dispose()
+    }
+  }
+  for (const boundary of [
+    'native-prepared',
+    'native-entry-committed',
+  ] as const) {
+    for (const interruption of ['stale', 'cancel', 'deadline'] as const) {
+      test(`host refused native entry ${boundary} ${interruption} retains valid no-target cleanup`, async () => {
+        const r = await hostRefusalControl(interruption, boundary)
+        const reason =
+          interruption === 'stale'
+            ? 'stale-authority'
+            : interruption === 'cancel'
+              ? 'cancelled'
+              : 'deadline-exhausted'
+        expect(r.boundaryObserved).toBe(true)
+        expect(r.entered).toBe(false)
+        expect(
+          r.commands.filter((command) => command.type === 'commit'),
+        ).toEqual([])
+        expect(r.commands.some((command) => command.type === 'stop')).toBe(true)
+        expect(r.started).toMatchObject({ ok: false, reason })
+        if (r.started.ok || r.result.ok)
+          throw new Error('Host refusal unexpectedly allowed native entry')
+        expect(r.result).toEqual(r.started)
+        if (interruption === 'stale')
+          expect(r.started).toMatchObject({ cause: 'Action basis changed' })
+        expect(r.cleanup).toMatchObject({
+          status: 'complete',
+          cleanupAuthorityRetained: false,
+        })
+        expect(r.retainedCount).toBe(0)
+      })
+    }
+  }
+  for (const corruption of [
+    'wrong-scope',
+    'wrong-waiter',
+    'target-created',
+    'target-entered',
+    'entered-final',
+    'corrupt-frame',
+    'trailing-eof',
+  ] as const) {
+    test(`host refused native entry cannot accept ${corruption} cleanup after host refusal`, async () => {
+      const r = await hostRefusalControl('stale', 'native-prepared', corruption)
+      expect(r.boundaryObserved).toBe(true)
+      expect(r.entered).toBe(false)
+      expect(r.commands.filter((command) => command.type === 'commit')).toEqual(
+        [],
+      )
+      expect(r.started.ok).toBe(false)
+      expect(r.result.ok).toBe(false)
+      expect(r.cleanup).toMatchObject({
+        status: 'unknown',
+        cleanupAuthorityRetained: true,
+      })
+      expect(r.retainedCount).toBeGreaterThan(0)
+    })
+  }
+
   test('a genuine target wait can differ from the wrapper exit', async () => {
     const r = await protocolControl((frame) => [
       frame.type === 'final' ? successfulFinal(frame) : frame,

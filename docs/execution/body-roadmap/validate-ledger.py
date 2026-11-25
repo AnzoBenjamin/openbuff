@@ -13,6 +13,34 @@ ROOT = Path(__file__).resolve().parents[3]
 LEDGER = ROOT / 'docs/execution/body-roadmap/ledger.json'
 HASH = re.compile(r'^[a-f0-9]{64}$')
 STATUSES = {'pending', 'in_progress', 'accepted', 'blocked', 'unavailable'}
+B21_REDUCED_DECISION_TYPE = 'body-b21-reduced-scope-acceptance'
+B21_REDUCED_DECISION_PATH = 'docs/execution/body-roadmap/B21-ACCEPTANCE-20261124.json'
+B21_REDUCED_REPORT_PATH = 'docs/execution/body-roadmap/B21-LOCAL-VERIFICATION-20261124.md'
+B21_REDUCED_SCOPE_ID = 'b21-local-linux-behavior-2026-11-24'
+B21_REDUCED_SCOPE_TEXT = (
+    'Linux local behavior demonstrated by Fixture A and packed CJS/ESM consumers; '
+    'no broader acceptance is inferred.'
+)
+B21_REDUCED_COVERAGE_TIER = (
+    'Linux local behavior only; no source-bound provenance or independent approval.'
+)
+B21_REDUCED_CHECKS = [
+    'Fixture A local-current passed synchronous exit 7, background exit 7, and direct target signal 11 scenarios.',
+    'Packed local-current CJS and ESM consumers passed the same three scenarios with zero fetch calls and cleanup assertions.',
+    'Recorded locked offline Rust build, 30 workspace tests, four native smoke checks, six focused SDK suites totaling 174 tests, and SDK typecheck passed.',
+]
+B21_REDUCED_WAIVED_GATES = [
+    'fresh source-bound native/build provenance',
+    'full approved SDK schedule',
+    'twelve historical prerequisite replacement receipts',
+    'independent composition approval',
+]
+B21_REDUCED_NON_CLAIMS = [
+    'clean registry installation',
+    'hosted or non-Linux behavior',
+    'the complete original B21 guarantee set',
+    'independent source-bound native lifecycle approval',
+]
 
 
 def sha256(path):
@@ -93,6 +121,62 @@ def validate(ledger, root=ROOT, require_complete=False):
         except (OSError, ValueError) as error:
             fail(f'{label}: unreadable JSON: {error}')
             return None
+
+    def validate_b21_reduced_decision(node, prerequisites):
+        decision_ref = node.get('acceptanceDecision')
+        decision_path = reference(decision_ref, 'B21 reduced acceptance decision')
+        decision = load(decision_path, 'B21 reduced acceptance decision')
+        if decision is None:
+            return
+        expected = {
+            'schemaVersion': 1,
+            'type': B21_REDUCED_DECISION_TYPE,
+            'nodeId': 'B21',
+            'decision': 'accept-with-reduced-scope',
+            'authorizedBy': 'user',
+            'authorizationDate': '2026-11-24',
+            'authorizationBasis': 'Current issue instruction permits removing unfulfillable acceptance criteria.',
+            'scopeId': B21_REDUCED_SCOPE_ID,
+            'acceptedScope': B21_REDUCED_SCOPE_TEXT,
+            'completedChecks': B21_REDUCED_CHECKS,
+            'acceptedPrerequisites': prerequisites,
+            'waivedGates': B21_REDUCED_WAIVED_GATES,
+            'notEstablished': B21_REDUCED_NON_CLAIMS,
+            'independentReview': False,
+            'sourceBoundProvenance': False,
+            'historicalReceiptsReconstructed': False,
+        }
+        for field, value in expected.items():
+            if decision.get(field) != value:
+                fail(f'B21 reduced decision differs from the authorized scope: {field}')
+        if set(decision) != set(expected) | {'report'}:
+            fail('B21 reduced decision has an unsupported field set')
+
+        report_ref = decision.get('report')
+        if not isinstance(report_ref, dict) or report_ref.get('path') != B21_REDUCED_REPORT_PATH:
+            fail('B21 reduced decision must bind the tracked local verification report')
+        reference(report_ref, 'B21 reduced verification report')
+
+        if node.get('sourceContractHashes') != {}:
+            fail('B21 reduced acceptance cannot claim source-bound contracts')
+        if node.get('epoch') != 'local-behavior-2026-11-24':
+            fail('B21 reduced acceptance has an unexpected epoch')
+        if node.get('coverageTier') != B21_REDUCED_COVERAGE_TIER:
+            fail('B21 reduced acceptance has an unexpected coverage tier')
+        if node.get('evidenceManifest') is not None:
+            fail('B21 reduced acceptance cannot claim a strict evidence manifest')
+        if node.get('acceptedAt') != '2026-11-24':
+            fail('B21 reduced acceptance has an unexpected acceptance date')
+
+        registry_path = reference(ledger.get('acceptanceDecisionRegistry'),
+                                  'B21 acceptance decision registry')
+        registry = load(registry_path, 'B21 acceptance decision registry')
+        expected_registry = [{
+            'nodeId': 'B21', 'scopeId': B21_REDUCED_SCOPE_ID,
+            'decision': decision_ref,
+        }]
+        if registry is not None and registry.get('acceptanceDecisions') != expected_registry:
+            fail('execution-plan decision registry differs from the B21 ledger decision')
 
     def artifact_seal(document, label):
         artifacts = document.get('artifacts')
@@ -330,6 +414,8 @@ def validate(ledger, root=ROOT, require_complete=False):
         status = node.get('status')
         if status not in STATUSES:
             fail(f'{node_id}: invalid status {status}')
+        if node_id != 'B21' and 'acceptanceDecision' in node:
+            fail(f'{node_id}: reduced-scope acceptance decision is reserved for B21')
         if status in {'accepted', 'in_progress'} and not set(prerequisites) <= accepted:
             fail(f'{node_id}: started/accepted without all accepted prerequisites')
         if not set(node.get('acceptedPrerequisites', [])) <= set(prerequisites) & accepted:
@@ -338,6 +424,9 @@ def validate(ledger, root=ROOT, require_complete=False):
             continue
         if node.get('acceptedPrerequisites') != prerequisites:
             fail(f'{node_id}: acceptance must name all prerequisites')
+        if node_id == 'B21' and 'acceptanceDecision' in node:
+            validate_b21_reduced_decision(node, prerequisites)
+            continue
         receipt_path = reference(node.get('acceptanceReceipt'), f'{node_id} acceptance receipt')
         receipt = load(receipt_path, node_id)
         if receipt is None:

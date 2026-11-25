@@ -132,6 +132,23 @@ describe('killJob', () => {
     })
   })
 
+  test('losing tracking after signal delivery never claims an observed exit', async () => {
+    let job: BackgroundJob
+    job = makeJob({
+      child: {
+        pid: 53000 + 4343,
+        kill: () => {
+          setTimeout(() => { job.status = 'lost' }, 10)
+          return true
+        },
+      } as unknown as BackgroundJob['child'],
+    })
+    const out = await killJob({ jobId: job.jobId, owner: TRUSTED_OWNER, waitForExitMs: 100 })
+    expect(value(out)).toMatchObject({ status: 'lost', killed: false, exitObserved: false, exitCode: null })
+    expect(value(out).reason).toMatch(/lost|unconfirmed/i)
+    expect(value(out).nextStep).toMatch(/verify|inspect|check_job/i)
+  })
+
   test('graceful exit after SIGTERM folds stopping into a terminal state with the exit code (M2-T4)', async () => {
     const job = makeJob()
     const out = await killJob({

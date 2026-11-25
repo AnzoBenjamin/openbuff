@@ -330,13 +330,19 @@ try {
         'Refusal must reach the public result',
       )
       if (scenario.name === 'required-unavailable-full-access-deadline') {
-        assert.equal(terminal?.executionRefusal?.reason, 'unavailable')
         const refused = events.find(
           (event) =>
             event.phase === 'no-launch' &&
             event.facts.branchId === 'terminal.sync',
         )
         assert.ok(refused)
+        assert.equal(refused.refusal.reason, 'unavailable')
+        if (result.output.type === 'error') {
+          assert.equal(result.runOutcome?.termination, 'failed')
+          assert.equal(result.runOutcome?.cause?.code, 'execution_unavailable')
+        } else {
+          assert.equal(terminal?.executionRefusal?.reason, 'unavailable')
+        }
         const profile = refused.facts.profile
         assert.ok(profile.requested.required.includes('deadline-termination'))
         assert.equal(profile.selected, null)

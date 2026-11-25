@@ -27,6 +27,8 @@ import type { ChildProcess } from 'node:child_process'
 export type AttachedJobHandle = Readonly<{
   jobId: string
   child: ChildProcess
+  /** Keep startup I/O referenced until the adapter finishes its handshake. */
+  started?: Promise<unknown>
   /** Cooperative B20 scope stop (SIGTERM, grace, SIGKILL) with its receipt. */
   stop(): Promise<unknown>
 }>
@@ -76,7 +78,7 @@ function sleepSync(ms: number): void {
 /** Cooperative stop of every live attached job; resolves when all scopes report. */
 export function stopAttachedJobs(): Promise<void> {
   const live = [...attached.values()].filter(isLive)
-  return Promise.allSettled(live.map(handle => handle.stop())).then(() => undefined)
+  return Promise.allSettled(live.map(handle => Promise.resolve().then(() => handle.stop()))).then(() => undefined)
 }
 
 /**
@@ -110,6 +112,9 @@ function boundedStop(): Promise<void> {
       if (timer) clearTimeout(timer)
       clearInterval(keepAlive)
       shuttingDown = undefined
+      // The last child may close while shutdown owns the lifecycle. Its
+      // close handler defers uninstallation until this async pass releases it.
+      uninstallIfIdle()
     }
   })()
   return shuttingDown
@@ -150,21 +155,27 @@ function uninstallIfIdle(): void {
 }
 
 /**
- * Register an attached job. Its child and stdio handles are unref'd so the job
- * never keeps the host alive on its own; this module ends it with the host.
+ * Register ownership immediately, keeping startup I/O referenced until it
+ * settles. Afterwards the job cannot keep the host alive on its own.
  */
 export function registerAttachedJob(handle: AttachedJobHandle, proc: AttachedJobProcess = process): void {
   attached.set(handle.jobId, handle)
   const { child } = handle
-  try { child.unref() } catch { /* fake child */ }
-  for (const stream of child.stdio ?? []) {
-    try { (stream as { unref?: () => void } | null)?.unref?.() } catch { /* not a socket */ }
-  }
   child.once('close', () => {
     attached.delete(handle.jobId)
     uninstallIfIdle()
   })
   install(proc)
+  const releaseReferences = () => {
+    try { child.unref() } catch { /* fake child */ }
+    for (const stream of child.stdio ?? []) {
+      try { (stream as { unref?: () => void } | null)?.unref?.() } catch { /* not a socket */ }
+    }
+  }
+  // A pending Promise alone does not keep Node alive. Preserve the real
+  // handles until startup succeeds or fails; the caller still observes failure.
+  if (handle.started) void handle.started.then(releaseReferences, releaseReferences)
+  else releaseReferences()
 }
 
 export function attachedJobIds(): readonly string[] {

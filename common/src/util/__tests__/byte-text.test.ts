@@ -86,6 +86,27 @@ describe('captured UTF-8 bytes and coordinates', () => {
     expect(() => rawByteToObservationUtf16(document, 1)).toThrow('BOM')
   })
 
+  test('observation UTF-8 offsets exclude CRLF normalization and BOM bytes', () => {
+    for (const bom of ['', '\uFEFF']) {
+      const document = captureTextDocument(`${bom}a\r\n😀\r\nend`)
+      for (const [utf16, utf8] of [
+        [0, 0],
+        [1, 1],
+        [2, 2],
+        [4, 6],
+        [5, 7],
+        [8, 10],
+      ]) {
+        expect(observationUtf16ToUtf8(document, utf16)).toBe(utf8)
+        expect(utf8ToObservationUtf16(document, utf8)).toBe(utf16)
+      }
+      expect(observationUtf16ToRawByte(document, 2)).toBe(bom ? 6 : 3)
+      expect(() => observationUtf16ToUtf8(document, 3)).toThrow('scalar')
+      expect(() => utf8ToObservationUtf16(document, 3)).toThrow('scalar')
+      expect(() => utf8ToObservationUtf16(document, 11)).toThrow('offset')
+    }
+  })
+
   test('a later slice-leading U+FEFF remains content', () => {
     const document = captureTextDocument(Buffer.from('\uFEFFcontent'), {
       includesBom: false,
@@ -134,6 +155,33 @@ describe('captured UTF-8 bytes and coordinates', () => {
     expect(() => spliceDocumentObservation(scalar, 1, 2, 'x')).toThrow('scalar')
   })
 
+  test('unchanged context in a mixed-ending replacement retains its raw bytes', () => {
+    const raw = '\uFEFFfirst\r\nold\nlast\r\n'
+    const document = captureTextDocument(raw)
+    expect(spliceDocumentRange(document, 1, 3, 'first\nold\nlast')).toBe(raw)
+    expect(spliceDocumentRange(document, 1, 3, 'first\nnew\nlast')).toBe(
+      '\uFEFFfirst\r\nnew\nlast\r\n',
+    )
+    expect(
+      spliceDocumentObservation(
+        document,
+        0,
+        document.observation.length,
+        'first\nnew\nlast\n',
+      ),
+    ).toBe('\uFEFFfirst\r\nnew\nlast\r\n')
+    const scalar = captureTextDocument('😀\r\n😀\nend')
+    expect(spliceDocumentRange(scalar, 1, 3, '😁\n😀\nend')).toBe(
+      '😁\r\n😀\nend',
+    )
+    expect(spliceDocumentRange(scalar, 1, 3, '😀\n😁\nend')).toBe(
+      '😀\r\n😁\nend',
+    )
+    expect(spliceDocumentObservation(scalar, 2, 2, 'x\ny')).toBe(
+      '😀x\r\ny\r\n😀\nend',
+    )
+  })
+
   test('invalid UTF-8 and lossy surrogate strings refuse capture', () => {
     expect(() => captureTextDocument(new Uint8Array([0xc0, 0xaf]))).toThrow()
     expect(() => captureTextDocument('\ud800')).toThrow('surrogate')
@@ -163,11 +211,26 @@ describe('authenticated raw read basis', () => {
     if (typeof decoded === 'string') return
     expect(rawReadBasesMatch(decoded.rawBasis, basis)).toBe(true)
     expect(decoded.hash).toBe(document.observationHash)
+    expect(token.length).toBeLessThan(100)
+    // Raw facts live behind the short handle; a decoded clone cannot mutate
+    // the authenticated registry record, and payload/signature substitution
+    // still refuses rather than minting altered BOM authority.
+    const alteredBasis = { ...basis, includesBom: false }
     const parts = token.split('.')
-    const payload = JSON.parse(Buffer.from(parts[2]!, 'base64url').toString())
-    payload.rawBasis.includesBom = false
-    parts[2] = Buffer.from(JSON.stringify(payload)).toString('base64url')
-    expect(typeof decodeReadCapabilityToken(parts.join('.'))).toBe('string')
+    const forgedPayload = Buffer.from(JSON.stringify({
+      startLine: decoded.startLine,
+      endLine: decoded.endLine,
+      hash: decoded.hash,
+      scopeFingerprint: decoded.scopeFingerprint,
+      rawBasis: alteredBasis,
+    })).toString('base64url')
+    expect(typeof decodeReadCapabilityToken(`cap.v4.${forgedPayload}.${parts.at(-1)}`)).toBe('string')
+    decoded.rawBasis!.includesBom = false
+    const fresh = decodeReadCapabilityToken(token)
+    expect(typeof fresh).toBe('object')
+    if (typeof fresh !== 'string') expect(rawReadBasesMatch(fresh.rawBasis, basis)).toBe(true)
+    const badSignature = token.endsWith('A') ? 'B' : 'A'
+    expect(typeof decodeReadCapabilityToken(token.slice(0, -1) + badSignature)).toBe('string')
   })
 
   test('legacy normalized capabilities parse but supply no raw edit authority', () => {

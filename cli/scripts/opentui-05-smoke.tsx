@@ -9,7 +9,7 @@
  * live dependency graph (it exercised the npm: aliases while Stage 0 kept
  * 0.2.2 installed side by side; the aliases are gone).
  *
- * Run: `bun run cli/src/index-05.tsx`
+ * Run: `bun run cli/scripts/opentui-05-smoke.tsx`
  *
  * Acceptance (from the migration plan):
  * - the 0.5.x renderer boots under our Bun version, via
@@ -31,11 +31,12 @@ import { createTestRenderer } from '@opentui/core/testing'
 import { createRoot } from '@opentui/react'
 import React from 'react'
 
-const Probe = (): React.ReactElement => (
-  <box style={{ flexDirection: 'column' as const }}>
-    <text>opentui-05 probe: renderer boot OK</text>
-  </box>
-) as unknown as React.ReactElement
+const Probe = (): React.ReactElement =>
+  (
+    <box style={{ flexDirection: 'column' as const }}>
+      <text>opentui-05 probe: renderer boot OK</text>
+    </box>
+  ) as unknown as React.ReactElement
 
 /**
  * Locate the installed OpenTUI native platform package

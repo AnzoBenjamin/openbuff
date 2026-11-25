@@ -71,6 +71,8 @@ describe('B18 exact command identity and complete effect admission', () => {
     ['npm install && rm -rf build', ['dependency-install', 'workspace-delete']],
     ['git commit -m ok; kubectl apply -f deploy.yaml', ['commit', 'deploy']],
     ['git push origin feature\nrm -rf build', ['push', 'workspace-delete']],
+    ['git push origin feature; npm run deploy', ['push', 'deploy']],
+    ['git push origin feature; git switch --discard-changes main', ['push', 'workspace-delete']],
     [
       'echo "$(git push origin feature; rm -rf build)"',
       ['push', 'workspace-delete'],
@@ -115,6 +117,30 @@ describe('B18 exact command identity and complete effect admission', () => {
       evaluateHarnessActionPolicy({ ...result, hasMatchingApproval: true })
         .allowed,
     ).toBe(true)
+  })
+
+  test.each(['echo ok >', 'echo ok 2>>', 'cat < ; git push origin feature'])(
+    'malformed redirection refuses admission: %s',
+    (command) => {
+      expect(classify(command).parseStatus).toBe('malformed')
+      expect(decide(command).allowed).toBe(false)
+    },
+  )
+
+  test.each([
+    "echo '>'",
+    'echo ok > output.txt',
+    'echo ok 2>&1',
+    'echo ok > "$OUTPUT"',
+    'echo ok > $(echo output.txt)',
+  ])('ordinary redirects do not become malformed: %s', (command) => {
+    expect(classifyTerminalHarnessAction(command)?.parseStatus).not.toBe('malformed')
+  })
+
+  test('dynamic package script after a routine push cannot be treated as complete', () => {
+    const command = 'git push origin feature; npm run "$TASK"'
+    expect(classify(command).parseStatus).toBe('unsupported')
+    expect(decide(command).allowed).toBe(false)
   })
 
   test.each([

@@ -2,6 +2,7 @@ import * as analytics from '@codebuff/common/analytics'
 import { TEST_USER_ID } from '@codebuff/common/old-constants'
 import { TEST_AGENT_RUNTIME_IMPL } from '@codebuff/common/testing/impl/agent-runtime'
 import { getInitialSessionState } from '@codebuff/common/types/session-state'
+import { jsonSchemaToZod } from '@codebuff/common/util/json-schema'
 import {
   assistantMessage,
   jsonToolResult,
@@ -161,6 +162,45 @@ describe('runProgrammaticStep', () => {
     mock.restore()
     // Clear the generator cache between tests
     clearAgentGeneratorCache()
+  })
+
+  describe('inline compaction outcome feedback', () => {
+    for (const [status, message, outcome] of [
+      ['completed', 'done', 'completed'],
+      ['failed', 'pruner fixture failed', 'failed'],
+      ['cancelled', 'Semantic compaction skipped: fixture governor declined the pass', 'skipped'],
+      ['cancelled', 'pruner cancelled', 'failed'],
+    ] as const) {
+      it(`reports ${outcome} for an inline pruner receipt with status ${status}`, async () => {
+        const outcomes: unknown[] = []
+        mockTemplate.toolNames = ['spawn_agent_inline']
+        mockTemplate.handleSteps = function* () {
+          yield { toolName: 'spawn_agent_inline', input: { agent_type: 'context-pruner' } }
+        } as () => StepGenerator
+        executeToolCallSpy.mockImplementation(async (params) => {
+          params.toolResults.push({
+            role: 'tool', toolName: 'spawn_agent_inline', toolCallId: params.toolCallId!,
+            content: [{ type: 'json', value: { agentReceipt: { status, output: { message } } } }],
+          })
+        })
+        await runProgrammaticStep({ ...mockParams, onCompactionOutcome: (value) => outcomes.push(value) })
+        expect(outcomes).toHaveLength(1)
+        expect(outcomes[0]).toMatchObject({ outcome })
+        if (outcome !== 'completed') expect(outcomes[0]).toMatchObject({ reason: expect.stringContaining(message) })
+      })
+    }
+
+    it('reports a bounded failure when the inline pruner call throws', async () => {
+      const outcomes: unknown[] = []
+      mockTemplate.toolNames = ['spawn_agent_inline']
+      mockTemplate.handleSteps = function* () {
+        yield { toolName: 'spawn_agent_inline', input: { agent_type: 'context-pruner' } }
+      } as () => StepGenerator
+      executeToolCallSpy.mockRejectedValue(new Error('inline pruner fixture threw'))
+      const result = await runProgrammaticStep({ ...mockParams, onCompactionOutcome: (value) => outcomes.push(value) })
+      expect(result.agentState.runOutcome?.termination).toBe('failed')
+      expect(outcomes).toEqual([{ outcome: 'failed', reason: 'inline pruner fixture threw' }])
+    })
   })
 
   describe('generator lifecycle', () => {
@@ -1362,11 +1402,11 @@ describe('runProgrammaticStep', () => {
 
   describe('output schema validation', () => {
     it('should validate output against outputSchema when using setOutput', async () => {
-      // Create template with outputSchema
-      const schemaTemplate = {
+      // Match the loader's JSON Schema -> live Zod conversion.
+      const schemaTemplate: AgentTemplate = {
         ...mockTemplate,
-        outputMode: 'structured_output' as const,
-        outputSchema: {
+        outputMode: 'structured_output',
+        outputSchema: jsonSchemaToZod({
           type: 'object',
           properties: {
             message: { type: 'string' },
@@ -1374,7 +1414,7 @@ describe('runProgrammaticStep', () => {
             count: { type: 'number' },
           },
           required: ['message', 'status'],
-        },
+        }),
         toolNames: ['set_output', 'end_turn'],
       }
 
@@ -1397,10 +1437,8 @@ describe('runProgrammaticStep', () => {
 
       const result = await runProgrammaticStep({
         ...mockParams,
-        template: schemaTemplate as unknown as AgentTemplate,
-        localAgentTemplates: {
-          'test-agent': schemaTemplate as unknown as AgentTemplate,
-        },
+        template: schemaTemplate,
+        localAgentTemplates: { 'test-agent': schemaTemplate },
       })
 
       expect(result.endTurn).toBe(true)
@@ -1409,21 +1447,23 @@ describe('runProgrammaticStep', () => {
         status: 'success',
         count: 42,
       })
+      expect(result.agentState.lastSetOutputError).toBeUndefined()
     })
 
     it('should handle invalid output that fails schema validation', async () => {
-      // Create template with strict outputSchema
-      const schemaTemplate = {
+      // Exercise actual enum and extra-property validation, not a missing parse method.
+      const schemaTemplate: AgentTemplate = {
         ...mockTemplate,
-        outputMode: 'structured_output' as const,
-        outputSchema: {
+        outputMode: 'structured_output',
+        outputSchema: jsonSchemaToZod({
           type: 'object',
           properties: {
             message: { type: 'string' },
             status: { type: 'string', enum: ['success', 'error'] },
           },
           required: ['message', 'status'],
-        },
+          additionalProperties: false,
+        }),
         toolNames: ['set_output', 'end_turn'],
       }
 
@@ -1449,16 +1489,21 @@ describe('runProgrammaticStep', () => {
 
       const result = await runProgrammaticStep({
         ...mockParams,
-        template: schemaTemplate as unknown as AgentTemplate,
-        localAgentTemplates: {
-          'test-agent': schemaTemplate as unknown as AgentTemplate,
-        },
+        template: schemaTemplate,
+        localAgentTemplates: { 'test-agent': schemaTemplate },
       })
 
-      // Should end turn (validation may fail but execution continues)
+      // Execution continues to end_turn, but invalid output must remain refused.
       expect(result.endTurn).toBe(true)
-      // Test passes if no exception is thrown during execution
       expect(result.agentState).toBeDefined()
+      expect(result.agentState.output).toBeUndefined()
+      expect(result.agentState.lastSetOutputError).toContain(
+        'Output failed to match the output schema and was ignored',
+      )
+      expect(result.agentState.lastSetOutputError).toContain('/status')
+      expect(result.agentState.lastSetOutputError).toContain(
+        'should NOT have additional properties',
+      )
     })
 
     it('should work with agents that have no outputSchema', async () => {

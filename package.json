@@ -31,6 +31,7 @@
     "init-worktree": "bun scripts/init-worktree.ts",
     "cleanup-worktree": "bun scripts/cleanup-worktree.ts",
     "generate-tool-definitions": "bun scripts/generate-tool-definitions.ts",
+    "check-doc-defaults": "bun scripts/check-doc-defaults.ts",
     "check:ci-local": "bun scripts/check-ci-local.ts",
     "install:pre-push": "bun scripts/install-pre-push-hook.ts"
   },

@@ -19,12 +19,14 @@ import {
   getSystemProcessEnv,
 } from './env'
 import { logger } from './logger'
+import { loadAgentDefinitions } from './local-agent-registry'
 import { getCommandApprovalOverride } from './command-approvals'
 
 import type { ClientToolCall } from '@codebuff/common/tools/list'
 import type { JSONObject } from '@codebuff/common/types/json'
 import type {
   MemoryV2ClientConfig,
+  AgentDefinition,
   OpenbuffClientOptions,
   RunOptions,
   RunState,
@@ -86,6 +88,7 @@ export class ManagedOpenbuffClient extends OpenbuffClient {
     private readonly runDelegate?: (
       options: RunOptions & OpenbuffClientOptions,
     ) => Promise<RunState>,
+    private readonly getAgentDefinitions: () => AgentDefinition[] = loadAgentDefinitions,
   ) {
     super(options)
   }
@@ -97,7 +100,17 @@ export class ManagedOpenbuffClient extends OpenbuffClient {
     this.activeRuns++
     try {
       const approvalMode = options.approvalMode ?? getCommandApprovalOverride()
-      const runOptions = approvalMode ? { ...options, approvalMode } : options
+      const runOptions = {
+        ...options,
+        // TUI callers supply a turn-specific catalog. Headless and ACP callers
+        // need the same trusted registry, read at run time rather than cached
+        // before deferred startup or a later registry reload has settled.
+        agentDefinitions:
+          options.agentDefinitions ??
+          this.options.agentDefinitions ??
+          this.getAgentDefinitions(),
+        ...(approvalMode ? { approvalMode } : {}),
+      }
       return this.runDelegate
         ? await this.runDelegate(runOptions)
         : await super.run(runOptions)

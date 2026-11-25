@@ -266,7 +266,7 @@ describe('IndexManager.markStale', () => {
     const status = mgr.getStatus()
     expect(status.state).toBe('failed')
     expect(status.lastBuildError).toMatchObject({
-      stage: 'persist',
+      stage: 'load',
       retryable: false,
     })
     expect(status.lastBuildError?.cachePath).toContain('.custom-index')
@@ -630,16 +630,40 @@ describe('IndexManager.adoptMergedIndex', () => {
     expect(beforeToken).toBeDefined()
     const winner: MetadataIndex = {
       ...base,
-      graph: { ...base.graph, edges: [...base.graph.edges, { from: 'file:src/auth.ts', to: 'file:src/auth.ts', type: 'references', weight: 1 }] },
+      graph: {
+        ...base.graph,
+        edges: [
+          ...base.graph.edges,
+          {
+            from: 'file:src/auth.ts',
+            to: 'file:src/auth.ts',
+            type: 'references',
+            weight: 1,
+          },
+        ],
+      },
     }
     expect(winner.builtAt).toBe(base.builtAt)
     expect(computeIndexSnapshotId(winner)).toBe(sourceIdentity)
-    expect(await saveIndex(winner, root, '.codebuff-index', { expectedPublicationToken: beforeToken })).toBe(true)
+    expect(
+      await saveIndex(winner, root, '.codebuff-index', {
+        expectedPublicationToken: beforeToken,
+      }),
+    ).toBe(true)
     const loser = { ...base, graph: { ...base.graph, edges: [] } }
     expect(await manager.adoptMergedIndex(loser, sourceIdentity)).toBe(false)
     expect(manager.getSnapshot()!.graph.edges).toEqual(winner.graph.edges)
     expect((await loadIndex(root))!.graph.edges).toEqual(winner.graph.edges)
-    console.log(JSON.stringify({ b04: 'manager-graph-cas-refusal', sourceIdentity, beforeToken, winnerToken: getIndexPublicationToken(winner), returned: false, graph: manager.getSnapshot()!.graph }))
+    console.log(
+      JSON.stringify({
+        b04: 'manager-graph-cas-refusal',
+        sourceIdentity,
+        beforeToken,
+        winnerToken: getIndexPublicationToken(winner),
+        returned: false,
+        graph: manager.getSnapshot()!.graph,
+      }),
+    )
   })
 
   test('persists the merged snapshot so merged precise edges survive on disk', async () => {
@@ -779,9 +803,9 @@ describe('IndexManager cross-root index isolation', () => {
     expect(persistedBAgain!.builtAt).toBe(persistedBBuiltAt)
     // ...and its own manager still serves B's content with no A leakage.
     expect(
-      mgrB.query('homeBenOnlySymbol').results.some(
-        (result) => result.path === 'src/home-ben.ts',
-      ),
+      mgrB
+        .query('homeBenOnlySymbol')
+        .results.some((result) => result.path === 'src/home-ben.ts'),
     ).toBe(true)
   })
 })

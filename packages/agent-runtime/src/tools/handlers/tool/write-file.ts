@@ -654,6 +654,7 @@ export const handleWriteFile = (async (
       path,
       initialContentPromise: Promise.resolve(initialContent),
       newContent: content,
+      instructions: toolCall.input.instructions,
       logger,
     })
     // Check for abort and throw at the boundary

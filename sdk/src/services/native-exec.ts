@@ -1336,6 +1336,7 @@ export function dispatchNativeLaunch(
           failure: Refusal | undefined,
           finalSettled = false,
           protocolInvalidated = false,
+          entryRejected = false,
           waiterIdentity: NativeWaiterIdentity | undefined,
           targetIdentity: NativeTargetIdentity | undefined,
           scopeId = `native-transport-${initial.launchId}`
@@ -1461,16 +1462,24 @@ export function dispatchNativeLaunch(
             finishStart(failure)
             stop('adapter-error')
           }
+          // Host refusal prevents entry while the authenticated control stream
+          // remains available to prove that the waiting native scope was reaped.
+          const rejectEntry = (refusal: Refusal) => {
+            entryRejected = true
+            failure ??= refusal
+            finishStart(failure)
+            stop('adapter-error')
+          }
           const settle = () => {
             if (!finalSettled) {
               finalSettled = true
               settleFinal(
-                final &&
+                failure ??
+                  (final &&
                   !protocolInvalidated &&
                   final.waitStatusSource === 'native-target-wait'
-                  ? { ok: true, value: final }
-                  : (failure ??
-                      refuse('unavailable', 'Native final report missing')),
+                    ? { ok: true, value: final }
+                    : refuse('unavailable', 'Native final report missing')),
               )
             }
           }
@@ -1687,6 +1696,8 @@ export function dispatchNativeLaunch(
                   frame.artifactSha256 !== identity.artifactSha256
                 )
                   throw new Error('Native report plan identity mismatch')
+                if (entryRejected && frame.type !== 'final')
+                  throw new Error('Native frame follows rejected target entry')
                 if (frame.type === 'prepared' && phase === 'prepare') {
                   if (
                     typeof frame.scopeId !== 'string' ||
@@ -1708,13 +1719,28 @@ export function dispatchNativeLaunch(
                     enforced:
                       frame.enforced as LaunchFacts['profile']['enforced'],
                   })
-                  if (!prepared.ok) throw new Error(prepared.cause)
+                  if (!prepared.ok) {
+                    if (prepared.reason === 'invalid-context')
+                      throw new Error(prepared.cause)
+                    rejectEntry(prepared)
+                    continue
+                  }
                   const commit = observer.commitNativeTargetEntry(identity)
-                  if (!commit.ok) throw new Error(commit.cause)
+                  if (!commit.ok) {
+                    if (commit.reason === 'invalid-context')
+                      throw new Error(commit.cause)
+                    rejectEntry(commit)
+                    continue
+                  }
+                  if (
+                    commit.value.facts.executionBindingDigest !==
+                    initial.executionBindingDigest
+                  )
+                    throw new Error(
+                      'Native committed execution binding differs',
+                    )
                   if (
                     input.resourceSignal.aborted ||
-                    commit.value.facts.executionBindingDigest !==
-                      initial.executionBindingDigest ||
                     (expiry !== null &&
                       BigInt(expiry) <=
                         BigInt(options.mapping.nativeSampleNs) +
@@ -1725,10 +1751,22 @@ export function dispatchNativeLaunch(
                                 1_000_000,
                             ),
                           ))
-                  )
-                    throw new Error(
-                      'Native original entry basis/deadline exhausted',
+                  ) {
+                    rejectEntry(
+                      input.resourceSignal.aborted
+                        ? refuse(
+                            isExecutionDeadlineSignal(input.resourceSignal)
+                              ? 'deadline-exhausted'
+                              : 'cancelled',
+                            'Native original entry interrupted',
+                          )
+                        : refuse(
+                            'deadline-exhausted',
+                            'Native original entry deadline exhausted',
+                          ),
                     )
+                    continue
+                  }
                   phase = 'commit'
                   send({ type: 'commit', ...identity, expiryNs: expiry })
                   continue
@@ -1775,7 +1813,18 @@ export function dispatchNativeLaunch(
                 }
                 if (frame.type === 'final' && phase !== 'final') {
                   const candidate = validateFinal(frame, expiry)
-                  if (frame.scopeId !== scopeId && phase !== 'prepare')
+                  if (
+                    entryRejected &&
+                    (candidate.targetEntry !== 'not-entered' ||
+                      candidate.targetPid !== null)
+                  )
+                    throw new Error(
+                      'Native final contradicts rejected target entry',
+                    )
+                  if (
+                    frame.scopeId !== scopeId &&
+                    (phase !== 'prepare' || waiterIdentity)
+                  )
                     throw new Error('Native final scope mismatch')
                   if (
                     (candidate.targetEntry === 'entered') !==

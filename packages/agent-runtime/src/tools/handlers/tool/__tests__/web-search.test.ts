@@ -57,6 +57,32 @@ async function runSearch(egress: WebEgressOptions) {
   return output[0].value as Record<string, unknown>
 }
 
+async function runUrlFetch(egress: WebEgressOptions) {
+  const toolCall: CodebuffToolCall<'web_search'> = {
+    toolName: 'web_search',
+    toolCallId: 'tc-fetch',
+    input: {
+      url: 'https://docs.example.com/guide',
+      include_links: true,
+      max_links: 10,
+    } as never,
+  }
+  const { output } = await handleWebSearch({
+    previousToolCallFinished: Promise.resolve(),
+    toolCall,
+    logger: noopLogger,
+    signal: new AbortController().signal,
+    agentStepId: 's',
+    clientSessionId: 'c',
+    fingerprintId: 'f',
+    repoId: undefined,
+    userInputId: 'u',
+    userId: undefined,
+    webEgress: egress,
+  })
+  return output[0].value as Record<string, unknown>
+}
+
 describe('web_search typed failures (N04)', () => {
   test('a DuckDuckGo anomaly page (HTTP 202) is blocked, with a reason and next step', async () => {
     const value = await runSearch(
@@ -139,5 +165,34 @@ describe('web_search typed failures (N04)', () => {
     expect(
       String((output[0].value as { errorMessage?: string }).errorMessage),
     ).toContain('non-public address')
+  })
+
+  test('URL mode fetches a public page directly and returns its text and absolute links', async () => {
+    const fetches: string[] = []
+    const value = await runUrlFetch({
+      resolveHost: async (hostname) => {
+        expect(hostname).toBe('docs.example.com')
+        return ['52.142.124.215']
+      },
+      supportsTlsServerName: true,
+      fetchImpl: (async (input: Parameters<typeof fetch>[0]) => {
+        fetches.push(String(input))
+        return new Response(
+          '<html><body><h1>Public guide</h1><a href="/reference">Reference</a></body></html>',
+          { headers: { 'content-type': 'text/html; charset=utf-8' } },
+        )
+      }) as unknown as typeof globalThis.fetch,
+    })
+
+    expect(fetches).toHaveLength(1)
+    expect(value.status).toBeUndefined()
+    expect(String(value.result)).toContain('Public guide')
+    expect(value.links).toEqual([
+      {
+        href: 'https://docs.example.com/guide',
+        text: 'https://docs.example.com/guide',
+      },
+      { href: 'https://docs.example.com/reference', text: 'Reference' },
+    ])
   })
 })

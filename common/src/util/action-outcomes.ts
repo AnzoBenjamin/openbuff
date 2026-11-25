@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { isMcpToolResultEnvelope } from '../mcp/result'
+import { executionRefusalSchema } from '../tools/params/execution-refusal'
 
 import {
   fileMutationResultV1Schema,
@@ -77,6 +78,11 @@ export function classifyActionOutput(
         return value.isError === true
           ? failed('mcp_tool_error', 'The MCP tool reported an error result.')
           : undefined
+      }
+      const refusal = executionRefusalSchema.safeParse(value.executionRefusal)
+      if (refusal.success) {
+        return failed(`execution_${refusal.data.reason}`, refusal.data.cause,
+          refusal.data.reason === 'cancelled' ? 'cancelled' : 'refused')
       }
       if (value.kind === 'file_mutation_result') {
         const parsed = fileMutationResultV1Schema.safeParse(value)

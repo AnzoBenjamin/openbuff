@@ -185,6 +185,7 @@ export const DynamicAgentDefinitionSchema = z.object({
   maxOutputTokens: z.number().int().positive().optional(),
 
   maxSpawnDepth: z.number().int().min(0).optional(),
+  maxSteps: z.union([z.literal(-1), z.number().int().positive().max(100000)]).optional(),
 
   // Tools and spawnable agents
   mcpServers: z.record(z.string(), mcpConfigSchema).default(() => ({})),

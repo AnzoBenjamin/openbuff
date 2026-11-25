@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 import { capturedDiagnosticInvocation, preflightDiagnosticDelta } from './diagnostic-delta'
 import {
   admitNodeLaunch,
@@ -13,6 +15,7 @@ import {
 
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import type { ExecutionAdapterContext, Refusal } from '@codebuff/common/types/contracts/execution-context'
+import type { CleanupResult } from '@codebuff/common/types/contracts/process-scope'
 import type {
   DiagnosticCapture,
   DiagnosticCommandRunner,
@@ -119,7 +122,8 @@ export function createDiagnosticCommandRunner(params: {
     const spawn = executionContext?.spawn ?? factorySpawn
     const limit = executionLimitSeconds(timeoutSeconds)
     if (!limit.ok) return refused(limit)
-    const context = deriveExecutionContext(executionContext, `diagnostic:${invocation.id}:${phase}`, limit.value)
+    // Each invocation owns a distinct child budget, independent of its branch ID.
+    const context = deriveExecutionContext(executionContext, `diagnostic:${invocation.id}:${phase}:${randomUUID()}`, limit.value)
     if (!context.ok) return refused(context)
     const launch = prepareNodeLaunch({
       executionContext: context.value,
@@ -133,8 +137,20 @@ export function createDiagnosticCommandRunner(params: {
       },
     })
     if (!launch.ok) return refused(launch)
-    const admitted = await admitNodeLaunch(launch.value, context.value.signal ?? signal)
+    const admission = admitNodeLaunch(launch.value, context.value.signal)
+    let removeAdmissionListener = () => {}
+    const callerCancellation = signal
+      ? new Promise<Refusal>(resolve => {
+          const onAbort = () => resolve(refusalForSignal(signal))
+          removeAdmissionListener = () => signal.removeEventListener('abort', onAbort)
+          signal.addEventListener('abort', onAbort, { once: true })
+          if (signal.aborted) onAbort()
+        })
+      : undefined
+    const admitted = await (callerCancellation ? Promise.race([admission, callerCancellation]) : admission)
+    removeAdmissionListener()
     if (!admitted.ok) return refused(admitted)
+    if (signal?.aborted) return refused(refusalForSignal(signal))
     const dispatched = dispatchNodeLaunch(admitted.value, (input) => spawn(input.executable, input.argv, {
       cwd: input.cwd, env: input.env, signal: input.resourceSignal,
       stdio: ['ignore', 'pipe', 'pipe'], shell: false, detached: false, windowsHide: false,
@@ -143,52 +159,102 @@ export function createDiagnosticCommandRunner(params: {
     const node = dispatched.value
     const child = node.child
     const resourceSignal = node.input.resourceSignal
+    // Cancellation may finish before a native result arrives or a close event is observed.
+    void node.nativeResult?.catch(() => {})
     return await new Promise<DiagnosticRunResult>((resolve) => {
       const stdoutCapture = new BoundedStreamCapture()
       const stderrCapture = new BoundedStreamCapture()
       let settled = false
+      let stopRefusal: Refusal | undefined
       let cancelTimer: (() => void) | undefined
-      const finish = (result: DiagnosticRunResult) => {
-        if (settled) return
+      const finish = (result: DiagnosticRunResult, cleanup?: CleanupResult, joinedStop = false) => {
+        if (settled || (stopRefusal && !joinedStop)) return
         settled = true
         cancelTimer?.()
         resourceSignal.removeEventListener('abort', onAbort)
-        const refusal = result.executionRefusal ?? node.resourceRefusal()
+        signal?.removeEventListener('abort', onCallerAbort)
+        const refusal = stopRefusal ?? result.executionRefusal ?? node.resourceRefusal()
+        const cleanupError = !cleanup ? 'Diagnostic cleanup could not be observed'
+          : cleanup.status !== 'complete' ? `Diagnostic cleanup ${cleanup.status}${cleanup.cause ? `: ${cleanup.cause}` : ''}` : undefined
+        const errorMessage = [refusal?.cause ?? result.errorMessage, cleanupError].filter(Boolean).join('; ') || undefined
         resolve({
           ...result,
           ...(refusal ? refused(refusal) : {}),
+          ...(errorMessage ? { errorMessage } : {}),
           stdout: result.stdout ?? stdoutCapture.text(),
           stderr: result.stderr ?? stderrCapture.text(),
-          outputTruncated: stdoutCapture.truncated || stderrCapture.truncated,
+          outputTruncated: stdoutCapture.truncated || stderrCapture.truncated || !cleanup?.output.complete,
         })
       }
-      const onAbort = () => finish(refused(refusalForSignal(resourceSignal)))
+      const stop = (refusal: Refusal) => {
+        if (settled || stopRefusal) return
+        stopRefusal = refusal
+        const deadline = refusal.reason === 'deadline-exhausted'
+        void node.scope.requestStop(deadline ? 'deadline' : 'owner-cancel', deadline).then(
+          cleanup => finish(refused(refusal), cleanup, true),
+          () => finish(refused(refusal), undefined, true),
+        )
+      }
+      const onAbort = () => stop(node.resourceRefusal() ?? refusalForSignal(resourceSignal))
+      const onCallerAbort = () => {
+        if (signal) stop(refusalForSignal(signal))
+      }
       if (node.input.resourceRemainingMs !== null) {
-        cancelTimer = scheduleNodeDeadline(node.remainingResourceMs, () => finish(refused(
+        cancelTimer = scheduleNodeDeadline(node.remainingResourceMs, () => stop(
           node.resourceRefusal() ?? (resourceSignal.aborted ? refusalForSignal(resourceSignal)
             : executionRefusal('deadline-exhausted', 'Diagnostic resource deadline exhausted')),
-        )))
+        ))
       }
       child.stdout?.on('data', (chunk: Buffer | string) => { if (!settled) stdoutCapture.push(chunk) })
       child.stderr?.on('data', (chunk: Buffer | string) => { if (!settled) stderrCapture.push(chunk) })
       child.on('error', (error: NodeJS.ErrnoException) => {
+        if (stopRefusal) return
+        if (resourceSignal.aborted) { onAbort(); return }
+        if (signal?.aborted) { onCallerAbort(); return }
         const observation = node.observation()
-        finish({
+        const result = {
           ...refused(node.resourceRefusal() ?? (!observation.ok ? observation
             : executionRefusal('unavailable', error.message))),
           ...(error.code ? { errorCode: error.code } : {}),
-        })
+        }
+        void node.scope.requestStop('adapter-error').then(
+          cleanup => finish(result, cleanup), () => finish(result),
+        )
       })
-      child.on('close', (code: number | null, terminationSignal?: string) => {
+      child.on('close', async (code: number | null, terminationSignal?: string) => {
+        if (stopRefusal) return
+        const cleanupPromise = node.scope.requestStop('normal-leader-exit').catch(() => undefined)
         const observation = node.observation()
-        if (!observation.ok) { finish(refused(observation)); return }
-        finish({
-          exitCode: code ?? undefined,
-          ...(terminationSignal ? { errorMessage: `diagnostic command terminated by ${terminationSignal}` } : {}),
-        })
+        if (!observation.ok) {
+          finish(refused(observation), await cleanupPromise)
+          return
+        }
+        let native: Awaited<typeof node.nativeResult>
+        try {
+          native = await node.nativeResult
+        } catch (error) {
+          const result = refused(executionRefusal('unavailable',
+            error instanceof Error ? error.message : 'Native diagnostic result unavailable'))
+          finish(result, await cleanupPromise)
+          return
+        }
+        if (native && !native.ok) {
+          finish(refused(native), await cleanupPromise)
+          return
+        }
+        const exitCode = native?.ok ? native.value.exitCode : code
+        const exitSignal = native?.ok ? native.value.signal : terminationSignal
+        const result = {
+          exitCode: exitCode ?? undefined,
+          ...(native?.ok && !native.value.cleanup?.complete ? { errorMessage: 'Native diagnostic cleanup was not completed' }
+            : exitSignal ? { errorMessage: `diagnostic command terminated by ${exitSignal}` } : {}),
+        }
+        finish(result, await cleanupPromise)
       })
       resourceSignal.addEventListener('abort', onAbort, { once: true })
+      signal?.addEventListener('abort', onCallerAbort, { once: true })
       if (resourceSignal.aborted) onAbort()
+      else if (signal?.aborted) onCallerAbort()
     })
   }
 }
@@ -235,18 +301,24 @@ export function createDiagnosticDeltaHook(params: {
     const cwd = input.cwd
     const env = input.env ? { ...input.env } : undefined
     const executionContext = input.executionContext
-    const signal = executionContext?.signal ?? input.signal
+    const signal = input.signal ?? executionContext?.signal
+    const failure = (error: unknown, reason: 'baseline_capture_failed' | 'preflight_failed') => {
+      const aborted = signal?.aborted ? signal : executionContext?.signal?.aborted ? executionContext.signal : undefined
+      const refusal = isExecutionRefusalError(error) ? error.refusal : aborted ? refusalForSignal(aborted) : undefined
+      return {
+        rejected: false as const,
+        diagnosticStatus: refusal?.reason === 'cancelled' ? 'cancelled' as const
+          : refusal?.reason === 'deadline-exhausted' ? 'failed' as const : 'unknown' as const,
+        observations: { basis: 'unknown' as const, reason },
+        ...(refusal ? { executionRefusal: refusal } : {}),
+      }
+    }
     try {
       let baseline: DiagnosticCapture | LanguageDiagnostic[] | undefined
       try {
         baseline = await getBaseline?.({ files, cwd, env, signal, executionContext })
       } catch (error) {
-        return {
-          rejected: false,
-          diagnosticStatus: signal?.aborted ? 'cancelled' : 'unknown',
-          observations: { basis: 'unknown', reason: 'baseline_capture_failed' },
-          ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
-        }
+        return failure(error, 'baseline_capture_failed')
       }
       // File-change hooks observe already-changed files. Without a pre-edit
       // baseline the preflight captures the current state as its own baseline
@@ -278,12 +350,7 @@ export function createDiagnosticDeltaHook(params: {
       })
     } catch (error) {
       // Work may continue, but missing observation never becomes passed evidence.
-      return {
-        rejected: false,
-        diagnosticStatus: signal?.aborted ? 'cancelled' : 'unknown',
-        observations: { basis: 'unknown', reason: 'preflight_failed' },
-        ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
-      }
+      return failure(error, 'preflight_failed')
     }
   }
 }

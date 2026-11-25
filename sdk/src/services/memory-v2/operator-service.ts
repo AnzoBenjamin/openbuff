@@ -68,7 +68,15 @@ function jsonStringEncodedBytes(value: string, budget: number): number {
   let bytes = 2
   for (let index = 0; index < value.length && bytes <= budget; index++) {
     const code = value.charCodeAt(index)
-    if (code === 0x22 || code === 0x5c || code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d) {
+    if (
+      code === 0x22 ||
+      code === 0x5c ||
+      code === 0x08 ||
+      code === 0x09 ||
+      code === 0x0a ||
+      code === 0x0c ||
+      code === 0x0d
+    ) {
       bytes += 2
     } else if (code <= 0x1f) {
       bytes += 6
@@ -94,7 +102,9 @@ function jsonStringEncodedBytes(value: string, budget: number): number {
 }
 
 function encodedJsonExceeds(value: unknown, budget: number): boolean {
-  type Work = { kind: 'value'; value: unknown } | { kind: 'leave'; value: object }
+  type Work =
+    | { kind: 'value'; value: unknown }
+    | { kind: 'leave'; value: object }
   const work: Work[] = [{ kind: 'value', value }]
   const active = new WeakSet<object>()
   let bytes = 0
@@ -144,12 +154,24 @@ function encodedJsonExceeds(value: unknown, budget: number): boolean {
 }
 
 function manifestEventsExceedBudget(input: unknown): boolean {
-  if (!isRecord(input) || !isRecord(input.manifest) || !('events' in input.manifest)) return false
-  return encodedJsonExceeds(input.manifest.events, MAX_MANIFEST_EVENTS_ENCODED_BYTES)
+  if (
+    !isRecord(input) ||
+    !isRecord(input.manifest) ||
+    !('events' in input.manifest)
+  )
+    return false
+  return encodedJsonExceeds(
+    input.manifest.events,
+    MAX_MANIFEST_EVENTS_ENCODED_BYTES,
+  )
 }
 
 function stableJson(value: unknown): string {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number') {
+  if (
+    value === null ||
+    typeof value === 'boolean' ||
+    typeof value === 'number'
+  ) {
     return JSON.stringify(value)
   }
   if (typeof value === 'string') return JSON.stringify(value)
@@ -181,7 +203,11 @@ const operationalError = (
   code: MemoryOperationError['code'],
   message: string,
   retryable = false,
-): MemoryOperationError => ({ code, message: message.slice(0, 4_096), retryable })
+): MemoryOperationError => ({
+  code,
+  message: message.slice(0, 4_096),
+  retryable,
+})
 
 class ExpectedOperationFailure extends Error {
   constructor(readonly operationError: MemoryOperationError) {
@@ -194,7 +220,10 @@ const failedError = (error: unknown): MemoryOperationError =>
     ? error.operationError
     : operationalError('internal', 'Memory operator failed', true)
 
-const eventOrder = (left: MemoryEventEnvelope, right: MemoryEventEnvelope): number =>
+const eventOrder = (
+  left: MemoryEventEnvelope,
+  right: MemoryEventEnvelope,
+): number =>
   left.sequence - right.sequence || left.eventId.localeCompare(right.eventId)
 
 function selectorFacet(selector: MemorySelector): string {
@@ -219,7 +248,9 @@ interface ActiveObservation {
   sourceEventId: MemoryEventEnvelope['eventId']
 }
 
-function activeObservations(events: MemoryEventEnvelope[]): Map<string, ActiveObservation> {
+function activeObservations(
+  events: MemoryEventEnvelope[],
+): Map<string, ActiveObservation> {
   const active = new Map<string, ActiveObservation>()
   for (const event of events) {
     switch (event.eventType) {
@@ -254,18 +285,26 @@ function activeObservations(events: MemoryEventEnvelope[]): Map<string, ActiveOb
   return active
 }
 
-function observationTaskIds(events: MemoryEventEnvelope[]): Map<string, string> {
+function observationTaskIds(
+  events: MemoryEventEnvelope[],
+): Map<string, string> {
   const tasks = new Map<string, string>()
   for (const event of events) {
     if (event.eventType === 'observation.recorded') {
-      tasks.set(event.payload.observation.observationId, event.payload.observation.taskId)
+      tasks.set(
+        event.payload.observation.observationId,
+        event.payload.observation.taskId,
+      )
     } else if (event.eventType === 'claim.consolidated') {
       tasks.set(
         event.payload.canonicalObservation.observationId,
         event.payload.canonicalObservation.taskId,
       )
     } else if (event.eventType === 'claim.corrected') {
-      tasks.set(event.payload.correction.observationId, event.payload.correction.taskId)
+      tasks.set(
+        event.payload.correction.observationId,
+        event.payload.correction.taskId,
+      )
     }
   }
   return tasks
@@ -275,7 +314,10 @@ function staleObservationReasons(
   events: MemoryEventEnvelope[],
 ): Map<string, Set<'forgotten' | 'superseded' | 'corrected'>> {
   const stale = new Map<string, Set<'forgotten' | 'superseded' | 'corrected'>>()
-  const add = (id: string, reason: 'forgotten' | 'superseded' | 'corrected') => {
+  const add = (
+    id: string,
+    reason: 'forgotten' | 'superseded' | 'corrected',
+  ) => {
     const reasons = stale.get(id) ?? new Set()
     reasons.add(reason)
     stale.set(id, reasons)
@@ -294,15 +336,38 @@ function staleObservationReasons(
   return stale
 }
 
-const normalizeSensitiveKey = (key: string): string => key.replace(/[^A-Za-z0-9]/g, '').toLowerCase()
+const normalizeSensitiveKey = (key: string): string =>
+  key.replace(/[^A-Za-z0-9]/g, '').toLowerCase()
 const SENSITIVE_KEYS = new Set([
-  'excerpt', 'content', 'body', 'stdout', 'stderr', 'log', 'logs', 'secret', 'secrets',
-  'token', 'tokens', 'password', 'passwords', 'passwd', 'authorization', 'cookie', 'raw',
-  'apikey', 'clientsecret', 'privatekey', 'accesstoken', 'refreshtoken',
+  'excerpt',
+  'content',
+  'body',
+  'stdout',
+  'stderr',
+  'log',
+  'logs',
+  'secret',
+  'secrets',
+  'token',
+  'tokens',
+  'password',
+  'passwords',
+  'passwd',
+  'authorization',
+  'cookie',
+  'raw',
+  'apikey',
+  'clientsecret',
+  'privatekey',
+  'accesstoken',
+  'refreshtoken',
 ])
-const isSensitiveKey = (key: string): boolean => SENSITIVE_KEYS.has(normalizeSensitiveKey(key))
-const PRIVATE_KEY_PEM = /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g
-const SECRET_ASSIGNMENT = /(\b(?:[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE[_-]?KEY)[A-Z0-9_]*|CLIENT[_-]?SECRET|ACCESS[_-]?TOKEN|REFRESH[_-]?TOKEN|apiKey|clientSecret|privateKey|accessToken|refreshToken|password)\s*[=:]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi
+const isSensitiveKey = (key: string): boolean =>
+  SENSITIVE_KEYS.has(normalizeSensitiveKey(key))
+const PRIVATE_KEY_PEM =
+  /-----BEGIN ((?:[A-Z0-9]+ )*PRIVATE KEY)-----[\s\S]*?-----END \1-----/g
+const SECRET_ASSIGNMENT =
+  /(\b(?:[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|PRIVATE[_-]?KEY)[A-Z0-9_]*|CLIENT[_-]?SECRET|ACCESS[_-]?TOKEN|REFRESH[_-]?TOKEN|apiKey|clientSecret|privateKey|accessToken|refreshToken|password)\s*[=:]\s*)("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;]+)/gi
 const BEARER_TOKEN = /(\bBearer\s+)[A-Za-z0-9._~+/=-]+/gi
 const GITHUB_TOKEN = /\b(?:ghp_[A-Za-z0-9]+|github_pat_[A-Za-z0-9_]+)\b/g
 const AWS_ACCESS_ID = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g
@@ -331,17 +396,28 @@ function redactString(value: string, stats: SanitizationStats): string {
     redacted,
     SECRET_ASSIGNMENT,
     (_match, prefix, secretValue) => {
-      const quote = secretValue.startsWith('"') || secretValue.startsWith("'")
-        ? secretValue[0]
-        : ''
+      const quote =
+        secretValue.startsWith('"') || secretValue.startsWith("'")
+          ? secretValue[0]
+          : ''
       return `${prefix}${quote}[REDACTED]${quote}`
     },
     stats,
   )
-  redacted = replaceRedacted(redacted, BEARER_TOKEN, (_match, prefix) => `${prefix}[REDACTED]`, stats)
+  redacted = replaceRedacted(
+    redacted,
+    BEARER_TOKEN,
+    (_match, prefix) => `${prefix}[REDACTED]`,
+    stats,
+  )
   redacted = replaceRedacted(redacted, GITHUB_TOKEN, '[REDACTED]', stats)
   redacted = replaceRedacted(redacted, AWS_ACCESS_ID, '[REDACTED]', stats)
-  redacted = replaceRedacted(redacted, /(?:^|\s)\/home\/[^\s/]+/g, ' [redacted-home]', stats)
+  redacted = replaceRedacted(
+    redacted,
+    /(?:^|\s)\/home\/[^\s/]+/g,
+    ' [redacted-home]',
+    stats,
+  )
   redacted = replaceRedacted(
     redacted,
     /(?:^|\s)\/(?:Users|private|etc|var|tmp)\/[^\s]*/g,
@@ -358,7 +434,8 @@ function redactString(value: string, stats: SanitizationStats): string {
 
 function sanitizeJson(value: unknown, stats: SanitizationStats): unknown {
   if (typeof value === 'string') return redactString(value, stats)
-  if (Array.isArray(value)) return value.map((child) => sanitizeJson(child, stats))
+  if (Array.isArray(value))
+    return value.map((child) => sanitizeJson(child, stats))
   if (!isRecord(value)) return value
   const sanitized: Record<string, unknown> = {}
   for (const [key, child] of Object.entries(value)) {
@@ -371,9 +448,10 @@ function sanitizeJson(value: unknown, stats: SanitizationStats): unknown {
   return sanitized
 }
 
-function sanitizeEvent(
-  sourceEvent: MemoryEventEnvelope,
-): { event?: MemoryEventEnvelope; redactedValues: number } {
+function sanitizeEvent(sourceEvent: MemoryEventEnvelope): {
+  event?: MemoryEventEnvelope
+  redactedValues: number
+} {
   const candidate = structuredClone(sourceEvent)
   const stats: SanitizationStats = { redactedValues: 0 }
   const removeExcerpt = (evidence: { excerpt?: string }) => {
@@ -383,17 +461,22 @@ function sanitizeEvent(
     }
   }
   if (candidate.eventType === 'observation.recorded') {
-    for (const evidence of candidate.payload.observation.evidence) removeExcerpt(evidence)
+    for (const evidence of candidate.payload.observation.evidence)
+      removeExcerpt(evidence)
   } else if (candidate.eventType === 'claim.consolidated') {
-    for (const evidence of candidate.payload.canonicalObservation.evidence) removeExcerpt(evidence)
+    for (const evidence of candidate.payload.canonicalObservation.evidence)
+      removeExcerpt(evidence)
   } else if (candidate.eventType === 'claim.corrected') {
-    for (const evidence of candidate.payload.correction.evidence) removeExcerpt(evidence)
+    for (const evidence of candidate.payload.correction.evidence)
+      removeExcerpt(evidence)
   } else if (candidate.eventType === 'evidence.attached') {
     for (const evidence of candidate.payload.evidence) removeExcerpt(evidence)
   } else if (candidate.eventType === 'evidence.rebound') {
     removeExcerpt(candidate.payload.evidence)
   }
-  const parsed = MemoryEventEnvelopeSchema.safeParse(sanitizeJson(candidate, stats))
+  const parsed = MemoryEventEnvelopeSchema.safeParse(
+    sanitizeJson(candidate, stats),
+  )
   return {
     ...(parsed.success ? { event: parsed.data } : {}),
     redactedValues: stats.redactedValues,
@@ -434,16 +517,25 @@ function renderMarkdown(manifest: MemoryExportManifestV2): string {
   return lines.join('\n').slice(0, 1_000_000)
 }
 
-function compactionWarnings(eventCount: number, bytes: number | null): string[] {
+function compactionWarnings(
+  eventCount: number,
+  bytes: number | null,
+): string[] {
   const warnings: string[] = []
   if (bytes !== null && bytes >= COMPACTION_STORE_BYTES_THRESHOLD) {
     warnings.push(
-      `Store size ${bytes} bytes exceeds 128MB compaction threshold (134217728 bytes).`.slice(0, 512),
+      `Store size ${bytes} bytes exceeds 128MB compaction threshold (134217728 bytes).`.slice(
+        0,
+        512,
+      ),
     )
   }
   if (eventCount >= COMPACTION_EVENT_COUNT_THRESHOLD) {
     warnings.push(
-      `Event count ${eventCount} exceeds 20000 compaction threshold (20k events).`.slice(0, 512),
+      `Event count ${eventCount} exceeds 20000 compaction threshold (20k events).`.slice(
+        0,
+        512,
+      ),
     )
   }
   return warnings.slice(0, MAX_COMPACTION_WARNINGS)
@@ -452,7 +544,10 @@ function compactionWarnings(eventCount: number, bytes: number | null): string[] 
 export class MemoryV2OperatorService {
   constructor(private readonly repository: MemoryRepositoryV2) {}
 
-  private async allEvents(projectId: MemoryEventEnvelope['projectId']): Promise<MemoryEventEnvelope[]> {
+  private async allEvents(
+    projectId: MemoryEventEnvelope['projectId'],
+    maxEvents = MAX_CANONICAL_EVENTS,
+  ): Promise<MemoryEventEnvelope[]> {
     const events: MemoryEventEnvelope[] = []
     let afterEventId: MemoryEventEnvelope['eventId'] | undefined
     const cursors = new Set<string>()
@@ -463,7 +558,9 @@ export class MemoryV2OperatorService {
         ...(afterEventId ? { afterEventId } : {}),
         limit: EXPORT_PAGE_SIZE,
       })
-      const outcome = MemoryExportOutcomeSchema.parse(await this.repository.export(request))
+      const outcome = MemoryExportOutcomeSchema.parse(
+        await this.repository.export(request),
+      )
       if (outcome.outcome !== 'page') {
         throw new ExpectedOperationFailure(
           operationalError(
@@ -474,9 +571,11 @@ export class MemoryV2OperatorService {
         )
       }
       events.push(...outcome.events)
-      if (events.length > MAX_CANONICAL_EVENTS) throw new Error('Canonical event limit exceeded')
+      if (events.length > maxEvents)
+        throw new Error('Canonical event limit exceeded')
       if (outcome.nextAfterEventId === null) return events.sort(eventOrder)
-      if (cursors.has(outcome.nextAfterEventId)) throw new Error('Repository export cursor repeated')
+      if (cursors.has(outcome.nextAfterEventId))
+        throw new Error('Repository export cursor repeated')
       cursors.add(outcome.nextAfterEventId)
       afterEventId = outcome.nextAfterEventId
     }
@@ -487,24 +586,33 @@ export class MemoryV2OperatorService {
     if (!parsed.success) {
       return MemoryConsolidationOutcomeSchema.parse({
         outcome: 'rejected',
-        error: operationalError('invalid-request', 'Invalid consolidation request'),
+        error: operationalError(
+          'invalid-request',
+          'Invalid consolidation request',
+        ),
       })
     }
     const request = parsed.data
     try {
-      const events = await this.allEvents(request.projectId)
+      const events = await this.allEvents(
+        request.projectId,
+        Number.MAX_SAFE_INTEGER,
+      )
+      const current = activeObservations(events)
       const grouped = new Map<string, ActiveObservation[]>()
-      for (const active of activeObservations(events).values()) {
+      for (const active of current.values()) {
         const observation = active.observation
+        if (observation.tags.includes('consolidation-candidate')) continue
         if (request.taskId && observation.taskId !== request.taskId) continue
-        const selector = observation.selectors?.[0] ?? observation.evidence[0]?.selector
+        const selector =
+          observation.selectors?.[0] ?? observation.evidence[0]?.selector
         const facet = selector
           ? selectorFacet(selector)
           : observation.evidence[0]?.artifact.location
             ? `artifact:${observation.evidence[0].artifact.location.replaceAll('\\', '/').toLowerCase()}`
             : undefined
         if (!facet) continue
-        const key = `${observation.taskId}\u0000${facet}\u0000${observation.kind}`
+        const key = `${facet}\u0000${observation.kind}`
         const values = grouped.get(key) ?? []
         values.push(active)
         grouped.set(key, values)
@@ -512,14 +620,16 @@ export class MemoryV2OperatorService {
       const candidates = [...grouped.entries()]
         .filter(([, values]) => values.length >= 2)
         .sort(([left], [right]) => left.localeCompare(right))
-        .slice(0, request.maxGroups)
         .map(([key, values]) => {
           const sources = values
             .sort((left, right) =>
-              left.observation.observationId.localeCompare(right.observation.observationId),
+              left.observation.observationId.localeCompare(
+                right.observation.observationId,
+              ),
             )
             .slice(0, MAX_GROUP_SOURCES)
-          const [taskId, facet, observationKind] = key.split('\u0000')
+          const [facet, observationKind] = key.split('\u0000')
+          const taskId = sources[0]!.observation.taskId
           const sourceObservationIds = sources.map(
             ({ observation }) => observation.observationId,
           )
@@ -540,6 +650,8 @@ export class MemoryV2OperatorService {
             sources,
           }
         })
+        .filter((candidate) => !current.has(candidate.canonicalObservationId))
+        .slice(0, request.maxGroups)
       if (candidates.length === 0) {
         return MemoryConsolidationOutcomeSchema.parse({
           outcome: 'no-op',
@@ -552,10 +664,14 @@ export class MemoryV2OperatorService {
           .map(({ observation }) => observation.observedAt)
           .sort()
           .at(-1)!
-        const mergedEvidence = candidate.sources.flatMap(({ observation }) => observation.evidence).slice(0, 8)
+        const mergedEvidence = candidate.sources
+          .flatMap(({ observation }) => observation.evidence)
+          .slice(0, 8)
         const mergedSelectors = (() => {
           const seen = new Set<string>()
-          const merged: NonNullable<ActiveObservation['observation']['selectors']> = []
+          const merged: NonNullable<
+            ActiveObservation['observation']['selectors']
+          > = []
           for (const { observation } of candidate.sources) {
             for (const selector of observation.selectors ?? []) {
               const key = JSON.stringify(selector)
@@ -572,66 +688,58 @@ export class MemoryV2OperatorService {
           observationId: candidate.canonicalObservationId,
           taskId: candidate.taskId,
           kind: candidate.observationKind,
-          summary: `Consolidated ${candidate.sourceObservationIds.length} ${candidate.observationKind} observations for ${(candidate.facet ?? '').slice(0, 128)}`,
-          detail: `Derived from observations ${candidate.sourceObservationIds.join(', ')} under policy ${request.policyVersion}. Facet ${candidate.facet}. Sources: ${candidate.sources.slice(0, 3).map(({ observation }) => observation.summary.slice(0, 200)).join(' | ')}`,
+          summary: `Candidate summary of ${candidate.sourceObservationIds.length} ${candidate.observationKind} observations for ${(candidate.facet ?? '').slice(0, 128)}`,
+          detail: `Derived from observations ${candidate.sourceObservationIds.join(', ')} under policy ${request.policyVersion}. Facet ${candidate.facet}. Sources: ${candidate.sources
+            .slice(0, 3)
+            .map(({ observation }) => observation.summary.slice(0, 200))
+            .join(' | ')}`,
           confidence: Math.min(
-            ...candidate.sources.map(({ observation }) => observation.confidence),
+            ...candidate.sources.map(
+              ({ observation }) => observation.confidence,
+            ),
           ),
           evidence: mergedEvidence,
           selectors: mergedSelectors,
           provenance: {
             origin: 'derived' as const,
             recordedBy: 'memory-v2-operator',
-            sourceEventIds: candidate.sources.map(({ sourceEventId }) => sourceEventId),
+            sourceEventIds: candidate.sources.map(
+              ({ sourceEventId }) => sourceEventId,
+            ),
             sourceSessionId: request.sessionId,
             metadata: {
               policyVersion: request.policyVersion,
               sourceObservationIds: candidate.sourceObservationIds,
             },
           },
-          tags: ['consolidated', request.policyVersion.slice(0, 64)],
+          tags: ['consolidation-candidate', request.policyVersion.slice(0, 64)],
           observedAt,
         }
-        const consolidatedPayload = {
+        // Cross-task semantic summaries are source-linked candidates. They
+        // never retract source facts, inherit verification, or activate policy.
+        const payload = {
           payloadSchemaVersion: 1 as const,
-          sourceObservationIds: candidate.sourceObservationIds,
-          canonicalObservation,
-          reason: `Deterministic append-only consolidation policy ${request.policyVersion}`,
+          observation: canonicalObservation,
         }
         plannedEvents.push(
           MemoryEventDraftSchema.parse({
             schemaVersion: 2,
             eventSchemaVersion: 1,
-            eventType: 'claim.consolidated',
-            eventId: derivedId('event', { type: 'claim.consolidated', payload: consolidatedPayload }),
+            eventType: 'observation.recorded',
+            eventId: derivedId('event', {
+              type: 'observation.recorded',
+              payload,
+            }),
             projectId: request.projectId,
             sessionId: request.sessionId,
             occurredAt: observedAt,
-            payload: consolidatedPayload,
+            payload,
           }),
         )
-        for (const observationId of candidate.sourceObservationIds) {
-          const payload = {
-            payloadSchemaVersion: 1 as const,
-            observationId,
-            supersededByObservationId: candidate.canonicalObservationId,
-            reason: `Superseded by deterministic consolidation policy ${request.policyVersion}`,
-          }
-          plannedEvents.push(
-            MemoryEventDraftSchema.parse({
-              schemaVersion: 2,
-              eventSchemaVersion: 1,
-              eventType: 'claim.superseded',
-              eventId: derivedId('event', { type: 'claim.superseded', payload }),
-              projectId: request.projectId,
-              sessionId: request.sessionId,
-              occurredAt: observedAt,
-              payload,
-            }),
-          )
-        }
       }
-      const visibleCandidates = candidates.map(({ sources: _sources, ...candidate }) => candidate)
+      const visibleCandidates = candidates.map(
+        ({ sources: _sources, ...candidate }) => candidate,
+      )
       if (request.mode === 'preview') {
         return MemoryConsolidationOutcomeSchema.parse({
           outcome: 'preview',
@@ -658,7 +766,10 @@ export class MemoryV2OperatorService {
         entries: append.entries,
       })
     } catch (error) {
-      return MemoryConsolidationOutcomeSchema.parse({ outcome: 'failed', error: failedError(error) })
+      return MemoryConsolidationOutcomeSchema.parse({
+        outcome: 'failed',
+        error: failedError(error),
+      })
     }
   }
 
@@ -667,7 +778,10 @@ export class MemoryV2OperatorService {
     if (!parsed.success) {
       return MemoryCorrectionOutcomeSchema.parse({
         outcome: 'rejected',
-        error: operationalError('invalid-request', 'Invalid correction request'),
+        error: operationalError(
+          'invalid-request',
+          'Invalid correction request',
+        ),
       })
     }
     const request = parsed.data
@@ -692,11 +806,14 @@ export class MemoryV2OperatorService {
         })
       }
       const tasks = observationTaskIds(await this.allEvents(request.projectId))
-      const targetTasks = targetObservationIds.map((observationId) => tasks.get(observationId))
+      const targetTasks = targetObservationIds.map((observationId) =>
+        tasks.get(observationId),
+      )
       const targetIsInvalid =
         targetTasks.some((taskId) => taskId === undefined) ||
         targetTasks.some((taskId) => taskId !== request.taskId) ||
-        (action.kind === 'correct' && action.correction.taskId !== targetTasks[0])
+        (action.kind === 'correct' &&
+          action.correction.taskId !== targetTasks[0])
       if (targetIsInvalid) {
         return MemoryCorrectionOutcomeSchema.parse({
           outcome: 'rejected',
@@ -733,7 +850,11 @@ export class MemoryV2OperatorService {
         if (action.kind === 'forget') {
           return {
             eventType: 'claim.forgotten' as const,
-            payload: { payloadSchemaVersion: 1 as const, ...action, kind: undefined },
+            payload: {
+              payloadSchemaVersion: 1 as const,
+              ...action,
+              kind: undefined,
+            },
           }
         }
         if (action.kind === 'supersede') {
@@ -759,7 +880,9 @@ export class MemoryV2OperatorService {
         }
       })()
       const payload = Object.fromEntries(
-        Object.entries(event.payload).filter(([, value]) => value !== undefined),
+        Object.entries(event.payload).filter(
+          ([, value]) => value !== undefined,
+        ),
       )
       const draft = MemoryEventDraftSchema.parse({
         schemaVersion: 2,
@@ -786,7 +909,8 @@ export class MemoryV2OperatorService {
           }),
         ),
       )
-      if (append.outcome !== 'appended') return MemoryCorrectionOutcomeSchema.parse(append)
+      if (append.outcome !== 'appended')
+        return MemoryCorrectionOutcomeSchema.parse(append)
       return MemoryCorrectionOutcomeSchema.parse({
         outcome: append.entries[0]!.duplicate ? 'no-op' : 'applied',
         ...(append.entries[0]!.duplicate
@@ -794,7 +918,10 @@ export class MemoryV2OperatorService {
           : { plannedEvents: [draft], entry: append.entries[0] }),
       })
     } catch (error) {
-      return MemoryCorrectionOutcomeSchema.parse({ outcome: 'failed', error: failedError(error) })
+      return MemoryCorrectionOutcomeSchema.parse({
+        outcome: 'failed',
+        error: failedError(error),
+      })
     }
   }
 
@@ -803,7 +930,10 @@ export class MemoryV2OperatorService {
     if (!parsed.success) {
       return MemoryRevalidationOutcomeSchema.parse({
         outcome: 'rejected',
-        error: operationalError('invalid-request', 'Invalid revalidation request'),
+        error: operationalError(
+          'invalid-request',
+          'Invalid revalidation request',
+        ),
       })
     }
     const request = parsed.data
@@ -812,7 +942,9 @@ export class MemoryV2OperatorService {
     )
     try {
       const tasks = observationTaskIds(await this.allEvents(request.projectId))
-      const targetTasks = actions.map((action) => tasks.get(action.observationId))
+      const targetTasks = actions.map((action) =>
+        tasks.get(action.observationId),
+      )
       if (
         targetTasks.some((taskId) => taskId === undefined) ||
         targetTasks.some((taskId) => taskId !== request.taskId)
@@ -826,7 +958,10 @@ export class MemoryV2OperatorService {
         })
       }
       if (request.mode === 'preview') {
-        return MemoryRevalidationOutcomeSchema.parse({ outcome: 'preview', actions })
+        return MemoryRevalidationOutcomeSchema.parse({
+          outcome: 'preview',
+          actions,
+        })
       }
       const results = []
       for (const action of actions) {
@@ -842,9 +977,15 @@ export class MemoryV2OperatorService {
         )
         results.push({ action, result })
       }
-      return MemoryRevalidationOutcomeSchema.parse({ outcome: 'applied', results })
+      return MemoryRevalidationOutcomeSchema.parse({
+        outcome: 'applied',
+        results,
+      })
     } catch (error) {
-      return MemoryRevalidationOutcomeSchema.parse({ outcome: 'failed', error: failedError(error) })
+      return MemoryRevalidationOutcomeSchema.parse({
+        outcome: 'failed',
+        error: failedError(error),
+      })
     }
   }
 
@@ -853,15 +994,24 @@ export class MemoryV2OperatorService {
     if (!parsed.success) {
       return MemoryProjectionRepairOutcomeSchema.parse({
         outcome: 'rejected',
-        error: operationalError('invalid-request', 'Invalid projection repair request'),
+        error: operationalError(
+          'invalid-request',
+          'Invalid projection repair request',
+        ),
       })
     }
     const request = parsed.data
     try {
       const beforeEvents = await this.allEvents(request.projectId)
-      const before = { eventCount: beforeEvents.length, checksum: digest(beforeEvents) }
+      const before = {
+        eventCount: beforeEvents.length,
+        checksum: digest(beforeEvents),
+      }
       if (request.mode === 'preview') {
-        return MemoryProjectionRepairOutcomeSchema.parse({ outcome: 'preview', before })
+        return MemoryProjectionRepairOutcomeSchema.parse({
+          outcome: 'preview',
+          before,
+        })
       }
       const rebuild = MemoryRebuildOutcomeSchema.parse(
         await this.repository.rebuild(
@@ -870,14 +1020,23 @@ export class MemoryV2OperatorService {
             projectId: request.projectId,
             rebuildId: request.rebuildId,
             projectionNames: request.projectionNames,
-            ...(request.fromEventId ? { fromEventId: request.fromEventId } : {}),
+            ...(request.fromEventId
+              ? { fromEventId: request.fromEventId }
+              : {}),
           }),
         ),
       )
-      if (rebuild.outcome !== 'rebuilt') return MemoryProjectionRepairOutcomeSchema.parse(rebuild)
+      if (rebuild.outcome !== 'rebuilt')
+        return MemoryProjectionRepairOutcomeSchema.parse(rebuild)
       const afterEvents = await this.allEvents(request.projectId)
-      const after = { eventCount: afterEvents.length, checksum: digest(afterEvents) }
-      if (before.eventCount !== after.eventCount || before.checksum !== after.checksum) {
+      const after = {
+        eventCount: afterEvents.length,
+        checksum: digest(afterEvents),
+      }
+      if (
+        before.eventCount !== after.eventCount ||
+        before.checksum !== after.checksum
+      ) {
         return MemoryProjectionRepairOutcomeSchema.parse({
           outcome: 'integrity-mismatch',
           before,
@@ -891,7 +1050,10 @@ export class MemoryV2OperatorService {
         rebuild,
       })
     } catch (error) {
-      return MemoryProjectionRepairOutcomeSchema.parse({ outcome: 'failed', error: failedError(error) })
+      return MemoryProjectionRepairOutcomeSchema.parse({
+        outcome: 'failed',
+        error: failedError(error),
+      })
     }
   }
 
@@ -900,7 +1062,10 @@ export class MemoryV2OperatorService {
     if (!parsed.success) {
       return MemoryManifestExportOutcomeSchema.parse({
         outcome: 'rejected',
-        error: operationalError('invalid-request', 'Invalid manifest export request'),
+        error: operationalError(
+          'invalid-request',
+          'Invalid manifest export request',
+        ),
       })
     }
     const request = parsed.data
@@ -909,19 +1074,23 @@ export class MemoryV2OperatorService {
       const stale = staleObservationReasons(canonical)
       const warnings: string[] = []
       const addWarning = (warning: string) => {
-        if (warnings.length < MAX_EXPORT_WARNINGS) warnings.push(warning.slice(0, 512))
+        if (warnings.length < MAX_EXPORT_WARNINGS)
+          warnings.push(warning.slice(0, 512))
       }
       const exported: MemoryExportEventV2[] = []
       let excludedEventCount = 0
       let redactedValueCount = 0
       let verificationLifecycleCount = 0
       for (const sourceEvent of canonical) {
-        if (isVerificationLifecycleEvent(sourceEvent)) verificationLifecycleCount++
+        if (isVerificationLifecycleEvent(sourceEvent))
+          verificationLifecycleCount++
         const observationId =
           sourceEvent.eventType === 'observation.recorded'
             ? sourceEvent.payload.observation.observationId
             : undefined
-        const reasons = observationId ? [...(stale.get(observationId) ?? [])].sort() : []
+        const reasons = observationId
+          ? [...(stale.get(observationId) ?? [])].sort()
+          : []
         if (reasons.length > 0 && !request.includeStale) {
           excludedEventCount++
           continue
@@ -929,7 +1098,9 @@ export class MemoryV2OperatorService {
         const sanitized = sanitizeEvent(sourceEvent)
         redactedValueCount += sanitized.redactedValues
         if (!sanitized.event) {
-          addWarning(`Omitted event ${sourceEvent.eventId}: sanitization could not preserve schema`)
+          addWarning(
+            `Omitted event ${sourceEvent.eventId}: sanitization could not preserve schema`,
+          )
           continue
         }
         exported.push({
@@ -939,7 +1110,9 @@ export class MemoryV2OperatorService {
         })
       }
       if (redactedValueCount > 0) {
-        addWarning(`Redacted ${redactedValueCount} sensitive value(s) from exported events`)
+        addWarning(
+          `Redacted ${redactedValueCount} sensitive value(s) from exported events`,
+        )
       }
       if (verificationLifecycleCount > 0) {
         addWarning(
@@ -947,7 +1120,10 @@ export class MemoryV2OperatorService {
         )
       }
       const health = MemoryHealthSchema.parse(
-        await this.repository.health({ schemaVersion: 2, projectId: request.projectId }),
+        await this.repository.health({
+          schemaVersion: 2,
+          projectId: request.projectId,
+        }),
       )
       const sequenceRange = canonical.length
         ? { first: canonical[0]!.sequence, last: canonical.at(-1)!.sequence }
@@ -979,7 +1155,10 @@ export class MemoryV2OperatorService {
           : {}),
       })
     } catch (error) {
-      return MemoryManifestExportOutcomeSchema.parse({ outcome: 'failed', error: failedError(error) })
+      return MemoryManifestExportOutcomeSchema.parse({
+        outcome: 'failed',
+        error: failedError(error),
+      })
     }
   }
 
@@ -997,7 +1176,10 @@ export class MemoryV2OperatorService {
     if (!parsed.success) {
       return MemoryManifestImportOutcomeSchema.parse({
         outcome: 'rejected',
-        error: operationalError('invalid-request', 'Invalid manifest import request'),
+        error: operationalError(
+          'invalid-request',
+          'Invalid manifest import request',
+        ),
       })
     }
     const request = parsed.data
@@ -1005,44 +1187,62 @@ export class MemoryV2OperatorService {
     if (manifest.projectId !== request.projectId) {
       return MemoryManifestImportOutcomeSchema.parse({
         outcome: 'rejected',
-        error: operationalError('conflict', 'Manifest project does not match target project'),
+        error: operationalError(
+          'conflict',
+          'Manifest project does not match target project',
+        ),
       })
     }
     if (manifestChecksum(manifest) !== manifest.checksum) {
       return MemoryManifestImportOutcomeSchema.parse({
         outcome: 'rejected',
-        error: operationalError('invalid-request', 'Manifest checksum is invalid'),
+        error: operationalError(
+          'invalid-request',
+          'Manifest checksum is invalid',
+        ),
       })
     }
     try {
       const admittedEvents = manifest.events
         .map(({ event }) => event)
         .filter((event) => !isVerificationLifecycleEvent(event))
-      const strippedVerificationEvents = manifest.events.length - admittedEvents.length
-      const admittedDrafts = admittedEvents.map(({ sequence: _sequence, ...draft }) => draft)
+      const strippedVerificationEvents =
+        manifest.events.length - admittedEvents.length
+      const admittedDrafts = admittedEvents.map(
+        ({ sequence: _sequence, ...draft }) => draft,
+      )
       let target = await this.allEvents(request.projectId)
-      let targetDrafts = target.map(({ sequence: _sequence, ...draft }) => draft)
+      let targetDrafts = target.map(
+        ({ sequence: _sequence, ...draft }) => draft,
+      )
       const isAdmittedPrefix = (drafts: MemoryEventDraft[]): boolean =>
         drafts.length <= admittedDrafts.length &&
-        stableJson(drafts) === stableJson(admittedDrafts.slice(0, drafts.length))
+        stableJson(drafts) ===
+          stableJson(admittedDrafts.slice(0, drafts.length))
       if (!isAdmittedPrefix(targetDrafts)) {
         return MemoryManifestImportOutcomeSchema.parse({
           outcome: 'rejected',
-          error: operationalError('conflict', 'Target logical project is not an imported prefix'),
+          error: operationalError(
+            'conflict',
+            'Target logical project is not an imported prefix',
+          ),
         })
       }
 
       const initialTargetLength = targetDrafts.length
       let offset = targetDrafts.length
-      let expectedTail = target.length === 0
-        ? { kind: 'empty' as const }
-        : { kind: 'event' as const, eventId: target.at(-1)!.eventId }
+      let expectedTail =
+        target.length === 0
+          ? { kind: 'empty' as const }
+          : { kind: 'event' as const, eventId: target.at(-1)!.eventId }
       let conflictRecoveries = 0
       while (offset < admittedEvents.length) {
-        const events = admittedEvents.slice(offset, offset + request.pageSize).map((event) => {
-          const { sequence: _sequence, ...draft } = event
-          return MemoryEventDraftSchema.parse(draft)
-        })
+        const events = admittedEvents
+          .slice(offset, offset + request.pageSize)
+          .map((event) => {
+            const { sequence: _sequence, ...draft } = event
+            return MemoryEventDraftSchema.parse(draft)
+          })
         const append = MemoryAppendOutcomeSchema.parse(
           await this.repository.append(
             MemoryAppendRequestSchema.parse({
@@ -1058,20 +1258,30 @@ export class MemoryV2OperatorService {
           expectedTail = { kind: 'event', eventId: append.lastEventId }
           continue
         }
-        if (append.error.code === 'conflict' && append.error.retryable && conflictRecoveries < 2) {
+        if (
+          append.error.code === 'conflict' &&
+          append.error.retryable &&
+          conflictRecoveries < 2
+        ) {
           conflictRecoveries++
           target = await this.allEvents(request.projectId)
-          targetDrafts = target.map(({ sequence: _sequence, ...draft }) => draft)
+          targetDrafts = target.map(
+            ({ sequence: _sequence, ...draft }) => draft,
+          )
           if (!isAdmittedPrefix(targetDrafts) || targetDrafts.length < offset) {
             return MemoryManifestImportOutcomeSchema.parse({
               outcome: 'rejected',
-              error: operationalError('conflict', 'Target logical project is not an imported prefix'),
+              error: operationalError(
+                'conflict',
+                'Target logical project is not an imported prefix',
+              ),
             })
           }
           offset = targetDrafts.length
-          expectedTail = target.length === 0
-            ? { kind: 'empty' }
-            : { kind: 'event', eventId: target.at(-1)!.eventId }
+          expectedTail =
+            target.length === 0
+              ? { kind: 'empty' }
+              : { kind: 'event', eventId: target.at(-1)!.eventId }
           continue
         }
         return MemoryManifestImportOutcomeSchema.parse({
@@ -1105,9 +1315,10 @@ export class MemoryV2OperatorService {
         })
       }
       if (initialTargetLength === admittedDrafts.length) {
-        const strippedReason = strippedVerificationEvents > 0
-          ? `; verification-state-stripped=${strippedVerificationEvents}`
-          : ''
+        const strippedReason =
+          strippedVerificationEvents > 0
+            ? `; verification-state-stripped=${strippedVerificationEvents}`
+            : ''
         return MemoryManifestImportOutcomeSchema.parse({
           outcome: 'no-op',
           reason: `The admitted manifest is already imported and projections were rebuilt${strippedReason}`,
@@ -1119,7 +1330,10 @@ export class MemoryV2OperatorService {
         rebuild,
       })
     } catch (error) {
-      return MemoryManifestImportOutcomeSchema.parse({ outcome: 'failed', error: failedError(error) })
+      return MemoryManifestImportOutcomeSchema.parse({
+        outcome: 'failed',
+        error: failedError(error),
+      })
     }
   }
 
@@ -1128,7 +1342,10 @@ export class MemoryV2OperatorService {
     if (!parsed.success) {
       return MemoryCompactionOutcomeSchema.parse({
         outcome: 'rejected',
-        error: operationalError('invalid-request', 'Invalid compaction request'),
+        error: operationalError(
+          'invalid-request',
+          'Invalid compaction request',
+        ),
       })
     }
     const request = parsed.data
@@ -1147,14 +1364,17 @@ export class MemoryV2OperatorService {
       // the GC-relevant envelopes (never Date.now), so eligibility is
       // reproducible from the batch alone.
       const asOfTurnWall = envelopes.reduce(
-        (max, envelope) => (envelope.occurredAt > max ? envelope.occurredAt : max),
+        (max, envelope) =>
+          envelope.occurredAt > max ? envelope.occurredAt : max,
         '1970-01-01T00:00:00.000Z',
       )
       let eventCount = events.length
       let bytes: number | null = null
       try {
         if (typeof this.repository.getStoreStats === 'function') {
-          const stats = await this.repository.getStoreStats({ projectId: request.projectId })
+          const stats = await this.repository.getStoreStats({
+            projectId: request.projectId,
+          })
           if (
             typeof stats.eventCount === 'number' &&
             Number.isSafeInteger(stats.eventCount) &&
@@ -1177,7 +1397,10 @@ export class MemoryV2OperatorService {
           // lower; warn the operator that the candidate list exceeds one
           // apply batch instead of letting the divergence surface silently.
           warnings.push(
-            `Preview maxEvents ${request.maxEvents} exceeds the single-apply cap of ${COMPACTION_APPLY_MAX_EVENTS}; one apply archives at most ${COMPACTION_APPLY_MAX_EVENTS} events (repeat applies archive the rest).`.slice(0, 512),
+            `Preview maxEvents ${request.maxEvents} exceeds the single-apply cap of ${COMPACTION_APPLY_MAX_EVENTS}; one apply archives at most ${COMPACTION_APPLY_MAX_EVENTS} events (repeat applies archive the rest).`.slice(
+              0,
+              512,
+            ),
           )
         }
         const selection = selectCompactionCandidates({
@@ -1205,7 +1428,10 @@ export class MemoryV2OperatorService {
       }
       // Apply selection is recomputed group-granular so a batch never splits
       // an observation group across the maxEvents boundary.
-      const applyMaxEvents = Math.min(request.maxEvents, COMPACTION_APPLY_MAX_EVENTS)
+      const applyMaxEvents = Math.min(
+        request.maxEvents,
+        COMPACTION_APPLY_MAX_EVENTS,
+      )
       const applySelection = selectCompactionCandidates({
         envelopes,
         maxEvents: applyMaxEvents,
@@ -1245,20 +1471,31 @@ export class MemoryV2OperatorService {
           // Consistency check between the repository's candidate view and the
           // operator's apply batch: a mismatch is reported but stays non-fatal.
           const repositoryEventIds = new Set(repositorySelection.eventIds)
-          const operatorEventIds = new Set(applyCandidates.map((event) => event.eventId))
+          const operatorEventIds = new Set(
+            applyCandidates.map((event) => event.eventId),
+          )
           const drift =
-            applyCandidates.filter((event) => !repositoryEventIds.has(event.eventId)).length +
-            repositorySelection.eventIds.filter((eventId) => !operatorEventIds.has(eventId)).length
+            applyCandidates.filter(
+              (event) => !repositoryEventIds.has(event.eventId),
+            ).length +
+            repositorySelection.eventIds.filter(
+              (eventId) => !operatorEventIds.has(eventId),
+            ).length
           if (drift > 0) {
             warnings.push(
-              `GC candidate drift: repository=${repositorySelection.eventIds.length} operator=${applyCandidates.length}`.slice(0, 512),
+              `GC candidate drift: repository=${repositorySelection.eventIds.length} operator=${applyCandidates.length}`.slice(
+                0,
+                512,
+              ),
             )
           }
         }
       } catch {
         // Inspection is advisory; privilegedCompact remains fail-closed.
       }
-      const archiveLines = applyCandidates.map((event) => stableJson(event)).slice(0, COMPACTION_APPLY_MAX_EVENTS)
+      const archiveLines = applyCandidates
+        .map((event) => stableJson(event))
+        .slice(0, COMPACTION_APPLY_MAX_EVENTS)
       const archiveHash = digest(archiveLines)
       // Full 64-hex (256-bit) digest in the filename: a 32-bit truncation
       // would let two distinct archived batches collide and a later apply
@@ -1270,7 +1507,8 @@ export class MemoryV2OperatorService {
       // interrupted apply: the derived payload/values exclude the wall-clock
       // archivedAt and instead pin the derivable max occurredAt of the batch.
       const archivedAt = applyCandidates.reduce(
-        (latest, event) => (event.occurredAt > latest ? event.occurredAt : latest),
+        (latest, event) =>
+          event.occurredAt > latest ? event.occurredAt : latest,
         '1970-01-01T00:00:00.000Z',
       )
       const payload = {
@@ -1278,7 +1516,11 @@ export class MemoryV2OperatorService {
         archivedEventIds,
         archivePath,
         archiveHash,
-        reason: `gc-eligibility ${COMPACTION_ELIGIBILITY_MODEL_VERSION} model=usefulness-v1 branches retracted=${applySelection.branchCounts.retracted} orphan=${applySelection.branchCounts.orphan} lowScore=${applySelection.branchCounts.lowScore}; olderThanDays=${request.olderThanDays}; maxEvents=${applyMaxEvents}; asOf=${asOfTurnWall}`.slice(0, 1000),
+        reason:
+          `gc-eligibility ${COMPACTION_ELIGIBILITY_MODEL_VERSION} model=usefulness-v1 branches retracted=${applySelection.branchCounts.retracted} orphan=${applySelection.branchCounts.orphan} lowScore=${applySelection.branchCounts.lowScore}; olderThanDays=${request.olderThanDays}; maxEvents=${applyMaxEvents}; asOf=${asOfTurnWall}`.slice(
+            0,
+            1000,
+          ),
         archivedAt,
       }
       const draft = MemoryEventDraftSchema.parse({
@@ -1300,10 +1542,13 @@ export class MemoryV2OperatorService {
           archivePath,
           archiveHash,
         })
-        const appliedWarnings = compactionWarnings(result.afterCount, result.afterBytes)
-        const mergedWarnings = [...warnings, ...appliedWarnings].filter(
-          (warning, index, all) => all.indexOf(warning) === index,
-        ).slice(0, MAX_COMPACTION_WARNINGS)
+        const appliedWarnings = compactionWarnings(
+          result.afterCount,
+          result.afterBytes,
+        )
+        const mergedWarnings = [...warnings, ...appliedWarnings]
+          .filter((warning, index, all) => all.indexOf(warning) === index)
+          .slice(0, MAX_COMPACTION_WARNINGS)
         return MemoryCompactionOutcomeSchema.parse({
           outcome: 'applied',
           archivedEventIds: result.archivedEventIds,
@@ -1320,7 +1565,10 @@ export class MemoryV2OperatorService {
         throw new ExpectedOperationFailure(failedError(error))
       }
     } catch (error) {
-      return MemoryCompactionOutcomeSchema.parse({ outcome: 'failed', error: failedError(error) })
+      return MemoryCompactionOutcomeSchema.parse({
+        outcome: 'failed',
+        error: failedError(error),
+      })
     }
   }
 }

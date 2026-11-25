@@ -43,6 +43,11 @@ const sortedByCanonicalJson = <Item>(items: readonly Item[]): Item[] =>
     compareCodePoints(canonicalJson(left), canonicalJson(right)),
   )
 
+const sortedByRanking = <Item extends { score: number }>(items: readonly Item[]): Item[] =>
+  [...items].sort((left, right) =>
+    right.score - left.score || compareCodePoints(canonicalJson(left), canonicalJson(right)),
+  )
+
 const reasons = (items: RankingReason[]): string =>
   sortedByCanonicalJson(items)
     .map(
@@ -234,7 +239,7 @@ export function compileMemoryV2Context(
   const categories: Array<{ label: string; entries: string[] }> = [
     {
       label: 'verifiedKnowledge',
-      entries: sortedByCanonicalJson(
+      entries: sortedByRanking(
         result.verifiedKnowledge.map((item) => ({
           ...item,
           verifiedEvidence: sortedByCanonicalJson(item.verifiedEvidence),
@@ -245,6 +250,13 @@ export function compileMemoryV2Context(
           [
             value('observationId', item.observation.observationId),
             value('verifiedAt', item.verifiedAt),
+            // Keep the complete claim/rationale ahead of potentially bulky
+            // supporting excerpts; metadata cannot erase the fact itself.
+            value('kind', item.observation.kind),
+            value('summary', item.observation.summary),
+            value('detail', item.observation.detail),
+            value('confidence', item.observation.confidence),
+            value('score', item.score),
             `selectors: ${sortedByCanonicalJson(item.verifiedEvidence.map((evidence) => evidence.selector)).map(selector).join(', ')}`,
             ...item.verifiedEvidence.flatMap((evidence) => {
               const record = evidence as {
@@ -261,11 +273,6 @@ export function compileMemoryV2Context(
                 value('verifiedAt', item.verifiedAt),
               ]
             }),
-            value('kind', item.observation.kind),
-            value('summary', item.observation.summary),
-            value('detail', item.observation.detail),
-            value('confidence', item.observation.confidence),
-            value('score', item.score),
             `reasons: ${reasons(item.reasons)}`,
           ],
           childMaxChars,
@@ -274,7 +281,7 @@ export function compileMemoryV2Context(
     },
     {
       label: 'reusableDiscovery',
-      entries: sortedByCanonicalJson(
+      entries: sortedByRanking(
         result.reusableDiscovery.map((item) => ({
           ...item,
           reasons: sortedByCanonicalJson(item.reasons),
@@ -297,7 +304,7 @@ export function compileMemoryV2Context(
     },
     {
       label: 'matchedTasks',
-      entries: sortedByCanonicalJson(
+      entries: sortedByRanking(
         result.matchedTasks.map((item) => ({
           ...item,
           reasons: sortedByCanonicalJson(item.reasons),
@@ -318,7 +325,7 @@ export function compileMemoryV2Context(
     },
     {
       label: 'rereadRequired',
-      entries: sortedByCanonicalJson(
+      entries: sortedByRanking(
         result.rereadRequired.map((item) => ({
           ...item,
           reasons: sortedByCanonicalJson(item.reasons),
@@ -339,7 +346,7 @@ export function compileMemoryV2Context(
     },
     {
       label: 'historicalContext',
-      entries: sortedByCanonicalJson(
+      entries: sortedByRanking(
         result.historicalContext.map((item) => ({
           ...item,
           reasons: sortedByCanonicalJson(item.reasons),

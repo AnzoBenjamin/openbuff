@@ -492,6 +492,24 @@ async function main() {
     mkdirSync(binDir, { recursive: true })
   }
 
+  // Native hosts package the shared SQLite service. Cross-target builds use
+  // the embedded versioned port unless an exact target sidecar is supplied.
+  const intelligenceName = targetInfo.platform === 'win32' ? 'openbuff-intelligence.exe' : 'openbuff-intelligence'
+  const nativeOverride = process.env.OPENBUFF_INTELLIGENCE_BINARY
+  const buildNative = targetInfo.platform !== 'win32' && targetInfo.platform === process.platform && targetInfo.arch === process.arch
+  if (nativeOverride || buildNative) {
+    if (!nativeOverride) runCommand('cargo', ['build', '--release', '--locked', '-p', 'openbuff-intelligence'], { cwd: join(repoRoot, 'rust'), env: process.env })
+    const nativeSource = nativeOverride ?? join(repoRoot, 'rust', 'target', 'release', intelligenceName)
+    const nativeDest = join(binDir, intelligenceName)
+    copyFileSync(nativeSource, nativeDest)
+    if (targetInfo.platform !== 'win32') chmodSync(nativeDest, 0o755)
+    writeFileSync(join(binDir, 'repository-intelligence-manifest.json'), JSON.stringify({ protocolVersion: 1, backend: 'rust-sqlite', file: intelligenceName,
+      sha256: createHash('sha256').update(readFileSync(nativeDest)).digest('hex'), platform: targetInfo.platform, arch: targetInfo.arch }, null, 2) + '\n')
+  } else {
+    rmSync(join(binDir, intelligenceName), { force: true })
+    writeFileSync(join(binDir, 'repository-intelligence-manifest.json'), JSON.stringify({ protocolVersion: 1, backend: 'embedded', platform: targetInfo.platform, arch: targetInfo.arch }) + '\n')
+  }
+
   // Generate bundled agents file before compiling
   log('Generating bundled agents...')
   runCommand(process.execPath, ['run', 'scripts/prebuild-agents.ts'], {

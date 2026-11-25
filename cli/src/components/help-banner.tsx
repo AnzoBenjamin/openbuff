@@ -10,6 +10,7 @@ import { useChatStore } from '../state/chat-store'
 import { Button } from './button'
 import { createTextDocument } from '../utils/output-document'
 import { useOutputReaderStore } from '../state/output-reader-store'
+import { formatCommandDirectory } from '../data/slash-commands'
 
 /** Help banner showing keyboard shortcuts and tips in an organized layout. */
 export const HelpBanner = ({ fileTree }: { fileTree?: FileTreeNode[] }) => {
@@ -93,6 +94,21 @@ export const HelpBanner = ({ fileTree }: { fileTree?: FileTreeNode[] }) => {
           }
         >
           <text fg={theme.link}>All shortcuts</text>
+        </Button>
+        <Button
+          onClick={() =>
+            useOutputReaderStore.getState().open({
+              document: createTextDocument({
+                id: 'command-directory',
+                title: 'Command directory',
+                text: formatCommandDirectory(),
+                notice:
+                  'Local command reference · Back returns to the composer',
+              }),
+            })
+          }
+        >
+          <text fg={theme.link}>All commands</text>
         </Button>
       </box>
     </BottomBanner>

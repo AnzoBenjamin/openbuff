@@ -1,7 +1,11 @@
 import * as fs from 'fs'
 import * as path from 'path'
 
-import { getLanguageConfig, hasLanguageConfiguration } from './languages'
+import {
+  getLanguageConfig,
+  getLoadedParserExtractionFingerprint,
+  hasLanguageConfiguration,
+} from './languages'
 
 import { importSpecifiersFromAstCaptures } from './import-sites'
 
@@ -26,46 +30,150 @@ const IGNORE_TOKENS = ['__init__', '__post_init__', '__call__', 'constructor']
 
 const IGNORED_TOKENS_BY_LANGUAGE_FAMILY: Record<string, ReadonlySet<string>> = {
   typescript: new Set([
-    'console', 'window', 'document', 'JSON', 'Promise', 'Math', 'Object',
-    'Array', 'String', 'Number', 'Boolean', 'Error', 'Symbol', 'Map', 'Set',
-    'globalThis', 'process', 'require', 'module', 'exports',
+    'console',
+    'window',
+    'document',
+    'JSON',
+    'Promise',
+    'Math',
+    'Object',
+    'Array',
+    'String',
+    'Number',
+    'Boolean',
+    'Error',
+    'Symbol',
+    'Map',
+    'Set',
+    'globalThis',
+    'process',
+    'require',
+    'module',
+    'exports',
   ]),
   javascript: new Set([
-    'console', 'window', 'document', 'JSON', 'Promise', 'Math', 'Object',
-    'Array', 'String', 'Number', 'Boolean', 'Error', 'Symbol', 'Map', 'Set',
-    'globalThis', 'process', 'require', 'module', 'exports',
+    'console',
+    'window',
+    'document',
+    'JSON',
+    'Promise',
+    'Math',
+    'Object',
+    'Array',
+    'String',
+    'Number',
+    'Boolean',
+    'Error',
+    'Symbol',
+    'Map',
+    'Set',
+    'globalThis',
+    'process',
+    'require',
+    'module',
+    'exports',
   ]),
   c: new Set([
-    'printf', 'scanf', 'malloc', 'free', 'memcpy', 'memset', 'sizeof', 'NULL',
+    'printf',
+    'scanf',
+    'malloc',
+    'free',
+    'memcpy',
+    'memset',
+    'sizeof',
+    'NULL',
     'std',
   ]),
   cpp: new Set([
-    'printf', 'scanf', 'malloc', 'free', 'memcpy', 'memset', 'sizeof', 'NULL',
-    'std', 'cout', 'cin', 'endl',
+    'printf',
+    'scanf',
+    'malloc',
+    'free',
+    'memcpy',
+    'memset',
+    'sizeof',
+    'NULL',
+    'std',
+    'cout',
+    'cin',
+    'endl',
   ]),
   kotlin: new Set([
-    'System', 'String', 'Integer', 'Boolean', 'Exception', 'Override', 'this',
+    'System',
+    'String',
+    'Integer',
+    'Boolean',
+    'Exception',
+    'Override',
+    'this',
     'super',
   ]),
   '.py': new Set([
-    'self', 'cls', 'None', 'True', 'False', 'print', 'len', 'range', 'str',
-    'int', 'float', 'dict', 'list', 'set', 'tuple', 'isinstance',
+    'self',
+    'cls',
+    'None',
+    'True',
+    'False',
+    'print',
+    'len',
+    'range',
+    'str',
+    'int',
+    'float',
+    'dict',
+    'list',
+    'set',
+    'tuple',
+    'isinstance',
   ]),
   '.go': new Set([
-    'err', 'fmt', 'nil', 'panic', 'recover', 'defer', 'make', 'new', 'len',
-    'cap', 'append', 'copy',
+    'err',
+    'fmt',
+    'nil',
+    'panic',
+    'recover',
+    'defer',
+    'make',
+    'new',
+    'len',
+    'cap',
+    'append',
+    'copy',
   ]),
   '.rs': new Set([
-    'self', 'Self', 'crate', 'Some', 'None', 'Ok', 'Err', 'println', 'vec',
+    'self',
+    'Self',
+    'crate',
+    'Some',
+    'None',
+    'Ok',
+    'Err',
+    'println',
+    'vec',
     'stringify',
   ]),
   '.rb': new Set([
-    'puts', 'require', 'require_relative', 'attr_accessor', 'attr_reader',
-    'attr_writer', 'self', 'nil', 'proc', 'lambda',
+    'puts',
+    'require',
+    'require_relative',
+    'attr_accessor',
+    'attr_reader',
+    'attr_writer',
+    'self',
+    'nil',
+    'proc',
+    'lambda',
   ]),
   '.java': new Set([
-    'System', 'String', 'Integer', 'Boolean', 'Exception', 'RuntimeException',
-    'Override', 'this', 'super',
+    'System',
+    'String',
+    'Integer',
+    'Boolean',
+    'Exception',
+    'RuntimeException',
+    'Override',
+    'this',
+    'super',
   ]),
 }
 
@@ -345,6 +453,8 @@ export interface ParsedFileTokens {
    * to a uniform count of 1 when absent.
    */
   identifierCounts?: Record<string, number>
+  /** Grammar/query/extractor identity captured before parsing this source. */
+  extractionFingerprint?: string
 }
 
 export async function getFileTokenScores(
@@ -443,10 +553,16 @@ export async function getFileTokenScores(
         continue
       }
 
+      const extractionFingerprint = getLoadedParserExtractionFingerprint(
+        fullPath,
+        languageConfig,
+      )
       const result = await parseTokensForScoring({
         filePath,
         fullPath,
-        languageConfig,
+        // Keep this file paired with the parser/query whose identity was
+        // captured, even if another parse reloads changed assets while reading.
+        languageConfig: { ...languageConfig },
         readFile,
         maxFileBytes: budget.maxFileBytes,
         remainingBytes: budget.maxTotalBytes - totalParsedBytes,
@@ -470,6 +586,7 @@ export async function getFileTokenScores(
         numLines: result.numLines,
         imports: result.imports,
         identifierCounts: result.identifierCounts,
+        extractionFingerprint,
       }
     }
 

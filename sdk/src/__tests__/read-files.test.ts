@@ -1,4 +1,6 @@
 import * as projectFileTree from '@codebuff/common/project-file-tree'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { createNodeError } from '@codebuff/common/testing/errors'
 import {
   configureExternalReadRoots,
@@ -32,6 +34,7 @@ import {
   getFilesStructuredFromOverride,
 } from '../tools/read-files'
 import { editTransactionParams } from '@codebuff/common/tools/params/tool/edit-transaction'
+import { createNodeFileSystem } from '../tools/node-filesystem'
 
 import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { PathLike } from 'node:fs'
@@ -1556,5 +1559,96 @@ describe('getFilesStructured — allowlisted external read roots', () => {
       status: 'error',
       error: { code: 'blocked' },
     })
+  })
+})
+
+describe('read-files text encodings and notebooks', () => {
+  test('decodes BOM-marked UTF-16LE and UTF-16BE as display-only text', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'openbuff-utf16-read-'))
+    try {
+      const littleEndianText = Buffer.from('hello\nworld\n', 'utf16le')
+      const bigEndianText = Buffer.from('wide\ntext\n', 'utf16le')
+      for (let index = 0; index < bigEndianText.length; index += 2) {
+        const low = bigEndianText[index]!
+        bigEndianText[index] = bigEndianText[index + 1]!
+        bigEndianText[index + 1] = low
+      }
+      writeFileSync(
+        path.join(root, 'little.txt'),
+        Buffer.concat([Buffer.from([0xff, 0xfe]), littleEndianText]),
+      )
+      writeFileSync(
+        path.join(root, 'big.txt'),
+        Buffer.concat([Buffer.from([0xfe, 0xff]), bigEndianText]),
+      )
+
+      const result = await getFilesStructured({
+        filePaths: ['little.txt', 'big.txt'],
+        cwd: root,
+        fs: createNodeFileSystem(),
+        capabilityIssuer: { projectId: root, runId: 'utf16-read' },
+      })
+      const little = result.results[0] as {
+        status: string
+        content?: string
+        metadataComplete?: boolean
+        editAnchor?: unknown
+      }
+      const big = result.results[1] as typeof little
+
+      expect(little.status).toBe('ok')
+      expect(little.content).toBe('hello\nworld\n')
+      expect(little.metadataComplete).toBe(false)
+      expect(little.editAnchor).toBeUndefined()
+      expect(big.status).toBe('ok')
+      expect(big.content).toBe('wide\ntext\n')
+      expect(big.editAnchor).toBeUndefined()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('renders notebook source cells with indices and omits stored outputs', async () => {
+    const notebookPath = '/project/notes.ipynb'
+    const notebook = JSON.stringify({
+      cells: [
+        { cell_type: 'markdown', source: ['# Notes\n', 'Read first.'] },
+        {
+          cell_type: 'code',
+          execution_count: 7,
+          source: ['print("visible source")'],
+          outputs: [
+            { data: { 'image/png': ['PRIVATE_BASE64_OUTPUT'] } },
+          ],
+        },
+      ],
+    })
+    const result = await getFilesStructured({
+      filePaths: ['notes.ipynb'],
+      cwd: '/project',
+      fs: createMockFs({
+        boundedReads: false,
+        files: { [notebookPath]: { content: notebook } },
+      }),
+      capabilityIssuer: { projectId: '/project', runId: 'notebook-read' },
+    })
+    const item = result.results[0] as {
+      status: string
+      content?: string
+      complete?: boolean
+      metadataComplete?: boolean
+      editAnchor?: unknown
+    }
+
+    expect(item.status).toBe('ok')
+    expect(item.content).toContain('[Notebook cell 1/2: markdown]')
+    expect(item.content).toContain('# Notes\nRead first.')
+    expect(item.content).toContain('[Notebook cell 2/2: code]')
+    expect(item.content).toContain('print("visible source")')
+    expect(item.content).toContain('[cell outputs omitted]')
+    expect(item.content).not.toContain('PRIVATE_BASE64_OUTPUT')
+    expect(item.complete).toBe(true)
+    expect(item.metadataComplete).toBe(false)
+    expect(item.editAnchor).toBeUndefined()
   })
 })

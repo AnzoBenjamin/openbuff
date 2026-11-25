@@ -510,6 +510,28 @@ export class AcpRemoteBackend implements ClientBackend {
     if (this.closed) {
       return this.buildErrorRunState('The ACP-remote backend is closed.')
     }
+    if (options.outputSchema !== undefined) {
+      const message =
+        'The ACP-remote backend cannot negotiate a per-run output schema. Use the in-process backend or select a structured-output agent on the server.'
+      return this.buildErrorRunState(message, {
+        runOutcome: {
+          termination: 'failed',
+          cause: { code: 'remote_output_schema_unavailable', message },
+        },
+        taskAcceptance: { status: 'unknown' },
+      })
+    }
+    if (options.model !== undefined) {
+      const message =
+        'The ACP-remote backend cannot negotiate a per-run model override. Select the model on the server or use the in-process backend.'
+      return this.buildErrorRunState(message, {
+        runOutcome: {
+          termination: 'failed',
+          cause: { code: 'remote_model_override_unavailable', message },
+        },
+        taskAcceptance: { status: 'unknown' },
+      })
+    }
     const cwd = options.cwd ?? this.cwd ?? process.cwd()
     this.cwd = cwd
     let runState: ActiveRun | undefined

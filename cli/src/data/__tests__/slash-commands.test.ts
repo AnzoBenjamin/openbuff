@@ -150,11 +150,8 @@ describe('slash-commands module', () => {
     })
 
     test('/image gave up its attach alias so /attach reaches the new command', () => {
-      expect(
-        SLASH_COMMANDS.filter((cmd) => cmd.aliases?.includes('attach')).map(
-          (cmd) => cmd.id,
-        ),
-      ).toEqual(['attach'])
+      expect(SLASH_COMMANDS.find((cmd) => cmd.id === 'attach')).toBeDefined()
+      expect(SLASH_COMMANDS.find((cmd) => cmd.id === 'image')?.aliases).not.toContain('attach')
     })
 
     test('registers /undo-turn and /restore for autocomplete and the palette', () => {

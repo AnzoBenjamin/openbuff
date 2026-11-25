@@ -387,12 +387,13 @@ selector returns one result item with a contiguous `requestIndex` and its own
 `editAnchor`:
 
 - `windows: [{ path, windowSize?, window? }]` splits the file into complete
-  contiguous line windows (default `windowSize` 400). Omit `window` to get the
-  manifest (`totalLines`, `windowSize`, `windowCount`) plus the first window.
+  contiguous line windows (default `windowSize` 400, maximum 5,000). Omit
+  `window` to get the manifest (`totalLines`, `windowSize`, `windowCount`) plus
+  the first window.
 - `around: [{ path, match, occurrence?, contextLines? }]` finds the 1-indexed
   `occurrence` (default 1) of the exact literal `match` and returns a complete
-  block covering it plus `contextLines` (default 40) on each side, clamped at
-  file boundaries. It is robust to line-number drift.
+  block covering it plus `contextLines` (default 40, maximum 2,000) on each
+  side, clamped at file boundaries. It is robust to line-number drift.
 - `symbol: { path, name, occurrence? }` pulls the Nth (default 1) top-level
   symbol with that name, mirroring `rewrite_symbol`'s occurrence semantics; a
   batch `symbols: [{ path, name, occurrence? }]` selector pulls several in one
@@ -416,6 +417,11 @@ unchanged. `occurrence` is mutually exclusive with `startLine`/`endLine`, so a
 call provides either explicit line bounds or an occurrence target, never both.
 This applies to both the standalone `replace_range` tool and the
 `replace_range` edit kind inside `edit_transaction`.
+
+Each returned block's `content` and exact `sourceContent` is independently
+capped at 10 MiB. Whole-file result content is also capped at 10 MiB; oversized
+content is omitted with an explicit marker rather than silently returned as
+complete.
 
 ## Explicit elision markers
 

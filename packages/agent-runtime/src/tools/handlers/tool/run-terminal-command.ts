@@ -42,10 +42,10 @@ export const handleRunTerminalCommand = (async ({
     input: {
       command: toolCall.input.command,
       mode: 'assistant',
-      // The agent's declared profile, never model input. Plan lineage is
-      // clamped to read-only (N03). The SDK enforces read-only and
-      // workspace-write declarations as an upper bound on the host profile;
-      // see sdk/src/tools/terminal-profile-bound.ts for which profiles bind.
+      // The template's declaration, never model input. The SDK binds plan
+      // terminal actions to a native-only read-only request and refuses them
+      // without verified OS enforcement. Non-plan declarations retain their
+      // existing lexical ceilings; see sdk/src/tools/terminal-profile-bound.ts.
       permission_profile: permissionProfile,
       allowed_paths: Array.isArray(spawnParams?.owned_paths)
         ? spawnParams.owned_paths.filter(
@@ -97,7 +97,7 @@ export function resolveTerminalPermissionProfile(
 }
 
 /**
- * Plan-lineage post-processing: a policy denial gets the typed
+ * Plan-lineage post-processing: policy/enforcement refusals get the typed
  * `plan_mode_read_only` code, and a started background job is recorded so the
  * lineage may later kill it.
  */
@@ -114,7 +114,15 @@ function annotatePlanLineageOutput(params: {
     if (typeof value.jobId === 'string') {
       recordPlanLineageJob({ clientSessionId, agentState, jobId: value.jobId })
     }
-    if (value.permissionDenied !== true) return part
+    const refusal = value.executionRefusal as { reason?: string } | undefined
+    if (
+      value.permissionDenied !== true &&
+      !['denied', 'unavailable', 'invalid-context'].includes(
+        refusal?.reason ?? '',
+      )
+    )
+      return part
+    if (value.errorCode === PLAN_MODE_READ_ONLY_ERROR_CODE) return part
     const message =
       typeof value.errorMessage === 'string' ? value.errorMessage : ''
     return {
@@ -122,7 +130,8 @@ function annotatePlanLineageOutput(params: {
       value: {
         ...value,
         errorCode: PLAN_MODE_READ_ONLY_ERROR_CODE,
-        errorMessage: `${PLAN_MODE_READ_ONLY_ERROR_CODE}: plan mode runs terminal commands read-only. ${message}`.trim(),
+        errorMessage:
+          `${PLAN_MODE_READ_ONLY_ERROR_CODE}: plan mode runs terminal commands read-only. ${message}`.trim(),
       },
     }
   }) as CodebuffToolOutput<ToolName>

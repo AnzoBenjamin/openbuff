@@ -6,7 +6,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
 
-import { captureRootDeadline } from '@codebuff/common/util/execution-context'
+import {
+  captureRootDeadline,
+  readOnlyPlanExecutionProfile,
+} from '@codebuff/common/util/execution-context'
 import { OpenbuffClient } from '../client'
 import { loadHostConfigSnapshot, nodeConfigReadFs } from '../host-config'
 import { runTerminalCommand } from '../tools/run-terminal-command'
@@ -264,7 +267,9 @@ describe('SDK native host selection and capture', () => {
       reason: 'unavailable',
     })
     expect(approvals).toBe(0)
-    expect(host.events.some((event) => event.phase === 'dispatched')).toBe(false)
+    expect(host.events.some((event) => event.phase === 'dispatched')).toBe(
+      false,
+    )
   })
 
   test('explicit fallback selects portable when native is absent', async () => {
@@ -582,6 +587,73 @@ describe('SDK native host selection and capture', () => {
     ).toMatchObject({ ok: false, reason: 'unavailable' })
   })
 
+  for (const missing of [
+    'filesystem-isolation',
+    'network-isolation',
+    'process-tree-containment',
+  ] as const)
+    test(`plan native preparation cannot commit target entry without ${missing}`, async () => {
+      const f = await fixture()
+      const requested = readOnlyPlanExecutionProfile(
+        nativeProfile({
+          policy: 'full-access',
+          optional: ['network-isolation'],
+        }),
+      )
+      const host = executionValue(
+        f.host({
+          profile: requested,
+          nativeExecution: { ...f.native, network: 'inherit' },
+        }).result,
+      )
+      const context = executionValue(host.directOperation()).executionContext
+      const launch = executionValue(prepareNodeLaunch(target(context)))
+      const admitted = executionValue(await admitNodeLaunch(launch))
+      const dispatched = launch.dispatchNow(
+        admitted.permit,
+        (_input, observer) => observer,
+      )
+      if (!dispatched.ok) throw new Error(dispatched.cause)
+      const observer = dispatched.value.handle
+      const identity = {
+        planDigest: 'a'.repeat(64),
+        nonce: `missing-${missing}`,
+        artifactSha256: f.native.installation.artifact.sha256,
+      }
+      executionValue(
+        observer.nativeTransportObserved({
+          ...identity,
+          source: 'native-monitor-spawn',
+          pid: 42_424_322,
+        }),
+      )
+      expect(
+        observer.nativePrepared({
+          ...identity,
+          source: 'native-adapter-ready',
+          scopeId: `missing-${missing}`,
+          enforced: requested.required
+            .filter((capability) => capability !== missing)
+            .map((capability) => ({
+              capability,
+              status: 'enforced' as const,
+              evidenceId: `synthetic-${capability}`,
+            })),
+        }),
+      ).toMatchObject({ ok: false, reason: 'unavailable' })
+      expect(observer.commitNativeTargetEntry(identity)).toMatchObject({
+        ok: false,
+      })
+      expect(
+        host.events.some(
+          (event) =>
+            event.phase === 'native-entry-committed' ||
+            event.phase === 'spawn-observed',
+        ),
+      ).toBe(false)
+      expect(launch.facts().profile.active).toBeNull()
+    })
+
   test('direct host entrypoint preserves native calibration clock and explicit installation', async () => {
     const f = await fixture()
     const controller = new AbortController()
@@ -610,7 +682,7 @@ describe('SDK native host selection and capture', () => {
 })
 
 describe('SDK native dispatch and resource cleanup ownership', () => {
-  test('actual SDK run returns unknown native cleanup without a logger and excludes its live transferred job', async () => {
+  test('actual SDK unavailable run retains unknown cleanup and independent live run excludes its transferred job', async () => {
     const f = await fixture()
     const runtime = await createNativeRunCleanupFixture(f.clock)
     const config = path.join(f.root, 'run-config.json')
@@ -643,22 +715,9 @@ describe('SDK native dispatch and resource cleanup ownership', () => {
             timeout_seconds: -1,
           },
         }
-        const transferred = yield {
-          toolName: 'run_terminal_command',
-          input: {
-            command: 'printf native-live-fixture',
-            process_type: 'BACKGROUND',
-            detach: true,
-            timeout_seconds: -1,
-          },
-        }
         yield {
           toolName: 'set_output',
-          input: {
-            failed: failed.toolResult,
-            transferred: transferred.toolResult,
-            fixtureCompleted: true,
-          },
+          input: { failed: failed.toolResult, fixtureCompleted: true },
         }
       },
     }
@@ -670,7 +729,7 @@ describe('SDK native dispatch and resource cleanup ownership', () => {
     const network = spyOn(globalThis, 'fetch').mockImplementation(
       Object.assign(async () => forbidNetwork(), { preconnect: forbidNetwork }),
     )
-    const journal: JournalEvent[] = []
+    const journal: Array<{ runId: string; event: JournalEvent }> = []
     let jobId: string | undefined
     let projectionReceipt: Record<string, unknown> | undefined
     try {
@@ -697,14 +756,95 @@ describe('SDK native dispatch and resource cleanup ownership', () => {
         harnessStateDir: path.join(f.root, 'harness'),
         handleEvent: () => {},
         journalWriter: {
-          append: (_runId, event) => journal.push(structuredClone(event)),
+          append: (runId, event) =>
+            journal.push({ runId, event: structuredClone(event) }),
         },
       })
       expect(client.options.logger).toBeUndefined()
-      const result = await client.run({
+      const failedResult = await client.run({
         agent,
         prompt: 'Exercise retained native cleanup and session transfer',
       })
+      const failedTerminalJournal = journal.filter(
+        ({ event }) => (event.payload as { terminal?: boolean }).terminal,
+      )
+      expect(failedResult.output).toMatchObject({
+        type: 'error',
+        message: 'DI-only synthetic native cleanup remains unconfirmed',
+      })
+      expect(failedResult.runOutcome).toEqual({
+        termination: 'failed',
+        cause: {
+          code: 'execution_unavailable',
+          message: 'DI-only synthetic native cleanup remains unconfirmed',
+        },
+      })
+      expect(failedTerminalJournal).toHaveLength(1)
+      expect(
+        (failedTerminalJournal[0].event.payload as { runOutcome?: unknown })
+          .runOutcome,
+      ).toEqual(failedResult.runOutcome)
+      expect(
+        runtime.calls.some(
+          (call) =>
+            call.entered &&
+            call.targetArgv?.includes('printf native-failed-fixture'),
+        ),
+      ).toBe(false)
+      const failedCall = runtime.calls.find(
+        (call) =>
+          !call.entered &&
+          call.targetArgv?.includes('printf native-failed-fixture'),
+      )
+      expect(failedCall).toBeDefined()
+      expect(
+        failedResult.actionOutcomes?.some(
+          (outcome) =>
+            outcome.toolName === 'run_terminal_command' &&
+            outcome.outcome === 'refused' &&
+            outcome.cause?.code === 'execution_unavailable',
+        ),
+      ).toBe(true)
+      expect(
+        failedResult.executionCleanup?.some(
+          (cleanup) =>
+            cleanup.launchFacts?.launchId === failedCall!.launchId &&
+            cleanup.status === 'unknown' &&
+            cleanup.cleanupAuthorityRetained,
+        ),
+      ).toBe(true)
+      const liveAgent: AgentDefinition = {
+        ...agent,
+        id: 'b21-native-live-run-cleanup',
+        handleSteps: function* () {
+          const transferred = yield {
+            toolName: 'run_terminal_command',
+            input: {
+              command: 'printf native-live-fixture',
+              process_type: 'BACKGROUND',
+              detach: true,
+              timeout_seconds: -1,
+            },
+          }
+          yield {
+            toolName: 'set_output',
+            input: {
+              transferred: transferred.toolResult,
+              fixtureCompleted: true,
+            },
+          }
+        },
+      }
+      const liveJournalStart = journal.length
+      const result = await client.run({
+        agent: liveAgent,
+        prompt: 'Exercise independent native session transfer',
+      })
+      const liveTerminalJournal = journal
+        .slice(liveJournalStart)
+        .filter(
+          ({ event }) => (event.payload as { terminal?: boolean }).terminal,
+        )
       projectionReceipt = {
         fixtureKind: 'actual-SDK-run-with-synthetic-native-reports',
         output: result.output,
@@ -712,30 +852,26 @@ describe('SDK native dispatch and resource cleanup ownership', () => {
         taskAcceptance: result.taskAcceptance,
         actionOutcomes: result.actionOutcomes,
         executionCleanup: result.executionCleanup,
-        terminalJournal: journal.filter(
-          (event) => (event.payload as { terminal?: boolean }).terminal,
-        ),
+        terminalJournal: liveTerminalJournal,
+        failedRun: {
+          output: failedResult.output,
+          runOutcome: failedResult.runOutcome,
+          taskAcceptance: failedResult.taskAcceptance,
+          actionOutcomes: failedResult.actionOutcomes,
+          executionCleanup: failedResult.executionCleanup,
+          terminalJournal: failedTerminalJournal,
+        },
         nativeOSAcceptance: false,
       }
       expect(result.output.type).toBe('structuredOutput')
       if (result.output.type !== 'structuredOutput' || !result.output.value)
         throw new Error('Programmatic fixture did not complete')
       const values = result.output.value
-      const failed = values.failed as Array<{
-        type: string
-        value: Record<string, unknown>
-      }>
       const transferred = values.transferred as Array<{
         type: string
         value: Record<string, unknown>
       }>
       expect(values.fixtureCompleted).toBe(true)
-      expect(failed[0].value).toMatchObject({
-        executionRefusal: { reason: 'unavailable' },
-      })
-      expect(
-        (failed[0].value.executionRefusal as { cause: string }).cause,
-      ).toContain('DI-only synthetic native cleanup remains unconfirmed')
       expect(transferred[0].value).toMatchObject({
         backgroundProcessStatus: 'running',
         detached: true,
@@ -747,48 +883,42 @@ describe('SDK native dispatch and resource cleanup ownership', () => {
       expect(live.input.resourceSignal.aborted).toBe(false)
       expect(live.scope.currentCleanup()).toBeUndefined()
       expect(live.facts().profile.active?.backend).toBe('native-exec')
-      const failedCall = runtime.calls.find(
-        (call) =>
-          !call.entered &&
-          call.targetArgv?.includes('printf native-failed-fixture'),
-      )
-      expect(failedCall).toBeDefined()
       expect(
-        result.executionCleanup?.some(
-          (cleanup) =>
-            cleanup.launchFacts?.launchId === failedCall!.launchId &&
-            cleanup.status === 'unknown' &&
-            cleanup.cleanupAuthorityRetained,
-        ),
-      ).toBe(true)
-      expect(
-        result.executionCleanup?.every(
+        (result.executionCleanup ?? []).every(
           (cleanup) => cleanup.scopeId !== live.scope.scopeId,
         ),
       ).toBe(true)
-      expect(Object.isFrozen(result.executionCleanup)).toBe(true)
+      expect(
+        result.executionCleanup === undefined ||
+          Object.isFrozen(result.executionCleanup),
+      ).toBe(true)
+      expect(Object.isFrozen(failedResult.executionCleanup)).toBe(true)
       expect(result.runOutcome).toEqual({ termination: 'completed' })
+      expect(liveTerminalJournal).toHaveLength(1)
+      const failedRunId = failedTerminalJournal[0].runId
+      const liveRunId = liveTerminalJournal[0].runId
+      expect(failedRunId).not.toBe(liveRunId)
+      expect(failedResult.actionOutcomes?.length).toBeGreaterThan(0)
       expect(
-        journal.some(
-          (event) => (event.payload as { terminal?: boolean }).terminal,
+        failedResult.actionOutcomes?.every(
+          (outcome) => outcome.runId === failedRunId,
         ),
       ).toBe(true)
+      expect(result.actionOutcomes?.length).toBeGreaterThan(0)
       expect(
-        (
-          journal.find(
-            (event) => (event.payload as { terminal?: boolean }).terminal,
-          )!.payload as { runOutcome?: unknown }
-        ).runOutcome,
+        result.actionOutcomes?.every((outcome) => outcome.runId === liveRunId),
+      ).toBe(true)
+      expect(
+        (liveTerminalJournal[0].event.payload as { runOutcome?: unknown })
+          .runOutcome,
       ).toEqual(result.runOutcome)
-      expect(
-        result.actionOutcomes?.some(
-          (outcome) =>
-            outcome.toolName === 'run_terminal_command' &&
-            outcome.outcome !== 'succeeded',
-        ),
-      ).toBe(true)
-      expect(runtime.calls.filter((call) => call.entered)).toHaveLength(1)
-      const liveCall = runtime.calls.find((call) => call.entered)!
+      const liveCalls = runtime.calls.filter(
+        (call) =>
+          call.entered &&
+          call.targetArgv?.includes('printf native-live-fixture'),
+      )
+      expect(liveCalls).toHaveLength(1)
+      const liveCall = liveCalls[0]!
       expect(liveCall.reports.map((frame) => frame.type)).toEqual([
         'initialized',
         'prepared',
@@ -837,11 +967,9 @@ describe('SDK native dispatch and resource cleanup ownership', () => {
         waitStatusSource: 'not-observed',
         cleanup: { complete: false },
       })
-      expect(
-        runtime.calls
-          .find((call) => call.entered)
-          ?.commands.some((frame) => frame.type === 'stop'),
-      ).toBe(false)
+      expect(failedCall!.commands.some((frame) => frame.type === 'stop')).toBe(
+        false,
+      )
       expect(runtime.identityChild.exitCode).toBeNull()
       expect(networkAttempts).toBe(0)
       expect(network.mock.calls).toHaveLength(0)
@@ -853,7 +981,11 @@ describe('SDK native dispatch and resource cleanup ownership', () => {
       expect(identityCleanup.closedBeforeFixtureDisposal).toBe(false)
       expect(identityCleanup.nativeTargetExecuted).toBe(false)
       const liveFinal = runtime.calls
-        .find((call) => call.entered)
+        .find(
+          (call) =>
+            call.entered &&
+            call.targetArgv?.includes('printf native-live-fixture'),
+        )
         ?.reports.find((frame) => frame.type === 'final')
       // The fixture reports a valid private tuple without inventing death proof.
       if (liveFinal) {

@@ -17,6 +17,9 @@ import filePicker from './file-explorer/file-picker'
 import globMatcher from './file-explorer/glob-matcher'
 import { createGeneralAgent } from './general-agent/general-agent'
 import librarian from './librarian/librarian'
+import knowledgeRetriever from './memory/knowledge-retriever'
+import knowledgeReviewer from './memory/knowledge-reviewer'
+import memoryManager from './memory/memory-manager'
 import researcherDocs from './researcher/researcher-docs'
 import researcherWeb from './researcher/researcher-web'
 import codeReviewer from './reviewer/code-reviewer'
@@ -94,17 +97,23 @@ const HARNESS_STATE_TOOLS = ['git_status'] as const
 describe('agent tool reachability', () => {
   for (const mode of ['default', 'fast'] as const) {
     test(`base2 (${mode}) exposes its intended read/mutation surface`, () => {
-      // Every non-core tier is unlocked by default, so the static list already
-      // IS the full mode-resolved surface (see
-      // agents/__tests__/base2-progressive-tool-disclosure.test.ts).
+      // Default base2 is core-only; the mode-resolved full surface remains as
+      // a private ceiling for tool_load.
       const definition = createBase2(mode)
-      const tools = definition.toolNames ?? []
+      const tools = getEffectiveAgentToolNames(definition, {
+        unlockedToolTiers: [],
+      })
       const programmaticTools = definition.programmaticToolNames ?? []
       for (const tool of STRUCTURAL_READ_TOOLS) {
         expect(tools).toContain(tool)
       }
       expect(tools).toContain('read_files')
-      expect(tools).toContain('edit_transaction')
+      expect(tools).toContain('tool_search')
+      expect(tools).toContain('tool_load')
+      expect(tools).not.toContain('edit_transaction')
+      expect(definition.programmaticConfig?.fullToolSurface).toContain(
+        'edit_transaction',
+      )
       for (const tool of LEGACY_DIRECT_EDIT_TOOLS)
         expect(tools).not.toContain(tool)
       for (const tool of PROPOSAL_TOOLS) {
@@ -117,21 +126,32 @@ describe('agent tool reachability', () => {
   }
 
   test('execute-plan exposes direct execution without proposal indirection', () => {
-    const tools = createBase2('default', { executePlan: true }).toolNames ?? []
-    expect(tools).toContain('edit_transaction')
+    const tools = getEffectiveAgentToolNames(
+      createBase2('default', { executePlan: true }),
+      { unlockedToolTiers: [] },
+    )
+    expect(tools).toContain('tool_load')
+    expect(tools).not.toContain('edit_transaction')
     for (const tool of LEGACY_DIRECT_EDIT_TOOLS)
       expect(tools).not.toContain(tool)
-    expect(tools).toContain('run_terminal_command')
-    expect(tools).toContain('run_targeted_validation')
-    expect(tools).toContain('get_change_review_bundle')
+    const fullSurface =
+      createBase2('default', {
+        executePlan: true,
+        progressiveToolDisclosure: false,
+      }).toolNames ?? []
+    expect(fullSurface).toContain('edit_transaction')
+    expect(fullSurface).toContain('run_terminal_command')
+    expect(fullSurface).toContain('run_targeted_validation')
+    expect(fullSurface).toContain('get_change_review_bundle')
     for (const tool of PROPOSAL_TOOLS) expect(tools).not.toContain(tool)
   })
 
   test('plan-only excludes project execution and proposal actions', () => {
-    // Plan mode relies on MODE gates, not tier gates: every non-core tier is
-    // unlocked by default, so these tools stay absent purely because of planOnly.
+    // Plan artifacts remain static; implementation mutations are filtered.
     const tools = createBase2('default', { planOnly: true }).toolNames ?? []
     expect(tools).not.toContain('edit_transaction')
+    expect(tools).toContain('create_plan')
+    expect(tools).toContain('update_plan_status')
     for (const tool of LEGACY_DIRECT_EDIT_TOOLS)
       expect(tools).not.toContain(tool)
     expect(tools).not.toContain('run_terminal_command')
@@ -161,6 +181,9 @@ describe('agent tool reachability', () => {
     'security-reviewer': securityReviewer,
     debugger: debuggerAgent,
     librarian,
+    'knowledge-retriever': knowledgeRetriever,
+    'knowledge-reviewer': knowledgeReviewer,
+    'memory-manager': memoryManager,
     synthesizer,
     architect,
     'product-reviewer': productReviewer,

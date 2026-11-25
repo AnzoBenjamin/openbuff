@@ -40,3 +40,30 @@ Passing scratch hosts are removed only after all consumer and stability oracles.
 This evidence gives scoped packed Node native consumption credit. Authored
 negative controls, installed CLI, host-native CI, other platforms and independent
 whole-card composition remain separate B21 obligations; `accepted` stays false.
+
+For a bounded local-current behavior check when strict candidate and independent
+I2 receipts are unavailable, use the existing SDK package snapshot and release
+binary explicitly:
+
+```sh
+/home/ben/.local/share/mise/installs/node/26/bin/node sdk/scripts/fixtures/b21-package-consumers/run-installed.mjs \
+  --local-current \
+  --sdk-package docs/execution/body-roadmap/evidence/B21/continuation-20261124-local-verification-r1/sdk-build \
+  --native-binary rust/target/release/openbuff-native \
+  --bwrap /usr/bin/bwrap \
+  --evidence-dir docs/execution/body-roadmap/evidence/B21/continuation-20261124-local-current-r1/packed-installed-consumer-r3
+```
+
+Local-current mode is mutually exclusive with strict admission flags. It hashes
+the SDK package manifest, shipped documentation and full `dist/` payload, plus
+the native artifact and bwrap, before and after the run. It packs from that
+package snapshot with lifecycle scripts disabled, and
+copies the already-installed third-party dependencies into an evidence-owned
+host inside the checkout. `HOME` is inherited unchanged; only credential-free
+runtime variables and an evidence-owned `TMPDIR` are passed to consumers. The
+CJS/ESM guards allow checkout paths only beneath that exact host and still
+reject workspace aliases and symlink-resolved imports elsewhere in the tree.
+The SDK source/build relationship is not re-proven by this local inventory;
+this is not source-bound build provenance, a fresh registry install, I2
+approval or whole-card acceptance; the result remains
+`accepted: false`.

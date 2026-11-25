@@ -1,10 +1,31 @@
 // Test that tree-sitter query files are properly bundled and functional
 const fs = require('fs')
+const Module = require('module')
 const os = require('os')
 const path = require('path')
+const { pathToFileURL } = require('url')
 
-// Import the SDK functionality we want to test
-const { initialSessionState } = require('@openbuff/sdk')
+if (process.env.OPENBUFF_STRICT_CONSUMER === '1') {
+  const resolveFilename = Module._resolveFilename
+  Module._resolveFilename = function (request, parent, isMain, options) {
+    if (request === '@codebuff/code-map') {
+      throw new Error('Workspace code-map resolution is forbidden in strict consumer mode')
+    }
+    return resolveFilename.call(this, request, parent, isMain, options)
+  }
+}
+
+if (process.env.OPENBUFF_SDK_WORKDIR) {
+  process.chdir(process.env.OPENBUFF_SDK_WORKDIR)
+}
+
+const sdkEntry = process.env.OPENBUFF_SDK_ENTRY ?? '@openbuff/sdk'
+async function loadSdk() {
+  if (sdkEntry.endsWith('.mjs')) {
+    return import(pathToFileURL(path.resolve(sdkEntry)).href)
+  }
+  return require(sdkEntry)
+}
 
 // Create sample source files for different languages to test tree-sitter parsing
 const testSourceFiles = {
@@ -25,6 +46,13 @@ export class Calculator {
 
 export function calculateSum(numbers: number[]): number {
   return numbers.reduce((sum, num) => sum + num, 0)
+}
+`,
+  'main.ts': `
+import { calculateSum } from './calculator'
+
+export function summarize(values: number[]): number {
+  return calculateSum(values)
 }
 `,
   'server.py': `
@@ -118,6 +146,7 @@ module.exports = { ApiClient, createApp }
 
 async function testTreeSitterFunctionality() {
   console.log('🧪 Testing tree-sitter functionality with real source files...')
+  const { initialSessionState } = await loadSdk()
 
   // Create a temporary directory for our test
   const testDir = fs.mkdtempSync(
@@ -159,6 +188,7 @@ async function testTreeSitterFunctionality() {
     // Test each language file and verify expected tokens were found
     const expectedTokens = {
       'calculator.ts': ['Calculator', 'add', 'getHistory', 'calculateSum'],
+      'main.ts': ['summarize'],
       'server.py': ['UserService', 'create_user', 'get_user', 'process_data'],
       'utils.go': ['Config', 'NewConfig', 'GetAddress', 'ProcessString'],
       'api.js': ['ApiClient', 'fetchData', 'postData', 'createApp'],
@@ -181,11 +211,8 @@ async function testTreeSitterFunctionality() {
       )
 
       if (missingTokens.length > 0) {
-        console.warn(
-          `⚠️  Missing expected tokens in ${fileName}: ${missingTokens.join(', ')}`,
-        )
-        console.warn(
-          `   Found tokens: ${foundTokens.slice(0, 10).join(', ')}${foundTokens.length > 10 ? '...' : ''}`,
+        throw new Error(
+          `Missing expected tokens in ${fileName}: ${missingTokens.join(', ')}`,
         )
       } else {
         console.log(
@@ -208,17 +235,15 @@ async function testTreeSitterFunctionality() {
       )
     }
 
-    // Test that tokenCallers were generated (shows cross-file analysis works)
+    // Test that the packaged query captures a call across the TS import edge.
     const tokenCallers = sessionState.fileContext.tokenCallers
-    if (tokenCallers && Object.keys(tokenCallers).length > 0) {
-      console.log(
-        `✅ Generated token callers for ${Object.keys(tokenCallers).length} files`,
-      )
-    } else {
-      console.log(
-        'ℹ️  No token callers generated (expected for single-file test)',
+    const calculateSumCallers = tokenCallers?.['calculator.ts']?.calculateSum
+    if (!calculateSumCallers?.includes('main.ts')) {
+      throw new Error(
+        'Expected calculator.ts:calculateSum to include main.ts as a caller',
       )
     }
+    console.log('✅ Generated the main.ts → calculator.ts call edge')
 
     return true
   } finally {

@@ -12,23 +12,85 @@ export const PlaybookTriggerSchema = z.strictObject({
     .optional(),
   requireEvidence: z
     .array(
-      z.strictObject({
-        kind: z.enum([
-          'toolSucceeded',
-          'fileDigestUnchanged',
-          'claimPinned',
-          'observationPresent',
-        ]),
-        tool: z.string().max(128).optional(),
-        commandPattern: z.string().max(256).optional(),
-        withinMs: z.number().int().positive().optional(),
-        path: z.string().max(1_024).optional(),
-      }),
+      z
+        .strictObject({
+          kind: z.enum([
+            'toolSucceeded',
+            'validationSucceeded',
+            'fileDigestUnchanged',
+            'claimPinned',
+            'observationPresent',
+          ]),
+          tool: z.string().max(128).optional(),
+          commandPattern: z.string().max(256).optional(),
+          withinMs: z.number().int().positive().optional(),
+          path: z.string().max(1_024).optional(),
+          /** Accepted host-attested check capabilities; any one may satisfy it. */
+          validationKinds: z
+            .array(z.string().min(1).max(128))
+            .min(1)
+            .max(8)
+            .optional(),
+        })
+        .refine(
+          (evidence) =>
+            evidence.kind === 'validationSucceeded'
+              ? evidence.tool === undefined &&
+                evidence.commandPattern === undefined &&
+                evidence.path === undefined
+              : evidence.validationKinds === undefined,
+          'Validation prerequisites use validationKinds, not tool/command/path assertions',
+        ),
     )
     .max(8)
     .default([]),
 })
 export type PlaybookTrigger = z.infer<typeof PlaybookTriggerSchema>
+
+/**
+ * A successful validation attested by the execution host, never by model text
+ * or a tool-output payload. Dependency keys include source, configuration,
+ * lockfile and tool-version inputs selected by the trusted producer.
+ */
+export const ValidationReceiptSchema = z.strictObject({
+  receiptId: z.string().min(1).max(128),
+  workspaceId: z.string().min(1).max(128),
+  rootRunId: z.string().min(1).max(128),
+  checkKind: z.string().min(1).max(128),
+  command: z.string().min(1).max(32_768),
+  cwd: z.string().min(1).max(4_096),
+  exitCode: z.literal(0),
+  completedAt: z.number().int().nonnegative(),
+  producer: z.strictObject({
+    runId: z.string().min(1).max(128),
+    agentId: z.string().min(1).max(128),
+  }),
+  dependencyHashes: z.record(z.string().min(1), z.string().min(1).max(512)),
+  dependencyFingerprint: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+})
+export type ValidationReceipt = z.infer<typeof ValidationReceiptSchema>
+
+/** Host-only registry snapshot, reusable by actors in the same root run. */
+export type ValidationEvidenceContext = {
+  workspaceId: string
+  rootRunId: string
+  receipts: readonly ValidationReceipt[]
+  currentDependencyHashes: Readonly<Record<string, string>>
+}
+
+/** Canonical fingerprint of a receipt's complete declared dependency closure. */
+export const computeValidationDependencyFingerprint = (
+  dependencyHashes: Readonly<Record<string, string>>,
+): string =>
+  `sha256:${createHash('sha256')
+    .update(
+      JSON.stringify(
+        Object.entries(dependencyHashes).sort(([a], [b]) =>
+          a < b ? -1 : a > b ? 1 : 0,
+        ),
+      ),
+    )
+    .digest('hex')}`
 
 export const PlaybookScopeSchema = z.strictObject({
   repos: z.array(z.string().max(1_024)).max(8).default([]),

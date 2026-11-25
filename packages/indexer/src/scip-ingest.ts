@@ -208,10 +208,11 @@ export function mergeScipEdgesIntoIndex(
   }
 
   const addedKeys = new Set<string>()
+  const existingPreciseKeys = new Set(merged.filter((edge) => edge.confidence === 'precise').map(edgeDedupeKey))
   let addedCount = 0
   for (const edge of preciseEdges) {
     const key = edgeDedupeKey(edge)
-    if (addedKeys.has(key)) continue
+    if (addedKeys.has(key) || existingPreciseKeys.has(key)) continue
     if (addedCount >= SCIP_MAX_MERGED_EDGES) {
       throw new ScipIngestError(
         'edge-limit',
@@ -222,7 +223,21 @@ export function mergeScipEdgesIntoIndex(
     addedCount++
     ensureFileNode(nodes, edge.from)
     ensureFileNode(nodes, edge.to)
-    merged.push(edge)
+    const sourceHashes: Record<string, string> = {}
+    for (const nodeId of [edge.from, edge.to]) {
+      const filePath = nodeId.startsWith('file:') ? nodeId.slice(5) : index.graph.nodes[nodeId]?.path
+      if (filePath && index.files[filePath]) sourceHashes[filePath] = index.files[filePath]!.hash
+    }
+    merged.push({
+      ...edge,
+      confidence: 'precise',
+      producer: edge.producer ?? {
+        name: 'scip',
+        version: 'scip-json:1',
+        configFingerprint: index.sourceConfigFingerprint,
+        sourceHashes,
+      },
+    })
   }
 
   const next: MetadataIndex = { ...index, graph: { nodes, edges: merged } }

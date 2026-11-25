@@ -30,6 +30,11 @@ export function createActionWorkspaceBasis(identity: ToolExecutionIdentity, work
     state?.snapshotId === confirmed?.snapshotId && state?.revision === confirmed?.revision
   return Object.freeze({
     isCurrent,
+    describeMismatch(state: WorkspaceStateV1 | undefined): string {
+      return `Action basis changed: expected ${confirmed?.snapshotId ?? 'unknown'} (revision ${confirmed?.revision ?? 'unknown'}), ` +
+        `actual ${state?.snapshotId ?? 'unknown'} (revision ${state?.revision ?? 'unknown'}); ` +
+        `attempted ${original.workspaceSnapshotId ?? 'unknown'} (revision ${original.workspaceRevision ?? 'unknown'}).`
+    },
     confirmTransition(transition: ConfirmedWorkspaceTransition): boolean {
       if (!isCurrent(original.basisId, transition.before)) return false
       const receipt = transition.canonicalReceipt

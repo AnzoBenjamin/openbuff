@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test'
 
-import { getEffectiveAgentToolNames } from '../agent-tool-names'
+import {
+  getEffectiveAgentToolNames,
+  prepareUnlockedToolTiersForTurn,
+} from '../agent-tool-names'
 import { ALLOW_ALL_TIER_TOOLS } from '../base2-tool-tiers'
 
 import type { AgentTemplate } from '../../templates/types'
@@ -17,6 +20,37 @@ function template(overrides: Partial<AgentTemplate>): AgentTemplate {
 }
 
 describe('getEffectiveAgentToolNames', () => {
+  it('resets progressive grants on new turns but retains them on checkpoint resumes', () => {
+    const progressiveTemplate = template({
+      programmaticConfig: { progressiveToolDisclosure: true },
+    })
+    const state = { unlockedToolTiers: ['implement'] }
+
+    prepareUnlockedToolTiersForTurn({
+      agentState: state,
+      agentTemplate: progressiveTemplate,
+      resumeInterruptedTurn: false,
+    })
+    expect(state.unlockedToolTiers).toEqual([])
+
+    state.unlockedToolTiers = ['audit']
+    prepareUnlockedToolTiersForTurn({
+      agentState: state,
+      agentTemplate: progressiveTemplate,
+      resumeInterruptedTurn: true,
+    })
+    expect(state.unlockedToolTiers).toEqual(['audit'])
+
+    state.unlockedToolTiers = ['implement']
+    prepareUnlockedToolTiersForTurn({
+      agentState: state,
+      agentTemplate: template({
+        programmaticConfig: { progressiveToolDisclosure: false },
+      }),
+      resumeInterruptedTurn: false,
+    })
+    expect(state.unlockedToolTiers).toEqual(['implement'])
+  })
   it('adds set_output to structured-output agents that omitted it', () => {
     expect(
       getEffectiveAgentToolNames(

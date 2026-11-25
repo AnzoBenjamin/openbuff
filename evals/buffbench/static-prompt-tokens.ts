@@ -8,10 +8,13 @@
  * Offline: no LLM or network calls.
  */
 import { getToolSet } from '@codebuff/agent-runtime/tools/prompts'
+import { getEffectiveAgentToolNames } from '@codebuff/agent-runtime/util/agent-tool-names'
 import {
   countTokens,
   countTokensJson,
 } from '@codebuff/agent-runtime/util/token-counter'
+
+import type { AgentTemplate } from '@codebuff/agent-runtime/templates/types'
 
 export interface StaticPromptDefinition {
   model?: string
@@ -19,6 +22,7 @@ export interface StaticPromptDefinition {
   systemPrompt?: string
   instructionsPrompt?: string
   stepPrompt?: string
+  programmaticConfig?: AgentTemplate['programmaticConfig']
 }
 
 export interface StaticPromptTokens {
@@ -43,7 +47,11 @@ export async function computeStaticPromptTokens(
     0,
   )
   const tools = await getToolSet({
-    toolNames: [...(definition.toolNames ?? [])],
+    toolNames: definition.programmaticConfig
+      ? getEffectiveAgentToolNames(definition, {
+          unlockedToolTiers: [],
+        })
+      : [...(definition.toolNames ?? [])],
     additionalToolDefinitions: async () => ({}),
     agentTools: {},
     skills: {},

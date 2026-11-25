@@ -8,6 +8,9 @@ import editor from '../editor/editor'
 import repairEditor from '../editor/repair-editor'
 import filePicker from '../file-explorer/file-picker'
 import generalAgent from '../general-agent/general-agent'
+import knowledgeRetriever from '../memory/knowledge-retriever'
+import knowledgeReviewer from '../memory/knowledge-reviewer'
+import memoryManager from '../memory/memory-manager'
 import researcherDocs from '../researcher/researcher-docs'
 import researcherWeb from '../researcher/researcher-web'
 import codeReviewer from '../reviewer/code-reviewer'
@@ -130,6 +133,9 @@ const SPAWN_CONTRACT_DEFINITIONS = {
   editor,
   'file-picker': filePicker,
   'general-agent': generalAgent,
+  'knowledge-retriever': knowledgeRetriever,
+  'knowledge-reviewer': knowledgeReviewer,
+  'memory-manager': memoryManager,
   'repair-editor': repairEditor,
   'researcher-docs': researcherDocs,
   'researcher-web': researcherWeb,

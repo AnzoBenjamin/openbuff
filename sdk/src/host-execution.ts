@@ -1,16 +1,20 @@
 import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
-import { captureRootDeadline, createHostAuthority } from '@codebuff/common/util/execution-context'
+import { captureRootDeadline, createHostAuthority, executionTargetBoundsRefusal, isReadOnlyPlanExecutionProfile } from '@codebuff/common/util/execution-context'
 import { CREDENTIAL_ENV_KEYS } from './credential-env-keys'
 import { captureAmbientHostInputs, createProviderHostContext, loadHostConfigSnapshot, nodeConfigReadFs } from './host-config'
 import { classifyCapturedTargetForExecution, evaluateHarnessActionPolicy } from './services/harness-enforcement'
 import { createNativeHostRegistry, registerPreparedNativeLaunch } from './services/native-host-execution'
+import { bindNodeLaunchClock, bindNodeScopeClock } from './services/node-scope-clock'
+import { captureTerminalTimeoutPolicy } from './services/terminal-timeout-policy'
+import type { TerminalTimeoutPolicy } from './services/terminal-timeout-policy'
+import { SUPERVISED_SELF_EXEC_FLAG } from '@codebuff/agent-runtime/supervision/self-exec-flag'
 import type { NativeHostExecution } from './services/native-host-execution'
 
 import type {
   ActionExecutionPort, AsyncDecision, BoundResourceFactory, BoundResourcePort, BudgetHandle, Clock, Correlation,
-  DestinationHandle, ExecutionAdapterContext, HostAuthority, LaunchEvent, LifetimeHandle, Limit, OwnerHandle,
+  DestinationHandle, ExecutionAdapterContext, ExecutionTargetBounds, HostAuthority, LaunchEvent, LifetimeHandle, Limit, OwnerHandle,
   PolicyInput, PreparedLaunch, ProfileFacts, ProfileRequest, Refusal, RequestHandle, ResourceHandle, ResourceRequestPort,
   Result, RootDeadlineSeed, SyncDecision, TargetDescription,
 } from '@codebuff/common/types/contracts/execution-context'
@@ -56,6 +60,7 @@ export type ExecutionScope = Readonly<{
 export type RunHostServices = Readonly<{
   profile: ProfileRequest
   approvalMode: HarnessApprovalMode
+  terminalTimeoutPolicy?: TerminalTimeoutPolicy
   provider: ProviderHostContext
   llm: LlmHostDeps
   execution: HostAuthority
@@ -65,6 +70,10 @@ export type RunHostServices = Readonly<{
   bootstrap: ExecutionAdapterContext
   directScope: ExecutionScope
   events: readonly LaunchEvent[]
+  /** Historical target entry, retained after cancellation; admission and native carrier startup do not count. */
+  hasObservedTargetStart(port: ActionExecutionPort): boolean
+  /** Prepare the runtime's exact self-exec launch without approving child tool effects. */
+  prepareSupervisedSelfExec(context: ExecutionAdapterContext, target: TargetDescription): Result<PreparedLaunch>
   terminalShell?: Readonly<{ executable: string; args: readonly string[] }>
   registerRun(owner: JobOwner, parent?: ExecutionAdapterContext): Result<ExecutionScope>
   createBackgroundReceiver(clientSessionId: string): Result<Readonly<{
@@ -86,11 +95,13 @@ export type HostExecutionOptions = Readonly<{
   profile?: ProfileRequest
   spawn?: CodebuffSpawn
   nativeExecution?: NativeHostExecution
+  terminalTimeoutPolicy?: TerminalTimeoutPolicy
   credentials?: CapturedCredentialPort
   record?: (event: LaunchEvent) => void
   authorizeAsync?: (input: PolicyInput) => Promise<AsyncDecision>
   authorizeSync?: (input: PolicyInput) => SyncDecision
   isCurrentBasis?: (correlation: Correlation) => boolean
+  describeBasisMismatch?: (correlation: Correlation) => string
   approvalMode?: HarnessApprovalMode
   requestApproval?: (request: HarnessApprovalRequest) => Promise<boolean>
   resolveApprovalContext?: (input: PolicyInput) => Promise<Readonly<{
@@ -105,6 +116,10 @@ export type HostExecutionOptions = Readonly<{
 export function createHostExecutionServices(options: HostExecutionOptions): Result<RunHostServices> {
   try {
     const snapshot = options.snapshot
+    const timeoutPolicy = captureTerminalTimeoutPolicy(options.terminalTimeoutPolicy !== undefined
+      ? options.terminalTimeoutPolicy : snapshot.loaded.config.terminalTimeoutPolicy)
+    if (!timeoutPolicy.ok) return timeoutPolicy
+    const terminalTimeoutPolicy = timeoutPolicy.value
     const approvalMode = options.approvalMode ?? snapshot.loaded.config.approvalMode ?? 'balanced'
     const provider = createProviderHostContext(snapshot, options.credentials)
     const clock = options.clock ?? executionClock
@@ -116,6 +131,9 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
     const profile = Object.freeze({ ...selectedProfile, required: Object.freeze([...selectedProfile.required]),
       ...(selectedProfile.optional ? { optional: Object.freeze([...selectedProfile.optional]) } : {}) })
     const events: LaunchEvent[] = []
+    const startedCorrelations = new Set<string>()
+    const contextCorrelations = new WeakMap<ActionExecutionPort, string>()
+    const supervisedSelfExecLaunches = new Set<string>()
     const metadata = new Map<string, CapturedTerminalLaunchMetadata>()
     const runScopes = new Map<string, ExecutionScope>()
     const runParentPorts = new Map<string, ActionExecutionPort | undefined>()
@@ -141,6 +159,8 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
       const effects = input.classification.effects
       const first = effects[0]
       if (input.target.mode === 'user') return { allowed: true as const, approvalRequired: false as const }
+      if (supervisedSelfExecLaunches.has(input.facts.launchId))
+        return { allowed: true as const, approvalRequired: false as const }
       if (registeredStartupResources.has(input.facts.resourceId) && input.classification.parseStatus !== 'malformed' &&
         effects.every(effect => effect.action === 'arbitrary-code'))
         return { allowed: true as const, approvalRequired: false as const }
@@ -227,7 +247,14 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
         clear: timer => clearTimeout(timer as ReturnType<typeof setTimeout>) },
       resolveProfile: (request, target) => nativeRegistry.resolve(request, target, resolvePortableProfile(request)),
       classifyTarget: classifyCapturedTargetForExecution, authorizeAsync, authorizeSync,
-      isCurrentBasis: options.isCurrentBasis ?? (() => true), record: event => { events.push(event); options.record?.(event) } })
+      isCurrentBasis: options.isCurrentBasis ?? (() => true), describeBasisMismatch: options.describeBasisMismatch, record: event => {
+        events.push(event)
+        if (event.phase === 'spawn-observed' || event.phase === 'native-entry-committed' ||
+          (event.phase === 'dispatch-failed' && event.processStart === 'observed')) {
+          startedCorrelations.add(JSON.stringify(event.facts.correlation))
+        }
+        options.record?.(event)
+      } })
     const root = execution.registerRootLifetime({ boundary: options.boundary, signal: options.signal })
     if (!root.ok) return root
     const rootLifetime = root.value
@@ -235,18 +262,25 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
     if (!hostOwner.ok) return hostOwner
 
     function contextFor(owner: OwnerHandle, budget: BudgetHandle, signal?: AbortSignal, requestedProfile = profile,
-      mode: 'assistant' | 'user' = 'assistant'): Result<ExecutionAdapterContext> {
+      mode: 'assistant' | 'user' = 'assistant', inheritedBounds?: ExecutionTargetBounds): Result<ExecutionAdapterContext> {
+      const bounds = { projectRoot: snapshot.inputs.projectRoot,
+        allowedPaths: inheritedBounds?.allowedPaths ?? [snapshot.inputs.projectRoot, ...snapshot.sandboxPolicy.allowPaths], profile: requestedProfile, mode }
+      const boundsRefusal = executionTargetBoundsRefusal(inheritedBounds, bounds)
+      if (boundsRefusal) return boundsRefusal
       const request = execution.registerRequest({ budget, signal })
       if (!request.ok) return request
-      const bound = execution.bindAction({ owner, budget, request: request.value })
+      const bound = execution.bindAction({ owner, budget, request: request.value, bounds })
       if (!bound.ok) return bound
+      const registration = execution.actionRegistration(bound.value)
+      if (!registration.ok) return registration
+      contextCorrelations.set(bound.value, JSON.stringify(registration.value.correlation))
       nativeRegistry.bind(bound.value)
-      return ok(Object.freeze({ execution: bound.value, projectRoot: snapshot.inputs.projectRoot,
-        allowedPaths: Object.freeze([snapshot.inputs.projectRoot, ...snapshot.sandboxPolicy.allowPaths]), profile: requestedProfile, mode, signal: bound.value.signal,
+      bindNodeScopeClock(bound.value, clock)
+      return ok(Object.freeze({ execution: bound.value, ...registration.value.bounds!, signal: bound.value.signal,
         spawn: options.spawn, cacheScope }))
     }
 
-    function resourceFactories(owner: OwnerHandle, lifetime: LifetimeHandle = rootLifetime) {
+    function resourceFactories(owner: OwnerHandle, lifetime: LifetimeHandle = rootLifetime, inheritedBounds?: ExecutionTargetBounds) {
       type Holder = { resource: ResourceHandle; key: string; target: TargetDescription; trustedStartup: boolean; startup?: ResourceRequestPort }
       const resourceHolders = new WeakMap<object, Holder>()
       function startupPort(source: ResourceRequestPort, holder: Holder): ResourceRequestPort {
@@ -260,6 +294,8 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
       const defaultDestination = (target: TargetDescription) => execution.registerDestination({ snapshotId: snapshot.snapshotId, origin: 'host',
         resolved: { kind: 'executable', command: target.executable, args: target.argv, declaredEnv: {} } })
       function register(target: TargetDescription, destination?: DestinationHandle): Result<Holder> {
+        const boundsRefusal = executionTargetBoundsRefusal(inheritedBounds, target)
+        if (boundsRefusal) return boundsRefusal
         const resolved = destination ? ok(destination) : defaultDestination(target)
         if (!resolved.ok) return resolved
         const origin = execution.destinationOrigin(resolved.value)
@@ -282,7 +318,7 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
         const budget = execution.deriveBudget({ parent: initial.value.budget, memoKey: `resource-startup:${holder.key}`, limit: { kind: 'finite', durationMs: 15_000 } })
         if (!budget.ok) return budget
         // Waiting request cancellation releases its lease, not this bounded startup request.
-        const context = contextFor(owner, budget.value)
+        const context = contextFor(owner, budget.value, undefined, inheritedBounds?.profile ?? profile, 'assistant', inheritedBounds)
         if (!context.ok) return context
         const requested = context.value.execution.requestResource(holder.resource)
         if (!requested.ok) return requested
@@ -299,7 +335,7 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
         if (!resource.ok) return resource
         const budget = execution.deriveBudget({ parent: maintenance.value.budget, memoKey: 'startup', limit: { kind: 'finite', durationMs: 15_000 } })
         if (!budget.ok) return budget
-        const context = contextFor(owner, budget.value)
+        const context = contextFor(owner, budget.value, undefined, inheritedBounds?.profile ?? profile, 'assistant', inheritedBounds)
         if (!context.ok) return context
         const requested = context.value.execution.requestResource(resource.value)
         if (!requested.ok) return requested
@@ -329,7 +365,7 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
       const resources: BoundResourceFactory = (target, destination) => { const holder = register(target, destination); return holder.ok ? ok(bound(holder.value)) : holder }
       const lspResources: LspResourceFactory = (spec, request) => {
         const target: TargetDescription = { executable: spec.argv[0], argv: spec.argv.slice(1), cwd: spec.cwd,
-          projectRoot: snapshot.inputs.projectRoot, allowedPaths: [snapshot.inputs.projectRoot], profile, mode: 'assistant',
+          projectRoot: snapshot.inputs.projectRoot, allowedPaths: [snapshot.inputs.projectRoot], profile: inheritedBounds?.profile ?? profile, mode: 'assistant',
           processType: 'BACKGROUND', family: 'lsp', branchId: 'lsp.cold-start', adapterOptions: { runtime: 'node', stdio: 'pipe' } }
         const registered = register(target)
         if (!registered.ok) return registered
@@ -378,13 +414,39 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
       },
       action() { return unavailable('A direct host operation does not have B02 action authority') },
     })
-    const services: RunHostServices = Object.freeze({ profile, approvalMode, provider, llm: Object.freeze({ providerContext: provider }), execution,
+    const services: RunHostServices = Object.freeze({ profile, approvalMode, terminalTimeoutPolicy, provider, llm: Object.freeze({ providerContext: provider }), execution,
       readPolicy: snapshot.readPolicy, rootLifetime, rootSignal: (() => {
         const signal = execution.signal(rootLifetime)
         if (!signal.ok) throw new Error(signal.cause)
         return signal.value
       })(), bootstrap: bootstrap.value, directScope,
       get events() { return Object.freeze([...events]) },
+      hasObservedTargetStart(port) {
+        // Observation survives the request's lifetime. Looking up live authority
+        // here would erase started-process evidence once cancellation revokes it.
+        const correlation = contextCorrelations.get(port)
+        return correlation !== undefined && startedCorrelations.has(correlation)
+      },
+      prepareSupervisedSelfExec(context, target) {
+        const registration = execution.actionRegistration(context.execution)
+        if (!registration.ok) return registration
+        const captured = Object.freeze({ ...target, argv: Object.freeze([...target.argv]) })
+        if (captured.executable !== process.execPath || captured.argv.length !== 2 ||
+          captured.argv[0] !== SUPERVISED_SELF_EXEC_FLAG || !path.isAbsolute(captured.argv[1]) ||
+          path.basename(captured.argv[1]) !== 'openbuff-supervised-request.json' ||
+          path.dirname(captured.argv[1]) !== captured.cwd ||
+          captured.projectRoot !== context.projectRoot || captured.mode !== context.mode ||
+          JSON.stringify(captured.allowedPaths) !== JSON.stringify(context.allowedPaths) ||
+          JSON.stringify(captured.profile) !== JSON.stringify(context.profile) ||
+          captured.family !== 'supervised-child' ||
+          !['supervised.self-exec.initial', 'supervised.self-exec.retry'].includes(captured.branchId) ||
+          captured.shellCommandBytes !== undefined || captured.processType !== 'SYNC' ||
+          captured.adapterOptions.runtime !== 'bun' || captured.adapterOptions.stdio !== 'ignore,pipe,pipe')
+          return { ok: false, reason: 'denied', cause: 'Supervised self-exec requires the exact runtime-authored child invocation' }
+        const prepared = context.execution.prepareTarget({ target: captured })
+        if (prepared.ok) supervisedSelfExecLaunches.add(prepared.value.facts().launchId)
+        return prepared
+      },
       terminalShell: snapshot.inputs.platform === 'win32'
         ? snapshot.inputs.environment.OPENBUFF_GIT_BASH_PATH ?? snapshot.inputs.environment.CODEBUFF_GIT_BASH_PATH
           ? Object.freeze({ executable: (snapshot.inputs.environment.OPENBUFF_GIT_BASH_PATH ?? snapshot.inputs.environment.CODEBUFF_GIT_BASH_PATH)!, args: Object.freeze(['-c']) })
@@ -396,6 +458,8 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
         const key = JSON.stringify([capturedOwner.clientSessionId, capturedOwner.rootRunId, capturedOwner.parentRunId, capturedOwner.parentAgentId])
         const parentRegistration = parent ? execution.actionRegistration(parent.execution) : undefined
         if (parentRegistration && !parentRegistration.ok) return parentRegistration
+        const parentBounds = parentRegistration?.ok ? parentRegistration.value.bounds : undefined
+        const inheritedBounds = parentBounds && isReadOnlyPlanExecutionProfile(parentBounds.profile) ? parentBounds : undefined
         const parentDeadline = parentRegistration?.ok ? execution.deadline(parentRegistration.value.budget) : undefined
         const additionalParentSignal = parent?.signal
         const parentSignal = parentRegistration?.ok ? additionalParentSignal
@@ -411,17 +475,18 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
         const runLifetime = boundedLifetime.value
         const owner = execution.registerOwner({ description: { kind: 'run', owner: capturedOwner }, lifetime: runLifetime })
         if (!owner.ok) return owner
-        const factories = resourceFactories(owner.value.owner, runLifetime)
+        const factories = resourceFactories(owner.value.owner, runLifetime, inheritedBounds)
+        const scopeProfile = inheritedBounds?.profile ?? profile
         const scope: ExecutionScope = Object.freeze({ owner: owner.value.owner, lifetime: runLifetime, ...factories,
           operation(p = {}) {
             const budget = execution.registerHostOperation({ owner: owner.value.owner, parent: runLifetime,
               purpose: 'direct-host-operation', limit: p.limit ?? unbounded })
-            return budget.ok ? contextFor(owner.value.owner, budget.value, p.signal, p.profile ?? profile, p.mode) : budget
+            return budget.ok ? contextFor(owner.value.owner, budget.value, p.signal, p.profile ?? scopeProfile, p.mode, inheritedBounds) : budget
           },
           action(p) {
             const budget = execution.registerAction({ correlation: { kind: 'action', actionId: p.actionId, attemptId: p.attemptId,
               basisId: p.basisId, owner: capturedOwner }, owner: owner.value.owner, parent: runLifetime, limit: p.limit ?? unbounded })
-            return budget.ok ? contextFor(owner.value.owner, budget.value, p.signal, p.profile ?? profile, p.mode) : budget
+            return budget.ok ? contextFor(owner.value.owner, budget.value, p.signal, p.profile ?? scopeProfile, p.mode, inheritedBounds) : budget
           } })
         runScopes.set(key, scope)
         runParentPorts.set(key, parent?.execution)
@@ -439,6 +504,8 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
           if (this !== port) return unavailable('Invalid background receiver capability')
           const sender = execution.actionRegistration(context.execution)
           if (!sender.ok) return sender
+          const boundsRefusal = executionTargetBoundsRefusal(sender.value.bounds, target)
+          if (boundsRefusal) return boundsRefusal
           const destination = execution.registerDestination({ snapshotId: snapshot.snapshotId, origin: 'host',
             resolved: { kind: 'executable', command: target.executable, args: target.argv, declaredEnv: {} } })
           if (!destination.ok) return destination
@@ -467,7 +534,10 @@ export function createHostExecutionServices(options: HostExecutionOptions): Resu
           if (!receivingLease.ok) return receivingLease
           const prepared = execution.prepareLaunch({ resource: transferred.value.resource, request: request.value,
             budget: budget.value, lease: receivingLease.value })
-          if (prepared.ok) registerPreparedNativeLaunch(context.execution, target, prepared.value)
+          if (prepared.ok) {
+            registerPreparedNativeLaunch(context.execution, target, prepared.value)
+            bindNodeLaunchClock(prepared.value, clock)
+          }
           return prepared
         } })
         return ok(port)
@@ -490,10 +560,12 @@ export function createDirectHostExecution(options: Readonly<{
   cwd: string; projectRoot?: string; hostConfiguration?: HostConfigurationInputs; configReadFs?: ConfigReadFs;
   credentials?: CapturedCredentialPort; env?: Readonly<Record<string, string | undefined>>; inheritEnv?: boolean;
   signal?: AbortSignal; limit?: Limit; profile?: ProfileRequest; spawn?: CodebuffSpawn;
-  nativeExecution?: NativeHostExecution;
+  nativeExecution?: NativeHostExecution; terminalTimeoutPolicy?: TerminalTimeoutPolicy;
   record?: (event: LaunchEvent) => void; approvalMode?: HarnessApprovalMode; requestApproval?: (request: HarnessApprovalRequest) => Promise<boolean>
 }>): Result<Readonly<{ hostServices: RunHostServices; executionContext: ExecutionAdapterContext; resources: BoundResourceFactory; lspResources: LspResourceFactory }>> {
-  options = Object.freeze({ ...options, env: options.env && Object.freeze({ ...options.env }),
+  const timeoutPolicy = captureTerminalTimeoutPolicy(options.terminalTimeoutPolicy)
+  if (!timeoutPolicy.ok) return timeoutPolicy
+  options = Object.freeze({ ...options, terminalTimeoutPolicy: timeoutPolicy.value, env: options.env && Object.freeze({ ...options.env }),
     profile: options.profile && Object.freeze({ ...options.profile, required: Object.freeze([...options.profile.required]),
       ...(options.profile.optional ? { optional: Object.freeze([...options.profile.optional]) } : {}) }) })
   const clock = options.nativeExecution?.clock ?? executionClock

@@ -179,6 +179,13 @@ renderTest(
       const document = useOutputReaderStore.getState().request?.document
       expect(document?.text).toContain('G: line number, or row <number>')
       expect(document?.text).toContain('Ctrl+T: collapse or expand agents')
+      useOutputReaderStore.getState().close()
+      await clickLabel(setup, 'All commands')
+      const commands = useOutputReaderStore.getState().request?.document
+      expect(commands?.text).toContain('/plans')
+      expect(commands?.text).toContain('/plan-use')
+      expect(commands?.text).toContain('/plan-timeline')
+      expect(commands?.text).toContain('/compact')
     } finally {
       await React.act(async () => setup.renderer.destroy())
     }

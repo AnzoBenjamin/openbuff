@@ -223,6 +223,35 @@ describe('changeFile', () => {
     )
   })
 
+  test('preserves BOM and line-ending bytes for a whole-file rewrite', async () => {
+    const fs = createMockFs({
+      files: {
+        '/repo/src/file.txt': 'before\r\nafter\r\n',
+      },
+    })
+    const content = '\uFEFFupdated\r\nnext\r\n'
+
+    const result = await changeFile({
+      parameters: {
+        type: 'file',
+        path: 'src/file.txt',
+        content,
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+
+    expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
+      kind: 'file_mutation_result',
+      outcome: 'applied',
+      actions: [
+        expect.objectContaining({ action: 'update', afterContent: content }),
+      ],
+    })
+    expect(await fs.readFile('/repo/src/file.txt', 'utf-8')).toBe(content)
+  })
+
   test('uses conditionalCommit for updates when the adapter provides it', async () => {
     const fs = createMockFs({ files: { '/repo/src/file.ts': 'before\n' } })
     let conditionalCalls = 0
@@ -502,7 +531,12 @@ describe('changeFile', () => {
 
     expect(result[0]?.type === 'json' ? result[0].value : null).toMatchObject({
       kind: 'file_mutation_result',
-      outcome: 'rolled_back',
+      outcome: 'unconfirmed',
+      actions: [
+        expect.objectContaining({ outcome: 'rolled_back' }),
+        expect.objectContaining({ outcome: 'unconfirmed' }),
+      ],
+      authorityReceipt: expect.objectContaining({ status: 'rolled_back' }),
     })
     expect(files['/repo/src/one.ts']).toBe('const one = 1\n')
     expect(files['/repo/src/two.ts']).toBe('const two = 1\n')
@@ -575,6 +609,7 @@ describe('changeFile', () => {
       afterHashes: { 'src/one.ts': getExactContentHash('const one = 2\n') },
     })
     expect(mutation.actions[1]?.forward?.outcome).toBe('unconfirmed')
+    expect(mutation.actions[1]?.outcome).toBe('unconfirmed')
   })
 
   test('does not overwrite an external edit when conditional rollback detects a conflict', async () => {
@@ -689,6 +724,62 @@ describe('changeFile', () => {
     expect(mutation.authorityReceipt?.finalHashes['file.txt']).toBe(
       getExactContentHash(foreign),
     )
+  })
+
+  test('[B03] rejected second forward and conflicting first rollback preserve both foreign files', async () => {
+    const fs = createMockFs({
+      files: {
+        '/repo/one.txt': 'one-before\n',
+        '/repo/two.txt': 'two-before\n',
+      },
+    })
+    const commit = fs.conditionalCommit!.bind(fs)
+    const attempted: string[] = []
+    fs.conditionalCommit = async (filePath, data, options) => {
+      attempted.push(String(filePath))
+      if (String(filePath) === '/repo/two.txt') {
+        await fs.writeFile('/repo/one.txt', 'one-foreign\n')
+        await fs.writeFile('/repo/two.txt', 'two-foreign\n')
+        return {
+          applied: false,
+          actualHash: getExactContentHash('two-foreign\n'),
+        }
+      }
+      return commit(filePath, data, options)
+    }
+    const result = await changeFiles({
+      parameters: [
+        { type: 'file', path: 'one.txt', content: 'one-after\n' },
+        { type: 'file', path: 'two.txt', content: 'two-after\n' },
+      ],
+      cwd: '/repo',
+      fs,
+    })
+    const mutation = fileMutationResultV1Schema.parse(
+      result[0]?.type === 'json' ? result[0].value : null,
+    )
+    expect(attempted).toEqual([
+      '/repo/one.txt',
+      '/repo/two.txt',
+      '/repo/one.txt',
+    ])
+    expect(mutation.outcome).toBe('rollback_incomplete')
+    expect(mutation.actions).toMatchObject([
+      {
+        outcome: 'rollback_incomplete',
+        forward: { outcome: 'applied' },
+        rollback: { attempted: true, succeeded: false },
+      },
+      { outcome: 'not_applied', forward: { outcome: 'not_applied' } },
+    ])
+    expect(mutation.actions[1]?.rollback).toBeUndefined()
+    expect(getConfirmedAppliedActionsV1(mutation)).toEqual([])
+    expect(await fs.readFile('/repo/one.txt', 'utf8')).toBe('one-foreign\n')
+    expect(await fs.readFile('/repo/two.txt', 'utf8')).toBe('two-foreign\n')
+    expect(mutation.authorityReceipt?.finalHashes).toMatchObject({
+      'one.txt': getExactContentHash('one-foreign\n'),
+      'two.txt': getExactContentHash('two-foreign\n'),
+    })
   })
 
   test('[B03] rejected forward cannot roll back foreign bytes equal to the intended postimage', async () => {
@@ -1199,7 +1290,12 @@ describe('changeFile', () => {
       const mutation = fileMutationResultV1Schema.parse(
         result[0]?.type === 'json' ? result[0].value : null,
       )
-      expect(mutation.outcome).toBe('rolled_back')
+      expect(mutation.outcome).toBe('unconfirmed')
+      expect(mutation.actions.map((action) => action.outcome)).toEqual([
+        'rolled_back',
+        'unconfirmed',
+      ])
+      expect(mutation.authorityReceipt?.status).toBe('rolled_back')
       expect(mutation.authorityReceipt?.transactionId).toBeDefined()
       // The in-memory rollback already restored the files.
       expect(files['/repo/src/one.ts']).toBe('const one = 1\n')
@@ -1504,7 +1600,19 @@ describe('changeFile', () => {
     const value = fileMutationResultV1Schema.parse(
       output[0].type === 'json' ? output[0].value : null,
     )
-    expect(value.outcome).toBe('rolled_back')
+    expect(value.outcome).toBe('unconfirmed')
+    expect(value.actions.map((action) => action.outcome)).toEqual([
+      'rolled_back',
+      'unconfirmed',
+    ])
+    expect(
+      fileMutationResultV1Schema.safeParse({
+        ...value,
+        authorityReceipt: undefined,
+        authorityTier: null,
+        receiptId: undefined,
+      }).success,
+    ).toBe(false)
     expect(value.freshCapabilities).toEqual([])
     expect(
       Buffer.from(await fs.readFile('/repo/a.txt')).equals(Buffer.from(raw)),

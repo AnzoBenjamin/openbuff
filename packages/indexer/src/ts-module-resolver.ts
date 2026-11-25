@@ -108,10 +108,14 @@ type TypescriptModule = typeof import('typescript')
 type OxcResolverModule = typeof import('oxc-resolver')
 
 /** Sync require-style dynamic import (the indexer runs under Bun/ESM). */
-const requireTypescript = createRequire(import.meta.url)
+// The published CJS SDK erases import.meta.url; resolve optional packages from
+// its actual bundle filename in that format.
+const resolverModule =
+  typeof import.meta.url === 'string' ? import.meta.url : __filename
+const requireTypescript = createRequire(resolverModule)
 
 /** Sync require-style dynamic import for the oxc napi binding. */
-const requireOxcResolver = createRequire(import.meta.url)
+const requireOxcResolver = createRequire(resolverModule)
 
 /**
  * Upper bound on the real-filesystem package.json fallback read (64 KiB):

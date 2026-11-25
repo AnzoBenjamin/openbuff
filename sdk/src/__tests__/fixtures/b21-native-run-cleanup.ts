@@ -132,6 +132,10 @@ export async function createNativeRunCleanupFixture(clock: Clock) {
       stdout = new PassThrough(),
       stderr = new PassThrough(),
       reports = new PassThrough()
+    const streamsDrained = Promise.all([
+      new Promise<void>((resolve) => stdout.once('end', resolve)),
+      new Promise<void>((resolve) => stderr.once('end', resolve)),
+    ])
     const decoder = new NativeFrameDecoder()
     // These generations and the distinct target PID are synthetic protocol data.
     const waiterIdentity = {
@@ -147,7 +151,8 @@ export async function createNativeRunCleanupFixture(clock: Clock) {
       targetStartTime: '43',
     }
     let identity: Identity | undefined,
-      plan: Record<string, unknown> | undefined
+      plan: Record<string, unknown> | undefined,
+      gitSafetyRead = false
     const control = new Writable({
       write(bytes, _encoding, done) {
         const frames = decoder.push(Buffer.from(bytes))
@@ -176,10 +181,14 @@ export async function createNativeRunCleanupFixture(clock: Clock) {
             call.launchId = String(plan.launchId)
             call.scopeId = `DI-only-native-scope:${call.launchId}`
             call.targetArgv = Object.freeze([...(plan.argv as string[])])
+            const args = plan.argv as string[]
+            gitSafetyRead = ['status', 'diff', 'shortlog'].some((command) =>
+              args.includes(command),
+            )
             const keepLive = (plan.argv as string[]).includes(
               'printf native-live-fixture',
             )
-            if (keepLive)
+            if (keepLive || gitSafetyRead)
               report({
                 type: 'prepared',
                 ...identity,
@@ -210,6 +219,7 @@ export async function createNativeRunCleanupFixture(clock: Clock) {
               pid: targetIdentity.targetPid,
               observation: 'exec-image',
             })
+            if (gitSafetyRead) queueMicrotask(() => call.finish())
           } else if (frame.type === 'stop') queueMicrotask(() => call.finish())
         }
       },
@@ -247,6 +257,7 @@ export async function createNativeRunCleanupFixture(clock: Clock) {
       finish() {
         if (call.closed) return
         if (identity && plan) {
+          const successfulGitRead = gitSafetyRead && call.entered
           const finalFrame = {
             type: 'final',
             ...identity,
@@ -258,12 +269,12 @@ export async function createNativeRunCleanupFixture(clock: Clock) {
             targetStartTime: call.entered
               ? targetIdentity.targetStartTime
               : null,
-            exitCode: null,
+            exitCode: successfulGitRead ? 0 : null,
             signal: null,
-            waitStatusSource: 'not-observed',
-            wrapperExitCode: null,
+            waitStatusSource: successfulGitRead ? 'native-target-wait' : 'not-observed',
+            wrapperExitCode: successfulGitRead ? 0 : null,
             wrapperSignal: null,
-            cause: 'DI-only synthetic native cleanup remains unconfirmed',
+            cause: successfulGitRead ? null : 'DI-only synthetic native cleanup remains unconfirmed',
             enforced: [],
             usage: {
               cpuMicros: 0,
@@ -271,17 +282,19 @@ export async function createNativeRunCleanupFixture(clock: Clock) {
               scope:
                 'direct-and-adopted-wait4; maxrss is not aggregate tree memory',
             },
-            targetUsage: null,
+            targetUsage: successfulGitRead
+              ? { cpuMicros: 0, maxRssKiB: 0, scope: 'actual-target-wait4; maxrss is target peak' }
+              : null,
             cleanup: {
-              complete: false,
+              complete: successfulGitRead,
               scopeTier: 'direct-child',
               pidNamespace: null,
               namespaceAbsent: null,
               initAbsent: null,
-              outerChildReaped: false,
+              outerChildReaped: successfulGitRead,
               reapedPids: [],
               stopAtNs: null,
-              allChildrenReaped: false,
+              allChildrenReaped: successfulGitRead,
               reapCount: 0,
               observationsTruncated: false,
               observedAtNs: '100000000',
@@ -299,9 +312,11 @@ export async function createNativeRunCleanupFixture(clock: Clock) {
         stderr.end()
         reports.end()
         control.end()
-        queueMicrotask(() => {
-          state.emit('exit', 0, null)
-          state.emit('close', 0, null)
+        void streamsDrained.then(() => {
+          queueMicrotask(() => {
+            state.emit('exit', 0, null)
+            state.emit('close', 0, null)
+          })
         })
       },
     }

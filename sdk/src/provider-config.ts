@@ -21,6 +21,8 @@ import {
   resolveStoredProjectTrust,
 } from './project-trust'
 import { hostExecutionConfigSchema } from './services/host-execution-config'
+import { terminalTimeoutPolicySchema, mergeTerminalTimeoutPolicies, tightenTerminalTimeoutPolicy } from './services/terminal-timeout-policy'
+import type { TerminalTimeoutPolicy } from './services/terminal-timeout-policy'
 
 import type {
   ProjectTrustDecision,
@@ -535,7 +537,7 @@ export const providerConfigFileSchema = z
           name: z.string().min(1).optional(),
           command: z.string().min(1),
           filePattern: z.string().min(1).optional(),
-          /** Optional per-hook wall-clock bound in seconds. Omitted means no timeout. */
+          /** Optional local wall-clock bound. Omitted or -1 adds no local cap; finite parent deadlines still apply. */
           timeoutSeconds: z.union([z.literal(-1), z.number().int().positive().max(3600)]).optional(),
           /** Run the command once per matching changed file instead of project-wide (FileChangeHook.runPerFile). */
           runPerFile: z.boolean().optional(),
@@ -544,6 +546,8 @@ export const providerConfigFileSchema = z
       .default([]),
     /** Explicit trust boundary for manifest-inferred commands. These may execute repository-controlled build scripts/plugins. Default is disabled; set true only for trusted projects. */
     autoFileChangeHooks: z.boolean().optional(),
+    /** Captured host defaults/caps for built-in terminal commands. Untrusted projects may only tighten them. */
+    terminalTimeoutPolicy: terminalTimeoutPolicySchema.optional(),
     /** Approval UX for classified terminal effects. */
     approvalMode: z
       .enum(['balanced', 'strict', 'allow-all'])
@@ -670,6 +674,7 @@ export const providerConfigFileSchema = z
       ...(config.autoFileChangeHooks !== undefined && {
         autoFileChangeHooks: config.autoFileChangeHooks,
       }),
+      ...(config.terminalTimeoutPolicy !== undefined && { terminalTimeoutPolicy: config.terminalTimeoutPolicy }),
       ...(config.approvalMode !== undefined && {
         approvalMode: config.approvalMode,
       }),
@@ -732,6 +737,8 @@ export type ResolvedProviderModelMetadata = Omit<
 
 export type LoadedProviderConfig = {
   config: ProviderConfigFile
+  /** Host-only captured primary selection. JSON config parsing never sets this field. */
+  runModel?: string
   sourceFilePaths: string[]
   /**
    * ER-1 provenance metadata for the `readableRoots` trust gate:
@@ -759,6 +766,8 @@ export type LoadedProviderConfig = {
     filePath: string
     message: string
   }>
+  /** Ordered individual declarations; includes do not inherit a parent's timeout-policy authority. */
+  terminalTimeoutDeclarations?: Array<Readonly<{ filePath: string; policy: TerminalTimeoutPolicy; via?: readonly string[] }>>
   sourceFiles?: {
     providers?: Record<string, string>
     routes?: {
@@ -1057,6 +1066,7 @@ function readProviderConfigFile(
     // overrides an earlier file (the loaders' empty base supplies 'balanced').
     let config: ProviderConfigFile = { ...emptyProviderConfig(), approvalMode: undefined }
     const sourceFilePaths: string[] = []
+    const terminalTimeoutDeclarations: NonNullable<LoadedProviderConfig['terminalTimeoutDeclarations']> = []
     const readableRootsSources: Record<string, string> = {}
     const sandboxAllowPathsSources: Record<string, string> = {}
     let sourceFiles: NonNullable<LoadedProviderConfig['sourceFiles']> = {
@@ -1075,6 +1085,10 @@ function readProviderConfigFile(
         loadedFragment.sourceFiles?.indexing !== undefined,
       )
       sourceFilePaths.push(...loadedFragment.sourceFilePaths)
+      terminalTimeoutDeclarations.push(...(loadedFragment.terminalTimeoutDeclarations ?? []).map(declaration => ({
+        ...declaration,
+        via: [reader ? resolvedConfigPath : fs.realpathSync(resolvedConfigPath), ...(declaration.via ?? [])],
+      })))
       sourceFiles = mergeSourceFiles(
         sourceFiles,
         loadedFragment.sourceFiles ?? {},
@@ -1124,8 +1138,12 @@ function readProviderConfigFile(
     )
     sourceFiles = mergeSourceFiles(sourceFiles, currentSourceFiles)
 
+    if (parseResult.data.terminalTimeoutPolicy !== undefined)
+      terminalTimeoutDeclarations.push({ filePath: reader ? resolvedConfigPath : fs.realpathSync(resolvedConfigPath),
+        policy: parseResult.data.terminalTimeoutPolicy })
     const result = {
       config,
+      terminalTimeoutDeclarations,
       sourceFilePaths: Array.from(
         new Set([...sourceFilePaths, resolvedConfigPath]),
       ),
@@ -1234,6 +1252,7 @@ function mergeProviderConfigs(
     // the base block wholesale; a present override replaces it wholesale.
     sandbox: override.sandbox ?? base.sandbox,
     execution: override.execution ?? base.execution,
+    terminalTimeoutPolicy: mergeTerminalTimeoutPolicies(base.terminalTimeoutPolicy, override.terminalTimeoutPolicy),
     failoverModels: override.failoverModels ?? base.failoverModels,
     maxAgentSteps: override.maxAgentSteps ?? base.maxAgentSteps,
     maxMissingOutputRetries:
@@ -1288,6 +1307,11 @@ export function restrictUntrustedProjectFragment(params: {
     providers[providerId] = provider
   }
   const restricted: ProviderConfigFile = { ...config, providers }
+  if (config.terminalTimeoutPolicy !== undefined && fragment.terminalTimeoutDeclarations === undefined) {
+    restricted.terminalTimeoutPolicy = tightenTerminalTimeoutPolicy(current.terminalTimeoutPolicy, config.terminalTimeoutPolicy)
+    if (JSON.stringify(restricted.terminalTimeoutPolicy) !== JSON.stringify(config.terminalTimeoutPolicy))
+      gated.push({ kind: 'terminalTimeoutPolicy', filePath: selectedPath, summary: 'relax terminal timeout defaults or caps' })
+  }
   if (config.fileChangeHooks.length > 0) {
     for (const hook of config.fileChangeHooks)
       gated.push({ kind: 'fileChangeHooks', filePath: selectedPath,
@@ -1398,7 +1422,8 @@ type ScopedFragment = {
 }
 
 /** Shared fold for both loaders: merge in order, gating project scope unless trusted. */
-function mergeScopedFragments(fragments: readonly ScopedFragment[], projectTrusted: boolean) {
+function mergeScopedFragments(fragments: readonly ScopedFragment[], projectTrusted: boolean,
+  isUserTimeoutDeclaration: (filePath: string) => boolean) {
   let config = emptyProviderConfig()
   let base: ProviderConfigFile | undefined
   const sourceFilePaths: string[] = []
@@ -1421,7 +1446,24 @@ function mergeScopedFragments(fragments: readonly ScopedFragment[], projectTrust
         selectedPath: fragment.selectedPath, hasIndexingOverride, gated })
       if (!projectTrusted) fragmentConfig = restricted
     }
+    const previousTimeoutPolicy = config.terminalTimeoutPolicy
     config = mergeProviderConfigs(config, fragmentConfig, hasIndexingOverride)
+    if (fragment.parsed.terminalTimeoutDeclarations !== undefined) {
+      let effective = previousTimeoutPolicy
+      for (const declaration of fragment.parsed.terminalTimeoutDeclarations) {
+        let policy = declaration.policy
+        const untrustedOrigin = [...(declaration.via ?? []), declaration.filePath]
+          .find(filePath => !isUserTimeoutDeclaration(filePath))
+        if (untrustedOrigin !== undefined) {
+          const tightened = tightenTerminalTimeoutPolicy(effective, policy)
+          if (JSON.stringify(tightened) !== JSON.stringify(policy))
+            gated.push({ kind: 'terminalTimeoutPolicy', filePath: untrustedOrigin, summary: 'relax terminal timeout defaults or caps' })
+          if (!projectTrusted) policy = tightened ?? {}
+        }
+        effective = mergeTerminalTimeoutPolicies(effective, policy)
+      }
+      config.terminalTimeoutPolicy = effective
+    }
     sourceFilePaths.push(...fragment.parsed.sourceFilePaths)
     sourceFiles = mergeSourceFiles(sourceFiles, fragment.parsed.sourceFiles ?? {})
     Object.assign(readableRootsSources, fragment.parsed.readableRootsSources ?? {})
@@ -1488,6 +1530,8 @@ export function loadProviderConfigForHost(params: {
     projectRoot: string
     /** True for the user config dir and the explicit selection; never gated. */
     isUserScope: (selectedPath: string) => boolean
+    /** Canonical user-owned/exact-selected paths for individual timeout declarations. */
+    isUserTimeoutDeclaration?: (filePath: string) => boolean
     /** Host decision (SDK option, CLI flag, env opt-in); undefined consults the store. */
     explicit?: ProjectTrustDecision
     /** Directory holding project-trust.json; undefined means no stored decisions. */
@@ -1536,9 +1580,13 @@ export function loadProviderConfigForHost(params: {
   // No selected paths means the host disabled config discovery: read nothing more.
   const extraFiles = params.configPaths.length === 0 ? [] : projectTrustExtraFiles(projectRoot)
     .filter(filePath => optionalConfigStat(params.reader, filePath)?.kind === 'file')
+  const isUserTimeoutDeclaration = params.projectTrust.isUserTimeoutDeclaration ?? ((filePath: string) =>
+    fragments.some(fragment => fragment.userScope && params.reader.realpath(fragment.selectedPath) === filePath))
+  const timeoutProjectFiles = fragments.flatMap(f => (f.parsed.terminalTimeoutDeclarations ?? [])
+    .flatMap(declaration => [...(declaration.via ?? []), declaration.filePath].filter(filePath => !isUserTimeoutDeclaration(filePath))))
   const trust = resolveLoadProjectTrust({
     projectRoot,
-    files: [...fragments.filter(f => !f.userScope).flatMap(f => f.parsed.sourceFilePaths), ...extraFiles],
+    files: [...fragments.filter(f => !f.userScope).flatMap(f => f.parsed.sourceFilePaths), ...timeoutProjectFiles, ...extraFiles],
     readBytes: filePath => params.reader.readFile(filePath),
     explicit: params.projectTrust.explicit,
     readStore: () => {
@@ -1549,7 +1597,7 @@ export function loadProviderConfigForHost(params: {
       catch (error) { if (error instanceof TypeError) return parseProjectTrustStore(''); throw error }
     },
   })
-  const merged = mergeScopedFragments(fragments, trust.status === 'trusted')
+  const merged = mergeScopedFragments(fragments, trust.status === 'trusted', isUserTimeoutDeclaration)
   return {
     config: merged.config,
     sourceFilePaths: merged.sourceFilePaths,
@@ -1937,6 +1985,10 @@ export function loadProviderConfigSync(
   const diagnostics: NonNullable<LoadedProviderConfig['diagnostics']> = []
   const fragments: ScopedFragment[] = []
   const configDirs = getOpenbuffConfigDirs().map((configDir) => path.resolve(configDir))
+  const explicitTimeoutPath = explicitConfigPath ? canonicalProjectRoot(path.resolve(explicitConfigPath)) : undefined
+  const timeoutConfigDirs = configDirs.map(directory => canonicalProjectRoot(directory))
+  const isUserTimeoutDeclaration = (filePath: string) => filePath === explicitTimeoutPath ||
+    timeoutConfigDirs.some(directory => filePath === directory || filePath.startsWith(directory + path.sep))
   const isUserScope = (configPath: string) => {
     if (explicitConfigPath) return true
     const resolved = path.resolve(configPath)
@@ -2006,6 +2058,8 @@ export function loadProviderConfigSync(
     projectRoot,
     files: [
       ...fragments.filter((f) => !f.userScope).flatMap((f) => f.parsed.sourceFilePaths),
+      ...fragments.flatMap(f => (f.parsed.terminalTimeoutDeclarations ?? [])
+        .flatMap(declaration => [...(declaration.via ?? []), declaration.filePath].filter(filePath => !isUserTimeoutDeclaration(filePath)))),
       ...projectTrustExtraFiles(projectRoot).filter((filePath) => fs.existsSync(filePath)),
     ],
     readBytes: (filePath) => {
@@ -2014,7 +2068,7 @@ export function loadProviderConfigSync(
     explicit: getProjectTrustOverride(projectRoot) ?? (trustEnv === '1' ? 'trusted' : undefined),
     readStore: () => readProjectTrustStoreSync(configDirs[0]!),
   })
-  const merged = mergeScopedFragments(fragments, trust.status === 'trusted')
+  const merged = mergeScopedFragments(fragments, trust.status === 'trusted', isUserTimeoutDeclaration)
   const { config, sourceFilePaths, sourceFiles, readableRootsSources, sandboxAllowPathsSources } = merged
 
   warnIfAncestorConfigHasApiKeyEnv(config, sourceFiles, process.cwd())
@@ -2475,7 +2529,8 @@ export function resolveConfiguredAgentModelConfig(params: {
   // Failover path: an explicit model param wins over routing so each
   // configured failover model is actually attempted. Reasoning effort still
   // resolves from matching route entries so per-model effort overrides apply.
-  if (preferModelParam && model) {
+  const selectedModel = preferModelParam && model ? model : loadedConfig.runModel
+  if (selectedModel) {
     const mode = resolveModeForAgentId(agentId)
     const reasoningEffort =
       (mode && loadedConfig.config.modeReasoningEfforts?.[mode]) ??
@@ -2483,7 +2538,7 @@ export function resolveConfiguredAgentModelConfig(params: {
         .map((candidate) => agentReasoningEfforts[candidate])
         .find((effort) => effort !== undefined) ??
       loadedConfig.config.defaultReasoningEffort
-    return { model, reasoningEffort }
+    return { model: selectedModel, reasoningEffort }
   }
 
   // Mode/agent/defaultModel routing in openbuff.json takes precedence. The

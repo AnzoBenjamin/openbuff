@@ -882,7 +882,12 @@ function sanitizeJsonToolResultValue(
     ) {
       continue
     }
-    result[key] = sanitizeJsonToolResultValue(child, seen)
+    Object.defineProperty(result, key, {
+      value: sanitizeJsonToolResultValue(child, seen),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    })
   }
   seen.delete(value)
   return result

@@ -47,7 +47,7 @@ jobs:
 
       # Explicit pin matches rust/rust-toolchain.toml; rustup installs it on
       # uncached runners, so the job never depends on a preinstalled toolchain.
-      - uses: dtolnay/rust-toolchain@1.87.0
+      - uses: dtolnay/rust-toolchain@1.99.1
 
       # Charter rule 3: toolchain cost stays O(1) — one reusable job with
       # caching, not per-package setup steps.
@@ -104,9 +104,9 @@ jobs:
 
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
-      # Same explicit 1.87.0 pin as build-test; `targets:` installs the target
+      # Same explicit 1.99.1 pin as build-test; `targets:` installs the target
       # std in one rustup pass.
-      - uses: dtolnay/rust-toolchain@1.87.0
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: ${{ matrix.target }}
 

@@ -68,6 +68,15 @@ describe('resolvePinnedMcpAddress (NEW-7)', () => {
     ).rejects.toThrow(/no addresses/)
   })
 
+  test('rejects resolver output that is not a usable IP literal, even if allowlisted', async () => {
+    for (const address of ['rebind.attacker.example', 'not-an-ip', '', '2606:4700:4700::1111%eth0']) {
+      await expect(resolvePinnedMcpAddress(new URL('http://mcp.example.com:8080/rpc'), {
+        resolveHost: async () => [address],
+        allowedLoopbackMcp: [`${address}:8080`],
+      })).rejects.toBeInstanceOf(McpDnsRebindingError)
+    }
+  })
+
   test('never leaks a resolved IP address into the refusal error', async () => {
     const resolveHost = async () => ['10.1.2.3']
     let caught: unknown

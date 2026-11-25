@@ -44,6 +44,8 @@ export const printModeProviderStatusSchema = z.object({
   attempt: z.number().int().positive().optional(),
   maxAttempts: z.number().int().positive().optional(),
   delayMs: z.number().nonnegative().optional(),
+  /** Live remaining time for the same captured backoff; absent on historical status events. */
+  remainingDelayMs: z.number().nonnegative().optional(),
   statusCode: z.number().int().optional(),
   /** Provider id of the route that failed (failover only). */
   providerId: z.string().optional(),
@@ -111,6 +113,21 @@ export const printModeTextSchema = z.object({
   agentId: z.string().optional(),
 })
 export type PrintModeText = z.infer<typeof printModeTextSchema>
+
+export const printModeUsageSchema = z.object({
+  type: z.literal('usage'),
+  runId: z.string(),
+  agentId: z.string().optional(),
+  model: z.string().optional(),
+  /** Missing/invalid provider counts remain absent, never a manufactured zero. */
+  inputTokens: z.number().int().nonnegative().optional(),
+  outputTokens: z.number().int().nonnegative().optional(),
+  cachedInputTokens: z.number().int().nonnegative().optional(),
+  totalTokens: z.number().int().nonnegative().optional(),
+  /** True only when input and output usage were explicitly reported and valid. */
+  complete: z.boolean(),
+})
+export type PrintModeUsage = z.infer<typeof printModeUsageSchema>
 
 export const printModeFinishSchema = z.object({
   type: z.literal('finish'),
@@ -659,6 +676,7 @@ export const printModeEventSchema = z.discriminatedUnion('type', [
   printModeToolCallSchema,
   printModeToolResultSchema,
   printModeToolStartSchema,
+  printModeUsageSchema,
 
   printModeContextCompactionSchema,
   printModeContextCompactionProgressSchema,

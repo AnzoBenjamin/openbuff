@@ -183,6 +183,19 @@ describe('sdk-event-handlers', () => {
     expect(textBlocks.some((b) => b.content.includes('retrying'))).toBe(false)
   })
 
+  test('provider retry countdown replaces the visible delay instead of repeating the original wait', () => {
+    const { ctx, getMessages } = createTestContext()
+    const handle = createEventHandler(ctx)
+    for (const remainingDelayMs of [45_000, 44_000, 1_000, 0]) {
+      dispatchValidEvent(handle, { type: 'provider_status', status: 'retrying', model: 'primary', attempt: 2, maxAttempts: 4,
+        delayMs: 45_000, remainingDelayMs })
+      const statuses = (getMessages()[0].blocks ?? []).filter(block => block.type === 'text' && block.textType === 'status')
+      expect(statuses).toHaveLength(1)
+      const text = (statuses[0] as { content: string }).content
+      expect(text).toContain(remainingDelayMs ? `in ${(remainingDelayMs / 1000).toFixed(1)}s` : 'now')
+    }
+  })
+
   test('a 401 failover notice persists and names the status, provider and env var', () => {
     const { ctx, getMessages } = createTestContext()
     const handleEvent = createEventHandler(ctx)

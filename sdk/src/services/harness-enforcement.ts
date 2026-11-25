@@ -539,6 +539,7 @@ function unsupportedSegment(
 function classifySegment(
   segment: string,
   depth = 0,
+  observeRoutine?: (program: string, args: readonly string[]) => void,
 ): Omit<ClassifiedHarnessAction, 'commandHash'> | undefined {
   const wrappedCommand = segment.trim()
   const words = shellWords(wrappedCommand)
@@ -691,7 +692,7 @@ function classifySegment(
             .map((word) => word.value)
             .join(' ')
         : args[payloadIndex].value
-    const classified = classifySegmentsLikeCommand(payload, depth + 1)
+    const classified = classifySegmentsLikeCommand(payload, depth + 1, observeRoutine)
     if (!classified) return { action: 'arbitrary-code', target: wrappedCommand }
     return {
       ...classified,
@@ -708,6 +709,8 @@ function classifySegment(
     )
   if (
     (program === 'git' && args[0]?.dynamic) ||
+    (['npm', 'pnpm', 'bun', 'yarn'].includes(program) &&
+      args.some((word) => word.dynamic)) ||
     (['npm', 'pnpm', 'bun', 'yarn', 'gh', 'docker', 'podman'].includes(
       program,
     ) &&
@@ -717,9 +720,17 @@ function classifySegment(
       wrappedCommand,
       'Dynamic subcommand cannot be classified statically.',
     )
+  observeRoutine?.(program, args.map(word => word.value))
+  const argvClassification = classifyHarnessArgv({
+    executable: program,
+    argv: args.map((word) => word.value),
+  })
   const classified = classifySingleSegment(
     [program, ...args.map((word) => word.value)].join(' '),
-  )
+  ) ?? (argvClassification?.parseStatus === 'complete' &&
+    argvClassification.action !== 'arbitrary-code'
+    ? { ...effectOnly(argvClassification), target: wrappedCommand }
+    : undefined)
   if (dynamicArguments)
     return classified
       ? {
@@ -752,6 +763,7 @@ function classifySegment(
 function classifySegmentsLikeCommand(
   command: string,
   depth: number,
+  observeRoutine?: (program: string, args: readonly string[]) => void,
 ): Omit<ClassifiedHarnessAction, 'commandHash'> | undefined {
   const scan = scanCommandSegments(command)
   if (!scan.complete)
@@ -771,7 +783,7 @@ function classifySegmentsLikeCommand(
     : 'complete'
   let parseReason = scan.unsupportedReason
   for (const segment of segments) {
-    const result = classifySegment(segment, depth)
+    const result = classifySegment(segment, depth, observeRoutine)
     if (!result) continue
     effects.push(...(result.effects ?? [effectOnly(result)]))
     if (
@@ -913,6 +925,7 @@ function scanCommandSegments(input: string, depth = 0): SegmentScanResult {
   let quote: "'" | '"' | undefined
   const groups: Array<{ closer: string; segmentCount: number }> = []
   let requiresNext = false
+  let requiresRedirectTarget = false
   let closedGroup = false
   let unsupportedReason: string | undefined
   const flush = () => {
@@ -959,10 +972,12 @@ function scanCommandSegments(input: string, depth = 0): SegmentScanResult {
       substitutions.push(...inner.segments, ...inner.substitutions)
       unsupportedReason ??= inner.unsupportedReason
       current += '__openbuff_dynamic__'
+      requiresRedirectTarget = false
       index = body.end
       continue
     }
     if (!inDoubleQuote) {
+      if (requiresRedirectTarget && /[;\n|&)]/.test(char)) return incomplete()
       if (char === '#' && (current.length === 0 || /\s$/.test(current))) {
         while (index < input.length && input[index] !== '\n') index++
         continue
@@ -1028,13 +1043,25 @@ function scanCommandSegments(input: string, depth = 0): SegmentScanResult {
         substitutions.push(...inner.segments, ...inner.substitutions)
         unsupportedReason ??= inner.unsupportedReason
         current += '__openbuff_dynamic__'
+        requiresRedirectTarget = false
         index = body.end
         continue
       }
       if (char === '<' && input[index + 1] === '<')
         unsupportedReason ??=
           'Here-document and here-string bodies are outside this scanner tier.'
+      if (char === '<' || char === '>') {
+        if (requiresRedirectTarget) return incomplete()
+        requiresRedirectTarget = true
+        current += char
+        index++
+        if (['<', '>', '|', '&'].includes(input[index] ?? '')) {
+          current += input[index++]
+        }
+        continue
+      }
       if (char === "'" || char === '"') {
+        requiresRedirectTarget = false
         quote = char
         current += char
         index += 1
@@ -1099,10 +1126,12 @@ function scanCommandSegments(input: string, depth = 0): SegmentScanResult {
         continue
       }
     }
+    if (requiresRedirectTarget && !/\s/.test(char))
+      requiresRedirectTarget = false
     current += char
     index += 1
   }
-  if (quote || groups.length || (requiresNext && !current.trim()))
+  if (quote || groups.length || requiresRedirectTarget || (requiresNext && !current.trim()))
     return incomplete()
   flush()
   return { segments, substitutions, complete: true, unsupportedReason }
@@ -1124,6 +1153,21 @@ export function classifyTerminalHarnessAction(
     | undefined => classifySegmentsLikeCommand(rawCommand, 0)
   const result = classify()
   return result ? { ...result, commandHash, rawCommand } : undefined
+}
+
+/** Procedural facts reuse the authorization scanner without introducing approvals
+ * for routine staging. Unsupported syntax retains all potentially gated actions. */
+export function classifyTerminalProcedureActions(command: string): readonly ('git-commit' | 'git-push' | 'git-stage')[] {
+  const actions = new Set<'git-commit' | 'git-push' | 'git-stage'>()
+  const classified = classifySegmentsLikeCommand(command, 0, (program, args) => {
+    if (program === 'git' && args[0] === 'add') actions.add('git-stage')
+  })
+  if (classified?.parseStatus && classified.parseStatus !== 'complete') return ['git-commit', 'git-push', 'git-stage']
+  for (const effect of classified?.effects ?? (classified ? [classified] : [])) {
+    if (effect.action === 'commit') actions.add('git-commit')
+    if (effect.action === 'push') actions.add('git-push')
+  }
+  return [...actions]
 }
 
 function exactArgv(args: readonly string[], expected: readonly string[]): boolean {
@@ -1335,6 +1379,7 @@ export function classifyHarnessArgv(params: { executable: string; argv: readonly
     if (subcommand === 'switch' && !args.some(arg => ['--discard-changes', '-f', '--force'].includes(arg))) return undefined
     if (subcommand === 'tag') return effect('release')
     if ((subcommand === 'reset' && args.includes('--hard')) || (subcommand === 'clean' && args.some(arg => /^-[^-]*[fd]/.test(arg))) ||
+      (subcommand === 'switch' && args.some(arg => ['--discard-changes', '-f', '--force'].includes(arg))) ||
       (subcommand === 'checkout' && args.includes('--')) ||
       (subcommand === 'restore' && (!args.includes('--staged') || args.some(arg => ['--worktree', '-W', '--source', '--overlay', '--patch', '-p'].includes(arg)))))
       return effect('workspace-delete')

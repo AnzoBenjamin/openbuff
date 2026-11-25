@@ -57,7 +57,10 @@ export async function readSavedTranscriptInspection(
   const id = `saved-inspection:${chatId}`
   if (!chatId || chatId === '.' || chatId === '..' || path.basename(chatId) !== chatId)
     throw new Error('Invalid saved session identifier')
-  const source = path.join(getProjectDataDir(), 'chats', chatId, 'chat-messages.json')
+  const chatDir = path.join(getProjectDataDir(), 'chats', chatId)
+  const envelope = path.join(chatDir, 'chat-state.json')
+  // The authoritative envelope can exist before its compatibility sidecar.
+  const source = fs.existsSync(envelope) ? envelope : path.join(chatDir, 'chat-messages.json')
   const chunks: Buffer[] = []
   let bytes = 0
   let limited = false

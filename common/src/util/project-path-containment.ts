@@ -622,7 +622,7 @@ let externalReadRootsOwner: string | undefined
 declare const hostReadPolicyBrand: unique symbol
 export type HostReadPolicy = Readonly<{ [hostReadPolicyBrand]: 'host-read-policy' }>
 const hostReadPolicies = new WeakMap<object, Readonly<{
-  projectRoot: string; realProjectRoot: string; roots: readonly string[]; realRoots: readonly string[]
+  projectRoot: string; realProjectRoot: string; roots: readonly string[]; realRoots: readonly string[]; projectOnly: boolean
 }>>()
 
 /** Capture one run's read boundary; copied or deserialized objects grant no reads. */
@@ -645,9 +645,35 @@ export function createHostReadPolicy(
   }
   hostReadPolicies.set(policy, Object.freeze({ projectRoot: path.resolve(projectRoot),
     realProjectRoot: canonical(path.resolve(projectRoot)), roots: capturedRoots,
-    realRoots: Object.freeze(capturedRoots.map(canonical)) }))
+    realRoots: Object.freeze(capturedRoots.map(canonical)), projectOnly: false }))
   if (sandbox) bindFilesystemSandbox(policy, sandbox)
   return policy
+}
+
+/** Derive a narrower read token without recapturing or retargeting its roots. */
+export function deriveProjectOnlyReadPolicy(parent: HostReadPolicy): HostReadPolicy {
+  const state = hostReadPolicies.get(parent)
+  if (!state) throw new Error('Invalid host read policy')
+  if (state.projectOnly) return parent
+  const policy = Object.freeze(Object.create(null)) as HostReadPolicy
+  hostReadPolicies.set(policy, Object.freeze({ ...state, projectOnly: true,
+    roots: Object.freeze([]), realRoots: Object.freeze([]) }))
+  bindFilesystemSandbox(policy, { mode: 'project', allowPaths: [] })
+  return policy
+}
+
+/** Only an authentic host-issued token can select the strict read boundary. */
+export function isProjectOnlyReadPolicy(token: unknown): token is HostReadPolicy {
+  return token !== null && typeof token === 'object' && hostReadPolicies.get(token)?.projectOnly === true
+}
+
+/** Authenticated admission roots; this accessor never performs filesystem I/O. */
+export function getHostReadProjectRoot(policy: HostReadPolicy): Readonly<{
+  projectRoot: string; realProjectRoot: string
+}> {
+  const state = hostReadPolicies.get(policy)
+  if (!state) throw new Error('Invalid host read policy')
+  return Object.freeze({ projectRoot: state.projectRoot, realProjectRoot: state.realProjectRoot })
 }
 
 export function getHostReadRoots(policy: HostReadPolicy): readonly string[] {
@@ -1235,6 +1261,29 @@ export async function resolveProjectPathForFileSystem(
   }
 }
 
+function projectOnlyLexicalReadPath(
+  projectRoot: string,
+  input: string,
+  readPolicy: HostReadPolicy,
+): { fullPath: string; relativePath: string; realProjectRoot: string } | null {
+  const state = hostReadPolicies.get(readPolicy)
+  if (!state?.projectOnly || state.projectRoot !== path.resolve(projectRoot) ||
+    typeof input !== 'string' || !input || input.includes('\0')) return null
+  const spelling = normalizePathSpelling(input)
+  if (spelling.hasTraversalSegment || /^[a-zA-Z]:/.test(spelling.canonical)) return null
+  const fullPath = resolveAgainstRoot(state.projectRoot, spelling.canonical || '.')
+  const relativePath = path.relative(state.projectRoot, fullPath)
+  if (escapesRoot(state.projectRoot, fullPath) ||
+    isMandatorySensitiveReadPath(fullPath) || refusesWin32AliasedSensitivePath(fullPath)) return null
+  return { fullPath, relativePath, realProjectRoot: state.realProjectRoot }
+}
+
+function projectOnlyCanonicalReadAllowed(fullPath: string, realFullPath: string, realRoot: string): boolean {
+  return path.isAbsolute(realFullPath) && !realFullPath.includes('\0') &&
+    !escapesRoot(realRoot, realFullPath) && !isMandatorySensitiveReadPath(realFullPath) &&
+    !refusesWin32AliasedSensitivePath(realFullPath) && !isMandatorySensitiveReadPath(fullPath)
+}
+
 /**
  * Read resolver follows the captured sandbox policy. In project mode, the
  * read-only readableRoots boundary is an additional fallback; it never grants
@@ -1247,6 +1296,16 @@ export function resolveProjectPathForRead(
 ): ContainedProjectPath | null {
   readPolicy ??= getSandboxReadPolicyToken() as HostReadPolicy | undefined
   if (!matchesHostReadPolicy(projectRoot, readPolicy)) return null
+  if (isProjectOnlyReadPolicy(readPolicy)) {
+    const target = projectOnlyLexicalReadPath(projectRoot, input, readPolicy)
+    if (!target) return null
+    try {
+      if (fs.realpathSync(path.resolve(projectRoot)) !== target.realProjectRoot) return null
+      const realFullPath = fs.realpathSync(target.fullPath)
+      if (!projectOnlyCanonicalReadAllowed(target.fullPath, realFullPath, target.realProjectRoot)) return null
+      return { fullPath: target.fullPath, realFullPath, relativePath: target.relativePath, scope: 'project' }
+    } catch { return null }
+  }
   if (readPolicy !== undefined && realpathOrLexical(path.resolve(projectRoot)) !== hostReadPolicies.get(readPolicy)!.realProjectRoot) return null
   const contained = resolveProjectPath(projectRoot, input, readPolicy)
   if (contained !== null) return contained
@@ -1269,6 +1328,16 @@ export async function resolveProjectPathForFileSystemRead(
   readPolicy: HostReadPolicy | undefined = fileSystem.hostReadPolicy,
 ): Promise<ContainedProjectPath | null> {
   if (!matchesHostReadPolicy(projectRoot, readPolicy)) return null
+  if (isProjectOnlyReadPolicy(readPolicy)) {
+    const target = projectOnlyLexicalReadPath(projectRoot, input, readPolicy)
+    if (!target) return null
+    try {
+      if (String(await fileSystem.realpath(path.resolve(projectRoot))) !== target.realProjectRoot) return null
+      const realFullPath = String(await fileSystem.realpath(target.fullPath))
+      if (!projectOnlyCanonicalReadAllowed(target.fullPath, realFullPath, target.realProjectRoot)) return null
+      return { fullPath: target.fullPath, realFullPath, relativePath: target.relativePath, scope: 'project' }
+    } catch { return null }
+  }
   if (readPolicy !== undefined && await realpathOrLexicalForFileSystem(path.resolve(projectRoot), fileSystem) !== hostReadPolicies.get(readPolicy)!.realProjectRoot) return null
   const contained = await resolveProjectPathForFileSystem(
     projectRoot,

@@ -20,8 +20,8 @@ import type { TaskMemoryV1 } from '@codebuff/common/types/task-memory'
 /**
  * Regression tests for the per-batch spawn clone cache (createAgentState
  * optional `sharedSpawnCloneCache`):
- * - sibling children of ONE spawn batch share the SAME taskMemory/playbook
- *   Context/workspaceState clone object identity instead of re-cloning;
+ * - sibling children of ONE spawn batch share memoized taskMemory/workspace
+ *   clones but receive independently filtered playbook contexts;
  * - a NEW handler invocation (fresh cache object) clones again — the cache is
  *   never reused across batches and never held at module scope;
  * - the cache slot is keyed by the SOURCE object, so a batch whose parent
@@ -47,7 +47,10 @@ const makeTemplate = (
   stepPrompt: '',
 })
 
-const makePlaybook = (playbookId = 'pb-spawn-cache-test'): MemoryPlaybook =>
+const makePlaybook = (
+  playbookId = 'pb-spawn-cache-test',
+  agentTypes?: string[],
+): MemoryPlaybook =>
   MemoryPlaybookSchema.parse({
     schemaVersion: 1,
     playbookId,
@@ -59,7 +62,7 @@ const makePlaybook = (playbookId = 'pb-spawn-cache-test'): MemoryPlaybook =>
       spawnAgentType: 'git-committer',
       requireEvidence: [],
     },
-    scope: { repos: [] },
+    scope: { repos: [], ...(agentTypes ? { agentTypes } : {}) },
     status: 'active',
     enforcement: 'warn',
     counters: {
@@ -97,24 +100,49 @@ const makeParentState = (): AgentState => ({
 })
 
 describe('createAgentState shared spawn clone cache', () => {
-  test('same-batch siblings share the SAME taskMemory/playbookContext/workspaceState object identity', () => {
+  test('siblings share memoized state but get playbooks filtered for their own agent type', () => {
     const cache: SharedSpawnCloneCache = {}
     const parent = makeParentState()
+    parent.playbookContext = [
+      makePlaybook('pb-committer', ['git-committer']),
+      makePlaybook('pb-reviewer', ['code-reviewer']),
+    ]
     const template = makeTemplate('full')
 
-    const childA = createAgentState('a', template, parent, {}, cache)
-    const childB = createAgentState('b', template, parent, {}, cache)
+    const childA = createAgentState('git-committer', template, parent, {}, cache)
+    const childB = createAgentState('code-reviewer', template, parent, {}, cache)
 
     expect(childA.taskMemory).toBe(childB.taskMemory)
-    expect(childA.playbookContext).toBe(childB.playbookContext)
     expect(childA.workspaceState).toBe(childB.workspaceState)
+    expect(childA.playbookContext).toEqual([parent.playbookContext[0]])
+    expect(childB.playbookContext).toEqual([parent.playbookContext[1]])
+    expect(childA.playbookContext).not.toBe(childB.playbookContext)
 
-    // The shared objects are still deep-clone copies of the parent's nodes
-    // (copy-safe against parent cross-mutation), NOT references to them.
+    // Memoized fields remain copies of the parent's nodes; playbook context is
+    // independently filtered for each child, not shared across siblings.
     expect(childA.taskMemory).toEqual(parent.taskMemory)
     expect(childA.taskMemory).not.toBe(parent.taskMemory)
     expect(childA.playbookContext).not.toBe(parent.playbookContext)
     expect(childA.workspaceState).not.toBe(parent.workspaceState)
+  })
+
+  test('mutating one child playbook context cannot leak to a sibling or parent', () => {
+    const cache: SharedSpawnCloneCache = {}
+    const parent = makeParentState()
+    parent.playbookContext = [
+      makePlaybook('pb-committer', ['git-committer']),
+      makePlaybook('pb-reviewer', ['code-reviewer']),
+    ]
+    const template = makeTemplate('full')
+    const childA = createAgentState('git-committer', template, parent, {}, cache)
+    const childB = createAgentState('code-reviewer', template, parent, {}, cache)
+
+    ;(
+      childA.playbookContext![0] as unknown as { instruction: string }
+    ).instruction = 'child-only change'
+
+    expect(childB.playbookContext?.[0]?.instruction).toBe('Test instruction.')
+    expect(parent.playbookContext[0]?.instruction).toBe('Test instruction.')
   })
 
   test('sibling states still differ in per-child identity fields', () => {
@@ -192,18 +220,17 @@ describe('createAgentState shared spawn clone cache', () => {
   })
 
   // Defense-in-depth at the isolation boundary (dev/test only): the shared
-  // memoized clone is deep-frozen, so a writer that breaks the
+  // memoized state clones are deep-frozen, so a writer that breaks the
   // copy-on-write convention fails loudly (strict-mode TypeError on a
   // frozen object) instead of silently cross-contaminating siblings.
-  test('the shared clone is deep-frozen with its parent untouched', () => {
+  test('memoized state clones are deep-frozen with their parent untouched', () => {
     const cache: SharedSpawnCloneCache = {}
     const parent = makeParentState()
 
     const child = createAgentState('a', makeTemplate('full'), parent, {}, cache)
 
     expect(Object.isFrozen(child.taskMemory)).toBe(true)
-    expect(Object.isFrozen(child.playbookContext)).toBe(true)
-    expect(Object.isFrozen(child.playbookContext![0])).toBe(true)
+    expect(Object.isFrozen(child.playbookContext)).toBe(false)
     expect(Object.isFrozen(child.workspaceState)).toBe(true)
     // Nested rows/arrays are frozen too, not just the root node.
     expect(Object.isFrozen(parent.taskMemory)).toBe(false)

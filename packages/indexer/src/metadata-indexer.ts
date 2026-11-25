@@ -7,6 +7,7 @@ import {
   getFileTokenScores,
   AST_IMPORT_SPECIFIER_LIMIT,
   SUPPORTED_CODE_EXTENSIONS,
+  getParserExtractionFingerprint,
 } from '@codebuff/code-map'
 
 import {
@@ -26,12 +27,16 @@ import {
   resolveGuidRef,
 } from './asset-refs'
 import { sanitizeIndexCacheDir } from './index-store'
-import { buildIndexQueryDataAsync } from './query-data'
+import {
+  buildIndexQueryDataAsync,
+  updateIndexQueryDataAsync,
+} from './query-data'
 import type {
   GraphWeights,
   IndexedFile,
   IndexEdge,
   IndexGraph,
+  IndexGraphDependencies,
   IndexingConfig,
   IndexMutationDelta,
   IndexNode,
@@ -300,7 +305,6 @@ export function compareRevisions(
   return strA < strB ? -1 : strA > strB ? 1 : 0
 }
 
-
 const MARKDOWN_LINK_REGEX = /\[[^\]]+\]\(([^)]+)\)/g
 
 /**
@@ -441,9 +445,21 @@ export async function buildMetadataIndex(
   let parseDiagnostics: ParseDiagnostic[] = []
   let parseCoverage: ParseCoverage | undefined
   let parseData: Record<string, ParsedFileTokens> = {}
+  const parsedSourceHashes = new Map<string, string>()
   if (codeFilePaths.length > 0) {
     try {
-      const data = await getFileTokenScores(projectRoot, codeFilePaths)
+      const data = await getFileTokenScores(
+        projectRoot,
+        codeFilePaths,
+        (filePath) => {
+          const content = fs.readFileSync(
+            path.join(projectRoot, filePath),
+            'utf8',
+          )
+          parsedSourceHashes.set(filePath, hashContent(content))
+          return content
+        },
+      )
       tokenScores = data.tokenScores
       tokenCallers = data.tokenCallers
       parseDiagnostics = data.diagnostics
@@ -477,9 +493,24 @@ export async function buildMetadataIndex(
       asset: file.asset,
       tokenScores: tokenScores[file.relativePath] ?? {},
       astImports: parseData[file.relativePath]?.imports,
+      parsedSourceHash: parsedSourceHashes.get(file.relativePath),
       yieldToEventLoop,
     })
-    if (indexed) indexedFiles[file.relativePath] = indexed
+    if (indexed) {
+      indexedFiles[file.relativePath] = indexed
+      if (
+        parseData[file.relativePath] &&
+        parsedSourceHashes.get(file.relativePath) !== indexed.hash
+      ) {
+        delete parseData[file.relativePath]
+        parseDiagnostics.push({
+          filePath: file.relativePath,
+          stage: 'parse',
+          message:
+            'Source changed between parsing and publication; cached parse was discarded',
+        })
+      }
+    }
   }
 
   const index = await createMetadataIndex(
@@ -491,6 +522,19 @@ export async function buildMetadataIndex(
     parseData,
   )
   index.coverage = createIndexCoverage(walked, parseCoverage)
+  index.updateStats = {
+    hashedFiles: Object.keys(indexedFiles).length,
+    parsedFiles: parseCoverage?.freshParsedFiles ?? 0,
+    graphFilesUpdated: Object.keys(indexedFiles).length,
+    graphEdgesUpdated: index.graph.edges.length,
+    postingsUpdated: Object.keys(index.queryData?.postings ?? {}).length,
+    changedFiles: Object.keys(indexedFiles).sort(),
+    deletedFiles: [],
+  }
+  index.freshness = parseDiagnostics.length ? 'unverified' : 'verified'
+  index.unverifiedPaths = parseDiagnostics.map(
+    (diagnostic) => diagnostic.filePath,
+  )
   return index
 }
 
@@ -501,92 +545,61 @@ export async function updateMetadataIndex(
   mutationDelta?: IndexMutationDelta,
 ): Promise<MetadataIndex> {
   tsAliasCacheByRoot.delete(projectRoot)
-  // B5(c) workspaceRevision journal: reject stale complete:true deltas. If the
-  // incoming revision is older than the incorporated revision, skip the precise
-  // walk and return existing with a builtAt refresh so callers observe liveness
-  // without regressing to stale content.
   if (
     mutationDelta?.complete === true &&
     mutationDelta.revision !== undefined &&
     existing.workspaceRevision !== undefined &&
     compareRevisions(mutationDelta.revision, existing.workspaceRevision) < 0
-  ) {
+  )
     return { ...existing, builtAt: Date.now() }
-  }
-  const preciseDelta = mutationDelta?.complete === true
+
+  const preciseDelta =
+    mutationDelta?.complete === true && !mutationDelta.coverageGap
   const walked = preciseDelta
-    ? await collectPreciseWalk(existing, projectRoot, mutationDelta, config)
+    ? await collectPreciseWalk(existing, projectRoot, mutationDelta!, config)
     : await walkProjectDetailed(
         projectRoot,
         getIndexExcludes(config),
         config.maxFiles,
       )
   const files = walked.files
-  // One yield gate per invocation: concurrent updateMetadataIndex calls each
-  // get their own time slice instead of sharing one (see
-  // createEventLoopYieldGate). Both loops in this invocation share the gate —
-  // the gate bounds time-between-yields, not per-loop yield counts.
   const yieldToEventLoop = createEventLoopYieldGate()
-  const currentByPath = new Map(files.map((f) => [f.relativePath, f]))
+  const currentByPath = new Map(files.map((file) => [file.relativePath, file]))
   const changedDeltaPaths = new Set(
     (mutationDelta?.changedPaths ?? []).map(normalizeMutationPath),
   )
   const deletedPaths = preciseDelta
     ? new Set((mutationDelta?.deletedPaths ?? []).map(normalizeMutationPath))
-    : new Set(Object.keys(existing.files))
-
+    : new Set(
+        Object.keys(existing.files).filter(
+          (filePath) => !currentByPath.has(filePath),
+        ),
+      )
   if (preciseDelta) {
-    for (const changedPath of changedDeltaPaths) {
-      if (!currentByPath.has(changedPath) && existing.files[changedPath]) {
-        deletedPaths.add(changedPath)
-      }
+    for (const filePath of changedDeltaPaths) {
+      if (!currentByPath.has(filePath) && existing.files[filePath])
+        deletedPaths.add(filePath)
     }
   }
-
-  if (!preciseDelta) {
-    for (const f of files) {
-      deletedPaths.delete(f.relativePath)
-    }
-  }
-
+  const updatedFiles = { ...existing.files }
+  const changedFiles: typeof files = []
   const hashByPath = new Map<string, string>()
   const hashReadFailedPaths = new Set<string>()
-  // Content reads that failed inside indexWalkedFile even though hashing
-  // succeeded (e.g. the file became unreadable between the hash read and the
-  // content read). Mirrors hashReadFailedPaths: a still-walked file must
-  // keep its previous indexed entry instead of being dropped from the index.
   const contentReadFailedPaths = new Set<string>()
-  const changedFiles: typeof files = []
-  const updatedFiles: Record<string, IndexedFile> = { ...existing.files }
-  let metadataOnlyChange = false
-
+  const readDiagnostics: ParseDiagnostic[] = []
+  let hashedFiles = 0
   for (const file of files) {
-    // Macrotask yield so the stat/hash pass does not starve the TUI (see
-    // createEventLoopYieldGate). Precedes all per-file work/continue paths so every
-    // iteration is covered uniformly.
     await yieldToEventLoop()
     const indexed = existing.files[file.relativePath]
-    if (preciseDelta && !changedDeltaPaths.has(file.relativePath)) {
-      continue
-    }
-    // Stat-gated hashing (X-2a): unchanged files skip the content read +
-    // SHA-256 entirely. A file is treated as unchanged only when BOTH the
-    // walked mtime/size AND a fresh stat() match the indexed record — the
-    // walked mtime can be stale for precise-delta overlays rebuilt from the
-    // indexed record, and the fresh stat catches changes that land between
-    // the walk and this loop. Known tradeoff (the standard indexer one,
-    // prescribed by the DEPTH audit): a touch-less write that keeps mtime
-    // AND size identical is invisible to this gate. Stat failures fall back
-    // to hashing, preserving the previous behavior.
-    // Residual race (documented, tolerated): the fresh stat() above and the
-    // hash read below are not atomic. A write landing between them is hashed
-    // as NEW content but recorded under the PRE-write mtime/size from the
-    // walk, so that record's stat identity is temporarily wrong. The next
-    // refresh's fresh stat() then mismatches the indexed record and forces a
-    // re-hash — the index self-heals one refresh late; content is never
-    // lost, only transiently attributed to a stale stat.
+    if (preciseDelta && !changedDeltaPaths.has(file.relativePath)) continue
     let hash: string | undefined
-    if (indexed) {
+    // Known dirty paths and coverage gaps always rehash. Stat equality is
+    // merely an accelerator for files covered by a continuous journal.
+    if (
+      indexed &&
+      !changedDeltaPaths.has(file.relativePath) &&
+      !mutationDelta?.verifyContent
+    ) {
       try {
         const stat = await fs.promises.stat(file.absolutePath)
         if (
@@ -594,32 +607,29 @@ export async function updateMetadataIndex(
           indexed.size === stat.size &&
           indexed.mtime === file.mtime &&
           indexed.size === file.size
-        ) {
+        )
           hash = indexed.hash
-        }
       } catch {
-        // Stat failure: fall back to hashing below (current behavior).
+        /* Rehash when stat cannot attest the cached identity. */
       }
     }
     if (hash === undefined) {
       try {
+        hashedFiles += 1
         hash = file.asset
           ? await hashBinaryFile(file.absolutePath)
           : await hashFile(file.absolutePath)
       } catch (error) {
         hashReadFailedPaths.add(file.relativePath)
-        // Bounded diagnostics: warn once per path instead of silently
-        // retrying (and silently failing) on every refresh.
         recordHashReadFailure(file.absolutePath, file.relativePath, error)
-        changedFiles.push(file)
+        readDiagnostics.push({
+          filePath: file.relativePath,
+          stage: 'read',
+          message: error instanceof Error ? error.message : String(error),
+        })
         continue
       }
     }
-    // Intra-file yield seam: the stat/hash pass above and the derived-metadata
-    // stat + change-classification block below each stay within one time
-    // slice (a single whole-content SHA-256 is one atomic native call — the
-    // documented residual exception that cannot be split; see
-    // createEventLoopYieldGate).
     await yieldToEventLoop()
     hashByPath.set(file.relativePath, hash)
     const derivedMetadataPath = file.asset
@@ -636,259 +646,329 @@ export async function updateMetadataIndex(
         )
         hasNewDerivedMetadata = true
       } catch {
-        // No derived inspection cache is available yet.
+        /* Optional derived asset metadata. */
       }
     }
-    if (!indexed || indexed.hash !== hash || hasNewDerivedMetadata) {
+    if (!indexed || indexed.hash !== hash || hasNewDerivedMetadata)
       changedFiles.push(file)
-    } else if (indexed.mtime !== file.mtime || indexed.size !== file.size) {
+    else if (indexed.mtime !== file.mtime || indexed.size !== file.size)
       updatedFiles[file.relativePath] = {
         ...indexed,
         mtime: file.mtime,
         size: file.size,
-        hash,
       }
-      metadataOnlyChange = true
-    }
   }
 
-  const needsParseHydration = existing.parseData === undefined
-  if (
-    changedFiles.length === 0 &&
-    deletedPaths.size === 0 &&
-    !needsParseHydration
-  ) {
-    // Self-heal stale parse failures on the no-change path. Failed-parse files
-    // are never written to parseData (getFileTokenScores `continue`s on a
-    // diagnostic), so an idle session with no code changes would otherwise
-    // carry stale parseDiagnostics + stale coverage.parser.truncated forever
-    // (the symptom: a persistent 'idx degraded' chip after a transient parser
-    // regression that has since been fixed). Re-attempt ONLY the
-    // previously-diagnosed files that are still present and uncached — a small
-    // set — and recompute diagnostics/coverage from the result. On success
-    // they enter the parse cache and drop out of the diagnostic set, so the
-    // NEXT no-change tick re-attempts nothing (steady-state cost = 0). A
-    // genuinely-still-failing file stays diagnosed and uncached, so it is
-    // re-tested each tick (bounded by the small failing-set size) and never
-    // hidden.
-    const walkedPaths = new Set(files.map((f) => f.relativePath))
-    const priorDiagnostics = existing.parseDiagnostics ?? []
-    // Drop diagnostics for files that are no longer walked (deleted/renamed)
-    // so stale coverage never references vanished files.
-    let parseDiagnostics = priorDiagnostics.filter((d) =>
-      walkedPaths.has(d.filePath),
-    )
-    let parseData = existing.parseData
-    let parserCoverage = existing.coverage?.parser
-
-    const retryPaths = parseDiagnostics
-      .map((d) => d.filePath)
-      .filter(
-        (p) =>
-          CODE_EXTENSIONS.has(path.extname(p)) &&
-          existing.parseData?.[p] === undefined,
-      )
-
-    if (retryPaths.length > 0) {
-      const reheal = await getFileTokenScores(
-        projectRoot,
-        retryPaths,
-        undefined,
-        {},
-      )
-      parseData = { ...(existing.parseData ?? {}), ...reheal.parsed }
-      setParsedCache(projectRoot, parseData)
-      const retrySet = new Set(retryPaths)
-      // The only files that can still be failing on this path are the ones we
-      // just re-tested (everything else is cached-success), so the post-reheal
-      // diagnostics fully characterize failure-driven coverage.
-      parseDiagnostics = [
-        ...parseDiagnostics.filter((d) => !retrySet.has(d.filePath)),
-        ...reheal.diagnostics,
-      ]
-      const budgetTruncated = Boolean(
-        existing.coverage?.parser?.fileBudgetExceeded ||
-          existing.coverage?.parser?.byteBudgetExceeded,
-      )
-      const failureSkipPaths = parseDiagnostics.map((d) => d.filePath)
-      parserCoverage = existing.coverage?.parser
-        ? {
-            ...existing.coverage.parser,
-            skippedFiles: failureSkipPaths.length,
-            truncated: budgetTruncated || failureSkipPaths.length > 0,
-            skippedPrefixes: Array.from(
-              new Set(
-                failureSkipPaths.map((p) => {
-                  const normalized = p.replace(/\\/g, '/')
-                  const slash = normalized.indexOf('/')
-                  return slash === -1 ? '.' : normalized.slice(0, slash)
-                }),
-              ),
-            ).sort(),
-            skippedLanguages: Array.from(
-              new Set(
-                failureSkipPaths.map((p) => path.extname(p) || 'unknown'),
-              ),
-            ).sort(),
-          }
-        : undefined
-    }
-
-    const graphFiles = metadataOnlyChange ? updatedFiles : existing.files
-    const aliases = loadTsAliases(projectRoot)
-    // One fail-open ts resolution tier per pass (null when the typescript
-    // module is unavailable).
-    const graph = await buildGraph(
-      graphFiles,
-      {},
-      aliases,
-      resolveGraphWeights(config.weights?.graph),
-      parseData,
-      createTsModuleResolver({ projectRoot, files: graphFiles, aliases }),
-      yieldToEventLoop,
-    )
-    return {
-      ...existing,
-      builtAt: Date.now(),
-      // A refresh that applied changes clears any prior degraded flag (P8.1).
-      parserDegraded: undefined,
-      files: graphFiles,
-      graph,
-      queryData: await buildIndexQueryDataAsync(graphFiles, graph, yieldToEventLoop),
-      // Carry the RECOMPUTED parse evidence, not the (possibly stale) spread
-      // from `existing`, so a self-healed failure clears here.
-      parseData,
-      parseDiagnostics,
-      coverage: createIndexCoverage(walked, parserCoverage),
-    }
-  }
-
-  const allCodeFilePaths = files
-    .filter(
-      (f) =>
-        CODE_EXTENSIONS.has(f.ext) && !hashReadFailedPaths.has(f.relativePath),
-    )
-    .map((f) => f.relativePath)
-
-  // Only changed code files need re-parsing; reuse cached parse output for the
-  // rest. The global token scores + call graph are then recomputed from the
-  // merged set (cheap, no tree-sitter). This avoids a full project re-parse on
-  // every incremental update (e.g. after each agent edit).
-  const changedPathSet = new Set(changedFiles.map((f) => f.relativePath))
-  const previousCache = {
-    ...(existing.parseData ?? {}),
-    ...getParsedCache(projectRoot),
-  }
-  const reuseParsed: Record<string, ParsedFileTokens> = {}
-  for (const codePath of allCodeFilePaths) {
-    if (!changedPathSet.has(codePath) && previousCache[codePath]) {
-      reuseParsed[codePath] = previousCache[codePath]
-    }
-  }
-
+  const allCodePaths = files
+    .filter((file) => CODE_EXTENSIONS.has(file.ext))
+    .map((file) => file.relativePath)
+  const currentFingerprints = getParseFingerprints(allCodePaths)
+  const previousParse = existing.parseData ?? {}
+  const changedPathSet = new Set(changedFiles.map((file) => file.relativePath))
+  const parsePaths = allCodePaths.filter(
+    (filePath) =>
+      !hashReadFailedPaths.has(filePath) &&
+      (changedPathSet.has(filePath) ||
+        !previousParse[filePath] ||
+        existing.parseFingerprints?.[filePath] !==
+          currentFingerprints[filePath]),
+  )
+  let parseData = { ...previousParse }
+  const parseFingerprints = { ...(existing.parseFingerprints ?? {}) }
+  let parseDiagnostics = (existing.parseDiagnostics ?? []).filter(
+    (diagnostic) =>
+      currentByPath.has(diagnostic.filePath) &&
+      !parsePaths.includes(diagnostic.filePath),
+  )
+  let parsedFiles = 0
+  let parseCoverage = existing.coverage?.parser
+  const parseContents = new Map<string, string>()
+  const failedParsePaths = new Set<string>()
   let tokenScores: Record<string, Record<string, number>> = {}
-  let tokenCallers: Record<string, Record<string, string[]>> = {}
-  let parseDiagnostics: ParseDiagnostic[] = []
-  let parseCoverage: ParseCoverage | undefined
-  let parseData: Record<string, ParsedFileTokens> = { ...previousCache }
-  let parserDegraded = false
-  if (allCodeFilePaths.length > 0) {
+  if (parsePaths.length) {
     try {
       const data = await getFileTokenScores(
         projectRoot,
-        allCodeFilePaths,
-        undefined,
-        reuseParsed,
+        parsePaths,
+        async (filePath) => {
+          const content = await fs.promises.readFile(
+            path.join(projectRoot, filePath),
+            'utf8',
+          )
+          parseContents.set(filePath, content)
+          return content
+        },
       )
+      parsedFiles = data.coverage.freshParsedFiles
       tokenScores = data.tokenScores
-      tokenCallers = data.tokenCallers
-      parseDiagnostics = data.diagnostics
+      parseData = { ...parseData, ...data.parsed }
+      parseDiagnostics = [...parseDiagnostics, ...data.diagnostics]
       parseCoverage = data.coverage
-      parseData = data.parsed
-      setParsedCache(projectRoot, parseData)
+      for (const filePath of parsePaths) {
+        if (data.parsed[filePath])
+          parseFingerprints[filePath] =
+            data.parsed[filePath]!.extractionFingerprint ??
+            currentFingerprints[filePath]!
+        else {
+          failedParsePaths.add(filePath)
+          // Keep the last valid source and its parse together after a failed
+          // derivation. The path remains explicitly unverified for discovery.
+          if (!previousParse[filePath]) delete parseData[filePath]
+        }
+      }
     } catch (error) {
-      parseDiagnostics = [createParseDiagnostic(projectRoot, error)]
-      parserDegraded = true
+      return {
+        ...existing,
+        parserDegraded: true,
+        freshness: 'unverified',
+        unverifiedPaths: parsePaths,
+        parseDiagnostics: [createParseDiagnostic(projectRoot, error)],
+        coverage: createIndexCoverage(walked, parseCoverage),
+        updateStats: {
+          hashedFiles,
+          parsedFiles,
+          graphFilesUpdated: 0,
+          changedFiles: [],
+          deletedFiles: [],
+        },
+      }
     }
   }
-
-  if (parserDegraded) {
-    // P8.1: the parser degraded, so `files`/`parseData` above were not
-    // refreshed and the pending mutation delta was dropped. Keep the prior
-    // builtAt (and workspaceRevision) intact — re-stamping Date.now() would
-    // mark a stale index fresh and suppress the manager's staleness-driven
-    // retry. parseDiagnostics/coverage are preserved; the returned
-    // `parserDegraded` flag makes IndexManager re-queue the delta once.
-    return {
-      ...existing,
-      parserDegraded: true,
-      parseDiagnostics,
-      coverage: createIndexCoverage(walked, parseCoverage),
-    }
+  for (const filePath of deletedPaths) {
+    delete updatedFiles[filePath]
+    delete parseData[filePath]
+    delete parseFingerprints[filePath]
   }
-
-  for (const deletedPath of deletedPaths) {
-    delete updatedFiles[deletedPath]
-    delete parseData[deletedPath]
-  }
-
-  for (const file of changedFiles) {
-    // Macrotask yield so re-indexing many changed files does not starve the
-    // TUI (see createEventLoopYieldGate). Precedes per-file work; updatedFiles is
-    // mutated only below the yield.
+  const reindexPaths = new Set([...changedPathSet, ...parsePaths])
+  for (const filePath of reindexPaths) {
     await yieldToEventLoop()
-    const previous = existing.files[file.relativePath]
+    const file = currentByPath.get(filePath)
+    if (
+      !file ||
+      hashReadFailedPaths.has(filePath) ||
+      (failedParsePaths.has(filePath) && existing.files[filePath])
+    )
+      continue
+    const previous = existing.files[filePath]
     const indexed = await indexWalkedFile({
       absolutePath: file.absolutePath,
       projectRoot,
-      relativePath: file.relativePath,
+      relativePath: filePath,
       mtime: file.mtime,
       size: file.size,
       ext: file.ext,
       asset: file.asset,
-      hash: hashByPath.get(file.relativePath),
-      tokenScores: tokenScores[file.relativePath] ?? {},
-      astImports: parseData[file.relativePath]?.imports,
-      previousChunks: previous?.chunks,
+      hash: hashByPath.get(filePath),
+      content: parseContents.get(filePath),
+      tokenScores: tokenScores[filePath] ?? {},
+      astImports: parseData[filePath]?.imports,
+      previousChunks:
+        existing.parseFingerprints?.[filePath] === currentFingerprints[filePath]
+          ? previous?.chunks
+          : undefined,
       previousHash: previous?.hash,
       readFailedPaths: contentReadFailedPaths,
       yieldToEventLoop,
     })
-    if (indexed) {
-      updatedFiles[file.relativePath] = indexed
-    } else if (
-      (hashReadFailedPaths.has(file.relativePath) ||
-        contentReadFailedPaths.has(file.relativePath)) &&
-      existing.files[file.relativePath]
-    ) {
-      // Transient (non-deletion) read failure: the walk still sees the file,
-      // so keep the previous indexed entry until a later refresh can re-read
-      // it instead of silently dropping a still-existing file from the index.
-    } else {
-      delete updatedFiles[file.relativePath]
-    }
+    if (indexed) updatedFiles[filePath] = indexed
+    else if (!contentReadFailedPaths.has(filePath))
+      delete updatedFiles[filePath]
   }
-
-  for (const [filePath, scores] of Object.entries(tokenScores)) {
-    const file = currentByPath.get(filePath)
-    const indexed = updatedFiles[filePath]
-    if (!file || !indexed) continue
-    updatedFiles[filePath] = {
-      ...indexed,
-      symbols: getTopSymbols(scores, 30),
-    }
+  for (const filePath of contentReadFailedPaths) {
+    if (previousParse[filePath]) parseData[filePath] = previousParse[filePath]!
+    else delete parseData[filePath]
+    if (existing.parseFingerprints?.[filePath])
+      parseFingerprints[filePath] = existing.parseFingerprints[filePath]!
+    else delete parseFingerprints[filePath]
+    readDiagnostics.push({
+      filePath,
+      stage: 'read',
+      message: 'Source content could not be read during reconciliation',
+    })
   }
+  parseDiagnostics.push(...readDiagnostics)
+  setParsedCache(projectRoot, parseData)
 
-  const index = await createMetadataIndex(
-    projectRoot,
+  const changedFacts = new Set([
+    ...deletedPaths,
+    ...Object.keys(updatedFiles).filter(
+      (filePath) => updatedFiles[filePath] !== existing.files[filePath],
+    ),
+  ])
+  const graphChangedPaths = new Set([
+    ...Array.from(changedFacts).filter(
+      (filePath) =>
+        existing.files[filePath]?.hash !== updatedFiles[filePath]?.hash,
+    ),
+    ...parsePaths.filter(
+      (filePath) =>
+        !failedParsePaths.has(filePath) &&
+        !contentReadFailedPaths.has(filePath),
+    ),
+  ])
+  const sourceConfigFingerprint = getSourceConfigurationFingerprint(
     updatedFiles,
-    tokenCallers,
-    config.weights?.graph,
-    parseDiagnostics,
-    parseData,
+    projectRoot,
   )
-  index.coverage = createIndexCoverage(walked, parseCoverage)
-  return index
+  const graphConfigFingerprint = getGraphConfigurationFingerprint(
+    sourceConfigFingerprint,
+    config.weights?.graph,
+  )
+  const configChanged =
+    existing.graphConfigFingerprint !== graphConfigFingerprint
+  const dependencies = updateGraphDependencies(
+    existing,
+    updatedFiles,
+    parseData,
+    graphChangedPaths,
+  )
+  let graphData: Record<string, IndexGraph>
+  let graphFilesUpdated = 0
+  let graphUpdatedPaths = new Set<string>()
+  if (!existing.graphData || !existing.graphDependencies || configChanged) {
+    const aliases = loadTsAliases(projectRoot)
+    const structural = await buildGraph(
+      updatedFiles,
+      {},
+      aliases,
+      resolveGraphWeights(config.weights?.graph),
+      parseData,
+      createTsModuleResolver({ projectRoot, files: updatedFiles, aliases }),
+      yieldToEventLoop,
+      undefined,
+      dependencies.definitions,
+    )
+    graphData = partitionGraphBySource(structural, updatedFiles)
+    graphFilesUpdated = Object.keys(updatedFiles).length
+    graphUpdatedPaths = new Set([...Object.keys(updatedFiles), ...deletedPaths])
+  } else {
+    const affected = collectAffectedGraphPaths(
+      existing,
+      updatedFiles,
+      parseData,
+      graphChangedPaths,
+      dependencies,
+    )
+    graphUpdatedPaths = affected
+    graphFilesUpdated = Array.from(affected).filter((filePath) =>
+      Boolean(updatedFiles[filePath]),
+    ).length
+    graphData = { ...existing.graphData }
+    for (const filePath of deletedPaths) delete graphData[filePath]
+    if (affected.size) {
+      const aliases = loadTsAliases(projectRoot)
+      const structural = await buildGraph(
+        updatedFiles,
+        {},
+        aliases,
+        resolveGraphWeights(config.weights?.graph),
+        parseData,
+        createTsModuleResolver({ projectRoot, files: updatedFiles, aliases }),
+        yieldToEventLoop,
+        affected,
+        dependencies.definitions,
+      )
+      Object.assign(
+        graphData,
+        partitionGraphBySource(structural, updatedFiles, affected),
+      )
+    }
+  }
+  const graph = composeGraphLayers(
+    graphData,
+    existing,
+    updatedFiles,
+    sourceConfigFingerprint,
+  )
+  const queryData =
+    changedFacts.size || graph !== existing.graph
+      ? await updateIndexQueryDataAsync(
+          existing,
+          updatedFiles,
+          graph,
+          changedFacts,
+          yieldToEventLoop,
+        )
+      : existing.queryData
+  const skippedPaths = new Set([
+    ...allCodePaths.filter((filePath) => !parseData[filePath]),
+    ...failedParsePaths,
+  ])
+  if (parseCoverage)
+    parseCoverage = {
+      ...parseCoverage,
+      requestedFiles: allCodePaths.length,
+      parsedFiles: allCodePaths.length - skippedPaths.size,
+      freshParsedFiles: parsedFiles,
+      reusedFiles: Math.max(
+        0,
+        allCodePaths.length - skippedPaths.size - parsedFiles,
+      ),
+      skippedFiles: skippedPaths.size,
+      skippedPrefixes: Array.from(
+        new Set(
+          Array.from(skippedPaths).map((filePath) =>
+            filePath.includes('/') ? filePath.split('/')[0]! : '.',
+          ),
+        ),
+      ).sort(),
+      skippedLanguages: Array.from(
+        new Set(
+          Array.from(skippedPaths).map((filePath) => path.extname(filePath)),
+        ),
+      ).sort(),
+      truncated: skippedPaths.size > 0,
+    }
+  const unverifiedPaths = Array.from(
+    new Set([
+      ...hashReadFailedPaths,
+      ...contentReadFailedPaths,
+      ...failedParsePaths,
+    ]),
+  ).sort()
+  return {
+    ...existing,
+    builtAt: Date.now(),
+    parserDegraded: undefined,
+    files: updatedFiles,
+    fileCount: Object.keys(updatedFiles).length,
+    graph,
+    graphData,
+    graphDependencies: dependencies,
+    graphConfigFingerprint,
+    sourceConfigFingerprint,
+    queryData,
+    parseData,
+    parseFingerprints,
+    parseDiagnostics,
+    freshness: unverifiedPaths.length ? 'unverified' : 'verified',
+    unverifiedPaths,
+    coverage: createIndexCoverage(walked, parseCoverage),
+    updateStats: {
+      hashedFiles,
+      parsedFiles,
+      graphFilesUpdated,
+      graphEdgesUpdated: countUpdatedGraphEdges(
+        existing,
+        graphData,
+        graph,
+        graphUpdatedPaths,
+      ),
+      postingsUpdated: Array.from(
+        new Set([
+          ...Object.keys(existing.queryData?.postings ?? {}),
+          ...Object.keys(queryData?.postings ?? {}),
+        ]),
+      ).filter(
+        (token) =>
+          existing.queryData?.postings[token] !== queryData?.postings[token],
+      ).length,
+      changedFiles: Array.from(changedFacts)
+        .filter((filePath) => Boolean(updatedFiles[filePath]))
+        .sort(),
+      deletedFiles: Array.from(deletedPaths).sort(),
+    },
+  }
 }
 
 async function indexWalkedFile(params: {
@@ -900,6 +980,9 @@ async function indexWalkedFile(params: {
   ext: string
   asset?: { kind: '3d'; format: string }
   hash?: string
+  /** Exact source text used by the parse of this changed file. */
+  content?: string
+  parsedSourceHash?: string
   tokenScores: Record<string, number>
   /**
    * P3-T5 AST import-capture tier: import specifiers captured by the
@@ -977,7 +1060,9 @@ async function indexWalkedFile(params: {
   }
   let content = ''
   try {
-    content = await fs.promises.readFile(params.absolutePath, 'utf8')
+    content =
+      params.content ??
+      (await fs.promises.readFile(params.absolutePath, 'utf8'))
   } catch {
     // Transient read failure: report it so the caller can keep the previous
     // indexed entry for this still-walked file instead of dropping it.
@@ -985,8 +1070,15 @@ async function indexWalkedFile(params: {
     return null
   }
 
-  const symbols = getTopSymbols(params.tokenScores, 30)
-  const imports = extractImports(content, params.ext, params.astImports)
+  const exactContentHash = hashContent(content)
+  const parseMatches =
+    !params.parsedSourceHash || params.parsedSourceHash === exactContentHash
+  const symbols = parseMatches ? getTopSymbols(params.tokenScores, 30) : []
+  const imports = extractImports(
+    content,
+    params.ext,
+    parseMatches ? params.astImports : undefined,
+  )
   const headings = DOC_EXTENSIONS.has(params.ext)
     ? extractHeadings(content)
     : []
@@ -1005,8 +1097,11 @@ async function indexWalkedFile(params: {
     .slice(0, 120)
     .join('\n')
   const contentSampleSliced = contentSampleRaw.slice(0, 4_000)
-  const contentSampleTruncated = contentSampleSliced.length < contentSampleRaw.length
-  const contentSample = contentSampleTruncated ? `${contentSampleSliced}…[truncated]` : contentSampleSliced
+  const contentSampleTruncated =
+    contentSampleSliced.length < contentSampleRaw.length
+  const contentSample = contentSampleTruncated
+    ? `${contentSampleSliced}…[truncated]`
+    : contentSampleSliced
 
   // Extract asset references from game engine text files (Unity .meta/.prefab/.unity,
   // Godot .tscn/.tres, Unreal .uproject, Bevy configs). Returns [] for non-asset files.
@@ -1030,35 +1125,40 @@ async function indexWalkedFile(params: {
   // yield-seam-bounded block. Non-code files hash lazily at the return.
   let contentHash: string | undefined
   if (CODE_EXTENSIONS.has(params.ext)) {
-    contentHash = params.hash ?? hashContent(content)
-    if (params.previousChunks && params.previousHash && contentHash === params.previousHash) {
+    contentHash = exactContentHash
+    if (
+      params.previousChunks &&
+      params.previousHash &&
+      contentHash === params.previousHash
+    ) {
       chunks = params.previousChunks.slice(0, 100)
       if (chunks.length === 0) chunks = undefined
-    } else try {
-      const rawChunks = await extractCodeChunks(content, params.relativePath)
-      if (rawChunks.length > 0) {
-        chunks = rawChunks.slice(0, 100).map((chunk) => ({
-          chunkId: chunk.chunkId,
-          qualifiedName: chunk.qualifiedName,
-          kind: chunk.kind,
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-          hash: chunk.hash,
-          stableChunkId: chunk.stableChunkId,
-          signature: chunk.signature,
-        }))
-        if (chunks.length === 0) chunks = undefined
+    } else
+      try {
+        const rawChunks = await extractCodeChunks(content, params.relativePath)
+        if (rawChunks.length > 0) {
+          chunks = rawChunks.slice(0, 100).map((chunk) => ({
+            chunkId: chunk.chunkId,
+            qualifiedName: chunk.qualifiedName,
+            kind: chunk.kind,
+            startLine: chunk.startLine,
+            endLine: chunk.endLine,
+            hash: chunk.hash,
+            stableChunkId: chunk.stableChunkId,
+            signature: chunk.signature,
+          }))
+          if (chunks.length === 0) chunks = undefined
+        }
+      } catch {
+        chunks = undefined
       }
-    } catch {
-      chunks = undefined
-    }
   }
 
   return {
     path: params.relativePath,
     mtime: params.mtime,
     size: params.size,
-    hash: params.hash ?? contentHash ?? hashContent(content),
+    hash: exactContentHash,
     ext: params.ext,
     symbols,
     imports,
@@ -1068,6 +1168,345 @@ async function indexWalkedFile(params: {
     ...(chunks ? { chunks } : {}),
     ...(assetRefs.length > 0 ? { assetRefs } : {}),
   }
+}
+
+function getParseFingerprints(filePaths: string[]): Record<string, string> {
+  const byExtension = new Map<string, string>()
+  const fingerprints: Record<string, string> = {}
+  for (const filePath of filePaths) {
+    const extension = path.extname(filePath).toLowerCase()
+    if (!byExtension.has(extension))
+      byExtension.set(extension, getParserExtractionFingerprint(filePath))
+    fingerprints[filePath] = byExtension.get(extension)!
+  }
+  return fingerprints
+}
+
+function buildGraphDependencies(
+  parseData: Record<string, ParsedFileTokens>,
+): IndexGraphDependencies {
+  const definitions: Record<string, string[]> = Object.create(null)
+  const callers: Record<string, string[]> = Object.create(null)
+  for (const [filePath, parsed] of Object.entries(parseData)) {
+    for (const symbol of new Set(parsed.identifiers))
+      (definitions[symbol] ??= []).push(filePath)
+    for (const call of new Set(parsed.calls))
+      (callers[call] ??= []).push(filePath)
+  }
+  return { definitions, callers }
+}
+
+function updateGraphDependencies(
+  previous: MetadataIndex,
+  files: Record<string, IndexedFile>,
+  parsed: Record<string, ParsedFileTokens>,
+  changedPaths: ReadonlySet<string>,
+): IndexGraphDependencies {
+  if (!previous.graphDependencies) return buildGraphDependencies(parsed)
+  const dependencies: IndexGraphDependencies = {
+    definitions: Object.assign(
+      Object.create(null),
+      previous.graphDependencies.definitions,
+    ),
+    callers: Object.assign(
+      Object.create(null),
+      previous.graphDependencies.callers,
+    ),
+  }
+  for (const filePath of changedPaths) {
+    for (const [field, parseField] of [
+      ['definitions', 'identifiers'],
+      ['callers', 'calls'],
+    ] as const) {
+      const before = new Set(previous.parseData?.[filePath]?.[parseField] ?? [])
+      const after = new Set(
+        files[filePath] ? (parsed[filePath]?.[parseField] ?? []) : [],
+      )
+      for (const symbol of new Set([...before, ...after])) {
+        if (before.has(symbol) === after.has(symbol)) continue
+        const members = new Set(dependencies[field][symbol] ?? [])
+        if (after.has(symbol)) members.add(filePath)
+        else members.delete(filePath)
+        if (members.size)
+          dependencies[field][symbol] = Array.from(members).sort()
+        else delete dependencies[field][symbol]
+      }
+    }
+  }
+  return dependencies
+}
+
+function collectAffectedGraphPaths(
+  previous: MetadataIndex,
+  files: Record<string, IndexedFile>,
+  parsed: Record<string, ParsedFileTokens>,
+  changedPaths: ReadonlySet<string>,
+  dependencies: IndexGraphDependencies,
+): Set<string> {
+  const affected = new Set(changedPaths)
+  let importTopologyChanged = false
+  const changedGuids = new Set<string>()
+  for (const filePath of changedPaths) {
+    const oldFile = previous.files[filePath]
+    const newFile = files[filePath]
+    const before = new Set(previous.parseData?.[filePath]?.identifiers ?? [])
+    const after = new Set(parsed[filePath]?.identifiers ?? [])
+    for (const symbol of new Set([...before, ...after])) {
+      if (before.has(symbol) === after.has(symbol)) continue
+      for (const caller of previous.graphDependencies?.callers[symbol] ?? [])
+        affected.add(caller)
+      for (const caller of dependencies.callers[symbol] ?? [])
+        affected.add(caller)
+    }
+    if (!oldFile || !newFile) importTopologyChanged = true
+    if (/\.(?:java|kt|php)$/.test(filePath)) {
+      const declaration = (file: IndexedFile | undefined) =>
+        file?.contentSample?.match(/(?:package|namespace)\s+[^;\n{]+/)?.[0]
+      if (declaration(oldFile) !== declaration(newFile))
+        importTopologyChanged = true
+    }
+    if (filePath.endsWith('.meta')) {
+      for (const ref of [
+        ...(oldFile?.assetRefs ?? []),
+        ...(newFile?.assetRefs ?? []),
+      ]) {
+        if (ref.refType === 'guid') changedGuids.add(ref.rawRef)
+      }
+    }
+    if (!newFile) {
+      for (const edgeIndex of previous.queryData?.adjacency[
+        fileNodeId(filePath)
+      ] ?? []) {
+        const edge = previous.graph.edges[edgeIndex]
+        if (edge?.from.startsWith('file:')) affected.add(edge.from.slice(5))
+      }
+    }
+  }
+  if (importTopologyChanged) {
+    const aliases = loadTsAliases(previous.projectRoot)
+    const oldResolver = createTsModuleResolver({
+      projectRoot: previous.projectRoot,
+      files: previous.files,
+      aliases,
+    })
+    const newResolver = createTsModuleResolver({
+      projectRoot: previous.projectRoot,
+      files,
+      aliases,
+    })
+    for (const file of Object.values(files)) {
+      if (affected.has(file.path)) continue
+      for (const specifier of file.imports) {
+        if (
+          resolveImportToFile(
+            file.path,
+            file.ext,
+            specifier,
+            previous.files,
+            aliases,
+            oldResolver,
+          ) !==
+          resolveImportToFile(
+            file.path,
+            file.ext,
+            specifier,
+            files,
+            aliases,
+            newResolver,
+          )
+        ) {
+          affected.add(file.path)
+          break
+        }
+      }
+      if (
+        file.assetRefs?.some(
+          (ref) => ref.resolvedPath && changedPaths.has(ref.resolvedPath),
+        )
+      )
+        affected.add(file.path)
+    }
+  }
+  if (changedGuids.size) {
+    for (const file of Object.values(files)) {
+      if (file.assetRefs?.some((ref) => changedGuids.has(ref.rawRef)))
+        affected.add(file.path)
+    }
+  }
+  return affected
+}
+
+/** Structural facts are owned by their source; shared nodes stay referenced. */
+function partitionGraphBySource(
+  graph: IndexGraph,
+  files: Record<string, IndexedFile>,
+  sourcePaths?: ReadonlySet<string>,
+): Record<string, IndexGraph> {
+  const grouped: Record<string, IndexGraph> = {}
+  for (const filePath of sourcePaths ?? Object.keys(files)) {
+    if (files[filePath]) grouped[filePath] = { nodes: {}, edges: [] }
+  }
+  for (const node of Object.values(graph.nodes)) {
+    if (node.path && grouped[node.path])
+      grouped[node.path]!.nodes[node.id] = node
+  }
+  for (const edge of graph.edges) {
+    const source = edge.from.startsWith('file:')
+      ? edge.from.slice(5)
+      : graph.nodes[edge.from]?.path
+    const group = source ? grouped[source] : undefined
+    if (!group) continue
+    group.edges.push(edge)
+    const target = graph.nodes[edge.to]
+    if (target && target.type !== 'file') group.nodes[target.id] = target
+  }
+  return grouped
+}
+
+function composeGraphLayers(
+  structural: Record<string, IndexGraph>,
+  previous: MetadataIndex,
+  files: Record<string, IndexedFile>,
+  sourceConfigFingerprint: string,
+): IndexGraph {
+  const priorPrecise = previous.graph.edges.filter(
+    (edge) => edge.confidence === 'precise',
+  )
+  const precise = priorPrecise.filter((edge) => {
+    const dependencies =
+      edge.producer?.sourceHashes ??
+      Object.fromEntries(
+        [edge.from, edge.to]
+          .filter((node) => node.startsWith('file:'))
+          .map((node) => [node.slice(5), previous.files[node.slice(5)]?.hash]),
+      )
+    if (
+      Object.entries(dependencies).some(
+        ([filePath, hash]) => !hash || files[filePath]?.hash !== hash,
+      )
+    )
+      return false
+    const configFingerprint =
+      edge.producer?.configFingerprint ?? previous.sourceConfigFingerprint
+    return !configFingerprint || configFingerprint === sourceConfigFingerprint
+  })
+  if (
+    previous.graphData &&
+    precise.length === priorPrecise.length &&
+    Object.keys(structural).length === Object.keys(previous.graphData).length &&
+    Object.keys(structural).every(
+      (filePath) => structural[filePath] === previous.graphData?.[filePath],
+    )
+  )
+    return previous.graph
+
+  const nodes: Record<string, IndexNode> = {}
+  const edges: IndexEdge[] = []
+  const preciseTuples = new Set(
+    precise.map((edge) => `${edge.from}\0${edge.to}\0${edge.type}`),
+  )
+  for (const group of Object.values(structural)) {
+    Object.assign(nodes, group.nodes)
+    for (const edge of group.edges) {
+      if (!preciseTuples.has(`${edge.from}\0${edge.to}\0${edge.type}`))
+        edges.push(edge)
+    }
+  }
+  edges.push(...precise)
+  return { nodes, edges: dedupeEdges(edges) }
+}
+
+function countUpdatedGraphEdges(
+  previous: MetadataIndex,
+  graphData: Record<string, IndexGraph>,
+  graph: IndexGraph,
+  affected: ReadonlySet<string>,
+): number {
+  const key = (edge: IndexEdge) =>
+    JSON.stringify([
+      edge.from,
+      edge.to,
+      edge.type,
+      edge.label ?? '',
+      edge.confidence ?? 'heuristic',
+    ])
+  const before = new Map<string, IndexEdge>()
+  const after = new Map<string, IndexEdge>()
+  for (const filePath of affected) {
+    for (const edge of previous.graphData?.[filePath]?.edges ?? [])
+      before.set(key(edge), edge)
+    for (const edge of graphData[filePath]?.edges ?? [])
+      after.set(key(edge), edge)
+  }
+  for (const edge of previous.graph.edges)
+    if (edge.confidence === 'precise') before.set(key(edge), edge)
+  for (const edge of graph.edges)
+    if (edge.confidence === 'precise') after.set(key(edge), edge)
+  return Array.from(new Set([...before.keys(), ...after.keys()])).filter(
+    (edgeKey) => {
+      const oldEdge = before.get(edgeKey)
+      const newEdge = after.get(edgeKey)
+      return (
+        oldEdge !== newEdge &&
+        (!oldEdge ||
+          !newEdge ||
+          JSON.stringify(oldEdge) !== JSON.stringify(newEdge))
+      )
+    },
+  ).length
+}
+
+/** Compiler/config/dependency inputs are distinct from structural edge weights. */
+export function getSourceConfigurationFingerprint(
+  files: Record<string, IndexedFile>,
+  projectRoot: string,
+): string {
+  const digest = crypto.createHash('sha256').update('source-configuration:1\0')
+  const configuration =
+    /(?:^|\/)(?:tsconfig[^/]*\.json|jsconfig[^/]*\.json|package\.json|(?:bun|package|pnpm|yarn|Cargo|composer|poetry|uv).*lock[^/]*|go\.(?:mod|sum)|Cargo\.toml|pyproject\.toml|requirements[^/]*\.txt|pom\.xml|build\.gradle[^/]*|[^/]*\.(?:csproj|fsproj|sln))$/
+  for (const filePath of Object.keys(files)
+    .filter((filePath) => configuration.test(filePath))
+    .sort()) {
+    digest
+      .update(filePath)
+      .update('\0')
+      .update(files[filePath]!.hash)
+      .update('\0')
+  }
+  for (const relativePath of [
+    'node_modules/.package-lock.json',
+    'node_modules/.modules.yaml',
+    '.pnp.cjs',
+    '.pnp.loader.mjs',
+  ]) {
+    try {
+      const absolutePath = path.join(projectRoot, relativePath)
+      const stat = fs.statSync(absolutePath)
+      digest.update(relativePath).update('\0')
+      if (stat.size <= 1_000_000) digest.update(fs.readFileSync(absolutePath))
+      else
+        digest.update(`oversized:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`)
+    } catch {
+      digest.update(`${relativePath}:absent\0`)
+    }
+  }
+  return digest.digest('hex')
+}
+
+function getGraphConfigurationFingerprint(
+  sourceFingerprint: string,
+  weights?: GraphWeights,
+): string {
+  return crypto
+    .createHash('sha256')
+    .update(
+      JSON.stringify({
+        version: 1,
+        sourceFingerprint,
+        weights: resolveGraphWeights(weights),
+      }),
+    )
+    .digest('hex')
 }
 
 async function createMetadataIndex(
@@ -1080,6 +1519,7 @@ async function createMetadataIndex(
 ): Promise<MetadataIndex> {
   const aliases = loadTsAliases(projectRoot)
   const yieldToEventLoop = createEventLoopYieldGate()
+  const dependencies = buildGraphDependencies(parseData)
   const graph = await buildGraph(
     files,
     tokenCallers,
@@ -1088,6 +1528,12 @@ async function createMetadataIndex(
     parseData,
     createTsModuleResolver({ projectRoot, files, aliases }),
     yieldToEventLoop,
+    undefined,
+    dependencies.definitions,
+  )
+  const sourceConfigFingerprint = getSourceConfigurationFingerprint(
+    files,
+    projectRoot,
   )
   return {
     version: '2',
@@ -1096,8 +1542,22 @@ async function createMetadataIndex(
     fileCount: Object.keys(files).length,
     files,
     graph,
+    graphData: partitionGraphBySource(graph, files),
+    graphDependencies: dependencies,
+    sourceConfigFingerprint,
+    graphConfigFingerprint: getGraphConfigurationFingerprint(
+      sourceConfigFingerprint,
+      graphWeights,
+    ),
     queryData: await buildIndexQueryDataAsync(files, graph, yieldToEventLoop),
     parseData,
+    parseFingerprints: Object.fromEntries(
+      Object.entries(parseData).map(([filePath, parsed]) => [
+        filePath,
+        parsed.extractionFingerprint ??
+          getParserExtractionFingerprint(filePath),
+      ]),
+    ),
     parseDiagnostics,
   }
 }
@@ -1207,6 +1667,8 @@ async function buildGraph(
   parseData: Record<string, ParsedFileTokens> = {},
   tsResolver: TsModuleResolver | null = null,
   yieldToEventLoop: () => Promise<void> = createEventLoopYieldGate(),
+  sourcePaths?: ReadonlySet<string>,
+  definitionPaths?: Record<string, string[]>,
 ): Promise<IndexGraph> {
   const nodes: Record<string, IndexNode> = {}
   const edges: IndexEdge[] = []
@@ -1216,6 +1678,7 @@ async function buildGraph(
   const guidToPathMap = buildGuidToPathMap(files)
 
   for (const file of Object.values(files)) {
+    if (sourcePaths && !sourcePaths.has(file.path)) continue
     await yieldToEventLoop()
     const fileId = fileNodeId(file.path)
     nodes[fileId] = {
@@ -1344,6 +1807,7 @@ async function buildGraph(
     if (!files[definingFile]) continue
     for (const [token, callers] of Object.entries(callersByToken)) {
       for (const callerFile of callers) {
+        if (sourcePaths && !sourcePaths.has(callerFile)) continue
         if (!files[callerFile]) continue
         edges.push({
           from: fileNodeId(callerFile),
@@ -1364,6 +1828,8 @@ async function buildGraph(
       weights.calls,
       tsResolver,
       yieldToEventLoop,
+      sourcePaths,
+      definitionPaths,
     )),
   )
 
@@ -1377,10 +1843,18 @@ async function buildModuleAwareCallEdges(
   weight: number,
   tsResolver: TsModuleResolver | null = null,
   yieldToEventLoop: () => Promise<void> = createEventLoopYieldGate(),
+  sourcePaths?: ReadonlySet<string>,
+  definitionPaths?: Record<string, string[]>,
 ): Promise<IndexEdge[]> {
   const definitions = new Map<string, string[]>()
   const definitionMembership = new Map<string, Set<string>>()
-  for (const [filePath, parsed] of Object.entries(parseData)) {
+  if (definitionPaths) {
+    for (const [symbol, paths] of Object.entries(definitionPaths))
+      definitions.set(symbol, paths)
+  }
+  for (const [filePath, parsed] of definitionPaths
+    ? []
+    : Object.entries(parseData)) {
     await yieldToEventLoop()
     if (!files[filePath]) continue
     for (const symbol of parsed.identifiers) {
@@ -1413,6 +1887,7 @@ async function buildModuleAwareCallEdges(
 
   const edges: IndexEdge[] = []
   for (const [callerPath, parsed] of Object.entries(parseData)) {
+    if (sourcePaths && !sourcePaths.has(callerPath)) continue
     await yieldToEventLoop()
     const caller = files[callerPath]
     if (!caller) continue

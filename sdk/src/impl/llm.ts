@@ -1,4 +1,5 @@
 import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
+import { isOpenAIProviderModel, isChatGptOAuthModelAllowed } from '@codebuff/common/constants/chatgpt-oauth'
 import { models } from '@codebuff/common/old-constants'
 import { withTransportTruncation } from '@codebuff/common/types/contracts/llm'
 import { buildArray } from '@codebuff/common/util/array'
@@ -33,7 +34,7 @@ import {
   isFailoverEligibleError,
   orderModelsByRouteHealth,
   resolveModelsToTry,
-  sessionRouteHealth,
+  getScopedSessionRouteHealth,
 } from './failover'
 import type { RouteHealthRegistry } from './failover'
 import { buildSpawnAgentsInputForDirectAgentCall } from './direct-agent-tool-repair'
@@ -43,14 +44,16 @@ import {
   resolveConfiguredAgentModelConfig,
   resolveConfiguredProviderModelMetadata,
 } from '../provider-config'
-import { getCapturedProviderConfig } from '../host-config'
+import { getCapturedProviderConfig, getProviderCredentialHealthIdentity } from '../host-config'
 import type { ProviderHostContext } from '../host-config'
+import { observeRetryWait } from '../services/retry-wait-status'
 import { refreshChatGptOAuthToken } from '../credentials'
+import { getSystemProcessEnv } from '../env'
 
 export type LlmHostDeps = Readonly<{
   providerContext: ProviderHostContext
   getModel?: typeof getModelForRequest
-  /** Session route health (N07). Defaults to the process-wide registry. */
+  /** Explicit session health; otherwise scoped to config and captured credential values. */
   routeHealth?: RouteHealthRegistry
 }>
 import {
@@ -527,6 +530,7 @@ function emitCacheDebugUsage(params: {
     outputTokens: number
     cachedInputTokens: number
     totalTokens: number
+    cacheUsageComplete?: boolean
   }) => void
   usage: {
     inputTokens?: number
@@ -537,11 +541,21 @@ function emitCacheDebugUsage(params: {
 }) {
   if (!params.callback) return
 
+  const isValidTokenCount = (value: number | undefined) =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+  const cacheUsageComplete =
+    isValidTokenCount(params.usage.inputTokens) &&
+    isValidTokenCount(params.usage.cachedInputTokens) &&
+    Number.isSafeInteger(
+      params.usage.inputTokens! + params.usage.cachedInputTokens!,
+    )
+
   params.callback({
     inputTokens: params.usage.inputTokens ?? 0,
     outputTokens: params.usage.outputTokens ?? 0,
     cachedInputTokens: params.usage.cachedInputTokens ?? 0,
     totalTokens: params.usage.totalTokens ?? 0,
+    cacheUsageComplete,
   })
 }
 
@@ -1121,31 +1135,45 @@ export function countToolSurfaceTokensForCalibration(
 }
 
 /**
- * N01: put an Anthropic prompt-cache breakpoint on the last tool definition.
- * Anthropic orders the cached prefix tools → system → messages, so this
- * breakpoint keeps the tool block cached even when the system prompt changes
- * (a plan/execute switch, for example). The message anchors placed by
- * `convertCbToModelMessages` use at most three breakpoints, so this is the
- * fourth and last one Anthropic allows. Providers other than Anthropic ignore
- * the `anthropic` provider option. Returns the input unchanged when empty.
+ * N01: put prompt-cache metadata on the selected tool definition, defaulting
+ * to the last tool. A template can select an earlier stable prefix boundary
+ * when later tools vary by mode. The message anchors placed by
+ * `convertCbToModelMessages` use at most three breakpoints, so this remains
+ * the fourth and last one Anthropic allows. An absent configured tool leaves
+ * the input unchanged rather than placing a misleading breakpoint.
  */
-export function withToolsCacheBreakpoint<T>(tools: T): T {
+export function withToolsCacheBreakpoint<T>(
+  tools: T,
+  requestedName?: string,
+): T {
   if (!tools || typeof tools !== 'object') return tools
-  const names = Object.keys(tools as Record<string, unknown>)
-  const lastName = names[names.length - 1]
-  if (lastName === undefined) return tools
-  const record = tools as Record<string, { providerOptions?: Record<string, Record<string, unknown>> }>
-  const lastTool = record[lastName]
-  if (!lastTool || typeof lastTool !== 'object') return tools
+  const record = tools as Record<
+    string,
+    { providerOptions?: Record<string, Record<string, unknown>> }
+  >
+  const names = Object.keys(record)
+  const breakpointName = requestedName ?? names[names.length - 1]
+  if (
+    breakpointName === undefined ||
+    !Object.prototype.hasOwnProperty.call(record, breakpointName)
+  ) {
+    return tools
+  }
+  const breakpointTool = record[breakpointName]
+  if (!breakpointTool || typeof breakpointTool !== 'object') return tools
   return {
     ...record,
-    [lastName]: {
-      ...lastTool,
+    [breakpointName]: {
+      ...breakpointTool,
       providerOptions: {
-        ...(lastTool.providerOptions ?? {}),
+        ...(breakpointTool.providerOptions ?? {}),
         anthropic: {
-          ...(lastTool.providerOptions?.anthropic ?? {}),
+          ...(breakpointTool.providerOptions?.anthropic ?? {}),
           cacheControl: { type: 'ephemeral' },
+        },
+        openaiCompatible: {
+          ...(breakpointTool.providerOptions?.openaiCompatible ?? {}),
+          cache_control: { type: 'ephemeral' },
         },
       },
     },
@@ -1244,6 +1272,7 @@ export async function* promptAiSdkStream(
     attempt?: number
     maxAttempts?: number
     delayMs?: number
+    remainingDelayMs?: number
     statusCode?: number
     providerId?: string
     apiKeyEnv?: string
@@ -1272,11 +1301,29 @@ export async function* promptAiSdkStream(
     model: params.model,
     loadedConfig,
   }).model
-  const routeHealth = deps?.routeHealth ?? sessionRouteHealth
+  const configuredModels = resolveModelsToTry(effectiveRequestedModel, loadedConfig)
+  const isOAuthHealthRoute = (model: string) => {
+    const route = resolveConfiguredProviderModelMetadata({ model, loadedConfig })
+    return route?.provider.type === 'chatgpt-oauth' ||
+      (!route && isOpenAIProviderModel(model) && isChatGptOAuthModelAllowed(model))
+  }
+  const routeHealth = deps?.routeHealth ?? getScopedSessionRouteHealth({
+    loadedConfig,
+    configurationIdentity: deps ? JSON.stringify([
+      deps.providerContext.snapshot.inputs.projectRoot,
+      deps.providerContext.snapshot.configDir ?? null,
+      deps.providerContext.snapshot.inputs.selection,
+    ]) : undefined,
+    credentialSourceIdentity: deps
+      ? (model) => getProviderCredentialHealthIdentity(deps.providerContext, isOAuthHealthRoute(model))
+      : undefined,
+    environment: deps?.providerContext.credentialEnvironment ?? getSystemProcessEnv(),
+    apiKey: params.apiKey,
+  })
   // N07: a route that failed authentication earlier in this session goes to
   // the back of the list, so the request starts on the working backup.
   const modelsToTry = orderModelsByRouteHealth(
-    resolveModelsToTry(effectiveRequestedModel, loadedConfig),
+    configuredModels,
     routeHealth,
   )
   if (modelsToTry[0] !== effectiveRequestedModel) {
@@ -1483,7 +1530,12 @@ export async function* promptAiSdkStream(
           response = streamText({
             ...streamParams,
             ...(requestCacheControl && compatibility.supportsTools !== false
-              ? { tools: withToolsCacheBreakpoint(streamParams.tools) }
+              ? {
+                  tools: withToolsCacheBreakpoint(
+                    streamParams.tools,
+                    streamParams.cacheControlToolBreakpoint,
+                  ),
+                }
               : {}),
             system: requestSystem || undefined,
             // Provider-config default output ceiling (defaultCapabilities/modelCapabilities
@@ -1974,18 +2026,45 @@ export async function* promptAiSdkStream(
             }
           }
 
-          if (params.onCacheDebugUsageReceived) {
-            const usageResult = await awaitOptionalPostStreamMetadata({
-              promise: response.usage,
-              label: 'provider usage metadata',
-              logger,
+          const usageResult = await awaitOptionalPostStreamMetadata({
+            promise: response.usage,
+            label: 'provider usage metadata',
+            logger,
+          })
+          if (usageResult) {
+            emitCacheDebugUsage({
+              callback: params.onCacheDebugUsageReceived,
+              usage: usageResult,
             })
-            if (usageResult) {
-              emitCacheDebugUsage({
-                callback: params.onCacheDebugUsageReceived,
-                usage: usageResult,
-              })
-            }
+          }
+          // Per-request NDJSON telemetry uses observed counts only. Missing
+          // metadata remains unknown; an observer cannot trigger model retries.
+          const tokenCount = (value: unknown) =>
+            typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+              ? value
+              : undefined
+          const inputTokens = tokenCount(usageResult?.inputTokens)
+          const outputTokens = tokenCount(usageResult?.outputTokens)
+          try {
+            params.sendAction({
+              action: {
+                type: 'response-chunk',
+                userInputId,
+                chunk: {
+                  type: 'usage',
+                  runId: params.runId,
+                  agentId: params.agentId,
+                  model: typeof aiSDKModel === 'string' ? aiSDKModel : aiSDKModel.modelId,
+                  inputTokens,
+                  outputTokens,
+                  cachedInputTokens: tokenCount(usageResult?.cachedInputTokens),
+                  totalTokens: tokenCount(usageResult?.totalTokens),
+                  complete: inputTokens !== undefined && outputTokens !== undefined,
+                },
+              },
+            })
+          } catch (error) {
+            logger.debug({ error }, 'Provider usage observer failed (non-fatal)')
           }
 
           // Skip provider-cost tracking for ChatGPT OAuth because the request runs
@@ -2147,20 +2226,19 @@ export async function* promptAiSdkStream(
               ? `Retryable HTTP ${statusCode} during stream, retrying with delay`
               : 'Transient network error during stream, retrying with delay',
           )
-          emitProviderStatus({
-            status: 'retrying',
+          const retryStatus = {
+            status: 'retrying' as const,
             model: attemptModel,
             attempt: attempt + 2,
-            maxAttempts: getRouteAttemptLimit(
-              policy,
-              retryBudget,
-              attemptModel,
-            ),
+            maxAttempts: getRouteAttemptLimit(policy, retryBudget, attemptModel),
             delayMs,
             ...(statusCode !== undefined ? { statusCode } : {}),
+          }
+          emitProviderStatus({ ...retryStatus, remainingDelayMs: delayMs })
+          await observeRetryWait({ delayMs, signal: params.signal,
+            sleep: (ms, signal) => params.retrySleep?.(ms, signal) ?? waitForBackoffDelay({ delayMs: ms, signal }),
+            onRemaining: remainingDelayMs => emitProviderStatus({ ...retryStatus, remainingDelayMs }),
           })
-          await (params.retrySleep?.(delayMs, params.signal) ??
-            waitForBackoffDelay({ delayMs, signal: params.signal }))
           if (params.signal.aborted) throw params.signal.reason
         }
       }

@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+  stat,
+  access,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 
@@ -11,6 +18,7 @@ import {
   RUN_JOURNAL_MAINTENANCE_TRIGGER_BYTES,
   maintainRunJournalIfNeeded,
   openRunJournalForRun,
+  resolveRunJournalPath,
 } from '../run-journal-path'
 
 describe('openRunJournalForRun (P2-T7 live-run journal opener)', () => {
@@ -36,6 +44,57 @@ describe('openRunJournalForRun (P2-T7 live-run journal opener)', () => {
       // The created journal carries the P2-T7 runIds dash extension.
       expect(journal!.runIds()).toEqual(['run-1'])
       await journal!.close()
+    } finally {
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  it('creates the private default live-journal parent only when a run opens it', async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), 'run-journal-first-'))
+    const previousConfigDir = process.env.OPENBUFF_CONFIG_DIR
+    process.env.OPENBUFF_CONFIG_DIR = path.join(parent, 'config')
+    let journal: ReturnType<typeof openRunJournalForRun>
+    try {
+      const journalPath = resolveRunJournalPath()
+      await expect(access(path.dirname(journalPath))).rejects.toThrow()
+      const warnings: string[] = []
+      journal = openRunJournalForRun({
+        path: journalPath,
+        warn: (message) => warnings.push(message),
+      })
+      expect(journal).toBeDefined()
+      expect(warnings).toEqual([])
+      journal!.append('first-run', {
+        eventType: 'step_boundary',
+        stepNumber: 0,
+        correlation: 'first',
+        payload: { status: 'completed' },
+      })
+      expect(journal!.runIds()).toEqual(['first-run'])
+      if (process.platform !== 'win32')
+        expect((await stat(path.dirname(journalPath))).mode & 0o077).toBe(0)
+    } finally {
+      await journal?.close()
+      if (previousConfigDir === undefined)
+        delete process.env.OPENBUFF_CONFIG_DIR
+      else process.env.OPENBUFF_CONFIG_DIR = previousConfigDir
+      await rm(parent, { recursive: true, force: true })
+    }
+  })
+
+  it('does not create missing directories for an explicitly injected nondefault path', async () => {
+    const parent = await mkdtemp(path.join(tmpdir(), 'run-journal-selected-'))
+    const journalPath = path.join(parent, 'caller-owned-missing', 'journal.db')
+    try {
+      const warnings: string[] = []
+      expect(
+        openRunJournalForRun({
+          path: journalPath,
+          warn: (message) => warnings.push(message),
+        }),
+      ).toBeUndefined()
+      expect(warnings).toHaveLength(1)
+      await expect(access(path.dirname(journalPath))).rejects.toThrow()
     } finally {
       await rm(parent, { recursive: true, force: true })
     }
@@ -141,10 +200,13 @@ describe('maintainRunJournalIfNeeded (write-side file-level maintenance)', () =>
 
   it('over the trigger: opens via the seam, runs maintain with the expected params, and closes the journal', async () => {
     const seen: Parameters<typeof createRunJournal>[0][] = []
-    const maintainCalls: Array<{
-      keepRuns?: number
-      vacuum?: boolean
-    } | undefined> = []
+    const maintainCalls: Array<
+      | {
+          keepRuns?: number
+          vacuum?: boolean
+        }
+      | undefined
+    > = []
     let closeCount = 0
     const result = await maintainRunJournalIfNeeded({
       path: ':memory:',
@@ -155,9 +217,10 @@ describe('maintainRunJournalIfNeeded (write-side file-level maintenance)', () =>
         const real = createRunJournal(params)
         return {
           ...real,
-          maintain: (
-            m?: { keepRuns?: number; vacuum?: boolean },
-          ): { prunedRunCount: number; vacuumed: boolean } => {
+          maintain: (m?: {
+            keepRuns?: number
+            vacuum?: boolean
+          }): { prunedRunCount: number; vacuumed: boolean } => {
             maintainCalls.push(m)
             return real.maintain(m)
           },
@@ -204,10 +267,13 @@ describe('maintainRunJournalIfNeeded (write-side file-level maintenance)', () =>
   })
 
   it('forwards RUN_JOURNAL_DEFAULT_MAINTENANCE when no maintenance params are injected', async () => {
-    const maintainCalls: Array<{
-      keepRuns?: number
-      vacuum?: boolean
-    } | undefined> = []
+    const maintainCalls: Array<
+      | {
+          keepRuns?: number
+          vacuum?: boolean
+        }
+      | undefined
+    > = []
     const result = await maintainRunJournalIfNeeded({
       path: ':memory:',
       // Exactly at the trigger is NOT under it: the file sits at the bound
@@ -217,9 +283,10 @@ describe('maintainRunJournalIfNeeded (write-side file-level maintenance)', () =>
         const real = createRunJournal(params)
         return {
           ...real,
-          maintain: (
-            m?: { keepRuns?: number; vacuum?: boolean },
-          ): { prunedRunCount: number; vacuumed: boolean } => {
+          maintain: (m?: {
+            keepRuns?: number
+            vacuum?: boolean
+          }): { prunedRunCount: number; vacuumed: boolean } => {
             maintainCalls.push(m)
             return real.maintain(m)
           },

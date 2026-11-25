@@ -166,6 +166,28 @@ export OPENCODE_GO_API_KEY="your_key"
 bun run smoke:openbuff
 ```
 
+## Web, images, MCP and local integrations
+
+- **Web research:** `web_search` supports keyless search and direct public-URL
+  fetches; URL requests use the shared pinned-address egress policy. The
+  optional browser-backed workflow is described in
+  [Researcher Web Browser](./docs/execution/body-roadmap/researcher-web-agent-browser.md).
+- **Images:** `read_image` exposes local image content to a vision-capable
+  configured model. Vision support depends on the selected provider/model;
+  see [provider configuration](./docs/configuration.md).
+- **MCP:** User/global servers come from provider configuration; project-local
+  servers live in `.agents/mcp.json` and follow the project trust decision.
+  See [agents and tools](./docs/agents-and-tools.md) and
+  [configuration](./docs/configuration.md).
+- **Local `serve`:** `openbuff serve` starts the local server entry point for
+  attached clients; the host retains approval and project-trust authority.
+  See the [request flow](./docs/request-flow.md).
+- **Skills and trust:** Project agents and skills live under `.agents/` and
+  `.agents/skills/`. The interactive TUI lists gated project settings before
+  trust; `run` and `serve` remain untrusted unless explicitly granted.
+  Decisions are scoped to the project's real path and configuration hash;
+  see [configuration](./docs/configuration.md).
+
 ## Why choose Openbuff
 
 **Custom workflows**: TypeScript generators let you mix AI generation with programmatic control. Agents can spawn subagents, branch on conditions, and run multi-step processes.

@@ -5,11 +5,15 @@ import {
   isIndexStale,
   getIndexDir,
   getIndexPublicationToken,
-  loadIndex,
   loadSemanticVectors,
-  saveIndex,
   saveSemanticVectors,
 } from './index-store'
+import {
+  loadIndexGeneration as loadIndex,
+  saveIndexGeneration as saveIndex,
+  loadIndexMutationJournal,
+  recordIndexMutation,
+} from './durable-index-store'
 import { queryIndex, type QueryOptions } from './query'
 import {
   mergeScipEdgesIntoIndex,
@@ -52,6 +56,11 @@ export class IndexManager {
 
   private index: MetadataIndex | null = null
   private buildPromise: Promise<void> | null = null
+  private discoveryPromise: Promise<void> | null = null
+  private finishDiscovery?: () => void
+  private journalPromise: Promise<unknown> = Promise.resolve()
+  private persistencePromise: Promise<unknown> = Promise.resolve()
+  private journalFailed = false
   private lastBuildAttempt = 0
   private forceRefresh = false
   private staleRefreshPending = false
@@ -192,7 +201,15 @@ export class IndexManager {
     this.forceRefresh = false
     this.pendingMutationDelta = undefined
     this.staleRefreshPending = staleRefresh
-    this.buildPromise = this._build(mutationDelta).finally(() => {
+    const coldStart = !this.index
+    if (coldStart && !staleRefresh)
+      this.discoveryPromise = new Promise((resolve) => {
+        this.finishDiscovery = resolve
+      })
+    this.buildPromise = this._build(mutationDelta, coldStart).finally(() => {
+      this.finishDiscovery?.()
+      this.finishDiscovery = undefined
+      this.discoveryPromise = null
       this.buildPromise = null
       this.staleRefreshPending = false
     })
@@ -291,6 +308,18 @@ export class IndexManager {
     this.mutationEpoch += 1
     this.pendingMutationDelta = undefined
     this.forceRefresh = true
+    if (this.index)
+      this.index = {
+        ...this.index,
+        freshness: 'unverified',
+        unverifiedPaths: undefined,
+      }
+    this.snapshotCache = undefined
+    this.appendJournal({
+      complete: false,
+      coverageGap: true,
+      verifyContent: true,
+    })
   }
 
   /** Queue a precise filesystem mutation delta for the next refresh. */
@@ -324,6 +353,24 @@ export class IndexManager {
       delta,
     )
     this.forceRefresh = true
+    if (this.index) {
+      this.index = {
+        ...this.index,
+        freshness:
+          delta.complete === true && !delta.coverageGap
+            ? 'dirty'
+            : 'unverified',
+        unverifiedPaths: Array.from(
+          new Set([
+            ...(this.index.unverifiedPaths ?? []),
+            ...(delta.changedPaths ?? []),
+            ...(delta.deletedPaths ?? []),
+          ]),
+        ).sort(),
+      }
+    }
+    this.snapshotCache = undefined
+    this.appendJournal(delta)
   }
 
   /**
@@ -331,7 +378,10 @@ export class IndexManager {
    * Starts a build if needed. Returns false when the wait timed out before
    * the build finished (also surfaced via {@link getStatus}).
    */
-  async waitUntilReady(timeoutMs = 30_000): Promise<boolean> {
+  async waitUntilReady(
+    timeoutMs = 30_000,
+    requireReconciled = false,
+  ): Promise<boolean> {
     // Detached-instance gate (reliability finding
     // detached-index-manager-still-runs-own-build-loop): forward readiness to
     // the registered singleton so the holder never builds (or serves) its own
@@ -343,15 +393,17 @@ export class IndexManager {
       // instead of being deferred until something else calls ensureBuilt
       // (reliability finding detached-query-forward-skips-pending-drain).
       this.forwardPendingMutationsTo(registered)
-      return registered.waitUntilReady(timeoutMs)
+      return registered.waitUntilReady(timeoutMs, requireReconciled)
     }
     this.scheduleRefreshIfNeeded()
     if (
       isIndexReady(this.index) &&
       !this.forceRefresh &&
       !this.staleRefreshPending &&
+      (!requireReconciled || !this.buildPromise) &&
       (!this.config.semantic?.enabled || !this.embed || this.isSemanticReady())
     ) {
+      await this.persistencePromise
       this.waitTimedOut = false
       return true
     }
@@ -376,6 +428,8 @@ export class IndexManager {
       // waituntilready-stale-timeout-flag-not-cleared).
       const timedOut = await Promise.race([
         this.buildPromise,
+        (!requireReconciled ? this.discoveryPromise : null) ??
+          this.buildPromise,
         new Promise<boolean>((resolve) => {
           timer = setTimeout(() => {
             this.waitTimedOut = true
@@ -390,10 +444,15 @@ export class IndexManager {
       if (!timedOut) {
         this.waitTimedOut = false
       }
-      return !timedOut
+      return !timedOut && Boolean(this.index)
     } finally {
       if (timer !== undefined) clearTimeout(timer)
     }
+  }
+
+  /** Wait for source attestation instead of merely opening cached discovery. */
+  async waitUntilReconciled(timeoutMs = 30_000): Promise<boolean> {
+    return this.waitUntilReady(timeoutMs, true)
   }
 
   /**
@@ -591,13 +650,39 @@ export class IndexManager {
     return { ...lexical, results }
   }
 
-  private async _build(mutationDelta?: IndexMutationDelta): Promise<void> {
+  private async _build(
+    mutationDelta?: IndexMutationDelta,
+    coldStart = false,
+  ): Promise<void> {
     if (this.config.enabled === false) return
     this.lastBuildAttempt = Date.now()
     const cacheDir = this.config.cacheDir ?? '.codebuff-index'
     let stage: IndexBuildError['stage'] = 'load'
     try {
-      const existing = await loadIndex(this.projectRoot, cacheDir)
+      await this.persistencePromise
+      await this.journalPromise
+      const existing = await loadIndex(this.projectRoot, cacheDir, {
+        onDiscovery: (discovery) => {
+          if (coldStart) {
+            this.index = {
+              ...discovery,
+              freshness: 'unverified',
+              unverifiedPaths: undefined,
+            }
+            this.snapshotCache = undefined
+            this.finishDiscovery?.()
+          }
+        },
+      })
+      if (coldStart && existing) {
+        this.index = {
+          ...existing,
+          freshness: 'unverified',
+          unverifiedPaths: undefined,
+        }
+        this.snapshotCache = undefined
+        this.finishDiscovery?.()
+      }
       const expectedBuiltAt = existing?.builtAt ?? null
       const expectedSnapshotId = existing
         ? computeIndexSnapshotId(existing)
@@ -605,6 +690,29 @@ export class IndexManager {
       const expectedPublicationToken = existing
         ? getIndexPublicationToken(existing)
         : null
+      const journal = await loadIndexMutationJournal(
+        this.projectRoot,
+        existing?.indexedJournalCursor ?? 0,
+        cacheDir,
+      )
+      for (const entry of journal)
+        mutationDelta = mergeMutationDeltas(mutationDelta, entry.delta)
+      const journalCursor =
+        journal[journal.length - 1]?.sequence ??
+        existing?.indexedJournalCursor ??
+        0
+      if (coldStart || this.journalFailed || mutationDelta?.coverageGap) {
+        mutationDelta = {
+          ...mutationDelta,
+          complete: false,
+          verifyContent: true,
+        }
+      } else if (!mutationDelta) {
+        // Age-based safety reconciliation attests content, including offline
+        // touch-less changes that a timestamp-only sweep cannot detect.
+        mutationDelta = { complete: false, verifyContent: true }
+      }
+      const buildEpoch = this.mutationEpoch
       let index: MetadataIndex
       stage = 'walk'
       if (existing) {
@@ -632,13 +740,37 @@ export class IndexManager {
       ) {
         index.workspaceRevision = mutationDelta.revision
       }
+      if (!index.parserDegraded && !index.unverifiedPaths?.length) {
+        index.indexedJournalCursor = journalCursor
+        if (mutationDelta?.verifyContent && this.mutationEpoch === buildEpoch)
+          this.journalFailed = false
+      }
+      if (
+        this.journalFailed ||
+        this.mutationEpoch !== buildEpoch ||
+        this.pendingMutationDelta ||
+        this.forceRefresh
+      ) {
+        index.freshness =
+          this.pendingMutationDelta?.complete === true &&
+          !this.pendingMutationDelta.coverageGap &&
+          !this.journalFailed
+            ? 'dirty'
+            : 'unverified'
+        index.unverifiedPaths = [
+          ...(this.pendingMutationDelta?.changedPaths ?? []),
+          ...(this.pendingMutationDelta?.deletedPaths ?? []),
+        ]
+      }
       stage = 'persist'
       let verifiedWrite = false
       const persisted = await saveIndex(index, this.projectRoot, cacheDir, {
         expectedBuiltAt,
         expectedSnapshotId,
         expectedPublicationToken,
-        onVerifiedWrite: (verified) => { verifiedWrite = verified },
+        onVerifiedWrite: (verified) => {
+          verifiedWrite = verified
+        },
       })
       if (!persisted) {
         this.forceRefresh = true
@@ -743,6 +875,11 @@ export class IndexManager {
       ...(index.workspaceRevision !== undefined
         ? { workspaceRevision: index.workspaceRevision }
         : {}),
+      freshness: index.freshness,
+      generationId: index.generationId,
+      repositoryId: index.repositoryId,
+      worktreeId: index.worktreeId,
+      indexedJournalCursor: index.indexedJournalCursor,
     }
     this.snapshotCache = { index, identity }
     return identity
@@ -1002,6 +1139,41 @@ export class IndexManager {
     const preciseEdges = scipPreciseEdges(scip)
     const merged = mergeScipEdgesIntoIndex(this.index, preciseEdges)
     this.index = merged.index
+    this.snapshotCache = undefined
+    if (merged.edgesMerged > 0) {
+      const liveMerged = merged.index
+      const sourceId = computeIndexSnapshotId(liveMerged)
+      this.persistencePromise = this.persistencePromise
+        .then(async () => {
+          const cacheDir = this.config.cacheDir ?? '.codebuff-index'
+          const current = await loadIndex(this.projectRoot, cacheDir)
+          if (!current || computeIndexSnapshotId(current) !== sourceId) {
+            this.forceRefresh = true
+            return
+          }
+          const durableMerge = mergeScipEdgesIntoIndex(
+            current,
+            preciseEdges,
+          ).index
+          const saved = await saveIndex(
+            durableMerge,
+            this.projectRoot,
+            cacheDir,
+            {
+              expectedPublicationToken: getIndexPublicationToken(current),
+              expectedSnapshotId: sourceId,
+              expectedBuiltAt: current.builtAt,
+            },
+          )
+          if (saved && this.index === liveMerged) {
+            this.index = durableMerge
+            this.snapshotCache = undefined
+          }
+        })
+        .catch((error) => {
+          console.debug('[indexer] precise graph persistence failed:', error)
+        })
+    }
     return merged.edgesMerged
   }
 
@@ -1021,6 +1193,8 @@ export class IndexManager {
       (this.forceRefresh ||
         refreshing ||
         this.lastBuildError ||
+        this.index.freshness === 'unverified' ||
+        this.index.freshness === 'dirty' ||
         isIndexStale(this.index)),
     )
     const diagnostics = this.index?.parseDiagnostics ?? []
@@ -1081,6 +1255,8 @@ export class IndexManager {
       ready: Boolean(this.index),
       stale,
       refreshing,
+      freshness: this.index?.freshness,
+      unverifiedPaths: this.index?.unverifiedPaths,
       semantic,
       totalIndexed: this.index?.fileCount ?? 0,
       indexAge,
@@ -1090,7 +1266,7 @@ export class IndexManager {
       ...(this.semanticSkippedCount > 0
         ? { semanticSkippedFiles: this.semanticSkippedCount }
         : {}),
-      message: `${state === 'ready' ? 'Index ready.' : state === 'stale' ? 'Serving a stale snapshot while refreshing.' : state === 'degraded' ? 'Index ready with partial coverage or diagnostics.' : state === 'failed' ? 'Index build failed.' : state === 'building' ? 'Index is building.' : state === 'disabled' ? 'Indexing is disabled.' : 'Index is empty or unavailable.'}${coverageNotice}${errorNotice}${semanticSkippedNotice}${waitTimeoutNotice}`,
+      message: `${this.index?.freshness === 'unverified' ? 'Serving a previously valid discovery snapshot; source freshness is unverified.' : state === 'ready' ? 'Index ready.' : state === 'stale' ? 'Serving a stale snapshot while refreshing.' : state === 'degraded' ? 'Index ready with partial coverage or diagnostics.' : state === 'failed' ? 'Index build failed.' : state === 'building' ? 'Index is building.' : state === 'disabled' ? 'Indexing is disabled.' : 'Index is empty or unavailable.'}${coverageNotice}${errorNotice}${semanticSkippedNotice}${waitTimeoutNotice}`,
     }
   }
 
@@ -1140,7 +1316,10 @@ export class IndexManager {
   private scheduleRefreshIfNeeded(): void {
     if (
       !this.index ||
-      (!isIndexStale(this.index) && !this.lastBuildError?.retryable) ||
+      (!isIndexStale(this.index) &&
+        !this.lastBuildError?.retryable &&
+        this.index.freshness !== 'unverified' &&
+        this.index.freshness !== 'dirty') ||
       this.buildPromise ||
       this.forceRefresh ||
       Date.now() - this.lastBuildAttempt < this.MIN_RETRY_INTERVAL_MS
@@ -1149,6 +1328,22 @@ export class IndexManager {
     }
     this.forceRefresh = true
     this.ensureBuilt()
+  }
+
+  private appendJournal(delta: IndexMutationDelta): void {
+    if (this.config.enabled === false) return
+    this.journalPromise = this.journalPromise
+      .then(() =>
+        recordIndexMutation(
+          this.projectRoot,
+          delta,
+          this.config.cacheDir ?? '.codebuff-index',
+        ),
+      )
+      .catch((error) => {
+        this.journalFailed = true
+        console.debug('[indexer] mutation journal persistence failed:', error)
+      })
   }
 }
 
@@ -1225,6 +1420,9 @@ function mergeMutationDeltas(
       ? current.complete === true && next.complete === true
       : next.complete,
     revision,
+    verifyContent:
+      current?.verifyContent === true || next.verifyContent === true,
+    coverageGap: current?.coverageGap === true || next.coverageGap === true,
   }
 }
 

@@ -55,8 +55,8 @@ export function buildIndexQueryData(
     }
   }
 
-  const persistedPostings: Record<string, string[]> = {}
-  const documentFrequencies: Record<string, number> = {}
+  const persistedPostings: Record<string, string[]> = Object.create(null)
+  const documentFrequencies: Record<string, number> = Object.create(null)
   for (const token of Array.from(postings.keys()).sort()) {
     const paths = Array.from(postings.get(token) ?? []).sort()
     persistedPostings[token] = paths
@@ -90,8 +90,8 @@ export async function buildIndexQueryDataAsync(
       paths.add(file.path)
     }
   }
-  const persistedPostings: Record<string, string[]> = {}
-  const documentFrequencies: Record<string, number> = {}
+  const persistedPostings: Record<string, string[]> = Object.create(null)
+  const documentFrequencies: Record<string, number> = Object.create(null)
   let tokenIndex = 0
   for (const token of Array.from(postings.keys()).sort()) {
     if (tokenIndex++ % 128 === 0) await yieldToEventLoop()
@@ -107,6 +107,60 @@ export async function buildIndexQueryDataAsync(
     if (edge.to !== edge.from) (adjacency[edge.to] ??= []).push(edgeIndex)
   }
   return { postings: persistedPostings, documentFrequencies, adjacency }
+}
+
+/** Maintain only affected lexical postings; remap adjacency for the edge view. */
+export async function updateIndexQueryDataAsync(
+  previous: MetadataIndex,
+  files: Record<string, IndexedFile>,
+  graph: IndexGraph,
+  changedPaths: ReadonlySet<string>,
+  yieldToEventLoop: () => Promise<void>,
+): Promise<IndexQueryData> {
+  if (!previous.queryData)
+    return buildIndexQueryDataAsync(files, graph, yieldToEventLoop)
+  const postings: Record<string, string[]> = Object.assign(
+    Object.create(null),
+    previous.queryData.postings,
+  )
+  const documentFrequencies: Record<string, number> = Object.assign(
+    Object.create(null),
+    previous.queryData.documentFrequencies,
+  )
+  for (const filePath of changedPaths) {
+    await yieldToEventLoop()
+    const before = previous.files[filePath]
+    const after = files[filePath]
+    const oldTokens = before
+      ? collectFilePostingTokens(before)
+      : new Set<string>()
+    const newTokens = after
+      ? collectFilePostingTokens(after)
+      : new Set<string>()
+    for (const token of new Set([...oldTokens, ...newTokens])) {
+      if (oldTokens.has(token) === newTokens.has(token)) continue
+      const members = new Set(postings[token] ?? [])
+      if (newTokens.has(token)) members.add(filePath)
+      else members.delete(filePath)
+      if (members.size) {
+        postings[token] = Array.from(members).sort()
+        documentFrequencies[token] = members.size
+      } else {
+        delete postings[token]
+        delete documentFrequencies[token]
+      }
+    }
+  }
+  // Numeric adjacency indexes address the flattened immutable edge view.
+  // This remapping does not re-extract graph relationships or lexical facts.
+  const adjacency: Record<string, number[]> = {}
+  for (let edgeIndex = 0; edgeIndex < graph.edges.length; edgeIndex++) {
+    if (edgeIndex % 256 === 0) await yieldToEventLoop()
+    const edge = graph.edges[edgeIndex]!
+    ;(adjacency[edge.from] ??= []).push(edgeIndex)
+    if (edge.to !== edge.from) (adjacency[edge.to] ??= []).push(edgeIndex)
+  }
+  return { postings, documentFrequencies, adjacency }
 }
 
 /** Return the bounded union of posting lists that can satisfy query tokens. */

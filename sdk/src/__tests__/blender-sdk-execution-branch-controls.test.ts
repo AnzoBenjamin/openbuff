@@ -277,23 +277,80 @@ function assertControl(observed: Observation) {
   expect(action).toBeDefined()
   expect(action?.toolName).toBe(observed.entries[0]!.toolName)
   expect(action?.runId).toBe(correlation.owner.rootRunId)
-  // SDK action normalization preserves returned JSON refusals as succeeded
-  // for inspect/preview, and guarded not_applied edits as uncertain. Neither
-  // is evidence that Blender launched; exact launch events are checked above.
+  // Typed branch refusals retain their original cause. Aborting before the
+  // validation admission instead cancels the action after the earlier edit.
+  const exhaustedBeforeTarget =
+    control === 'exhausted-before-later-branch' && branch !== 'blender.validate'
   const cancelled =
     control === 'pre-aborted' ||
-    control === 'exhausted-before-later-branch' ||
+    (control === 'exhausted-before-later-branch' &&
+      branch === 'blender.validate') ||
     control === 'delayed-authorizer-cancellation'
+  const executionReason =
+    control === 'denied' || control === 'unavailable'
+      ? control
+      : exhaustedBeforeTarget
+        ? 'deadline-exhausted'
+        : control === 'delayed-authorizer-cancellation'
+          ? 'cancelled'
+          : undefined
   expect(action?.outcome).toBe(
     cancelled
       ? 'cancelled'
-      : observed.entries[0]!.toolName === 'edit_3d_asset'
-        ? 'uncertain'
-        : 'succeeded',
+      : executionReason
+        ? 'refused'
+        : observed.entries[0]!.toolName === 'edit_3d_asset'
+          ? 'uncertain'
+          : 'succeeded',
   )
-  if (!cancelled) {
-    expect(observed.result?.output.type).toBe('structuredOutput')
-    expect(observed.result?.runOutcome?.termination).toBe('completed')
+  // Even an earlier synthetic edit leaves the source unchanged: no guarded
+  // commit succeeded, so a launch must not become a confirmed mutation.
+  expect(action?.effect).toEqual({
+    status: 'unobserved',
+    receiptIds: [],
+    confirmedPaths: [],
+  })
+  if (executionReason) {
+    expect(consumer.executionRefusal).toMatchObject({
+      ok: false,
+      reason: executionReason,
+    })
+    const refusal = consumer.executionRefusal as { cause: unknown }
+    expect(typeof refusal.cause).toBe('string')
+    if (typeof refusal.cause !== 'string')
+      throw new Error('Typed Blender refusal lacks its original cause message')
+    expect(action?.cause).toEqual({
+      code: `execution_${executionReason}`,
+      message: refusal.cause,
+    })
+    expect(
+      targetEvents.some(
+        (event) =>
+          event.phase === 'no-launch' &&
+          event.refusal.reason === executionReason,
+      ),
+    ).toBe(true)
+  } else if (cancelled) {
+    expect(action?.cause?.code).toBe('action_cancelled')
+    expect(consumer.executionRefusal).toBeUndefined()
+    expect(targetEvents.some((event) => event.phase === 'no-launch')).toBe(
+      false,
+    )
+  }
+  if (control !== 'happy') {
+    expect(observed.result?.output.type).toBe('error')
+    if (control === 'denied' || control === 'unavailable') {
+      expect(observed.result?.runOutcome?.termination).toBe('failed')
+      expect(observed.result?.runOutcome?.cause).toEqual(action?.cause)
+    } else {
+      const exhausted = control === 'exhausted-before-later-branch'
+      expect(observed.result?.runOutcome?.termination).toBe(
+        exhausted ? 'deadline_exhausted' : 'cancelled',
+      )
+      expect(observed.result?.runOutcome?.cause?.code).toBe(
+        exhausted ? 'run_deadline_exhausted' : 'run_cancelled',
+      )
+    }
   }
   if (
     [

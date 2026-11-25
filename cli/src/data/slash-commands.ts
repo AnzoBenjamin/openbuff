@@ -73,7 +73,7 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
   {
     id: 'help',
     label: 'help',
-    description: 'Display keyboard shortcuts and tips',
+    description: 'Display keyboard shortcuts and the local command directory',
     aliases: ['h', '?'],
     implicitCommand: true,
   },
@@ -132,6 +132,24 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     label: 'interview',
     description:
       'AI asks a series of questions to flesh out request into a spec',
+  },
+  {
+    id: 'plans',
+    label: 'plans',
+    description: 'List durable plan sessions and their progress',
+    aliases: ['plan-ls'],
+  },
+  {
+    id: 'plan-use',
+    label: 'plan-use',
+    description: 'Choose the active durable plan session: /plan-use <slug>',
+    aliases: ['plan-active', 'use-plan'],
+  },
+  {
+    id: 'plan-timeline',
+    label: 'plan-timeline',
+    description: 'Inspect a durable plan event timeline: /plan-timeline <slug>',
+    aliases: ['tl'],
   },
   {
     id: 'resume-plan',
@@ -197,7 +215,8 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     id: 'feedback',
     label: 'feedback',
     description:
-      'Feedback help (remote submission unavailable in local/BYOK build)',
+      'Save explicit feedback locally or export it: /feedback <text>',
+    aliases: ['bug', 'report'],
   },
   {
     id: 'bash',
@@ -231,6 +250,7 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     id: 'update',
     label: 'update',
     description: 'Check staged CLI update status (restart to apply)',
+    aliases: ['upgrade', 'check-update'],
   },
   {
     id: 'theme:toggle',
@@ -247,7 +267,6 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
     id: 'attach',
     label: 'attach',
     description: 'Reattach to the last detached session',
-    aliases: ['attach'],
   },
   {
     id: 'undo-turn',
@@ -276,6 +295,24 @@ const ALL_SLASH_COMMANDS: SlashCommand[] = [
 ]
 
 export const SLASH_COMMANDS = ALL_SLASH_COMMANDS
+
+/** Shared local help reference; insertion-only shortcuts never pretend to execute. */
+export function formatCommandDirectory(): string {
+  return [
+    'Openbuff command directory',
+    'Use /<command> in the composer. Some commands submit agent prompts; insertion-only shortcuts are marked below.',
+    '',
+    ...SLASH_COMMANDS.map((command) =>
+      [
+        `/${command.id}${command.aliases?.length ? ` (aliases: ${command.aliases.map((alias) => `/${alias}`).join(', ')})` : ''}`,
+        `  ${command.description}`,
+        ...(command.insertText
+          ? [`  Inserts into the composer only: ${command.insertText}`]
+          : []),
+      ].join('\n'),
+    ),
+  ].join('\n\n')
+}
 
 export const SLASHLESS_COMMAND_IDS = new Set(
   SLASH_COMMANDS.filter((cmd) => cmd.implicitCommand).map((cmd) =>

@@ -406,6 +406,45 @@ describe('humanized renderers replace raw-JSON fallbacks', () => {
     expect(markup).not.toContain('errorMessage')
   })
 
+  test.each([
+    ['unavailable', 'failed', 'none', 0, 0],
+    ['passed', 'passed', 'full', 0, 0],
+    ['passed', 'passed', 'full', 1, 1],
+  ] as const)(
+    'run_targeted_validation shows diagnostic %s and its observed counts',
+    (diagnosticStatus, status, assurance, beforeCount, afterCount) => {
+      const markup = render(
+        'run_targeted_validation',
+        {},
+        {
+          status,
+          assurance,
+          results: [
+            {
+              hookName: 'diagnostic-delta',
+              validationStatus: `diagnostic_delta_${diagnosticStatus}`,
+              diagnosticStatus,
+              observations: {
+                basis: 'before_after',
+                before: {
+                  diagnostics: Array.from({ length: beforeCount }, () => ({})),
+                },
+                after: {
+                  diagnostics: Array.from({ length: afterCount }, () => ({})),
+                },
+              },
+            },
+          ],
+        },
+      )
+      expect(markup).toContain(diagnosticStatus)
+      expect(markup).toContain('before_after')
+      expect(markup).toContain(`before: ${beforeCount}`)
+      expect(markup).toContain(`after: ${afterCount}`)
+      expect(markup).toContain(assurance)
+    },
+  )
+
   test('every renderer in this family is registered (no fallback)', () => {
     for (const toolName of [
       'recall_context',

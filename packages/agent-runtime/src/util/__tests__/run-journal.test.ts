@@ -583,6 +583,163 @@ describe('classifyRunResume', () => {
     }
   })
 
+  it('keeps an earlier unmatched tool call in flight across interleaved results and a long journal', () => {
+    const journal = makeJournal()
+    try {
+      journal.append('run-interleaved', {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: 'tool-pending',
+        payload: { toolName: 'write_file' },
+      })
+      journal.append('run-interleaved', {
+        eventType: 'llm_request',
+        stepNumber: 0,
+        correlation: 'llm-pending',
+        payload: { model: 'm' },
+      })
+      journal.append('run-interleaved', {
+        eventType: 'tool_call',
+        stepNumber: 1,
+        correlation: 'tool-complete',
+        payload: { toolName: 'read_files' },
+      })
+      journal.append('run-interleaved', {
+        eventType: 'tool_result',
+        stepNumber: 1,
+        correlation: 'tool-complete',
+        payload: { result: 'done' },
+      })
+      journal.append('run-interleaved', {
+        eventType: 'llm_request',
+        stepNumber: 2,
+        correlation: 'llm-complete',
+        payload: { model: 'm' },
+      })
+      journal.append('run-interleaved', {
+        eventType: 'llm_response',
+        stepNumber: 2,
+        correlation: 'llm-complete',
+        payload: { response: 'done' },
+      })
+      for (let stepNumber = 3; stepNumber < 75; stepNumber++) {
+        journal.append('run-interleaved', {
+          eventType: 'step_boundary',
+          stepNumber,
+          correlation: `s${stepNumber}`,
+          payload: { status: 'completed' },
+        })
+      }
+
+      expect(classifyRunResume(journal, 'run-interleaved')).toEqual({
+        kind: 'in_flight_tool',
+        toolCallId: 'tool-pending',
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('keeps an earlier unmatched model request in flight after unrelated completed work', () => {
+    const journal = makeJournal()
+    try {
+      journal.append('run-llm-interleaved', {
+        eventType: 'llm_request',
+        stepNumber: 0,
+        correlation: 'llm-pending',
+        payload: { model: 'm' },
+      })
+      journal.append('run-llm-interleaved', {
+        eventType: 'tool_call',
+        stepNumber: 1,
+        correlation: 'tool-complete',
+        payload: { toolName: 'read_files' },
+      })
+      journal.append('run-llm-interleaved', {
+        eventType: 'tool_result',
+        stepNumber: 1,
+        correlation: 'tool-complete',
+        payload: { result: 'done' },
+      })
+      journal.append('run-llm-interleaved', {
+        eventType: 'step_boundary',
+        stepNumber: 2,
+        correlation: 's2',
+        payload: { status: 'completed' },
+      })
+
+      expect(classifyRunResume(journal, 'run-llm-interleaved')).toEqual({
+        kind: 'in_flight_llm',
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('does not let one result settle multiple attempts sharing a correlation', () => {
+    const journal = makeJournal()
+    try {
+      for (let stepNumber = 0; stepNumber < 2; stepNumber++) {
+        journal.append('run-reused', {
+          eventType: 'tool_call',
+          stepNumber,
+          correlation: 'reused-tool',
+          payload: { toolName: 'write_file' },
+        })
+      }
+      journal.append('run-reused', {
+        eventType: 'tool_result',
+        stepNumber: 2,
+        correlation: 'reused-tool',
+        payload: { result: 'one attempt completed' },
+      })
+      journal.append('run-reused', {
+        eventType: 'step_boundary',
+        stepNumber: 3,
+        correlation: 's3',
+        payload: { status: 'completed' },
+      })
+
+      expect(classifyRunResume(journal, 'run-reused')).toEqual({
+        kind: 'in_flight_tool',
+        toolCallId: 'reused-tool',
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('does not pair null-correlated requests with null-correlated results', () => {
+    const journal = makeJournal()
+    try {
+      journal.append('run-null-correlation', {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: null,
+        payload: { toolName: 'write_file' },
+      })
+      journal.append('run-null-correlation', {
+        eventType: 'tool_result',
+        stepNumber: 0,
+        correlation: null,
+        payload: { result: 'cannot establish correlation' },
+      })
+      journal.append('run-null-correlation', {
+        eventType: 'step_boundary',
+        stepNumber: 1,
+        correlation: 's1',
+        payload: { status: 'completed' },
+      })
+
+      expect(classifyRunResume(journal, 'run-null-correlation')).toEqual({
+        kind: 'in_flight_tool',
+        toolCallId: '',
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
   it('classifies a tool_call tail with a null correlation as in_flight_tool, not clean', () => {
     const journal = makeJournal()
     try {
@@ -786,7 +943,12 @@ describe('kill-9 mid-tool-call resume (P2-T2-DESIGN §6)', () => {
       expect(
         journal.toolResultForInput(runId, 'toolB', { op: 'write', path: 'b.ts' }, 0),
       ).toEqual({ result: 'B-done' })
-      expect(classifyRunResume(journal, runId)).toEqual({ kind: 'clean' })
+      // The replayed attempt used a fresh correlation, so it cannot settle
+      // the original uncertain tool_call in this retained journal.
+      expect(classifyRunResume(journal, runId)).toEqual({
+        kind: 'in_flight_tool',
+        toolCallId: 'uuid-pre-crash-B',
+      })
     } finally {
       journal.close()
     }
@@ -823,6 +985,12 @@ describe('nested child spawn resume (P2-T2-DESIGN §4d)', () => {
         payload: { model: 'm' },
       })
       journal.append(childRunId, {
+        eventType: 'llm_response',
+        stepNumber: 0,
+        correlation: 'cl0',
+        payload: { messageId: 'm0' },
+      })
+      journal.append(childRunId, {
         eventType: 'tool_call',
         stepNumber: 1,
         correlation: 'c1-tool',
@@ -841,7 +1009,7 @@ describe('nested child spawn resume (P2-T2-DESIGN §4d)', () => {
         payload: { status: 'completed' },
       })
       const childLastSeq = journal.lastEvent(childRunId)!.seq
-      expect(childLastSeq).toBe(3)
+      expect(childLastSeq).toBe(4)
 
       expect(classifyChildRun(journal, childRunId)).toEqual({
         kind: 'child_completed',
@@ -856,6 +1024,51 @@ describe('nested child spawn resume (P2-T2-DESIGN §4d)', () => {
         kind: 'replayed_completed',
         childRunId,
         lastSeq: childLastSeq,
+      })
+    } finally {
+      journal.close()
+    }
+  })
+
+  it('does not treat a child terminal boundary as completion when a tool call is unmatched', () => {
+    const parentRunId = 'parent-child-terminal-inflight'
+    const childRunId = 'child-terminal-inflight'
+    const journal = makeJournal()
+    try {
+      journal.append(parentRunId, {
+        eventType: 'spawn',
+        stepNumber: 0,
+        correlation: childRunId,
+        payload: { agentType: 'helper' },
+      })
+      journal.append(childRunId, {
+        eventType: 'tool_call',
+        stepNumber: 0,
+        correlation: 'child-tool-pending',
+        payload: { toolName: 'write_file' },
+      })
+      journal.append(childRunId, {
+        eventType: 'step_boundary',
+        stepNumber: 1,
+        correlation: 'child-terminal',
+        payload: { status: 'completed' },
+      })
+
+      expect(classifyChildRun(journal, childRunId)).toEqual({
+        kind: 'child_in_flight_tool',
+        childRunId,
+        toolCallId: 'child-tool-pending',
+      })
+      expect(planChildResume(journal, parentRunId)).toEqual({
+        kind: 'needs_children',
+        inFlight: [
+          {
+            kind: 'child_in_flight_tool',
+            childRunId,
+            toolCallId: 'child-tool-pending',
+          },
+        ],
+        awaiting: [],
       })
     } finally {
       journal.close()
@@ -965,6 +1178,12 @@ describe('nested child spawn resume (P2-T2-DESIGN §4d)', () => {
         stepNumber: 0,
         correlation: 'cl5',
         payload: { model: 'm' },
+      })
+      journal.append(childRunId, {
+        eventType: 'llm_response',
+        stepNumber: 0,
+        correlation: 'cl5',
+        payload: { messageId: 'm5' },
       })
       journal.append(childRunId, {
         eventType: 'tool_call',
@@ -1230,6 +1449,12 @@ describe('background agent resume policy (P2-T2-DESIGN §4d slice 3)', () => {
       // Once the respawned child's own run reaches a TERMINAL journal tail,
       // the marker settles and re-planning becomes idempotent.
       journal.append('child-respawn', {
+        eventType: 'llm_response',
+        stepNumber: 0,
+        correlation: 'cr0',
+        payload: { messageId: 'cr0-response' },
+      })
+      journal.append('child-respawn', {
         eventType: 'step_boundary',
         stepNumber: 1,
         correlation: 'cr-done',
@@ -1347,6 +1572,12 @@ describe('background agent resume policy (P2-T2-DESIGN §4d slice 3)', () => {
       // Once the respawned child's run reaches a terminal tail, the same
       // marker settles and re-planning becomes idempotent.
       journal.append('child-lone', {
+        eventType: 'llm_response',
+        stepNumber: 0,
+        correlation: 'cl-0',
+        payload: { messageId: 'cl-0-response' },
+      })
+      journal.append('child-lone', {
         eventType: 'step_boundary',
         stepNumber: 1,
         correlation: 'cl-done',
@@ -1437,6 +1668,12 @@ describe('background agent resume policy (P2-T2-DESIGN §4d slice 3)', () => {
       })
       // The terminal step_boundary tail is what makes this marker settle.
       journal.append('child-attempt-2', {
+        eventType: 'llm_response',
+        stepNumber: 0,
+        correlation: 'ca2-0',
+        payload: { messageId: 'ca2-0-response' },
+      })
+      journal.append('child-attempt-2', {
         eventType: 'step_boundary',
         stepNumber: 1,
         correlation: 'ca2-done',
@@ -1486,6 +1723,12 @@ describe('background agent resume policy (P2-T2-DESIGN §4d slice 3)', () => {
         stepNumber: 0,
         correlation: 'cs-0',
         payload: { model: 'm' },
+      })
+      journal.append('child-settled', {
+        eventType: 'llm_response',
+        stepNumber: 0,
+        correlation: 'cs-0',
+        payload: { messageId: 'cs-0-response' },
       })
       journal.append('child-settled', {
         eventType: 'step_boundary',
@@ -2017,6 +2260,12 @@ describe('replay driver integration (report → plan → execute)', () => {
         stepNumber: 0,
         correlation: 'cd0',
         payload: { model: 'm' },
+      })
+      journal.append('child-done', {
+        eventType: 'llm_response',
+        stepNumber: 0,
+        correlation: 'cd0',
+        payload: { messageId: 'cd0-response' },
       })
       journal.append('child-done', {
         eventType: 'step_boundary',
@@ -3232,7 +3481,7 @@ describe('P2-T2 slice-4 hardening: retention O(1), forceFlush, close-on-throw, b
     }
   })
 
-  it('classifyRunResume stays correct on a run longer than the bounded tail window', () => {
+  it('classifyRunResume scans retained runs longer than the previous tail window', () => {
     const journal = makeJournalWith({ retention: { maxEvents: 200 } })
     try {
       for (let i = 0; i < 100; i++) journal.append('run-long', stepEvent(i))
@@ -3242,8 +3491,8 @@ describe('P2-T2 slice-4 hardening: retention O(1), forceFlush, close-on-throw, b
         correlation: 'llm-1',
         payload: { model: 'x' },
       })
-      // 101 events: the bounded window cannot hold them all, yet the tail
-      // classification is unchanged (the tail IS the newest event).
+      // The full retained history is available even when it exceeds the old
+      // bounded tail window.
       expect(classifyRunResume(journal, 'run-long')).toEqual({
         kind: 'in_flight_llm',
       })

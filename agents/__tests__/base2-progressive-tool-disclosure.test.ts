@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from 'bun:test'
 
 import { loopAgentSteps } from '@codebuff/agent-runtime/run-agent-step'
+import { getModelVisibleSpawnableAgents } from '@codebuff/agent-runtime/templates/prompts'
 import { getToolSet } from '@codebuff/agent-runtime/tools/prompts'
 import { getEffectiveAgentToolNames } from '@codebuff/agent-runtime/util/agent-tool-names'
 import {
@@ -74,8 +75,10 @@ async function toolSurfaceTokenCount(toolNames: string[]): Promise<number> {
 }
 
 describe('base2 progressive tool disclosure (M1)', () => {
-  test('the default surface is the full mode-resolved surface', () => {
-    const agent = createBase2('default')
+  test('the explicit progressive-tool opt-out preserves the full mode-resolved surface', () => {
+    const agent = createBase2('default', {
+      progressiveToolDisclosure: false,
+    })
     // Explicit expected surface rather than a re-derivation via
     // resolveModelToolNames (createBase2 calls that same function with these
     // same defaults, so comparing against it could never fail). CORE order
@@ -109,8 +112,6 @@ describe('base2 progressive tool disclosure (M1)', () => {
       'rename_symbol',
       'code_action',
       'extract_symbol',
-      'create_plan',
-      'update_plan_status',
       'inspect_workspace',
       'inspect_environment',
       'get_affected_tests',
@@ -127,6 +128,22 @@ describe('base2 progressive tool disclosure (M1)', () => {
       'edit_3d_asset',
       'kill_job',
     ])
+  })
+
+  test('the default surface starts at CORE with tool discovery controls', () => {
+    const agent = createBase2('default')
+    const runtimeCore = getEffectiveAgentToolNames(agent, {
+      unlockedToolTiers: [],
+    })
+
+    expect(agent.programmaticConfig?.progressiveToolDisclosure).toBe(true)
+    expect(agent.toolNames).not.toContain('tool_search')
+    expect(agent.toolNames).not.toContain('tool_load')
+    expect(runtimeCore).toEqual([...BASE2_CORE_TOOL_NAMES])
+    expect(runtimeCore).not.toContain('edit_transaction')
+    expect(agent.programmaticConfig?.fullToolSurface).toContain(
+      'edit_transaction',
+    )
   })
 
   test('mode gates apply across every gate combination', () => {
@@ -169,7 +186,7 @@ describe('base2 progressive tool disclosure (M1)', () => {
   })
 
   test('createBase2 unlockedTiers passthrough narrows the shipped surface', () => {
-    // `unlockedTiers` is the only control that narrows what createBase2 ships.
+    // Explicit core-only unlocks keep the default CORE surface narrow.
     const coreOnly = createBase2('default', { unlockedTiers: [] })
     // Explicit expected CORE-only surface (same reason as above: comparing
     // against resolveModelToolNames with the identical arguments createBase2
@@ -198,11 +215,16 @@ describe('base2 progressive tool disclosure (M1)', () => {
       'check_background_agent',
       'read_logs',
     ])
-    // The dormant runtime ceiling is deliberately NOT narrowed with it: it is
-    // the default (all non-core tiers) mode-resolved surface, so flipping
-    // progressiveToolDisclosure on could still unlock a tier instead of being
-    // stuck CORE-only. The caller's narrowing lives in toolNames above, and
-    // progressiveToolDisclosure: false keeps the ceiling unused today.
+    const runtimeCore = getEffectiveAgentToolNames(coreOnly, {
+      unlockedToolTiers: [],
+    })
+    expect(runtimeCore).toEqual([
+      ...(coreOnly.toolNames ?? []),
+      'tool_search',
+      'tool_load',
+    ])
+    // The runtime ceiling remains the full mode-resolved surface so a later
+    // tool_load can expose an allowed tier without widening mode policy.
     expect(
       coreOnly.programmaticConfig?.fullToolSurface as string[] | undefined,
     ).toContain('edit_transaction')
@@ -216,18 +238,11 @@ describe('base2 progressive tool disclosure (M1)', () => {
 
   test('fullToolSurface publishes the default mode-resolved ceiling, not the narrowed surface', () => {
     // The runtime ceiling is only ever membership-tested (agent-tool-names.ts
-    // builds a Set from it), and it is dormant while
-    // progressiveToolDisclosure is pinned false. It is derived from the
-    // DEFAULT (all non-core tiers) mode-resolved surface — the same list the
-    // identical mode options WITHOUT `unlockedTiers` ship as toolNames — so a
-    // caller-narrowed surface cannot leave behind a ceiling that can never
-    // unlock a tier. It is also its own array, so an in-place mutation by
-    // either consumer cannot silently move the other.
+    // builds a Set from it), and it remains the full mode-resolved surface
+    // independently of progressive and caller-unlocked defaults.
     const cases: Array<{
       label: string
       options?: Parameters<typeof createBase2>[1]
-      // Same mode gates, no caller narrowing: its toolNames IS the ceiling.
-      ceilingOptions?: Parameters<typeof createBase2>[1]
     }> = [
       { label: 'defaults' },
       { label: 'core-only narrowing', options: { unlockedTiers: [] } },
@@ -235,21 +250,21 @@ describe('base2 progressive tool disclosure (M1)', () => {
         label: 'implement-only narrowing',
         options: { unlockedTiers: ['implement'] },
       },
-      {
-        label: 'plan-only',
-        options: { planOnly: true },
-        ceilingOptions: { planOnly: true },
-      },
+      { label: 'plan-only', options: { planOnly: true } },
       {
         label: 'execute-plan',
         options: { executePlan: true },
-        ceilingOptions: { executePlan: true },
       },
     ]
-    for (const { label, options, ceilingOptions } of cases) {
+    for (const { label, options } of cases) {
       const agent = createBase2('default', options)
       const ceiling = agent.programmaticConfig?.fullToolSurface
-      const expectedCeiling = createBase2('default', ceilingOptions).toolNames
+      const expectedCeiling = resolveModelToolNames({
+        mode: 'default',
+        planOnly: options?.planOnly,
+        executePlan: options?.executePlan,
+        noAskUser: options?.noAskUser,
+      })
       expect(ceiling, label).toEqual(expectedCeiling)
       expect(ceiling, label).not.toBe(expectedCeiling)
       expect(ceiling, label).not.toBe(agent.toolNames)
@@ -263,6 +278,124 @@ describe('base2 progressive tool disclosure (M1)', () => {
     expect(tools).not.toContain('run_terminal_command')
     expect(tools).not.toContain('write_todos')
     expect(tools).not.toContain('run_targeted_validation')
+  })
+
+  test('plan and execute-plan share a cache breakpoint before catalog- and mode-specific tools', () => {
+    const plan = createBase2('default', { planOnly: true })
+    const execute = createBase2('default', { executePlan: true })
+    const planTools = plan.toolNames ?? []
+    const executeTools = execute.toolNames ?? []
+    let sharedPrefixLength = 0
+    while (
+      sharedPrefixLength < planTools.length &&
+      sharedPrefixLength < executeTools.length &&
+      planTools[sharedPrefixLength] !== 'spawn_agents' &&
+      planTools[sharedPrefixLength] === executeTools[sharedPrefixLength]
+    ) {
+      sharedPrefixLength++
+    }
+
+    const breakpoint = plan.programmaticConfig?.cacheControlToolBreakpoint
+    expect(sharedPrefixLength).toBeGreaterThan(0)
+    expect(breakpoint).toBe(planTools[sharedPrefixLength - 1])
+    expect(execute.programmaticConfig?.cacheControlToolBreakpoint).toBe(
+      breakpoint,
+    )
+    expect(planTools).not.toContain('edit_transaction')
+    expect(planTools).not.toContain('write_file')
+    expect(planTools).not.toContain('run_terminal_command')
+  })
+
+  test('plan and execute-plan share the actual provider-schema prefix before their different spawn catalogs', async () => {
+    for (const { mode, noAskUser, unlockedTiers } of [
+      { mode: 'default' as const, noAskUser: false, unlockedTiers: undefined },
+      { mode: 'fast' as const, noAskUser: false, unlockedTiers: undefined },
+      { mode: 'default' as const, noAskUser: true, unlockedTiers: undefined },
+      {
+        mode: 'default' as const,
+        noAskUser: false,
+        unlockedTiers: [] as UnlockedToolTier[],
+      },
+    ]) {
+      const plan = createBase2(mode, {
+        planOnly: true,
+        noAskUser,
+        unlockedTiers,
+      })
+      const execute = createBase2(mode, {
+        executePlan: true,
+        noAskUser,
+        unlockedTiers,
+      })
+      const providerTools = async (template: typeof plan) =>
+        getToolSet({
+          toolNames: getEffectiveAgentToolNames(template, {
+            unlockedToolTiers: [],
+          }),
+          additionalToolDefinitions: async () => ({}),
+          agentTools: {},
+          skills: {},
+          spawnableAgentTypes: getModelVisibleSpawnableAgents(
+            template.spawnableAgents ?? [],
+          ),
+        })
+      const [planProviderTools, executeProviderTools] = await Promise.all([
+        providerTools(plan),
+        providerTools(execute),
+      ])
+      const planNames = getEffectiveAgentToolNames(plan, {
+        unlockedToolTiers: [],
+      })
+      const executeNames = getEffectiveAgentToolNames(execute, {
+        unlockedToolTiers: [],
+      })
+      const breakpoint = plan.programmaticConfig?.cacheControlToolBreakpoint
+      const breakpointIndex = planNames.findIndex(
+        (toolName) => toolName === breakpoint,
+      )
+      const providerDefinitions = (
+        names: string[],
+        tools: typeof planProviderTools,
+      ) =>
+        names.map((name) => {
+          const definition = tools[name]!
+          return {
+            name,
+            description: definition.description,
+            inputSchema: (
+              definition.inputSchema as unknown as {
+                jsonSchema?: unknown
+              }
+            ).jsonSchema,
+          }
+        })
+
+      expect(
+        breakpointIndex,
+        `${mode}/${noAskUser}/${unlockedTiers}`,
+      ).toBeGreaterThanOrEqual(0)
+      expect(execute.programmaticConfig?.cacheControlToolBreakpoint).toBe(
+        breakpoint,
+      )
+      expect(
+        providerDefinitions(planNames, planProviderTools).slice(
+          0,
+          breakpointIndex + 1,
+        ),
+      ).toEqual(
+        providerDefinitions(executeNames, executeProviderTools).slice(
+          0,
+          breakpointIndex + 1,
+        ),
+      )
+      expect(planProviderTools.spawn_agents!.inputSchema).not.toEqual(
+        executeProviderTools.spawn_agents!.inputSchema,
+      )
+      expect(planNames.indexOf('spawn_agents')).toBeGreaterThan(breakpointIndex)
+      expect(planNames).not.toContain('edit_transaction')
+      expect(planNames).not.toContain('write_file')
+      expect(planNames).not.toContain('run_terminal_command')
+    }
   })
 
   test('planOnly + unlock implement: still no edit_transaction', () => {
@@ -279,11 +412,18 @@ describe('base2 progressive tool disclosure (M1)', () => {
     expect(tools).not.toContain('write_todos')
   })
 
-  test('token budget: always-on full tool surface is under 29.5k', async () => {
-    // Field descriptions are retained for tool argument clarity; the measured
-    // full native-tool surface is ~27.6k. This ceiling keeps about 6% growth
-    // headroom and does not include the agent catalog or other prompt text.
-    const tools = createBase2('default').toolNames ?? []
+  test('token budget: default core-first surface is under 25k', async () => {
+    const tools = getEffectiveAgentToolNames(createBase2('default'), {
+      unlockedToolTiers: [],
+    })
+    expect(await toolSurfaceTokenCount(tools)).toBeLessThan(25_000)
+  })
+
+  test('token budget: explicit full-surface opt-out stays under 29.5k', async () => {
+    const tools =
+      createBase2('default', { progressiveToolDisclosure: false }).toolNames ?? []
+    // Field descriptions are retained for tool argument clarity; this ceiling
+    // keeps the legacy opt-out surface bounded with modest growth headroom.
     expect(await toolSurfaceTokenCount(tools)).toBeLessThan(29_500)
   })
 
@@ -694,27 +834,21 @@ describe('tier resolution helpers (M1-T3)', () => {
 // added there flows into the surfaced set automatically. These tests pin the
 // derivation itself.
 describe('base2 tier membership — resolveModelToolNames stays in sync', () => {
-  test('progressive core-only surface matches BASE2_CORE_TOOL_NAMES exactly', () => {
-    // In the default mode (ask_user + write_todos both allowed) the CORE-only
-    // surface must equal the runtime constant, so a tool added or removed on
-    // either side fails loudly instead of silently changing the surface.
+  test('public core surface and runtime-internal control injection stay aligned', () => {
     const coreOnly = resolveModelToolNames({
       mode: 'default',
       unlockedTiers: [],
     })
-    // Bidirectional membership over string sets — avoids the ToolName[] sort()
-    // widening that would break the AllToolNames[] toEqual overload, while still
-    // making a one-sided edit to either list fail loudly. Each direction is
-    // checked against the OTHER list's set so neither loop is vacuous.
-    const coreSet = new Set<string>(BASE2_CORE_TOOL_NAMES)
-    const surfacedSet = new Set<string>(coreOnly)
-    expect(coreOnly.length).toBe(coreSet.size)
-    for (const name of coreOnly) {
-      expect(coreSet.has(name)).toBe(true)
-    }
-    for (const name of BASE2_CORE_TOOL_NAMES) {
-      expect(surfacedSet.has(name)).toBe(true)
-    }
+    const internalControls = ['tool_search', 'tool_load']
+    const publicCore: string[] = BASE2_CORE_TOOL_NAMES.filter(
+      (name) => !internalControls.includes(name),
+    )
+    expect<string[]>(coreOnly).toEqual(publicCore)
+    expect(
+      getEffectiveAgentToolNames(createBase2('default'), {
+        unlockedToolTiers: [],
+      }),
+    ).toEqual([...publicCore, ...internalControls])
   })
 
   test('mode-gated CORE tools stay within BASE2_CORE_TOOL_NAMES', () => {
@@ -734,19 +868,20 @@ describe('base2 tier membership — resolveModelToolNames stays in sync', () => 
     expect(gated).not.toContain('write_todos')
   })
 
-  test('every runtime tier contributes its tools to the default surface', () => {
-    // Derivation guard: the default unlock set is Object.keys of the runtime
-    // tier map, so a newly added fifth tier must contribute tools here instead
-    // of silently contributing none.
+  test('the full-surface opt-out includes every mode-available runtime tier', () => {
+    // Derivation guard: a newly added tier contributes tools when explicitly
+    // opted out of progressive loading, subject to mode-specific policy.
     const surface = new Set<string>(
-      resolveModelToolNames({
-        mode: 'default',
+      createBase2('default', {
         executePlan: true,
-      }),
+        progressiveToolDisclosure: false,
+      }).toolNames ?? [],
     )
     for (const [tier, toolNames] of Object.entries(BASE2_TIER_TOOL_NAMES)) {
       for (const name of toolNames) {
-        expect(surface.has(name), `${tier}:${name}`).toBe(true)
+        const planArtifactTool =
+          name === 'create_plan' || name === 'update_plan_status'
+        expect(surface.has(name), `${tier}:${name}`).toBe(!planArtifactTool)
       }
     }
   })
@@ -835,7 +970,10 @@ describe('progressive tool disclosure — runtime wiring (loopAgentSteps)', () =
       systemPrompt: 'Test system prompt',
       instructionsPrompt: 'Test instructions prompt',
       stepPrompt: 'Test step prompt',
-      programmaticConfig: { fullToolSurface: fullSurface },
+      programmaticConfig: {
+        fullToolSurface: fullSurface,
+        cacheControlToolBreakpoint: 'read_files',
+      },
     } as AgentTemplate
   }
 
@@ -875,10 +1013,15 @@ describe('progressive tool disclosure — runtime wiring (loopAgentSteps)', () =
 
     // Capture the tool names offered to the LLM on each step.
     const offeredToolNamesPerStep: string[][] = []
+    const cacheBreakpointsPerStep: Array<string | undefined> = []
     let llmCallCount = 0
-    runtimeParams.promptAiSdkStream = mock(async function* ({ tools }) {
+    runtimeParams.promptAiSdkStream = mock(async function* ({
+      tools,
+      cacheControlToolBreakpoint,
+    }) {
       llmCallCount += 1
       offeredToolNamesPerStep.push(Object.keys(tools ?? {}))
+      cacheBreakpointsPerStep.push(cacheControlToolBreakpoint)
       yield { type: 'text' as const, text: 'LLM response\n\n' }
       if (llmCallCount < 3) {
         // Steps 1 & 2: a non-ending tool call (read_files) so the loop
@@ -935,6 +1078,11 @@ describe('progressive tool disclosure — runtime wiring (loopAgentSteps)', () =
 
     // Three LLM steps ran (one per loop iteration before end_turn).
     expect(llmCallCount).toBe(3)
+    expect(cacheBreakpointsPerStep).toEqual([
+      'read_files',
+      'read_files',
+      'read_files',
+    ])
 
     // Step 1: core-only surface — no implement-tier tool is offered.
     const step1Tools = offeredToolNamesPerStep[0]

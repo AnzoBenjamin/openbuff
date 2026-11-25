@@ -446,6 +446,12 @@ describe('languages module', () => {
       // Reset the cached parser on the GDScript entry so the mock loader
       // is actually exercised (languageTable entries are shared singletons).
       const gdEntry = languageTable.find((c) => c.extensions.includes('.gd'))!
+      const original = {
+        parser: gdEntry.parser,
+        language: gdEntry.language,
+        query: gdEntry.query,
+        extractionIdentity: gdEntry.extractionIdentity,
+      }
       gdEntry.parser = undefined
       gdEntry.language = undefined
       gdEntry.query = undefined
@@ -459,15 +465,18 @@ describe('languages module', () => {
         loadLanguage,
       }
 
-      // The mock loader throws, so createLanguageConfig should propagate.
-      await expect(
-        createLanguageConfig('player.gd', mockLoader),
-      ).rejects.toThrow('WASM not available in test')
+      try {
+        // The mock loader throws, so createLanguageConfig should propagate.
+        await expect(
+          createLanguageConfig('player.gd', mockLoader),
+        ).rejects.toThrow('WASM not available in test')
 
-      // The loader's methods were called with GDScript-specific args
-      expect(initParser).toHaveBeenCalledTimes(1)
-      // loadLanguage receives the wasm filename
-      expect(loadLanguage).toHaveBeenCalledWith('tree-sitter-gdscript.wasm')
+        // The loader's methods were called with GDScript-specific args
+        expect(initParser).toHaveBeenCalledTimes(1)
+        expect(loadLanguage).toHaveBeenCalledWith('tree-sitter-gdscript.wasm')
+      } finally {
+        Object.assign(gdEntry, original)
+      }
     }, 15_000)
   })
 
@@ -514,8 +523,12 @@ describe('languages module', () => {
         // load from the monorepo's package-resolvable wasm.
         const realLanguage =
           original.language ??
-          (await (await import('web-tree-sitter')).Language.load(
-nodeRequire.resolve('@vscode/tree-sitter-wasm/wasm/tree-sitter-typescript.wasm')
+          (await (
+            await import('web-tree-sitter')
+          ).Language.load(
+            nodeRequire.resolve(
+              '@vscode/tree-sitter-wasm/wasm/tree-sitter-typescript.wasm',
+            ),
           ))
         const loadLanguage = mock(async (_wasmFile: string) => realLanguage)
         const mockLoader: RuntimeLanguageLoader = {

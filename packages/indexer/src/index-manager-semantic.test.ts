@@ -69,7 +69,7 @@ describe('IndexManager semantic integration', () => {
         return fakeEmbed(texts)
       },
     )
-    await resumed.waitUntilReady(10_000)
+    await resumed.waitUntilReconciled(10_000)
     expect(resumed.isSemanticReady()).toBe(true)
     expect(resumedCount).toBe(6)
     expect(resumed.getStatus().semanticSkippedFiles).toBeUndefined()
@@ -105,7 +105,7 @@ describe('IndexManager semantic integration', () => {
       },
       cachedEmbed,
     )
-    await cached.waitUntilReady(10_000)
+    await cached.waitUntilReconciled(10_000)
     expect(cached.isSemanticReady()).toBe(true)
     expect(cachedEmbeddedTexts).toBe(0)
 
@@ -119,7 +119,7 @@ describe('IndexManager semantic integration', () => {
       { semantic: { enabled: true, model: 'embedding-v2' } },
       changedModelEmbed,
     )
-    await changedModel.waitUntilReady(10_000)
+    await changedModel.waitUntilReconciled(10_000)
     expect(changedModelEmbeddedTexts).toBeGreaterThan(0)
   })
 

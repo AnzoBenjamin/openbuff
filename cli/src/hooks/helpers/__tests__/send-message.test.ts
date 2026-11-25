@@ -648,6 +648,77 @@ describe('markPendingCompactionInterrupted', () => {
 })
 
 describe('handleRunCompletion', () => {
+  test('publishes a zero cache-hit rate only when usage is complete', () => {
+    const runStates = [
+      {
+        cacheUsageComplete: true,
+        cacheInputTokens: 0,
+        cacheTotalInputTokens: 100,
+        expectedRate: 0,
+      },
+      {
+        cacheUsageComplete: false,
+        cacheInputTokens: 0,
+        cacheTotalInputTokens: 100,
+        expectedRate: undefined,
+      },
+      {
+        cacheUsageComplete: undefined,
+        cacheInputTokens: 0,
+        cacheTotalInputTokens: 100,
+        expectedRate: undefined,
+      },
+      {
+        cacheUsageComplete: true,
+        cacheInputTokens: 50,
+        cacheTotalInputTokens: 150,
+        expectedRate: 1 / 3,
+      },
+      {
+        cacheUsageComplete: true,
+        cacheInputTokens: 150,
+        cacheTotalInputTokens: 100,
+        expectedRate: undefined,
+      },
+      {
+        cacheUsageComplete: true,
+        cacheInputTokens: 50.5,
+        cacheTotalInputTokens: 100,
+        expectedRate: undefined,
+      },
+    ]
+
+    for (const cacheStats of runStates) {
+      const timerController = createMockTimerController()
+      let messages = createBaseMessages()
+      const updater = createBatchedMessageUpdater('ai-1', (fn: any) => {
+        messages = fn(messages)
+      })
+
+      handleRunCompletion({
+        runState: {
+          sessionState: {
+            mainAgentState: cacheStats,
+          } as any,
+          output: { type: 'lastMessage', value: [] },
+        } as RunState,
+        actualCredits: undefined,
+        agentMode: 'DEFAULT' as any,
+        timerController,
+        updater,
+        aiMessageId: 'ai-1',
+        wasAbortedByUser: false,
+        setStreamStatus: () => {},
+        setCanProcessQueue: () => {},
+        updateChainInProgress: () => {},
+        setHasReceivedPlanResponse: () => {},
+      })
+      updater.flush()
+
+      expect(messages[0]?.cacheHitRate).toBe(cacheStats.expectedRate)
+    }
+  })
+
   for (const runOutcome of [
     { termination: 'completed' },
     {
@@ -1562,7 +1633,7 @@ describe('CLI-level race condition: abort run A, attempt run B before A resolves
     expect(streamStatus as StreamStatus).toBe('idle') // Clobbered!
   })
 
-  test('full two-run lifecycle preserves run A state before run B completion', () => {
+  test('full two-run lifecycle preserves run A state before run B completion', async () => {
     // End-to-end test: two complete runs sharing the SAME streamRefs instance
     // (matching production behavior where streamRefs is reused across sends).
     // Verifies that run B can start immediately after abort, and that run A's
@@ -1711,7 +1782,7 @@ describe('CLI-level race condition: abort run A, attempt run B before A resolves
     }
     previousRunState = runStateB
 
-    handleRunCompletion({
+    await handleRunCompletion({
       runState: runStateB,
       actualCredits: 5,
       agentMode: 'DEFAULT' as any,
@@ -1759,7 +1830,7 @@ describe('CLI-level race condition: abort run A, attempt run B before A resolves
  * flight.
  */
 describe('handleRunCompletion and handleRunError settle writes before reopening the queue gate', () => {
-  test('success path stops the timer and marks complete before finalizeQueueState', () => {
+  test('success path stops the timer and marks complete before finalizeQueueState', async () => {
     let messages = createBaseMessages()
     const timerController = createMockTimerController()
     const updater = createBatchedMessageUpdater('ai-1', (fn: any) => {
@@ -1779,7 +1850,7 @@ describe('handleRunCompletion and handleRunError settle writes before reopening 
       output: { type: 'lastMessage' as const, value: [] },
     }
 
-    handleRunCompletion({
+    await handleRunCompletion({
       runState,
       actualCredits: 1,
       agentMode: 'DEFAULT' as any,

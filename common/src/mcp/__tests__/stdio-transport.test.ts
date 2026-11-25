@@ -323,7 +323,7 @@ describe('owned MCP actual stdio boundary', () => {
     }
   })
 
-  test('a registered deadline abort keeps its cause while the captured remaining bridge is still positive', async () => {
+  test('a registered deadline abort uses its captured clock domain and retains its cause', async () => {
     let hostNow = 1000
     let nextTimerId = 0
     const timers = new Map<number, { dueAt: number; callback: () => void }>()
@@ -360,11 +360,13 @@ describe('owned MCP actual stdio boundary', () => {
     }
     let remainingMs: (() => number | null) | undefined
     let remainingAtAbort: number | null | undefined
+    let scopeClockDomainId: string | undefined
     let registeredDeadlineAtAbort = false
     const transport = new OwnedStdioTransport({
       prepareLaunch: () => access.prepareLaunch(),
       createScope: (ownedChild, options) => {
         remainingMs = options.remainingMs
+        scopeClockDomainId = options.clock?.domainId
         return createNodeProcessScope(ownedChild, options)
       },
       spawn: (_command, _args, options) => {
@@ -401,16 +403,17 @@ describe('owned MCP actual stdio boundary', () => {
       }
       await waitUntil(() => transport.currentCleanup() !== undefined)
       const result = transport.currentCleanup()!
-      recordEvidence('registered-deadline-positive-bridge', {
-        control: 'injected-child-with-registered-host-authority',
+      recordEvidence('registered-deadline-clock-bound', {
+        control: 'captured-host-clock-domain',
         remainingAtAbort,
         registeredDeadlineAtAbort,
         result,
       })
       expect(registeredDeadlineAtAbort).toBe(true)
-      expect(remainingAtAbort).toBeGreaterThan(0)
+      expect(scopeClockDomainId).toBe('mcp-deadline-marker-control')
       expect(result.trigger).toBe('deadline')
       expect(result.status).toBe('complete')
+      expect(result.selectedLimitSatisfied).toBe(true)
       expect(result.originalDeadline).toMatchObject({
         kind: 'finite',
         domainId: 'mcp-deadline-marker-control',

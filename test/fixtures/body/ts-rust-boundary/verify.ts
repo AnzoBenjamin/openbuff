@@ -15,29 +15,42 @@ import type {
 } from '../../../../common/src/types/contracts/execution-context'
 
 // Authored fixture A: real installed native artifact and public SDK, no Python.
+// Strict mode requires the reviewed manifest; local-current mode is a bounded
+// behavior check and never emits source-bound acceptance evidence.
 const arguments_ = new Map<string, string>()
 let withoutPython = false
+let localCurrent = false
 for (let index = 2; index < process.argv.length; index++) {
   const key = process.argv[index]!
   if (key === '--without-python' && !withoutPython) {
     withoutPython = true
     continue
   }
+  if (key === '--local-current' && !localCurrent) {
+    localCurrent = true
+    continue
+  }
   assert.ok(
-    ['--manifest', '--native-binary', '--evidence-dir'].includes(key) &&
-      !arguments_.has(key),
+    ['--manifest', '--native-binary', '--bwrap', '--evidence-dir'].includes(
+      key,
+    ) && !arguments_.has(key),
     `Unexpected/repeated argument: ${key}`,
   )
   const value = process.argv[++index]
   assert.ok(value && !value.startsWith('--'), `Missing argument value: ${key}`)
   arguments_.set(key, value)
 }
+const strictMode = arguments_.has('--manifest')
 assert.ok(
-  withoutPython && arguments_.size === 3,
-  'Require --manifest, --native-binary, --without-python and --evidence-dir',
+  withoutPython &&
+    arguments_.size === 3 &&
+    localCurrent !== strictMode &&
+    (localCurrent ? arguments_.has('--bwrap') : !arguments_.has('--bwrap')) &&
+    arguments_.has('--native-binary') &&
+    arguments_.has('--evidence-dir'),
+  'Require either strict --manifest or --local-current, plus --native-binary, --without-python, and --evidence-dir; local-current also requires --bwrap',
 )
 const evidenceDir = path.resolve(arguments_.get('--evidence-dir')!)
-const manifestPath = path.resolve(arguments_.get('--manifest')!)
 const sourceBinary = path.resolve(arguments_.get('--native-binary')!)
 fs.mkdirSync(evidenceDir, { recursive: false })
 process.once('exit', (exitCode) => {
@@ -64,71 +77,113 @@ process.once('exit', (exitCode) => {
 })
 const sha = (file: string) =>
   createHash('sha256').update(fs.readFileSync(file)).digest('hex')
-const manifestBytes = fs.readFileSync(manifestPath)
-const manifest = JSON.parse(manifestBytes.toString('utf8'))
-const environment = captureBootstrapEnvironment(process.env)
-const bootstrap = await verifyBootstrap(
-  manifest,
-  {
-    manifestPath,
-    evidenceDir: path.join(evidenceDir, 'bootstrap'),
-    requiredCells: ['native-linux', 'node'],
-  },
-  defaultBootstrapDependencies(environment),
-)
-assert.equal(
-  bootstrap.exitCode,
-  0,
-  'Selected current prerequisite verification failed; no native adoption credit',
-)
-const artifact = manifest.artifacts.find(
-  (entry: { id: string }) => entry.id === 'native-checkout',
-)
-assert.ok(
-  artifact?.sha256 && artifact.buildReceipt,
-  'Native artifact requires a source-bound build receipt and selected checksum',
-)
-assert.equal(path.resolve(artifact.path), sourceBinary)
-assert.equal(sha(sourceBinary), artifact.sha256)
-assert.equal(
-  sha(path.resolve(artifact.buildReceipt.path)),
-  artifact.buildReceipt.sha256,
-)
-const buildProof = JSON.parse(
-  fs.readFileSync(path.resolve(artifact.buildReceipt.path), 'utf8'),
-)
-assert.equal(buildProof.schemaVersion, 1)
-assert.equal(buildProof.type, 'body-bootstrap-artifact-build')
-assert.equal(buildProof.exitCode, 0)
-assert.equal(buildProof.artifact?.sha256, artifact.sha256)
-assert.equal(path.resolve(buildProof.artifact?.path ?? ''), sourceBinary)
-for (const source of manifest.inputs.sources)
+let manifestPath: string | undefined
+let manifestBytes: Buffer | undefined
+let manifest: any
+let artifact: any
+let artifactSha: string
+let bwrapPath: string
+let bwrapSha: string
+let bwrapVersion: string
+if (localCurrent) {
   assert.equal(
-    buildProof.sourceContractHashes?.[source.path],
-    source.sha256,
-    `Build source binding: ${source.path}`,
+    process.platform,
+    'linux',
+    'Local-current fixture requires Linux',
   )
-for (const source of [
-  ...manifest.inputs.packages,
-  ...manifest.inputs.locks,
-  ...manifest.inputs.configuration,
-])
+  assert.ok(
+    fs.statSync(sourceBinary).isFile(),
+    'Native binary must be a regular file',
+  )
+  assert.ok(
+    fs.statSync(sourceBinary).mode & 0o111,
+    'Native binary must be executable',
+  )
+  artifactSha = sha(sourceBinary)
+  bwrapPath = fs.realpathSync(arguments_.get('--bwrap')!)
+  assert.ok(fs.statSync(bwrapPath).isFile(), 'bwrap must be a regular file')
+  assert.ok(fs.statSync(bwrapPath).mode & 0o111, 'bwrap must be executable')
+  const bwrapProbe = spawnSync(bwrapPath, ['--version'], { encoding: 'utf8' })
+  assert.equal(bwrapProbe.status, 0, 'Selected bwrap must report its version')
+  bwrapVersion = bwrapProbe.stdout.trim()
+  assert.match(bwrapVersion, /^bubblewrap\s+/)
+  bwrapSha = sha(bwrapPath)
+} else {
+  manifestPath = path.resolve(arguments_.get('--manifest')!)
+  manifestBytes = fs.readFileSync(manifestPath)
+  manifest = JSON.parse(manifestBytes.toString('utf8'))
+  const environment = captureBootstrapEnvironment(process.env)
+  const verifiedBootstrap = await verifyBootstrap(
+    manifest,
+    {
+      manifestPath,
+      evidenceDir: path.join(evidenceDir, 'bootstrap'),
+      requiredCells: ['native-linux', 'node'],
+    },
+    defaultBootstrapDependencies(environment),
+  )
   assert.equal(
-    buildProof.contextContractHashes?.[source.path],
-    source.sha256,
-    `Build context binding: ${source.path}`,
+    verifiedBootstrap.exitCode,
+    0,
+    'Selected current prerequisite verification failed; no native adoption credit',
   )
+  artifact = manifest.artifacts.find(
+    (entry: { id: string }) => entry.id === 'native-checkout',
+  )
+  assert.ok(
+    artifact?.sha256 && artifact.buildReceipt,
+    'Native artifact requires a source-bound build receipt and selected checksum',
+  )
+  assert.equal(path.resolve(artifact.path), sourceBinary)
+  artifactSha = artifact.sha256
+  assert.equal(sha(sourceBinary), artifactSha)
+  assert.equal(
+    sha(path.resolve(artifact.buildReceipt.path)),
+    artifact.buildReceipt.sha256,
+  )
+  const buildProof = JSON.parse(
+    fs.readFileSync(path.resolve(artifact.buildReceipt.path), 'utf8'),
+  )
+  assert.equal(buildProof.schemaVersion, 1)
+  assert.equal(buildProof.type, 'body-bootstrap-artifact-build')
+  assert.equal(buildProof.exitCode, 0)
+  assert.equal(buildProof.artifact?.sha256, artifactSha)
+  assert.equal(path.resolve(buildProof.artifact?.path ?? ''), sourceBinary)
+  for (const source of manifest.inputs.sources)
+    assert.equal(
+      buildProof.sourceContractHashes?.[source.path],
+      source.sha256,
+      `Build source binding: ${source.path}`,
+    )
+  for (const source of [
+    ...manifest.inputs.packages,
+    ...manifest.inputs.locks,
+    ...manifest.inputs.configuration,
+  ])
+    assert.equal(
+      buildProof.contextContractHashes?.[source.path],
+      source.sha256,
+      `Build context binding: ${source.path}`,
+    )
+  const bwrap = verifiedBootstrap.observed.tools.find(
+    (entry: { id: string }) => entry.id === 'bwrap',
+  )
+  assert.ok(bwrap?.resolvedPath && bwrap.before?.sha256)
+  bwrapPath = path.resolve(bwrap.resolvedPath)
+  bwrapSha = bwrap.before.sha256
+  const bwrapProbe = spawnSync(bwrapPath, ['--version'], {
+    encoding: 'utf8',
+  })
+  assert.equal(bwrapProbe.status, 0, 'Selected bwrap must report its version')
+  bwrapVersion = bwrapProbe.stdout.trim()
+}
 const installationDir = path.join(evidenceDir, 'installation')
 fs.mkdirSync(installationDir)
 const installedBinary = path.join(installationDir, 'openbuff-native')
 fs.copyFileSync(sourceBinary, installedBinary, fs.constants.COPYFILE_EXCL)
 fs.chmodSync(installedBinary, 0o700)
-assert.equal(sha(installedBinary), artifact.sha256)
+assert.equal(sha(installedBinary), artifactSha)
 assert.ok(fs.statSync(installedBinary).isFile())
-const bwrap = bootstrap.observed.tools.find(
-  (entry: { id: string }) => entry.id === 'bwrap',
-)
-assert.ok(bwrap?.resolvedPath && bwrap.before?.sha256)
 const sourceFiles = [
   'test/fixtures/body/ts-rust-boundary/verify.ts',
   'scripts/body-bootstrap.ts',
@@ -152,17 +207,27 @@ const sourceFiles = [
   'common/src/types/contracts/process-scope.ts',
   'common/src/tools/params/execution-usage.ts',
   'common/src/tools/params/native-wait-status.ts',
+  'rust/Cargo.toml',
   'rust/Cargo.lock',
+  'rust/rust-toolchain.toml',
   'rust/crates/openbuff-native/Cargo.toml',
+  'rust/crates/openbuff-native/src/lib.rs',
+  'rust/crates/openbuff-native/src/main.rs',
+  'rust/crates/openbuff-native/src/exec/mod.rs',
   'rust/crates/openbuff-native/src/exec/control.rs',
   'rust/crates/openbuff-native/src/exec/runner.rs',
   'rust/crates/openbuff-native/src/exec/entry_waiter.rs',
+  'rust/crates/openbuff-native/src/exec/landlock_fs.rs',
   'rust/crates/openbuff-native/src/exec/linux_sandbox.rs',
   'rust/crates/openbuff-native/src/exec/plan.rs',
 ]
 const sourceHashes = () =>
   Object.fromEntries(sourceFiles.map((file) => [file, sha(path.resolve(file))]))
 const before = sourceHashes()
+const artifactBefore = sha(sourceBinary)
+const bwrapBefore = sha(bwrapPath)
+assert.equal(artifactBefore, artifactSha)
+assert.equal(bwrapBefore, bwrapSha)
 const roots = [
   path.join(evidenceDir, 'workspace'),
   path.join(evidenceDir, 'excluded'),
@@ -245,12 +310,12 @@ const sdk = await import('../../../../sdk/src/index')
 const nativeDeclaration = {
   artifact: {
     path: installedBinary,
-    sha256: artifact.sha256,
+    sha256: artifactSha,
     platform: 'linux-x64-gnu' as const,
     crateVersion: '0.1.0' as const,
     workspaceProtocol: '1' as const,
   },
-  bwrap: { path: bwrap.resolvedPath, sha256: bwrap.before.sha256 },
+  bwrap: { path: bwrapPath, sha256: bwrapSha },
   runtimePaths: ['/usr', '/bin', '/lib', '/lib64'],
   network: 'deny' as const,
   landlock: 'optional' as const,
@@ -442,12 +507,15 @@ try {
     )
   }
   assert.equal(providerCalls, 0)
-  assert.equal(sha(installedBinary), artifact.sha256)
+  assert.equal(sha(installedBinary), artifactSha)
+  assert.equal(sha(sourceBinary), artifactBefore, 'Native binary drift')
+  assert.equal(sha(bwrapPath), bwrapBefore, 'bwrap binary drift')
   assert.deepEqual(sourceHashes(), before, 'Fixture source drift')
-  assert.equal(
-    sha(manifestPath),
-    createHash('sha256').update(manifestBytes).digest('hex'),
-  )
+  if (manifestPath && manifestBytes)
+    assert.equal(
+      sha(manifestPath),
+      createHash('sha256').update(manifestBytes).digest('hex'),
+    )
 } catch (error) {
   failure =
     error instanceof Error ? (error.stack ?? error.message) : String(error)
@@ -456,6 +524,7 @@ try {
   const receipt = {
     schemaVersion: 1,
     node: 'B21',
+    mode: localCurrent ? 'local-current-behavior-only' : 'strict-source-bound',
     boundary:
       'authored-fixture-A; source public SDK plus copied installed native artifact',
     withoutPython: true,
@@ -466,18 +535,26 @@ try {
     },
     sourceBinary: {
       path: sourceBinary,
-      sha256: artifact.sha256,
-      buildReceipt: artifact.buildReceipt,
+      sha256: artifactSha,
+      buildReceipt: artifact?.buildReceipt ?? null,
     },
+    bwrap: { path: bwrapPath, version: bwrapVersion, sha256: bwrapSha },
     installedBinary: {
       path: installedBinary,
       sha256: sha(installedBinary),
       mode: fs.statSync(installedBinary).mode & 0o777,
     },
-    manifest: {
-      path: manifestPath,
-      sha256: createHash('sha256').update(manifestBytes).digest('hex'),
-    },
+    manifest:
+      manifestPath && manifestBytes
+        ? {
+            path: manifestPath,
+            sha256: createHash('sha256').update(manifestBytes).digest('hex'),
+          }
+        : null,
+    artifactBefore,
+    artifactAfter: sha(sourceBinary),
+    bwrapBefore,
+    bwrapAfter: sha(bwrapPath),
     sourceBefore: before,
     sourceAfter: sourceHashes(),
     providerCalls,
@@ -488,6 +565,11 @@ try {
       'No packed SDK or installed CLI credit',
       'No unsupported-platform enforcement credit',
       'No whole-card acceptance without independent review and remaining required controls',
+      ...(localCurrent
+        ? [
+            'Local-current mode does not produce a source-bound native build or bootstrap receipt',
+          ]
+        : []),
     ],
   }
   fs.writeFileSync(

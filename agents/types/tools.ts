@@ -931,7 +931,7 @@ export interface RunTerminalCommandParams {
   detach?: boolean
   /** The working directory to run the command in. Default is the project root. */
   cwd?: string
-  /** Wall-clock bound in seconds, including startup and approval waits. If omitted, SYNC commands get 120 s of execution time (approval waits excluded) and BACKGROUND jobs have no local timeout. Raise it for long builds or test suites. -1 means no local timeout where the host allows it; a host cap and any finite parent deadline still apply. */
+  /** Wall-clock bound in seconds, including startup and approval waits. Omitted or -1 adds no local timeout unless the host explicitly configures a default or cap. Cancellation and any finite parent/run deadline always apply. */
   timeout_seconds?: number
   /** Runtime-managed background job owner; agents must omit. */
   owner?: {

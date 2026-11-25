@@ -2,7 +2,7 @@
   "name": "@openbuff/sdk",
   "private": false,
   "version": "0.11.0",
-  "description": "Official SDK for Openbuff — local-first BYOK AI coding agent & framework",
+  "description": "Official SDK for Openbuff \u2014 local-first BYOK AI coding agent & framework",
   "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -77,7 +77,9 @@
     "tiktoken": "1.0.22",
     "web-tree-sitter": "0.25.10",
     "ws": "^8.18.0",
-    "zod": "^4.2.1"
+    "zod": "^4.2.1",
+    "oxc-resolver": "11.24.2",
+    "typescript": "5.5.4"
   },
   "//devDependencies": "Declared here, not hoisted, so a pruned or isolated install still typechecks this member: src/ imports lodash at runtime (declared in dependencies above) and the declaration build inlines what it needs from these typings, so they must resolve from THIS manifest rather than from the workspace-root devDependency. @types/lodash stays a devDependency (not a runtime one) so type packages are not forced into every consumer install graph.",
   "devDependencies": {

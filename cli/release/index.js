@@ -86,6 +86,7 @@ function getManagedSiblingNames(tempDir) {
   return [
     ...new Set([
       ...wasmSiblings,
+      ...extracted.filter(name => ['openbuff-intelligence', 'openbuff-intelligence.exe', 'repository-intelligence-manifest.json'].includes(name)),
       ...getQuerySiblingNames(tempDir),
       ...(extracted.includes(TREE_SITTER_MANIFEST)
         ? [TREE_SITTER_MANIFEST]
@@ -1043,6 +1044,18 @@ async function downloadBinary(version, options = {}) {
       )
     }
 
+    const intelligenceManifest = path.join(config.tempDownloadDir, 'repository-intelligence-manifest.json')
+    if (fs.existsSync(intelligenceManifest)) {
+      const declared = JSON.parse(fs.readFileSync(intelligenceManifest, 'utf8'))
+      if (declared.protocolVersion !== 1 || !['embedded', 'rust-sqlite'].includes(declared.backend)) throw new Error('Invalid repository intelligence manifest')
+      if (declared.backend === 'rust-sqlite') {
+        if (!['openbuff-intelligence', 'openbuff-intelligence.exe'].includes(declared.file)) throw new Error('Invalid repository intelligence executable')
+        const nativePath = path.join(config.tempDownloadDir, declared.file)
+        assertExtractedRegularFile(config.tempDownloadDir, nativePath)
+        if (require('crypto').createHash('sha256').update(fs.readFileSync(nativePath)).digest('hex') !== declared.sha256) throw new Error('Repository intelligence checksum mismatch')
+      }
+    }
+
     if (process.platform !== 'win32') fs.chmodSync(tempBinaryPath, 0o755)
 
     const installFiles = [
@@ -1071,7 +1084,7 @@ async function downloadBinary(version, options = {}) {
     installFiles.push({ source: tempMetadataPath, target: config.metadataPath })
 
     for (const file of installFiles) {
-      if (process.platform !== 'win32' && file.name === 'rg') {
+      if (process.platform !== 'win32' && ['rg', 'openbuff-intelligence'].includes(file.name)) {
         fs.chmodSync(file.source, 0o755)
       }
     }

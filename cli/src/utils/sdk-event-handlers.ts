@@ -2355,9 +2355,11 @@ const handleProviderStatus = (
 ) => {
   state.setIsRetrying(event.status !== 'recovered')
   const failover = event.status === 'failover'
+  const delay = event.remainingDelayMs ?? event.delayMs
+  const waitLabel = delay !== undefined && delay > 0 ? ` in ${(delay / 1000).toFixed(1)}s` : event.remainingDelayMs === 0 ? ' now' : ''
   const content =
     event.status === 'retrying'
-      ? `Provider request failed; retrying${event.attempt ? ` (attempt ${event.attempt}/${event.maxAttempts})` : ''}${event.delayMs ? ` in ${(event.delayMs / 1000).toFixed(1)}s` : ''}.`
+      ? `Provider request failed; retrying${event.attempt ? ` (attempt ${event.attempt}/${event.maxAttempts})` : ''}${waitLabel}.`
       : failover
         ? describeProviderFailover(event)
         : `Provider connection recovered${event.model ? ` on ${event.model}` : ''}.`

@@ -6,6 +6,7 @@ import {
   getContentHash,
   readCapabilityMatchesScope,
 } from '../content-hash'
+import { captureTextDocument, getRawReadBasis } from '../byte-text'
 
 const scope = {
   projectId: '/workspace/project',
@@ -84,6 +85,45 @@ describe('read capabilities', () => {
         }),
       ).toBe(false)
     }
+  })
+
+  it('uses a short authenticated handle for raw cap.v4 capabilities', () => {
+    const content = 'value\n'
+    const rawBasis = getRawReadBasis(
+      captureTextDocument(content),
+      1,
+      1,
+      'whole',
+    )
+    const token = encodeReadCapabilityToken({
+      startLine: 1,
+      endLine: 1,
+      hash: getContentHash(content),
+      scope,
+      rawBasis,
+    })
+
+    expect(token.startsWith('cap.v4.')).toBe(true)
+    expect(token.length).toBeLessThan(100)
+    expect(token).not.toContain('rawBasis')
+    const decoded = decodeReadCapabilityToken(token)
+    if (typeof decoded === 'string') throw new Error(decoded)
+    expect(decoded).toMatchObject({
+      startLine: 1,
+      endLine: 1,
+      hash: getContentHash(content),
+      tokenVersion: 'v4',
+      rawBasis,
+    })
+    expect(decoded.scopeFingerprint).toHaveLength(43)
+    expect(readCapabilityMatchesScope(decoded, scope)).toBe(true)
+    expect(
+      readCapabilityMatchesScope(decoded, { ...scope, runId: 'other-run' }),
+    ).toBe(false)
+
+    const replacement = token.endsWith('A') ? 'B' : 'A'
+    const tampered = `${token.slice(0, -1)}${replacement}`
+    expect(decodeReadCapabilityToken(tampered)).toContain('malformed or unauthenticated')
   })
 
   it('accepts harmless wrappers copied from a read result', () => {

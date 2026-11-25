@@ -165,6 +165,7 @@ export const useSendMessage = ({
   const streamRefs = streamRefsRef.current
   const activeRunOwnerRef = useRef<symbol | null>(null)
   const sdkExecutionRef = useRef<symbol | null>(null)
+  const snapshotCompletionRef = useRef<Promise<void> | null>(null)
   const restorePromiseRef = useRef<Promise<void> | null>(null)
   const restoreAbortRef = useRef<AbortController | null>(null)
 
@@ -476,6 +477,10 @@ export const useSendMessage = ({
         // A prompt submitted during restore must fork from the restored state
         // and append after its messages, rather than being overwritten by it.
         await restorePromiseRef.current
+        if (!isCurrentRunOwner()) return
+        // A replaced conversation can bypass the queue while the previous
+        // turn is still staging its tracked-tree snapshot.
+        await snapshotCompletionRef.current
         if (!isCurrentRunOwner()) return
         const prepared = await prepareUserMessage({
           content,
@@ -845,7 +850,7 @@ export const useSendMessage = ({
         await clearCheckpoint()
         if (!isCurrentRunOwner()) return
         resumableCheckpointRef.current = null
-        handleRunCompletion({
+        await handleRunCompletion({
           runState,
           actualCredits,
           agentMode,
@@ -860,6 +865,14 @@ export const useSendMessage = ({
           resumeQueue,
           isProcessingQueueRef,
           isQueuePausedRef,
+          isCurrentRunOwner,
+          onSnapshotStarted: (completion) => {
+            snapshotCompletionRef.current = completion
+            void completion.then(() => {
+              if (snapshotCompletionRef.current === completion)
+                snapshotCompletionRef.current = null
+            })
+          },
         })
       } catch (error) {
         if (isCurrentRunOwner() && !abortController.signal.aborted) {

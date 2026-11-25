@@ -76,6 +76,33 @@ function preparedMutation(
 }
 
 describe('replaceRange', () => {
+  test('preserves mixed line endings in unchanged read-backed context', async () => {
+    const source = '\uFEFFfirst\r\nold\nlast\r\n'
+    const fs = createMockFs({ files: { '/repo/src/file.ts': source } })
+    const result = await replaceRange({
+      parameters: {
+        path: 'src/file.ts',
+        readCapability: capability({
+          source,
+          startLine: 1,
+          endLine: 3,
+          content: 'first\nold\nlast',
+        }),
+        newContent: 'first\nnew\nlast',
+      },
+      cwd: '/repo',
+      fs,
+      capabilityIssuer,
+    })
+    expect(result[0]).toMatchObject({
+      type: 'json',
+      value: { outcome: 'applied' },
+    })
+    expect(await fs.readFile('/repo/src/file.ts', 'utf-8')).toBe(
+      '\uFEFFfirst\r\nnew\nlast\r\n',
+    )
+  })
+
   test('replaces a cap.v4-verified line range', async () => {
     const fs = createMockFs({
       files: { '/repo/src/file.ts': 'line 1\nline 2\nline 3\n' },

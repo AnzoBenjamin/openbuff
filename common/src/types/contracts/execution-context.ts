@@ -86,6 +86,13 @@ export type ProfileRequest = Readonly<{
   optional?: readonly Capability[]
   allowBackendFallback: boolean
 }>
+export type ExecutionTargetBounds = Readonly<{
+  projectRoot: string
+  allowedPaths: readonly string[]
+  profile: ProfileRequest
+  mode: 'assistant' | 'user'
+}>
+
 export type BackendSelection = Readonly<{
   backend: string; generation: string; policy: PolicyProfile
   cancellation: 'cooperative' | 'os-scoped' | 'unavailable'
@@ -249,6 +256,8 @@ export type ExactLaunchInput = Readonly<{
 }>
 export interface PreparedLaunch {
   facts(): LaunchFacts
+  /** Captured in-process clock for local deadline observation; never serialize. */
+  clock(): Clock
   admit(): Promise<Admission>
   // No async callback invoked, waited upon, or treated optimistically here.
   // No sync policy / requires async approval / unsupported capability =>
@@ -367,6 +376,7 @@ export type HostAuthorityInputs = Readonly<{
   authorizeAsync: (request: PolicyInput) => Promise<AsyncDecision>
   authorizeSync?: (request: PolicyInput) => SyncDecision
   isCurrentBasis: (correlation: Correlation) => boolean
+  describeBasisMismatch?: (correlation: Correlation) => string
   record: (event: LaunchEvent) => void
 }>
 
@@ -403,11 +413,14 @@ export interface HostAuthority {
   }>): Result<RequestHandle>
   bindAction(p: Readonly<{
     request: RequestHandle; budget: BudgetHandle; owner: OwnerHandle
+    /** Host-captured ceiling; omission on rebind cannot discard existing bounds. */
+    bounds?: ExecutionTargetBounds
   }>): Result<ActionExecutionPort>
   // Root-only registry lookup. Derived adapter ports retain authenticated
   // ancestry; a copied/serialized port does not expose a registration.
   actionRegistration(port: ActionExecutionPort): Result<Readonly<{
     request: RequestHandle; budget: BudgetHandle; owner: OwnerHandle; correlation: Correlation; signal: AbortSignal
+    bounds?: ExecutionTargetBounds
   }>>
   deadline(handle: LifetimeHandle | BudgetHandle): AbsoluteDeadline
   signal(handle: LifetimeHandle | BudgetHandle): Result<AbortSignal>

@@ -5,6 +5,7 @@ import { isValidPlanSlug } from '@codebuff/common/util/plan-artifacts'
 import { clearDegradedProviderRoutes } from '@openbuff/sdk'
 
 import { registerPlanTimelineCommand } from './plan-timeline'
+import { SLASH_COMMANDS } from '../data/slash-commands'
 import { handleContextCommand } from './context'
 import { formatQueuedMessageForHistory } from '../hooks/helpers/send-message'
 import { handleIndexCommandBlocks } from './index-command'
@@ -26,6 +27,7 @@ import {
   hasAnyArtifact,
   hasPlanArtifactInDir,
   listPlanSessionsAsync,
+  planCatalogWarning,
   readPlanArtifactPage,
   PLAN_ARTIFACT_NAMES,
   PLAN_SESSIONS_DIR_PREFIX,
@@ -47,6 +49,10 @@ import { useThemeStore } from '../hooks/use-theme'
 import { useChatStore } from '../state/chat-store'
 import { usePermissionsStore } from '../state/permissions-store'
 import { getProjectRoot } from '../project-files'
+import {
+  exportLocalFeedback,
+  saveLocalFeedback,
+} from '../utils/feedback-storage'
 import {
   getAgentRegistryDiagnostics,
   getLoadedMCPServers,
@@ -325,6 +331,76 @@ const appendLocalMessage = (params: RouterParams, body: string) => {
   ])
 }
 
+export type FeedbackCommandStorage = {
+  save: typeof saveLocalFeedback
+  export: typeof exportLocalFeedback
+}
+
+function appendFeedbackStatus(params: RouterParams, body: string): void {
+  params.setMessages((previous) => [...previous, getSystemMessage(body)])
+}
+
+export async function handleFeedbackCommand(
+  params: RouterParams,
+  args: string,
+  storage: FeedbackCommandStorage = {
+    save: saveLocalFeedback,
+    export: exportLocalFeedback,
+  },
+): Promise<void> {
+  const trimmedArgs = args.trim()
+  if (/^export(?:\s|$)/i.test(trimmedArgs)) {
+    const destination = trimmedArgs.replace(/^export\s*/i, '').trim()
+    if (!destination) {
+      clearInput(params)
+      appendFeedbackStatus(
+        params,
+        'Usage: /feedback export <new-path>. Existing files are never overwritten.',
+      )
+      return
+    }
+    try {
+      const outputPath = await storage.export(destination, {
+        cwd: getProjectRoot() ?? process.cwd(),
+      })
+      clearInput(params)
+      appendFeedbackStatus(params, `Local feedback exported to ${outputPath}.`)
+    } catch (error) {
+      appendFeedbackStatus(
+        params,
+        `Could not export local feedback: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    return
+  }
+
+  if (!trimmedArgs) {
+    clearInput(params)
+    appendFeedbackStatus(
+      params,
+      'Usage: /feedback <text> to save feedback locally, or /feedback export <new-path> to export it. Nothing is sent to a provider.',
+    )
+    return
+  }
+
+  try {
+    const { filePath } = await storage.save({
+      category: 'other',
+      text: trimmedArgs,
+    })
+    clearInput(params)
+    appendFeedbackStatus(
+      params,
+      `Feedback saved locally to ${filePath}. Export with /feedback export <new-path>; nothing was sent remotely.`,
+    )
+  } catch (error) {
+    appendFeedbackStatus(
+      params,
+      `Could not save feedback locally: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+}
+
 const appendLocalBlocks = (
   params: RouterParams,
   blocksLike: ContentBlock[],
@@ -442,6 +518,7 @@ export const formatPlanListReport = (
     const emptyLines = [
       'No plan sessions found under .agents/sessions/.',
       'Use /mode:plan to start one.',
+      ...(planCatalogWarning(sessions) ? ['', planCatalogWarning(sessions)!] : []),
     ]
     if (staleNote) {
       emptyLines.push('', staleNote)
@@ -450,6 +527,8 @@ export const formatPlanListReport = (
   }
 
   const lines: string[] = [`Plan sessions (${sessions.length}):`]
+  const partialNotice = planCatalogWarning(sessions)
+  if (partialNotice) lines.push(partialNotice)
   for (const session of sessions) {
     lines.push(formatPlanSessionListRowText(session))
   }
@@ -506,7 +585,6 @@ const setPlanUse = (input: string): string => {
 const ALL_COMMANDS: CommandDefinition[] = [
   defineCommandWithArgs({
     name: 'permissions',
-    aliases: ['approvals'],
     handler: (params, args) => {
       if (args.trim())
         appendLocalMessage(params, handlePermissionsCommand(args))
@@ -517,7 +595,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommand({
     name: 'help',
-    aliases: ['h', '?'],
     handler: async (params) => {
       const { postUserMessage } = await handleHelpCommand()
       params.setMessages((prev) => postUserMessage(prev))
@@ -527,17 +604,10 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'feedback',
-    aliases: ['bug', 'report'],
-    handler: (params) => {
-      appendLocalMessage(
-        params,
-        'Remote feedback submission is unavailable in this local/BYOK build. Your draft remains available. Report an issue at https://github.com/AnzoBenjamin/openbuff/issues after reviewing any details you share.',
-      )
-    },
+    handler: (params, args) => handleFeedbackCommand(params, args),
   }),
   defineCommandWithArgs({
     name: 'bash',
-    aliases: ['!'],
     handler: (params, args) => {
       const trimmedArgs = args.trim()
 
@@ -592,7 +662,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommand({
     name: 'exit',
-    aliases: ['quit', 'q'],
     handler: (params) => {
       // Flush state before exiting: snapshot the conversation so an in-flight
       // turn's blocks persist for /undo, drain the guarded-submit queue so
@@ -876,7 +945,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'new',
-    aliases: ['n', 'clear', 'c', 'reset'],
     handler: (params, args) => {
       const trimmedArgs = args.trim()
 
@@ -1045,7 +1113,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommand({
     name: 'info',
-    aliases: ['status'],
     handler: (params) => {
       try {
         const { postUserMessage } = handleInfoCommand()
@@ -1064,7 +1131,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommand({
     name: 'context',
-    aliases: ['ctx'],
     handler: (params) => {
       try {
         const { postUserMessage } = handleContextCommand()
@@ -1096,7 +1162,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommand({
     name: 'update',
-    aliases: ['upgrade', 'check-update'],
     handler: (params) => {
       const status = buildUpdateStatus()
       const block: ContentBlock = {
@@ -1113,7 +1178,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommand({
     name: 'doctor',
-    aliases: ['diagnose'],
     handler: (params) => {
       const diagnostics = getAgentRegistryDiagnostics()
       let providerStatus: string
@@ -1158,7 +1222,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'memory',
-    aliases: ['mem'],
     handler: (params, args) =>
       runLocalCommandOperation(
         params,
@@ -1169,7 +1232,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'image',
-    aliases: ['img'],
     handler: async (params, args) => {
       const trimmedArgs = args.trim()
 
@@ -1199,7 +1261,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   ...AGENT_MODES.map((mode) =>
     defineCommandWithArgs({
       name: `mode:${mode.toLowerCase()}`,
-      aliases: [`model:${mode.toLowerCase()}`],
       handler: (params, args) => {
         const trimmedArgs = args.trim()
 
@@ -1246,7 +1307,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
     ? [
         defineCommand({
           name: 'connect',
-          aliases: ['connect:chatgpt', 'chatgpt'],
           handler: (params) => {
             useChatStore.getState().setInputMode('connect:chatgpt')
             params.saveToHistory(params.inputValue.trim())
@@ -1257,7 +1317,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
     : []),
   defineCommand({
     name: 'history',
-    aliases: ['chats'],
     handler: (params) => {
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
@@ -1266,7 +1325,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommand({
     name: 'prompts',
-    aliases: ['prompt-search'],
     handler: (params) => {
       params.saveToHistory(params.inputValue.trim())
       clearInput(params)
@@ -1293,7 +1351,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'resume-plan',
-    aliases: ['rp'],
     handler: (params, args) => {
       params.saveToHistory(params.inputValue.trim())
       const parsed = splitPlanCommandArgs(args)
@@ -1328,7 +1385,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'update-plan',
-    aliases: ['up'],
     handler: (params, args) => {
       params.saveToHistory(params.inputValue.trim())
       const parsed = splitPlanCommandArgs(args)
@@ -1361,7 +1417,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'plan-status',
-    aliases: ['ps'],
     handler: (params, args) => {
       params.saveToHistory(params.inputValue.trim())
       const parsed = splitPlanCommandArgs(args)
@@ -1388,7 +1443,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommand({
     name: 'plans',
-    aliases: ['plan-ls'],
     handler: (params) =>
       runLocalCommandOperation(
         params,
@@ -1407,6 +1461,8 @@ const ALL_COMMANDS: CommandDefinition[] = [
               isStatusReport: false,
             },
           ]
+          const partialNotice = planCatalogWarning(sessions)
+          if (partialNotice && sessions.length > 0) blocks.push({ type: 'text', content: partialNotice })
           if (active.staleNote && sessions.length > 0)
             blocks.push({ type: 'text', content: active.staleNote })
           return { blocks, content: reportText }
@@ -1438,7 +1494,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'plan-use',
-    aliases: ['plan-active', 'use-plan'],
     handler: (params, args) => {
       params.saveToHistory(params.inputValue.trim())
       const trimmed = args.trim()
@@ -1455,7 +1510,6 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
   defineCommandWithArgs({
     name: 'lessons',
-    aliases: ['lesson'],
     handler: (params, args) => {
       params.saveToHistory(params.inputValue.trim())
       const parsed = splitPlanCommandArgs(args)
@@ -1520,7 +1574,12 @@ const ALL_COMMANDS: CommandDefinition[] = [
   }),
 ]
 
-export const COMMAND_REGISTRY: CommandDefinition[] = ALL_COMMANDS
+export const COMMAND_REGISTRY: CommandDefinition[] = ALL_COMMANDS.map((command) => {
+  // Static discovery metadata owns aliases for router, menu and local help.
+  // Insertion-only general-agent retains its hidden direct route.
+  const metadata = SLASH_COMMANDS.find((item) => item.id === command.name && !item.insertText)
+  return metadata ? { ...command, aliases: [...(metadata.aliases ?? [])] } : command
+})
 
 export function findCommand(cmd: string): CommandDefinition | undefined {
   const lowerCmd = cmd.toLowerCase()

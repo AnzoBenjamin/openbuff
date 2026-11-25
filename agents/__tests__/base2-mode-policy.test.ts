@@ -47,6 +47,22 @@ describe('base2 mode policy coverage', () => {
     }
   })
 
+  test('disclosure controls are mode-neutral and plan artifacts remain PLAN-only', () => {
+    for (const isFast of [false, true]) {
+      for (const planOnly of [false, true]) {
+        for (const executePlan of [false, true]) {
+          for (const noAskUser of [false, true]) {
+            const gates = { isFast, planOnly, executePlan, noAskUser }
+            expect(modeAllowsTool('tool_load', gates)).toBe(true)
+            expect(modeAllowsTool('tool_search', gates)).toBe(true)
+            expect(modeAllowsTool('create_plan', gates)).toBe(planOnly)
+            expect(modeAllowsTool('update_plan_status', gates)).toBe(planOnly)
+          }
+        }
+      }
+    }
+  })
+
   test('mode gates still deny mutation tools outside their mode', () => {
     const planOnlyGates = {
       isFast: false,

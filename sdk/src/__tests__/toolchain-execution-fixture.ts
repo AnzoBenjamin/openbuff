@@ -25,6 +25,7 @@ export function executionFixture(options: { refusal?: Refusal; refusalFor?: (tar
       const granted = () => options.refusalFor?.(captured) ?? options.refusal ?? { ok: true as const, value: { permit, decisionId: 'fixture-policy' } }
       const launch: PreparedLaunch = {
         facts: () => ({} as LaunchFacts),
+        clock: () => ({ domainId: 'toolchain-fixture', nowMs: () => performance.now() }),
         async admit() { await options.wait; return granted() },
         admitSync: granted,
         dispatchNow(token, callback) {

@@ -173,9 +173,9 @@ export interface RunJournal extends JournalWriter, JournalReader {
   /**
    * Optional (slice-4 hardening) bounded read: the LAST `limit` events for
    * runId, NEWEST FIRST (ORDER BY seq DESC LIMIT ...). Consumers that only
-   * inspect a run's tail (classifyRunResume) use this instead of
-   * materializing the full event list; they must probe for it structurally
-   * and fall back to events() when it is absent, keeping results identical.
+   * inspect a run's tail use this instead of materializing the full event
+   * list; they must probe for it structurally and fall back to events() when
+   * it is absent, keeping results identical.
    */
   recentEvents?(runId: string, limit: number): JournalEventRow[]
   /**
@@ -464,17 +464,6 @@ const DEFAULT_MAX_BATCH_DELAY_MS = 50
  * 10 runs by first-event order (see maintain).
  */
 const DEFAULT_MAINTAIN_KEEP_RUNS = 10
-
-/**
- * Bounded tail window for classifyRunResume (slice-4 hardening): the resume
- * match predicates only ever fire for events AFTER the tail event's seq, and
- * the built-in reader's lastEvent IS the max-seq row, so a bounded
- * newest-first window (ORDER BY seq DESC LIMIT, via the optional
- * recentEvents extension) decides the classification without materializing
- * the run's full event list. Readers without recentEvents fall back to a
- * full events() load with identical results.
- */
-const RESUME_TAIL_EVENT_LIMIT = 64
 
 /**
  * Optional per-run retention bounds (P2-T2 slice 4). Both caps are opt-in;
@@ -1846,90 +1835,84 @@ export function createRunJournal(params: {
 }
 
 /**
- * Pure crash classifier (design §4a). Reads the journal tail and decides how a
- * run should resume:
- * - tool_call tail with no matching tool_result → in_flight_tool (the kill-9
- *   window: the tool may or may not have applied, so replay must consult
- *   `toolResultFor` before re-executing). A tool_call tail with a null
- *   correlation is also in_flight_tool: with no correlation no later
- *   tool_result can ever match, so the call can never be proven complete.
- * - llm_request tail with no matching llm_response → in_flight_llm.
- * - anything else (tool_result/step_boundary tail, or empty) → clean.
+ * Pure crash classifier (design §4a). Scans every retained event and matches
+ * each result to at most one preceding request with the same non-null
+ * correlation. Unmatched tool calls are returned before unmatched model
+ * requests because their effects may be uncertain. Null-correlated requests
+ * cannot be matched and remain in flight.
  *
- * Only events AFTER the tail event's seq count as the match: a retry that
- * reuses the same toolCallId/correlation must not let an EARLIER attempt's
- * result classify a re-executed, still-in-flight call as clean.
+ * `clean` describes the retained events only: retention may have removed
+ * earlier rows, so it is not proof of a complete prefix or replay eligibility.
  */
 export function classifyRunResume(
   reader: JournalReader,
   runId: string,
 ): RunResumeClassification {
-  const last = reader.lastEvent(runId)
-  if (!last) return { kind: 'clean' }
+  type PendingRequest = { correlation: string | null; settled: boolean }
+  type RequestQueue = { requests: PendingRequest[]; next: number }
 
-  // Bounded tail (slice-4 hardening): the match predicates below only count
-  // events AFTER the tail event's seq, and the built-in reader's lastEvent IS
-  // the max-seq row, so a newest-first window (ORDER BY seq DESC LIMIT via the
-  // optional recentEvents extension) decides the classification without
-  // materializing the run's full event list. Readers without the extension
-  // fall back to a full events() load — identical results, seq gaps included
-  // (ordering is by seq, never row count).
-  const bounded = reader as BoundedReadJournalReader
-  const tailWindow =
-    typeof bounded.recentEvents === 'function'
-      ? bounded.recentEvents(runId, RESUME_TAIL_EVENT_LIMIT)
-      : reader.events(runId)
+  const pendingTools: PendingRequest[] = []
+  const pendingLlm: PendingRequest[] = []
+  const toolRequests = new Map<string, RequestQueue>()
+  const llmRequests = new Map<string, RequestQueue>()
 
-  if (last.eventType === 'tool_call') {
-    const correlation = last.correlation
-    // Correlation reuse guard: only a tool_result recorded AFTER this
-    // tool_call's seq can complete it. An earlier attempt's result (same
-    // correlation, retried call) must not satisfy the check, or a genuinely
-    // in-flight re-executed tool call would be misclassified as clean and
-    // the resume path would skip the toolResultFor cross-check.
-    const hasResult =
-      correlation != null &&
-      tailWindow.some(
-        (e) =>
-          e.seq > last.seq &&
-          e.eventType === 'tool_result' &&
-          e.correlation === correlation,
-      )
-    if (!hasResult) {
-      // A tool_call tail with no later matching tool_result is in-flight —
-      // including a null correlation: with no correlation no later tool_result
-      // can ever match, so the call can never be proven complete and must not
-      // be classified clean (that would skip the toolResultFor cross-check
-      // and could re-execute a side-effecting tool call). The empty toolCallId
-      // keeps the replay cross-check fail-closed: toolResultFor finds nothing
-      // for '', so the call is re-executed under live control instead of
-      // being silently skipped.
-      return { kind: 'in_flight_tool', toolCallId: correlation ?? '' }
+  const recordRequest = (
+    pending: PendingRequest[],
+    requests: Map<string, RequestQueue>,
+    correlation: string | null,
+  ) => {
+    const request = { correlation, settled: false }
+    pending.push(request)
+    if (correlation == null) return
+
+    const queue = requests.get(correlation) ?? { requests: [], next: 0 }
+    queue.requests.push(request)
+    requests.set(correlation, queue)
+  }
+
+  const settleRequest = (
+    requests: Map<string, RequestQueue>,
+    correlation: string | null,
+  ) => {
+    if (correlation == null) return
+    const queue = requests.get(correlation)
+    const request = queue?.requests[queue.next]
+    if (!queue || !request) return
+    request.settled = true
+    queue.next++
+  }
+
+  // `events()` is the full reader contract. Sort by seq so pairing remains
+  // correct for readers whose iteration order is not explicitly guaranteed.
+  for (const event of [...reader.events(runId)].sort((a, b) => a.seq - b.seq)) {
+    switch (event.eventType) {
+      case 'tool_call':
+        recordRequest(pendingTools, toolRequests, event.correlation ?? null)
+        break
+      case 'tool_result':
+        settleRequest(toolRequests, event.correlation ?? null)
+        break
+      case 'llm_request':
+        recordRequest(pendingLlm, llmRequests, event.correlation ?? null)
+        break
+      case 'llm_response':
+        settleRequest(llmRequests, event.correlation ?? null)
+        break
     }
-    return { kind: 'clean' }
   }
 
-  if (last.eventType === 'llm_request') {
-    const correlation = last.correlation
-    // Same correlation-reuse guard as the tool_call branch above: only an
-    // llm_response recorded AFTER this llm_request's seq can complete it, and
-    // a null correlation can never match — with `null === null` any later
-    // null-correlation llm_response (e.g. from a different request) would
-    // otherwise satisfy the check and misclassify a genuinely in-flight
-    // request as clean, so the resume path would skip in_flight_llm handling
-    // and resume the loop with a response that never arrived.
-    const hasResponse =
-      correlation != null &&
-      tailWindow.some(
-        (e) =>
-          e.seq > last.seq &&
-          e.eventType === 'llm_response' &&
-          e.correlation === correlation,
-      )
-    if (!hasResponse) return { kind: 'in_flight_llm' }
-    return { kind: 'clean' }
+  const inFlightTool = pendingTools.find((request) => !request.settled)
+  if (inFlightTool) {
+    // Empty ID keeps the replay cross-check fail-closed when correlation was
+    // absent; toolResultFor cannot prove a result for that request.
+    return {
+      kind: 'in_flight_tool',
+      toolCallId: inFlightTool.correlation ?? '',
+    }
   }
-
+  if (pendingLlm.some((request) => !request.settled)) {
+    return { kind: 'in_flight_llm' }
+  }
   return { kind: 'clean' }
 }
 

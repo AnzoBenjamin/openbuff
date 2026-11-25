@@ -1,4 +1,14 @@
-import { spawn } from 'child_process'
+import {
+  launchSearchProcess,
+  finishSearchProcess,
+  searchExitStatus,
+  searchExitError,
+} from './search-execution'
+import {
+  scheduleNodeDeadline,
+  refusalForSignal,
+} from '../services/execution-launch'
+import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
 import * as fs from 'fs'
 import * as path from 'path'
 
@@ -44,7 +54,7 @@ const MAX_FILE_BYTES_FOR_SYMBOLS = 1_000_000 // 1MB per file is plenty
  */
 const MAX_PENDING_STDOUT_LINE_BYTES = 1024 * 1024
 
-export function findFilesMatchingContent({
+export async function findFilesMatchingContent({
   projectPath,
   pattern,
   flags,
@@ -53,7 +63,9 @@ export function findFilesMatchingContent({
   groupBySymbol = false,
   timeoutSeconds = 15,
   logger,
-  signal,
+  signal: requestedSignal,
+  executionContext,
+  branchId = 'sdk.find-files-matching-content',
   fileFilter,
 }: {
   projectPath: string
@@ -68,127 +80,140 @@ export function findFilesMatchingContent({
    *  and the promise resolves with the same `{ errorMessage }` shape used for
    *  other find_files_matching_content errors. */
   signal?: AbortSignal
+  executionContext?: ExecutionAdapterContext
+  branchId?: string
   fileFilter?: FileFilter
 }): Promise<CodebuffToolOutput<'find_files_matching_content'>> {
+  const signal = requestedSignal
+
+  const projectRoot = path.resolve(projectPath)
+  if (
+    hasFilesystemSandbox() &&
+    !resolveProjectPathForRead(projectRoot, cwd ?? '.')
+  ) {
+    return [
+      {
+        type: 'json',
+        value: {
+          errorMessage: 'Search path is outside the configured sandbox.',
+        },
+      },
+    ]
+  }
+  const requestedCwd = cwd ?? '.'
+  const resolvedCwd = path.isAbsolute(requestedCwd)
+    ? path.resolve(requestedCwd)
+    : path.resolve(projectRoot, requestedCwd)
+  let searchCwd: string
+  let searchPaths: string[]
+  try {
+    const realCwd = fs.realpathSync.native(resolvedCwd)
+    if (fs.statSync(realCwd).isDirectory()) {
+      searchCwd = realCwd
+      const existingHiddenDirs = INCLUDED_HIDDEN_DIRS.filter((dir) => {
+        try {
+          return fs.statSync(path.join(searchCwd, dir)).isDirectory()
+        } catch {
+          return false
+        }
+      })
+      searchPaths = ['.', ...existingHiddenDirs]
+    } else {
+      // File-as-cwd: search only that file; process cwd = project root when
+      // the file is under the project, else the file's parent directory.
+      searchCwd = isPathInside(projectRoot, realCwd)
+        ? projectRoot
+        : path.dirname(realCwd)
+      searchPaths = [toRgPathArg(searchCwd, realCwd)]
+    }
+  } catch {
+    return [
+      {
+        type: 'json',
+        value: {
+          errorMessage: `Invalid cwd: Path '${requestedCwd}' does not exist or cannot be read. find_files_matching_content requires an existing directory or file.`,
+        },
+      },
+    ]
+  }
+
+  const parsedFlags = parseSafeRipgrepFlags(flags || [], {
+    toolName: 'find_files_matching_content',
+  })
+  if ('errorMessage' in parsedFlags) {
+    return [
+      {
+        type: 'json',
+        value: parsedFlags,
+      },
+    ]
+  }
+  const flagsArray = parsedFlags.flags
+
+  // When groupBySymbol is requested, we need line numbers, so we stream JSON
+  // matches and aggregate ourselves. Otherwise we can use ripgrep's much
+  // cheaper `-l` (--files-with-matches) mode.
+  const args = groupBySymbol
+    ? [
+        '--no-config',
+        '-n',
+        '--json',
+        ...DEFAULT_EXCLUDED_GLOBS.flatMap((glob) => ['-g', glob]),
+        ...flagsArray,
+        '--',
+        pattern,
+        ...searchPaths,
+      ]
+    : [
+        '--no-config',
+        '-l',
+        ...DEFAULT_EXCLUDED_GLOBS.flatMap((glob) => ['-g', glob]),
+        ...flagsArray,
+        '--',
+        pattern,
+        ...searchPaths,
+      ]
+
+  const rgPath = getBundledRgPath(import.meta.url, {})
+  if (logger) {
+    logger.info(
+      { rgPath, args, searchCwd, groupBySymbol },
+      'find-files-matching-content: Spawning ripgrep process',
+    )
+  }
+
+  if (signal?.aborted)
+    return [
+      {
+        type: 'json',
+        value: {
+          errorMessage: refusalForSignal(signal).cause,
+          executionRefusal: refusalForSignal(signal),
+        },
+      },
+    ]
+  const launched = await launchSearchProcess({
+    executionContext,
+    callerSignal: signal,
+    executable: rgPath,
+    argv: args,
+    cwd: searchCwd,
+    branchId,
+    timeoutSeconds,
+  })
+  if (!launched.ok)
+    return [
+      {
+        type: 'json',
+        value: { errorMessage: launched.cause, executionRefusal: launched },
+      },
+    ]
+  const node = launched.value
+  const childProcess = node.child
+  const resourceSignal = node.input.resourceSignal
   return new Promise((resolve) => {
     let isResolved = false
-
-    const projectRoot = path.resolve(projectPath)
-    if (hasFilesystemSandbox() && !resolveProjectPathForRead(projectRoot, cwd ?? '.')) {
-      return resolve([{ type: 'json', value: { errorMessage: 'Search path is outside the configured sandbox.' } }])
-    }
-    const requestedCwd = cwd ?? '.'
-    const resolvedCwd = path.isAbsolute(requestedCwd)
-      ? path.resolve(requestedCwd)
-      : path.resolve(projectRoot, requestedCwd)
-    let searchCwd: string
-    let searchPaths: string[]
-    try {
-      const realCwd = fs.realpathSync.native(resolvedCwd)
-      if (fs.statSync(realCwd).isDirectory()) {
-        searchCwd = realCwd
-        const existingHiddenDirs = INCLUDED_HIDDEN_DIRS.filter((dir) => {
-          try {
-            return fs.statSync(path.join(searchCwd, dir)).isDirectory()
-          } catch {
-            return false
-          }
-        })
-        searchPaths = ['.', ...existingHiddenDirs]
-      } else {
-        // File-as-cwd: search only that file; process cwd = project root when
-        // the file is under the project, else the file's parent directory.
-        searchCwd = isPathInside(projectRoot, realCwd)
-          ? projectRoot
-          : path.dirname(realCwd)
-        searchPaths = [toRgPathArg(searchCwd, realCwd)]
-      }
-    } catch {
-      return resolve([
-        {
-          type: 'json',
-          value: {
-            errorMessage: `Invalid cwd: Path '${requestedCwd}' does not exist or cannot be read. find_files_matching_content requires an existing directory or file.`,
-          },
-        },
-      ])
-    }
-
-    const parsedFlags = parseSafeRipgrepFlags(flags || [], {
-      toolName: 'find_files_matching_content',
-    })
-    if ('errorMessage' in parsedFlags) {
-      return resolve([
-        {
-          type: 'json',
-          value: parsedFlags,
-        },
-      ])
-    }
-    const flagsArray = parsedFlags.flags
-
-    // When groupBySymbol is requested, we need line numbers, so we stream JSON
-    // matches and aggregate ourselves. Otherwise we can use ripgrep's much
-    // cheaper `-l` (--files-with-matches) mode.
-    const args = groupBySymbol
-      ? [
-          '--no-config',
-          '-n',
-          '--json',
-          ...DEFAULT_EXCLUDED_GLOBS.flatMap((glob) => ['-g', glob]),
-          ...flagsArray,
-          '--',
-          pattern,
-          ...searchPaths,
-        ]
-      : [
-          '--no-config',
-          '-l',
-          ...DEFAULT_EXCLUDED_GLOBS.flatMap((glob) => ['-g', glob]),
-          ...flagsArray,
-          '--',
-          pattern,
-          ...searchPaths,
-        ]
-
-    const rgPath = getBundledRgPath(import.meta.url)
-    if (logger) {
-      logger.info(
-        { rgPath, args, searchCwd, groupBySymbol },
-        'find-files-matching-content: Spawning ripgrep process',
-      )
-    }
-
-    if (signal?.aborted) {
-      const reason = signal.reason
-      return resolve([
-        {
-          type: 'json',
-          value: {
-            errorMessage: reason instanceof Error ? reason.message : 'Aborted',
-          },
-        },
-      ])
-    }
-
-    let childProcess: ReturnType<typeof spawn>
-    try {
-      childProcess = spawn(rgPath, args, {
-        cwd: searchCwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-    } catch (error) {
-      return resolve([
-        {
-          type: 'json',
-          value: {
-            errorMessage:
-              error instanceof Error ? error.message : String(error),
-          },
-        },
-      ])
-    }
-
+    let removeAbortListener = () => {}
     let stdoutBuf = ''
     let stderrBuf = ''
     // For files-with-matches mode: stream complete path lines into a bounded
@@ -199,53 +224,46 @@ export function findFilesMatchingContent({
     const matchesByFile = new Map<string, Set<number>>()
     let totalMatches = 0
     let truncatedByLimit = false
-    let killTimeoutId: ReturnType<typeof setTimeout> | null = null
-    let removeAbortListener = () => {}
 
-    const clearKillFallback = () => {
-      if (!killTimeoutId) return
-      clearTimeout(killTimeoutId)
-      killTimeoutId = null
-    }
+    const partialOutput = () => ({
+      ...buildSuccessPayload({
+        groupBySymbol,
+        stdoutBuf: '',
+        filesWithoutGroups,
+        matchesByFile,
+        maxFiles,
+        truncatedByLimit: true,
+        projectRoot,
+        searchCwd,
+        pattern,
+        timedOut: false,
+        timeoutSeconds,
+      }),
+      message: 'Partial search results after interruption.',
+    })
 
-    const settle = (payload: any) => {
+    const settle = (
+      payload: Extract<
+        CodebuffToolOutput<'find_files_matching_content'>[number],
+        { type: 'json' }
+      >['value'],
+    ) => {
       if (isResolved) return
       isResolved = true
-      childProcess.stdout?.removeAllListeners()
-      childProcess.stderr?.removeAllListeners()
       removeAbortListener()
-      clearTimeout(timeoutId)
-      resolve([{ type: 'json', value: payload }])
+      cancelTimeout()
+      void finishSearchProcess(node, payload, partialOutput).then((value) =>
+        resolve([{ type: 'json', value }]),
+      )
     }
 
-    const hardKill = () => {
-      try {
-        childProcess.kill('SIGTERM')
-      } catch {}
-      if (killTimeoutId) return
-      killTimeoutId = setTimeout(() => {
-        try {
-          childProcess.kill('SIGKILL')
-        } catch {
-          try {
-            childProcess.kill()
-          } catch {}
-        }
-        killTimeoutId = null
-      }, 1000)
-      if (
-        killTimeoutId &&
-        typeof killTimeoutId === 'object' &&
-        'unref' in killTimeoutId &&
-        typeof killTimeoutId.unref === 'function'
-      ) {
-        killTimeoutId.unref()
-      }
+    const stopForOutputLimit = () => {
+      void node.scope.requestStop('output-limit')
     }
 
-    const timeoutId = setTimeout(() => {
+    const cancelTimeout = scheduleNodeDeadline(node.remainingResourceMs, () => {
       if (isResolved) return
-      hardKill()
+      stopForOutputLimit()
       // Build partial result from whatever we've collected so far.
       const partial = buildSuccessPayload({
         groupBySymbol,
@@ -261,22 +279,35 @@ export function findFilesMatchingContent({
         timeoutSeconds,
       })
       settle(partial)
-    }, timeoutSeconds * 1000)
+    })
 
-    if (signal) {
-      const onAbort = () => {
-        if (isResolved) return
-        const reason = signal.reason
-        settle({
-          errorMessage: reason instanceof Error ? reason.message : 'Aborted',
-        })
-        hardKill()
-      }
-      signal.addEventListener('abort', onAbort, { once: true })
-      removeAbortListener = () => {
-        signal.removeEventListener('abort', onAbort)
-      }
+    const onAbort = () => {
+      if (isResolved) return
+      const refusal = refusalForSignal(resourceSignal)
+      settle({
+        ...partialOutput(),
+        errorMessage: refusal.cause,
+        executionRefusal: refusal,
+      })
     }
+    const onCallerAbort = () => {
+      if (isResolved || !signal) return
+      const refusal = refusalForSignal(signal)
+      void node.scope.requestStop('owner-cancel')
+      settle({
+        ...partialOutput(),
+        errorMessage: refusal.cause,
+        executionRefusal: refusal,
+      })
+    }
+    resourceSignal.addEventListener('abort', onAbort, { once: true })
+    signal?.addEventListener('abort', onCallerAbort, { once: true })
+    removeAbortListener = () => {
+      resourceSignal.removeEventListener('abort', onAbort)
+      signal?.removeEventListener('abort', onCallerAbort)
+    }
+    if (resourceSignal.aborted) onAbort()
+    else if (signal?.aborted) onCallerAbort()
 
     childProcess.stdout?.on('data', (chunk: Buffer | string) => {
       if (isResolved) return
@@ -291,7 +322,7 @@ export function findFilesMatchingContent({
         // Refuse to keep an unterminated stdout line that grows without bound.
         // Complete lines have already been processed into bounded collections.
         truncatedByLimit = true
-        hardKill()
+        stopForOutputLimit()
         settle(
           buildSuccessPayload({
             groupBySymbol,
@@ -325,7 +356,7 @@ export function findFilesMatchingContent({
           filesWithoutGroups.push(projectRelativeFile)
           if (filesWithoutGroups.length >= maxFiles) {
             truncatedByLimit = true
-            hardKill()
+            stopForOutputLimit()
             settle(
               buildSuccessPayload({
                 groupBySymbol,
@@ -366,7 +397,7 @@ export function findFilesMatchingContent({
         if (!fileMatches) {
           if (matchesByFile.size >= maxFiles) {
             truncatedByLimit = true
-            hardKill()
+            stopForOutputLimit()
             settle(
               buildSuccessPayload({
                 groupBySymbol,
@@ -392,7 +423,7 @@ export function findFilesMatchingContent({
           totalMatches++
           if (totalMatches >= HARD_MATCH_LIMIT) {
             truncatedByLimit = true
-            hardKill()
+            stopForOutputLimit()
             settle(
               buildSuccessPayload({
                 groupBySymbol,
@@ -423,14 +454,10 @@ export function findFilesMatchingContent({
       }
     })
 
-    childProcess.once('close', (code) => {
-      clearKillFallback()
+    childProcess.once('close', async (code, signal) => {
+      const status = await searchExitStatus(node, code, signal)
       if (isResolved) return
-      if (code !== 0 && code !== 1 && stderrBuf.trim().length > 0) {
-        return settle({
-          errorMessage: `ripgrep exited with code ${code}: ${stderrBuf.trim()}`,
-        })
-      }
+      code = status.exitCode
       // Flush any remaining partial line.
       if (stdoutBuf) {
         const trailing = stdoutBuf
@@ -479,8 +506,9 @@ export function findFilesMatchingContent({
         }
       }
 
-      settle(
-        buildSuccessPayload({
+      const errorMessage = searchExitError(status, stderrBuf)
+      settle({
+        ...buildSuccessPayload({
           groupBySymbol,
           stdoutBuf,
           filesWithoutGroups,
@@ -493,11 +521,13 @@ export function findFilesMatchingContent({
           timedOut: false,
           timeoutSeconds,
         }),
-      )
+        ...(code !== null ? { exitCode: code } : {}),
+        ...(stderrBuf ? { stderr: stderrBuf } : {}),
+        ...(errorMessage ? { errorMessage, truncated: true } : {}),
+      })
     })
 
     childProcess.once('error', (error) => {
-      clearKillFallback()
       if (isResolved) return
       settle({
         errorMessage: `Failed to execute ripgrep: ${error.message}. Vendored ripgrep not found; ensure @openbuff/sdk is up-to-date or set CODEBUFF_RG_PATH.`,

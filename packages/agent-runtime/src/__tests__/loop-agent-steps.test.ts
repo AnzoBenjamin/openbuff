@@ -9,6 +9,10 @@ import { afterEach, describe, expect, it, mock } from 'bun:test'
 import z from 'zod/v4'
 
 import contextPruner from '../../../../agents/context-pruner'
+import {
+  BASE2_CORE_TOOL_NAMES,
+  BASE2_TIER_TOOL_NAMES,
+} from '../util/base2-tool-tiers'
 import thinker from '../../../../agents/thinker/thinker'
 import { loopAgentSteps } from '../run-agent-step'
 import { clearAgentGeneratorCache } from '../run-programmatic-step'
@@ -100,6 +104,61 @@ describe('loopAgentSteps', () => {
       signal: new AbortController().signal,
     }
   }
+
+  it('loads a tool tier between model steps without widening the initial surface', async () => {
+    setup()
+    const progressiveTemplate: AgentTemplate = {
+      ...agentTemplate,
+      id: 'test-agent',
+      outputMode: 'last_message' as const,
+      toolNames: [...BASE2_CORE_TOOL_NAMES, 'end_turn'],
+      programmaticConfig: {
+        progressiveToolDisclosure: true,
+        fullToolSurface: [
+          ...BASE2_CORE_TOOL_NAMES,
+          ...Object.values(BASE2_TIER_TOOL_NAMES).flat(),
+          'end_turn',
+        ],
+      },
+    }
+    progressiveTemplate.handleSteps = function* () {
+      yield 'STEP'
+      yield 'STEP'
+      yield 'STEP'
+    }
+    const visibleEditTransaction: boolean[] = []
+    let calls = 0
+    const stream = mock(async function* ({ tools }) {
+      calls++
+      visibleEditTransaction.push(Object.hasOwn(tools, 'edit_transaction'))
+      if (calls === 1) {
+        yield createToolCallChunk('tool_search', {
+          query: 'edit_transaction',
+        })
+      } else if (calls === 2) {
+        yield createToolCallChunk('tool_load', { tier: 'implement' })
+      } else {
+        yield { type: 'text' as const, text: 'loaded tools verified' }
+      }
+      return promptSuccess(`progressive-step-${calls}`)
+    })
+
+    const result = await loopAgentSteps({
+      ...baseParams,
+      agentType: 'test-agent',
+      agentTemplate: progressiveTemplate,
+      localAgentTemplates: { 'test-agent': progressiveTemplate },
+      agentState: {
+        ...agentState,
+        agentType: 'test-agent',
+        unlockedToolTiers: [],
+      },
+      promptAiSdkStream: stream,
+    })
+
+    expect(result.agentState.unlockedToolTiers).toEqual(['implement'])
+    expect(visibleEditTransaction).toEqual([false, false, true])
+  })
 
   it('routes spawned subagent model requests by stable agent type', async () => {
     setup()
@@ -299,6 +358,7 @@ describe('loopAgentSteps', () => {
           outputTokens: 0,
           cachedInputTokens: 0,
           totalTokens: 2,
+          cacheUsageComplete: true,
         })
         return promptSuccess('["fixture candidate"]')
       },
@@ -1161,6 +1221,34 @@ describe('loopAgentSteps', () => {
       triggerBudgetTokens: 42_000,
       targetBudgetTokens: 22_400,
     })
+  })
+
+  it('reports a failed generator-driven pruner on the parent compaction settle', async () => {
+    setup()
+    const events: any[] = []
+    agentState.messageHistory = [userMessage('small-window evidence '.repeat(8_000))]
+    agentTemplate.toolNames = ['end_turn']
+    agentTemplate.programmaticToolNames = ['spawn_agent_inline']
+    agentTemplate.spawnableAgents = ['context-pruner']
+    agentTemplate.handleSteps = function* () {
+      yield { toolName: 'spawn_agent_inline', input: { agent_type: 'context-pruner', params: {} }, includeToolCall: false }
+      yield { toolName: 'end_turn', input: {} }
+    } as () => StepGenerator
+    const pruner = buildPrunerStub(function* () {
+      throw new Error('generator pruner fixture failed')
+    })
+    let runCounter = 0
+    const prunerRun = await loopAgentSteps({
+      ...baseParams,
+      startAgentRun: async () => `pruner-fixture-run-${++runCounter}`,
+      agentState,
+      resolveModelContextWindow: mock(() => 32_000),
+      localAgentTemplates: { 'test-agent': agentTemplate, 'context-pruner': pruner },
+      onResponseChunk: (event) => events.push(event),
+    })
+    const settled = events.filter((event) => event.type === 'context_compaction_status' && event.state === 'settled')
+    expect(settled).toHaveLength(1)
+    expect(settled[0], JSON.stringify(prunerRun.output)).toMatchObject({ outcome: 'failed', reason: expect.stringContaining('generator pruner fixture failed') })
   })
 
   it('settles the compaction status exactly once when the programmatic step throws', async () => {
@@ -2512,9 +2600,7 @@ describe('loopAgentSteps', () => {
     expect(ledger!.byCategory.systemInfo).toBeGreaterThan(0)
     expect(ledger!.windowTokens).toBeGreaterThan(0)
 
-    // A cached-prompt turn reuses the session-cached system prompt (agent
-    // type matches) and must not overwrite the recorded ledger.
-    agentState.systemPrompt = 'cached'
+    // Re-rendering the same system prompt must retain its measured ledger.
     agentState.agentType = 'test-agent'
 
     await loopAgentSteps({
@@ -2524,6 +2610,105 @@ describe('loopAgentSteps', () => {
     })
 
     expect(agentState.contextBudgetLedger).toBe(ledger)
+  })
+
+  it('keeps the saved system prompt when resuming an interrupted turn', async () => {
+    setup()
+    const fileContext = {
+      ...mockFileContext,
+      userKnowledgeFiles: { 'resume-notes.md': 'Checkpoint guidance.' },
+    }
+    agentTemplate.systemPrompt = [
+      'Task: ' + PLACEHOLDER.USER_INPUT_PROMPT,
+      PLACEHOLDER.KNOWLEDGE_FILES_CONTENTS,
+    ].join('\n')
+    agentState.agentType = 'test-agent'
+    const capturedSystemPrompts: string[] = []
+    runtimeParams.promptAiSdkStream = mock(async function* ({ messages }) {
+      const systemMessage = messages.find(
+        (message: { role: string; content?: unknown }) =>
+          message.role === 'system',
+      )
+      const systemContent = systemMessage?.content
+      capturedSystemPrompts.push(
+        Array.isArray(systemContent)
+          ? systemContent
+              .filter((part) => part.type === 'text')
+              .map((part) => (part.type === 'text' ? part.text : ''))
+              .join('')
+          : systemContent ?? '',
+      )
+      yield createToolCallChunk('end_turn', {})
+      return promptSuccess('mock-message-id')
+    })
+
+    await loopAgentSteps({
+      ...baseParams,
+      fileContext,
+      prompt: 'Checkpoint task',
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+    })
+
+    const checkpointSystemPrompt = agentState.systemPrompt
+    const checkpointTemplateIdentity = agentState.systemPromptTemplateIdentity
+    expect(checkpointSystemPrompt).toContain('Checkpoint task')
+    expect(checkpointSystemPrompt).toContain('Checkpoint guidance.')
+    expect(checkpointTemplateIdentity).toBeDefined()
+
+    fileContext.userKnowledgeFiles = {
+      'resume-notes.md': 'Guidance changed after checkpoint.',
+    }
+    await loopAgentSteps({
+      ...baseParams,
+      fileContext,
+      prompt: 'Do not replace the interrupted task',
+      resumeInterruptedTurn: true,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+    })
+
+    expect(capturedSystemPrompts[1]).toBe(checkpointSystemPrompt)
+    expect(capturedSystemPrompts[1]).not.toContain(
+      'Guidance changed after checkpoint.',
+    )
+    expect(agentState.systemPromptTemplateIdentity).toBe(
+      checkpointTemplateIdentity,
+    )
+  })
+
+  it('rebuilds legacy cached system prompts without a template identity', async () => {
+    setup()
+    agentTemplate.systemPrompt = `Current template ${PLACEHOLDER.FILE_TREE_PROMPT}`
+    agentState.agentType = 'test-agent'
+    agentState.systemPrompt = 'Legacy cached prompt'
+
+    await loopAgentSteps({
+      ...baseParams,
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    expect(agentState.systemPrompt).toContain('Current template')
+    expect(agentState.systemPrompt).not.toBe('Legacy cached prompt')
+    expect(agentState.systemPromptTemplateIdentity).toBeDefined()
+    expect(agentState.contextBudgetLedger).toBeDefined()
+  })
+
+  it('clears template identity when using an inherited parent prompt', async () => {
+    setup()
+    agentTemplate.inheritParentSystemPrompt = true
+    agentState.agentType = 'test-agent'
+    agentState.systemPrompt = 'Cached child prompt'
+    agentState.systemPromptTemplateIdentity = 'stale-template-identity'
+
+    await loopAgentSteps({
+      ...baseParams,
+      parentSystemPrompt: 'Inherited parent system prompt',
+      promptAiSdkStream: runtimeParams.promptAiSdkStream,
+      localAgentTemplates: { 'test-agent': agentTemplate },
+    })
+
+    expect(agentState.systemPrompt).toBe('Inherited parent system prompt')
+    expect(agentState.systemPromptTemplateIdentity).toBeUndefined()
   })
 
   it('annotates the retained contextBudgetLedger on a /compact turn', async () => {
@@ -2561,6 +2746,35 @@ describe('loopAgentSteps', () => {
     expect(agentState.contextBudgetLedger!.byCategory).toEqual(
       ledger!.byCategory,
     )
+  })
+
+  it('degraded or malformed correlated V2 authority never injects the V1 shadow', async () => {
+    for (const context of [undefined, { schemaVersion: 2, broken: true }]) {
+      setup()
+      agentState.memoryAuthority = {
+        schemaVersion: 1, userInputId: 'test-user-input', requested: 'sqlite-v2-opt-in', active: 'sqlite-v2-opt-in',
+        fallbackOccurred: false, reason: 'backend-unavailable', v1CompatibilityShadowAvailable: true,
+        v1Import: { status: 'no-record' },
+      }
+      agentState.memoryV2Context = context as AgentState['memoryV2Context']
+      agentState.taskMemory = commitTaskMemory({ draft: {
+        schemaVersion: 1, goal: 'V1_SHADOW_MUST_NOT_REACH_PROVIDER', requirements: [], decisions: [], filesInspected: [],
+        editsMade: [], validationResults: [], reviewReceipts: [], blockers: [], nextActions: [], historicalSummary: '', evidence: [],
+      }, expectedRevision: -1 })
+      let observed: Message[] = []
+      const stream = mock(async function* (params) {
+        observed = params.messages
+        yield createToolCallChunk('end_turn', {})
+        return promptSuccess('degraded-memory')
+      })
+      await loopAgentSteps({ ...baseParams, agentState, promptAiSdkStream: stream })
+      const tags = observed.flatMap(message => message.tags ?? [])
+      expect(tags).not.toContain('TASK_MEMORY_CONTEXT')
+      expect(tags).not.toContain('MEMORY_V2_CONTEXT')
+      expect(JSON.stringify(observed)).not.toContain('V1_SHADOW_MUST_NOT_REACH_PROVIDER')
+      expect(agentState.memoryAuthority.active).toBe('sqlite-v2-opt-in')
+      expect(agentState.memoryAuthority.fallbackOccurred).toBe(false)
+    }
   })
 
   it('selects exactly one correlated prompt authority and defaults legacy states to V1', async () => {
@@ -2661,25 +2875,23 @@ describe('loopAgentSteps', () => {
       localAgentTemplates: { 'test-agent': agentTemplate },
     })
     const mismatchedTags = sentMessages.flatMap((message) => message.tags ?? [])
-    expect(mismatchedTags).toContain('TASK_MEMORY_CONTEXT')
+    expect(mismatchedTags).not.toContain('TASK_MEMORY_CONTEXT')
     expect(mismatchedTags).not.toContain('MEMORY_V2_CONTEXT')
     expect(JSON.stringify(sentMessages)).not.toContain('Matched prior task')
 
-    for (const state of [
-      {
-        ...agentState,
-        memoryAuthority: undefined,
-        stepsRemaining: 10,
-      },
-      {
-        ...agentState,
-        memoryV2Context: {
-          ...memoryV2Context,
+    for (const [state, expectedV1Bands] of [
+      [{ ...agentState, memoryAuthority: undefined, stepsRemaining: 10 }, 1],
+      [{ ...agentState,
+        memoryV2Context: { ...memoryV2Context,
           result: { ...memoryV2Context.result, unexpected: true },
         } as typeof memoryV2Context,
         stepsRemaining: 10,
-      },
-    ]) {
+      }, 0],
+      [{ ...agentState,
+        memoryAuthority: { ...agentState.memoryAuthority!, userInputId: 'older-input' },
+        stepsRemaining: 10,
+      }, 1],
+    ] as const) {
       sentMessages = []
       await loopAgentSteps({
         ...baseParams,
@@ -2689,7 +2901,7 @@ describe('loopAgentSteps', () => {
       })
       const tags = sentMessages.flatMap((message) => message.tags ?? [])
       expect(tags.filter((tag) => tag === 'TASK_MEMORY_CONTEXT')).toHaveLength(
-        1,
+        expectedV1Bands,
       )
       expect(tags).not.toContain('MEMORY_V2_CONTEXT')
     }

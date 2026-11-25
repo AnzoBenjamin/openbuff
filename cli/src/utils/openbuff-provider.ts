@@ -987,6 +987,8 @@ export async function handleOpenbuffProviderCommand(args: string): Promise<{
 export function getOpenbuffProviderReadiness(params: {
   agent: AgentDefinition | string
   agentMode: AgentMode
+  /** An explicit run primary must be checked instead of the configured default route. */
+  model?: string
 }): { ok: true } | { ok: false; message: string } {
   const loadedConfig = loadProviderConfigSync()
   if (loadedConfig.diagnostics?.length) {
@@ -1011,13 +1013,15 @@ export function getOpenbuffProviderReadiness(params: {
 
   const agentId = asAgentId(params.agent, params.agentMode)
   const fallbackModel = asAgentModel(params.agent)
-  const requestedModel = resolveConfiguredAgentModel({
-    agentId,
-    model: fallbackModel,
-    loadedConfig,
-  })
 
   try {
+    const requestedModel =
+      params.model ??
+      resolveConfiguredAgentModel({
+        agentId,
+        model: fallbackModel,
+        loadedConfig,
+      })
     const resolvedProvider = resolveConfiguredProviderModel({
       model: requestedModel,
       loadedConfig,

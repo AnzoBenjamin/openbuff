@@ -14,6 +14,7 @@ import { codeSearch } from '../tools/code-search'
 import { glob } from '../tools/glob'
 import { createNodeFileSystem } from '../tools/node-filesystem'
 import { evaluateTerminalCommandPolicy } from '../tools/terminal-command-policy'
+import { createSearchExecutionFixture } from './fixtures/search-execution'
 
 import type {
   AgentDefinition,
@@ -197,21 +198,32 @@ describe('filesystem sandbox configuration reaches actual agent runs', () => {
 
   test('external glob and code search work with the unrestricted policy', async () => {
     const f = fixture()
-    await withFilesystemSandbox(unrestricted, async () => {
-      const files = await glob({
-        pattern: '*.md',
-        cwd: f.external,
-        projectPath: f.cwd,
-        fs: createNodeFileSystem(),
-      })
-      expect(JSON.stringify(files)).toContain(path.join(f.external, 'notes.md'))
-      const matches = await codeSearch({
-        projectPath: f.cwd,
-        cwd: path.join(f.external, 'service.log'),
-        pattern: 'sandbox-fixture',
-      })
-      expect(JSON.stringify(matches)).toContain('sandbox-fixture log')
+    const host = await createSearchExecutionFixture({
+      projectPath: f.cwd,
+      environment: { PATH: '/usr/bin:/bin' },
     })
+    try {
+      await withFilesystemSandbox(unrestricted, async () => {
+        const files = await glob({
+          pattern: '*.md',
+          cwd: f.external,
+          projectPath: f.cwd,
+          fs: createNodeFileSystem(),
+        })
+        expect(JSON.stringify(files)).toContain(
+          path.join(f.external, 'notes.md'),
+        )
+        const matches = await codeSearch({
+          executionContext: host.context(),
+          projectPath: f.cwd,
+          cwd: path.join(f.external, 'service.log'),
+          pattern: 'sandbox-fixture',
+        })
+        expect(JSON.stringify(matches)).toContain('sandbox-fixture log')
+      })
+    } finally {
+      await host.close()
+    }
   }, 20_000)
 
   test('project mode applies additional writable roots on the next run', async () => {

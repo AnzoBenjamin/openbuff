@@ -214,6 +214,16 @@ LLM Response (tool_call)          Agent Runtime processes stream
 
 Control-plane reads and validation use the same local dispatch path. A targeted validation call must include the snapshot ID observed before execution; the SDK rejects the call if the workspace is already stale and rejects its result if files mutate while the command is running. This prevents an old compiler/test result or reviewer verdict from clearing a newer change.
 
+Before each new tool attempt, the runtime synchronizes its workspace view with
+the host, including for subagents. The attempt retains its original snapshot
+and input identity; synchronization never renews an already registered action.
+The host advances the workspace for commands with unknown effects only after
+observing target entry, including commands that later fail or are cancelled.
+Refusals before target entry do not create workspace revisions. A
+`stale-authority` refusal permits one workspace refresh per agent run; a second
+refusal stops the run. Other execution refusals stop immediately. This recovery
+budget is separate from the malformed-tool-call loop guard.
+
 ### Staged read-before-edit enforcement
 
 Edit-oriented transaction variants and compatibility handlers participate in a
@@ -391,3 +401,12 @@ When the user presses Escape:
 The upstream Codebuff project routed inference and authentication through a hosted server with product billing, run records, and provider proxying. That path is not part of Openbuff and the hosted web, billing, BigQuery, and free-mode product surfaces have been removed from the active workspace.
 
 Openbuff replaces that entire hop with direct, BYOK provider calls from the local process. No Openbuff credits are deducted, no run records are written to a hosted database, and no telemetry is uploaded.
+
+
+## Repository context and validation evidence
+
+After the host registers an actor's actual run, template and task input identity, the runtime requests a repository context packet. The host queries reusable source generations and projected knowledge, attests relevant source dependencies, resolves applicable complete procedures, and includes current validation receipts. This occurs before the actor's first model/programmatic execution and also applies to transcript-isolated children through the supervision bridge.
+
+Native compiler/test execution captures its dependency baseline before launch. Only successful trusted results with matching post-run dependencies issue validation receipts. The acting child requests current evidence from the host registry at the gate; source/configuration/tool/install changes invalidate it. Terminal procedure facts reuse the execution scanner, including routine Git staging, without introducing staging or supervisor approval requirements.
+
+A deadline, uncertain source coverage, failed lookup, or unavailable optional index produces explicit degraded context. Discovery hints and retrieved memories cannot authorize source edits or execution. The existing workspace/action authority checks remain responsible for mutations. See [repository-intelligence.md](repository-intelligence.md).

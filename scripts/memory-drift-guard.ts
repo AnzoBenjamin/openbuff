@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs'
+import { readdirSync, readFileSync, existsSync, statSync, lstatSync } from 'node:fs'
 import { dirname, relative, resolve, sep, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { HISTORICAL_SOURCE_COPY_PREFIXES } from './lib/historical-source-copies'
+import { getGitDocumentationInventory } from './lib/documentation-inventory'
 
 export type Finding = {
   path: string
@@ -116,7 +117,24 @@ function shouldSkipPath(projectPath: string): boolean {
   )
 }
 
-function* markdownFiles(root: string, directory = root): Generator<string> {
+function* markdownFiles(root: string): Generator<string> {
+  const inventory = getGitDocumentationInventory(root)
+  if (inventory !== null) {
+    // Git owns repository scope, including force-added ignored Markdown. Keep
+    // exact historical/path exemptions, but do not blanket-skip scratch dirs.
+    for (const projectPath of inventory) {
+      if (shouldSkipPath(projectPath)) continue
+      const absolutePath = resolve(root, projectPath)
+      if (lstatSync(absolutePath, { throwIfNoEntry: false })?.isFile()) {
+        yield absolutePath
+      }
+    }
+    return
+  }
+  yield* walkMarkdownFiles(root)
+}
+
+function* walkMarkdownFiles(root: string, directory = root): Generator<string> {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const absolutePath = resolve(directory, entry.name)
     const projectPath = toProjectPath(root, absolutePath)
@@ -128,7 +146,7 @@ function* markdownFiles(root: string, directory = root): Generator<string> {
       ) {
         continue
       }
-      yield* markdownFiles(root, absolutePath)
+      yield* walkMarkdownFiles(root, absolutePath)
       continue
     }
 
@@ -369,16 +387,25 @@ export function checkEdges(
   return findings
 }
 
-export function checkIndexSync(root: string): Finding[] {
+export function checkIndexSync(
+  root: string,
+  snapshot?: MarkdownSnapshot,
+): Finding[] {
   const findings: Finding[] = []
+  const inventory = snapshot ? null : getGitDocumentationInventory(root)
   const indexFiles = ['AGENTS.md', 'ROUTER.md', 'agents/patterns/INDEX.md']
   for (const indexFile of indexFiles) {
-    const abs = join(root, indexFile)
-    if (!existsSync(abs)) {
+    const abs = resolve(root, indexFile)
+    if (
+      !existsSync(abs) ||
+      (snapshot && !snapshot.files.includes(abs)) ||
+      (inventory !== null &&
+        (!inventory.has(indexFile) || !lstatSync(abs).isFile()))
+    ) {
       continue
     }
     const projectPath = indexFile
-    const lines = readLines(abs)
+    const lines = snapshotFileLines(snapshot, abs)
     const linkRegex = /\[[^\]]+\]\(([^)]+)\)/g
     const quotedRegex =
       /`((?:src|packages|cli|common|sdk|agents|scripts|docs)\/[A-Za-z0-9._\/-]+(?:\.[A-Za-z]+)?)`/g
@@ -1315,14 +1342,23 @@ export function checkScriptCoverage(
   return findings
 }
 
-export function checkToolConfigSync(root: string): Finding[] {
+export function checkToolConfigSync(
+  root: string,
+  snapshot?: MarkdownSnapshot,
+): Finding[] {
   const findings: Finding[] = []
-  const routerPath = join(root, 'ROUTER.md')
-  if (!existsSync(routerPath)) {
+  const inventory = snapshot ? null : getGitDocumentationInventory(root)
+  const routerPath = resolve(root, 'ROUTER.md')
+  if (
+    !existsSync(routerPath) ||
+    (snapshot && !snapshot.files.includes(routerPath)) ||
+    (inventory !== null &&
+      (!inventory.has('ROUTER.md') || !lstatSync(routerPath).isFile()))
+  ) {
     return findings
   }
   const projectPath = 'ROUTER.md'
-  const lines = readLines(routerPath)
+  const lines = snapshotFileLines(snapshot, routerPath)
   const quotedFileRegex = /`([A-Za-z0-9._\/-]+\.[A-Za-z]+)`/g
   lines.forEach((line, index) => {
     if (!line.startsWith('|')) {

@@ -7,6 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { execFileSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 
 import {
@@ -31,6 +32,73 @@ test('retained markdown avoids unallowlisted hosted-product wording', () => {
     'Focused BYOK wording guard passed: no unallowlisted hosted-product wording found.',
   )
   expect(violations).toEqual([])
+})
+
+test('Git documentation scope excludes ignored artifacts but checks force-added and new wording', () => {
+  execFileSync('git', ['init', '-q'], { cwd: fixtureRoot })
+  const evidence = 'docs/execution/body-roadmap/evidence'
+  writeFileSync(join(fixtureRoot, '.gitignore'), `/.tmp/\n/${evidence}/\n`)
+  const ignoredPaths = ['.tmp/ignored.md', `${evidence}/B99/ignored.mdx`]
+  const frozenPath = `${evidence}/B30/independent-review/source-snapshot/docs/architecture.md`
+  const stagedPaths = ['.tmp/force-added.md', `${evidence}/B99/force-added.mdx`]
+  const newPaths = [
+    'docs/new.md',
+    'docs/new.mdx',
+    'docs/.tmp/notes.md',
+    'docs/execution/body-roadmap/evidence-active/receipt.md',
+  ]
+  const activePaths = [...stagedPaths, ...newPaths]
+  for (const path of [...ignoredPaths, frozenPath, ...activePaths]) {
+    mkdirSync(dirname(join(fixtureRoot, path)), { recursive: true })
+    writeFileSync(join(fixtureRoot, path), 'Use the hosted backend.\n')
+  }
+  mkdirSync(join(fixtureRoot, 'common'), { recursive: true })
+  writeFileSync(
+    join(fixtureRoot, 'docs/architecture.md'),
+    'BYOK with no hosted backend.\n',
+  )
+  writeFileSync(
+    join(fixtureRoot, 'common/knowledge.md'),
+    'Use the hosted backend.\n',
+  )
+  execFileSync('git', ['add', '-f', '--', frozenPath, ...stagedPaths], {
+    cwd: fixtureRoot,
+  })
+
+  expect(
+    findByokWordingViolations(fixtureRoot)
+      .map((violation) => violation.path)
+      .sort(),
+  ).toEqual([...activePaths, 'common/knowledge.md'].sort())
+})
+
+test('a fixture root inside a parent Git repository retains non-Git evidence and scratch checks', () => {
+  execFileSync('git', ['init', '-q'], { cwd: fixtureRoot })
+  writeFileSync(join(fixtureRoot, '.gitignore'), '/fixture/\n')
+  const root = join(fixtureRoot, 'fixture')
+  const paths = [
+    '.tmp/notes.md',
+    'docs/execution/body-roadmap/evidence/B30/independent-review/source-snapshot-active/notes.md',
+  ]
+  for (const path of paths) {
+    mkdirSync(dirname(join(root, path)), { recursive: true })
+    writeFileSync(join(root, path), 'Use the hosted backend.\n')
+  }
+
+  expect(
+    findByokWordingViolations(root)
+      .map((violation) => violation.path)
+      .sort(),
+  ).toEqual([...paths].sort())
+})
+
+test('selected-repository inventory errors fail visibly instead of returning clean wording', () => {
+  execFileSync('git', ['init', '-q'], { cwd: fixtureRoot })
+  writeFileSync(join(fixtureRoot, '.git', 'index'), 'broken index\n')
+
+  expect(() => findByokWordingViolations(fixtureRoot)).toThrow(
+    'documentation inventory',
+  )
 })
 
 test('local workflow captures and the exact raw B30 archive are excluded without relaxing active wording', () => {

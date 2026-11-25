@@ -96,6 +96,14 @@ function visitSchemas(
   }
 }
 
+/** Refuse actual schema-reference keywords without treating literal data/map names as references. */
+export function assertInlineJsonSchema(schema: JsonSchema): void {
+  visitSchemas(schema, (member, path) => {
+    if (Object.hasOwn(member, '$ref'))
+      schemaError(`${path}/$ref references are unsupported here; inline the schema`)
+  })
+}
+
 function resolveLocalRef(root: JsonSchema, ref: string): JsonSchema {
   let value: unknown = root
   if (ref !== '#') {

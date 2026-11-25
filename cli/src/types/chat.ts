@@ -737,8 +737,10 @@ export type ChatMessage = {
   /**
    * Cache hit rate (0-1) for the run, computed from
    * cacheInputTokens/cacheTotalInputTokens on the main agent state at run
-   * completion. Surfaced live in the message footer as "cache N%". Undefined
-   * when no cache usage data was collected (e.g. provider doesn't report it).
+   * completion, only when every contributing provider response reported valid
+   * input and cached-input counts. Surfaced in the message footer as
+   * "cache N%", including a verified 0%. Undefined when usage is missing or
+   * incomplete.
    */
   cacheHitRate?: number
   completionTime?: string

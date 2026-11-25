@@ -88,6 +88,14 @@ export type AcpPromptTurnResult = {
 export type AcpPromptHandler = (input: {
   sessionId: string
   promptText: string
+  /**
+   * Original ACP content blocks, including images and embedded resources.
+   * Optional for compatibility with direct handler callers; `prompt()` always
+   * provides this field for a wire request.
+   */
+  promptContent?: PromptRequest['prompt']
+  /** Captured session cwd, validated at session/new or session/load by the host. */
+  cwd?: string
   update: (chunkText: string) => Promise<void>
   signal: AbortSignal
   /**
@@ -395,9 +403,23 @@ function isWindowsAbsolutePath(value: string): boolean {
 }
 
 /** Builds the -32602 `limit_exceeded` error body. */
-function makeLimitExceeded(message: string): RequestError {
+function makeLimitExceeded(
+  message: string,
+  reason?: 'image_too_large' | 'prompt_too_large',
+): RequestError {
   return RequestError.invalidParams(
-    { [OPENBUFF_ACP_NS]: { code: 'limit_exceeded' } },
+    {
+      [OPENBUFF_ACP_NS]: {
+        code: 'limit_exceeded',
+        ...(reason
+          ? {
+              reason,
+              nextStep:
+                'Reduce the prompt to at most 8 MiB expanded bytes and each decoded image to at most 5 MiB.',
+            }
+          : {}),
+      },
+    },
     message,
   )
 }
@@ -515,9 +537,9 @@ function isPrivateOrLoopbackHost(hostname: string): boolean {
 
 /**
  * §12.6: enforces the prompt-total (8 MiB) and per-decoded-image (5 MiB)
- * limits over the already-parsed content blocks. `prompt` is text-only for
- * the handler, but the byte accounting covers every block so a large image or
- * embedded resource cannot smuggle an oversized turn past the wire limit.
+ * limits over the already-parsed content blocks. The compatibility projection
+ * is text-only, but byte accounting covers every block. The serve bridge also
+ * bounds the fully expanded resources before starting an SDK run.
  * A breach throws -32602 `limit_exceeded` before any handler runs.
  */
 function enforcePromptLimits(prompt: PromptRequest['prompt']): void {
@@ -527,10 +549,14 @@ function enforcePromptLimits(prompt: PromptRequest['prompt']): void {
       total += Buffer.byteLength(block.text, 'utf8')
     } else if (block.type === 'image') {
       // The wire carries base64; the limit is on the DECODED size (~3/4).
-      const decodedBytes = Math.floor(block.data.length * 0.75)
+      const padding = block.data.endsWith('==')
+        ? 2
+        : block.data.endsWith('=') ? 1 : 0
+      const decodedBytes = Math.floor(block.data.length * 0.75) - padding
       if (decodedBytes > MAX_IMAGE_BYTES) {
         throw makeLimitExceeded(
           `ACP prompt image exceeds the ${MAX_IMAGE_BYTES}-byte per-image limit.`,
+          'image_too_large',
         )
       }
       total += decodedBytes
@@ -541,7 +567,10 @@ function enforcePromptLimits(prompt: PromptRequest['prompt']): void {
       if ('text' in resource && typeof resource.text === 'string') {
         total += Buffer.byteLength(resource.text, 'utf8')
       } else if ('blob' in resource && typeof resource.blob === 'string') {
-        total += Math.floor(resource.blob.length * 0.75)
+        const padding = resource.blob.endsWith('==')
+          ? 2
+          : resource.blob.endsWith('=') ? 1 : 0
+        total += Math.floor(resource.blob.length * 0.75) - padding
       }
     } else {
       // resource_link and any future block: count a bounded proxy.
@@ -551,6 +580,7 @@ function enforcePromptLimits(prompt: PromptRequest['prompt']): void {
   if (total > MAX_PROMPT_TOTAL_BYTES) {
     throw makeLimitExceeded(
       `ACP prompt exceeds the ${MAX_PROMPT_TOTAL_BYTES}-byte total limit.`,
+      'prompt_too_large',
     )
   }
 }
@@ -802,14 +832,11 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
         elicitationForm != null
           ? { elicitation: { form: elicitationForm } }
           : undefined
-      // §3.3: the honest P1 capability advertisement. `loadSession` is true
-      // (session/load is implemented below). `promptCapabilities` claims ONLY
-      // what the prompt path actually consumes: `prompt()` forwards just the
-      // `type === 'text'` blocks to the handler, so image and embedded-context
-      // (resource) blocks are silently dropped — advertising `image: true` or
-      // `embeddedContext: true` would promise input the wire path discards,
-      // and a compliant client sending that content would lose it without any
-      // error. `sessionCapabilities` is deliberately NOT advertised:
+      // §3.3: `loadSession` and the advertised prompt content are implemented:
+      // `prompt()` preserves all incoming blocks for the handler and also
+      // supplies a text-only projection for existing consumers. Audio remains
+      // unsupported by the prompt handler contract. `sessionCapabilities` is
+      // deliberately NOT advertised:
       // this agent implements neither session/list nor session/close, and a
       // compliant client that saw them advertised would call methods the wire
       // layer rejects with -32601. The `chatgpt-oauth` auth method is
@@ -818,9 +845,9 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
       const agentCapabilities: AgentCapabilities = {
         loadSession: true,
         promptCapabilities: {
-          image: false,
+          image: true,
           audio: false,
-          embeddedContext: false,
+          embeddedContext: true,
         },
         mcpCapabilities: { http: true, sse: true },
       }
@@ -1022,9 +1049,8 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
       // subsequent prompt is accepted again.
       const abortController = new AbortController()
       session.abortController = abortController
-      // The baseline contract here only needs text: concatenate the
-      // `type === 'text'` blocks and let the injected handler decide what to
-      // do with richer blocks (images, resources) in later phases.
+      // Keep the text projection for existing handlers, while also forwarding
+      // every typed block so image and embedded resource content is preserved.
       const promptText = params.prompt
         .flatMap((block) => (block.type === 'text' ? [block.text] : []))
         .join('')
@@ -1032,6 +1058,8 @@ export function createAcpAgent(options: AcpAgentOptions): AcpAgent {
         const result = await options.promptHandler({
           sessionId: params.sessionId,
           promptText,
+          promptContent: params.prompt,
+          cwd: session.cwd,
           mcpServers: session.mcpServers,
           reverseRequests,
           clientCapabilities,

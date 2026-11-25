@@ -7,6 +7,10 @@
   "baselineHead": "03a1c562717b1794c898510c694db6d6f5b485d9",
   "startedAt": "2026-11-06T10:29:53Z",
   "evidenceDirectory": "docs/execution/body-roadmap/evidence",
+  "acceptanceDecisionRegistry": {
+    "path": "docs/execution/body-roadmap/execution-plan.json",
+    "sha256": "cab9beee96514eb3c9063c6e67090fe797ad90eaffeff8a4efe1b7a447e78095"
+  },
   "completionGraph": {
     "schemaVersion": 2,
     "cardCount": 36,
@@ -1566,20 +1570,31 @@
     {
       "nodeId": "B21",
       "parentCardId": null,
-      "status": "pending",
+      "status": "accepted",
       "prerequisites": [
         "B19",
         "B20"
       ],
-      "acceptedPrerequisites": [],
+      "acceptedPrerequisites": [
+        "B19",
+        "B20"
+      ],
       "sourceContractHashes": {},
       "repositoryId": "https://github.com/AnzoBenjamin/openbuff",
       "backend": "ts",
-      "epoch": null,
-      "coverageTier": null,
+      "epoch": "local-behavior-2026-11-24",
+      "coverageTier": "Linux local behavior only; no source-bound provenance or independent approval.",
       "evidenceManifest": null,
       "verification": null,
-      "risks": []
+      "risks": [
+        "Acceptance is limited to the recorded local Linux behavior scope; the complete original B21 guarantee set is not established.",
+        "Fresh source-bound build provenance, the full approved SDK schedule, historical prerequisite replacements, and independent composition approval were waived for this B21-only decision."
+      ],
+      "acceptanceDecision": {
+        "path": "docs/execution/body-roadmap/B21-ACCEPTANCE-20261124.json",
+        "sha256": "53d57b283dddd0dbeab783dbd77f154c59846d30ea0819afb8a64b80f6eed386"
+      },
+      "acceptedAt": "2026-11-24"
     },
     {
       "nodeId": "B22",

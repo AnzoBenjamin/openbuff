@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import {
   artifactId,
   createArtifactSink,
@@ -12,6 +12,101 @@ import type { OpenbuffClient } from '@openbuff/sdk'
 import { recordEvaluatorModelAttempts } from '../evaluation-model-attempts'
 
 describe('isolated evaluator sinks (pre-suite sentinel gate)', () => {
+  test.each([false, true])(
+    'injected sink owns traces and reported paths when runner throws=%s',
+    async (throws) => {
+      const root = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'buffbench-sink-path-'),
+      )
+      const log = spyOn(console, 'log').mockImplementation(() => {})
+      try {
+        const logsDir = path.join(root, 'unrelated')
+        fs.mkdirSync(logsDir)
+        fs.writeFileSync(path.join(logsDir, 'sentinel'), 'preserve me')
+        const sink = createArtifactSink(path.join(root, 'owned'))
+        const client = {
+          run: async () => ({
+            output: {
+              type: 'structuredOutput',
+              value: {
+                analysis: 'fixture',
+                strengths: [],
+                weaknesses: [],
+                completionScore: 10,
+                codeQualityScore: 10,
+                overallScore: 10,
+              },
+            },
+          }),
+        } as unknown as OpenbuffClient
+        const result = await runTask({
+          client,
+          commit: {
+            id: 'fixture',
+            sha: '123456789',
+            parentSha: 'parent',
+            spec: 'fixture',
+            prompt: 'fixture',
+            supplementalFiles: [],
+            fileDiffs: [],
+          },
+          agents: ['agent-a'],
+          repoUrl: 'fixture',
+          logsDir,
+          artifactSink: sink,
+          index: 0,
+          totalTasks: 1,
+          analyzerContext: {
+            agentDefinitions: [],
+            agentTypeDefinition: '',
+            testedAgentIds: [],
+          },
+          localAgentDefinitions: [],
+          extractLessons: false,
+          printEvents: false,
+          disableAnalysis: true,
+          saveTraces: true,
+          runAgentOnCommitImpl: async () => {
+            if (throws) throw new Error('fixture runner failed')
+            return {
+              diff: '',
+              contextFiles: {},
+              durationMs: 1,
+              cost: 0,
+              trace: [],
+              retrievalFlow: {
+                queryCallCount: 0,
+                queryResultPaths: [],
+                successfulReadPaths: [],
+                relevantReadPaths: [],
+                irrelevantReadPaths: [],
+              },
+            }
+          },
+        })
+        expect(fs.readdirSync(logsDir)).toEqual(['sentinel'])
+        expect(fs.readFileSync(path.join(logsDir, 'sentinel'), 'utf8')).toBe(
+          'preserve me',
+        )
+        const trace = result.commitTraces[0]!
+        const reported = log.mock.calls.flat().map(String).join('\n')
+        const expected = path.join(
+          sink.root,
+          `1-fixture-agent-a-1234567-${trace.attemptId}.json`,
+        )
+        expect(reported).toContain(`Trace saved to: ${expected}`)
+        expect(fs.existsSync(expected)).toBe(true)
+        if (!throws) {
+          expect(fs.readdirSync(path.join(sink.root, 'traces'))).toEqual([
+            `1-fixture-agent-a-1234567-${trace.attemptId}-agent.json`,
+          ])
+        }
+      } finally {
+        log.mockRestore()
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    },
+  )
   test.each([
     ['undefined', undefined],
     ['null', null],

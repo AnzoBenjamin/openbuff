@@ -1,6 +1,9 @@
 import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
 import { CHATGPT_OAUTH_ENABLED } from '@codebuff/common/constants/chatgpt-oauth'
-import { runTerminalCommand } from '@openbuff/sdk'
+import {
+  createConfiguredDirectHostExecution,
+  runTerminalCommand,
+} from '@openbuff/sdk'
 
 import {
   findCommand,
@@ -34,7 +37,6 @@ import {
   registerBashCommand,
 } from '../utils/bash-command-controller'
 import * as turnSnapshots from '../utils/turn-snapshots'
-const INTERACTIVE_BASH_TIMEOUT_SECONDS = 10 * 60
 
 /**
  * Run a bash command with automatic ghost/direct mode selection.
@@ -68,6 +70,7 @@ export async function runBashCommand(command: string) {
   const id = crypto.randomUUID()
   const abortController = registerBashCommand(id)
   const commandCwd = process.cwd()
+  const commandEnv = { ...getSystemProcessEnv() }
   const startTime = Date.now()
 
   if (ghost) {
@@ -101,8 +104,7 @@ export async function runBashCommand(command: string) {
   // (5s timeout inside capturePreDispatchSnapshot; on timeout it logs once
   // and the outcome is 'skipped' so dispatch proceeds) is acceptable
   // latency. Single choke point covering both ghost and direct modes;
-  // runBashCommand has no async completion seam, so the after-state is
-  // covered by the next turn's snapshot. Failures surface through
+  // The after-state is covered by the next turn's snapshot. Failures surface through
   // logTurnSnapshotFailure (finding b): one latched warning per distinct
   // error — never silent, never spammy.
   await turnSnapshots
@@ -110,18 +112,83 @@ export async function runBashCommand(command: string) {
     .then((outcome) => turnSnapshots.logTurnSnapshotFailure(outcome, 'shell'))
     .catch(() => undefined)
 
-  runTerminalCommand({
-    command,
-    process_type: 'SYNC',
-    cwd: commandCwd,
-    timeout_seconds: INTERACTIVE_BASH_TIMEOUT_SECONDS,
-    env: getSystemProcessEnv(),
-    signal: abortController.signal,
-  })
+  return Promise.resolve()
+    .then(() =>
+      createConfiguredDirectHostExecution({
+        cwd: commandCwd,
+        projectRoot: getProjectRoot(),
+        mode: 'user',
+        limit: { kind: 'unbounded' },
+        env: commandEnv,
+        inheritEnv: false,
+        signal: abortController.signal,
+      }),
+    )
+    .then(async (host) => {
+      if (!host.ok) throw new Error(host.cause)
+      let result: Awaited<ReturnType<typeof runTerminalCommand>> | undefined
+      try {
+        result = await runTerminalCommand({
+          command,
+          process_type: 'SYNC',
+          cwd: commandCwd,
+          timeoutPolicy: host.value.hostServices.terminalTimeoutPolicy,
+          env: commandEnv,
+          signal: abortController.signal,
+          executionContext: host.value.executionContext,
+          terminalShell: host.value.hostServices.terminalShell,
+          getTerminalLaunchMetadata:
+            host.value.hostServices.getTerminalLaunchMetadata,
+        })
+      } finally {
+        try {
+          const cleanup = await host.value.close()
+          if (
+            cleanup.some((observation) => observation.status !== 'complete')
+          ) {
+            throw new Error('Shell command process cleanup remains unconfirmed')
+          }
+        } catch (error) {
+          if (!result) throw error
+          const value = result[0].value
+          const priorError =
+            'errorMessage' in value ? value.errorMessage : undefined
+          const cleanupError =
+            error instanceof Error ? error.message : String(error)
+          result = [
+            {
+              ...result[0],
+              value: {
+                ...value,
+                errorMessage: [priorError, cleanupError]
+                  .filter(Boolean)
+                  .join('\n'),
+              },
+            },
+          ]
+        }
+      }
+      return result
+    })
     .then(([{ value }]) => {
       const stdout = 'stdout' in value ? value.stdout || '' : ''
-      const stderr = 'stderr' in value ? value.stderr || '' : ''
-      const exitCode = 'exitCode' in value ? (value.exitCode ?? 0) : 0
+      let stderr = 'stderr' in value ? value.stderr || '' : ''
+      const targetExitCode = 'exitCode' in value ? value.exitCode : undefined
+      const hasExitCode =
+        typeof targetExitCode === 'number' && Number.isFinite(targetExitCode)
+      const refusal =
+        'executionRefusal' in value ? value.executionRefusal : undefined
+      const errorMessage =
+        ('errorMessage' in value ? value.errorMessage : undefined) ||
+        refusal?.cause ||
+        (!hasExitCode ? 'Shell command returned no target exit status' : '')
+      const exitCode =
+        hasExitCode && !(errorMessage && targetExitCode === 0)
+          ? targetExitCode
+          : 1
+      if (errorMessage && !stderr.includes(errorMessage)) {
+        stderr = [stderr, errorMessage].filter(Boolean).join('\n')
+      }
 
       // Track terminal command completion
       const durationMs = Date.now() - startTime
@@ -456,9 +523,11 @@ export async function routeUserPrompt(
       // Persist only the connection outcome in this legacy dispatch path.
       setMessages((prev) => [
         ...prev,
-        getSystemMessage(result.success
-          ? 'ChatGPT connection completed. Open Providers & models to review routing.'
-          : 'ChatGPT connection failed. Start the connection again from Providers & models.'),
+        getSystemMessage(
+          result.success
+            ? 'ChatGPT connection completed. Open Providers & models to review routing.'
+            : 'ChatGPT connection failed. Start the connection again from Providers & models.',
+        ),
       ])
     }
 

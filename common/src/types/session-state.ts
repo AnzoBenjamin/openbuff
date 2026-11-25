@@ -430,12 +430,19 @@ export type AgentState = {
    */
   cacheInputTokens: number
   /**
-   * Cumulative count of total input tokens processed by the provider across
-   * all steps in this run. This is the denominator for the cache-hit rate
-   * (cacheInputTokens / cacheTotalInputTokens). Accumulated alongside
-   * cacheInputTokens.
+   * Cumulative input-token count across all steps in this turn, including
+   * cached input tokens. This is the denominator for the cache-hit rate
+   * (cacheInputTokens / cacheTotalInputTokens). The separate per-step count
+   * passed to token-budget enforcement retains its existing provider-reported
+   * input-token semantics.
    */
   cacheTotalInputTokens: number
+  /**
+   * Whether every provider request contributing to this turn's cache ratio
+   * reported valid input and cached-input counts. Optional for legacy states;
+   * only `true` permits the CLI to display a cache-hit rate.
+   */
+  cacheUsageComplete?: boolean
   /**
    * Optional per-run cost cap in US cents. Lazy-initialized from the agent
    * template's maxCostCents on the first step, then enforced after each step's
@@ -454,6 +461,8 @@ export type AgentState = {
   output?: Record<string, any>
   parentId?: string
   systemPrompt: string
+  /** Template identity for the cached system prompt; absent on legacy states. */
+  systemPromptTemplateIdentity?: string
   toolDefinitions: Record<
     string,
     { description: string | undefined; inputSchema: {} }
@@ -562,12 +571,17 @@ export type AgentState = {
   memoryV2Context?: MemoryTurnContextV2
   /** Active procedural playbooks for the turn: loaded by the coordinator, consumed by the runtime playbook gate. */
   playbookContext?: MemoryPlaybook[]
+  /** Host-prepared actor-specific discovery and knowledge, independent of transcript inheritance. */
+  repositoryContext?: import('./contracts/repository-intelligence').RepositoryContextPacket
+  playbookApplicability?: import('../util/playbook-applicability').PlaybookApplicabilityContext
   /** Per-turn memory-cover reuse accumulator (S2 reuse receipt). Reset each turn. */
   memoryReuse?: MemoryReuseReceiptV1
   /** Snapshot of the completed turn's reuse receipt handed to the SDK coordinator for usage correlation; cleared by coordinator finishTurn. */
   memoryUsageTurn?: MemoryReuseReceiptV1
   /** Monotonic workspace state shared by reads, mutations, indexing, validation, and review. */
   workspaceState?: WorkspaceStateV1
+  /** Per-run recovery budget; reset at loop entry, independent of model retries. */
+  executionRecovery?: { staleRefusals: number }
   /**
    * Process-owned mutation paths for concurrent gate isolation; published by
    * runtime after confirmed mutations / terminal touchedPaths.
@@ -743,6 +757,7 @@ export function getInitialAgentState(): AgentState {
     directCreditsUsed: 0,
     cacheInputTokens: 0,
     cacheTotalInputTokens: 0,
+    cacheUsageComplete: true,
     output: undefined,
     parentId: undefined,
     systemPrompt: '',

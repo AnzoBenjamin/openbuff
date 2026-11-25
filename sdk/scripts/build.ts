@@ -9,6 +9,7 @@ import { delimiter, join, resolve } from 'path'
 
 import { generateDtsBundle } from 'dts-bundle-generator'
 import { resolveGrammarWasmSource } from '../../packages/code-map/src/grammar-wasm-repair'
+import { TAG_QUERY_FILES } from '../../packages/code-map/src/languages'
 import { LANGUAGE_WASM_FILES } from '../../packages/code-map/src/wasm-files'
 import { normalizeEntryReexports, repairCjsExportGetters, repairEsmExportRenames } from './esm-export-fixup'
 import { verifyPublicDeclarations } from './verify-public-declarations'
@@ -160,6 +161,9 @@ async function build() {
 
   console.log('📂 Copying WASM files for tree-sitter...')
   await copyWasmFiles()
+
+  console.log('📂 Copying tree-sitter tag queries...')
+  await copyTreeSitterQueries()
 
   console.log('📂 Copying vendored ripgrep binaries...')
   await copyRipgrepVendor()
@@ -446,6 +450,20 @@ async function copyWasmFiles() {
     join(wasmDir, 'tree-sitter-manifest.json'),
     `${JSON.stringify({ schemaVersion: 1, files: manifest }, null, 2)}\n`,
   )
+}
+
+async function copyTreeSitterQueries() {
+  const sourceDir = resolve(
+    import.meta.dir,
+    '../../packages/code-map/src/tree-sitter-queries',
+  )
+  const queryDir = resolve('dist/tree-sitter-queries')
+  await mkdir(queryDir, { recursive: true })
+
+  for (const queryFile of TAG_QUERY_FILES) {
+    await cp(join(sourceDir, queryFile), join(queryDir, queryFile))
+  }
+  console.log(`  ✓ Copied ${TAG_QUERY_FILES.length} tree-sitter tag queries`)
 }
 
 async function copyRipgrepVendor() {

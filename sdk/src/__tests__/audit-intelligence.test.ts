@@ -489,6 +489,61 @@ describe('native audit intelligence', () => {
     )
   })
 
+  test.each(['build/release/tool.ts', 'release/debug/tool.ts'])(
+    'attests nested shipped source and invalidates cached consumers: %s',
+    (file) => {
+      const root = fixture()
+      const absolute = path.join(root, file)
+      fs.mkdirSync(path.dirname(absolute), { recursive: true })
+      fs.writeFileSync(absolute, 'export const value = 1')
+      const before = inspectCodebaseStructure(root)
+      inspectCodebaseStructureTool(root)
+      expect(before.sourceBinding?.shippedSourceFiles).toContain(file)
+      fs.writeFileSync(absolute, 'export const value = 2')
+      expect(inspectCodebaseStructure(root).snapshotId).not.toBe(
+        before.snapshotId,
+      )
+      expect(
+        inspectFeatureCompletenessTool(root, {
+          feature: 'resume plan',
+          snapshot_id: before.snapshotId,
+        })[0],
+      ).toMatchObject({
+        type: 'json',
+        value: { sourceBinding: { status: 'stale' } },
+      })
+    },
+  )
+
+  test('nested shipped discovery still excludes live state and dependencies', () => {
+    const root = fixture()
+    for (const file of [
+      'build/cache/generated.ts',
+      'release/debug/run.log',
+      'release/node_modules/dependency.ts',
+      'debug/release/live.ts',
+    ]) {
+      fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true })
+      fs.writeFileSync(path.join(root, file), 'excluded')
+    }
+    fs.mkdirSync(path.join(root, 'build/cache/release'), { recursive: true })
+    fs.writeFileSync(
+      path.join(root, 'build/cache/release/source.ts'),
+      'included',
+    )
+    const inventory = inspectCodebaseStructure(root)
+    expect(inventory.sourceBinding?.shippedSourceFiles).toContain(
+      'build/cache/release/source.ts',
+    )
+    for (const file of [
+      'build/cache/generated.ts',
+      'release/debug/run.log',
+      'release/node_modules/dependency.ts',
+      'debug/release/live.ts',
+    ])
+      expect(inventory.files).not.toContain(file)
+  })
+
   test('attests extensionless release scripts and unfamiliar source extensions', () => {
     const root = fixture()
     fs.mkdirSync(path.join(root, 'release', 'tools'), { recursive: true })

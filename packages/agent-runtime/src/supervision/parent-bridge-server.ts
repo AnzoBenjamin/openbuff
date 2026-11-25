@@ -446,7 +446,14 @@ export function startParentBridgeServer(
  * into the live shapes the real deps expect.
  */
 export type SupervisedBridgeHandlerDeps = {
+  resolveMemoryAuthority?: import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['resolveMemoryAuthority']
+  prepareRepositoryContext?: import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['prepareRepositoryContext']
+  classifyPlaybookTerminalActions?: import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['classifyPlaybookTerminalActions']
+  getPlaybookValidationEvidence?: import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['getPlaybookValidationEvidence']
+  synchronizeWorkspace?: import('@codebuff/common/types/contracts/client').SynchronizeWorkspace
+  authorizeToolRead?: import('@codebuff/common/types/contracts/client').AuthorizeToolRead
   onExecutionActionStart?: import('@codebuff/common/types/contracts/client').OnExecutionActionStart
+  onNativeToolObservation?: import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['onNativeToolObservation']
   promptAiSdkStream: PromptAiSdkStreamFn
   promptAiSdk: PromptAiSdkFn
   promptAiSdkStructured: PromptAiSdkStructuredFn
@@ -1409,6 +1416,36 @@ export function buildSupervisedBridgeHandlers(
       await deps.onExecutionActionStart?.(rehydrateParams(params, logger, bridgeNonce) as Parameters<NonNullable<SupervisedBridgeHandlerDeps['onExecutionActionStart']>>[0])
       return null
     },
+    onNativeToolObservation: async (params) => {
+      const observer = deps.onNativeToolObservation
+      if (!observer) throw new Error('Native tool observation observer is unavailable; capture is unconfirmed')
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        // Bound only metadata/RPC occupancy; never replace the actor's signal.
+        await Promise.race([
+          Promise.resolve().then(() => observer(rehydrateParams(params, logger, bridgeNonce) as Parameters<typeof observer>[0])),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error('Native tool observation metadata budget expired; capture is unconfirmed')), 2_000)
+            timer.unref?.()
+          }),
+        ])
+      } finally { if (timer !== undefined) clearTimeout(timer) }
+      return null
+    },
+    resolveMemoryAuthority: async params =>
+      (await deps.resolveMemoryAuthority?.(rehydrateParams(params, logger, bridgeNonce) as Parameters<NonNullable<SupervisedBridgeHandlerDeps['resolveMemoryAuthority']>>[0])) ?? null,
+    prepareRepositoryContext: async params =>
+      (await deps.prepareRepositoryContext?.(rehydrateParams(params, logger, bridgeNonce) as Parameters<NonNullable<SupervisedBridgeHandlerDeps['prepareRepositoryContext']>>[0])) ?? null,
+    classifyPlaybookTerminalActions: async (params: { command?: unknown }) => {
+      if (typeof params.command !== 'string' || params.command.length > 32_768) throw new Error('Invalid command classification request')
+      return (await deps.classifyPlaybookTerminalActions?.(params.command)) ?? []
+    },
+    getPlaybookValidationEvidence: async params =>
+      (await deps.getPlaybookValidationEvidence?.(rehydrateParams(params, logger, bridgeNonce) as import('@codebuff/common/types/contracts/client').ExecutionActor)) ?? null,
+    synchronizeWorkspace: async (params) =>
+      (await deps.synchronizeWorkspace?.(rehydrateParams(params, logger, bridgeNonce) as import('@codebuff/common/types/contracts/client').ExecutionActor)) ?? null,
+    authorizeToolRead: async params =>
+      (await deps.authorizeToolRead?.(rehydrateParams(params, logger, bridgeNonce) as Parameters<NonNullable<SupervisedBridgeHandlerDeps['authorizeToolRead']>>[0])) ?? { allowed: true },
     requestToolCall: (params) => {
       const request = rehydrateParams(
         params,

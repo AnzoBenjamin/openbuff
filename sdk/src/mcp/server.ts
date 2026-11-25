@@ -12,12 +12,16 @@ import { MemoryRetrievalRequestSchema } from '@codebuff/common/types/memory-v2'
 import { isMandatorySensitiveReadPath } from '@codebuff/common/util/sensitive-paths'
 
 import { codeSearch } from '../tools/code-search'
+import {
+  deriveExecutionContext,
+  refusalForSignal,
+} from '../services/execution-launch'
 import { getFilesStructured } from '../tools/read-files'
 import { createNodeFileSystem } from '../tools/node-filesystem'
 import { inspectCodebaseStructure } from '../services/audit-intelligence'
 import { getHarnessStateDir } from '../credentials'
 import { WorkspaceMutationBroker } from '../services/workspace-mutation-broker'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import { sanitizeOutbound } from '../serve/outbound-filter'
@@ -29,6 +33,10 @@ import type { CodebuffFileSystem } from '@codebuff/common/types/filesystem'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
 import type { ProjectId } from '@codebuff/common/types/memory-v2'
 import type { MemoryRepositoryV2 } from '../services/memory-v2/types'
+import type {
+  ExecutionAdapterContext,
+  Result,
+} from '@codebuff/common/types/contracts/execution-context'
 
 /**
  * The `openbuff mcp` server (P1-T4): a fail-closed MCP projection of the
@@ -108,24 +116,28 @@ const stringList = (description: string) => ({
 
 const QUERY_INDEX_INPUT_SCHEMA = {
   type: 'object',
+  description:
+    'Unrecognized properties are ignored and never grant execution authority.',
   properties: {
     query: {
       type: 'string',
+      minLength: 1,
       maxLength: MAX_QUERY_CHARS,
       description: 'Free-text search query over the codebase metadata index.',
     },
     limit: {
-      type: 'integer',
+      type: 'number',
       minimum: 1,
-      maximum: MAX_QUERY_LIMIT,
-      description: `Maximum number of file results (default ${DEFAULT_QUERY_LIMIT}, capped at ${MAX_QUERY_LIMIT}).`,
+      description: `Maximum number of file results (default ${DEFAULT_QUERY_LIMIT}); floored and capped at ${MAX_QUERY_LIMIT}.`,
     },
-    fileTypes: stringList(
-      'Restrict to these file extensions (e.g. ["ts", "py"]).',
-    ),
-    pathPrefixes: stringList(
-      'Restrict to these project-relative path prefixes.',
-    ),
+    fileTypes: {
+      ...stringList('Restrict to these file extensions (e.g. ["ts", "py"]).'),
+      items: { type: 'string', minLength: 1, maxLength: 32 },
+    },
+    pathPrefixes: {
+      ...stringList('Restrict to these project-relative path prefixes.'),
+      items: { type: 'string', minLength: 1, maxLength: MAX_PATH_CHARS },
+    },
     mode: {
       type: 'string',
       enum: [
@@ -141,23 +153,24 @@ const QUERY_INDEX_INPUT_SCHEMA = {
     },
     from: {
       type: 'string',
+      minLength: 1,
       maxLength: MAX_PATH_CHARS,
       description: 'Graph traversal start node (neighbors/explain modes).',
     },
     to: {
       type: 'string',
+      minLength: 1,
       maxLength: MAX_PATH_CHARS,
       description: 'Graph traversal target node (explain mode).',
     },
     timeoutMs: {
-      type: 'integer',
+      type: 'number',
       minimum: 0,
-      maximum: MAX_INDEX_WAIT_MS,
-      description: `How long to wait for an index build before answering from the empty/stale snapshot (default ${DEFAULT_INDEX_WAIT_MS}ms).`,
+      description: `How long to wait for an index build before answering from the empty/stale snapshot (default ${DEFAULT_INDEX_WAIT_MS}ms); floored and capped at ${MAX_INDEX_WAIT_MS}ms.`,
     },
   },
   required: ['query'],
-  additionalProperties: false,
+  additionalProperties: true,
 }
 
 /**
@@ -522,6 +535,13 @@ export interface McpServer {
 export type CreateMcpServerOptions = {
   client: McpServerClient
   sessionData: McpSessionData
+  /** Trusted host authority with ancestor lifetime cancellation. Use the factory
+   * to bind individual MCP request cancellation; never accepted from tool JSON. */
+  executionContext?: ExecutionAdapterContext
+  /** Trusted per-request host operation factory; never read from tool JSON. */
+  executionContextForRequest?: (
+    signal?: AbortSignal,
+  ) => Result<ExecutionAdapterContext>
   /** Advertised on the MCP initialize handshake; defaults to MCP_SERVER_NAME. */
   serverName?: string
   /** Advertised on the MCP initialize handshake. */
@@ -538,6 +558,8 @@ export type CreateMcpServerOptions = {
 export type RunMcpOptions = CreateMcpServerOptions & {
   /** Aborting closes the server; stdio's lifetime is otherwise the process. */
   signal?: AbortSignal
+  /** Trusted owner cleanup, joined after transport closure or startup failure. */
+  onClose?: () => Promise<void>
 }
 
 type CallToolResult = {
@@ -640,16 +662,31 @@ function errnoCode(error: unknown): string | undefined {
   return undefined
 }
 
+function exceedsStringLimit(
+  value: string,
+  maxChars: number,
+  countCodePoints: boolean,
+): boolean {
+  if (value.length <= maxChars) return false
+  if (!countCodePoints) return true
+  let count = 0
+  for (const _ of value) {
+    if (++count > maxChars) return true
+  }
+  return false
+}
+
 function optionalString(
   value: unknown,
   name: string,
   maxChars: number,
+  countCodePoints = false,
 ): { ok: true; value: string | undefined } | { ok: false; message: string } {
   if (value === undefined) return { ok: true, value: undefined }
   if (typeof value !== 'string' || value.length === 0) {
     return { ok: false, message: `${name} must be a non-empty string.` }
   }
-  if (value.length > maxChars) {
+  if (exceedsStringLimit(value, maxChars, countCodePoints)) {
     return {
       ok: false,
       message: `${name} exceeds the ${maxChars}-character limit.`,
@@ -663,6 +700,7 @@ function optionalStringList(
   name: string,
   maxItems: number,
   maxChars: number,
+  countCodePoints = false,
 ): { ok: true; value: string[] | undefined } | { ok: false; message: string } {
   if (value === undefined) return { ok: true, value: undefined }
   if (
@@ -680,7 +718,9 @@ function optionalStringList(
       message: `${name} supports at most ${maxItems} entries.`,
     }
   }
-  if (value.some((entry) => entry.length > maxChars)) {
+  if (
+    value.some((entry) => exceedsStringLimit(entry, maxChars, countCodePoints))
+  ) {
     return {
       ok: false,
       message: `${name} entries are capped at ${maxChars} characters.`,
@@ -724,7 +764,7 @@ function validateQueryIndexInput(args: unknown):
   | { ok: false; message: string } {
   if (!isRecord(args))
     return { ok: false, message: 'arguments must be an object.' }
-  const query = optionalString(args.query, 'query', MAX_QUERY_CHARS)
+  const query = optionalString(args.query, 'query', MAX_QUERY_CHARS, true)
   if (!query.ok || query.value === undefined) {
     return {
       ok: false,
@@ -736,6 +776,7 @@ function validateQueryIndexInput(args: unknown):
     'fileTypes',
     MAX_STRINGS,
     32,
+    true,
   )
   if (!fileTypes.ok) return fileTypes
   const pathPrefixes = optionalStringList(
@@ -743,6 +784,7 @@ function validateQueryIndexInput(args: unknown):
     'pathPrefixes',
     MAX_STRINGS,
     MAX_PATH_CHARS,
+    true,
   )
   if (!pathPrefixes.ok) return pathPrefixes
   const limit = optionalBoundedInt(
@@ -761,9 +803,9 @@ function validateQueryIndexInput(args: unknown):
     DEFAULT_INDEX_WAIT_MS,
   )
   if (!timeoutMs.ok) return timeoutMs
-  const from = optionalString(args.from, 'from', MAX_PATH_CHARS)
+  const from = optionalString(args.from, 'from', MAX_PATH_CHARS, true)
   if (!from.ok) return from
-  const to = optionalString(args.to, 'to', MAX_PATH_CHARS)
+  const to = optionalString(args.to, 'to', MAX_PATH_CHARS, true)
   if (!to.ok) return to
   let mode: McpQueryIndexOptions['mode']
   if (args.mode !== undefined) {
@@ -855,6 +897,9 @@ async function callCodeSearch(
   client: McpServerClient,
   sessionData: McpSessionData,
   args: unknown,
+  executionContext?: ExecutionAdapterContext,
+  executionContextForRequest?: CreateMcpServerOptions['executionContextForRequest'],
+  requestSignal?: AbortSignal,
 ): Promise<CallToolResult> {
   if (!isRecord(args)) return invalid('arguments must be an object.')
   const pattern = optionalString(args.pattern, 'pattern', MAX_PATTERN_CHARS)
@@ -896,6 +941,23 @@ async function callCodeSearch(
       `flags entries must be one of: ${CODE_SEARCH_ALLOWED_FLAGS.join(', ')}.`,
     )
   }
+  const requestContext = requestSignal?.aborted
+    ? refusalForSignal(requestSignal)
+    : executionContextForRequest
+      ? executionContextForRequest(requestSignal)
+      : deriveExecutionContext(
+          executionContext,
+          `mcp.request:${randomUUID()}`,
+          { kind: 'unbounded' },
+        )
+  if (!requestContext.ok) {
+    return errorResult(requestContext.cause, {
+      kind: 'code_search_result',
+      schemaVersion: 1,
+      errorMessage: requestContext.cause,
+      executionRefusal: requestContext,
+    })
+  }
   const output = await codeSearch({
     projectPath: sessionData.projectRoot,
     pattern: pattern.value,
@@ -906,6 +968,9 @@ async function callCodeSearch(
     ...(flags.value ? { flags: flags.value } : {}),
     ...(client.logger ? { logger: client.logger } : {}),
     ...(client.fileFilter ? { fileFilter: client.fileFilter } : {}),
+    executionContext: requestContext.value,
+    signal: requestSignal,
+    branchId: 'mcp.code-search',
   })
   const jsonPart = output.find((part) => part.type === 'json')
   const value: {
@@ -1723,7 +1788,7 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
     // ours is the zod-4-native equivalent with the identical wire shape (see
     // CALL_TOOL_REQUEST_SCHEMA_V4 above).
     CALL_TOOL_REQUEST_SCHEMA_V4 as unknown as typeof CallToolRequestSchema,
-    async (request) => {
+    async (request, extra) => {
       const { name, arguments: args } = request.params
       // Fail closed BEFORE any handler logic: unknown names get a structured
       // MCP error, never a dispatched call. The gate is built from the SAME
@@ -1736,7 +1801,14 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
           case 'query_index':
             return await callQueryIndex(sessionData, args)
           case 'code_search':
-            return await callCodeSearch(client, sessionData, args)
+            return await callCodeSearch(
+              client,
+              sessionData,
+              args,
+              options.executionContext,
+              options.executionContextForRequest,
+              extra.signal,
+            )
           case 'read_files':
             return await callReadFiles(
               { ...client, fileSystem: fs },
@@ -1787,26 +1859,91 @@ export function createMcpServer(options: CreateMcpServerOptions): McpServer {
 
 /**
  * Connects the MCP server to a `StdioServerTransport` and returns `{ close }`
- * (a no-op for stdio — the transport's lifetime IS the process). stdout is
+ * with a joined lifetime covering stdin EOF, cancellation and explicit close. stdout is
  * the MCP wire: this layer writes nothing human-readable anywhere; the CLI
  * owns the stderr banner.
  */
 export async function runMcp(
   options: RunMcpOptions,
-): Promise<{ close: () => Promise<void> }> {
-  const { signal, ...serverOptions } = options
-  const server = createMcpServer(serverOptions)
-  const transport = new StdioServerTransport()
-  await server.connect(transport)
-  const close = async () => {
-    await server.close()
-  }
-  if (signal) {
-    if (signal.aborted) {
-      await close()
-    } else {
-      signal.addEventListener('abort', () => void close(), { once: true })
+  deps: {
+    createServer?: (
+      options: CreateMcpServerOptions,
+    ) => McpServer & { onclose?: () => void }
+    createTransport?: () => unknown
+    input?: {
+      once(event: 'end' | 'close', listener: () => void): unknown
+      off(event: 'end' | 'close', listener: () => void): unknown
+      readonly readableEnded?: boolean
+      readonly destroyed?: boolean
     }
+  } = {},
+): Promise<{ close: () => Promise<void> }> {
+  const { signal, onClose, ...serverOptions } = options
+  let server: (McpServer & { onclose?: () => void }) | undefined
+  let connected: Promise<void> = Promise.resolve()
+  let closing: Promise<void> | undefined
+  const input = deps.input ?? process.stdin
+  function close(): Promise<void> {
+    if (closing) return closing
+    closing = Promise.resolve().then(async () => {
+      signal?.removeEventListener('abort', requestClose)
+      input.off('end', requestClose)
+      input.off('close', requestClose)
+      const results = await Promise.allSettled([
+        Promise.resolve().then(async () => {
+          await connected.catch(() => {})
+          await server?.close()
+        }),
+        Promise.resolve().then(() => onClose?.()),
+      ])
+      const errors = results.flatMap((result) =>
+        result.status === 'rejected' ? [result.reason] : [],
+      )
+      if (errors.length)
+        throw new AggregateError(errors, 'MCP server cleanup failed')
+    })
+    return closing
+  }
+  function requestClose() {
+    void close().catch((error) => {
+      // Retain the rejected close promise for callers; diagnostics use no protocol stdout.
+      try {
+        options.client.logger?.error({ error }, 'MCP server cleanup failed')
+      } catch {}
+    })
+  }
+  try {
+    server = (deps.createServer ?? createMcpServer)(serverOptions)
+    const previousClose = server.onclose
+    server.onclose = () => {
+      try {
+        previousClose?.()
+      } finally {
+        requestClose()
+      }
+    }
+    const transport = (
+      deps.createTransport ?? (() => new StdioServerTransport())
+    )()
+    if (!signal?.aborted && !input.readableEnded && !input.destroyed) {
+      connected = Promise.resolve().then(() => server!.connect(transport))
+      input.once('end', requestClose)
+      input.once('close', requestClose)
+      signal?.addEventListener('abort', requestClose, { once: true })
+      await connected
+    } else await close()
+    if (closing) await closing
+  } catch (error) {
+    try {
+      await close()
+    } catch (cleanupError) {
+      if (cleanupError === error) throw error
+      throw new AggregateError(
+        [error, cleanupError],
+        'MCP server startup and cleanup failed',
+      )
+    }
+    throw error
   }
   return { close }
 }

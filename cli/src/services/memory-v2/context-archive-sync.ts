@@ -4,6 +4,7 @@ import type { RunState } from '@openbuff/sdk'
 import { logger } from '../../utils/logger'
 import { getProjectMemoryV2Provider } from './provider'
 import { getMemoryAuthoritySelection } from '../../utils/env'
+import { archiveSnapshotIdentity } from './context-archive-store'
 
 /**
  * Cross-session persistence for the compaction-fidelity context archive
@@ -48,13 +49,22 @@ const HYDRATION_SNAPSHOT_LIMIT = 24
 type PersistContextArchiveSnapshots = (request: {
   runId: string
   snapshots: ContextArchiveSnapshot[]
-}) => Promise<{ persisted: number; skipped: number }>
+}) => Promise<{
+  persisted: number
+  skipped: number
+  status?: 'ok' | 'degraded' | 'unavailable'
+  reasons?: string[]
+}>
 
 /** Narrowed shape of the repository's optional context-archive load. */
 type LoadContextArchiveSnapshots = (request: {
   runId?: string
   limit?: number
-}) => Promise<{ snapshots: ContextArchiveSnapshot[] }>
+}) => Promise<{
+  snapshots: ContextArchiveSnapshot[]
+  status?: 'ok' | 'degraded' | 'unavailable'
+  reasons?: string[]
+}>
 
 /**
  * Narrow an optional repository method before use (SDK contract: callers
@@ -85,7 +95,12 @@ const optionalMethod = <F>(repository: unknown, key: string): F | undefined => {
 export async function persistContextArchiveSnapshotsToRepository(
   repository: unknown,
   request: { runId: string; snapshots: ContextArchiveSnapshot[] },
-): Promise<{ persisted: number; skipped: number } | null> {
+): Promise<{
+  persisted: number
+  skipped: number
+  status?: 'ok' | 'degraded' | 'unavailable'
+  reasons?: string[]
+} | null> {
   const persist = optionalMethod<PersistContextArchiveSnapshots>(
     repository,
     'persistContextArchiveSnapshots',
@@ -98,7 +113,17 @@ export async function persistContextArchiveSnapshotsToRepository(
     return null
   }
   try {
-    return await persist(request)
+    const outcome = await persist(request)
+    if (outcome.status === 'degraded' || outcome.status === 'unavailable')
+      logger.warn(
+        {
+          runId: request.runId,
+          status: outcome.status,
+          reasons: outcome.reasons,
+        },
+        '[context-archive] Durable archive persistence is degraded',
+      )
+    return outcome
   } catch (error) {
     logger.warn(
       {
@@ -133,6 +158,18 @@ export async function loadContextArchiveSnapshotsFromRepository(
   }
   try {
     const loaded = await load(request)
+    if (loaded?.status === 'unavailable') {
+      logger.warn(
+        { reasons: loaded.reasons },
+        '[context-archive] Durable archive storage is unavailable',
+      )
+      return null
+    }
+    if (loaded?.status === 'degraded')
+      logger.warn(
+        { reasons: loaded.reasons },
+        '[context-archive] Durable archive hydration is partial',
+      )
     return Array.isArray(loaded?.snapshots) ? loaded.snapshots : []
   } catch (error) {
     logger.warn(
@@ -145,8 +182,9 @@ export async function loadContextArchiveSnapshotsFromRepository(
 
 /**
  * Flush the run's current context archive into the memory-v2 store. The
- * repository idempotently full-replaces per run_id, so the whole current
- * archive is always sent. Best-effort and never throws: a missing runId, an
+ * repository incrementally reconciles ordered snapshots per source run, so
+ * the whole current archive is sent with its original run provenance.
+ * Best-effort and never throws: a missing runId, an
  * empty/absent archive, or an unavailable provider/repository all degrade to
  * a debug log. Fire-and-forget from the sync saveChatState path — never
  * awaited there.
@@ -187,7 +225,13 @@ export async function flushContextArchiveSnapshots(
     try {
       const outcome = await persistContextArchiveSnapshotsToRepository(
         providerResult.repository,
-        { runId, snapshots: archive },
+        {
+          runId,
+          snapshots: archive.map((snapshot) => ({
+            ...snapshot,
+            runId: snapshot.runId ?? runId,
+          })),
+        },
       )
       if (outcome) {
         logger.debug(
@@ -196,6 +240,8 @@ export async function flushContextArchiveSnapshots(
             snapshotCount: archive.length,
             persisted: outcome.persisted,
             skipped: outcome.skipped,
+            status: outcome.status,
+            reasons: outcome.reasons,
           },
           '[context-archive] Flushed context archive snapshots to memory-v2',
         )
@@ -272,12 +318,10 @@ export async function hydrateContextArchiveSnapshots(
  * Pure merge of the in-memory archive with durable snapshots (no I/O; unit
  * tested directly).
  *
- * - Identity is (runId, archivedAt, action). Persisted load results do not
- *   expose runId on the ContextArchiveSnapshot shape itself, so the runId leg
- *   reads an optional store-attached `runId` field and treats absent as the
- *   empty string — uniformly on BOTH sides, so an in-memory snapshot always
- *   matches the durable row it was flushed from, whether or not the store
- *   attaches runId. This is what keeps repeated restores duplicate-free.
+ * - Identity covers the source run, timestamp, action and full ordered
+ *   manifest. Different actions or content at the same timestamp remain
+ *   independent. Legacy unnamed snapshots bind only to one matching source
+ *   run; ambiguous source runs remain distinct.
  * - In-memory entries win on duplicate identity.
  * - Durable entries then fill the remaining per-kind cap slots in the
  *   store's newest-first order: semantic/mechanical snapshots share
@@ -297,8 +341,10 @@ export function mergeContextArchives(
   durable: ContextArchiveSnapshot[],
 ): ContextArchiveSnapshot[] {
   const identityOf = (snapshot: ContextArchiveSnapshot): string => {
-    const runId = (snapshot as { runId?: unknown }).runId
-    return `${typeof runId === 'string' ? runId : ''}\u0000${snapshot.archivedAt}\u0000${snapshot.action}`
+    return (
+      archiveSnapshotIdentity(snapshot) ??
+      `${snapshot.runId ?? ''}\u0000${snapshot.archivedAt}\u0000${snapshot.action}`
+    )
   }
   const isEviction = (action: ContextArchiveSnapshot['action']): boolean =>
     action === 'tool_result_eviction'
@@ -306,10 +352,28 @@ export function mergeContextArchives(
   const merged: ContextArchiveSnapshot[] = []
   const seenIdentities = new Set<string>()
   const kindCounts = { semanticOrMechanical: 0, eviction: 0 }
+  const baseOf = (snapshot: ContextArchiveSnapshot) =>
+    archiveSnapshotIdentity(snapshot, '') ??
+    `${snapshot.archivedAt}\u0000${snapshot.action}`
+  const sourceRunsByBase = new Map<string, Set<string>>()
+  for (const snapshot of durable) {
+    if (snapshot.runId) {
+      const runs = sourceRunsByBase.get(baseOf(snapshot)) ?? new Set<string>()
+      runs.add(snapshot.runId)
+      sourceRunsByBase.set(baseOf(snapshot), runs)
+    }
+  }
 
   for (const snapshot of inMemory ?? []) {
-    merged.push(snapshot)
-    seenIdentities.add(identityOf(snapshot))
+    const knownRuns = sourceRunsByBase.get(baseOf(snapshot))
+    // Legacy snapshots lack source run identity. Bind only an unambiguous
+    // restore match, preserving distinct runs at equal transcript timestamps.
+    const admitted =
+      !snapshot.runId && knownRuns?.size === 1
+        ? { ...snapshot, runId: [...knownRuns][0] }
+        : snapshot
+    merged.push(admitted)
+    seenIdentities.add(identityOf(admitted))
     if (isEviction(snapshot.action)) kindCounts.eviction += 1
     else kindCounts.semanticOrMechanical += 1
   }

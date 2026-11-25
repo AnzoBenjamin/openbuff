@@ -6,6 +6,7 @@ import { pathToFileURL } from 'url'
 import { validateAgents } from '../validate-agents'
 
 import { mcpConfigOriginForPath } from './load-mcp-config'
+import { loadMarkdownAgent } from './load-markdown-agent'
 
 import type { AgentDefinition } from '@codebuff/common/templates/initial-agents-dir/types/agent-definition'
 import { markAllMCPConfigOrigins } from '@codebuff/common/mcp/client'
@@ -63,7 +64,7 @@ export type LoadLocalAgentsResult = {
 
 const agentFileExtensions = new Set(['.ts', '.tsx', '.js', '.mjs', '.cjs'])
 
-const getAllAgentFiles = (dir: string): string[] => {
+const getAllAgentFiles = (dir: string, includeMarkdown = true): string[] => {
   const files: string[] = []
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true })
@@ -71,13 +72,14 @@ const getAllAgentFiles = (dir: string): string[] => {
       const fullPath = path.join(dir, entry.name)
       if (entry.isDirectory()) {
         if (entry.name === 'skills') continue
-        files.push(...getAllAgentFiles(fullPath))
+        files.push(...getAllAgentFiles(fullPath, false))
         continue
       }
       const extension = path.extname(entry.name).toLowerCase()
       const isAgentFile =
         entry.isFile() &&
-        agentFileExtensions.has(extension) &&
+        (agentFileExtensions.has(extension) ||
+          (includeMarkdown && extension === '.md')) &&
         !entry.name.endsWith('.d.ts') &&
         !entry.name.endsWith('.test.ts')
       if (isAgentFile) {
@@ -107,7 +109,9 @@ const getDefaultAgentDirs = (includeProjectAgents: boolean) => {
  * By default, searches only `{homedir}/.agents`. Project and parent agent
  * modules are executable code and require `includeProjectAgents: true`.
  *
- * Agent files can be `.ts`, `.tsx`, `.js`, `.mjs`, or `.cjs`.
+ * Agent files can be `.ts`, `.tsx`, `.js`, `.mjs`, or `.cjs`; top-level
+ * `.md` files can declare prompt-only agents with plain YAML frontmatter.
+ * Markdown is loaded before code within one directory so existing code wins.
  * TypeScript files are loaded natively by Bun's runtime.
  *
  * @param options.agentsPath - Optional path to a specific agents directory
@@ -175,6 +179,7 @@ export async function loadLocalAgents({
   validate?: boolean
 }): Promise<LoadedAgents | LoadLocalAgentsResult> {
   const agents: LoadedAgents = {}
+  const loadErrors: AgentValidationError[] = []
 
   const agentDirs = agentsPath
     ? [agentsPath]
@@ -183,7 +188,13 @@ export async function loadLocalAgents({
   // found under, so importAgentModule can enforce lexical containment
   // against the same root the loader walks.
   const allAgentFiles = agentDirs.flatMap((dir) =>
-    getAllAgentFiles(dir).map((fullPath) => ({ fullPath, agentsDir: dir })),
+    getAllAgentFiles(dir)
+      .sort(
+        (a, b) =>
+          Number(path.extname(b).toLowerCase() === '.md') -
+          Number(path.extname(a).toLowerCase() === '.md'),
+      )
+      .map((fullPath) => ({ fullPath, agentsDir: dir })),
   )
 
   if (allAgentFiles.length === 0) {
@@ -192,7 +203,10 @@ export async function loadLocalAgents({
 
   for (const { fullPath, agentsDir } of allAgentFiles) {
     try {
-      const agentModule = await importAgentModule(fullPath, agentsDir)
+      const markdown = path.extname(fullPath).toLowerCase() === '.md'
+      const agentModule = markdown
+        ? loadMarkdownAgent(fullPath)
+        : await importAgentModule(fullPath, agentsDir)
       if (!agentModule) {
         continue
       }
@@ -246,6 +260,15 @@ export async function loadLocalAgents({
 
       agents[processedAgentDefinition.id] = processedAgentDefinition
     } catch (error) {
+      if (path.extname(fullPath).toLowerCase() === '.md')
+        loadErrors.push({
+          agentId: path.basename(fullPath, path.extname(fullPath)),
+          filePath: fullPath,
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Invalid declarative Markdown agent',
+        })
       if (verbose) {
         console.error(
           `Error loading agent from file ${fullPath}:`,
@@ -257,7 +280,7 @@ export async function loadLocalAgents({
 
   // Validate agents if requested
   if (validate) {
-    const validationErrors: AgentValidationError[] = []
+    const validationErrors: AgentValidationError[] = [...loadErrors]
 
     if (Object.keys(agents).length > 0) {
       const result = await validateAgents(Object.values(agents))

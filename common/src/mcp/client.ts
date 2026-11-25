@@ -54,7 +54,12 @@ const listToolsCache: Record<
 const listToolsExpiry = new Map<string, number>()
 const catalogCache = new Map<
   string,
-  { generation: number; expiresAt: number; promise: Promise<McpToolCatalog> }
+  {
+    generation: number
+    order: number
+    expiresAt: number
+    promise: Promise<McpToolCatalog>
+  }
 >()
 const cacheTtlMs = 30_000
 let nextClientGeneration = 0
@@ -70,6 +75,9 @@ type ClientState = {
   mediated?: boolean
   disconnection: AbortController
   invalidation: AbortController
+  nextCatalogOrder: number
+  committedCatalogOrder: number
+  catalogRevision: number
   outputContracts: Map<
     string,
     { schema: unknown; validator?: ReturnType<typeof jsonSchemaToZod> }
@@ -271,7 +279,7 @@ type MediatedResourceState = {
 }
 const mediatedResources = new Map<string, MediatedResourceState>()
 
-function clearClientToolCaches(key: string): void {
+function clearClientPageCaches(key: string): void {
   const prefix = `${key}\0`
   for (const cacheKey of Object.keys(listToolsCache)) {
     if (cacheKey.startsWith(prefix)) {
@@ -279,6 +287,10 @@ function clearClientToolCaches(key: string): void {
       listToolsExpiry.delete(cacheKey)
     }
   }
+}
+
+function clearClientToolCaches(key: string): void {
+  clearClientPageCaches(key)
   catalogCache.delete(key)
 }
 
@@ -1311,6 +1323,9 @@ async function connectMCPClient(
     ...(ownedTransport ? { mediated: true } : {}),
     disconnection: new AbortController(),
     invalidation: new AbortController(),
+    nextCatalogOrder: 0,
+    committedCatalogOrder: 0,
+    catalogRevision: 0,
     outputContracts: new Map(),
   }
   connection.state = state
@@ -1356,11 +1371,12 @@ export function listMCPTools(
   ...args: Parameters<typeof Client.prototype.listTools>
 ): ReturnType<typeof Client.prototype.listTools> {
   requireLegacyClient(clientId)
-  return listMCPToolsInternal(clientId, ...args)
+  return listMCPToolsInternal(clientId, true, ...args)
 }
 
 function listMCPToolsInternal(
   clientId: string,
+  observeContracts: boolean,
   ...args: Parameters<typeof Client.prototype.listTools>
 ): ReturnType<typeof Client.prototype.listTools> {
   const state = clientStates.get(clientId)
@@ -1368,6 +1384,7 @@ function listMCPToolsInternal(
     throw new Error(`listTools: client not found with id: ${clientId}`)
   }
   const generation = state.generation
+  const catalogRevision = state.catalogRevision
   // Cancellation belongs to each caller; never share a signal-bound request.
   const cacheable = args[1]?.signal === undefined
   const cacheKey = `${clientId}\0${stableHash(args)}`
@@ -1394,7 +1411,8 @@ function listMCPToolsInternal(
       }
       if (cacheable && listToolsCache[cacheKey] === pending)
         listToolsExpiry.set(cacheKey, Date.now() + cacheTtlMs)
-      observeOutputContracts(state, result.tools)
+      if (observeContracts && state.catalogRevision === catalogRevision)
+        observeOutputContracts(state, result.tools)
       return result
     }),
   )
@@ -1431,15 +1449,17 @@ function listMCPToolCatalogInternal(
     cached.expiresAt > Date.now()
   )
     return cached.promise
+  const order = state && !state.closed ? ++state.nextCatalogOrder : 0
   const promise =
     state && !state.closed
       ? withClientUse(state, () =>
-          discoverMCPToolCatalog(clientId, state, options),
+          discoverMCPToolCatalog(clientId, state, options, order),
         )
-      : discoverMCPToolCatalog(clientId, state, options)
+      : discoverMCPToolCatalog(clientId, state, options, order)
   if (cacheable && state) {
     const entry = {
       generation: state.generation,
+      order,
       expiresAt: Number.POSITIVE_INFINITY,
       promise,
     }
@@ -1467,6 +1487,7 @@ async function discoverMCPToolCatalog(
   clientId: string,
   state: ClientState | undefined,
   options: McpToolCatalogOptions,
+  order: number,
 ): Promise<McpToolCatalog> {
   const catalog: McpToolCatalog = {
     kind: 'mcp_tool_catalog',
@@ -1525,6 +1546,7 @@ async function discoverMCPToolCatalog(
         listed = await Promise.race([
           listMCPToolsInternal(
             clientId,
+            false,
             cursor === undefined ? undefined : { cursor },
             { signal, timeout: timeoutMs },
           ),
@@ -1555,9 +1577,15 @@ async function discoverMCPToolCatalog(
       }
       const nextCursor = listed.nextCursor
       if (nextCursor === undefined) {
+        if (order < state.committedCatalogOrder) return fail('superseded', true)
         // Replace only on a complete traversal; earlier pages retain their
         // contracts even though the vendor Client caches only its last page.
         observeOutputContracts(state, catalog.tools, true)
+        state.committedCatalogOrder = order
+        state.catalogRevision++
+        clearClientPageCaches(clientId)
+        const cached = catalogCache.get(clientId)
+        if (cached && cached.order < order) catalogCache.delete(clientId)
         catalog.complete = true
         return catalog
       }

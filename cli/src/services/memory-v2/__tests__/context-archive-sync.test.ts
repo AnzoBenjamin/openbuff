@@ -37,10 +37,11 @@ const snapshot = (params: {
     archivedAt: params.archivedAt,
     action: params.action,
     keepRecentSteps: 2,
-    messages: [toolMessage(params.toolCallId ?? `call-${params.archivedAt}`, 'body')],
+    messages: [
+      toolMessage(params.toolCallId ?? `call-${params.archivedAt}`, 'body'),
+    ],
   }
-  // Optional store-attached runId leg of the merge identity (present on
-  // durable rows when the store attaches it; read defensively on both sides).
+  // Source runs participate in the immutable manifest identity.
   return params.runId !== undefined
     ? ({ ...base, runId: params.runId } as ContextArchiveSnapshot)
     : base
@@ -52,14 +53,25 @@ const snapshot = (params: {
  */
 const toolCallIdOf = (
   message?: ContextArchiveSnapshot['messages'][number],
-): string => (message !== undefined && message.role === 'tool' ? message.toolCallId : '')
+): string =>
+  message !== undefined && message.role === 'tool' ? message.toolCallId : ''
 
 describe('mergeContextArchives', () => {
   test('orders the merged archive chronologically oldest-first', () => {
-    const inMemory = [snapshot({ archivedAt: 300, action: 'semantic_compaction' })]
+    const inMemory = [
+      snapshot({ archivedAt: 300, action: 'semantic_compaction' }),
+    ]
     const durable = [
-      snapshot({ archivedAt: 200, action: 'semantic_compaction', toolCallId: 'd1' }),
-      snapshot({ archivedAt: 100, action: 'semantic_compaction', toolCallId: 'd2' }),
+      snapshot({
+        archivedAt: 200,
+        action: 'semantic_compaction',
+        toolCallId: 'd1',
+      }),
+      snapshot({
+        archivedAt: 100,
+        action: 'semantic_compaction',
+        toolCallId: 'd2',
+      }),
     ]
 
     const merged = mergeContextArchives(inMemory, durable)
@@ -75,14 +87,25 @@ describe('mergeContextArchives', () => {
     expect(merged[2]).toBe(inMemory[0])
   })
 
-  test('dedupes on (runId, archivedAt, action); in-memory wins', () => {
+  test('dedupes an identical checked manifest; in-memory wins', () => {
     const inMemory = [
-      snapshot({ archivedAt: 100, action: 'semantic_compaction', toolCallId: 'live' }),
+      snapshot({
+        archivedAt: 100,
+        action: 'semantic_compaction',
+        toolCallId: 'live',
+      }),
     ]
     const durable = [
-      // Same identity as the in-memory snapshot but different content.
-      snapshot({ archivedAt: 100, action: 'semantic_compaction', toolCallId: 'store' }),
-      snapshot({ archivedAt: 50, action: 'semantic_compaction', toolCallId: 'older' }),
+      snapshot({
+        archivedAt: 100,
+        action: 'semantic_compaction',
+        toolCallId: 'live',
+      }),
+      snapshot({
+        archivedAt: 50,
+        action: 'semantic_compaction',
+        toolCallId: 'older',
+      }),
     ]
 
     const merged = mergeContextArchives(inMemory, durable)
@@ -91,6 +114,78 @@ describe('mergeContextArchives', () => {
     // Chronological oldest-first: the older durable snapshot comes first.
     expect(toolCallIdOf(merged[0]?.messages[0])).toBe('older')
     expect(toolCallIdOf(merged[1]?.messages[0])).toBe('live')
+  })
+
+  test('same-time actions, content and distinct source runs survive repeated restoration', () => {
+    const durable = [
+      snapshot({
+        archivedAt: 100,
+        action: 'semantic_compaction',
+        toolCallId: 'first',
+        runId: 'source-one',
+      }),
+      snapshot({
+        archivedAt: 100,
+        action: 'semantic_compaction',
+        toolCallId: 'changed',
+        runId: 'source-one',
+      }),
+      snapshot({
+        archivedAt: 100,
+        action: 'tool_result_eviction',
+        toolCallId: 'evicted',
+        runId: 'source-one',
+      }),
+      snapshot({
+        archivedAt: 100,
+        action: 'semantic_compaction',
+        toolCallId: 'first',
+        runId: 'source-two',
+      }),
+    ]
+    const first = mergeContextArchives(undefined, durable)
+    expect(first).toHaveLength(4)
+    expect(mergeContextArchives(first, durable)).toEqual(first)
+    expect(
+      first.filter((snapshot) => snapshot.runId === 'source-one'),
+    ).toHaveLength(3)
+  })
+
+  test('a legacy unnamed snapshot binds only to one exact matching source manifest', () => {
+    const legacy = snapshot({
+      archivedAt: 100,
+      action: 'semantic_compaction',
+      toolCallId: 'original',
+    })
+    const durable = [
+      snapshot({
+        archivedAt: 100,
+        action: 'semantic_compaction',
+        toolCallId: 'changed',
+        runId: 'source-two',
+      }),
+      { ...legacy, runId: 'source-one' },
+    ]
+    const first = mergeContextArchives([legacy], durable)
+    expect(first).toHaveLength(2)
+    expect(first[0]?.runId).toBe('source-one')
+    expect(mergeContextArchives(first, durable)).toEqual(first)
+  })
+
+  test('ambiguous legacy source runs are retained without guessing ownership', () => {
+    const legacy = snapshot({ archivedAt: 100, action: 'semantic_compaction' })
+    const durable = [
+      { ...legacy, runId: 'source-one' },
+      { ...legacy, runId: 'source-two' },
+    ]
+    const first = mergeContextArchives([legacy], durable)
+    expect(first).toHaveLength(3)
+    expect(first[0]?.runId).toBeUndefined()
+    expect(first.slice(1).map((snapshot) => snapshot.runId)).toEqual([
+      'source-one',
+      'source-two',
+    ])
+    expect(mergeContextArchives(first, durable)).toEqual(first)
   })
 
   test('treats the same action at different archivedAt as distinct', () => {
@@ -102,8 +197,16 @@ describe('mergeContextArchives', () => {
 
   test('dedupes repeated restores: a second hydrate with the merged archive is a no-op', () => {
     const durable = [
-      snapshot({ archivedAt: 200, action: 'semantic_compaction', toolCallId: 'd1' }),
-      snapshot({ archivedAt: 100, action: 'semantic_compaction', toolCallId: 'd2' }),
+      snapshot({
+        archivedAt: 200,
+        action: 'semantic_compaction',
+        toolCallId: 'd1',
+      }),
+      snapshot({
+        archivedAt: 100,
+        action: 'semantic_compaction',
+        toolCallId: 'd2',
+      }),
     ]
     const first = mergeContextArchives(undefined, durable)
 
@@ -118,20 +221,28 @@ describe('mergeContextArchives', () => {
       snapshot({ archivedAt: 1_000 + i, action: 'semantic_compaction' }),
     )
     const durable = [
-      snapshot({ archivedAt: 900, action: 'semantic_compaction', toolCallId: 'over-cap' }),
+      snapshot({
+        archivedAt: 900,
+        action: 'semantic_compaction',
+        toolCallId: 'over-cap',
+      }),
       // Eviction is a separate kind: it must still be admitted.
-      snapshot({ archivedAt: 890, action: 'tool_result_eviction', toolCallId: 'evict' }),
+      snapshot({
+        archivedAt: 890,
+        action: 'tool_result_eviction',
+        toolCallId: 'evict',
+      }),
     ]
 
     const merged = mergeContextArchives(inMemory, durable)
 
     expect(merged).toHaveLength(9)
-    expect(
-      merged.some((s) => toolCallIdOf(s.messages[0]) === 'over-cap'),
-    ).toBe(false)
-    expect(
-      merged.some((s) => toolCallIdOf(s.messages[0]) === 'evict'),
-    ).toBe(true)
+    expect(merged.some((s) => toolCallIdOf(s.messages[0]) === 'over-cap')).toBe(
+      false,
+    )
+    expect(merged.some((s) => toolCallIdOf(s.messages[0]) === 'evict')).toBe(
+      true,
+    )
   })
 
   test('eviction cap is 16 and independent of the semantic/mechanical cap', () => {
@@ -139,19 +250,27 @@ describe('mergeContextArchives', () => {
       snapshot({ archivedAt: 1_000 + i, action: 'tool_result_eviction' }),
     )
     const durable = [
-      snapshot({ archivedAt: 900, action: 'tool_result_eviction', toolCallId: 'over-cap' }),
-      snapshot({ archivedAt: 890, action: 'semantic_compaction', toolCallId: 'semantic' }),
+      snapshot({
+        archivedAt: 900,
+        action: 'tool_result_eviction',
+        toolCallId: 'over-cap',
+      }),
+      snapshot({
+        archivedAt: 890,
+        action: 'semantic_compaction',
+        toolCallId: 'semantic',
+      }),
     ]
 
     const merged = mergeContextArchives(inMemory, durable)
 
     expect(merged).toHaveLength(17)
-    expect(
-      merged.some((s) => toolCallIdOf(s.messages[0]) === 'over-cap'),
-    ).toBe(false)
-    expect(
-      merged.some((s) => toolCallIdOf(s.messages[0]) === 'semantic'),
-    ).toBe(true)
+    expect(merged.some((s) => toolCallIdOf(s.messages[0]) === 'over-cap')).toBe(
+      false,
+    )
+    expect(merged.some((s) => toolCallIdOf(s.messages[0]) === 'semantic')).toBe(
+      true,
+    )
   })
 
   test('in-memory entries are never dropped even when already over cap', () => {
@@ -164,9 +283,11 @@ describe('mergeContextArchives', () => {
 
   test('handles undefined in-memory archive and empty durable set', () => {
     expect(mergeContextArchives(undefined, [])).toEqual([])
-    expect(mergeContextArchives(undefined, [
-      snapshot({ archivedAt: 100, action: 'semantic_compaction' }),
-    ])).toHaveLength(1)
+    expect(
+      mergeContextArchives(undefined, [
+        snapshot({ archivedAt: 100, action: 'semantic_compaction' }),
+      ]),
+    ).toHaveLength(1)
   })
 
   test('mechanical_trim and semantic_compaction share the same cap kind', () => {
@@ -177,24 +298,31 @@ describe('mergeContextArchives', () => {
       snapshot({ archivedAt: 2_000, action: 'mechanical_trim' }),
     ]
     const durable = [
-      snapshot({ archivedAt: 900, action: 'mechanical_trim', toolCallId: 'over-cap' }),
+      snapshot({
+        archivedAt: 900,
+        action: 'mechanical_trim',
+        toolCallId: 'over-cap',
+      }),
     ]
 
     const merged = mergeContextArchives(inMemory, durable)
 
     expect(merged).toHaveLength(8)
-    expect(
-      merged.some((s) => toolCallIdOf(s.messages[0]) === 'over-cap'),
-    ).toBe(false)
+    expect(merged.some((s) => toolCallIdOf(s.messages[0]) === 'over-cap')).toBe(
+      false,
+    )
   })
 })
 
 describe('optional repository narrowing (callers-must-narrow contract)', () => {
   test('persist returns null when the repository lacks the method', async () => {
-    const result = await persistContextArchiveSnapshotsToRepository({}, {
-      runId: 'run-1',
-      snapshots: [],
-    })
+    const result = await persistContextArchiveSnapshotsToRepository(
+      {},
+      {
+        runId: 'run-1',
+        snapshots: [],
+      },
+    )
     expect(result).toBeNull()
   })
 
@@ -204,10 +332,13 @@ describe('optional repository narrowing (callers-must-narrow contract)', () => {
         throw new Error('store closed')
       },
     }
-    const result = await persistContextArchiveSnapshotsToRepository(repository, {
-      runId: 'run-1',
-      snapshots: [snapshot({ archivedAt: 1, action: 'semantic_compaction' })],
-    })
+    const result = await persistContextArchiveSnapshotsToRepository(
+      repository,
+      {
+        runId: 'run-1',
+        snapshots: [snapshot({ archivedAt: 1, action: 'semantic_compaction' })],
+      },
+    )
     expect(result).toBeNull()
   })
 
@@ -223,10 +354,13 @@ describe('optional repository narrowing (callers-must-narrow contract)', () => {
       snapshot({ archivedAt: 1, action: 'semantic_compaction' }),
       snapshot({ archivedAt: 2, action: 'tool_result_eviction' }),
     ]
-    const result = await persistContextArchiveSnapshotsToRepository(repository, {
-      runId: 'run-1',
-      snapshots,
-    })
+    const result = await persistContextArchiveSnapshotsToRepository(
+      repository,
+      {
+        runId: 'run-1',
+        snapshots,
+      },
+    )
 
     expect(result).toEqual({ persisted: 2, skipped: 1 })
     expect(seen).toEqual({ runId: 'run-1', snapshots })
@@ -291,8 +425,16 @@ describe('optional repository narrowing (callers-must-narrow contract)', () => {
   test('load forwards the request and returns snapshots', async () => {
     let seen: unknown
     const durable = [
-      snapshot({ archivedAt: 200, action: 'semantic_compaction', toolCallId: 'newest' }),
-      snapshot({ archivedAt: 100, action: 'semantic_compaction', toolCallId: 'older' }),
+      snapshot({
+        archivedAt: 200,
+        action: 'semantic_compaction',
+        toolCallId: 'newest',
+      }),
+      snapshot({
+        archivedAt: 100,
+        action: 'semantic_compaction',
+        toolCallId: 'older',
+      }),
     ]
     const repository = {
       loadContextArchiveSnapshots: async (request: unknown) => {
@@ -317,6 +459,51 @@ describe('optional repository narrowing (callers-must-narrow contract)', () => {
       await loadContextArchiveSnapshotsFromRepository(repository, {}),
     ).toEqual([])
   })
+
+  test('successful empty and unavailable loads remain distinct; degraded snapshots remain readable', async () => {
+    expect(
+      await loadContextArchiveSnapshotsFromRepository(
+        {
+          loadContextArchiveSnapshots: async () => ({
+            status: 'ok',
+            snapshots: [],
+          }),
+        },
+        {},
+      ),
+    ).toEqual([])
+    expect(
+      await loadContextArchiveSnapshotsFromRepository(
+        {
+          loadContextArchiveSnapshots: async () => ({
+            status: 'unavailable',
+            snapshots: [],
+            reasons: ['store-closed'],
+          }),
+        },
+        {},
+      ),
+    ).toBeNull()
+    const durable = [
+      snapshot({
+        archivedAt: 100,
+        action: 'semantic_compaction',
+        runId: 'source-one',
+      }),
+    ]
+    expect(
+      await loadContextArchiveSnapshotsFromRepository(
+        {
+          loadContextArchiveSnapshots: async () => ({
+            status: 'degraded',
+            snapshots: durable,
+            reasons: ['legacy-migration-incomplete'],
+          }),
+        },
+        {},
+      ),
+    ).toEqual(durable)
+  })
 })
 
 describe('flushContextArchiveSnapshots skip paths (best-effort, no-throw)', () => {
@@ -333,7 +520,9 @@ describe('flushContextArchiveSnapshots skip paths (best-effort, no-throw)', () =
     } as unknown as Parameters<typeof flushContextArchiveSnapshots>[0]
 
     // Returns before the provider would be opened; must never throw.
-    await expect(flushContextArchiveSnapshots(runState)).resolves.toBeUndefined()
+    await expect(
+      flushContextArchiveSnapshots(runState),
+    ).resolves.toBeUndefined()
   })
 
   test('resolves without touching the provider when the archive is empty', async () => {
@@ -344,7 +533,9 @@ describe('flushContextArchiveSnapshots skip paths (best-effort, no-throw)', () =
       output: { type: 'error', message: 'x' },
     } as unknown as Parameters<typeof flushContextArchiveSnapshots>[0]
 
-    await expect(flushContextArchiveSnapshots(runState)).resolves.toBeUndefined()
+    await expect(
+      flushContextArchiveSnapshots(runState),
+    ).resolves.toBeUndefined()
   })
 
   test('resolves when sessionState is absent entirely', async () => {
@@ -352,19 +543,25 @@ describe('flushContextArchiveSnapshots skip paths (best-effort, no-throw)', () =
       output: { type: 'error', message: 'x' },
     } as unknown as Parameters<typeof flushContextArchiveSnapshots>[0]
 
-    await expect(flushContextArchiveSnapshots(runState)).resolves.toBeUndefined()
+    await expect(
+      flushContextArchiveSnapshots(runState),
+    ).resolves.toBeUndefined()
   })
 })
 
 describe('hydrateContextArchiveSnapshots (merge-through seam)', () => {
   test('merges loaded durable snapshots into the in-memory archive', async () => {
-    // The real provider is not touchable in a unit test, so the unavailable
-    // path is what this asserts directly: hydration must still return the
-    // in-memory archive (degraded, never throwing).
+    // Skip project I/O explicitly so this test cannot open ambient memory.
     const inMemory = [
-      snapshot({ archivedAt: 100, action: 'semantic_compaction', toolCallId: 'live' }),
+      snapshot({
+        archivedAt: 100,
+        action: 'semantic_compaction',
+        toolCallId: 'live',
+      }),
     ]
-    const hydrated = await hydrateContextArchiveSnapshots(inMemory)
+    const hydrated = await hydrateContextArchiveSnapshots(inMemory, {
+      includeProjectArchive: false,
+    })
     expect(hydrated).toEqual(inMemory)
   })
 })

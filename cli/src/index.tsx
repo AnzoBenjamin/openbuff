@@ -6,6 +6,7 @@
 // of tree-sitter.cjs and fails on user machines. Must run before the SDK / code-map
 // import chain triggers Parser.init.
 import './pre-init/tree-sitter-wasm'
+import './pre-init/protocol-stdio'
 
 import fs from 'fs'
 import { createRequire } from 'module'
@@ -53,7 +54,11 @@ import {
 } from './utils/early-input-capture'
 import { getCliEnv } from './utils/env'
 import { initializeAgentRegistry, getProjectAgentTrustStatus } from './utils/local-agent-registry'
-import { createTerminalTrustPrompt, resolveProjectTrust } from './utils/project-trust-gate'
+import {
+  resolveLaunchProjectTrust,
+  resolveProjectTrust,
+} from './utils/project-trust-gate'
+import { ProjectTrustScreen } from './components/project-trust-screen'
 import { clearLogFile, logger } from './utils/logger'
 import { shouldShowProjectPicker } from './utils/project-picker'
 import { hasGitDirectoryAsync } from './utils/directory-browser'
@@ -67,7 +72,6 @@ import { initializeSkillRegistry, getProjectSkillTrustStatus } from './utils/ski
 import { detectTerminalTheme } from './utils/terminal-color-detection'
 import { detectTerminalImageSupport } from './utils/terminal-images'
 import { setOscDetectedTheme } from './utils/theme-system'
-import { isTrustedProjectRoot, loadTrustedRoots } from './utils/trusted-roots'
 
 import type { FileTreeNode } from '@codebuff/common/util/file'
 import { publishWasmBinary } from './pre-init/tree-sitter-wasm'
@@ -263,6 +267,17 @@ async function main(): Promise<void> {
   // an earlier attempt put this in a pre-init module with top-level await,
   // and on Windows that didn't actually pause module evaluation (commander
   // still ran first and rejected the unknown flag).
+  if (process.argv.includes('--smoke-intelligence')) {
+    try {
+      const { smokeRepositoryIntelligence } = await import('./services/repository-intelligence-smoke')
+      await smokeRepositoryIntelligence()
+      process.exit(0)
+    } catch (error) {
+      console.error('Repository intelligence smoke FAIL:', error)
+      process.exit(1)
+    }
+  }
+
   if (process.argv.includes('--smoke-tree-sitter')) {
     const wasmBinary = (
       globalThis as { __CODEBUFF_TREE_SITTER_WASM_BINARY__?: Uint8Array }
@@ -474,6 +489,7 @@ async function main(): Promise<void> {
     cwd,
     initialMode,
     trustProjectAgents,
+    init,
     serve,
     mcp,
     run,
@@ -577,6 +593,12 @@ async function main(): Promise<void> {
     }
   }
 
+  if (init) {
+    const { runInitCommand } = await import('./commands/init')
+    process.exitCode = runInitCommand(init)
+    return
+  }
+
   const isPublishCommand = cliArgv[2] === 'publish'
   const hasAgentOverride = Boolean(agent?.trim())
 
@@ -599,58 +621,64 @@ async function main(): Promise<void> {
     initialMode: initialMode ?? 'DEFAULT',
   })
 
-  // NEW-2 serve trust (design §12.8): `openbuff serve` loads project-scope
-  // `.agents/**` agent definitions and project `.agents/mcp.json` ONLY when
-  // the user started serve with `--trust-project-agents` OR the project
-  // root's realpath appears in the user-level allowlist
-  // (~/.config/openbuff/trusted-roots.json, owner-only 0600). Trust is never
-  // inferred from `session/new` cwd or any client-supplied field, and every
-  // allowlist read/validation error fails closed (untrusted). On the TUI
-  // path `effectiveTrust` stays equal to the raw `--trust-project-agents`
-  // flag, so non-serve behavior is unchanged.
-  // The serve subcommand carries its own --trust-project-agents; the
-  // top-level program hardcodes trustProjectAgents to false for serve runs.
-  const trustFlag = serve ? serve.trustProjectAgents : trustProjectAgents
-  let allowlisted = false
-  if (serve && !trustFlag) {
-    try {
-      allowlisted = isTrustedProjectRoot(
-        fs.realpathSync(projectRoot),
-        await loadTrustedRoots(),
-      )
-    } catch {
-      // Fail closed: realpathSync threw (e.g. missing project root) so
-      // serve stays untrusted.
+  // N02: select the parsed flag, serve-only allowlist and interactive prompt
+  // through one tested launch resolver. Project registries start only after
+  // this decision; protocol/headless paths never consume terminal consent.
+  let cliRenderer: Awaited<ReturnType<typeof createCliRenderer>> | undefined
+  let cliRoot: ReturnType<typeof createRoot> | undefined
+  let rendererCleanupInstalled = false
+  const getCliRenderer = async () => {
+    if (!cliRenderer) {
+      if (smokeBootscreenTimer) {
+        clearTimeout(smokeBootscreenTimer)
+        smokeBootscreenTimer = null
+      }
+      cliRenderer = await createCliRenderer({
+        backgroundColor: 'transparent',
+        exitOnCtrlC: false,
+        screenMode: 'alternate-screen',
+        // D47 Stage 4: request the raw kitty image transport when our protocol
+        // detection says the terminal runs kitty. Omit otherwise so OpenTUI's
+        // own capability probing applies.
+        ...(detectTerminalImageSupport() === 'kitty'
+          ? { kittyImageTransport: 'raw' as const }
+          : {}),
+      })
     }
+    if (!rendererCleanupInstalled) {
+      process.removeListener('uncaughtException', earlyFatalHandler)
+      process.removeListener('unhandledRejection', earlyFatalHandler)
+      installProcessCleanupHandlers(cliRenderer)
+      rendererCleanupInstalled = true
+    }
+    return cliRenderer
   }
-  // N02 project trust gate: one decision covers .agents/**, project skills,
-  // .agents/mcp.json AND the project's openbuff.json/openbuff.d (providers,
-  // routes, hooks, approvalMode, sandbox). It is persisted per project path
-  // + config hash in the user config dir; the SDK loaders enforce it for
-  // TUI, run, serve and mcp. Only the interactive TUI launch asks; headless
-  // commands print one stderr notice and stay untrusted.
-  const interactiveTrustPrompt =
-    !serve && !mcp && !run && !replay && !dash &&
-    process.stdin.isTTY === true && process.stdout.isTTY === true
-  const projectTrust = await resolveProjectTrust(
-    { projectRoot, flag: trustFlag, allowlisted },
+  const projectTrust = await resolveLaunchProjectTrust(
     {
-      ...(interactiveTrustPrompt
-        ? {
-            prompt: async (lines: string[]) => {
-              // The early-input capture holds stdin in raw mode and would
-              // replay the answer into the chat input; suspend it (dropping
-              // anything typed before the question) while the prompt reads a
-              // cooked line, then resume it for the renderer handoff.
-              discardEarlyInputCapture()
-              try {
-                return await createTerminalTrustPrompt({ input: process.stdin, output: process.stdout })(lines)
-              } finally {
-                startEarlyInputCapture()
-              }
-            },
-          }
-        : {}),
+      args: parsedArgs,
+      projectRoot,
+      stdinIsTTY: process.stdin.isTTY,
+      stdoutIsTTY: process.stdout.isTTY,
+      isPublishCommand,
+    },
+    {
+      prompt: async (lines: string[]) => {
+        // The early-input capture holds stdin in raw mode and would replay
+        // consent keys into chat. The same renderer serves trust and the app.
+        discardEarlyInputCapture()
+        const oscTheme = await oscThemePromise
+        if (oscTheme) {
+          setOscDetectedTheme(oscTheme)
+          applyOscDetectedThemeToStore()
+        }
+        const renderer = await getCliRenderer()
+        cliRoot = createRoot(renderer)
+        return await new Promise<boolean>((resolve) => {
+          cliRoot!.render(
+            <ProjectTrustScreen lines={lines} onDecision={resolve} />,
+          )
+        })
+      },
       notice: (line) => process.stderr.write(line + '\n'),
     },
   )
@@ -968,26 +996,12 @@ async function main(): Promise<void> {
     }
   }
 
-  // Stop the boot-window capture BEFORE the renderer is created: OpenTUI
-  // claims stdin raw mode here and the capture listener must not compete
-  // with it. The return value is deliberately discarded — Chat's mount
-  // effect takes the captured text via consumeCapturedEarlyInput(), which is
-  // also what makes the replay one-shot across Chat remounts.
+  // Stop the boot-window capture before the main app renders. If trust was
+  // requested, the same renderer already owns stdin and the capture was
+  // discarded before the trust screen; otherwise Chat can replay boot text.
   stopEarlyInputCapture()
 
-  const renderer = await createCliRenderer({
-    backgroundColor: 'transparent',
-    exitOnCtrlC: false,
-    screenMode: 'alternate-screen',
-    // D47 Stage 4: request the raw kitty image transport when our protocol
-    // detection says the terminal runs kitty — our detection module stays the
-    // source of truth (kittyImageTransport verified on CliRendererConfig in
-    // node_modules/@opentui/core/renderer.d.ts). Omitted otherwise so
-    // OpenTUI's own capability probing applies.
-    ...(detectTerminalImageSupport() === 'kitty'
-      ? { kittyImageTransport: 'raw' as const }
-      : {}),
-  })
+  const renderer = await getCliRenderer()
 
   if (smokeBootscreenTimer) {
     clearTimeout(smokeBootscreenTimer)
@@ -997,12 +1011,8 @@ async function main(): Promise<void> {
     console.log('openbuff bootscreen ok')
   }
 
-  // Remove early handlers — proper cleanup handlers (with renderer access) take over
-  process.removeListener('uncaughtException', earlyFatalHandler)
-  process.removeListener('unhandledRejection', earlyFatalHandler)
-  installProcessCleanupHandlers(renderer)
-
-  createRoot(renderer).render(
+  const root = (cliRoot ??= createRoot(renderer))
+  root.render(
     <QueryClientProvider client={queryClient}>
       <AppWithAsyncAuth />
     </QueryClientProvider>,

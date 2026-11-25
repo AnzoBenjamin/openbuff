@@ -143,7 +143,24 @@ export function observationUtf16ToUtf8(
   document: CapturedTextDocument,
   offset: number,
 ): number {
-  return observationUtf16ToRawByte(document, offset) - document.bomBytes
+  if (
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    offset > document.observation.length
+  ) {
+    throw new RangeError('Invalid observation UTF-16 offset')
+  }
+  let observed = 0
+  let byte = 0
+  while (observed < offset) {
+    const width = scalarWidth(document.observation, observed)
+    if (observed + width.utf16 > offset) {
+      throw new RangeError('Observation offset splits a Unicode scalar')
+    }
+    observed += width.utf16
+    byte += width.utf8
+  }
+  return byte
 }
 
 export function rawByteToObservationUtf16(
@@ -185,7 +202,24 @@ export function utf8ToObservationUtf16(
   document: CapturedTextDocument,
   offset: number,
 ): number {
-  return rawByteToObservationUtf16(document, offset + document.bomBytes)
+  if (
+    !Number.isSafeInteger(offset) ||
+    offset < 0 ||
+    offset > Buffer.byteLength(document.observation)
+  ) {
+    throw new RangeError('Invalid observation UTF-8 offset')
+  }
+  let observed = 0
+  let byte = 0
+  while (byte < offset) {
+    const width = scalarWidth(document.observation, observed)
+    if (byte + width.utf8 > offset) {
+      throw new RangeError('Observation offset splits a Unicode scalar')
+    }
+    observed += width.utf16
+    byte += width.utf8
+  }
+  return observed
 }
 
 type RawLine = {
@@ -364,6 +398,87 @@ function insertionEnding(
   return sawCrlf ? '\r\n' : '\n'
 }
 
+function rawOffsetFromObservation(
+  document: CapturedTextDocument,
+  observationStart: number,
+  rawStart: number,
+  targetOffset: number,
+): number {
+  let observed = observationStart
+  let raw = rawStart
+  while (observed < targetOffset) {
+    if (document.rawText.startsWith('\r\n', raw)) {
+      raw += 2
+      observed++
+      continue
+    }
+    const width = scalarWidth(document.rawText, raw)
+    if (observed + width.utf16 > targetOffset) {
+      throw new RangeError('Observation offset splits a Unicode scalar')
+    }
+    raw += width.utf16
+    observed += width.utf16
+  }
+  return raw
+}
+
+function splicePreservingContext(
+  document: CapturedTextDocument,
+  startOffset: number,
+  endOffset: number,
+  rawStart: number,
+  rawEnd: number,
+  replacement: string,
+  ending: '\r\n' | '\n',
+): string {
+  const before = document.observation.slice(startOffset, endOffset)
+  const after = normalizeLineEndings(replacement)
+  let prefix = 0
+  while (
+    prefix < before.length &&
+    prefix < after.length &&
+    before[prefix] === after[prefix]
+  )
+    prefix++
+  if (
+    prefix > 0 &&
+    prefix < before.length &&
+    /[\uD800-\uDBFF]/.test(before[prefix - 1]!)
+  )
+    prefix--
+  let suffix = 0
+  while (
+    suffix < before.length - prefix &&
+    suffix < after.length - prefix &&
+    before[before.length - suffix - 1] === after[after.length - suffix - 1]
+  )
+    suffix++
+  if (
+    suffix > 0 &&
+    suffix < before.length &&
+    /[\uDC00-\uDFFF]/.test(before[before.length - suffix]!)
+  )
+    suffix--
+  const start = rawOffsetFromObservation(
+    document,
+    startOffset,
+    rawStart,
+    startOffset + prefix,
+  )
+  const end = rawOffsetFromObservation(
+    document,
+    startOffset,
+    rawStart,
+    endOffset - suffix,
+  )
+  const inserted = after
+    .slice(prefix, after.length - suffix)
+    .replaceAll('\n', ending)
+  return (
+    document.rawText.slice(0, start) + inserted + document.rawText.slice(end)
+  )
+}
+
 export function spliceDocumentRange(
   document: CapturedTextDocument,
   startLine: number,
@@ -372,17 +487,14 @@ export function spliceDocumentRange(
 ): string {
   assertLosslessText(replacement)
   const span = getRawLineSpan(document, startLine, endLine)
-  const normalized = normalizeLineEndings(replacement)
-  const inserted = normalized.includes('\n')
-    ? normalized.replaceAll(
-        '\n',
-        insertionEnding(document, span.startUtf16, span.endUtf16, span.sawCrlf),
-      )
-    : normalized
-  return (
-    document.rawText.slice(0, span.startUtf16) +
-    inserted +
-    document.rawText.slice(span.endUtf16)
+  return splicePreservingContext(
+    document,
+    span.startObservationOffset,
+    span.endObservationOffset,
+    span.startUtf16,
+    span.endUtf16,
+    replacement,
+    insertionEnding(document, span.startUtf16, span.endUtf16, span.sawCrlf),
   )
 }
 
@@ -396,20 +508,19 @@ export function spliceDocumentObservation(
   assertLosslessText(replacement)
   const start = observationBoundary(document, startOffset).utf16
   const end = observationBoundary(document, endOffset).utf16
-  const normalized = normalizeLineEndings(replacement)
-  const inserted = normalized.includes('\n')
-    ? normalized.replaceAll(
-        '\n',
-        insertionEnding(
-          document,
-          start,
-          end,
-          document.rawText.slice(0, end).includes('\r\n'),
-        ),
-      )
-    : normalized
-  return (
-    document.rawText.slice(0, start) + inserted + document.rawText.slice(end)
+  return splicePreservingContext(
+    document,
+    startOffset,
+    endOffset,
+    start,
+    end,
+    replacement,
+    insertionEnding(
+      document,
+      start,
+      end,
+      document.rawText.slice(0, end).includes('\r\n'),
+    ),
   )
 }
 

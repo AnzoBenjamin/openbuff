@@ -18,6 +18,10 @@ import type { Message } from './messages/codebuff-message'
  * 4k chars per message): per-message truncation applies on write.
  */
 export type ContextArchiveSnapshot = {
+  /** Original run provenance when hydrated into a different conversation. */
+  runId?: string
+  /** Durable identity independent of timestamp collisions. */
+  snapshotId?: string
   archivedAt: number
   action: 'semantic_compaction' | 'mechanical_trim' | 'tool_result_eviction'
   /** Steps the caller pinned from eviction at archive time. */

@@ -57,6 +57,7 @@ export interface UseChatStreamingReturn {
   setStreamStatus: (status: StreamStatus) => void
 
   // Queue management
+  interruptStreaming: (controller: AbortController | null | undefined) => void
   queuedMessages: QueuedMessage[]
   queueError: string | null
   attachmentRemovalCount: number
@@ -234,6 +235,17 @@ export function useChatStreaming({
     activeAgentStreamsRef,
   )
 
+  const interruptStreaming = useCallback(
+    (controller: AbortController | null | undefined) => {
+      // Pause before abort listeners can synchronously settle a turn and release
+      // its queue gate. Do not rely on the last render's queue length: an enqueue
+      // may already have updated the queue ref in this same input batch.
+      pauseQueue()
+      controller?.abort()
+    },
+    [pauseQueue],
+  )
+
   // Queue UI
   const {
     queuedCount,
@@ -258,6 +270,7 @@ export function useChatStreaming({
   // Queue controls
   const { handleCtrlC, ensureQueueActiveBeforeSubmit } = useQueueControls({
     queuePaused,
+    isQueuePausedRef,
     queuedCount,
     clearQueue: cancelQueuedMessages,
     resumeQueue,
@@ -285,6 +298,7 @@ export function useChatStreaming({
     setStreamStatus,
 
     // Queue management
+    interruptStreaming,
     queuedMessages,
     queueError,
     attachmentRemovalCount,

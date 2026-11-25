@@ -89,9 +89,19 @@ fn disconnected_partial_body_is_protocol_failure_with_no_target() {
 }
 
 fn refused_prepare(
+    plan: String,
+    bad_identity: Option<&str>,
+    setup_failure: bool,
+) -> Vec<serde_json::Value> {
+    refused_prepare_sequence(plan, bad_identity, setup_failure, false, None)
+}
+
+fn refused_prepare_sequence(
     mut plan: String,
     bad_identity: Option<&str>,
     setup_failure: bool,
+    stop_before_prepare: bool,
+    successor: Option<&str>,
 ) -> Vec<serde_json::Value> {
     use openbuff_native::exec::control::{sha256, PROTOCOL};
     let (mut input, child_input) = UnixStream::pair().unwrap();
@@ -99,7 +109,7 @@ fn refused_prepare(
     let binary = env!("CARGO_BIN_EXE_openbuff-native");
     let artifact = fs::File::open(binary).unwrap();
     let hash = sha256(&fs::read(binary).unwrap());
-    if setup_failure {
+    if setup_failure || stop_before_prepare {
         let mut value: serde_json::Value = serde_json::from_str(&plan).unwrap();
         value["artifact"]["sha256"] = hash.clone().into();
         plan = value.to_string();
@@ -150,22 +160,53 @@ fn refused_prepare(
     }
     let mut child = spawned.unwrap();
     drop((child_input, child_output, artifact));
-    for frame in [
-        serde_json::json!({"type":"initialize", "protocol":PROTOCOL,
-            "workspaceProtocol":openbuff_workspace_harness::workspace_protocol_version().to_string(),
-            "artifactSha256":hash}),
-        serde_json::json!({"type":"prepare",
-            "nonce":if bad_identity == Some("nonce") { "" } else { "refused-original-plan" },
-            "planDigest":if bad_identity == Some("digest") { "0".repeat(64) } else { digest.clone() },
-            "artifactSha256":if bad_identity == Some("artifact") { "0".repeat(64) } else { hash.clone() },
-            "planJson":plan}),
-    ] {
+    let prepare = |fault: Option<&str>, replacement: bool| {
+        let frame = serde_json::json!({"type":"prepare",
+            "nonce":if fault == Some("nonce") { "" } else if replacement { "refused-replacement-plan" } else { "refused-original-plan" },
+            "planDigest":if fault == Some("digest") { "0".repeat(64) } else { digest.clone() },
+            "artifactSha256":if fault == Some("artifact") { "0".repeat(64) } else { hash.clone() },
+            "planJson":plan});
         let bytes = serde_json::to_vec(&frame).unwrap();
-        input
-            .write_all(&(bytes.len() as u32).to_le_bytes())
-            .unwrap();
-        input.write_all(&bytes).unwrap();
+        if fault == Some("duplicate") {
+            let mut duplicate = br#"{"nonce":"duplicate","#.to_vec();
+            duplicate.extend_from_slice(&bytes[1..]);
+            duplicate
+        } else {
+            bytes
+        }
+    };
+    let mut bodies = vec![serde_json::to_vec(
+        &serde_json::json!({"type":"initialize", "protocol":PROTOCOL,
+        "workspaceProtocol":openbuff_workspace_harness::workspace_protocol_version().to_string(),
+        "artifactSha256":hash}),
+    )
+    .unwrap()];
+    if stop_before_prepare {
+        bodies.push(
+            serde_json::to_vec(&serde_json::json!({"type":"stop","reason":"fixture-prior-stop"}))
+                .unwrap(),
+        );
     }
+    bodies.push(prepare(bad_identity, false));
+    if let Some(next) = successor {
+        bodies.push(prepare(
+            if matches!(next, "same" | "replacement") {
+                None
+            } else {
+                Some(next)
+            },
+            next == "replacement",
+        ));
+    }
+    // Send the complete sequence together: Stop precedes Prepare in the same
+    // native read turn without relying on scheduler delays or changing expiry.
+    let mut packet = Vec::new();
+    for bytes in bodies {
+        packet.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        packet.extend_from_slice(&bytes);
+    }
+    assert!(packet.len() < 64 * 1024);
+    input.write_all(&packet).unwrap();
     let mut channel = Channel::new(output.as_raw_fd(), output.as_raw_fd()).unwrap();
     let mut frames = Vec::new();
     let until = Instant::now() + Duration::from_secs(3);
@@ -190,10 +231,36 @@ fn refused_prepare(
         f["type"].as_str(),
         Some("prepared" | "target-created" | "target-entered")
     )));
+    for report in frames.iter().filter(|f| f["type"] == "final") {
+        let observed_at = report["cleanup"]["observedAtNs"]
+            .as_str()
+            .unwrap()
+            .parse::<u64>()
+            .unwrap();
+        if !report["cleanup"]["stopAtNs"].is_null() {
+            let stopped_at = report["cleanup"]["stopAtNs"]
+                .as_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap();
+            assert!(
+                stopped_at <= observed_at,
+                "final cleanup stopAtNs {stopped_at} exceeds observedAtNs {observed_at}"
+            );
+        }
+    }
     let report = frames.iter().find(|f| f["type"] == "final").unwrap();
     assert_eq!(report["artifactSha256"], hash);
     assert_eq!(report["targetEntry"], "not-entered");
     assert_eq!(report["cleanup"]["complete"], true);
+    if stop_before_prepare {
+        assert_eq!(report["cause"], "fixture-prior-stop");
+        assert_eq!(report["waiterPid"], serde_json::Value::Null);
+        assert_eq!(report["targetPid"], serde_json::Value::Null);
+        assert_eq!(report["wrapperExitCode"], serde_json::Value::Null);
+        assert_eq!(report["wrapperSignal"], serde_json::Value::Null);
+        assert_eq!(report["cleanup"]["allChildrenReaped"], true);
+    }
     assert_eq!(
         report["nonce"],
         if bad_identity.is_some() {
@@ -261,6 +328,44 @@ fn authenticated_setup_refusal_keeps_correlation_without_target_admission() {
         "{cause}"
     );
     assert!(cause.contains("os error"), "{cause}");
+}
+
+#[test]
+fn stopped_authenticated_prepare_correlates_without_admitting_a_child() {
+    refused_prepare_sequence(refusal_plan(vec!["exact-env"]), None, false, true, None);
+}
+
+#[test]
+fn stopped_invalid_prepare_cannot_gain_correlation_from_a_valid_successor() {
+    for fault in ["digest", "artifact", "nonce", "duplicate"] {
+        refused_prepare_sequence(
+            refusal_plan(vec!["exact-env"]),
+            Some(fault),
+            false,
+            true,
+            Some("replacement"),
+        );
+    }
+}
+
+#[test]
+fn stopped_repeated_prepare_cannot_replace_the_first_authenticated_tuple() {
+    for successor in [
+        "same",
+        "replacement",
+        "digest",
+        "artifact",
+        "nonce",
+        "duplicate",
+    ] {
+        refused_prepare_sequence(
+            refusal_plan(vec!["exact-env"]),
+            None,
+            false,
+            true,
+            Some(successor),
+        );
+    }
 }
 
 #[test]

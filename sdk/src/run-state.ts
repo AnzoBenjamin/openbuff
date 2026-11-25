@@ -36,6 +36,7 @@ import {
   reconcileTaskMemoryEvidence,
 } from './services/task-memory-store'
 import { loadSkills } from './skills/load-skills'
+import { isProjectOnlyReadPolicy } from '@codebuff/common/util/project-path-containment'
 import { loadInstructionFiles } from './instruction-files'
 import { runGit } from './tools/git-status'
 
@@ -864,7 +865,9 @@ export async function initialSessionState(
 
   // Metadata and skills share the captured root without admitting workspace IO.
   const contextCwd = cwd ?? params.contextCwd ?? process.cwd()
-  const skills = await loadSkills({
+  // Raw skill discovery has no authenticated guarded-reader contract yet.
+  // A strict root must not bypass its read policy during bootstrap.
+  const skills = isProjectOnlyReadPolicy(fs.hostReadPolicy) ? {} : await loadSkills({
     cwd: contextCwd,
     skillsPath: skillsDir,
     homeDir,
@@ -1251,7 +1254,11 @@ export async function applyOverridesToSessionState(
     }
   }
 
-  if (overrides.contextCwd !== undefined || overrides.homeDir !== undefined ||
+  if (isProjectOnlyReadPolicy(runtime?.fs?.hostReadPolicy)) {
+    // Clear inherited JSON as well; returning an old skills map would still
+    // disclose bytes loaded under a weaker previous-turn policy.
+    sessionState.fileContext.skills = {}
+  } else if (overrides.contextCwd !== undefined || overrides.homeDir !== undefined ||
     overrides.includeGlobalSkills !== undefined || overrides.skillsDir !== undefined ||
     overrides.includeProjectSkills !== undefined) {
     sessionState.fileContext.skills = await loadSkills({

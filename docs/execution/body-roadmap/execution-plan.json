@@ -10,6 +10,16 @@
     "sha256": "d9596d9b8ecc9a43589a12e6cbbbcdfde76860fe4510dc0605af6c968ce82b31"
   },
   "baseCompletionNodeCount": 39,
+  "acceptanceDecisions": [
+    {
+      "nodeId": "B21",
+      "scopeId": "b21-local-linux-behavior-2026-11-24",
+      "decision": {
+        "path": "docs/execution/body-roadmap/B21-ACCEPTANCE-20261124.json",
+        "sha256": "53d57b283dddd0dbeab783dbd77f154c59846d30ea0819afb8a64b80f6eed386"
+      }
+    }
+  ],
   "addenda": [
     {
       "id": "RWEB",

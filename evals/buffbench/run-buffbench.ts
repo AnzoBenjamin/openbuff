@@ -449,7 +449,7 @@ async function runTaskWithEnvironment(options: {
       const safeAgentId = agentId.replace(/[^a-zA-Z0-9-]/g, '_')
       const safeCommitShort = commit.sha.slice(0, 7)
       const traceFilename = `${artifactPrefix}.json`
-      const tracePath = path.join(logsDir, traceFilename)
+      const tracePath = path.join(sink.root, traceFilename)
 
       // Store judging result and trace for combined output later. Bind the
       // entry to a local const: writing commitTraces[commitTraces.length - 1]
@@ -479,7 +479,7 @@ async function runTaskWithEnvironment(options: {
 
       // Save judge traces to separate files if saveTraces is enabled
       if (saveTraces) {
-        const tracesDir = path.join(logsDir, 'traces')
+        const tracesDir = path.join(sink.root, 'traces')
         if (!fs.existsSync(tracesDir)) {
           fs.mkdirSync(tracesDir, { recursive: true })
         }
@@ -522,7 +522,7 @@ async function runTaskWithEnvironment(options: {
       const safeTaskId = commit.id.replace(/[^a-zA-Z0-9-]/g, '_')
       const safeAgentId = agentId.replace(/[^a-zA-Z0-9-]/g, '_')
       const safeCommitShort = commit.sha.slice(0, 7)
-      const tracePath = path.join(logsDir, `${artifactPrefix}.json`)
+      const tracePath = path.join(sink.root, `${artifactPrefix}.json`)
       const traceEntry: AgentTraceData = {
         ...evidence,
         agentId,
@@ -591,7 +591,7 @@ async function runTaskWithEnvironment(options: {
   const safeTaskId = commit.id.replace(/[^a-zA-Z0-9-]/g, '_')
   const analysisCommitShort = artifactId(commit.sha.slice(0, 7))
   const analysisFilename = `${index + 1}-${artifactId(commit.id)}-ANALYSIS-${analysisCommitShort}-${taskAttemptId}.json`
-  const analysisPath = path.join(logsDir, analysisFilename)
+  const analysisPath = path.join(sink.root, analysisFilename)
   sink.writeJson(path.basename(analysisPath), analysisData)
 
   // Print all agent results with their judging, then trace analysis together
@@ -607,7 +607,7 @@ async function runTaskWithEnvironment(options: {
         durationMs: trace.durationMs,
         error: trace.error,
         traceFilePath: path.join(
-          logsDir,
+          sink.root,
           `${index + 1}-${artifactId(commit.id)}-${artifactId(trace.agentId)}-${artifactId(commit.sha.slice(0, 7))}-${trace.attemptId}.json`,
         ),
         idiomTraceability: trace.idiomTraceability,

@@ -1,3 +1,4 @@
+import { createRepositoryIntelligenceSource } from '@openbuff/sdk'
 import path from 'path'
 
 import { MAX_AGENT_STEPS_DEFAULT } from '@codebuff/common/constants/agents'
@@ -243,6 +244,7 @@ export const createRunConfig = (params: CreateRunConfigParams) => {
     agent,
     prompt,
     content,
+    repositoryIntelligence: createRepositoryIntelligenceSource(getProjectRoot(), loadedConfig.indexing),
     previousRun: previousRunState ?? undefined,
     // The CLI has on-demand query_index/read_subtree retrieval. Parsing every
     // source file before every prompt adds seconds before provider dispatch.

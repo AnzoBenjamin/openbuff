@@ -4,12 +4,13 @@ import os from 'node:os'
 import path from 'node:path'
 
 import { createHostReadPolicy } from '@codebuff/common/util/project-path-containment'
+import { isChatGptOAuthModelAllowed, isOpenAIProviderModel } from '@codebuff/common/constants/chatgpt-oauth'
 
 import { getValidChatGptOAuthCredentials, refreshChatGptOAuthToken } from './credentials'
 import { CREDENTIAL_ENV_KEYS } from './credential-env-keys'
 import { getSystemProcessEnv, getChatGptOAuthTokenFromEnv } from './env'
 import { PROJECT_TRUST_ENV_VAR, getProjectTrustOverride } from './project-trust'
-import { loadProviderConfigForHost } from './provider-config'
+import { loadProviderConfigForHost, resolveConfiguredProviderModelMetadata } from './provider-config'
 
 import type { HostReadPolicy } from '@codebuff/common/util/project-path-containment'
 import type { ChatGptOAuthCredentials } from './credentials'
@@ -75,6 +76,8 @@ export type ProviderHostContext = Readonly<{
 
 const snapshots = new WeakSet<object>()
 const providerContexts = new WeakSet<object>()
+const credentialPortIdentities = new WeakMap<CapturedCredentialPort, string>()
+const providerCredentialSources = new WeakMap<ProviderHostContext, string>()
 
 function freezeCopy<T>(value: T): T {
   if (Array.isArray(value)) return Object.freeze(value.map(freezeCopy)) as T
@@ -225,8 +228,10 @@ export function loadHostConfigSnapshot(p: { inputs: HostConfigurationInputs; fs:
     // project scope and only tightens policy until the project is trusted.
     const isUserScope = (selectedPath: string) => inputs.selection.kind === 'explicit' ||
       (configDir !== undefined && inside(configDir, selectedPath))
+    const isUserTimeoutDeclaration = (candidate: string) =>
+      (realConfigDir !== undefined && inside(realConfigDir, candidate)) || candidate === realExplicit
     const loaded = loadProviderConfigForHost({ configPaths, reader, isTrustedPath: isTrusted,
-      projectTrust: { projectRoot: realProjectRoot, isUserScope, explicit: inputs.trust.projectConfig,
+      projectTrust: { projectRoot: realProjectRoot, isUserScope, isUserTimeoutDeclaration, explicit: inputs.trust.projectConfig,
         storeDir: realConfigDir } })
     const executionFile = loaded.sourceFiles?.execution
     const executionOrigin = executionFile === undefined ? undefined : Object.freeze({
@@ -273,6 +278,27 @@ export function getCapturedProviderConfig(snapshot: HostConfigSnapshot): LoadedP
   return snapshot.loaded as LoadedProviderConfig
 }
 
+/** A host-authenticated routing view for one run; config bytes and provider authority are unchanged. */
+export function withRunModelOverride(snapshot: HostConfigSnapshot, model: string | undefined): SnapshotResult {
+  try {
+    getCapturedProviderConfig(snapshot)
+    if (model === undefined) return { status: 'complete', snapshot }
+    if (typeof model !== 'string' || !model || model.length > 1024 || /[\s\x00-\x1f\x7f]/.test(model))
+      return { status: 'unavailable', cause: 'Run model must be a non-empty provider/model identifier without whitespace or control characters.' }
+    if (!resolveConfiguredProviderModelMetadata({ model, loadedConfig: snapshot.loaded as LoadedProviderConfig }) &&
+      !(isOpenAIProviderModel(model) && isChatGptOAuthModelAllowed(model)))
+      return { status: 'unavailable', cause: `Run model '${model}' is not served by a configured provider. Configure that model or omit the run override.` }
+    const selected: HostConfigSnapshot = Object.freeze({ ...snapshot, snapshotId: randomUUID(),
+      loaded: freezeCopy({ ...snapshot.loaded, runModel: model }),
+      sourceBytesIdentity: createHmac('sha256', randomBytes(32)).update(JSON.stringify(['openbuff.run-model.v1', snapshot.sourceBytesIdentity, model])).digest('hex'),
+    })
+    snapshots.add(selected)
+    return { status: 'complete', snapshot: selected }
+  } catch (error) {
+    return { status: 'unavailable', cause: error instanceof Error ? error.message : 'Run model selection unavailable' }
+  }
+}
+
 export function createProviderHostContext(snapshot: HostConfigSnapshot, credentials?: CapturedCredentialPort): ProviderHostContext {
   getCapturedProviderConfig(snapshot)
   const environment = snapshot.inputs.environment
@@ -288,11 +314,37 @@ export function createProviderHostContext(snapshot: HostConfigSnapshot, credenti
     refreshChatGptOAuthToken({ ...environment, OPENBUFF_CONFIG_DIR: snapshot.configDir }) : null })
   const context = Object.freeze({ snapshot, credentialEnvironment: environment, credentials: capturedPort })
   providerContexts.add(context)
+  let source = 'default'
+  if (credentials) {
+    source = credentialPortIdentities.get(credentials) ?? randomUUID()
+    credentialPortIdentities.set(credentials, source)
+  }
+  providerCredentialSources.set(context, source)
   return context
 }
 
 export function assertProviderHostContext(context: ProviderHostContext): void {
   if (!providerContexts.has(context)) throw new Error('Invalid provider host context')
+}
+
+/**
+ * Internal route-health identity; never resolves or retains credential values.
+ * Custom ports share health only when the host reuses that exact port object.
+ * Stored OAuth revisions are metadata-only and inspected solely for OAuth
+ * routes without an overriding environment token. Ordinary BYOK stays read-free.
+ */
+export function getProviderCredentialHealthIdentity(context: ProviderHostContext, includeStoredOAuth = false): string {
+  assertProviderHostContext(context)
+  const source = providerCredentialSources.get(context)!
+  if (source !== 'default' || !includeStoredOAuth || !context.snapshot.configDir ||
+      getChatGptOAuthTokenFromEnv(context.credentialEnvironment)) return source
+  const filePath = path.join(context.snapshot.configDir, 'credentials.json')
+  try {
+    const stat = fs.statSync(filePath, { bigint: true })
+    return JSON.stringify([source, filePath, String(stat.dev), String(stat.ino), String(stat.size), String(stat.mtimeNs), String(stat.ctimeNs)])
+  } catch (error) {
+    return JSON.stringify([source, filePath, (error as NodeJS.ErrnoException).code ?? 'unavailable'])
+  }
 }
 
 export function credentialRoster(snapshot: HostConfigSnapshot): readonly string[] {

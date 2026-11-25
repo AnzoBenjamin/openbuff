@@ -1,5 +1,4 @@
 import * as analytics from '@codebuff/common/analytics'
-import { createHash } from 'node:crypto'
 import { TEST_USER_ID } from '@codebuff/common/old-constants'
 import { createTestAgentRuntimeParams } from '@codebuff/common/testing/fixtures/agent-runtime'
 import { promptSuccess } from '@codebuff/common/util/error'
@@ -20,6 +19,7 @@ import {
 
 import { mainPrompt } from '../main-prompt'
 import * as processFileBlockModule from '../process-file-block'
+import { PLACEHOLDER } from '../templates/types'
 import { createToolCallChunk } from './test-utils'
 
 import type { AgentTemplate } from '@codebuff/common/types/agent-template'
@@ -466,8 +466,109 @@ describe('mainPrompt', () => {
     expect(newSessionState.mainAgentState.stepsRemaining).toBe(initialCount - 1)
   })
 
-  it('reuses the session system prompt across consecutive same-agent turns', async () => {
+  it('refreshes current knowledge and user input while keeping identical prompts stable', async () => {
+    const fileContext = { ...mockFileContext }
+    const sessionState = getInitialSessionState(fileContext)
+    const capturedSystemPrompts: string[] = []
+    const agentId = 'current-context-agent'
+    const agentTemplate = {
+      ...mockLocalAgentTemplates[AgentTemplateTypes.base],
+      id: agentId,
+      systemPrompt: [
+        'Task: ' + PLACEHOLDER.USER_INPUT_PROMPT,
+        PLACEHOLDER.KNOWLEDGE_FILES_CONTENTS,
+      ].join('\n'),
+    }
+    const localAgentTemplates = {
+      ...mockLocalAgentTemplates,
+      [agentId]: agentTemplate,
+    }
+
+    mainPromptBaseParams.promptAiSdkStream = async function* ({
+      messages,
+    }: Parameters<typeof mainPromptBaseParams.promptAiSdkStream>[0]) {
+      const systemMessage = messages.find(
+        (message: { role: string; content?: unknown }) =>
+          message.role === 'system',
+      )
+      const systemContent = systemMessage?.content
+      capturedSystemPrompts.push(
+        Array.isArray(systemContent)
+          ? systemContent
+              .filter((part) => part.type === 'text')
+              .map((part) => (part.type === 'text' ? part.text : ''))
+              .join('')
+          : systemContent ?? '',
+      )
+      yield { type: 'text' as const, text: 'Test response' }
+      return 'mock-message-id'
+    }
+
+    const firstAction = {
+      type: 'prompt' as const,
+      agentId,
+      prompt: 'First prompt',
+      sessionState,
+      fingerprintId: 'test',
+      costMode: 'normal' as const,
+      promptId: 'test-1',
+      toolResults: [],
+    }
+    fileContext.userKnowledgeFiles = {
+      'user-notes.md': 'Original project guidance.',
+    }
+
+    await mainPrompt({
+      ...mainPromptBaseParams,
+      agentTemplate: undefined,
+      action: firstAction,
+      localAgentTemplates,
+    })
+
+    const firstSystemPrompt = capturedSystemPrompts[0]
+    expect(firstSystemPrompt).toContain('First prompt')
+    expect(firstSystemPrompt).toContain('Original project guidance.')
+
+    fileContext.userKnowledgeFiles = {
+      'user-notes.md': 'Updated project guidance.',
+    }
+
+    const secondAction = {
+      ...firstAction,
+      prompt: 'Second task',
+      promptId: 'test-2',
+    }
+
+    await mainPrompt({
+      ...mainPromptBaseParams,
+      agentTemplate: undefined,
+      action: secondAction,
+      localAgentTemplates,
+    })
+
+    expect(capturedSystemPrompts[1]).toContain('Second task')
+    expect(capturedSystemPrompts[1]).toContain('Updated project guidance.')
+    expect(capturedSystemPrompts[1]).not.toContain('Original project guidance.')
+
+    await mainPrompt({
+      ...mainPromptBaseParams,
+      agentTemplate: undefined,
+      action: secondAction,
+      localAgentTemplates,
+    })
+
+    expect(capturedSystemPrompts[2]).toBe(capturedSystemPrompts[1])
+    expect(sessionState.mainAgentState.systemPrompt).toBe(
+      capturedSystemPrompts[2],
+    )
+  })
+
+  it('rebuilds the session system prompt when a same-ID template changes', async () => {
     const sessionState = getInitialSessionState(mockFileContext)
+    const baseTemplate = mockLocalAgentTemplates[AgentTemplateTypes.base]
+    baseTemplate.systemPrompt =
+      'Original instructions for {CODEBUFF_AGENT_NAME}'
+    mainPromptBaseParams.agentTemplate = baseTemplate
     const capturedSystemPrompts: string[] = []
 
     mainPromptBaseParams.promptAiSdkStream = async function* ({
@@ -478,48 +579,46 @@ describe('mainPrompt', () => {
       return 'mock-message-id'
     }
 
-    const firstAction = {
-      type: 'prompt' as const,
-      prompt: 'First prompt',
-      sessionState,
-      fingerprintId: 'test',
-      costMode: 'normal' as const,
-      promptId: 'test-1',
-      toolResults: [],
-    }
+    const runTurn = async (promptId: string) =>
+      mainPrompt({
+        ...mainPromptBaseParams,
+        action: {
+          type: 'prompt',
+          prompt: `Prompt ${promptId}`,
+          sessionState,
+          fingerprintId: 'test',
+          costMode: 'normal',
+          promptId,
+          toolResults: [],
+        },
+        localAgentTemplates: mockLocalAgentTemplates,
+      })
 
-    await mainPrompt({
-      ...mainPromptBaseParams,
-      action: firstAction,
-      localAgentTemplates: mockLocalAgentTemplates,
-    })
+    await runTurn('template-1')
+    const originalIdentity =
+      sessionState.mainAgentState.systemPromptTemplateIdentity
+    expect(sessionState.mainAgentState.systemPrompt).toContain(
+      'Original instructions for Base Agent',
+    )
 
-    const firstSystemPrompt = sessionState.mainAgentState.systemPrompt
-    expect(firstSystemPrompt).not.toBe('')
+    await runTurn('template-2')
+    expect(capturedSystemPrompts[1]).toBe(capturedSystemPrompts[0])
+    expect(sessionState.mainAgentState.systemPromptTemplateIdentity).toBe(
+      originalIdentity,
+    )
 
-    sessionState.fileContext.knowledgeFiles = {
-      'knowledge.md': 'This file changed after the first turn.',
-    }
+    baseTemplate.displayName = 'Renamed Base Agent'
+    baseTemplate.systemPrompt = 'Updated instructions for {CODEBUFF_AGENT_NAME}'
+    await runTurn('template-3')
 
-    const secondAction = {
-      ...firstAction,
-      prompt: 'Second prompt',
-      promptId: 'test-2',
-    }
-
-    await mainPrompt({
-      ...mainPromptBaseParams,
-      action: secondAction,
-      localAgentTemplates: mockLocalAgentTemplates,
-    })
-
-    const hashPromptPrefix = (value: string) =>
-      createHash('sha256').update(value.slice(0, 4096)).digest('hex')
-
-    expect(capturedSystemPrompts).toHaveLength(2)
-    expect(sessionState.mainAgentState.systemPrompt).toBe(firstSystemPrompt)
-    expect(hashPromptPrefix(capturedSystemPrompts[1])).toBe(
-      hashPromptPrefix(capturedSystemPrompts[0]),
+    expect(sessionState.mainAgentState.systemPrompt).toContain(
+      'Updated instructions for Renamed Base Agent',
+    )
+    expect(sessionState.mainAgentState.systemPrompt).not.toContain(
+      'Original instructions',
+    )
+    expect(sessionState.mainAgentState.systemPromptTemplateIdentity).not.toBe(
+      originalIdentity,
     )
   })
 })

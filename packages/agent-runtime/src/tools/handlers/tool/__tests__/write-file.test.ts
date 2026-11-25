@@ -6,6 +6,7 @@ import {
 
 import { handleCreatePlan } from '../create-plan'
 import {
+  handleWriteFile,
   getFileProcessingValues,
   grantWholeFileReadAuthorization,
   hasWholeFileReadAuthorization,
@@ -15,9 +16,11 @@ import {
 
 import type {
   ClientToolCall,
+  CodebuffToolCall,
   CodebuffToolOutput,
 } from '@codebuff/common/tools/list'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
+import type { AgentState } from '@codebuff/common/types/session-state'
 
 const logger: Logger = {
   debug: () => {},
@@ -96,6 +99,52 @@ describe('handleCreatePlan', () => {
 })
 
 describe('handleWriteFile', () => {
+  it('sends BOM and dominant EOL-preserved content through the whole-file write path', async () => {
+    const raw = '\uFEFFbefore\r\nafter\r\n'
+    const clientToolCalls: ClientToolCall<'write_file'>[] = []
+    const toolCall: CodebuffToolCall<'write_file'> = {
+      toolCallId: 'write-file-eol',
+      toolName: 'write_file',
+      input: {
+        path: 'src/notes.txt',
+        instructions: 'Rewrite the note without changing its text format.',
+        content: 'updated\nafter\n',
+      },
+    }
+
+    await handleWriteFile({
+      previousToolCallFinished: Promise.resolve(),
+      toolCall,
+      agentState: {} as AgentState,
+      clientSessionId: 'session',
+      fileProcessingState: createFileProcessingState(),
+      fingerprintId: 'fingerprint',
+      logger,
+      prompt: undefined,
+      userId: undefined,
+      userInputId: 'input',
+      requestClientToolCall: async (clientToolCall) => {
+        clientToolCalls.push(clientToolCall)
+        return [
+          {
+            type: 'json',
+            value: { file: 'src/notes.txt', message: 'Updated file' },
+          },
+        ]
+      },
+      requestOptionalFile: async () => raw,
+      writeToClient: () => {},
+    })
+
+    expect(clientToolCalls).toHaveLength(1)
+    const writtenInput = clientToolCalls[0]?.input
+    expect(writtenInput?.type).toBe('file')
+    if (writtenInput?.type !== 'file') {
+      throw new Error('expected a whole-file client write')
+    }
+    expect(writtenInput.content).toBe('\uFEFFupdated\r\nafter\r\n')
+  })
+
   describe('getFileProcessingValues', () => {
     it('should copy file processing state values', () => {
       const state: FileProcessingState = {

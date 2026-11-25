@@ -125,9 +125,10 @@ const QUERY = 'postgres session storage'
 const OBSERVATION_A_ID = 'observation-a'
 const OBSERVATION_B_ID = 'observation-b'
 const OBSERVATION_A_SUMMARY = 'Use postgres for session storage durability'
-const OBSERVATION_B_SUMMARY = 'Keep session persistence across restarts'
+const OBSERVATION_B_SUMMARY = 'Keep durable records across restarts'
 const OBSERVATION_A_DETAIL = 'Durable session storage was chosen deliberately.'
-const OBSERVATION_B_DETAIL = 'Sessions survive process restarts via a store.'
+const OBSERVATION_B_DETAIL =
+  'Recovered state survives a process crash via an append-only journal.'
 
 // The fake embedder assigns explicit 4-dim vectors so BOTH observation embed
 // texts land near the query text vector: the corpus engineering is the point,
@@ -160,7 +161,8 @@ function retrievalRequest(queryId: string) {
     projectId: 'project-1',
     sessionId: 'session-1',
     query: QUERY,
-    taskId: 'task-1',
+    // This is a lexical-vs-semantic test, not exact-task recall. An exact
+    // task filter would correctly make both records eligible without words.
     selectors: [],
     artifactKinds: [],
     includeHistorical: false,
@@ -334,6 +336,8 @@ describe('concept recall firewall', () => {
     expect(resultDegraded.outcome).toBe('result')
     if (resultOff.outcome !== 'result' || resultDegraded.outcome !== 'result')
       return
-    expect(queryString(resultDegraded.result)).toBe(queryString(resultOff.result))
+    expect(queryString(resultDegraded.result)).toBe(
+      queryString(resultOff.result),
+    )
   })
 })

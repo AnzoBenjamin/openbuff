@@ -1,0 +1,31 @@
+{
+  "recordedAt": "2026-11-14T22:12:57.658777+00:00",
+  "reason": "ultrawork stop-hook fresh verification",
+  "passed": true,
+  "sdkRegressionTests": 57,
+  "sdkRegressionFailures": 0,
+  "rustTests": 4,
+  "sdkTypecheckExitCode": 0,
+  "installedProbes": [
+    "help",
+    "rust-sqlite repository intelligence",
+    "Tree-sitter",
+    "code-map symbols/calls/imports",
+    "OpenTUI"
+  ],
+  "binarySha256": "52d7e3815446f0c51c0f0fa651061aaee6d57bc8d0f316d761797b994a96458b",
+  "sidecarSha256": "615e79020b8a730f20781cd25184275bd4fa846a20aa1877b7c578dc6da131a7",
+  "logs": {
+    "regressions": ".agents/sessions/index-records-architecture-20261114/evidence/fresh-final-regressions.log",
+    "typecheck": ".agents/sessions/index-records-architecture-20261114/evidence/fresh-final-typecheck.log",
+    "intelligence": ".agents/sessions/index-records-architecture-20261114/evidence/fresh-final-intelligence.log",
+    "probes": ".agents/sessions/index-records-architecture-20261114/evidence/fresh-final-probes.log",
+    "rust": ".agents/sessions/index-records-architecture-20261114/evidence/fresh-final-rust.log",
+    "help": ".agents/sessions/index-records-architecture-20261114/evidence/fresh-final-help.log"
+  },
+  "ciLocalLimitations": [
+    "uncommitted generated type source versus HEAD",
+    "pre-existing historical archive links"
+  ],
+  "productSourceChangedDuringVerification": false
+}

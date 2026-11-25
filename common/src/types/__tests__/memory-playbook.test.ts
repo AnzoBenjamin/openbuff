@@ -3,6 +3,7 @@ import {
   MemoryPlaybookSchema,
   PlaybookTriggerSchema,
   computeTriggerSignature,
+  computeValidationDependencyFingerprint,
   type PlaybookScope,
   type PlaybookTrigger,
 } from '../memory-playbook'
@@ -19,7 +20,11 @@ const trigger: PlaybookTrigger = {
   terminalAction: 'git-push',
   requireEvidence: [],
 }
-const scope: PlaybookScope = { repos: ['acme/repo'], glob: undefined, agentTypes: undefined }
+const scope: PlaybookScope = {
+  repos: ['acme/repo'],
+  glob: undefined,
+  agentTypes: undefined,
+}
 
 const minimalPlaybook = {
   schemaVersion: 1,
@@ -70,6 +75,56 @@ describe('MemoryPlaybookSchema', () => {
     })
     expect(result.success).toBe(false)
   })
+
+  test('accepts typed validation alternatives and rejects command-text substitutes', () => {
+    const make = (evidence: Record<string, unknown>) =>
+      PlaybookTriggerSchema.safeParse({
+        tool: 'run_terminal_command',
+        terminalAction: 'git-commit',
+        requireEvidence: [evidence],
+      })
+    expect(
+      make({
+        kind: 'validationSucceeded',
+        validationKinds: ['ci-local', 'package-checks'],
+      }).success,
+    ).toBe(true)
+    expect(
+      make({ kind: 'validationSucceeded', commandPattern: '*check:ci-local*' })
+        .success,
+    ).toBe(false)
+    expect(
+      make({ kind: 'toolSucceeded', validationKinds: ['ci-local'] }).success,
+    ).toBe(false)
+    expect(
+      make({ kind: 'validationSucceeded', validationKinds: [] }).success,
+    ).toBe(false)
+  })
+})
+
+describe('computeValidationDependencyFingerprint', () => {
+  test('is independent of map insertion order and changes with any input', () => {
+    const baseline = computeValidationDependencyFingerprint({
+      source: 'a',
+      config: 'b',
+      tool: 'c',
+    })
+    expect(
+      computeValidationDependencyFingerprint({
+        tool: 'c',
+        config: 'b',
+        source: 'a',
+      }),
+    ).toBe(baseline)
+    expect(
+      computeValidationDependencyFingerprint({
+        source: 'a2',
+        config: 'b',
+        tool: 'c',
+      }),
+    ).not.toBe(baseline)
+    expect(baseline).toMatch(/^sha256:[0-9a-f]{64}$/)
+  })
 })
 
 describe('computeTriggerSignature', () => {
@@ -104,7 +159,11 @@ describe('computeTriggerSignature', () => {
       { repos: [] },
     )
     const b = computeTriggerSignature(
-      { tool: 'spawn_agents', spawnAgentType: 'implementer', requireEvidence: [] },
+      {
+        tool: 'spawn_agents',
+        spawnAgentType: 'implementer',
+        requireEvidence: [],
+      },
       { repos: [] },
     )
     expect(b).not.toBe(a)

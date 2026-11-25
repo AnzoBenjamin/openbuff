@@ -3,6 +3,7 @@ import path from 'path'
 
 import { getProjectDataDir } from '../project-files'
 import { logger } from './logger'
+import { readSavedChatCapture, readSavedChatCaptureAsync } from './saved-chat-capture'
 
 import type { ChatMessage } from '../types/chat'
 
@@ -41,6 +42,11 @@ interface ChatDirInfo {
   chatPath: string
   messagesPath: string
   mtime: Date
+}
+
+function unavailableEntry(info: ChatDirInfo): ChatHistoryEntry {
+  return { chatId: info.chatId, lastPrompt: '(saved capture unavailable · Inspect for recovery)',
+    timestamp: info.mtime, messageCount: 0, messageCountKnown: false, captureUnavailable: true }
 }
 
 async function mapInBatches<T, R>(
@@ -101,24 +107,16 @@ export function getAllChats(maxChats: number = 500): ChatHistoryEntry[] {
 
     for (const info of chatsToLoad) {
       try {
-        let messageCount = 0
-        let lastPrompt = '(empty chat)'
-
-        if (fs.existsSync(info.messagesPath)) {
-          const content = fs.readFileSync(info.messagesPath, 'utf8')
-          const messages = JSON.parse(content) as ChatMessage[]
-          messageCount = messages.length
-          lastPrompt = getFirstUserPrompt(messages)
-        }
-
-        // Skip empty chats (no messages)
-        if (messageCount > 0) {
+        const capture = readSavedChatCapture(info.chatPath)
+        if (capture.state === 'saved') {
           chats.push({
             chatId: info.chatId,
-            lastPrompt,
+            lastPrompt: getFirstUserPrompt(capture.messages),
             timestamp: info.mtime,
-            messageCount,
+            messageCount: capture.messages.length,
           })
+        } else if (capture.state === 'unavailable') {
+          chats.push(unavailableEntry(info))
         }
       } catch (error) {
         logger.debug(
@@ -189,14 +187,10 @@ export async function getAllChatsAsync(
         16,
         async (info): Promise<ChatHistoryEntry | null> => {
           try {
-            const messages = JSON.parse(
-              await fs.promises.readFile(info.messagesPath, {
-                encoding: 'utf8',
-                signal,
-              }),
-            ) as ChatMessage[]
-            if (!Array.isArray(messages)) throw new Error('Saved transcript is not a message array')
-            if (messages.length === 0) return null
+            const capture = await readSavedChatCaptureAsync(info.chatPath, signal)
+            if (capture.state === 'empty') return null
+            if (capture.state === 'unavailable') { omitted++; return unavailableEntry(info) }
+            const messages = capture.messages
             return {
               chatId: info.chatId,
               lastPrompt: getFirstUserPrompt(messages),
@@ -206,14 +200,7 @@ export async function getAllChatsAsync(
           } catch {
             if (signal?.aborted) return null
             omitted++
-            return {
-              chatId: info.chatId,
-              lastPrompt: '(saved capture unavailable · Inspect for recovery)',
-              timestamp: info.mtime,
-              messageCount: 0,
-              messageCountKnown: false,
-              captureUnavailable: true,
-            }
+            return unavailableEntry(info)
           }
         },
         signal,

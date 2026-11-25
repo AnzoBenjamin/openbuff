@@ -48,3 +48,20 @@ test('reading an inspection never quarantines or rewrites a capture and refuses 
     await rm(root, { recursive: true, force: true })
   }
 })
+
+test('inspection reads an envelope-only save without loading continuation state', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'saved-envelope-inspection-'))
+  spyOn(projectFiles, 'getProjectDataDir').mockReturnValue(root)
+  const directory = path.join(root, 'chats', 'saved')
+  const source = path.join(directory, 'chat-state.json')
+  const raw = JSON.stringify({ version: 1, runState: { retainedState: true }, messages })
+  try {
+    await mkdir(directory, { recursive: true })
+    await writeFile(source, raw)
+    const document = await readSavedTranscriptInspection('saved', 'metadata')
+    expect(document.rowCount).toBe(3)
+    expect(document.provenance?.identity).toBe(source)
+    expect(document.notice).toContain('cannot resume or edit')
+    expect(await readFile(source, 'utf8')).toBe(raw)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})

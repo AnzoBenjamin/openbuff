@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { convertCbToModelMessages } from '../../util/messages'
+import { convertCbToModelMessages, jsonToolResult } from '../../util/messages'
 import { classifyActionOutput } from '../../util/action-outcomes'
 import {
   getMcpWireResult,
@@ -150,6 +150,7 @@ test('MCP authoritative errors include empty failures; nested/extension data doe
     },
     errorMessage: 'outer extension data',
     status: 'error',
+    executionRefusal: { ok: false, reason: 'cancelled', cause: 'peer data' },
   })
   expect(classifyActionOutput('peer/read', successful).outcome).toBe(
     'succeeded',
@@ -177,6 +178,16 @@ test('MCP authoritative errors include empty failures; nested/extension data doe
     includeCacheControl: false,
   })
   expect(JSON.stringify(model)).toContain('payload data')
+})
+
+test('JSON tool output retains __proto__ as data without changing its prototype', () => {
+  const input = JSON.parse(
+    '{"__proto__":{"marker":1},"nested":{"__proto__":2}}',
+  )
+  const value = jsonToolResult(input)[0].value
+  expect(Object.hasOwn(value, '__proto__')).toBe(true)
+  expect(Object.getPrototypeOf(value)).toBe(Object.prototype)
+  expect(JSON.stringify(value)).toBe(JSON.stringify(input))
 })
 
 test('display omission retains content order, media MIME, resource URI and metadata', () => {

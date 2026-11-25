@@ -265,3 +265,12 @@ During the transition from the upstream Codebuff codebase, a small set of compat
 ### Internal Workspace Package Names
 
 All internal workspace packages retain the `@codebuff/*` namespace: `@codebuff/common`, `@codebuff/agents`, `@codebuff/internal`, `@codebuff/code-map`, `@codebuff/indexer`, `@codebuff/agent-runtime`, `@codebuff/build-tools`, `@codebuff/evals`, `@codebuff/scripts`, `@codebuff/local-agents` (the `.agents/` workspace), and the workspace `@codebuff/cli` (which is published as `@openbuff/cli`). These are private and never published to npm. Only `@openbuff/cli` (v0.1.0) and `@openbuff/sdk` (v0.11.0) are published. Homepage: openbuff.dev. Repo: github.com/AnzoBenjamin/openbuff.
+
+
+## Durable repository intelligence
+
+The CLI and SDK prepare a bounded, actor-specific repository context before execution. The same callback crosses the authenticated supervised bridge for isolated descendants. Source facts, scoped procedures and host-attested validation receipts remain evidence with separate validity rules; existing read/edit and execution authority is checked independently.
+
+Index generations use normalized, content-addressed storage with atomic publication, per-worktree overlays and producer-specific graph layers. The native CLI uses the bundled Rust SQLite service on supported native builds; SDK/virtual and cross-target configurations retain the embedded port. Durable memory queries use maintained projections rather than a bounded event tail, and transcript archives store canonical bodies with immutable snapshot membership.
+
+See [repository-intelligence.md](repository-intelligence.md) for contracts, migration/rollback, configuration, freshness, receipt limitations and reproduction commands. Evidence and implementation status are recorded in `.agents/sessions/index-records-architecture-20261114/`.

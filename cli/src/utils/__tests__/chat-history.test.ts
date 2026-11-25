@@ -120,4 +120,42 @@ describe('chat-history', () => {
     expect(entries[0]).toMatchObject({ chatId: 'broken', messageCountKnown: false, captureUnavailable: true })
     expect(states).toEqual([{ state: 'partial', omitted: 1 }])
   })
+
+  test('log-only new chats and valid empty transcripts are omitted by both readers', async () => {
+    const dir = path.join(tempDataDir, 'chats', 'new-chat')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'log.jsonl'), 'startup log')
+    const empty = path.join(tempDataDir, 'chats', 'empty')
+    fs.mkdirSync(empty, { recursive: true })
+    fs.writeFileSync(path.join(empty, 'chat-messages.json'), '[]')
+    const states: unknown[] = []
+    expect(getAllChats()).toEqual([])
+    expect(await getAllChatsAsync(500, undefined, undefined, 25, state => states.push(state))).toEqual([])
+    expect(states).toEqual([{ state: 'loaded', omitted: 0 }])
+    expect(fs.existsSync(path.join(dir, 'log.jsonl'))).toBe(true)
+  })
+
+  test('the authoritative envelope supplies history when its sidecar is absent or stale', async () => {
+    writeChat('envelope', 'stale sidecar')
+    const dir = path.join(tempDataDir, 'chats', 'envelope')
+    const messages = JSON.parse(fs.readFileSync(path.join(dir, 'chat-messages.json'), 'utf8'))
+    messages[0].content = 'authoritative prompt'
+    fs.writeFileSync(path.join(dir, 'chat-state.json'), JSON.stringify({ version: 1, runState: {}, messages }))
+    expect(getAllChats()[0]?.lastPrompt).toBe('authoritative prompt')
+    expect((await getAllChatsAsync())[0]?.lastPrompt).toBe('authoritative prompt')
+    fs.unlinkSync(path.join(dir, 'chat-messages.json'))
+    expect((await getAllChatsAsync())[0]).toMatchObject({ lastPrompt: 'authoritative prompt', messageCount: 1 })
+  })
+
+  test.each(['corrupt', 'unsupported', 'run-only'])('%s saved state retains a recovery entry without any writes', async kind => {
+    const dir = path.join(tempDataDir, 'chats', kind)
+    fs.mkdirSync(dir, { recursive: true })
+    const name = kind === 'run-only' ? 'run-state.json' : 'chat-state.json'
+    const bytes = kind === 'corrupt' ? '{broken' : kind === 'unsupported' ? '{"version":999,"messages":[]}' : '{}'
+    fs.writeFileSync(path.join(dir, name), bytes)
+    expect(getAllChats()[0]).toMatchObject({ captureUnavailable: true, messageCountKnown: false })
+    expect((await getAllChatsAsync())[0]).toMatchObject({ captureUnavailable: true, messageCountKnown: false })
+    expect(fs.readdirSync(dir)).toEqual([name])
+    expect(fs.readFileSync(path.join(dir, name), 'utf8')).toBe(bytes)
+  })
 })

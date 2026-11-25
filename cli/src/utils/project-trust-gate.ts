@@ -9,8 +9,11 @@ import {
   setProjectTrustOverride,
 } from '@openbuff/sdk'
 
+import { isRendererCommand } from '../cli-args'
 import { getConfigDir } from './auth'
+import { isTrustedProjectRoot, loadTrustedRoots } from './trusted-roots'
 
+import type { ParsedArgs } from '../cli-args'
 import type { ProjectTrustState } from '@openbuff/sdk'
 
 /**
@@ -88,10 +91,55 @@ export function describeProjectTrustRequest(
   state: ProjectTrustState | undefined,
   extras: string[],
 ): string[] {
-  return [
-    ...(state ? formatProjectTrustItems(state) : []),
-    ...extras,
-  ]
+  return [...(state ? formatProjectTrustItems(state) : []), ...extras]
+}
+
+export type ResolveLaunchProjectTrustDeps = ResolveProjectTrustDeps & {
+  /** Legacy serve-only root grant; lookup errors must leave the project untrusted. */
+  isAllowlisted?: (projectRoot: string) => Promise<boolean>
+}
+
+/**
+ * Select the existing trust inputs for a parsed CLI launch. Only an interactive
+ * TUI may consume consent; headless/protocol commands must not read their wire.
+ * The entry point uses the returned decision before starting project registries.
+ */
+export async function resolveLaunchProjectTrust(
+  params: {
+    args: ParsedArgs
+    projectRoot: string
+    stdinIsTTY: boolean | undefined
+    stdoutIsTTY: boolean | undefined
+    isPublishCommand?: boolean
+  },
+  deps: ResolveLaunchProjectTrustDeps = {},
+): Promise<ProjectTrustOutcome> {
+  const { isAllowlisted, ...trustDeps } = deps
+  const flag = params.args.serve
+    ? params.args.serve.trustProjectAgents
+    : params.args.trustProjectAgents
+  let allowlisted = false
+  if (params.args.serve && !flag) {
+    try {
+      allowlisted = isAllowlisted
+        ? await isAllowlisted(params.projectRoot)
+        : isTrustedProjectRoot(
+            fs.realpathSync(params.projectRoot),
+            await loadTrustedRoots(),
+          )
+    } catch {
+      // Preserve the serve allowlist's fail-closed startup contract.
+    }
+  }
+  const interactive =
+    isRendererCommand(params.args) &&
+    !params.isPublishCommand &&
+    params.stdinIsTTY === true &&
+    params.stdoutIsTTY === true
+  return resolveProjectTrust(
+    { projectRoot: params.projectRoot, flag, allowlisted },
+    { ...trustDeps, prompt: interactive ? trustDeps.prompt : undefined },
+  )
 }
 
 /**
@@ -169,48 +217,13 @@ export async function resolveProjectTrust(
   deps.notice?.(
     [
       `openbuff: project ${params.projectRoot} is not trusted${
-        state?.reason === 'changed' ? ' (its config changed since you trusted it)' : ''
+        state?.reason === 'changed'
+          ? ' (its config changed since you trusted it)'
+          : ''
       }; ignoring:`,
       ...items.map((item) => `  - ${item}`),
       '  Start openbuff interactively to review, or pass --trust-project-agents to trust it.',
     ].join('\n'),
   )
   return { trusted: false, source: 'untrusted', state }
-}
-
-/** Plain-terminal trust screen shown before the TUI renderer mounts. */
-export function createTerminalTrustPrompt(io: {
-  input: NodeJS.ReadableStream
-  output: NodeJS.WritableStream
-}): ProjectTrustPrompt {
-  return async (lines) => {
-    const readline = await import('readline/promises')
-    // terminal: false keeps readline from installing keypress handling that
-    // would leave the answer keystrokes for the TUI renderer to replay.
-    const rl = readline.createInterface({
-      input: io.input,
-      output: io.output,
-      terminal: false,
-    })
-    try {
-      io.output.write(
-        [
-          '',
-          'This project has configuration that can run code, use your API keys or loosen approvals:',
-          ...lines.map((line) => `  - ${line}`),
-          '',
-          'Until you trust it, Openbuff ignores all of the above (project config can only tighten policy).',
-          'Your answer is saved for this project and asked again if its config changes.',
-          '',
-        ].join('\n'),
-      )
-      const answer = (await rl.question('Trust this project? [y/N] '))
-        .trim()
-        .toLowerCase()
-      return answer === 'y' || answer === 'yes'
-    } finally {
-      rl.close()
-      io.input.pause()
-    }
-  }
 }

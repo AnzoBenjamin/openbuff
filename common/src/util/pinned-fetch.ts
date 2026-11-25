@@ -16,9 +16,9 @@ import * as zlib from 'node:zlib'
  *   Bun-only `tls.serverName` RequestInit extension for SNI and certificate
  *   checks ({@link buildPinnedRequest}).
  * - Other runtimes (Node/undici ignore `tls.serverName`): `node:http(s)`
- *   with a `lookup` hook that always answers with the pinned address
- *   ({@link nodePinnedRequest}). The request keeps its real hostname, so SNI,
- *   `Host` and certificate validation are unchanged.
+ *   with the connection hostname set directly to the validated IP literal
+ *   ({@link nodePinnedRequest}). Explicit `Host` and TLS `servername` retain
+ *   routing and certificate validation against the original authority.
  *
  * Redirects are never followed here; callers re-validate each hop.
  */
@@ -31,6 +31,15 @@ export const runtimeSupportsTlsServerName = (): boolean =>
   (globalThis as { Bun?: unknown }).Bun !== undefined
 
 const stripBrackets = (host: string): string => host.replace(/^\[|\]$/g, '')
+
+function pinnedAddressFamily(address: string): 4 | 6 {
+  const family = isIP(address)
+  if ((family !== 4 && family !== 6) || address.includes('%'))
+    throw new Error(
+      'Pinned address must be an IP literal without a zone identifier',
+    )
+  return family
+}
 
 const authorityFor = (host: string, port: string): string =>
   port ? `${host}:${port}` : host
@@ -46,8 +55,9 @@ export function buildPinnedRequest(
   init: RequestInit = {},
   port: string = requestUrl.port,
 ): { url: URL; init: RequestInit & { tls?: { serverName?: string } } } {
+  const family = pinnedAddressFamily(address)
   const pinnedUrl = new URL(requestUrl.href)
-  pinnedUrl.hostname = isIP(address) === 6 ? `[${address}]` : address
+  pinnedUrl.hostname = family === 6 ? `[${address}]` : address
   if (port) {
     pinnedUrl.port = port
   }
@@ -96,24 +106,23 @@ const decodeBody = (
 }
 
 /**
- * Issues one request through `node:http`/`node:https` with DNS answered by
- * `address`. Never follows redirects. Returns a WHATWG `Response`.
+ * Issues one request through `node:http`/`node:https` directly to `address`,
+ * retaining the original Host/SNI. Never follows redirects. Returns a WHATWG Response.
  */
 export async function nodePinnedRequest(
   requestUrl: URL,
   address: string,
   init: NodePinnedRequestInit = {},
 ): Promise<Response> {
+  const family = pinnedAddressFamily(address)
   const isHttps = requestUrl.protocol === 'https:'
   const mod = isHttps ? await import('node:https') : await import('node:http')
-  const family = isIP(address)
-  if (family === 0) {
-    throw new Error('Pinned address is not an IP literal')
-  }
   const headers: Record<string, string> = {}
   new Headers(init.headers).forEach((value, key) => {
     headers[key] = value
   })
+  if (!('host' in headers))
+    headers.host = authorityFor(requestUrl.hostname, requestUrl.port)
   if (!('accept-encoding' in headers)) {
     headers['accept-encoding'] = 'gzip, deflate, br'
   }
@@ -125,17 +134,10 @@ export async function nodePinnedRequest(
         method: init.method ?? 'GET',
         headers,
         signal: init.signal,
-        lookup: (
-          _hostname: string,
-          options: { all?: boolean } | number | undefined,
-          callback: (...args: unknown[]) => void,
-        ) => {
-          if (typeof options === 'object' && options?.all) {
-            callback(null, [{ address, family }])
-          } else {
-            callback(null, address, family)
-          }
-        },
+        // A lookup hook is skipped for literal URLs. Override the actual
+        // connection host so both hostname and literal URLs honor the pin.
+        hostname: address,
+        family,
         ...(isHttps ? { servername: stripBrackets(requestUrl.hostname) } : {}),
       } as Parameters<typeof mod.request>[1],
       (res) => {

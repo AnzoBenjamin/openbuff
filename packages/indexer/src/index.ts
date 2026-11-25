@@ -9,6 +9,7 @@ export type {
   IndexEdgeType,
   IndexEdge,
   IndexGraph,
+  IndexGraphDependencies,
   IndexQueryData,
   IndexCoverage,
   IndexStatus,
@@ -19,6 +20,31 @@ export type {
   QueryIndexMode,
   RelatedFile,
 } from './types'
+export * from './storage-port'
+export {
+  closeIndexStorage,
+  getIndexStorageIdentity,
+  loadIndexGeneration,
+  loadIndexMutationJournal,
+  openIndexStorage,
+  recordIndexMutation,
+  saveIndexGeneration,
+} from './durable-index-store'
+export type {
+  IndexGenerationManifest,
+  IndexMutationJournalEntry,
+  PublishIndexGenerationOptions,
+} from './durable-index-store'
+export {
+  createEmbeddedIndexStorage,
+  DirectoryIndexStorage,
+} from './embedded-storage'
+export {
+  collectIndexGarbage,
+  pinIndexGeneration,
+  releaseIndexGenerationPin,
+} from './index-retention'
+export type { IndexRetentionReport } from './index-retention'
 export { IndexManager } from './index-manager'
 export { buildMetadataIndex, updateMetadataIndex } from './metadata-indexer'
 export {

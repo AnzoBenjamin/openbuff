@@ -37,7 +37,16 @@ export function isIgnoredPath(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, '/')
   const segments = normalized.split('/')
   if (normalized.startsWith('.agents/sessions/')) return true
-  if (segments.some((segment) => ignoredLiveStateDirectorySet.has(segment)))
+  const artifactIndex = segments.findIndex((segment) =>
+    artifactDirectories.has(segment),
+  )
+  if (
+    segments.some(
+      (segment, index) =>
+        ignoredLiveStateDirectorySet.has(segment) &&
+        !(segment === 'debug' && artifactIndex >= 0 && index > artifactIndex),
+    )
+  )
     return true
   return ignoredLiveStateFileSuffixList.some((suffix) =>
     normalized.endsWith(suffix),
@@ -118,26 +127,34 @@ export type CodebaseInventory = {
   }>
 }
 
-function walk(root: string, current = root, out: string[] = []): string[] {
+function walk(
+  root: string,
+  current = root,
+  out: string[] = [],
+  artifactsOnly = false,
+): string[] {
   for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
     const absolute = path.join(current, entry.name)
     const relative = path.relative(root, absolute).replace(/\\/g, '/')
     if (entry.isDirectory()) {
-      const segments = relative.split('/')
-      const mayContainShippedSource = segments.some((segment) =>
-        artifactDirectories.has(segment),
-      )
       if (
         isIgnoredPath(relative) ||
-        (ignored.has(entry.name) &&
-          (!mayContainShippedSource ||
-            entry.name === '.git' ||
-            entry.name === 'node_modules'))
+        entry.name === '.git' ||
+        entry.name === 'node_modules'
       )
         continue
-      walk(root, absolute, out)
+      const inArtifact = relative
+        .split('/')
+        .some((segment) => artifactDirectories.has(segment))
+      walk(
+        root,
+        absolute,
+        out,
+        !inArtifact && (artifactsOnly || ignored.has(entry.name)),
+      )
     } else if (entry.isFile() || entry.isSymbolicLink()) {
-      if (ignored.has(entry.name) || isIgnoredPath(relative)) continue
+      if (artifactsOnly || ignored.has(entry.name) || isIgnoredPath(relative))
+        continue
       out.push(relative)
     }
   }

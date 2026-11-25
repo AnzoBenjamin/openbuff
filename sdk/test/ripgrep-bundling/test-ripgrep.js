@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Test ripgrep bundling functionality in runtime environment
-import { writeFileSync, mkdirSync, existsSync } from 'fs'
+import { writeFileSync, mkdirSync, existsSync, mkdtempSync } from 'fs'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 
@@ -8,7 +8,7 @@ console.log('🧪 Testing ripgrep bundling functionality...')
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
-const testDir = join(__dirname, 'test-files')
+const testDir = mkdtempSync(join(__dirname, '.test-files-'))
 
 // Create test files for searching
 function setupTestFiles() {
@@ -75,12 +75,14 @@ async function cleanupTestFiles() {
   }
 }
 
+let host
 try {
   setupTestFiles()
 
   // Test 1: Import ripgrep functions via Tools namespace
   console.log('\n1. Testing ripgrep imports...')
-  const { getBundledRgPath, ToolHelpers } = await import('@openbuff/sdk')
+  const { getBundledRgPath, ToolHelpers, createConfiguredDirectHostExecution } =
+    await import('@openbuff/sdk')
 
   if (typeof getBundledRgPath !== 'function') {
     throw new Error(
@@ -128,34 +130,73 @@ try {
 
   console.log('✅ Using bundled ripgrep binary (not @vscode/ripgrep)')
 
-  // Test 5: Test basic code search functionality
-  console.log('\n5. Testing basic code search...')
+  // Test 5: Direct tool calls need host-captured execution authority.
+  console.log('\n5. Testing code search authority requirement...')
   const searchResult = await ToolHelpers.codeSearch({
     projectPath: testDir,
     pattern: 'UNIQUE_SEARCH_TERM',
     maxResults: 10,
   })
 
-  if (!Array.isArray(searchResult) || searchResult.length === 0) {
+  const refusal = searchResult[0]?.value?.executionRefusal
+  if (refusal?.reason !== 'unavailable') {
     throw new Error(
-      'Expected search results array, got empty or invalid result',
+      'Expected missing execution authority to refuse code search',
     )
   }
 
-  const result = searchResult[0]
-  if (result.type !== 'json' || !result.value) {
-    throw new Error('Expected JSON result with value property')
-  }
+  console.log('✅ Code search refuses without captured execution authority')
 
-  if (!result.value.stdout || typeof result.value.stdout !== 'string') {
-    throw new Error('Expected stdout in search result')
-  }
+  const created = await createConfiguredDirectHostExecution({
+    cwd: testDir,
+    projectRoot: testDir,
+    hostConfiguration: {
+      environment: { PATH: process.env.PATH },
+      platform: process.platform,
+      invocationCwd: testDir,
+      projectRoot: testDir,
+      home: { kind: 'none' },
+      globals: { kind: 'disabled' },
+      selection: { kind: 'none' },
+      trust: { ancestorConfig: false, projectReadableRoots: false },
+    },
+    mode: 'user',
+    approvalMode: 'allow-all',
+    profile: {
+      policy: 'full-access',
+      preferredBackend: 'portable-ts',
+      required: ['exact-env'],
+      allowBackendFallback: false,
+    },
+    limit: { kind: 'finite', durationMs: 60_000 },
+  })
+  if (!created.ok)
+    throw new Error(`Could not create search host: ${created.cause}`)
+  host = created.value
 
-  console.log('✅ Basic code search successful')
+  const runBundledSearch = async (pattern, flags) => {
+    const operation = host.hostServices.directOperation({ mode: 'user' })
+    if (!operation.ok) throw new Error(operation.cause)
+    const result = await ToolHelpers.codeSearch({
+      projectPath: testDir,
+      pattern,
+      flags,
+      maxResults: 10,
+      executionContext: operation.value.executionContext,
+    })
+    const value = result[0]?.value
+    if (typeof value?.stdout !== 'string' || value.errorMessage) {
+      throw new Error(`SDK code search failed: ${JSON.stringify(value)}`)
+    }
+    if (value.processCleanup?.status !== 'complete') {
+      throw new Error('SDK code search did not complete process cleanup')
+    }
+    return value.stdout
+  }
 
   // Test 6: Verify search results contain expected matches
-  console.log('\n6. Testing search result content...')
-  const stdout = result.value.stdout
+  console.log('\n6. Testing SDK code search results...')
+  const stdout = await runBundledSearch('UNIQUE_SEARCH_TERM')
   const lines = stdout.split('\n').filter((line) => line.trim())
 
   if (lines.length < 3) {
@@ -175,14 +216,8 @@ try {
 
   // Test 7: Test search with flags
   console.log('\n7. Testing search with flags...')
-  const flaggedResult = await ToolHelpers.codeSearch({
-    projectPath: testDir,
-    pattern: 'unique_search_term',
-    flags: '-i', // case insensitive
-    maxResults: 5,
-  })
-
-  if (!flaggedResult[0]?.value?.stdout) {
+  const flaggedStdout = await runBundledSearch('unique_search_term', '-i')
+  if (!flaggedStdout) {
     throw new Error('Expected results from case-insensitive search')
   }
 
@@ -190,28 +225,22 @@ try {
 
   // Test 8: Test search with file type filtering
   console.log('\n8. Testing file type filtering...')
-  const typeFilteredResult = await ToolHelpers.codeSearch({
-    projectPath: testDir,
-    pattern: 'UNIQUE_SEARCH_TERM',
-    flags: '-t js', // only JavaScript files
-    maxResults: 5,
-  })
-
-  const typeFilteredStdout = typeFilteredResult[0]?.value?.stdout || ''
+  const typeFilteredStdout = await runBundledSearch(
+    'UNIQUE_SEARCH_TERM',
+    '-t js',
+  )
   const typeFilteredLines = typeFilteredStdout
     .split('\n')
-    .filter((line) => line.trim())
+    .filter((line) => !line.startsWith(' ') && line.endsWith(':'))
 
   // Should only find JS file, not TS or JSON
-  const hasOnlyJs = typeFilteredLines.every(
-    (line) => !line.includes('.ts') && !line.includes('.json'),
-  )
-
-  if (!hasOnlyJs && typeFilteredLines.length > 0) {
-    console.warn('⚠️ File type filtering may not be working as expected')
-  } else {
-    console.log('✅ File type filtering works correctly')
+  if (
+    typeFilteredLines.length !== 1 ||
+    !/(?:^|\/)example\.js:$/.test(typeFilteredLines[0])
+  ) {
+    throw new Error('Expected file type filtering to match only example.js')
   }
+  console.log('✅ File type filtering works correctly')
 
   // Test 9: Test error handling for invalid directory
   console.log('\n9. Testing error handling...')
@@ -252,7 +281,11 @@ try {
 } catch (error) {
   console.error('\n❌ Ripgrep bundling test failed:', error.message)
   console.error('Stack trace:', error.stack)
-  process.exit(1)
+  process.exitCode = 1
 } finally {
-  await cleanupTestFiles()
+  try {
+    await host?.close()
+  } finally {
+    await cleanupTestFiles()
+  }
 }

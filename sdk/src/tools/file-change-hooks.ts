@@ -44,11 +44,9 @@ export type CapturedHookConfiguration = Readonly<{
   fileChangeHooks: readonly Readonly<FileChangeHook>[]
 }>
 
-// Hooks default to a bounded 300s wall-clock timeout so a hung typecheck/lint
-// command cannot stall the agent forever. An explicit -1 in a hook's config is
-// a deliberate opt-out (unbounded), and any positive `timeoutSeconds` still
-// takes precedence.
-const HOOK_DEFAULT_TIMEOUT_SECONDS = 300
+// Productive validation work has no implicit wall-clock cutoff. Explicit
+// timeoutSeconds and any captured parent deadline still apply, as does cancellation.
+const HOOK_DEFAULT_TIMEOUT_SECONDS = -1
 const MAX_HOOK_OUTPUT_CHARS = 6000
 const MAX_MANIFEST_BYTES = 512_000
 const MAX_PROJECT_SCAN_ENTRIES = 2_000
@@ -1572,7 +1570,11 @@ export async function runFileChangeHooks(params: {
   const files = [...params.files]
   const cwd = params.cwd
   const env = params.env ? { ...params.env } : undefined
-  const signal = params.executionContext?.signal ?? params.signal
+  const hostSignal = params.executionContext?.signal
+  const signal = params.signal && hostSignal && params.signal !== hostSignal
+    ? AbortSignal.any([params.signal, hostSignal])
+    : params.signal ?? hostSignal
+  throwIfAborted(signal)
   // Copy the hook view before the first await. Root retains the frozen source
   // snapshot; no later ambient load or mutation can change this invocation.
   const captured = params.capturedConfiguration
@@ -1611,6 +1613,10 @@ export async function runFileChangeHooks(params: {
       executionRefusal: inferredContext,
     }] }] as CodebuffToolOutput<'run_file_change_hooks'>
   }
+  const inferenceHostSignal = inferredContext?.ok ? inferredContext.value.signal : hostSignal
+  const inferenceSignal = params.signal && inferenceHostSignal && params.signal !== inferenceHostSignal
+    ? AbortSignal.any([params.signal, inferenceHostSignal])
+    : params.signal ?? inferenceHostSignal
   const hooks =
     explicitHooks ??
     (await (async () => {
@@ -1625,12 +1631,13 @@ export async function runFileChangeHooks(params: {
           ? await inferFileChangeHooksFromFileSystem(
               cwd,
               params.fileSystem,
-              inferredContext?.ok ? inferredContext.value.signal ?? signal : signal,
+              inferenceSignal,
             )
-          : await inferFileChangeHooksAsync(cwd, inferredContext?.ok ? inferredContext.value.signal ?? signal : signal),
+          : await inferFileChangeHooksAsync(cwd, inferenceSignal),
         configuredHooks!,
       )
     })())
+  throwIfAborted(signal)
   const matching = selectMatchingHooks(hooks, files)
   if (hooks.length === 0) {
     return [
@@ -1692,7 +1699,7 @@ export async function runFileChangeHooks(params: {
         projectRoot: cwd,
         timeout_seconds: hook.timeoutSeconds ?? HOOK_DEFAULT_TIMEOUT_SECONDS,
         env,
-        signal: context.value.signal ?? signal,
+        signal: params.signal ?? context.value.signal,
         executionContext: context.value,
         executionFamily: 'configured-hook',
         executionBranchId: `hook.${configured ? 'configured' : 'inferred-opt-in'}.${hook.runPerFile ? 'per-file' : 'project'}`,
@@ -1774,7 +1781,7 @@ export async function runFileChangeHooks(params: {
         files,
         cwd,
         env,
-        signal,
+        signal: params.signal ?? hostSignal,
         executionContext: params.executionContext,
       })
     } catch (error) {
@@ -1822,6 +1829,7 @@ export async function runFileChangeHooks(params: {
     })
   }
 
+  throwIfAborted(signal)
   return [
     { type: 'json', value: results },
   ] as CodebuffToolOutput<'run_file_change_hooks'>

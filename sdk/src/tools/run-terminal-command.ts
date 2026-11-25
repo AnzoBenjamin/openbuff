@@ -14,6 +14,7 @@ import {
 import { resolveFilePathForOperation } from './path-utils'
 import { runGit } from './git-status'
 import { prepareHarnessGitReadArgv } from '../services/harness-enforcement'
+import { SIGTERM_GRACE_MS } from '../services/semgrep-baseline'
 import { MAX_TERMINAL_SPOOL_BYTES, TerminalOutputSpool } from './terminal-output-spool'
 import { processCleanupSchema } from '@codebuff/common/tools/params/process-cleanup'
 import { registerPreparedNativeLaunch } from '../services/native-host-execution'
@@ -44,56 +45,33 @@ import type {
   Refusal, Result, TargetDescription,
 } from '@codebuff/common/types/contracts/execution-context'
 
+import { captureTerminalTimeoutPolicy, resolveTerminalTimeout } from '../services/terminal-timeout-policy'
+export { DEFAULT_SYNC_TIMEOUT_SECONDS, resolveTerminalTimeout } from '../services/terminal-timeout-policy'
+export type { TerminalTimeoutPolicy, TerminalTimeoutResolution } from '../services/terminal-timeout-policy'
+import type { TerminalTimeoutPolicy } from '../services/terminal-timeout-policy'
+
 const COMMAND_OUTPUT_LIMIT = 50_000
 
-/** Execution-time bound for a SYNC command whose caller omitted `timeout_seconds`. */
-export const DEFAULT_SYNC_TIMEOUT_SECONDS = 120
+async function admitWithCallerCancellation(
+  launch: PreparedLaunch,
+  hostSignal?: AbortSignal,
+  callerSignal?: AbortSignal,
+) {
+  if (!callerSignal || callerSignal === hostSignal) return admitNodeLaunch(launch, hostSignal)
+  if (callerSignal.aborted) return refusalForSignal(callerSignal)
+  return new Promise<Awaited<ReturnType<typeof admitNodeLaunch>>>(resolve => {
+    const onAbort = () => resolve(hostSignal?.aborted ? refusalForSignal(hostSignal) : refusalForSignal(callerSignal))
+    callerSignal.addEventListener('abort', onAbort, { once: true })
+    void admitNodeLaunch(launch, hostSignal).then(result => {
+      callerSignal.removeEventListener('abort', onAbort)
+      resolve(result)
+    })
+    if (callerSignal.aborted) onAbort()
+  })
+}
+
 /** Silence after which a SYNC result carries a "waiting for input?" hint. The command keeps running. */
 export const IDLE_OUTPUT_HINT_MS = 30_000
-
-/**
- * Host/user limits on model-supplied terminal timeouts. Model input never
- * supplies this policy; the trusted host does.
- */
-export type TerminalTimeoutPolicy = Readonly<{
-  /** Replaces DEFAULT_SYNC_TIMEOUT_SECONDS for SYNC commands that omit a timeout. */
-  defaultSyncSeconds?: number
-  /** Upper bound applied to every finite or unbounded (-1) request. */
-  maxSeconds?: number
-  /** `false` turns a SYNC `-1` request into the default bound. Defaults to `true`. */
-  allowUnbounded?: boolean
-}>
-
-export type TerminalTimeoutResolution = Readonly<{
-  /** Captured local limit; -1 leaves only the parent deadline in force. */
-  localSeconds: number
-  /** Execution-time default that starts at dispatch, after any approval wait. */
-  defaultExecutionMs?: number
-}>
-
-/**
- * An omitted SYNC timeout becomes an execution-time default (120 s) that starts
- * after admission, so an approval wait never consumes it. Explicit values keep
- * their documented meaning (including approval waits). A finite parent deadline
- * always still applies through the derived execution context.
- */
-export function resolveTerminalTimeout(
-  requested: number | undefined,
-  processType: 'SYNC' | 'BACKGROUND',
-  policy: TerminalTimeoutPolicy = {},
-): TerminalTimeoutResolution {
-  const cap = policy.maxSeconds !== undefined && policy.maxSeconds > 0 ? policy.maxSeconds : undefined
-  const syncDefault = Math.min(policy.defaultSyncSeconds ?? DEFAULT_SYNC_TIMEOUT_SECONDS, cap ?? Infinity)
-  const defaulted = (): TerminalTimeoutResolution => processType === 'SYNC'
-    ? { localSeconds: -1, defaultExecutionMs: Math.round(syncDefault * 1000) }
-    : { localSeconds: cap ?? -1 }
-  if (requested === undefined) return defaulted()
-  if (requested === -1) {
-    if (cap !== undefined) return { localSeconds: cap }
-    return policy.allowUnbounded === false ? defaulted() : { localSeconds: -1 }
-  }
-  return { localSeconds: cap !== undefined && requested > cap ? cap : requested }
-}
 
 export type TerminalIdleOutputHint = Readonly<{ idleMs: number; stdoutBytes: number; stderrBytes: number }>
 
@@ -198,7 +176,9 @@ const GIT_SAFETY_SCAN_OVERLAP_CHARS = 256
  */
 const GIT_SAFETY_SCAN_SLICE_CHARS = 64 * 1024
 
-type GitSafetyResult = { exitCode: number; stdout: string; stderr: string; executionRefusal?: Refusal }
+type GitSafetyResult = { exitCode: number; stdout: string; stderr: string; executionRefusal?: Refusal; cleanupFailed?: boolean }
+
+class GitSafetyCleanupError extends ExecutionRefusalError {}
 
 type StagedDiffScan = {
   /**
@@ -834,13 +814,14 @@ async function runGitForSafety(
     env?: NodeJS.ProcessEnv
     executionContext?: ExecutionAdapterContext
     branchId?: string
+    captureDirtyOutput?: boolean
   },
 ): Promise<GitSafetyResult> {
   const refuse = (refusal: Refusal): GitSafetyResult => ({
     exitCode: -1, stdout: '', stderr: refusal.cause, executionRefusal: refusal,
   })
   if (options?.signal?.aborted) return refuse(refusalForSignal(options.signal))
-  const limit = executionLimitMs(options?.timeoutMs ?? GIT_SAFETY_SPAWN_TIMEOUT_MS)
+  const limit = executionLimitMs(options?.captureDirtyOutput ? options.timeoutMs : options?.timeoutMs ?? GIT_SAFETY_SPAWN_TIMEOUT_MS)
   if (!limit.ok) return refuse(limit)
   const context = deriveExecutionContext(options?.executionContext, `git-safety:${options?.branchId ?? ''}`, limit.value)
   if (!context.ok) return refuse(context)
@@ -848,18 +829,21 @@ async function runGitForSafety(
     executionContext: context.value,
     executable: 'git', argv: prepareHarnessGitReadArgv(args), cwd,
     branchId: options?.branchId ?? '',
-    environmentOverlay: { ...options?.env, GIT_OPTIONAL_LOCKS: '0' },
+    environmentOverlay: options?.captureDirtyOutput ? options.env : { ...options?.env, GIT_OPTIONAL_LOCKS: '0' },
     adapterOptions: { stdio: 'ignore-pipe-pipe', shell: false, detached: false, windowsHide: false,
-      maxRetainedOutputBytes: 2 * GIT_SAFETY_OUTPUT_LIMIT },
+      ...(options?.captureDirtyOutput
+        ? { sigtermGraceMs: SIGTERM_GRACE_MS, phase: 'direct' }
+        : { maxRetainedOutputBytes: 2 * GIT_SAFETY_OUTPUT_LIMIT }) },
   })
   if (!launch.ok) return refuse(launch)
-  const admitted = await admitNodeLaunch(launch.value, context.value.signal ?? options?.signal)
+  const admitted = await admitWithCallerCancellation(launch.value, context.value.signal, options?.signal)
   if (!admitted.ok) return refuse(admitted)
+  if (options?.signal?.aborted) return refuse(refusalForSignal(options.signal))
   const spawn = trustedNodeSpawn(context.value)
   const dispatched = dispatchNodeLaunch(admitted.value, (input) => spawn(input.executable, input.argv, {
     cwd: input.cwd, env: input.env, signal: input.resourceSignal,
     stdio: ['ignore', 'pipe', 'pipe'], shell: false, detached: false, windowsHide: false,
-  }))
+  }), options?.captureDirtyOutput ? { sigtermGraceMs: SIGTERM_GRACE_MS } : {})
   if (!dispatched.ok) return refuse(dispatched)
   const node = dispatched.value
   const resourceSignal = node.input.resourceSignal
@@ -878,17 +862,23 @@ async function runGitForSafety(
     let stdoutComplete = false
     /** Stateful decoder, so a code point split across chunks is not corrupted. */
     const stdoutDecoder = new StringDecoder('utf8')
+    const stderrDecoder = new StringDecoder('utf8')
     const child = node.child
     let lifetimeRefusal: Refusal | undefined
-    const settle = (exitCode: number) => {
-      if (settled) return
+    let stopRefusal: Refusal | undefined
+    let childError = false
+    void node.nativeResult?.catch(() => {})
+    const settle = (exitCode: number, cleanupError?: string, joinedStop = false) => {
+      if (settled || (stopRefusal && !joinedStop)) return
       settled = true
       cancelSpawnTimer()
       resourceSignal.removeEventListener('abort', onAbort)
+      options?.signal?.removeEventListener('abort', onCallerAbort)
       // Whatever the decoder still held is part of the head: a stream that ends
       // mid-code-point must not lose the diagnostic that straddles that boundary.
       stdout += stdoutDecoder.end()
-      if (stdout.length > GIT_SAFETY_WHITESPACE_HEAD_BYTES) {
+      appendStderrTail(stderrDecoder.end())
+      if (!options?.captureDirtyOutput && stdout.length > GIT_SAFETY_WHITESPACE_HEAD_BYTES) {
         stdout = stdout.slice(0, GIT_SAFETY_WHITESPACE_HEAD_BYTES)
       }
       // An over-budget stream mirrors spawnSync's maxBuffer refusal: the
@@ -897,13 +887,36 @@ async function runGitForSafety(
       // produced an untrustworthy partial diff, and the preflight must not
       // hang the tool call waiting for it.
       const observation = node.observation()
-      const refusal = lifetimeRefusal ?? node.resourceRefusal() ?? (!observation.ok ? observation : undefined)
+      let refusal = stopRefusal ?? lifetimeRefusal ?? node.resourceRefusal() ?? (!observation.ok ? observation : undefined)
+      if (cleanupError) {
+        refusal = executionRefusal(refusal?.reason ?? 'unavailable',
+          [refusal?.cause, cleanupError].filter(Boolean).join('; '))
+      }
       resolve({
         exitCode: overflowed || aborted || refusal ? -1 : exitCode,
         stdout,
         stderr: stderr || refusal?.cause || '',
         ...(refusal ? { executionRefusal: refusal } : {}),
+        ...(cleanupError ? { cleanupFailed: true } : {}),
       })
+    }
+    const joinCleanup = async (reason: 'deadline' | 'owner-cancel' | 'normal-leader-exit' | 'adapter-error', force = false) => {
+      try {
+        const cleanup = await node.scope.requestStop(reason, force)
+        return cleanup.status !== 'complete'
+          ? `Git cleanup ${cleanup.status}${cleanup.cause ? `: ${cleanup.cause}` : ''}`
+          : !cleanup.output.complete ? 'Git cleanup output is incomplete' : undefined
+      } catch (error) {
+        return `Git cleanup could not be observed: ${error instanceof Error ? error.message : String(error)}`
+      }
+    }
+    const stop = (refusal: Refusal) => {
+      if (settled || stopRefusal) return
+      aborted = true
+      stopRefusal = refusal
+      const deadline = refusal.reason === 'deadline-exhausted'
+      void joinCleanup(deadline ? 'deadline' : 'owner-cancel', deadline)
+        .then((cleanupError) => settle(-1, cleanupError, true))
     }
     /**
      * A local `git diff --cached` is fast; one that has not produced a result
@@ -913,21 +926,23 @@ async function runGitForSafety(
      * never sees.
      */
     const cancelSpawnTimer = scheduleNodeDeadline(node.remainingResourceMs, () => {
-      aborted = true
-      lifetimeRefusal = node.resourceRefusal() ?? (resourceSignal.aborted ? refusalForSignal(resourceSignal)
-        : executionRefusal('deadline-exhausted', 'Git safety resource deadline exhausted'))
-      settle(-1)
+      stop(node.resourceRefusal() ?? (resourceSignal.aborted ? refusalForSignal(resourceSignal)
+        : executionRefusal('deadline-exhausted', 'Git safety resource deadline exhausted')))
     })
     let aborted = false
     const onAbort = (): void => {
-      aborted = true
-      lifetimeRefusal = refusalForSignal(resourceSignal)
-      settle(-1)
+      stop(node.resourceRefusal() ?? refusalForSignal(resourceSignal))
+    }
+    const onCallerAbort = (): void => {
+      stop(node.resourceRefusal() ?? refusalForSignal(options!.signal!))
     }
     resourceSignal.addEventListener('abort', onAbort, { once: true })
+    if (options?.signal && options.signal !== resourceSignal) {
+      options.signal.addEventListener('abort', onCallerAbort, { once: true })
+    }
     const withinBudget = (bytes: number): boolean => {
       if (overflowed) return false
-      if (bytes <= GIT_SAFETY_OUTPUT_LIMIT) return true
+      if (options?.captureDirtyOutput || bytes <= GIT_SAFETY_OUTPUT_LIMIT) return true
       overflowed = true
       child.kill('SIGKILL')
       return false
@@ -952,6 +967,10 @@ async function runGitForSafety(
         observeStdout(chunk)
         return
       }
+      if (options?.captureDirtyOutput) {
+        stdout += stdoutDecoder.write(chunk)
+        return
+      }
       if (stdoutComplete) return
       // Head-only retention: the first diagnostic decides the verdict and the
       // remainder of the list is never retained or decoded.
@@ -969,20 +988,36 @@ async function runGitForSafety(
       if (settled) return
       stderrBytes += chunk.byteLength
       if (!withinBudget(stderrBytes)) return
-      appendStderrTail(chunk.toString('utf8'))
+      appendStderrTail(stderrDecoder.write(chunk))
     })
     child.on('error', (error) => {
       appendStderrTail(error.message)
-      settle(-1)
+      if (resourceSignal.aborted) { onAbort(); return }
+      if (options?.signal?.aborted) { onCallerAbort(); return }
+      if (stopRefusal || childError) return
+      childError = true
+      void joinCleanup('adapter-error').then((cleanupError) => settle(-1, cleanupError))
     })
     child.on('close', async (code) => {
-      const native = await node.nativeResult
-      if (native && !native.ok) { lifetimeRefusal = native; settle(-1); return }
-      settle(native?.ok ? native.value.exitCode ?? -1 : code ?? -1)
+      if (stopRefusal || childError) return
+      const cleanup = joinCleanup('normal-leader-exit')
+      try {
+        const native = await node.nativeResult
+        if (native && !native.ok) lifetimeRefusal = native
+        const cleanupError = await cleanup ?? (native?.ok && !native.value.cleanup.complete
+          ? 'Git native cleanup is incomplete' : undefined)
+        settle(native?.ok ? native.value.exitCode ?? -1 : code ?? -1, cleanupError)
+      } catch (error) {
+        lifetimeRefusal = executionRefusal('unavailable', `Git native result unavailable: ${error instanceof Error ? error.message : String(error)}`)
+        settle(-1, await cleanup)
+      }
     })
     if (resourceSignal.aborted) onAbort()
+    if (options?.signal?.aborted) onCallerAbort()
   })
 }
+
+export { runGitForSafety as __runGitForSafetyForTest }
 
 /**
  * Outcome of the staged-commit safety preflight.
@@ -1033,7 +1068,14 @@ async function validateStagedCommit(
       scanner,
     ),
   ])
-  const refusal = whitespace.executionRefusal ?? diff.executionRefusal
+  const stopped = [whitespace, diff].find(({ executionRefusal }) =>
+    executionRefusal?.reason === 'cancelled' || executionRefusal?.reason === 'deadline-exhausted')
+  const primary = stopped ?? (whitespace.executionRefusal ? whitespace : diff)
+  let refusal = primary.executionRefusal
+  const other = primary === whitespace ? diff : whitespace
+  if (refusal && other.cleanupFailed && other.executionRefusal) {
+    refusal = executionRefusal(refusal.reason, `${refusal.cause}; ${other.executionRefusal.cause}`)
+  }
   if (refusal) return { kind: 'inspectionFailed', detail: refusal.cause, executionRefusal: refusal }
   if (whitespace.exitCode !== 0) {
     const detail = (whitespace.stdout || whitespace.stderr).trim()
@@ -1222,13 +1264,18 @@ export async function listDirtyPaths(
   env?: NodeJS.ProcessEnv,
   executionContext?: ExecutionAdapterContext,
   branchId = 'terminal.legacy-dirty',
+  callerSignal?: AbortSignal,
 ): Promise<Set<string> | null> {
   try {
     const args = ['status', '--porcelain', '-uall']
-    const result = env
+    const result = callerSignal
+      ? await runGitForSafety(args, projectRoot, undefined, { signal: callerSignal, env, executionContext, branchId, captureDirtyOutput: !env })
+      : env
       ? await runGitForSafety(args, projectRoot, undefined, { signal, env, executionContext, branchId })
       : await runGit(args, projectRoot, signal, { executionContext, branchId })
-    if (result.executionRefusal) throw new ExecutionRefusalError(result.executionRefusal)
+    if (result.executionRefusal) throw 'cleanupFailed' in result && result.cleanupFailed
+      ? new GitSafetyCleanupError(result.executionRefusal)
+      : new ExecutionRefusalError(result.executionRefusal)
     if (result.exitCode !== 0) return null
     const paths = new Set<string>()
     for (const line of result.stdout.split('\n')) {
@@ -1291,7 +1338,7 @@ export async function runTerminalCommand({
   allowed_paths?: string[]
   cwd: string
   projectRoot?: string
-  /** Omitted: SYNC gets DEFAULT_SYNC_TIMEOUT_SECONDS of execution time; BACKGROUND stays unbounded. */
+  /** Omitted/-1 adds no local timeout; explicit host defaults/caps and parent deadlines still apply. */
   timeout_seconds?: number
   env?: Record<string, string | undefined>
   /** Child inheritance is captured by the root host before this call. */
@@ -1341,7 +1388,10 @@ export async function runTerminalCommand({
     },
   }]
   if (signal?.aborted) return refused(refusalForSignal(signal))
-  const timeout = resolveTerminalTimeout(timeout_seconds, process_type, timeoutPolicy)
+  if (requestedSignal?.aborted) return refused(refusalForSignal(requestedSignal))
+  const capturedTimeoutPolicy = captureTerminalTimeoutPolicy(timeoutPolicy)
+  if (!capturedTimeoutPolicy.ok) return refused(capturedTimeoutPolicy)
+  const timeout = resolveTerminalTimeout(timeout_seconds, process_type, capturedTimeoutPolicy.value)
   const limit = executionLimitSeconds(timeout.localSeconds)
   if (!limit.ok) return refused(limit)
   const branchId = executionBranchId ?? (process_type === 'BACKGROUND'
@@ -1408,7 +1458,7 @@ export async function runTerminalCommand({
   if (!prepared.ok) return refused(prepared)
   const preparedLaunch = prepared.value
   registerPreparedNativeLaunch(context.value.execution, target.value, preparedLaunch)
-  const admitted = await admitNodeLaunch(preparedLaunch, signal)
+  const admitted = await admitWithCallerCancellation(preparedLaunch, signal, requestedSignal)
   if (!admitted.ok) return refused(admitted)
   const launchFacts = preparedLaunch.facts()
   const owner = launchFacts.correlation.kind === 'action'
@@ -1444,12 +1494,14 @@ export async function runTerminalCommand({
     } }]
   }
   let dirtyObservationRefusal: Refusal | undefined
+  let dirtyObservationCleanupFailed = false
   const observeDirty = async (dirtyBranchId: string) => {
     try {
-      return await listDirtyPaths(effectiveProjectRoot, signal, env, context.value, dirtyBranchId)
+      return await listDirtyPaths(effectiveProjectRoot, signal, env, context.value, dirtyBranchId, requestedSignal)
     } catch (error) {
       if (!isExecutionRefusalError(error)) throw error
       dirtyObservationRefusal = error.refusal
+      dirtyObservationCleanupFailed = error instanceof GitSafetyCleanupError
       return null
     }
   }
@@ -1459,7 +1511,7 @@ export async function runTerminalCommand({
     permission_profile === 'git-commit' &&
     metadata?.requiresCommitSafety === true
   ) {
-    const safety = await validateStagedCommit(containedCwd, signal, env, context.value)
+    const safety = await validateStagedCommit(containedCwd, requestedSignal ?? signal, env, context.value)
     if (safety?.kind === 'blocked') {
       return finalizeHarnessMetadata(
         Promise.resolve([
@@ -1500,6 +1552,8 @@ export async function runTerminalCommand({
   if (process_type === 'BACKGROUND') {
     return finalizeHarnessMetadata((async () => {
       const dirtyBefore = await observeDirty('terminal.safety.dirty-before')
+      if (requestedSignal?.aborted) return refused(dirtyObservationRefusal ?? refusalForSignal(requestedSignal))
+      if (dirtyObservationRefusal && (dirtyObservationCleanupFailed || dirtyObservationRefusal.reason === 'cancelled' || dirtyObservationRefusal.reason === 'deadline-exhausted')) return refused(dirtyObservationRefusal)
       let job
       try {
         job = startBackgroundJob({
@@ -1516,7 +1570,23 @@ export async function runTerminalCommand({
         if (isExecutionRefusalError(error)) return refused(error.refusal)
         throw error
       }
-      const observed = await job.nodeLaunch!.started
+      const node = job.nodeLaunch!
+      let callerStop: Promise<unknown> | undefined
+      let wakeCaller!: () => void
+      const callerCancelled = new Promise<undefined>(resolve => { wakeCaller = () => resolve(undefined) })
+      const onCallerAbort = () => {
+        callerStop ??= Promise.resolve().then(() => node.scope.requestStop('owner-cancel'))
+        wakeCaller()
+      }
+      requestedSignal?.addEventListener('abort', onCallerAbort, { once: true })
+      if (requestedSignal?.aborted) onCallerAbort()
+      const observed = await Promise.race([node.started, callerCancelled])
+      requestedSignal?.removeEventListener('abort', onCallerAbort)
+      if (callerStop) {
+        await callerStop
+        return refused(node.resourceRefusal() ?? refusalForSignal(requestedSignal!))
+      }
+      if (!observed) return refused(executionRefusal('unavailable', 'Background start observation is unavailable'))
       if (!observed.ok) {
         killBackgroundJob(job.jobId, 'SIGTERM')
         return refused(observed)
@@ -1539,6 +1609,8 @@ export async function runTerminalCommand({
   return finalizeHarnessMetadata(
     (async () => {
       const dirtyBefore = await observeDirty('terminal.safety.dirty-before')
+      if (requestedSignal?.aborted) return refused(dirtyObservationRefusal ?? refusalForSignal(requestedSignal))
+      if (dirtyObservationRefusal && (dirtyObservationCleanupFailed || dirtyObservationRefusal.reason === 'cancelled' || dirtyObservationRefusal.reason === 'deadline-exhausted')) return refused(dirtyObservationRefusal)
 
       const commandResult = await new Promise<
         CodebuffToolOutput<'run_terminal_command'>
@@ -1578,8 +1650,9 @@ export async function runTerminalCommand({
         let settled = false
         let completing = false
         let terminationReason: 'abort' | 'timeout' | null = null
+        let callerRefusal: Refusal | undefined
         let defaultTimeoutFired = false
-        let defaultTimeoutTimer: ReturnType<typeof setTimeout> | undefined
+        let cancelDefaultTimeout: (() => void) | undefined
         // Idle-output watchdog: a hint only, never a kill.
         let lastOutputAt = performance.now()
         let maxIdleMs = 0
@@ -1606,8 +1679,8 @@ export async function runTerminalCommand({
         const stopWatchdogs = () => {
           if (idleTimer !== undefined) clearTimeout(idleTimer)
           idleTimer = undefined
-          if (defaultTimeoutTimer !== undefined) clearTimeout(defaultTimeoutTimer)
-          defaultTimeoutTimer = undefined
+          cancelDefaultTimeout?.()
+          cancelDefaultTimeout = undefined
           maxIdleMs = Math.max(maxIdleMs, performance.now() - lastOutputAt)
         }
         const idleFields = () => idleOutputHintMs > 0 && maxIdleMs >= idleOutputHintMs
@@ -1643,9 +1716,18 @@ export async function runTerminalCommand({
           markTermination(refusalForSignal(resourceSignal).reason === 'deadline-exhausted' ? 'timeout' : 'abort')
           cancelTimer?.()
         }
+        const onCallerAbort = () => {
+          markTermination('abort')
+          if (terminationReason !== 'abort' || callerRefusal) return
+          callerRefusal = refusalForSignal(requestedSignal!)
+          void node.scope.requestStop('owner-cancel').then(() => finishClose(null, true))
+        }
         const signalAlreadyAborted = resourceSignal.aborted
         if (!signalAlreadyAborted) {
           resourceSignal.addEventListener('abort', onAbort, { once: true })
+        }
+        if (requestedSignal && requestedSignal !== resourceSignal) {
+          requestedSignal.addEventListener('abort', onCallerAbort, { once: true })
         }
 
         // Admission/preflight elapsed time is already deducted by the host.
@@ -1655,16 +1737,20 @@ export async function runTerminalCommand({
           })
         }
         if (timeout.defaultExecutionMs !== undefined) {
-          defaultTimeoutTimer = setTimeout(() => {
-            defaultTimeoutTimer = undefined
-            if (settled || completing || terminationReason) return
-            markTermination('timeout')
-            if (terminationReason !== 'timeout') return
-            defaultTimeoutFired = true
-            // SIGTERM, bounded grace, then SIGKILL of the owned process group.
-            void node.scope.requestStop('deadline')
-          }, timeout.defaultExecutionMs)
-          defaultTimeoutTimer.unref?.()
+          const startedAt = performance.now()
+          const durationMs = timeout.defaultExecutionMs
+          cancelDefaultTimeout = scheduleNodeDeadline(
+            () => Math.max(0, durationMs - (performance.now() - startedAt)),
+            () => {
+              cancelDefaultTimeout = undefined
+              if (settled || completing || terminationReason) return
+              markTermination('timeout')
+              if (terminationReason !== 'timeout') return
+              defaultTimeoutFired = true
+              // SIGTERM, bounded grace, then SIGKILL of the owned process group.
+              void node.scope.requestStop('deadline')
+            },
+          )
         }
         armIdle()
 
@@ -1715,11 +1801,11 @@ export async function runTerminalCommand({
         })
 
         // Handle process completion
-        childProcess.on('close', async (exitCode) => {
+        const finishClose = async (exitCode: number | null, cleanupFinished = false) => {
           if (completing) return
           completing = true
           stopWatchdogs()
-          const native = await node.nativeResult
+          const native = cleanupFinished ? undefined : await node.nativeResult
           if (native?.ok) exitCode = native.value.exitCode
           const nativeFields = native?.ok ? {
             executionUsage: native.value.targetUsage ?? native.value.usage,
@@ -1736,6 +1822,7 @@ export async function runTerminalCommand({
 
           cancelTimer?.()
           resourceSignal.removeEventListener('abort', onAbort)
+          requestedSignal?.removeEventListener('abort', onCallerAbort)
 
           // Join disk writes before returning a recovery path. Inline accumulation
           // stays bounded, while the artifact contains every streamed character.
@@ -1747,7 +1834,7 @@ export async function runTerminalCommand({
           stderr = appendCapped(stderr, stderrTail)
           if (terminationReason === 'abort') {
             // Cancellation keeps what the command printed, like a timeout.
-            const output = refused(resourceRefusal ?? refusalForSignal(resourceSignal))[0]
+            const output = refused(resourceRefusal ?? callerRefusal ?? refusalForSignal(resourceSignal))[0]
             const partialStdout = truncateStringWithMessage({ str: stripColors(stdout), maxLength: COMMAND_OUTPUT_LIMIT, remove: 'MIDDLE' })
             const partialStderr = truncateStringWithMessage({ str: stripColors(stderr), maxLength: COMMAND_OUTPUT_LIMIT, remove: 'MIDDLE' })
             const partialLogFields = outputSpool
@@ -1848,7 +1935,8 @@ export async function runTerminalCommand({
           }
 
           resolve([{ type: 'json', value: combinedOutput }])
-        })
+        }
+        childProcess.on('close', (exitCode) => { void finishClose(exitCode) })
 
         // Handle spawn errors
         childProcess.on('error', async (error) => {
@@ -1860,9 +1948,10 @@ export async function runTerminalCommand({
 
           cancelTimer?.()
           resourceSignal.removeEventListener('abort', onAbort)
+          requestedSignal?.removeEventListener('abort', onCallerAbort)
 
           const observation = node.observation()
-          const refusal = node.resourceRefusal() ?? (resourceSignal.aborted ? refusalForSignal(resourceSignal)
+          const refusal = node.resourceRefusal() ?? callerRefusal ?? (resourceSignal.aborted ? refusalForSignal(resourceSignal)
             : !observation.ok ? observation : executionRefusal('unavailable', error.message))
           let fullLogFields = {}
           if (refusal.reason === 'deadline-exhausted' || refusal.reason === 'cancelled') {
@@ -1908,6 +1997,7 @@ export async function runTerminalCommand({
         if (signalAlreadyAborted) {
           onAbort()
         }
+        if (requestedSignal?.aborted) onCallerAbort()
       })
 
       const part = commandResult[0]
@@ -1926,7 +2016,19 @@ export async function runTerminalCommand({
         {
           type: 'json' as const,
           value: withTouchedPaths(
-            { ...part.value, ...(dirtyObservationRefusal ? { dirtyObservationRefusal } : {}) } as Record<string, unknown>,
+            {
+              ...part.value,
+              ...(dirtyObservationRefusal ? { dirtyObservationRefusal } : {}),
+              ...(dirtyObservationCleanupFailed && dirtyObservationRefusal ? {
+                ...(!('executionRefusal' in part.value) ? {
+                  errorMessage: dirtyObservationRefusal.cause,
+                  executionRefusal: dirtyObservationRefusal,
+                } : {}),
+              } : {}),
+              ...(requestedSignal?.aborted && !('executionRefusal' in part.value)
+                ? { executionRefusal: dirtyObservationRefusal ?? refusalForSignal(requestedSignal) }
+                : {}),
+            } as Record<string, unknown>,
             touched,
           ) as typeof part.value,
         },

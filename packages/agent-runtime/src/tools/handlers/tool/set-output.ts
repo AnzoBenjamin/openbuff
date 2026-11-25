@@ -552,6 +552,8 @@ export const handleSetOutput = (async (params: {
   toolCall: CodebuffToolCall<ToolName>
 
   agentState: AgentState
+  /** Exact executing template, including an ephemeral host-selected root schema. */
+  agentTemplate?: AgentTemplate
   apiKey: string
   databaseAgentCache: Map<string, AgentTemplate | null>
   localAgentTemplates: Record<string, AgentTemplate>
@@ -656,8 +658,8 @@ export const handleSetOutput = (async (params: {
     if (replay) return replay
   }
 
-  let agentTemplate = null
-  if (agentState.agentType) {
+  let agentTemplate = params.agentTemplate ?? null
+  if (!agentTemplate && agentState.agentType) {
     agentTemplate = await getAgentTemplate({
       ...params,
       agentId: agentState.agentType,

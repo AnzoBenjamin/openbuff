@@ -1,6 +1,10 @@
 import { EventEmitter } from 'node:events'
 
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import * as executionLaunch from '../services/execution-launch'
+import { captureRootDeadline } from '@codebuff/common/util/execution-context'
+import { createDirectHostExecution, createHostExecutionServices, executionClock } from '../host-execution'
+import { loadHostConfigSnapshot, nodeConfigReadFs } from '../host-config'
 
 import {
   createDiagnosticCommandRunner,
@@ -31,6 +35,7 @@ import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
 import type { ChildProcess } from 'node:child_process'
 import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import type { AsyncDecision, ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
+import type { CleanupResult } from '@codebuff/common/types/contracts/process-scope'
 
 
 import {
@@ -40,6 +45,41 @@ import {
   executionDeadlineMs,
 } from './fixtures/b19-terminal-execution'
 import { executionRefusal } from '../services/execution-launch'
+
+const diagnosticHostConfiguration = {
+  environment: { PATH: '/usr/bin:/bin' }, platform: process.platform,
+  invocationCwd: process.cwd(), projectRoot: process.cwd(),
+  home: { kind: 'none' as const }, globals: { kind: 'disabled' as const },
+  selection: { kind: 'none' as const }, trust: { ancestorConfig: false, projectReadableRoots: false },
+}
+
+function independentDiagnosticHost(spawn: CodebuffSpawn, authorizeAsync?: () => Promise<AsyncDecision>) {
+  const signal = new AbortController()
+  const profile = { policy: 'full-access' as const, preferredBackend: 'portable-ts' as const,
+    required: ['exact-env' as const], allowBackendFallback: false }
+  if (!authorizeAsync) {
+    const host = createDirectHostExecution({ cwd: process.cwd(), hostConfiguration: diagnosticHostConfiguration,
+      spawn, signal: signal.signal, limit: { kind: 'finite', durationMs: 10_000 }, profile })
+    if (!host.ok) throw new Error(host.cause)
+    return { context: host.value.executionContext, signal }
+  }
+  const snapshot = loadHostConfigSnapshot({ inputs: diagnosticHostConfiguration, fs: nodeConfigReadFs })
+  if (snapshot.status !== 'complete') throw new Error(snapshot.cause)
+  const boundary = captureRootDeadline({ clock: executionClock, limit: { kind: 'finite', durationMs: 10_000 } })
+  if (!boundary.ok) throw new Error(boundary.cause)
+  const services = createHostExecutionServices({ snapshot: snapshot.snapshot, boundary: boundary.value,
+    clock: executionClock, childInheritanceEnvironment: diagnosticHostConfiguration.environment,
+    signal: signal.signal, spawn, profile, approvalMode: 'allow-all', authorizeAsync })
+  if (!services.ok) throw new Error(services.cause)
+  const host = services.value.directOperation()
+  if (!host.ok) throw new Error(host.cause)
+  return { context: host.value.executionContext, signal }
+}
+
+async function waitForDiagnostic(predicate: () => boolean) {
+  for (let i = 0; i < 100 && !predicate(); i++) await new Promise(resolve => setImmediate(resolve))
+  expect(predicate()).toBe(true)
+}
 
 const executionHosts: ReturnType<typeof createTerminalExecutionFixture>[] = []
 afterEach(() => { for (const host of executionHosts.splice(0)) host.dispose() })
@@ -516,6 +556,43 @@ describe('supportedDiagnosticFiles', () => {
 // preflightDiagnosticDelta — reject only on NEW errors
 // ---------------------------------------------------------------------------
 describe('preflightDiagnosticDelta', () => {
+  test('independent pre-aborted caller cannot apply a diagnostic edit', async () => {
+    const caller = new AbortController()
+    caller.abort(new Error('caller cancelled'))
+    let applied = false
+    const result = await preflightDiagnosticDelta({
+      files: [], cwd: '/repo', signal: caller.signal,
+      executionContext: capturedExecution('/repo'),
+      runCommand: async () => { throw new Error('unexpected command') },
+      applyEdit: () => { applied = true },
+    })
+    expect(applied).toBe(false)
+    expect(result).toMatchObject({ rejected: true, diagnosticStatus: 'cancelled' })
+  })
+
+  test('cancellation during no-op apply does not report a diagnostic pass', async () => {
+    const caller = new AbortController()
+    const { run } = ruffRunner('[]', '[]')
+    let entered!: () => void
+    let release!: () => void
+    const waiting = new Promise<void>(resolve => { entered = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let rolledBack = false
+    const pending = preflightDiagnosticDelta({
+      files: ['src/a.py'], cwd: '/repo', signal: caller.signal,
+      executionContext: capturedExecution('/repo'), runCommand: run,
+      skipSecondCapture: true,
+      applyEdit: async () => { entered(); await gate },
+      rollbackEdit: () => { rolledBack = true },
+    })
+    await waiting
+    caller.abort(new Error('caller cancelled during apply'))
+    release()
+    const result = await pending
+    expect(result).toMatchObject({ rejected: true, diagnosticStatus: 'cancelled' })
+    expect(rolledBack).toBe(true)
+  })
+
   function ruffRunner(
     beforeJson: string,
     afterJson: string,
@@ -1260,8 +1337,9 @@ describe('createDiagnosticDeltaHook', () => {
     ) => {
       calls.push({ file, args: [...(args ?? [])], options })
       const stdout = new EventEmitter()
+      const stderr = new EventEmitter()
       const child = Object.assign(new EventEmitter(), {
-        pid: 42_424_001, stdout, kill: () => true,
+        pid: 42_424_001, stdout, stderr, kill: () => true,
       }) as unknown as ChildProcess
       process.nextTick(() => {
         const spec = results[file]
@@ -1272,6 +1350,8 @@ describe('createDiagnosticDeltaHook', () => {
         }
         child.emit('spawn')
         if (spec?.stdout) stdout.emit('data', spec.stdout)
+        stdout.emit('end')
+        stderr.emit('end')
         child.emit('close', spec?.exitCode ?? 0)
       })
       return child
@@ -1440,6 +1520,86 @@ describe('createDiagnosticDeltaHook', () => {
 // (perf: diagnostic-capture-utf8-chunk-split)
 // ---------------------------------------------------------------------------
 describe('createDiagnosticCommandRunner stream capture', () => {
+  test('independent cancellation during approval prevents diagnostic dispatch', async () => {
+    const recorder = createExecutionProcessRecorder()
+    const caller = new AbortController()
+    let entered!: () => void, approve!: () => void
+    const enteredApproval = new Promise<void>((resolve) => { entered = resolve })
+    const approval = new Promise<void>((resolve) => { approve = resolve })
+    const host = createTerminalExecutionFixture({
+      projectRoot: '/repo', spawn: recorder.spawn,
+      authorize: async () => {
+        entered()
+        await approval
+        return { ok: true, basis: 'explicit-policy', decisionId: 'diagnostic-caller' }
+      },
+    })
+    executionHosts.push(host)
+    const pending = createDiagnosticCommandRunner({ spawn: recorder.spawn })({
+      command: 'tsc --noEmit --pretty false', cwd: '/repo', timeoutSeconds: 30,
+      executionContext: host.context, signal: caller.signal,
+    })
+    try {
+      await enteredApproval
+      caller.abort(new Error('caller cancelled'))
+      approve()
+      expect(await pending).toMatchObject({ cancelled: true })
+      expect(recorder.calls).toHaveLength(0)
+    } finally { approve() }
+  })
+
+  test('independent cancellation stops and joins the dispatched diagnostic scope', async () => {
+    const recorder = createExecutionProcessRecorder({ autoClose: false })
+    const caller = new AbortController()
+    const host = createTerminalExecutionFixture({ projectRoot: '/repo', spawn: recorder.spawn })
+    executionHosts.push(host)
+    const pending = createDiagnosticCommandRunner({ spawn: recorder.spawn })({
+      command: 'tsc --noEmit --pretty false', cwd: '/repo', timeoutSeconds: 30,
+      executionContext: host.context, signal: caller.signal,
+    })
+    const deadline = performance.now() + 1_000
+    while (!recorder.calls[0]?.child.stdout?.listenerCount('data')) {
+      if (performance.now() > deadline) throw new Error('diagnostic did not dispatch')
+      await new Promise((resolve) => setTimeout(resolve, 1))
+    }
+    recorder.calls[0]!.child.stdout?.emit('data', Buffer.from('partial'))
+    caller.abort(new Error('caller cancelled'))
+    const result = await pending
+    expect(result).toMatchObject({ cancelled: true, stdout: 'partial' })
+    expect(recorder.calls[0]?.signals).toContain('SIGTERM')
+    expect(recorder.calls[0]?.closed).toBe(true)
+  }, 2_000)
+  test('native target failure is not replaced by the monitor exit code', async () => {
+    const recorder = createExecutionProcessRecorder({ reply: () => ({ exitCode: 0 }) })
+    const host = createTerminalExecutionFixture({ projectRoot: '/repo', spawn: recorder.spawn })
+    executionHosts.push(host)
+    const dispatch = executionLaunch.dispatchNodeLaunch
+    const stub = spyOn(executionLaunch, 'dispatchNodeLaunch').mockImplementation((...args) => {
+      const actual = dispatch(...args)
+      if (!actual.ok) return actual
+      return {
+        ...actual,
+        value: {
+          ...actual.value,
+          nativeResult: Promise.resolve({
+            ok: true,
+            value: { exitCode: 7, signal: null, wrapperExitCode: 0 },
+          }) as typeof actual.value.nativeResult,
+        },
+      }
+    })
+    try {
+      const capture = await captureDiagnosticObservation({
+        files: ['src/a.ts'], cwd: '/repo', executionContext: host.context,
+        runCommand: createDiagnosticCommandRunner({ spawn: recorder.spawn }),
+      })
+      expect(capture.commands.length).toBeGreaterThan(0)
+      expect(capture.commands.every((command) => command.exitCode === 7 && command.status === 'failed')).toBe(true)
+      expect(capture.coverage.status).not.toBe('complete')
+    } finally {
+      stub.mockRestore()
+    }
+  })
   /** Spawn fake whose stdout is delivered as raw byte chunks. */
   function bufferSpawn(stdoutChunks: Buffer[]): CodebuffSpawn {
     return ((file: string) => {
@@ -1765,6 +1925,117 @@ describe('B19 diagnostic launch controls', () => {
     ])
   })
 
+  test.each(['capture', 'runner'] as const)('%s calls get independent budgets, including after an earlier deadline', async kind => {
+    const manual = createControlledExecutionClock()
+    const recorder = createExecutionProcessRecorder()
+    const host = createTerminalExecutionFixture({
+      ...manual, projectRoot: '/repo', spawn: recorder.spawn,
+      actionLimit: { kind: 'finite', durationMs: 150_000 },
+    })
+    executionHosts.push(host)
+    const runCommand = createDiagnosticCommandRunner({ spawn: recorder.spawn })
+    const invoke = async (timeoutSeconds: number) => kind === 'capture'
+      ? captureDiagnosticObservation({ files: ['src/a.go'], cwd: '/repo', runCommand,
+          timeoutSeconds, executionContext: host.context, phase: 'baseline' })
+      : runCommand({ command: 'go vet ./...', cwd: '/repo', timeoutSeconds,
+          executionContext: host.context, phase: 'baseline' })
+
+    await invoke(100)
+    await invoke(20)
+    manual.advance(100_000)
+    const last = await invoke(1_000)
+    expect(kind === 'capture' ? (last as DiagnosticCapture).commands[0]?.status : (last as { exitCode?: number }).exitCode)
+      .toBe(kind === 'capture' ? 'completed' : 0)
+    expect(host.policyInputs.map(input => executionDeadlineMs(input.facts.deadlines.resourceLifetime)))
+      .toEqual([100_100, 20_100, 150_100])
+    expect(host.policyInputs.map(input => input.facts.branchId)).toEqual(Array(3).fill('diagnostic.go.baseline'))
+  })
+
+  test.each(['capture', 'runner'] as const)('overlapping %s calls have independent deadlines', async kind => {
+    const manual = createControlledExecutionClock()
+    const recorder = createExecutionProcessRecorder({ autoClose: false })
+    const host = createTerminalExecutionFixture({ ...manual, projectRoot: '/repo', spawn: recorder.spawn })
+    executionHosts.push(host)
+    const runCommand = createDiagnosticCommandRunner({ spawn: recorder.spawn })
+    const invoke = (timeoutSeconds: number) => kind === 'capture'
+      ? captureDiagnosticObservation({ files: ['src/a.go'], cwd: '/repo', runCommand,
+          timeoutSeconds, executionContext: host.context, phase: 'after' })
+      : runCommand({ command: 'go vet ./...', cwd: '/repo', timeoutSeconds,
+          executionContext: host.context, phase: 'after' })
+
+    const first = invoke(100)
+    await waitForDiagnostic(() => recorder.calls.length === 1)
+    const second = invoke(20)
+    await waitForDiagnostic(() => recorder.calls.length === 2)
+    expect(host.policyInputs.map(input => executionDeadlineMs(input.facts.deadlines.resourceLifetime))).toEqual([100_100, 20_100])
+    manual.advance(20_000)
+    const short = await second
+    expect(kind === 'capture' ? (short as DiagnosticCapture).commands[0]?.status : (short as { timedOut?: boolean }).timedOut)
+      .toBe(kind === 'capture' ? 'timed_out' : true)
+    expect(recorder.calls[0]!.signals).toEqual([])
+    expect(recorder.calls[1]!.signals).toEqual(['SIGKILL'])
+    recorder.calls[0]!.finish()
+    await first
+  })
+
+  test.each(['deadline', 'cancel'] as const)('capture classifies %s host signal correctly', async kind => {
+    const manual = createControlledExecutionClock()
+    const caller = new AbortController()
+    const recorder = createExecutionProcessRecorder()
+    const host = createTerminalExecutionFixture({ ...manual, projectRoot: '/repo', spawn: recorder.spawn,
+      signal: caller.signal, actionLimit: { kind: 'finite', durationMs: 20 } })
+    executionHosts.push(host)
+    const capture = await captureDiagnosticObservation({
+      files: ['src/a.go'], cwd: '/repo', timeoutSeconds: 1, executionContext: host.context,
+      runCommand: async () => {
+        if (kind === 'deadline') manual.advance(20)
+        else caller.abort(new Error('caller cancelled'))
+        throw new executionLaunch.ExecutionRefusalError(executionRefusal(
+          kind === 'deadline' ? 'deadline-exhausted' : 'cancelled', 'controlled stop',
+        ))
+      },
+    })
+    expect(capture.commands[0]).toMatchObject({
+      status: kind === 'deadline' ? 'timed_out' : 'cancelled',
+      executionRefusal: { reason: kind === 'deadline' ? 'deadline-exhausted' : 'cancelled' },
+    })
+  })
+
+  test('capture classifies an already expired host refusal without running the command', async () => {
+    const manual = createControlledExecutionClock()
+    const recorder = createExecutionProcessRecorder()
+    const host = createTerminalExecutionFixture({ ...manual, projectRoot: '/repo', spawn: recorder.spawn,
+      actionLimit: { kind: 'finite', durationMs: 20 } })
+    executionHosts.push(host)
+    manual.advance(20)
+    let called = false
+    const capture = await captureDiagnosticObservation({
+      files: ['src/a.go'], cwd: '/repo', timeoutSeconds: 1, executionContext: host.context,
+      runCommand: async () => { called = true; return { exitCode: 0 } },
+    })
+    expect(called).toBe(false)
+    expect(capture.commands[0]).toMatchObject({ status: 'timed_out', executionRefusal: { reason: 'deadline-exhausted' } })
+  })
+
+  test('capture classifies an AbortError from an expired child budget as timed out', async () => {
+    const manual = createControlledExecutionClock()
+    const recorder = createExecutionProcessRecorder()
+    const host = createTerminalExecutionFixture({ ...manual, projectRoot: '/repo', spawn: recorder.spawn })
+    executionHosts.push(host)
+    const capture = await captureDiagnosticObservation({
+      files: ['src/a.go'], cwd: '/repo', timeoutSeconds: 0.02, executionContext: host.context,
+      runCommand: async ({ signal }) => {
+        manual.advance(20)
+        expect(signal?.aborted).toBe(true)
+        const error = new Error('child stopped')
+        error.name = 'AbortError'
+        throw error
+      },
+    })
+    expect(host.context.signal?.aborted).toBe(false)
+    expect(capture.commands[0]?.status).toBe('timed_out')
+  })
+
   test('delta hook captures files, env and mode before awaiting its baseline', async () => {
     const recorder = createExecutionProcessRecorder({ reply: executable => ({
       stdout: executable === 'tsc' ? 'src/a.ts(8,1): error TS2322: type mismatch\n' : '[]',
@@ -1796,5 +2067,221 @@ describe('B19 diagnostic launch controls', () => {
     expect(result?.rejected).toBe(false)
     expect(host.policyInputs.map(input => input.facts.branchId)).toEqual(['diagnostic.tsc.after', 'diagnostic.eslint.after'])
     for (const actual of recorder.calls) expect(actual.options.env?.PROJECT_VALUE).toBe('before-baseline')
+  })
+})
+
+describe('diagnostic cancellation and cleanup regressions', () => {
+  const command = 'tsc --noEmit --pretty false'
+  const cwd = process.cwd()
+
+  test('hook forwards an independent caller signal to baseline and preflight', async () => {
+    const recorder = createExecutionProcessRecorder()
+    const host = independentDiagnosticHost(recorder.spawn)
+    const caller = new AbortController()
+    let baselineSignal: AbortSignal | undefined, preflightSignal: AbortSignal | undefined
+    const hook = createDiagnosticDeltaHook({
+      spawn: recorder.spawn,
+      getBaseline: input => { baselineSignal = input.signal; return undefined },
+      preflight: (async input => { preflightSignal = input.signal; return { rejected: false } }) as typeof preflightDiagnosticDelta,
+    })
+    await hook({ files: ['src/a.ts'], cwd, executionContext: host.context, signal: caller.signal })
+    expect(baselineSignal).toBe(caller.signal)
+    expect(preflightSignal).toBe(caller.signal)
+  })
+
+  test.each(['cancelled', 'deadline-exhausted'] as const)('hook preserves %s baseline refusal', async reason => {
+    const recorder = createExecutionProcessRecorder()
+    const host = independentDiagnosticHost(recorder.spawn)
+    const hook = createDiagnosticDeltaHook({ spawn: recorder.spawn, getBaseline: () => {
+      throw new executionLaunch.ExecutionRefusalError(executionRefusal(reason, 'baseline stopped'))
+    } })
+    expect(await hook({ files: ['src/a.ts'], cwd, executionContext: host.context })).toMatchObject({
+      diagnosticStatus: reason === 'cancelled' ? 'cancelled' : 'failed', executionRefusal: { reason },
+    })
+  })
+
+  test.each(['allow', 'reject'] as const)('caller cancellation returns while approval remains pending and late %s is handled', async late => {
+    const recorder = createExecutionProcessRecorder()
+    let reject!: (error: Error) => void
+    let allow!: (decision: AsyncDecision) => void
+    let entered = false
+    const approval = new Promise<AsyncDecision>((yes, no) => { allow = yes; reject = no })
+    const host = independentDiagnosticHost(recorder.spawn, () => { entered = true; return approval })
+    const caller = new AbortController()
+    const pending = createDiagnosticCommandRunner({ spawn: recorder.spawn })({ command, cwd, timeoutSeconds: 30,
+      executionContext: host.context, signal: caller.signal })
+    await waitForDiagnostic(() => entered)
+    caller.abort(new Error('caller stopped'))
+    const result = await Promise.race([pending, new Promise<'waiting'>(resolve => setTimeout(() => resolve('waiting'), 50))])
+    if (late === 'reject') reject(new Error('late approval failure'))
+    else allow({ ok: true, basis: 'explicit-policy', decisionId: 'late-allow' })
+    expect(result).toMatchObject({ cancelled: true, executionRefusal: { reason: 'cancelled' } })
+    await new Promise(resolve => setImmediate(resolve))
+    expect(recorder.calls).toHaveLength(0)
+  })
+
+  test('pre-aborted caller does not request approval or dispatch', async () => {
+    const recorder = createExecutionProcessRecorder()
+    let approved = false
+    const host = independentDiagnosticHost(recorder.spawn, async () => {
+      approved = true
+      return { ok: true, basis: 'explicit-policy', decisionId: 'unexpected' }
+    })
+    const caller = new AbortController()
+    caller.abort(new Error('already cancelled'))
+    const result = await createDiagnosticCommandRunner({ spawn: recorder.spawn })({ command, cwd, timeoutSeconds: 30,
+      executionContext: host.context, signal: caller.signal })
+    expect(result).toMatchObject({ cancelled: true, executionRefusal: { reason: 'cancelled' } })
+    expect(approved).toBe(false)
+    expect(recorder.calls).toHaveLength(0)
+  })
+
+  test('completed cleanup with drained output remains successful', async () => {
+    const recorder = createExecutionProcessRecorder({ reply: () => ({ stdout: 'complete' }) })
+    const host = independentDiagnosticHost(recorder.spawn)
+    const result = await createDiagnosticCommandRunner({ spawn: recorder.spawn })({ command, cwd, timeoutSeconds: 30,
+      executionContext: host.context })
+    expect(result).toMatchObject({ exitCode: 0, stdout: 'complete', outputTruncated: false })
+    expect(result.errorMessage).toBeUndefined()
+  })
+
+  test.each(['host', 'deadline'] as const)('%s cancellation joins cleanup and preserves output and refusal', async kind => {
+    const recorder = createExecutionProcessRecorder({ autoClose: false })
+    const host = independentDiagnosticHost(recorder.spawn)
+    let release!: () => void, requested = false
+    let dispatchedResource: AbortSignal | undefined
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const dispatch = executionLaunch.dispatchNodeLaunch
+    const stub = spyOn(executionLaunch, 'dispatchNodeLaunch').mockImplementation((...args) => {
+      const actual = dispatch(...args)
+      if (!actual.ok) return actual
+      dispatchedResource = actual.value.input.resourceSignal
+      const scope = actual.value.scope
+      return { ...actual, value: { ...actual.value, scope: { ...scope,
+        requestStop: (reason, force) => { requested = true; return scope.requestStop(reason, force).then(async result => { await gate; return result }) },
+      } } }
+    })
+    try {
+      const pending = createDiagnosticCommandRunner({ spawn: recorder.spawn, sigtermGraceMs: 0 })({ command, cwd,
+        timeoutSeconds: kind === 'deadline' ? 0.04 : 30, executionContext: host.context })
+      let settled = false
+      void pending.then(() => { settled = true })
+      await waitForDiagnostic(() => !!recorder.calls[0]?.child.stdout?.listenerCount('data'))
+      recorder.calls[0]!.child.stdout!.emit('data', 'partial')
+      if (kind === 'host') host.signal.abort(new Error('host stopped'))
+      else await new Promise(resolve => setTimeout(resolve, 70))
+      await new Promise(resolve => setImmediate(resolve))
+      expect(requested).toBe(true)
+      expect(settled).toBe(false)
+      release()
+      const result = await pending
+      expect(result).toMatchObject({ stdout: 'partial', executionRefusal: { reason: kind === 'host' ? 'cancelled' : 'deadline-exhausted' } })
+      expect(recorder.calls[0]!.options.signal).toBe(dispatchedResource!)
+    } finally { release(); stub.mockRestore() }
+  })
+
+  test('caller cancellation during native result wait cannot be replaced by close success', async () => {
+    const recorder = createExecutionProcessRecorder({ autoClose: false })
+    const host = independentDiagnosticHost(recorder.spawn)
+    const caller = new AbortController()
+    let resolveNative!: (value: unknown) => void, release!: () => void
+    const native = new Promise(resolve => { resolveNative = resolve })
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const dispatch = executionLaunch.dispatchNodeLaunch
+    const stub = spyOn(executionLaunch, 'dispatchNodeLaunch').mockImplementation((...args) => {
+      const actual = dispatch(...args)
+      if (!actual.ok) return actual
+      const scope = actual.value.scope
+      return { ...actual, value: { ...actual.value, nativeResult: native as typeof actual.value.nativeResult,
+        scope: { ...scope, requestStop: (reason, force) => scope.requestStop(reason, force).then(async result => {
+          if (reason === 'owner-cancel') await gate
+          return result
+        }) } } }
+    })
+    try {
+      const pending = createDiagnosticCommandRunner({ spawn: recorder.spawn })({ command, cwd, timeoutSeconds: 30,
+        executionContext: host.context, signal: caller.signal })
+      let settled = false
+      void pending.then(() => { settled = true })
+      await waitForDiagnostic(() => !!recorder.calls[0]?.child.stdout?.listenerCount('data'))
+      recorder.calls[0]!.child.stdout!.emit('data', 'partial')
+      recorder.calls[0]!.finish()
+      caller.abort(new Error('caller stopped'))
+      resolveNative({ ok: true, value: { exitCode: 0, signal: null, cleanup: { complete: true } } })
+      await new Promise(resolve => setImmediate(resolve))
+      expect(settled).toBe(false)
+      release()
+      expect(await pending).toMatchObject({ cancelled: true, stdout: 'partial', executionRefusal: { reason: 'cancelled' } })
+    } finally { release(); stub.mockRestore() }
+  })
+
+  test('late native rejection after cancellation is observed', async () => {
+    const recorder = createExecutionProcessRecorder({ autoClose: false })
+    const host = independentDiagnosticHost(recorder.spawn)
+    const caller = new AbortController()
+    let rejectNative!: (error: Error) => void
+    const native = new Promise((_, reject) => { rejectNative = reject })
+    const dispatch = executionLaunch.dispatchNodeLaunch
+    const stub = spyOn(executionLaunch, 'dispatchNodeLaunch').mockImplementation((...args) => {
+      const actual = dispatch(...args)
+      return actual.ok ? { ...actual, value: { ...actual.value,
+        nativeResult: native as typeof actual.value.nativeResult } } : actual
+    })
+    try {
+      const pending = createDiagnosticCommandRunner({ spawn: recorder.spawn })({ command, cwd, timeoutSeconds: 30,
+        executionContext: host.context, signal: caller.signal })
+      await waitForDiagnostic(() => !!recorder.calls[0]?.child.stdout?.listenerCount('data'))
+      caller.abort(new Error('caller stopped'))
+      expect(await pending).toMatchObject({ cancelled: true })
+      rejectNative(new Error('late native failure'))
+      await new Promise(resolve => setImmediate(resolve))
+    } finally { stub.mockRestore() }
+  })
+
+  test.each(['native', 'scope', 'streams'] as const)('%s incomplete cleanup is visible in the outcome', async kind => {
+    const recorder = createExecutionProcessRecorder()
+    const host = independentDiagnosticHost(recorder.spawn)
+    const dispatch = executionLaunch.dispatchNodeLaunch
+    const stub = spyOn(executionLaunch, 'dispatchNodeLaunch').mockImplementation((...args) => {
+      const actual = dispatch(...args)
+      if (!actual.ok) return actual
+      const scope = actual.value.scope
+      return { ...actual, value: { ...actual.value,
+        ...(kind === 'native' ? { nativeResult: Promise.resolve({ ok: true, value: { exitCode: 0, signal: null,
+          cleanup: { complete: false } } }) as typeof actual.value.nativeResult } : {}),
+        scope: { ...scope, requestStop: (reason, force) => scope.requestStop(reason, force).then(result => ({
+          ...result, ...(kind === 'scope' ? { status: 'failed', cause: 'controlled cleanup failure' } : {}),
+          ...(kind === 'streams' ? { output: { ...result.output, complete: false } } : {}),
+        } as CleanupResult)) },
+      } }
+    })
+    try {
+      const result = await createDiagnosticCommandRunner({ spawn: recorder.spawn })({ command, cwd, timeoutSeconds: 30,
+        executionContext: host.context })
+      if (kind === 'streams') expect(result.outputTruncated).toBe(true)
+      else expect(result.errorMessage).toContain('cleanup')
+    } finally { stub.mockRestore() }
+  })
+
+  test('undrained output cannot become complete diagnostic coverage', async () => {
+    const recorder = createExecutionProcessRecorder({ reply: executable => ({ stdout: executable === 'eslint' ? '[]' : '' }) })
+    const host = independentDiagnosticHost(recorder.spawn)
+    const dispatch = executionLaunch.dispatchNodeLaunch
+    const stub = spyOn(executionLaunch, 'dispatchNodeLaunch').mockImplementation((...args) => {
+      const actual = dispatch(...args)
+      if (!actual.ok) return actual
+      const scope = actual.value.scope
+      return { ...actual, value: { ...actual.value, scope: { ...scope,
+        requestStop: (reason, force) => scope.requestStop(reason, force).then(result => ({
+          ...result, output: { ...result.output, complete: false },
+        })),
+      } } }
+    })
+    try {
+      const capture = await captureDiagnosticObservation({ files: ['src/a.ts'], cwd,
+        executionContext: host.context, runCommand: createDiagnosticCommandRunner({ spawn: recorder.spawn }) })
+      expect(capture.commands.every(item => item.outputTruncated && item.coverageStatus === 'incomplete')).toBe(true)
+      expect(capture.coverage.status).not.toBe('complete')
+    } finally { stub.mockRestore() }
   })
 })

@@ -12,7 +12,38 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises'
 import { checkSQLiteIntegrity } from './sqlite-integrity-check'
-import { queryAdmissionSQL, scanSQLiteQuery } from './sqlite-query-scan'
+import {
+  KNOWLEDGE_PROJECTION_DDL,
+  KNOWLEDGE_FTS_DDL,
+  KNOWLEDGE_PRODUCER_VERSION,
+  applyKnowledgeEvent,
+  advanceKnowledgeCursor,
+  knowledgeCursor,
+  clearKnowledgeProjection,
+  exactKnowledgeIdentity,
+  knowledgeFreshnessKey,
+  type KnowledgeObservationState,
+  type KnowledgeTaskState,
+} from './knowledge-projection'
+import {
+  knowledgeQueryPlan,
+  readKnowledgeQuery,
+  scanKnowledgeQuery,
+  type KnowledgeQueryRows,
+} from './knowledge-query'
+import {
+  migrateContextArchiveSchema,
+  migrateArchivePage,
+  archiveFtsAvailable,
+  prepareArchiveSnapshot,
+  putArchiveSnapshot,
+  readArchiveSnapshot,
+  collectArchiveOrphans,
+  repairArchiveFts,
+  disableArchiveFtsTriggers,
+  archiveSnapshotId,
+  type ArchiveManifestRow,
+} from './context-archive-store'
 
 import {
   MemoryAppendRequestSchema,
@@ -24,6 +55,7 @@ import {
   MemoryHealthRequestSchema,
   MemoryRebuildRequestSchema,
   MemoryRetrievalRequestSchema,
+  MemoryObservationSchema,
   MemoryRetrievalResultSchema,
   MemoryVerifyOutcomeSchema,
   MemoryVerifyRequestSchema,
@@ -112,14 +144,16 @@ export type RuntimeNeutralMemoryEventV2 = MemoryEventEnvelope
  * an OLDER binary fail closed on a v4 store — a pre-archive build sharing
  * this file can never open it, so it cannot compact or rebuild a store whose
  * context_archive_* side tables it does not maintain.
+ *
+ * Version 5 adds current knowledge and shared archive bodies. Version 6
+ * gives each checked archive manifest an immutable identity; timestamp
+ * collisions no longer overwrite actions or ordered message memberships.
  */
-const SCHEMA_VERSION = 4
+const SCHEMA_VERSION = 6
 const DEFAULT_DATABASE_PATH = join('.openbuff', 'memory', 'memory-v2.sqlite')
 const DEFAULT_BUSY_TIMEOUT_MS = 2_500
 const MAX_BUSY_TIMEOUT_MS = 10_000
 const PAGE_SIZE = 250
-const MAX_QUERY_EVENTS = 10_000
-const MAX_QUERY_PAYLOAD_BYTES = 8 * 1024 * 1024
 const MAX_REPLAY_EVENTS = 10_000
 const GC_SELECT_LIMIT = 10_000
 const COMPACTION_APPLY_MAX = 100
@@ -137,12 +171,6 @@ const CONTEXT_ARCHIVE_SEARCH_SCAN_CAP = 500
 /** Snippet shape: up to 120 chars of lead-in, 600 chars total. */
 const CONTEXT_ARCHIVE_SNIPPET_CONTEXT = 120
 const CONTEXT_ARCHIVE_SNIPPET_CHARS = 600
-/** Recognized snapshot actions; anything else fails the DDL CHECK anyway. */
-const CONTEXT_ARCHIVE_ACTIONS: ReadonlySet<string> = new Set([
-  'semantic_compaction',
-  'mechanical_trim',
-  'tool_result_eviction',
-])
 /** Metadata key tracking the claim_dedup cold-start backfill cursor. */
 const CLAIM_DEDUP_BACKFILL_KEY = 'claim_dedup_backfill'
 /** Event types the shared P6 compaction-eligibility selection consumes. */
@@ -400,12 +428,6 @@ interface PreparedDatabasePath {
   existingIdentity: FileIdentity | null
 }
 
-interface QueryAdmissionRow {
-  sequence: number
-  payload_bytes: number
-  metadata_bytes: number
-}
-
 interface UsageRow {
   observation_id: string
   used_count: number
@@ -425,6 +447,7 @@ interface ObservationStatusRow {
   entity_id: string
   task_id: string | null
   state_json: string
+  claim_state_json?: string | null
 }
 
 interface PlaybookRow {
@@ -445,20 +468,8 @@ interface PlaybookRow {
   updated_at: number
 }
 
-type ContextArchiveMessage = ContextArchiveSnapshot['messages'][number]
-
-interface ContextArchiveSnapshotRow {
-  run_id: string
-  archived_at: number
-  action: string
-  keep_recent_steps: number
-  step_base: number | null
-  reason: string | null
-  messages_json: string
-  steps_json: string | null
-}
-
 interface ContextArchiveMessageRow {
+  snapshot_id?: string
   run_id: string
   archived_at: number
   tool_call_id: string | null
@@ -488,12 +499,6 @@ const RETRACTED_CLAIM_LIFECYCLES: ReadonlySet<string> = new Set([
   'corrected',
   'archived',
 ])
-
-interface QueryScanResult {
-  rows: EventRow[]
-  eventCapReached: boolean
-  payloadBudgetReached: boolean
-}
 
 const PROJECTIONS: Record<string, ProjectionDefinition> = {
   task: { table: 'memory_tasks', payloadId: 'taskId', explicitId: 'taskId' },
@@ -538,6 +543,8 @@ export class BunSQLiteMemoryRepository
   readonly databasePath: string
   private closed = false
   private integrityCheck: Promise<boolean> | undefined
+  private knowledgeRepair: Promise<void> | undefined
+  private archiveMigration: Promise<number> | undefined
 
   private constructor(
     private readonly database: Database,
@@ -630,6 +637,11 @@ export class BunSQLiteMemoryRepository
   async appendEvents(
     inputs: readonly (MemoryV2EventInput | MemoryEventEnvelope)[],
   ): Promise<MemoryV2AppendResult> {
+    try {
+      await this.ensureKnowledgeProjection()
+    } catch (error) {
+      return { status: 'error', error: classifyStorageError(error) }
+    }
     const result = this.appendKernel(inputs)
     if (result.status === 'error') return result
     return {
@@ -653,6 +665,12 @@ export class BunSQLiteMemoryRepository
       return rejectedOutcome(
         'Every event must belong to the requested project.',
       )
+    }
+
+    try {
+      await this.ensureKnowledgeProjection()
+    } catch (error) {
+      return appendFailureOutcome(classifyStorageError(error))
     }
 
     const result = this.appendKernel(parsed.data.events, {
@@ -1040,6 +1058,7 @@ export class BunSQLiteMemoryRepository
         this.database.exec('DELETE FROM memory_usage')
         // claim_dedup is rebuilt from the surviving log during the replay.
         this.database.exec('DELETE FROM claim_dedup')
+        clearKnowledgeProjection(this.database)
         setProjectionCursor(this.database, 0)
         return replayProjections(this.database)
       })
@@ -1108,29 +1127,26 @@ export class BunSQLiteMemoryRepository
       if (filtered !== undefined && filtered.length === 0) {
         return { status: 'ok', usage: [] }
       }
-      const rows =
-        filtered !== undefined
-          ? (this.database
-              .query(
-                `SELECT observation_id, used_count, ignored_count, staled_count,
-                        last_mechanism, last_turn_id, last_sequence
-                   FROM memory_usage
-                  WHERE observation_id IN (${filtered
-                    .map((_, index) => `?${index + 1}`)
-                    .join(', ')})
-                  ORDER BY observation_id
-                  LIMIT 256`,
-              )
-              .all(...filtered) as UsageRow[])
-          : (this.database
-              .query(
-                `SELECT observation_id, used_count, ignored_count, staled_count,
-                        last_mechanism, last_turn_id, last_sequence
-                   FROM memory_usage
-                  ORDER BY observation_id
-                  LIMIT 256`,
-              )
-              .all() as UsageRow[])
+      await this.ensureKnowledgeProjection()
+      const rows = this.database
+        .query(
+          `WITH ids AS (
+        SELECT observation_id FROM memory_usage
+        UNION SELECT observation_id FROM memory_knowledge WHERE project_id=? AND (json_extract(state_json,'$.used')>0 OR json_extract(state_json,'$.ignored')>0)
+      )
+      SELECT ids.observation_id,
+        COALESCE(json_extract(k.state_json,'$.used'),u.used_count,0) AS used_count,
+        COALESCE(json_extract(k.state_json,'$.ignored'),u.ignored_count,0) AS ignored_count,
+        COALESCE(u.staled_count,0) AS staled_count,
+        COALESCE(json_extract(k.state_json,'$.lastUsage.mechanism'),u.last_mechanism) AS last_mechanism,
+        COALESCE(json_extract(k.state_json,'$.lastUsage.turnId'),u.last_turn_id) AS last_turn_id,
+        COALESCE(json_extract(k.state_json,'$.lastUsage.sequence'),u.last_sequence,0) AS last_sequence
+      FROM ids LEFT JOIN memory_usage u ON u.observation_id=ids.observation_id
+      LEFT JOIN memory_knowledge k ON k.observation_id=ids.observation_id
+      ${filtered ? `WHERE ids.observation_id IN (${filtered.map(() => '?').join(',')})` : ''}
+      ORDER BY ids.observation_id LIMIT 256`,
+        )
+        .all(params.projectId, ...(filtered ?? [])) as UsageRow[]
       return {
         status: 'ok',
         usage: rows.map((row) => ({
@@ -1239,17 +1255,16 @@ export class BunSQLiteMemoryRepository
       if (filtered.length === 0) {
         return { status: 'ok', entries: [] }
       }
+      await this.ensureKnowledgeProjection()
       const rows = this.database
         .query(
-          `SELECT entity_id, task_id, state_json
-             FROM memory_claims
-            WHERE entity_id IN (${filtered
-              .map((_, index) => `?${index + 1}`)
-              .join(', ')})
-            ORDER BY entity_id
+          `SELECT k.observation_id AS entity_id,k.task_id,k.state_json,c.state_json AS claim_state_json
+             FROM memory_knowledge k LEFT JOIN memory_claims c ON c.entity_id=k.observation_id
+            WHERE k.project_id=? AND k.observation_id IN (${filtered.map(() => '?').join(', ')})
+            ORDER BY k.observation_id
             LIMIT 256`,
         )
-        .all(...filtered) as ObservationStatusRow[]
+        .all(params.projectId, ...filtered) as ObservationStatusRow[]
       return {
         status: 'ok',
         entries: rows
@@ -1265,18 +1280,35 @@ export class BunSQLiteMemoryRepository
               readable = false
               state = undefined
             }
-            const lifecycle = nestedValue(state, 'lifecycle')
+            let legacyLifecycle: unknown
+            try {
+              if (row.claim_state_json)
+                legacyLifecycle = nestedValue(
+                  JSON.parse(row.claim_state_json),
+                  'lifecycle',
+                )
+            } catch {
+              readable = false
+            }
+            const knowledge = objectValue(state)
+            const validFlags = ['forgotten', 'superseded', 'corrected'].every(
+              (key) => typeof knowledge[key] === 'boolean',
+            )
+            if (
+              !validFlags ||
+              (row.claim_state_json && typeof legacyLifecycle !== 'string')
+            )
+              readable = false
             return {
               observationId: row.entity_id,
               taskId: row.task_id ?? '',
               status: !readable
                 ? ('unknown' as const)
-                : typeof lifecycle === 'string' &&
-                    RETRACTED_CLAIM_LIFECYCLES.has(lifecycle)
+                : knowledge.forgotten ||
+                    knowledge.superseded ||
+                    knowledge.corrected
                   ? ('retracted' as const)
-                  : typeof lifecycle === 'string'
-                    ? ('active' as const)
-                    : ('unknown' as const),
+                  : ('active' as const),
             }
           })
           .sort((left, right) =>
@@ -1288,246 +1320,166 @@ export class BunSQLiteMemoryRepository
     }
   }
 
-  /**
-   * Persist compaction-archive snapshots for one session run into the
-   * durable context_archive_* side tables (the cross-session recall_context
-   * source).
-   *
-   * IDEMPOTENT FULL-REPLACE PER RUN: the in-memory archive is the capped
-   * truth, so the transaction first deletes every stored row for runId
-   * (snapshots, messages, fts rows, watermark) and then inserts the full
-   * incoming set — re-persisting the same run yields the same row count.
-   * The same transaction runs the bounded TTL prune (snapshots older than
-   * CONTEXT_ARCHIVE_TTL_MS, capped at CONTEXT_ARCHIVE_PRUNE_CAP per flush).
-   *
-   * Failure semantics: never throws. An empty runId, an empty snapshot
-   * list, a closed store, or a failed transaction returns
-   * { persisted: 0, skipped: N } — the flush either commits fully or rolls
-   * back fully.
-   */
+  /** Incremental immutable bodies/messages with ordered snapshot memberships. */
   async persistContextArchiveSnapshots(request: {
     runId: string
     snapshots: ContextArchiveSnapshot[]
-  }): Promise<{ persisted: number; skipped: number }> {
+  }): Promise<{
+    persisted: number
+    skipped: number
+    status?: 'ok' | 'degraded' | 'unavailable'
+    reasons?: string[]
+  }> {
     const snapshots = Array.isArray(request?.snapshots) ? request.snapshots : []
-    const skipAll = (): { persisted: number; skipped: number } => ({
+    const unavailable = (reason: string) => ({
       persisted: 0,
       skipped: snapshots.length,
+      status: 'unavailable' as const,
+      reasons: [reason],
     })
-    if (this.requireOpen() !== null) return skipAll()
+    if (this.requireOpen()) return unavailable('store-closed')
     const runId = typeof request?.runId === 'string' ? request.runId : ''
-    if (runId.length === 0 || snapshots.length === 0) return skipAll()
-
-    const ftsAvailable = contextArchiveFtsAvailable(this.database)
-    const now = new Date().toISOString()
-    const ttlCutoff = Date.now() - CONTEXT_ARCHIVE_TTL_MS
-    const insertSnapshot = this.database.query(
-      `INSERT INTO context_archive_snapshots
-         (run_id, archived_at, action, keep_recent_steps, step_base, reason,
-          messages_json, steps_json, created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
-    )
-    const insertMessage = this.database.query(
-      `INSERT INTO context_archive_messages
-         (run_id, archived_at, msg_index, tool_call_id, tool_name, step, body)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-    )
-    const insertFts = ftsAvailable
-      ? this.database.query(
-          `INSERT INTO context_archive_fts (run_id, archived_at, msg_index, body)
-           VALUES (?1, ?2, ?3, ?4)`,
-        )
-      : null
-
-    // One immediate write transaction: bun's transaction() wrapper commits
-    // when the closure returns and rolls back when it throws, so the rows
-    // are durably visible once the method resolves (the previous manual
-    // BEGIN IMMEDIATE/exec('COMMIT') pair rolled back on return, leaving
-    // the flush's rows invisible to every later read).
-    const flush = this.database.transaction(() => {
-      // Bounded TTL prune FIRST — before this run's rows are written. The
-      // prune removes rows from PREVIOUS runs that aged past the cutoff;
-      // running it after the inserts would also delete rows this flush just
-      // wrote whenever their archivedAt predates the cutoff (archivedAt is a
-      // transcript timestamp, not a wall-clock write time — backfills and
-      // replayed sessions legitimately persist old timestamps). The
-      // per-flush snapshot cap keeps a cold store's first prune bounded.
-      const stale = this.database
-        .query(
-          `SELECT run_id, archived_at FROM context_archive_snapshots
-            WHERE archived_at < ?1
-            ORDER BY archived_at
-            LIMIT ?2`,
-        )
-        .all(ttlCutoff, CONTEXT_ARCHIVE_PRUNE_CAP) as Array<{
-        run_id: string
-        archived_at: number
-      }>
-      for (const row of stale) {
-        if (insertFts) {
-          this.database.run(
-            'DELETE FROM context_archive_fts WHERE run_id = ? AND archived_at = ?',
-            [row.run_id, row.archived_at],
+    if (!runId || runId.length > 2048)
+      return {
+        persisted: 0,
+        skipped: snapshots.length,
+        status: 'degraded',
+        reasons: ['invalid-run-id'],
+      }
+    if (!snapshots.length) return { persisted: 0, skipped: 0, status: 'ok' }
+    try {
+      const invalidLegacy = await this.ensureArchiveMigration()
+      const prepared = snapshots.map(prepareArchiveSnapshot)
+      const valid = prepared.filter(
+        (snapshot): snapshot is NonNullable<typeof snapshot> =>
+          snapshot !== null,
+      )
+      const now = new Date().toISOString()
+      const flush = this.database.transaction(() => {
+        if (!archiveFtsAvailable(this.database))
+          disableArchiveFtsTriggers(this.database)
+        // Retention removes references first; shared messages/bodies survive while referenced.
+        const stale = this.database
+          .query(
+            'SELECT snapshot_id FROM context_archive_snapshots WHERE archived_at<?1 AND run_id!=?2 ORDER BY archived_at LIMIT ?3',
           )
-        }
-        this.database.run(
-          'DELETE FROM context_archive_messages WHERE run_id = ? AND archived_at = ?',
-          [row.run_id, row.archived_at],
-        )
-        this.database.run(
-          'DELETE FROM context_archive_snapshots WHERE run_id = ? AND archived_at = ?',
-          [row.run_id, row.archived_at],
-        )
-      }
-      this.database.run(
-        'DELETE FROM context_archive_watermarks WHERE max_archived_at < ?',
-        [ttlCutoff],
-      )
-
-      // Idempotent full-replace per run: drop the run's previous rows first.
-      if (insertFts) {
-        this.database.run('DELETE FROM context_archive_fts WHERE run_id = ?', [
-          runId,
-        ])
-      }
-      this.database.run(
-        'DELETE FROM context_archive_messages WHERE run_id = ?',
-        [runId],
-      )
-      this.database.run(
-        'DELETE FROM context_archive_snapshots WHERE run_id = ?',
-        [runId],
-      )
-      this.database.run(
-        'DELETE FROM context_archive_watermarks WHERE run_id = ?',
-        [runId],
-      )
-
-      let persisted = 0
-      let maxArchivedAt = Number.NEGATIVE_INFINITY
-      for (const snapshot of snapshots) {
-        const prepared = prepareContextArchiveSnapshot(snapshot)
-        if (prepared === null) continue // skipped: invalid snapshot shape
-        insertSnapshot.run(
-          runId,
-          snapshot.archivedAt,
-          snapshot.action,
-          snapshot.keepRecentSteps,
-          snapshot.stepBase ?? null,
-          snapshot.reason ?? null,
-          prepared.messagesJson,
-          prepared.stepsJson,
-          now,
-        )
-        for (const row of prepared.messageRows) {
-          insertMessage.run(
+          .all(
+            Date.now() - CONTEXT_ARCHIVE_TTL_MS,
             runId,
-            snapshot.archivedAt,
-            row.msgIndex,
-            row.toolCallId,
-            row.toolName,
-            row.step,
-            row.body,
+            CONTEXT_ARCHIVE_PRUNE_CAP,
+          ) as Array<{ snapshot_id: string }>
+        for (const row of stale)
+          this.database
+            .query('DELETE FROM context_archive_snapshots WHERE snapshot_id=?1')
+            .run(row.snapshot_id)
+        for (const snapshot of valid)
+          putArchiveSnapshot(
+            this.database,
+            snapshot.snapshot.runId ?? runId,
+            snapshot,
+            now,
           )
-          if (insertFts) {
-            insertFts.run(runId, snapshot.archivedAt, row.msgIndex, row.body)
+        // A partially invalid incoming set cannot erase a valid prior archive.
+        if (valid.length === snapshots.length) {
+          const identities = valid
+            .filter((snapshot) => (snapshot.snapshot.runId ?? runId) === runId)
+            .map((snapshot) => archiveSnapshotId(runId, snapshot))
+          if (identities.length)
+            this.database
+              .query(
+                `DELETE FROM context_archive_snapshots WHERE run_id=? AND snapshot_id NOT IN (${identities.map(() => '?').join(',')})`,
+              )
+              .run(runId, ...identities)
+        }
+        if (valid.length) {
+          for (const owner of new Set(
+            valid.map((snapshot) => snapshot.snapshot.runId ?? runId),
+          )) {
+            const row = this.database
+              .query(
+                'SELECT max(archived_at) AS max FROM context_archive_snapshots WHERE run_id=?1',
+              )
+              .get(owner) as { max: number }
+            this.database
+              .query(
+                'INSERT INTO context_archive_watermarks(run_id,max_archived_at,updated_at) VALUES (?1,?2,?3) ON CONFLICT(run_id) DO UPDATE SET max_archived_at=excluded.max_archived_at,updated_at=excluded.updated_at WHERE max_archived_at!=excluded.max_archived_at',
+              )
+              .run(owner, row.max, now)
           }
         }
-        persisted++
-        maxArchivedAt = Math.max(maxArchivedAt, snapshot.archivedAt)
-      }
-
-      if (Number.isFinite(maxArchivedAt)) {
-        // Observability watermark: the newest persisted archivedAt per run.
-        this.database.run(
-          `INSERT INTO context_archive_watermarks (run_id, max_archived_at, updated_at)
-           VALUES (?1, ?2, ?3)
-           ON CONFLICT(run_id) DO UPDATE SET
-             max_archived_at = excluded.max_archived_at,
-             updated_at = excluded.updated_at`,
-          [runId, maxArchivedAt, now],
+        this.database.exec(
+          'DELETE FROM context_archive_watermarks WHERE NOT EXISTS(SELECT 1 FROM context_archive_snapshots s WHERE s.run_id=context_archive_watermarks.run_id)',
         )
+        collectArchiveOrphans(this.database)
+        return {
+          persisted: valid.length,
+          skipped: snapshots.length - valid.length,
+        }
+      })
+      const counts = flush.immediate()
+      const reasons = [
+        ...(counts.skipped ? ['invalid-snapshot'] : []),
+        ...(invalidLegacy ? ['legacy-migration-incomplete'] : []),
+        ...(!archiveFtsAvailable(this.database) ? ['fts-unavailable'] : []),
+      ]
+      return {
+        ...counts,
+        status: reasons.length ? 'degraded' : 'ok',
+        ...(reasons.length ? { reasons } : {}),
       }
-
-      return { persisted, skipped: snapshots.length - persisted }
-    })
-    try {
-      return flush.immediate()
     } catch {
-      // The transaction rolled back or the handle is dead; the typed
-      // skip-all outcome below is the observable result either way.
-      return skipAll()
+      return unavailable('storage-failed')
     }
   }
 
-  /**
-   * Load persisted compaction-archive snapshots, newest first (the caller
-   * reverses as needed). Without runId, spans all runs. Stale rows
-   * (unreadable messages_json, unknown action) are dropped rather than
-   * failing the whole read. Never throws; a failed read returns
-   * { snapshots: [] }.
-   */
   async loadContextArchiveSnapshots(
-    request: {
-      runId?: string
-      limit?: number
-    } = {},
-  ): Promise<{ snapshots: ContextArchiveSnapshot[] }> {
-    if (this.requireOpen() !== null) return { snapshots: [] }
+    request: { runId?: string; limit?: number } = {},
+  ): Promise<{
+    snapshots: ContextArchiveSnapshot[]
+    status?: 'ok' | 'degraded' | 'unavailable'
+    reasons?: string[]
+  }> {
+    if (this.requireOpen())
+      return { snapshots: [], status: 'unavailable', reasons: ['store-closed'] }
     const runId =
-      typeof request?.runId === 'string' && request.runId.length > 0
-        ? request.runId
-        : null
+      typeof request.runId === 'string' && request.runId ? request.runId : null
     const limit =
-      typeof request?.limit === 'number' &&
+      typeof request.limit === 'number' &&
       Number.isFinite(request.limit) &&
       request.limit >= 0
         ? Math.min(Math.floor(request.limit), CONTEXT_ARCHIVE_LOAD_LIMIT_MAX)
         : CONTEXT_ARCHIVE_LOAD_LIMIT_DEFAULT
     try {
-      const rows = (
-        runId !== null
-          ? this.database
-              .query(
-                `SELECT run_id, archived_at, action, keep_recent_steps, step_base,
-                        reason, messages_json, steps_json
-                   FROM context_archive_snapshots
-                  WHERE run_id = ?1
-                  ORDER BY archived_at DESC
-                  LIMIT ?2`,
-              )
-              .all(runId, limit)
-          : this.database
-              .query(
-                `SELECT run_id, archived_at, action, keep_recent_steps, step_base,
-                        reason, messages_json, steps_json
-                   FROM context_archive_snapshots
-                  ORDER BY archived_at DESC
-                  LIMIT ?1`,
-              )
-              .all(limit)
-      ) as ContextArchiveSnapshotRow[]
+      const invalidLegacy = await this.ensureArchiveMigration()
+      const rows = this.database
+        .query(
+          `SELECT * FROM context_archive_snapshots${runId ? ' WHERE run_id=?' : ''} ORDER BY archived_at DESC,run_id,snapshot_id LIMIT ?`,
+        )
+        .all(...(runId ? [runId] : []), limit) as ArchiveManifestRow[]
       const snapshots: ContextArchiveSnapshot[] = []
       for (const row of rows) {
-        const snapshot = parsePersistedSnapshot(row)
-        if (snapshot !== null) snapshots.push(snapshot)
+        const snapshot = readArchiveSnapshot(this.database, row)
+        if (snapshot) snapshots.push(snapshot)
+        await yieldToEventLoop()
       }
-      return { snapshots }
+      const reasons = [
+        ...(snapshots.length < rows.length ? ['invalid-manifest'] : []),
+        ...(invalidLegacy ? ['legacy-migration-incomplete'] : []),
+      ]
+      return {
+        snapshots,
+        status: reasons.length ? 'degraded' : 'ok',
+        ...(reasons.length ? { reasons } : {}),
+      }
     } catch {
-      return { snapshots: [] }
+      return {
+        snapshots: [],
+        status: 'unavailable',
+        reasons: ['storage-failed'],
+      }
     }
   }
 
-  /**
-   * Bounded search over the persisted compaction archive. The durable FTS5
-   * index serves the query when present; when it is absent (SQLite built
-   * without FTS5) or the MATCH fails for any reason, the search fails open
-   * to a bounded case-insensitive LIKE scan over context_archive_messages
-   * with ALL-terms AND semantics — mirroring the runtime recall contract
-   * that never throws on a bad query. Only archived tool messages are
-   * returned: the recall contract matches tool bodies (same as the runtime
-   * scanner); non-tool rows exist for lineage only.
-   */
   async searchContextArchive(request: {
     query: string
     limit?: number
@@ -1535,81 +1487,220 @@ export class BunSQLiteMemoryRepository
     const empty: ContextArchiveSearchOutcome = {
       matches: [],
       snapshotsSearched: 0,
+      status: 'ok',
     }
-    if (this.requireOpen() !== null) return empty
+    if (this.requireOpen())
+      return { ...empty, status: 'unavailable', reasons: ['store-closed'] }
     const query = typeof request?.query === 'string' ? request.query : ''
+    const terms = sanitizeFtsQuery(query)
+    if (!terms) return empty
     const limit =
-      typeof request?.limit === 'number' &&
+      typeof request.limit === 'number' &&
       Number.isFinite(request.limit) &&
       request.limit > 0
         ? Math.min(Math.floor(request.limit), CONTEXT_ARCHIVE_SEARCH_LIMIT_MAX)
         : CONTEXT_ARCHIVE_SEARCH_LIMIT_DEFAULT
-    const terms = sanitizeFtsQuery(query)
-    // No FTS5-expressible term: nothing can match under the ALL-terms
-    // contract, so report an empty (not failed) search.
-    if (terms === null) return empty
-
     try {
-      if (contextArchiveFtsAvailable(this.database)) {
+      const invalidLegacy = await this.ensureArchiveMigration()
+      const reasons = invalidLegacy ? ['legacy-migration-incomplete'] : []
+      const from = `FROM context_archive_bodies b JOIN context_archive_messages m ON m.content_digest=b.content_digest JOIN context_archive_memberships r ON r.message_id=m.message_id JOIN context_archive_snapshots s ON s.snapshot_id=r.snapshot_id`
+      const select =
+        'SELECT s.snapshot_id,s.run_id,s.archived_at,m.tool_name,m.tool_call_id,r.step,b.body'
+      if (archiveFtsAvailable(this.database)) {
         try {
           const rows = this.database
             .query(
-              `SELECT fts.run_id AS run_id, fts.archived_at AS archived_at,
-                      m.tool_name AS tool_name, m.tool_call_id AS tool_call_id,
-                      m.step AS step, m.body AS body
-                 FROM context_archive_fts fts
-                 JOIN context_archive_messages m
-                   ON m.run_id = fts.run_id
-                  AND m.archived_at = fts.archived_at
-                  AND m.msg_index = fts.msg_index
-                WHERE fts MATCH ?1 AND m.tool_name IS NOT NULL
-                ORDER BY rank
-                LIMIT ?2`,
+              `${select} ${from} JOIN context_archive_fts ON context_archive_fts.rowid=b.rowid WHERE context_archive_fts MATCH ?1 AND m.tool_name IS NOT NULL ORDER BY rank,s.archived_at DESC,r.msg_index DESC LIMIT ?2`,
             )
             .all(
               terms.join(' '),
               CONTEXT_ARCHIVE_SEARCH_SCAN_CAP,
             ) as ContextArchiveMessageRow[]
+          const literalTerms = terms.map((term) =>
+            term.slice(1, -1).replaceAll('""', '"'),
+          )
           return {
-            matches: buildArchiveSearchMatches(rows, terms, limit),
+            matches: buildArchiveSearchMatches(rows, literalTerms, limit),
             snapshotsSearched: countDistinctArchiveSnapshots(rows),
+            status: reasons.length ? 'degraded' : 'ok',
+            ...(reasons.length ? { reasons } : {}),
           }
         } catch {
-          // MATCH failed (e.g. a query shape the sanitizer did not cover):
-          // fall through to the LIKE scan below.
+          reasons.push('fts-failed')
         }
-      }
-
-      // Fail-open LIKE scan: all terms AND, case-insensitive, bounded.
-      const loweredTerms = query
-        .toLowerCase()
-        .split(/\s+/)
-        .filter((term) => term.length > 0)
-      if (loweredTerms.length === 0) return empty
+      } else reasons.push('fts-unavailable')
+      const loweredTerms = terms.map((term) =>
+        term.slice(1, -1).replaceAll('""', '"'),
+      )
       const clauses = loweredTerms
-        .map((_, index) => `lower(body) LIKE ?${index + 1} ESCAPE '\\'`)
+        .map(() => "lower(b.body) LIKE ? ESCAPE '\\'")
         .join(' AND ')
-      const params = loweredTerms.map((term) => `%${escapeLikePattern(term)}%`)
       const rows = this.database
         .query(
-          `SELECT run_id, archived_at, tool_name, tool_call_id, step, body
-             FROM context_archive_messages
-            WHERE tool_name IS NOT NULL AND ${clauses}
-            ORDER BY archived_at DESC, msg_index DESC
-            LIMIT ?${loweredTerms.length + 1}`,
+          `${select} ${from} WHERE m.tool_name IS NOT NULL AND ${clauses} ORDER BY s.archived_at DESC,r.msg_index DESC LIMIT ?`,
         )
         .all(
-          ...params,
+          ...loweredTerms.map((term) => `%${escapeLikePattern(term)}%`),
           CONTEXT_ARCHIVE_SEARCH_SCAN_CAP,
         ) as ContextArchiveMessageRow[]
       return {
         matches: buildArchiveSearchMatches(rows, loweredTerms, limit),
         snapshotsSearched: countDistinctArchiveSnapshots(rows),
+        status: 'degraded',
+        reasons,
       }
     } catch {
-      // Fail-open contract: a search failure is an empty result, never a
-      // thrown error into the recall path.
-      return empty
+      return { ...empty, status: 'unavailable', reasons: ['storage-failed'] }
+    }
+  }
+
+  async repairContextArchive(): Promise<{
+    status: 'ok' | 'degraded'
+    reasons?: string[]
+  }> {
+    if (this.requireOpen())
+      return { status: 'degraded', reasons: ['store-closed'] }
+    try {
+      this.database.exec('DELETE FROM context_archive_migration_errors')
+      const invalid = await this.ensureArchiveMigration()
+      this.database
+        .transaction(() => repairArchiveFts(this.database))
+        .immediate()
+      return invalid
+        ? { status: 'degraded', reasons: ['legacy-migration-incomplete'] }
+        : { status: 'ok' }
+    } catch {
+      return { status: 'degraded', reasons: ['repair-failed'] }
+    }
+  }
+
+  /** Bounded exact cross-task maintenance; it never creates a policy or a semantic fact. */
+  async consolidateExact(request: {
+    projectId: string
+    maxGroups?: number
+    now?: number
+  }): Promise<{
+    status: 'ok' | 'degraded'
+    reinforced: number
+    superseded: number
+    reason?: string
+  }> {
+    const degraded = (reason: string) => ({
+      status: 'degraded' as const,
+      reinforced: 0,
+      superseded: 0,
+      reason,
+    })
+    if (this.requireOpen()) return degraded('store-closed')
+    if (!ProjectIdSchema.safeParse(request.projectId).success)
+      return degraded('invalid-project')
+    try {
+      this.requireBoundProject(request.projectId)
+      await this.ensureKnowledgeProjection()
+      const maxGroups =
+        typeof request.maxGroups === 'number' &&
+        Number.isFinite(request.maxGroups)
+          ? Math.max(0, Math.min(16, Math.floor(request.maxGroups)))
+          : 4
+      const tail = this.readLastEventIdForProject(request.projectId)
+      const groups = this.database
+        .query(
+          "SELECT exact_identity FROM memory_knowledge WHERE project_id=?1 AND lifecycle='active' GROUP BY exact_identity HAVING COUNT(*)>1 AND COUNT(DISTINCT task_id)>1 AND sum(pinned=0)>0 ORDER BY min(source_sequence),exact_identity LIMIT ?2",
+        )
+        .all(request.projectId, maxGroups) as Array<{ exact_identity: string }>
+      const at =
+        typeof request.now === 'number' && Number.isFinite(request.now)
+          ? new Date(request.now).toISOString()
+          : new Date().toISOString()
+      const drafts: MemoryEventDraft[] = []
+      for (const group of groups) {
+        const rows = this.database
+          .query(
+            `WITH head AS MATERIALIZED (
+              SELECT observation_id FROM memory_knowledge
+              WHERE project_id=?1 AND exact_identity=?2 AND lifecycle='active'
+              ORDER BY pinned DESC,source_sequence,observation_id LIMIT 1
+            )
+            SELECT state_json FROM memory_knowledge
+            WHERE project_id=?1 AND exact_identity=?2 AND lifecycle='active'
+              AND (pinned=0 OR observation_id=(SELECT observation_id FROM head))
+            ORDER BY pinned DESC,source_sequence,observation_id LIMIT 16`,
+          )
+          .all(request.projectId, group.exact_identity) as Array<{
+          state_json: string
+        }>
+        const states = rows.map(
+          (row) => JSON.parse(row.state_json) as KnowledgeObservationState,
+        )
+        const head = states[0]
+        if (!head) continue
+        for (const source of states.slice(1)) {
+          // Explicit duplicate pins remain independently inspectable and active.
+          if (source.pinned) continue
+          if (
+            exactKnowledgeIdentity(source.observation) !==
+            exactKnowledgeIdentity(head.observation)
+          )
+            continue
+          const identity = createHash('sha256')
+            .update(
+              `${KNOWLEDGE_PRODUCER_VERSION}:${request.projectId}:${source.sourceEventId}:${head.sourceEventId}`,
+            )
+            .digest('hex')
+          drafts.push(
+            MemoryEventDraftSchema.parse({
+              schemaVersion: 2,
+              eventSchemaVersion: 1,
+              eventType: 'claim.reinforced',
+              eventId: `event:exact-reinforce:${identity}`,
+              projectId: request.projectId,
+              sessionId: 'session:exact-maintenance',
+              occurredAt: at,
+              payload: {
+                payloadSchemaVersion: 1,
+                observationId: head.observation.observationId,
+                claimId: group.exact_identity,
+                reason: `Exact cross-task corroboration from ${source.observation.observationId}`,
+                reinforcedAt: at,
+                reinforcedBy: 'current-knowledge-exact-maintenance',
+              },
+            }),
+          )
+          drafts.push(
+            MemoryEventDraftSchema.parse({
+              schemaVersion: 2,
+              eventSchemaVersion: 1,
+              eventType: 'claim.superseded',
+              eventId: `event:exact-supersede:${identity}`,
+              projectId: request.projectId,
+              sessionId: 'session:exact-maintenance',
+              occurredAt: at,
+              payload: {
+                payloadSchemaVersion: 1,
+                observationId: source.observation.observationId,
+                supersededByObservationId: head.observation.observationId,
+                reason:
+                  'Exact content and dependency duplicate; canonical source and corroboration remain auditable.',
+              },
+            }),
+          )
+        }
+      }
+      if (!drafts.length) return { status: 'ok', reinforced: 0, superseded: 0 }
+      const appended = this.appendKernel(drafts, {
+        projectId: request.projectId,
+        expectedTail: tail
+          ? { kind: 'event', eventId: MemoryEventIdSchema.parse(tail) }
+          : { kind: 'empty' },
+      })
+      if (appended.status === 'error') return degraded(appended.error.kind)
+      return {
+        status: 'ok',
+        reinforced: drafts.length / 2,
+        superseded: drafts.length / 2,
+      }
+    } catch {
+      return degraded('maintenance-failed')
     }
   }
 
@@ -1628,7 +1719,7 @@ export class BunSQLiteMemoryRepository
           `SELECT ${PLAYBOOK_SELECT_COLUMNS}
              FROM memory_playbooks
             WHERE workspace_id = ?1
-              AND status = 'active'
+              AND status IN ('active','verified')
               AND (expires_at IS NULL OR expires_at > ?2)
             ORDER BY created_at, playbook_id`,
         )
@@ -1815,9 +1906,7 @@ export class BunSQLiteMemoryRepository
         falsePositives:
           prior.falsePositives + (outcome === 'falsePositive' ? 1 : 0),
         lastFiredAt: now,
-        ...(outcome === 'falsePositive'
-          ? { lastFalsePositiveAt: now }
-          : {}),
+        ...(outcome === 'falsePositive' ? { lastFalsePositiveAt: now } : {}),
       })
       this.database
         .query(
@@ -1860,14 +1949,18 @@ export class BunSQLiteMemoryRepository
    * which is unknown at migration time, so the caller seeds its own
    * workspace. Each seed is checked independently and skipped when a
    * playbook with that seed's trigger signature already exists for the
-   * workspace, so repeated calls never duplicate a rule and existing rows
-   * are never refreshed — a workspace that already carries an earlier seed
-   * gains only the newer ones.
+   * workspace. Exact host-owned legacy seeds upgrade their prerequisite
+   * while preserving operator state; existing current identities skip.
    */
   async ensureSeedPlaybooks(workspaceId: string): Promise<void> {
     const unavailable = this.requireOpen()
     if (unavailable) throw new MemoryV2StorageError(unavailable.error)
     for (const seed of SEED_PLAYBOOKS) {
+      this.database
+        .transaction(() =>
+          upgradeOwnedSeedPlaybook(this.database, workspaceId, seed),
+        )
+        .immediate()
       const triggerSignature = computeTriggerSignature(seed.trigger, seed.scope)
       try {
         const existing = this.database
@@ -1930,34 +2023,43 @@ export class BunSQLiteMemoryRepository
 
     try {
       this.requireBoundProject(parsed.data.projectId)
-      const scan = this.databasePath === ':memory:'
-        ? scanQueryRows(this.database, parsed.data.projectId, parsed.data.includeHistorical)
-        : await scanSQLiteQuery<EventRow>({
-            databasePath: this.databasePath,
-            projectId: parsed.data.projectId,
-            includeHistorical: parsed.data.includeHistorical,
-            maxEvents: MAX_QUERY_EVENTS,
-            maxBytes: MAX_QUERY_PAYLOAD_BYTES,
-          })
+      await this.ensureKnowledgeProjection()
+      const plan = knowledgeQueryPlan(parsed.data, !!this.recallExpander)
+      const scan =
+        this.databasePath === ':memory:'
+          ? readKnowledgeQuery(this.database, plan)
+          : await scanKnowledgeQuery(this.databasePath, plan)
       const closed = this.requireOpen()
       if (closed) return operationFailureOutcome(closed.error)
-      const events: MemoryEventEnvelope[] = []
-      const rows = scan.rows.reverse()
-      for (let index = 0; index < rows.length; index++) {
-        if (index % 32 === 0) await yieldToEventLoop()
-        const row = rows[index]!
-        if (CANONICAL_EVENT_TYPES.has(row.event_type)) {
-          events.push(envelopeFromRow(row))
-        }
-      }
+      const events = scan.coverage.map((row) =>
+        MemoryEventEnvelopeSchema.parse(JSON.parse(row.event_json)),
+      )
       return {
         outcome: 'result',
         result: await buildLexicalResult(
           parsed.data,
           events,
-          scan.eventCapReached,
-          scan.payloadBudgetReached,
+          scan.candidateCapReached,
+          false,
           this.recallExpander,
+          scan,
+          async (ids) => {
+            if (this.closed) return []
+            const eligibleIds = ids
+              .filter((id) => typeof id === 'string')
+              .slice(0, 8)
+            if (!eligibleIds.length) return []
+            const rows = this.database
+              .query(
+                `SELECT state_json FROM memory_knowledge WHERE project_id=? AND lifecycle='active' AND observation_id IN (${eligibleIds.map(() => '?').join(',')})`,
+              )
+              .all(parsed.data.projectId, ...eligibleIds) as Array<{
+              state_json: string
+            }>
+            return rows.map(
+              (row) => JSON.parse(row.state_json) as KnowledgeObservationState,
+            )
+          },
         ),
       }
     } catch (error) {
@@ -2224,8 +2326,8 @@ export class BunSQLiteMemoryRepository
         nextAfterEventId,
         ...(rows.length > 0
           ? {
-              rawTailEventId:
-                lastRow!.event_id as MemoryEventEnvelope['eventId'],
+              rawTailEventId: lastRow!
+                .event_id as MemoryEventEnvelope['eventId'],
             }
           : {}),
         skippedUnknownCount,
@@ -2301,7 +2403,9 @@ export class BunSQLiteMemoryRepository
     return unsupported('semantic-search')
   }
 
-  async getStoreStats(request: { projectId: string }): Promise<MemoryStoreStats> {
+  async getStoreStats(request: {
+    projectId: string
+  }): Promise<MemoryStoreStats> {
     const unavailable = this.requireOpen()
     if (unavailable) throw new MemoryV2StorageError(unavailable.error)
     try {
@@ -2458,10 +2562,16 @@ export class BunSQLiteMemoryRepository
       if (!MemoryEventIdSchema.safeParse(id).success)
         fail('The privileged compaction event IDs are invalid.')
     }
-    if (!Array.isArray(input.archiveLines) || input.archiveLines.length !== input.eventIds.length) {
+    if (
+      !Array.isArray(input.archiveLines) ||
+      input.archiveLines.length !== input.eventIds.length
+    ) {
       fail('The privileged compaction archive lines must match the event list.')
     }
-    if (typeof input.archiveHash !== 'string' || !DIGEST_PATTERN.test(input.archiveHash)) {
+    if (
+      typeof input.archiveHash !== 'string' ||
+      !DIGEST_PATTERN.test(input.archiveHash)
+    ) {
       fail('The privileged compaction archive hash is invalid.')
     }
     if (
@@ -2475,7 +2585,10 @@ export class BunSQLiteMemoryRepository
     if (!draft.success || draft.data.eventType !== 'claim.archived') {
       fail('The privileged compaction archive claim is invalid.')
     }
-    const claim = draft.data as Extract<typeof draft.data, { eventType: 'claim.archived' }>
+    const claim = draft.data as Extract<
+      typeof draft.data,
+      { eventType: 'claim.archived' }
+    >
     if (claim.projectId !== input.projectId) {
       fail('The privileged compaction archive claim project does not match.')
     }
@@ -2631,7 +2744,9 @@ export class BunSQLiteMemoryRepository
             WHERE event_id IN (${placeholders})
               AND json_extract(metadata_json, '$.projectId') = ?${projectParamIndex}`,
         )
-        .run(...input.eventIds, input.projectId) as unknown as { changes: unknown }
+        .run(...input.eventIds, input.projectId) as unknown as {
+        changes: unknown
+      }
       if (Number(deleted.changes) !== input.eventIds.length) {
         fail('The privileged compaction delete did not remove every event.')
       }
@@ -2661,7 +2776,8 @@ export class BunSQLiteMemoryRepository
           prepared.sessionId,
           prepared.artifactId,
         )
-      for (const table of PROJECTION_TABLES) this.database.exec(`DELETE FROM ${table}`)
+      for (const table of PROJECTION_TABLES)
+        this.database.exec(`DELETE FROM ${table}`)
       // The usage projection must stay consistent with the surviving event log:
       // clearing the canonical events (including archived 'observation.reused'
       // events) invalidates their usage counters, so memory_usage is rebuilt
@@ -2670,6 +2786,7 @@ export class BunSQLiteMemoryRepository
       this.database.exec('DELETE FROM memory_usage')
       // claim_dedup is rebuilt from the surviving log during the replay.
       this.database.exec('DELETE FROM claim_dedup')
+      clearKnowledgeProjection(this.database)
       setProjectionCursor(this.database, 0)
       replayProjections(this.database, Number.MAX_SAFE_INTEGER)
       this.database.exec('COMMIT')
@@ -2806,6 +2923,106 @@ export class BunSQLiteMemoryRepository
       )
       .get() as { value: string } | null
     return row ? Number(row.value) : 0
+  }
+
+  /** Repair pages commit their cursor with their data, so interruption/reopen resumes safely. */
+  private async ensureKnowledgeProjection(): Promise<void> {
+    if (this.closed) return
+    if (this.knowledgeRepair) return this.knowledgeRepair
+    this.knowledgeRepair = (async () => {
+      const producer = this.database
+        .query(
+          "SELECT value FROM memory_knowledge_metadata WHERE key='producer'",
+        )
+        .get() as { value: string } | null
+      if (producer?.value !== KNOWLEDGE_PRODUCER_VERSION)
+        throw incompatibleSchemaError()
+      const cursor = knowledgeCursor(this.database)
+      const checkpoint = this.database
+        .query(
+          "SELECT value FROM memory_knowledge_metadata WHERE key='cursorEventId'",
+        )
+        .get() as { value: string } | null
+      const anchor = cursor
+        ? (this.database
+            .query('SELECT event_id FROM memory_events WHERE sequence=?1')
+            .get(cursor) as { event_id: string } | null)
+        : null
+      if (
+        cursor > 0 &&
+        (!anchor || (checkpoint?.value && checkpoint.value !== anchor.event_id))
+      )
+        this.database
+          .transaction(() => clearKnowledgeProjection(this.database))
+          .immediate()
+      if (
+        !this.database
+          .query(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_knowledge_fts'",
+          )
+          .get()
+      )
+        this.database.exec(
+          'DROP TRIGGER IF EXISTS memory_knowledge_ai;DROP TRIGGER IF EXISTS memory_knowledge_ad;DROP TRIGGER IF EXISTS memory_knowledge_au;',
+        )
+      while (!this.closed) {
+        const repaired = this.database
+          .transaction(() => {
+            const cursor = knowledgeCursor(this.database)
+            const rows = this.database
+              .query(
+                `SELECT sequence,event_id,idempotency_key,event_type,occurred_at,payload_json,metadata_json,task_id,session_id,artifact_id FROM memory_events WHERE sequence>?1 ORDER BY sequence LIMIT ?2`,
+              )
+              .all(cursor, PAGE_SIZE) as EventRow[]
+            for (const row of rows) {
+              validateCanonicalProjectionRow(row)
+              const metadata = JSON.parse(row.metadata_json) as Record<
+                string,
+                unknown
+              >
+              if (
+                metadata.schemaVersion === 2 &&
+                CANONICAL_EVENT_TYPES.has(row.event_type)
+              )
+                applyKnowledgeEvent(this.database, envelopeFromRow(row))
+              advanceKnowledgeCursor(
+                this.database,
+                row.sequence,
+                row.occurred_at,
+                row.event_id,
+              )
+            }
+            return rows.length
+          })
+          .immediate()
+        if (repaired === 0) break
+        await yieldToEventLoop()
+      }
+    })()
+    try {
+      await this.knowledgeRepair
+    } finally {
+      this.knowledgeRepair = undefined
+    }
+  }
+
+  private async ensureArchiveMigration(): Promise<number> {
+    if (this.archiveMigration) return this.archiveMigration
+    this.archiveMigration = (async () => {
+      let invalid = 0
+      while (!this.closed) {
+        const page = migrateArchivePage(this.database)
+        invalid = page.invalid
+        if (!page.remaining) break
+        await yieldToEventLoop()
+      }
+      return invalid
+    })()
+    try {
+      return await this.archiveMigration
+    } finally {
+      this.archiveMigration = undefined
+    }
   }
 }
 
@@ -3136,23 +3353,52 @@ function migrate(database: Database): void {
     database.exec(MEMORY_USAGE_DDL)
     // Additive P7 projection table: created idempotently on every open so
     // existing stores gain it without a structural migration. This build
-    // also bumps PRAGMA user_version to SCHEMA_VERSION (3) below, so a
+    // also bumps PRAGMA user_version to the current SCHEMA_VERSION below, so a
     // pre-P7 build sharing the file fails closed at its own open (version
     // > its SCHEMA_VERSION) instead of compacting/rebuilding a store whose
     // claim.reinforced protection it cannot see.
     database.exec(CLAIM_DEDUP_DDL)
-    // Additive context-archive persistence (the cross-session recall_context
-    // source): row tables are created idempotently on every open. The FTS5
-    // virtual table is feature-detected — a bundled SQLite without FTS5
-    // skips ONLY the index table and keeps the row tables, so durable recall
-    // degrades to a bounded LIKE scan instead of failing the store open.
-    database.exec(CONTEXT_ARCHIVE_DDL)
+    database.exec(KNOWLEDGE_PROJECTION_DDL)
+    const hadKnowledgeFts = !!database
+      .query(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_knowledge_fts'",
+      )
+      .get()
     try {
-      database.exec(CONTEXT_ARCHIVE_FTS_DDL)
+      database.exec(KNOWLEDGE_FTS_DDL)
+      if (!hadKnowledgeFts)
+        database.exec(
+          "INSERT INTO memory_knowledge_fts(memory_knowledge_fts) VALUES ('rebuild')",
+        )
     } catch {
-      // No FTS5 in this build: recall falls back to the LIKE scan at query
-      // time (sqlite_master will not list context_archive_fts).
+      /* Indexed selectors remain available without FTS5. */
     }
+    const knowledgeProducer = database
+      .query("SELECT value FROM memory_knowledge_metadata WHERE key='producer'")
+      .get() as { value: string } | null
+    if (knowledgeProducer?.value === 'current-knowledge-1') {
+      if (
+        !database
+          .query(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_knowledge_fts'",
+          )
+          .get()
+      )
+        database.exec(
+          'DROP TRIGGER IF EXISTS memory_knowledge_ai;DROP TRIGGER IF EXISTS memory_knowledge_ad;DROP TRIGGER IF EXISTS memory_knowledge_au;',
+        )
+      // Version 1 collapsed symbol occurrences in evidence freshness. Keep
+      // canonical history and resume the corrected projection from zero.
+      clearKnowledgeProjection(database)
+      database
+        .query(
+          "UPDATE memory_knowledge_metadata SET value=?1 WHERE key='producer'",
+        )
+        .run(KNOWLEDGE_PRODUCER_VERSION)
+    }
+    // Bodies and manifests migrate transactionally, with payload backfill
+    // deferred to bounded resumable pages on the archive surface.
+    migrateContextArchiveSchema(database)
     // Additive procedural-memory table: created idempotently on every open so
     // existing stores gain it without a structural migration. Nothing here
     // touches the canonical event log or its append-only triggers.
@@ -3409,49 +3655,6 @@ const CLAIM_DEDUP_DDL = `
  * (cli/src/utils/run-state-storage.ts saveChatState); this store lives in
  * the same user-local, project-bound trust domain.
  */
-const CONTEXT_ARCHIVE_DDL = `
-  CREATE TABLE IF NOT EXISTS context_archive_snapshots (
-    run_id TEXT NOT NULL,
-    archived_at INTEGER NOT NULL,
-    action TEXT NOT NULL CHECK(action IN ('semantic_compaction','mechanical_trim','tool_result_eviction')),
-    keep_recent_steps INTEGER NOT NULL,
-    step_base INTEGER,
-    reason TEXT,
-    messages_json TEXT NOT NULL CHECK(json_valid(messages_json)),
-    steps_json TEXT,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY(run_id, archived_at)
-  ) WITHOUT ROWID;
-  CREATE TABLE IF NOT EXISTS context_archive_messages (
-    run_id TEXT NOT NULL,
-    archived_at INTEGER NOT NULL,
-    msg_index INTEGER NOT NULL,
-    tool_call_id TEXT,
-    tool_name TEXT,
-    step INTEGER,
-    body TEXT NOT NULL,
-    PRIMARY KEY(run_id, archived_at, msg_index)
-  );
-  CREATE TABLE IF NOT EXISTS context_archive_watermarks (
-    run_id TEXT PRIMARY KEY,
-    max_archived_at INTEGER NOT NULL,
-    updated_at TEXT NOT NULL
-  ) WITHOUT ROWID;
-`
-
-/**
- * The durable FTS5 index over archived bodies: a REGULAR (not
- * external-content) fts5 table kept in sync with plain INSERTs on flush and
- * DELETEs on prune. Duplicate body storage is accepted for robustness — the
- * row tables remain the source of truth and the index is rebuildable by a
- * full re-persist. Created only when the bundled SQLite supports FTS5.
- */
-const CONTEXT_ARCHIVE_FTS_DDL = `
-  CREATE VIRTUAL TABLE IF NOT EXISTS context_archive_fts
-    USING fts5(run_id UNINDEXED, archived_at UNINDEXED, msg_index UNINDEXED, body);
-`
-
-/** Columns every playbook read/write maps back through MemoryPlaybookSchema. */
 const PLAYBOOK_SELECT_COLUMNS = `playbook_id, workspace_id, task_id, title, instruction,
        trigger_json, scope_json, status, enforcement, counters_json,
        provenance_json, trigger_signature, expires_at, created_at, updated_at`
@@ -3492,8 +3695,8 @@ const MEMORY_PLAYBOOKS_DDL = `
  * {@link BunSQLiteMemoryRepository.ensureSeedPlaybooks}. Each seed is keyed
  * by its computeTriggerSignature(trigger, scope); the per-seed existence
  * check in that method skips a seed already present for the workspace, so
- * existing rows are never refreshed — a workspace that already carries the
- * CI-before-commit seed gains only the CI-before-push seed.
+ * exact host-owned legacy rows are upgraded to validation receipts while
+ * operator state and text survive. User-owned rules remain independent.
  */
 const SEED_PLAYBOOKS: ReadonlyArray<{
   trigger: PlaybookTrigger
@@ -3510,17 +3713,16 @@ const SEED_PLAYBOOKS: ReadonlyArray<{
       spawnAgentType: 'git-committer',
       requireEvidence: [
         {
-          kind: 'toolSucceeded',
-          tool: 'run_terminal_command',
-          commandPattern: '*check:ci-local*',
-          withinMs: 14_400_000,
+          kind: 'validationSucceeded',
+          validationKinds: ['ci-local', 'package-checks'],
+          withinMs: 1_800_000,
         },
       ],
     },
     scope: { repos: [] },
     title: 'Run the repo CI check before committing',
     instruction:
-      'Run the repository CI check (e.g. `bun run check:ci-local`, or the package-appropriate typecheck/test script) successfully in this session before spawning git-committer to commit or push.',
+      'Before spawning git-committer to commit or push, require a successful host validation receipt for the repository CI check or the appropriate package checks whose source and configuration dependencies still match. Reuse a valid receipt produced by another actor; otherwise run the required check.',
     status: 'active',
     enforcement: 'warn',
     provenance: {
@@ -3531,25 +3733,22 @@ const SEED_PLAYBOOKS: ReadonlyArray<{
     },
   },
   {
-    // The orchestrator itself must run the CI check (its own
-    // run_terminal_command, visible to the evidence scan) before a direct
-    // git push; a subagent's runs are not visible to this check.
+    // A matching host-attested validation receipt can be reused across actors.
     trigger: {
       tool: 'run_terminal_command',
       terminalAction: 'git-push',
       requireEvidence: [
         {
-          kind: 'toolSucceeded',
-          tool: 'run_terminal_command',
-          commandPattern: '*check:ci-local*',
-          withinMs: 14_400_000,
+          kind: 'validationSucceeded',
+          validationKinds: ['ci-local', 'package-checks'],
+          withinMs: 1_800_000,
         },
       ],
     },
     scope: { repos: [] },
     title: 'Run the repo CI check before pushing directly',
     instruction:
-      "Before any direct `git push` from the orchestrator, run the repository CI check yourself with run_terminal_command in this session (e.g. `bun run check:ci-local`, or the package-appropriate typecheck/test script) as its own command and let it succeed first. Do not delegate the check to a subagent — a subagent's runs are not visible to this check — and do not push on a red or skipped check.",
+      'Before a direct git push, require a successful host validation receipt for the repository CI check or the appropriate package checks with matching source and configuration dependencies. A valid receipt produced by any actor is reusable. Run the required check when no valid receipt exists; do not push after failed or skipped validation.',
     status: 'active',
     enforcement: 'warn',
     provenance: {
@@ -3561,136 +3760,131 @@ const SEED_PLAYBOOKS: ReadonlyArray<{
   },
 ]
 
-/** Whether the durable context_archive_fts index table exists in this store. */
-function contextArchiveFtsAvailable(database: Database): boolean {
-  const row = database
+/** Upgrade only the two exact host-owned legacy recipes; operator text and quality survive. */
+function upgradeOwnedSeedPlaybook(
+  database: Database,
+  workspaceId: string,
+  seed: (typeof SEED_PLAYBOOKS)[number],
+): void {
+  const legacyTrigger = {
+    ...seed.trigger,
+    requireEvidence: [
+      {
+        kind: 'toolSucceeded' as const,
+        tool: 'run_terminal_command',
+        commandPattern: '*check:ci-local*',
+        withinMs: 14_400_000,
+      },
+    ],
+  }
+  const legacySignature = computeTriggerSignature(legacyTrigger, seed.scope)
+  const old = database
     .query(
-      "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'context_archive_fts'",
+      `SELECT ${PLAYBOOK_SELECT_COLUMNS} FROM memory_playbooks WHERE workspace_id=?1 AND trigger_signature=?2`,
     )
-    .get() as { present: number } | null
-  return row !== null
-}
-
-/**
- * Serial form of an archived message body. Tool messages mirror the runtime
- * recall scanner's serialization (json parts stringified, media parts as
- * '[media]'), so persisted snippets read like in-memory recall snippets;
- * non-tool messages store their JSON-stringified content for lineage.
- */
-function contextArchiveMessageBody(message: ContextArchiveMessage): string {
-  if (message.role !== 'tool') return JSON.stringify(message.content)
-  return message.content
-    .map((part) =>
-      part.type === 'json' ? JSON.stringify(part.value) : '[media]',
-    )
-    .join(' ')
-}
-
-/**
- * Validate and flatten one incoming archive snapshot into insertable rows.
- * Returns null for an invalid snapshot (skipped, not fatal: the flush
- * commits the valid remainder). Tool messages carry their provenance step —
- * `steps[index]` when the snapshot recorded it, else slice-local
- * `index + stepBase` (the same stepProvenance semantics the runtime scanner
- * uses); non-tool messages keep NULL tool fields.
- */
-function prepareContextArchiveSnapshot(snapshot: ContextArchiveSnapshot): {
-  messagesJson: string
-  stepsJson: string | null
-  messageRows: Array<{
-    msgIndex: number
-    toolCallId: string | null
-    toolName: string | null
-    step: number | null
-    body: string
-  }>
-} | null {
+    .get(workspaceId, legacySignature) as PlaybookRow | null
+  if (!old) return
+  const provenance = JSON.parse(old.provenance_json) as MemoryProvenance
   if (
-    snapshot === null ||
-    typeof snapshot !== 'object' ||
-    typeof snapshot.archivedAt !== 'number' ||
-    !Number.isFinite(snapshot.archivedAt) ||
-    typeof snapshot.action !== 'string' ||
-    !CONTEXT_ARCHIVE_ACTIONS.has(snapshot.action) ||
-    typeof snapshot.keepRecentSteps !== 'number' ||
-    !Array.isArray(snapshot.messages)
-  ) {
-    return null
-  }
-  try {
-    const messagesJson = JSON.stringify(snapshot.messages)
-    const stepsJson = Array.isArray(snapshot.steps)
-      ? JSON.stringify(snapshot.steps)
-      : null
-    const messageRows = snapshot.messages.map((message, index) => {
-      if (message.role === 'tool') {
-        const recordedStep = snapshot.steps?.[index]
-        return {
-          msgIndex: index,
-          toolCallId: message.toolCallId,
-          toolName: message.toolName,
-          step:
-            typeof recordedStep === 'number'
-              ? recordedStep
-              : index + (snapshot.stepBase ?? 0),
-          body: contextArchiveMessageBody(message),
-        }
-      }
-      return {
-        msgIndex: index,
-        toolCallId: null,
-        toolName: null,
-        step: null,
-        body: JSON.stringify(message.content),
-      }
-    })
-    return { messagesJson, stepsJson, messageRows }
-  } catch {
-    // Unserializable message content (e.g. a cyclic value): skip the
-    // snapshot rather than aborting the whole flush.
-    return null
-  }
-}
-
-/**
- * Deserialize one persisted snapshot row back into a ContextArchiveSnapshot.
- * Returns null for a row that fails validation (unreadable JSON, unknown
- * action) — callers drop it instead of failing the whole read.
- */
-function parsePersistedSnapshot(
-  row: ContextArchiveSnapshotRow,
-): ContextArchiveSnapshot | null {
-  if (!CONTEXT_ARCHIVE_ACTIONS.has(row.action)) return null
-  let messages: unknown
-  try {
-    messages = JSON.parse(row.messages_json)
-  } catch {
-    return null
-  }
-  if (!Array.isArray(messages)) return null
-  let steps: number[] | undefined
-  if (typeof row.steps_json === 'string') {
-    try {
-      const parsed: unknown = JSON.parse(row.steps_json)
-      if (
-        Array.isArray(parsed) &&
-        parsed.every((step) => typeof step === 'number')
-      ) {
-        steps = parsed
-      }
-    } catch {
-      // Absent steps fall back to stepBase numbering at recall time.
+    provenance.origin !== 'migration' ||
+    provenance.recordedBy !== 'bun-sqlite-memory-v2'
+  )
+    return
+  if (
+    stableJson(JSON.parse(old.trigger_json)) !== stableJson(legacyTrigger) ||
+    stableJson(JSON.parse(old.scope_json)) !== stableJson(seed.scope)
+  )
+    return
+  const nextSignature = computeTriggerSignature(seed.trigger, seed.scope)
+  const collision = database
+    .query(
+      `SELECT ${PLAYBOOK_SELECT_COLUMNS} FROM memory_playbooks WHERE workspace_id=?1 AND trigger_signature=?2`,
+    )
+    .get(workspaceId, nextSignature) as PlaybookRow | null
+  let counters = PlaybookCountersSchema.parse(JSON.parse(old.counters_json))
+  if (collision) {
+    const collisionProvenance = JSON.parse(
+      collision.provenance_json,
+    ) as MemoryProvenance
+    if (
+      collisionProvenance.origin !== 'migration' ||
+      collisionProvenance.recordedBy !== 'bun-sqlite-memory-v2'
+    ) {
+      // Existing operator policy owns the new identity. Preserve the old row
+      // for inspection, with its prior state recorded in provenance.
+      database
+        .query(
+          "UPDATE memory_playbooks SET status='retired',provenance_json=?1 WHERE playbook_id=?2",
+        )
+        .run(
+          JSON.stringify({
+            ...provenance,
+            metadata: {
+              ...provenance.metadata,
+              legacyStatus: provenance.metadata.legacyStatus ?? old.status,
+              seedMigration: 'validation-receipts-1',
+            },
+          }),
+          old.playbook_id,
+        )
+      return
     }
+    const other = PlaybookCountersSchema.parse(
+      JSON.parse(collision.counters_json),
+    )
+    counters = {
+      ...counters,
+      fired: counters.fired + other.fired,
+      blocked: counters.blocked + other.blocked,
+      compliedAfterBlock:
+        counters.compliedAfterBlock + other.compliedAfterBlock,
+      falsePositives: counters.falsePositives + other.falsePositives,
+      bypassed: counters.bypassed + other.bypassed,
+      ...(counters.lastFiredAt || other.lastFiredAt
+        ? {
+            lastFiredAt: Math.max(
+              counters.lastFiredAt ?? 0,
+              other.lastFiredAt ?? 0,
+            ),
+          }
+        : {}),
+      ...(counters.lastFalsePositiveAt || other.lastFalsePositiveAt
+        ? {
+            lastFalsePositiveAt: Math.max(
+              counters.lastFalsePositiveAt ?? 0,
+              other.lastFalsePositiveAt ?? 0,
+            ),
+          }
+        : {}),
+    }
+    database
+      .query('DELETE FROM memory_playbooks WHERE playbook_id=?1')
+      .run(collision.playbook_id)
   }
-  return {
-    archivedAt: row.archived_at,
-    action: row.action as ContextArchiveSnapshot['action'],
-    keepRecentSteps: row.keep_recent_steps,
-    stepBase: row.step_base ?? undefined,
-    reason: row.reason ?? undefined,
-    steps,
-    messages: messages as ContextArchiveSnapshot['messages'],
-  }
+  const originalInstruction = seed.trigger.spawnAgentType
+    ? 'Run the repository CI check (e.g. `bun run check:ci-local`, or the package-appropriate typecheck/test script) successfully in this session before spawning git-committer to commit or push.'
+    : "Before any direct `git push` from the orchestrator, run the repository CI check yourself with run_terminal_command in this session (e.g. `bun run check:ci-local`, or the package-appropriate typecheck/test script) as its own command and let it succeed first. Do not delegate the check to a subagent — a subagent's runs are not visible to this check — and do not push on a red or skipped check."
+  database
+    .query(
+      'UPDATE memory_playbooks SET trigger_json=?1,trigger_signature=?2,instruction=?3,counters_json=?4,provenance_json=?5,updated_at=?6 WHERE playbook_id=?7',
+    )
+    .run(
+      JSON.stringify(seed.trigger),
+      nextSignature,
+      old.instruction === originalInstruction
+        ? seed.instruction
+        : old.instruction,
+      JSON.stringify(counters),
+      JSON.stringify({
+        ...provenance,
+        metadata: {
+          ...provenance.metadata,
+          seedMigration: 'validation-receipts-1',
+        },
+      }),
+      Date.now(),
+      old.playbook_id,
+    )
 }
 
 /** Escape LIKE wildcards so a user term matches literally. */
@@ -3703,7 +3897,8 @@ function countDistinctArchiveSnapshots(
   rows: ContextArchiveMessageRow[],
 ): number {
   const seen = new Set<string>()
-  for (const row of rows) seen.add(`${row.run_id}\u0000${row.archived_at}`)
+  for (const row of rows)
+    seen.add(row.snapshot_id ?? `${row.run_id}\u0000${row.archived_at}`)
   return seen.size
 }
 
@@ -3821,7 +4016,7 @@ function prepareEvent(
       sessionId: value.sessionId,
     })
 
-  return {
+  const prepared: PreparedEvent = {
     eventId,
     idempotencyKey,
     eventType,
@@ -3838,6 +4033,12 @@ function prepareEvent(
       512,
     ),
   }
+  if (
+    objectValue(metadata).schemaVersion === 2 &&
+    CANONICAL_EVENT_TYPES.has(eventType)
+  )
+    envelopeFromPrepared(prepared, 1)
+  return prepared
 }
 
 function compactObject(
@@ -3885,6 +4086,7 @@ function applyProjection(
   database: Database,
   event: PreparedEvent,
   sequence: number,
+  maintainKnowledge = true,
 ): void {
   const payload =
     event.payload && typeof event.payload === 'object'
@@ -3894,6 +4096,12 @@ function applyProjection(
     event.metadata &&
     typeof event.metadata === 'object' &&
     (event.metadata as Record<string, unknown>).schemaVersion === 2
+
+  if (maintainKnowledge) {
+    if (canonical && CANONICAL_EVENT_TYPES.has(event.eventType))
+      applyKnowledgeEvent(database, envelopeFromPrepared(event, sequence))
+    advanceKnowledgeCursor(database, sequence, event.occurredAt, event.eventId)
+  }
 
   switch (event.eventType) {
     case 'task.created':
@@ -4421,7 +4629,9 @@ function upsertClaimDedup(
   _sequence: number,
 ): void {
   const id =
-    typeof claimId === 'string' && /^[0-9a-f]{64}$/.test(claimId) ? claimId : null
+    typeof claimId === 'string' && /^[0-9a-f]{64}$/.test(claimId)
+      ? claimId
+      : null
   if (!id || !observationId) return
   const existing = database
     .query('SELECT observation_id FROM claim_dedup WHERE claim_id = ?1')
@@ -4519,7 +4729,7 @@ function backfillClaimDedup(database: Database): void {
     if (rows.length === 0) break
     for (const row of rows) {
       validateCanonicalProjectionRow(row)
-      applyProjection(database, preparedEventFromRow(row), row.sequence)
+      applyProjection(database, preparedEventFromRow(row), row.sequence, false)
       cursor = row.sequence
     }
   }
@@ -4584,6 +4794,13 @@ function eventProjectId(event: PreparedEvent): string | null {
 
 function envelopeFromRow(row: EventRow): MemoryEventEnvelope {
   const event = preparedEventFromRow(row)
+  return envelopeFromPrepared(event, row.sequence)
+}
+
+function envelopeFromPrepared(
+  event: PreparedEvent,
+  sequence: number,
+): MemoryEventEnvelope {
   if (!event.metadata || typeof event.metadata !== 'object') {
     throw new Error('Stored canonical event metadata is invalid.')
   }
@@ -4595,7 +4812,7 @@ function envelopeFromRow(row: EventRow): MemoryEventEnvelope {
     eventId: event.eventId,
     projectId: metadata.projectId,
     sessionId: metadata.sessionId,
-    sequence: row.sequence,
+    sequence,
     occurredAt: event.occurredAt,
     payload: event.payload,
   })
@@ -4687,57 +4904,6 @@ function selectorKey(selector: MemorySelector): string {
   return base
 }
 
-function scanQueryRows(
-  database: Database,
-  projectId: string,
-  includeHistorical: boolean,
-): QueryScanResult {
-  const admission = database
-    .query(
-      queryAdmissionSQL,
-    )
-    // Tombstones stay in the replay. Only earlier evidence dominated by a
-    // canonical forget is omitted, and historical queries retain every event.
-    .all(
-      projectId,
-      MAX_QUERY_EVENTS + 1,
-      includeHistorical ? 1 : 0,
-    ) as QueryAdmissionRow[]
-  const sequences: number[] = []
-  let bytes = 0
-  let payloadBudgetReached = false
-  for (const row of admission.slice(0, MAX_QUERY_EVENTS)) {
-    const rowBytes = row.payload_bytes + row.metadata_bytes
-    if (bytes + rowBytes > MAX_QUERY_PAYLOAD_BYTES) {
-      payloadBudgetReached = true
-      break
-    }
-    sequences.push(row.sequence)
-    bytes += rowBytes
-  }
-  if (sequences.length === 0) {
-    return {
-      rows: [],
-      eventCapReached: admission.length > MAX_QUERY_EVENTS,
-      payloadBudgetReached,
-    }
-  }
-  const rows = database
-    .query(
-      `SELECT sequence, event_id, idempotency_key, event_type, occurred_at,
-            payload_json, metadata_json, task_id, session_id, artifact_id
-       FROM memory_events
-      WHERE sequence IN (${sequences.map(() => '?').join(',')})
-      ORDER BY sequence DESC`,
-    )
-    .all(...sequences) as EventRow[]
-  return {
-    rows,
-    eventCapReached: admission.length > MAX_QUERY_EVENTS,
-    payloadBudgetReached,
-  }
-}
-
 function lexicalTokens(value: string): Set<string> {
   return new Set(
     value
@@ -4762,243 +4928,53 @@ async function buildLexicalResult(
   eventCapReached: boolean,
   payloadBudgetReached: boolean,
   recallExpander?: BunSQLiteMemoryRepositoryOptions['recallExpander'],
+  projection?: KnowledgeQueryRows,
+  loadConceptStates?: (ids: string[]) => Promise<KnowledgeObservationState[]>,
 ) {
-  type ObservationState = {
-    observation: MemoryObservation
-    sourceSequence: number
-    sourceEventId: string
-    forgotten: boolean
-    superseded: boolean
-    corrected: boolean
-    pinned: boolean
-    used: number
-    ignored: number
-    reinforced: number
-    freshness: Map<
-      string,
-      {
-        state: 'verified' | 'invalid'
-        at: string
-        reason?: string
-        observedDigest?: string
-        workspaceRevision?: number
-        workspaceSnapshotId?: string
-      }
-    >
+  type ObservationState = Omit<KnowledgeObservationState, 'freshness'> & {
+    freshness: Map<string, KnowledgeObservationState['freshness'][string]>
   }
-  type TaskState = {
-    taskId: string
-    title: string
-    objective: string
-    status:
-      | 'created'
-      | 'active'
-      | 'blocked'
-      | 'completed'
-      | 'failed'
-      | 'cancelled'
-    sourceSequence: number
-    eventId: string
-  }
+  type TaskState = KnowledgeTaskState
   const observations = new Map<string, ObservationState>()
   const tasks = new Map<string, TaskState>()
-  // P7 supersession head map: observation id -> the observation id that
-  // superseded it, folded from claim.superseded events during the replay so
-  // historicalContext can resolve the tail of a supersession chain.
   const supersededBy = new Map<string, string>()
-
-  let foldedEvents = 0
-  for (const event of events) {
-    if (foldedEvents++ % 32 === 0) await yieldToEventLoop()
-    if (event.eventType === 'task.created') {
-      tasks.set(event.payload.taskId, {
-        taskId: event.payload.taskId,
-        title: event.payload.title,
-        objective: event.payload.objective,
-        status: event.payload.initialStatus,
-        sourceSequence: event.sequence,
-        eventId: event.eventId,
-      })
-    } else if (event.eventType === 'task.transitioned') {
-      const task = tasks.get(event.payload.taskId)
-      if (task)
-        tasks.set(task.taskId, {
-          ...task,
-          status: event.payload.toStatus,
-          sourceSequence: event.sequence,
-          eventId: event.eventId,
-        })
-    } else if (event.eventType === 'observation.recorded') {
-      observations.set(event.payload.observation.observationId, {
-        observation: event.payload.observation,
-        sourceSequence: event.sequence,
-        sourceEventId: event.eventId,
-        forgotten: false,
-        superseded: false,
-        corrected: false,
-        pinned: false,
-        used: 0,
-        ignored: 0,
-        reinforced: 0,
-        freshness: new Map(),
-      })
-    } else if (event.eventType === 'evidence.attached') {
-      const state = observations.get(event.payload.observationId)
-      if (state)
-        state.observation = {
-          ...state.observation,
-          evidence: [
-            ...state.observation.evidence,
-            ...event.payload.evidence,
-          ].slice(0, 32),
-        }
-    } else if (event.eventType === 'claim.consolidated') {
-      for (const id of event.payload.sourceObservationIds) {
-        const source = observations.get(id)
-        if (source) source.superseded = true
-      }
-      observations.set(event.payload.canonicalObservation.observationId, {
-        observation: event.payload.canonicalObservation,
-        sourceSequence: event.sequence,
-        sourceEventId: event.eventId,
-        forgotten: false,
-        superseded: false,
-        corrected: false,
-        pinned: false,
-        used: 0,
-        ignored: 0,
-        reinforced: 0,
-        freshness: new Map(),
-      })
-    } else if (event.eventType === 'claim.corrected') {
-      const prior = observations.get(event.payload.observationId)
-      if (prior) prior.corrected = true
-      observations.set(event.payload.correction.observationId, {
-        observation: event.payload.correction,
-        sourceSequence: event.sequence,
-        sourceEventId: event.eventId,
-        forgotten: false,
-        superseded: false,
-        corrected: false,
-        pinned: prior?.pinned ?? false,
-        used: 0,
-        ignored: 0,
-        reinforced: 0,
-        freshness: new Map(),
-      })
-    } else if (event.eventType === 'claim.forgotten') {
-      for (const id of event.payload.observationIds) {
-        const state = observations.get(id)
-        if (state) state.forgotten = true
-      }
-    } else if (event.eventType === 'claim.superseded') {
-      const state = observations.get(event.payload.observationId)
-      if (state) state.superseded = true
-      supersededBy.set(
-        event.payload.observationId,
-        event.payload.supersededByObservationId,
-      )
-    } else if (event.eventType === 'claim.pinned') {
-      const state = observations.get(event.payload.observationId)
-      if (state) state.pinned = true
-    } else if (event.eventType === 'evidence.verified') {
-      const state = observations.get(event.payload.observationId)
-      state?.freshness.set(selectorKey(event.payload.selector), {
-        state: 'verified',
-        at: event.payload.verifiedAt,
-        observedDigest: event.payload.observedDigest,
-        workspaceRevision: event.payload.workspaceRevision,
-        workspaceSnapshotId: event.payload.workspaceSnapshotId,
-      })
-    } else if (event.eventType === 'evidence.invalidated') {
-      const state = observations.get(event.payload.observationId)
-      state?.freshness.set(selectorKey(event.payload.selector), {
-        state: 'invalid',
-        at: event.payload.invalidatedAt,
-        reason: event.payload.reason,
-      })
-    } else if (event.eventType === 'evidence.rebound') {
-      const state = observations.get(event.payload.observationId)
-      if (state) {
-        state.observation = {
-          ...state.observation,
-          evidence: [
-            ...state.observation.evidence.filter(
-              (e) =>
-                selectorKey(e.selector) !==
-                selectorKey(event.payload.previousSelector),
-            ),
-            event.payload.evidence,
-          ],
-        }
-        state.freshness.delete(selectorKey(event.payload.previousSelector))
-      }
-    } else if (event.eventType === 'observation.reused') {
-      // Fold the P4 usage counters into observation state so retrieval can
-      // score reusability without ever reading the memory_usage projection
-      // table directly (fold events, never tables). Unknown observation ids
-      // are ignored and malformed payloads are tolerated objectArray-style.
-      for (const entry of objectArray(event.payload.used)) {
-        const state = observations.get(
-          typeof entry.observationId === 'string'
-            ? entry.observationId
-            : String(entry.observationId ?? ''),
-        )
-        if (state) state.used += 1
-      }
-      for (const entry of objectArray(event.payload.ignored)) {
-        const state = observations.get(
-          typeof entry.observationId === 'string'
-            ? entry.observationId
-            : String(entry.observationId ?? ''),
-        )
-        if (state) state.ignored += 1
-      }
-    } else if (event.eventType === 'claim.reinforced') {
-      // Fold the P7 reinforcement counter so retrieval usefulness scoring
-      // credits reinforced claims. Unknown observation ids are ignored,
-      // mirroring the observation.reused fold branch above.
-      const state = observations.get(event.payload.observationId)
-      if (state) state.reinforced += 1
-    }
-  }
-
-  // P8 wave 2a concept corpus: a bounded snapshot of ACTIVE observations
-  // (never forgotten/superseded/corrected) offered to the advisory recall
-  // expander. observationId code-point order and the 256-entry cap keep the
-  // corpus deterministic and bounded; claimId is carried only as a strict
-  // 64-hex value from the canonical provenance metadata key.
-  const conceptCorpus: ConceptCorpusEntry[] = [...observations.values()]
-    .filter(
-      (state) => !state.forgotten && !state.superseded && !state.corrected,
-    )
-    .map((state) => {
-      const entry: ConceptCorpusEntry = {
-        observationId: state.observation.observationId,
-        kind: state.observation.kind,
-        summary: state.observation.summary,
-      }
-      if (
-        typeof state.observation.detail === 'string' &&
-        state.observation.detail.length > 0
-      )
-        entry.detail = state.observation.detail
-      const claimId = state.observation.provenance?.metadata?.claimId
-      if (typeof claimId === 'string' && /^[0-9a-f]{64}$/.test(claimId))
-        entry.claimId = claimId
-      return entry
+  for (let index = 0; index < (projection?.observations.length ?? 0); index++) {
+    if (index % 32 === 0) await yieldToEventLoop()
+    const state = JSON.parse(
+      projection!.observations[index]!.state_json,
+    ) as KnowledgeObservationState
+    // Parse through the canonical schema before any derived projection can be injected.
+    const observation = MemoryObservationSchema.parse(state.observation)
+    observations.set(observation.observationId, {
+      ...state,
+      observation,
+      freshness: new Map(Object.entries(state.freshness)),
     })
-    .sort((left, right) =>
-      compareUnicodeCodePoints(left.observationId, right.observationId),
-    )
-    .slice(0, 256)
-
-  // Deterministic as-of wall clock: the latest occurredAt across the admitted
-  // event page (never Date.now), so usefulness age buckets are reproducible.
-  const asOfTurnWall = events.reduce(
-    (max, e) => (e.occurredAt > max ? e.occurredAt : max),
-    '1970-01-01T00:00:00.000Z',
+    if (state.supersededBy)
+      supersededBy.set(observation.observationId, state.supersededBy)
+  }
+  for (const row of projection?.tasks ?? []) {
+    const task = JSON.parse(row.state_json) as TaskState
+    tasks.set(task.taskId, task)
+  }
+  // The optional semantic index receives the complete eligible durable corpus.
+  // Candidate ranking remains bounded; corpus admission is independent of log age.
+  const conceptCorpus: ConceptCorpusEntry[] = (projection?.corpus ?? []).map(
+    (row) => ({
+      observationId: row.observation_id,
+      kind: row.kind,
+      summary: row.summary,
+      ...(row.detail ? { detail: row.detail } : {}),
+      ...(row.claim_id && /^[0-9a-f]{64}$/.test(row.claim_id)
+        ? { claimId: row.claim_id }
+        : {}),
+    }),
   )
+  const projectedAt = projection?.metadata.find(
+    (row) => row.key === 'generatedAt',
+  )?.value
+  const asOfTurnWall =
+    projectedAt ?? events.at(-1)?.occurredAt ?? '1970-01-01T00:00:00.000Z'
 
   const queryTokens = lexicalTokens(
     [request.query, ...request.selectors.map(selectorKey)].join(' '),
@@ -5011,6 +4987,11 @@ async function buildLexicalResult(
       : never,
   ) => {
     if (freshness.state !== 'verified') return false
+    if (
+      freshness.selector &&
+      stableJson(freshness.selector) !== stableJson(evidence.selector)
+    )
+      return false
     // Strict honesty gate for every path-bearing selector (file, line-range,
     // symbol, json-pointer, chunk): the observed digest must equal the
     // evidence contentDigest (for chunk selectors this is chunk.hash, not the
@@ -5020,6 +5001,35 @@ async function buildLexicalResult(
       if (evidence.contentDigest === undefined) return false
       if (freshness.observedDigest !== evidence.contentDigest) return false
     }
+    const dependencyDigests = request.dependencyDigests
+    const dependencyKey = selectorKey(evidence.selector)
+    if (
+      dependencyDigests &&
+      Object.prototype.hasOwnProperty.call(dependencyDigests, dependencyKey) &&
+      dependencyDigests[dependencyKey] !== freshness.observedDigest
+    )
+      return false
+    // Facts follow source dependencies; current operational assertions still
+    // require the exact workspace stamp that produced their receipt.
+    const operational =
+      evidence.provenance.metadata.validityScope === 'workspace' ||
+      [
+        'git_status',
+        'run_terminal_command',
+        'run_targeted_validation',
+        'run_file_change_hooks',
+      ].includes(evidence.provenance.toolName ?? '') ||
+      evidence.artifact.classification.labels.some((label) =>
+        ['workspace-state', 'clean-worktree', 'validation-result'].includes(
+          label,
+        ),
+      )
+    if (
+      !operational &&
+      dependencyDigests &&
+      Object.prototype.hasOwnProperty.call(dependencyDigests, dependencyKey)
+    )
+      return true
     const requestHasContext =
       request.workspaceRevision !== undefined ||
       request.workspaceSnapshotId !== undefined
@@ -5224,14 +5234,18 @@ async function buildLexicalResult(
         state.observation.selectors ??
         state.observation.evidence.map(({ selector }) => selector)
       const verified = state.observation.evidence.some((evidence) => {
-        const freshness = state.freshness.get(selectorKey(evidence.selector))
+        const freshness = state.freshness.get(
+          knowledgeFreshnessKey(evidence.selector),
+        )
         return freshness !== undefined && contextMatches(evidence, freshness)
       })
       // Digest-freshness: true only when verified evidence carries a matching
       // contentDigest (chunk.hash for chunk selectors, not the file hash) plus
       // exact revision/snapshot equality already enforced by contextMatches.
       const digestFresh = state.observation.evidence.some((evidence) => {
-        const freshness = state.freshness.get(selectorKey(evidence.selector))
+        const freshness = state.freshness.get(
+          knowledgeFreshnessKey(evidence.selector),
+        )
         return (
           freshness !== undefined &&
           contextMatches(evidence, freshness) &&
@@ -5243,7 +5257,10 @@ async function buildLexicalResult(
       // of present evidence.excerpt tokens; zero when no excerpt is present.
       const excerptTokens = new Set<string>()
       for (const evidence of state.observation.evidence) {
-        if (typeof evidence.excerpt === 'string' && evidence.excerpt.length > 0) {
+        if (
+          typeof evidence.excerpt === 'string' &&
+          evidence.excerpt.length > 0
+        ) {
           for (const token of lexicalTokens(evidence.excerpt))
             excerptTokens.add(token)
         }
@@ -5279,8 +5296,7 @@ async function buildLexicalResult(
                 )
               ? 1
               : 0
-      const retracted =
-        state.forgotten || state.superseded || state.corrected
+      const retracted = state.forgotten || state.superseded || state.corrected
       return {
         id: state.observation.observationId,
         state,
@@ -5323,7 +5339,9 @@ async function buildLexicalResult(
       !state.superseded &&
       !state.corrected &&
       state.observation.evidence.some((evidence) => {
-        const freshness = state.freshness.get(selectorKey(evidence.selector))
+        const freshness = state.freshness.get(
+          knowledgeFreshnessKey(evidence.selector),
+        )
         return freshness !== undefined && contextMatches(evidence, freshness)
       }),
   )
@@ -5332,7 +5350,10 @@ async function buildLexicalResult(
       !state.forgotten &&
       !state.superseded &&
       !state.corrected &&
-      state.observation.kind === 'discovery',
+      (state.observation.kind === 'discovery' ||
+        state.observation.kind === 'fact' ||
+        state.observation.kind === 'decision' ||
+        state.observation.kind === 'constraint'),
   )
   const rereadCandidates = observationCandidates
     .filter(
@@ -5341,20 +5362,28 @@ async function buildLexicalResult(
     .flatMap(({ state, selectors, ranking }) =>
       selectors
         .map((selector) => {
-          const freshness = state.freshness.get(selectorKey(selector))
+          const freshness = state.freshness.get(knowledgeFreshnessKey(selector))
           const evidence = state.observation.evidence.find(
             (item) => selectorKey(item.selector) === selectorKey(selector),
           )
           if (freshness && evidence && contextMatches(evidence, freshness))
             return null
           const rereadReason =
-            freshness?.reason === 'missing'
-              ? 'missing'
-              : freshness?.reason === 'expired'
-                ? 'expired'
-                : freshness?.state === 'invalid'
-                  ? 'changed'
-                  : 'never-verified'
+            request.dependencyDigests &&
+            Object.prototype.hasOwnProperty.call(
+              request.dependencyDigests,
+              selectorKey(selector),
+            ) &&
+            request.dependencyDigests[selectorKey(selector)] !==
+              evidence?.contentDigest
+              ? 'changed'
+              : freshness?.reason === 'missing'
+                ? 'missing'
+                : freshness?.reason === 'expired'
+                  ? 'expired'
+                  : freshness?.state === 'invalid'
+                    ? 'changed'
+                    : 'never-verified'
           return {
             observationId: state.observation.observationId,
             selector,
@@ -5461,7 +5490,7 @@ async function buildLexicalResult(
       const verifiedSelectors = [...state.freshness].filter(
         ([key, freshness]) => {
           const evidence = state.observation.evidence.find(
-            (item) => selectorKey(item.selector) === key,
+            (item) => knowledgeFreshnessKey(item.selector) === key,
           )
           return evidence !== undefined && contextMatches(evidence, freshness)
         },
@@ -5469,7 +5498,7 @@ async function buildLexicalResult(
       const verifiedEvidence = verifiedSelectors
         .map(([key]) =>
           state.observation.evidence.find(
-            (evidence) => selectorKey(evidence.selector) === key,
+            (evidence) => knowledgeFreshnessKey(evidence.selector) === key,
           ),
         )
         .filter(
@@ -5493,9 +5522,12 @@ async function buildLexicalResult(
     .slice(0, limit)
     .map(({ state, ranking }) => ({
       observation: state.observation,
-      reuseGuidance: state.pinned
-        ? 'Pinned discovery; verify selectors before reuse.'
-        : 'Verify selectors before reusing this discovery.',
+      reuseGuidance:
+        state.observation.kind === 'discovery'
+          ? state.pinned
+            ? 'Pinned discovery; verify selectors before reuse.'
+            : 'Verify selectors before reusing this discovery.'
+          : `${state.pinned ? 'Pinned unverified' : 'Unverified'} ${state.observation.kind}; verify supporting selectors before reuse.`,
       score: ranking.score,
       reasons: ranking.reasons,
     }))
@@ -5508,6 +5540,18 @@ async function buildLexicalResult(
     try {
       const expansion = await recallExpander({ request, corpus: conceptCorpus })
       if (expansion && !expansion.degraded) {
+        if (loadConceptStates) {
+          for (const state of await loadConceptStates(
+            expansion.observationIds,
+          )) {
+            const observation = MemoryObservationSchema.parse(state.observation)
+            observations.set(observation.observationId, {
+              ...state,
+              observation,
+              freshness: new Map(Object.entries(state.freshness)),
+            })
+          }
+        }
         let appended = 0
         for (const id of expansion.observationIds) {
           // The result schema caps reusableDiscovery at 100 entries; never
@@ -5515,6 +5559,17 @@ async function buildLexicalResult(
           if (appended >= 8 || reusableDiscovery.length >= 100) break
           const state = observations.get(id)
           if (!state || state.forgotten || state.superseded || state.corrected)
+            continue
+          if (request.taskId && state.observation.taskId !== request.taskId)
+            continue
+          if (
+            request.artifactKinds.length &&
+            !state.observation.evidence.some((evidence) =>
+              request.artifactKinds.includes(
+                evidence.artifact.classification.kind,
+              ),
+            )
+          )
             continue
           if (reusableDiscovery.some((e) => e.observation.observationId === id))
             continue
@@ -5684,11 +5739,38 @@ async function buildLexicalResult(
     rereadCandidates.length > limit ||
     historicalCandidates.length > limit
   const degradationReasons = [
+    ...(projection?.lexicalFallback
+      ? [
+          {
+            code: 'partial-projection' as const,
+            detail:
+              'The optional full-text index is unavailable; an indexed-scope lexical fallback was used.',
+            retryable: true,
+          },
+        ]
+      : []),
+    ...(projection &&
+    Number(
+      projection.metadata.find((row) => row.key === 'cursor')?.value ?? 0,
+    ) <
+      Number(
+        projection.metadata.find((row) => row.key === 'canonicalTail')?.value ??
+          0,
+      )
+      ? [
+          {
+            code: 'partial-projection' as const,
+            detail:
+              'The knowledge projection has not reached the canonical tail.',
+            retryable: true,
+          },
+        ]
+      : []),
     ...(resultCapReached
       ? [
           {
             code: 'result-cap-reached' as const,
-            detail: 'The deterministic result or event cap was reached.',
+            detail: 'The indexed candidate or result cap was reached.',
             retryable: false,
           },
         ]
@@ -5707,7 +5789,7 @@ async function buildLexicalResult(
     schemaVersion: 2,
     queryId: request.queryId,
     projectId: request.projectId,
-    generatedAt: events.at(-1)?.occurredAt ?? '1970-01-01T00:00:00.000Z',
+    generatedAt: asOfTurnWall,
     ...categories,
     currentCoverage,
     degradation:

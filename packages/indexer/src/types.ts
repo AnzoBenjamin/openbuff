@@ -65,11 +65,23 @@ export interface IndexEdge {
   weight: number
   label?: string
   confidence?: EdgeConfidence
+  /** Producer-specific validity; retained independently of structural refresh. */
+  producer?: {
+    name: string
+    version: string
+    configFingerprint?: string
+    sourceHashes: Record<string, string>
+  }
 }
 
 export interface IndexGraph {
   nodes: Record<string, IndexNode>
   edges: IndexEdge[]
+}
+
+export interface IndexGraphDependencies {
+  definitions: Record<string, string[]>
+  callers: Record<string, string[]>
 }
 
 /**
@@ -102,6 +114,31 @@ export interface MetadataIndex {
   queryData?: IndexQueryData
   /** Durable per-file tree-sitter summaries used by incremental rebuilds. */
   parseData?: Record<string, import('@codebuff/code-map').ParsedFileTokens>
+  /** Grammar, query, and extraction identity for each cached parse. */
+  parseFingerprints?: Record<string, string>
+  /** Structural graph facts grouped by their source file for delta maintenance. */
+  graphData?: Record<string, IndexGraph>
+  graphConfigFingerprint?: string
+  sourceConfigFingerprint?: string
+  graphDependencies?: IndexGraphDependencies
+  /** Discovery validity never grants mutation authority. */
+  freshness?: 'verified' | 'unverified' | 'dirty'
+  unverifiedPaths?: string[]
+  generationId?: string
+  repositoryId?: string
+  worktreeId?: string
+  indexedJournalCursor?: number
+  /** Observable work, kept separate from query ranking and authority. */
+  updateStats?: {
+    hashedFiles: number
+    parsedFiles: number
+    graphFilesUpdated: number
+    graphEdgesUpdated?: number
+    postingsUpdated?: number
+    changedFiles: string[]
+    deletedFiles: string[]
+    persistenceWrites?: number
+  }
   parseDiagnostics?: ParseDiagnostic[]
   /**
    * P8.1: set by updateMetadataIndex when the tree-sitter parse degraded for
@@ -121,6 +158,11 @@ export interface IndexSnapshotIdentity {
   indexVersion: MetadataIndex['version']
   builtAt: number
   workspaceRevision?: string | number
+  freshness?: MetadataIndex['freshness']
+  generationId?: string
+  repositoryId?: string
+  worktreeId?: string
+  indexedJournalCursor?: number
 }
 
 export interface IndexCoverage {
@@ -154,6 +196,8 @@ export interface IndexStatus {
   ready: boolean
   stale: boolean
   refreshing: boolean
+  freshness?: MetadataIndex['freshness']
+  unverifiedPaths?: string[]
   semantic: 'disabled' | 'building' | 'ready' | 'unavailable' | 'failed'
   totalIndexed: number
   indexAge: number
@@ -180,6 +224,9 @@ export interface IndexMutationDelta {
   deletedPaths?: string[]
   complete?: boolean
   revision?: string | number
+  /** Force source attestation after process downtime or a watcher coverage gap. */
+  verifyContent?: boolean
+  coverageGap?: boolean
 }
 
 export type QueryIndexMode =

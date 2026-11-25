@@ -80,8 +80,17 @@ export function openRunJournalForRun(params: {
 }): CreatedRunJournal | undefined {
   const create = params.createRunJournal ?? createRunJournal
   try {
+    const defaultPath = resolveRunJournalPath()
+    const journalPath = params.path ?? defaultPath
+    // Only the default live writer owns directory creation. Readers and
+    // caller-injected paths retain their existing no-create/fail-open behavior.
+    if (
+      !params.createRunJournal &&
+      path.resolve(journalPath) === path.resolve(defaultPath)
+    )
+      fs.mkdirSync(path.dirname(journalPath), { recursive: true, mode: 0o700 })
     return create({
-      path: params.path ?? resolveRunJournalPath(),
+      path: journalPath,
       retention: params.retention ?? RUN_JOURNAL_DEFAULT_RETENTION,
     })
   } catch (error) {
@@ -103,9 +112,7 @@ export function openRunJournalForRun(params: {
  * (`:memory:`) never have a marker: the read degrades to undefined
  * without touching the filesystem.
  */
-function defaultReadMaintenanceMarker(
-  journalPath: string,
-): number | undefined {
+function defaultReadMaintenanceMarker(journalPath: string): number | undefined {
   if (journalPath === ':memory:') return undefined
   try {
     const raw = fs.readFileSync(`${journalPath}.maintained`, 'utf8').trim()

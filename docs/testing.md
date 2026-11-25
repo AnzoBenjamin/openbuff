@@ -179,6 +179,33 @@ full replacement` comment).
   per-test port; production keeps the provider-registered fixed port (1455). Do
   not re-add fixed-port bind assumptions in new OAuth tests.
 
+## Opt-in Linux plan terminal enforcement
+
+The ordinary SDK schedule excludes integration files and never provisions a
+native sandbox. A local Linux x64 GNU control can explicitly select an existing
+trusted native ELF and installed bubblewrap:
+
+```sh
+OPENBUFF_TEST_PLAN_NATIVE=1 \
+OPENBUFF_TEST_NATIVE_ARTIFACT="$PWD/rust/target/release/openbuff-native" \
+bun --no-env-file --no-install test --isolate \
+  ./sdk/src/__tests__/plan-terminal-native.integration.test.ts
+```
+
+The fixture refuses a missing artifact selection. It uses owned temporary
+project/config directories, verifies the selected executable identities,
+exercises direct and child-agent plan commands plus a detached background job,
+and checks actual host-write and TCP/Unix-socket denials. Private sandbox
+scratch writes remain allowed. A paired execute command proves host writes and
+its inherited loopback networking still work. Provider fetches are forbidden,
+and `HOME` is not reassigned. The fixture does not install or download tools.
+
+Optionally set `OPENBUFF_TEST_PLAN_NATIVE_EVIDENCE_DIR` to a new absolute owned
+directory to retain its JSON result, native entry facts and cleanup observations.
+Without the explicit opt-in/platform cell, the test is skipped; that is not OS
+execution credit. This fixture proves selected local behavior, not release
+provenance, cross-platform support or formal roadmap acceptance.
+
 ## Coding harness experiments
 
 - `bun run --cwd scripts harness:lsp -- <diagnostic-command> <file...>` runs an

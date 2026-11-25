@@ -396,10 +396,13 @@ export class OwnedStdioTransport extends ScopedStdioTransport {
     if (!admission.ok) throw launchError(admission)
     if (this.closed)
       throw new Error('MCP stdio transport closed before dispatch')
+    const launchClock = prepared.value.clock()
     return this.waitForStart(() => {
       const dispatched = prepared.value.dispatchNow(
         admission.value.permit,
         (input, observer) => {
+          const capturedAt = launchClock.nowMs()
+          const capturedRemainingMs = input.resourceRemainingMs
           const child = (this.options.spawn ?? nodeSpawn)(
             input.executable,
             input.argv,
@@ -413,13 +416,12 @@ export class OwnedStdioTransport extends ScopedStdioTransport {
               windowsHide: input.adapterOptions.windowsHide === true,
             },
           )
-          const capturedAt = performance.now()
-          const capturedRemainingMs = input.resourceRemainingMs
           return this.attachChild(
             child,
             {
               detached: input.adapterOptions.detached === true,
               signal: input.resourceSignal,
+              clock: launchClock,
               remainingMs: () =>
                 capturedRemainingMs === null
                   ? null

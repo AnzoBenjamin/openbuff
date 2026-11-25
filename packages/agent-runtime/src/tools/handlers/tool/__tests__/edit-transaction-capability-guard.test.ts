@@ -6,6 +6,7 @@ import {
 } from '../edit-transaction'
 import { getFileProcessingValues } from '../write-file'
 import {
+  decodeReadCapabilityToken,
   encodeReadCapabilityToken,
   getContentHash,
 } from '@codebuff/common/util/content-hash'
@@ -536,27 +537,36 @@ describe('edit_transaction confirmed-post-edit substitution span guard', () => {
     // stale only because an earlier edit in this run changed the file takes
     // the fresh anchor — it grants nothing the caller did not already hold.
     const path = 'src/a.ts'
+    const state = freshAnchorState(path)
+    const staleToken = wholeFileStaleToken(path)
+    const expectedAnchorToken =
+      state.confirmedPostEditAnchorsByPath?.[path]?.readCapability
+    if (!expectedAnchorToken) {
+      throw new Error('expected a confirmed post-edit anchor')
+    }
     const [out] = substituteConfirmedPostEditCapabilities(
       [
         {
           type: 'replace_range',
           path,
-          readCapability: wholeFileStaleToken(path),
+          readCapability: staleToken,
           newContent: 'fully replaced file\n',
         },
       ] as any,
       new Map([[path, content as string | null]]),
-      freshAnchorState(path),
+      state,
       '/project',
       'run',
       logger,
     )
-    expect((out as { readCapability?: string }).readCapability).toBe(
-      anchorToken(path),
-    )
-    expect((out as { readCapability?: string }).readCapability).not.toBe(
-      wholeFileStaleToken(path),
-    )
+    const actualToken = (out as { readCapability?: string }).readCapability
+    expect(actualToken).not.toBe(staleToken)
+    if (!actualToken) throw new Error('expected replacement capability')
+    const actualCapability = decodeReadCapabilityToken(actualToken)
+    const expectedCapability = decodeReadCapabilityToken(expectedAnchorToken)
+    if (typeof actualCapability === 'string') throw new Error(actualCapability)
+    if (typeof expectedCapability === 'string') throw new Error(expectedCapability)
+    expect(actualCapability).toEqual(expectedCapability)
   })
 
   it('does not substitute a scoped replace_range capability with the whole-file anchor (unit)', () => {
@@ -564,12 +574,13 @@ describe('edit_transaction confirmed-post-edit substitution span guard', () => {
     // with the whole-file anchor would let an omitted startLine/endLine
     // default to the anchor's 1..N span — a whole-file clobber.
     const path = 'src/a.ts'
+    const scopedToken = scopedStaleToken(path)
     const [out] = substituteConfirmedPostEditCapabilities(
       [
         {
           type: 'replace_range',
           path,
-          readCapability: scopedStaleToken(path),
+          readCapability: scopedToken,
           newContent: 'line1\nreplaced\nline3\n',
         },
       ] as any,
@@ -579,9 +590,7 @@ describe('edit_transaction confirmed-post-edit substitution span guard', () => {
       'run',
       logger,
     )
-    expect((out as { readCapability?: string }).readCapability).toBe(
-      scopedStaleToken(path),
-    )
+    expect((out as { readCapability?: string }).readCapability).toBe(scopedToken)
   })
 
   it('does not substitute a full-looking lines basis with the whole-file anchor (unit)', () => {
@@ -700,13 +709,14 @@ describe('edit_transaction confirmed-post-edit substitution span guard', () => {
     // write_file authorization semantics are whole-file; a scoped basedOnRead
     // must never be smuggled past the whole-file check via anchor substitution.
     const path = 'src/a.ts'
+    const scopedToken = scopedStaleToken(path)
     const [out] = substituteConfirmedPostEditCapabilities(
       [
         {
           type: 'write_file',
           path,
           content,
-          basedOnRead: scopedStaleToken(path),
+          basedOnRead: scopedToken,
         },
       ] as any,
       new Map([[path, content as string | null]]),
@@ -715,9 +725,7 @@ describe('edit_transaction confirmed-post-edit substitution span guard', () => {
       'run',
       logger,
     )
-    expect((out as { basedOnRead?: string }).basedOnRead).toBe(
-      scopedStaleToken(path),
-    )
+    expect((out as { basedOnRead?: string }).basedOnRead).toBe(scopedToken)
   })
 
   it('does not substitute a foreign-scope whole-file capability with the anchor (unit)', () => {

@@ -9,6 +9,7 @@ import type {
   SendActionFn,
   SendSubagentChunkFn,
   OnExecutionActionStart,
+  ExecutionActor,
   ToolExecutionIdentity,
   ExecutionHostOperationOrigin,
 } from './client'
@@ -28,6 +29,7 @@ import type {
 } from './llm'
 import type { Logger } from './logger'
 import type { CodebuffFileSystem } from '../filesystem'
+import type { MemoryAuthorityMode } from '../memory-v2'
 import type { PlaybookGateOutcomeEvent } from '../memory-playbook'
 import type { RunOutcome } from '../run-outcome'
 
@@ -166,9 +168,8 @@ export type SupervisedSpawnRequest = {
   prompt: string | undefined
   spawnParams: Record<string, unknown> | undefined
   /**
-   * Wall-clock deadline for the supervised child. Supervised spawns gain a
-   * deadline in-process spawns do not have; the supervisor's 10-minute
-   * default is preserved when omitted.
+   * Optional wall-clock deadline for the supervised child. Omitted adds no
+   * local duration; authenticated parent deadlines and cancellation still apply.
    */
   timeoutMs?: number
   /**
@@ -181,6 +182,8 @@ export type SupervisedSpawnRequest = {
    */
   child?: {
     agentId: string
+    /** Captured remaining inference-step budget; 0 remains exhausted across transport. */
+    stepsRemaining?: number
     messageHistory?: unknown
     systemPrompt?: string
     taskMemory?: unknown
@@ -207,6 +210,7 @@ export type SupervisedSpawnRequest = {
   userId?: string | undefined
   clientSessionId?: string
   userInputId?: string
+  playbookGateMode?: 'off' | 'warn' | 'block'
   fingerprintId?: string
   ancestorRunIds?: string[]
   parentSystemPrompt?: string
@@ -341,9 +345,48 @@ export interface SupervisedRestartPolicy {
   onRestart?: (info: { attempt: number; crashReason: string }) => void
 }
 
+/** Completed runtime-local metadata, not an execution or mutation capability. */
+export type NativeToolObservation = Readonly<{
+  actor: ExecutionActor
+  executionIdentity: ToolExecutionIdentity
+  toolName: 'record_decision'
+  callId: string
+  /** Captured by the runtime before setup/preflight awaits. */
+  userInputId: string
+  input: import('../../tools/list').CodebuffToolCall<'record_decision'>['input']
+  output: import('../../tools/list').CodebuffToolOutput<'record_decision'>
+  /** The actual caller lifetime, including an already-aborted signal. */
+  signal: AbortSignal
+}>
+
 /** Shared dependencies */
 export type AgentRuntimeDeps = {
+  /**
+   * Host-selected memory source metadata, independent of retrieval success.
+   * Authenticate the exact registered actor and full task input before returning
+   * the admission-captured mode. This grants no execution/read/edit authority.
+   * Omitted (or undefined for an unwired host) preserves standalone legacy behavior.
+   */
+  resolveMemoryAuthority?: (request: Readonly<{
+    actor: ExecutionActor
+    userInputId: string
+  }>) => MemoryAuthorityMode | undefined | Promise<MemoryAuthorityMode | undefined>
+  prepareRepositoryContext?: import('./repository-intelligence').PrepareRepositoryContext
+  classifyPlaybookTerminalActions?: (command: string) => Promise<readonly ('git-commit' | 'git-push' | 'git-stage')[]>
+  getPlaybookValidationEvidence?: (actor: import('./client').ExecutionActor) => Promise<import('../memory-playbook').ValidationEvidenceContext | undefined>
+  synchronizeWorkspace?: import('./client').SynchronizeWorkspace
+  /** Before native/cache/process dispatch, consult the captured actor read boundary. */
+  authorizeToolRead?: import('./client').AuthorizeToolRead
+  /** Host-captured procedural mode, preserved across process boundaries. */
+  playbookGateMode?: 'off' | 'warn' | 'block'
   onExecutionActionStart?: OnExecutionActionStart
+  /**
+   * Host-owned observation of a validated successful LOCAL record_decision.
+   * Awaited with a bounded metadata-only budget before result publication;
+   * absence, failure or timeout must not change the completed tool outcome.
+   * Cancellation is retained on the signal, not used to reauthorize metadata.
+   */
+  onNativeToolObservation?: (observation: NativeToolObservation) => void | Promise<void>
   /** Select the host's canonical terminal outcome before journal publication. */
   resolveRunOutcome?: (params: {
     runId: string
@@ -456,6 +499,8 @@ export type AgentRuntimeScopedDeps = {
   requestOptionalFile: RequestOptionalFileFn
   /** Filesystem view used by runtime-native discovery tools such as read_subtree. */
   fileSystem?: CodebuffFileSystem
+  /** Host-local actor lookup; no filesystem or policy token crosses JSON transport. */
+  getFileSystemForActor?: (actor: ExecutionActor) => CodebuffFileSystem
   /** Shared path policy classifier; blocked paths are omitted from discovery. */
   fileFilter?: (path: string) => {
     status: 'blocked' | 'allow-example' | 'allow'

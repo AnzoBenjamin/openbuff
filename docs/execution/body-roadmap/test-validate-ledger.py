@@ -13,6 +13,35 @@ spec = importlib.util.spec_from_file_location('ledger_validator', Path(__file__)
 validator = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(validator)
 
+B21_REDUCED_DECISION_TYPE = 'body-b21-reduced-scope-acceptance'
+B21_REDUCED_DECISION_PATH = 'docs/execution/body-roadmap/B21-ACCEPTANCE-20261124.json'
+B21_REDUCED_REPORT_PATH = 'docs/execution/body-roadmap/B21-LOCAL-VERIFICATION-20261124.md'
+B21_REDUCED_SCOPE_ID = 'b21-local-linux-behavior-2026-11-24'
+B21_REDUCED_SCOPE_TEXT = (
+    'Linux local behavior demonstrated by Fixture A and packed CJS/ESM consumers; '
+    'no broader acceptance is inferred.'
+)
+B21_REDUCED_COVERAGE_TIER = (
+    'Linux local behavior only; no source-bound provenance or independent approval.'
+)
+B21_REDUCED_CHECKS = [
+    'Fixture A local-current passed synchronous exit 7, background exit 7, and direct target signal 11 scenarios.',
+    'Packed local-current CJS and ESM consumers passed the same three scenarios with zero fetch calls and cleanup assertions.',
+    'Recorded locked offline Rust build, 30 workspace tests, four native smoke checks, six focused SDK suites totaling 174 tests, and SDK typecheck passed.',
+]
+B21_REDUCED_WAIVED_GATES = [
+    'fresh source-bound native/build provenance',
+    'full approved SDK schedule',
+    'twelve historical prerequisite replacement receipts',
+    'independent composition approval',
+]
+B21_REDUCED_NON_CLAIMS = [
+    'clean registry installation',
+    'hosted or non-Linux behavior',
+    'the complete original B21 guarantee set',
+    'independent source-bound native lifecycle approval',
+]
+
 
 class LedgerTests(unittest.TestCase):
     def setUp(self):
@@ -147,10 +176,102 @@ class LedgerTests(unittest.TestCase):
         self.assertFalse(report['valid'])
         self.assertTrue(any(text in error for error in report['errors']), report['errors'])
 
+    def prepare_b21_reduced_acceptance(self):
+        graph = {
+            'schemaVersion': 2, 'cardCount': 3, 'nodeCount': 3,
+            'dependencySemantics': 'all-of', 'rollups': {},
+            'ledgerRequiredFields': self.ledger['completionGraph']['ledgerRequiredFields'],
+            'nodes': [
+                {'id': 'B19', 'kind': 'card', 'prerequisites': []},
+                {'id': 'B20', 'kind': 'card', 'prerequisites': []},
+                {'id': 'B21', 'kind': 'card', 'prerequisites': ['B19', 'B20']},
+            ],
+        }
+        self.ledger['completionGraph'] = graph
+        self.ledger['nodes'] = [{
+            'nodeId': item['id'], 'parentCardId': None, 'status': 'pending',
+            'prerequisites': item['prerequisites'], 'acceptedPrerequisites': [],
+            'sourceContractHashes': {}, 'repositoryId': 'fixture', 'backend': 'ts',
+            'epoch': None, 'coverageTier': None, 'evidenceManifest': None,
+        } for item in graph['nodes']]
+        self.write('plan.md', '```json\n' + json.dumps(graph) + '\n```\n')
+        self.ledger['planSha256'] = validator.sha256(self.root/'plan.md')
+        self.accept('B19')
+        self.accept('B20')
+
+        report = self.write(
+            B21_REDUCED_REPORT_PATH,
+            '# B21 local verification\n\nReduced local Linux behavior scope.\n',
+        )
+        decision = {
+            'schemaVersion': 1,
+            'type': B21_REDUCED_DECISION_TYPE,
+            'nodeId': 'B21',
+            'decision': 'accept-with-reduced-scope',
+            'authorizedBy': 'user',
+            'authorizationDate': '2026-11-24',
+            'authorizationBasis': 'Current issue instruction permits removing unfulfillable acceptance criteria.',
+            'scopeId': B21_REDUCED_SCOPE_ID,
+            'acceptedScope': B21_REDUCED_SCOPE_TEXT,
+            'completedChecks': list(B21_REDUCED_CHECKS),
+            'acceptedPrerequisites': ['B19', 'B20'],
+            'waivedGates': list(B21_REDUCED_WAIVED_GATES),
+            'notEstablished': list(B21_REDUCED_NON_CLAIMS),
+            'independentReview': False,
+            'sourceBoundProvenance': False,
+            'historicalReceiptsReconstructed': False,
+            'report': report,
+        }
+        decision_ref = self.write(B21_REDUCED_DECISION_PATH, decision)
+        execution_plan = {
+            'acceptanceDecisions': [{
+                'nodeId': 'B21', 'scopeId': B21_REDUCED_SCOPE_ID,
+                'decision': decision_ref,
+            }],
+        }
+        execution_plan_ref = self.write('execution-plan.json', execution_plan)
+        self.ledger['acceptanceDecisionRegistry'] = execution_plan_ref
+        self.node('B21').update({
+            'status': 'accepted', 'acceptedPrerequisites': ['B19', 'B20'],
+            'epoch': 'local-behavior-2026-11-24',
+            'coverageTier': B21_REDUCED_COVERAGE_TIER,
+            'acceptanceDecision': decision_ref,
+            'acceptedAt': '2026-11-24',
+        })
+        return decision
+
     def test_pending_progress_is_valid_but_cannot_claim_completion(self):
         self.assertTrue(self.check()['valid'])
         self.assertEqual(self.check()['ready'], ['B01'])
         self.assertFalse(validator.validate(self.ledger, self.root, require_complete=True)['valid'])
+
+    def test_user_authorized_b21_reduced_decision_accepts_only_its_declared_scope(self):
+        self.prepare_b21_reduced_acceptance()
+        report = self.check()
+        self.assertTrue(report['valid'], report['errors'])
+        self.assertIn('B21', report['accepted'])
+
+    def test_b21_reduced_acceptance_requires_a_decision(self):
+        self.prepare_b21_reduced_acceptance()
+        self.node('B21').pop('acceptanceDecision')
+        self.assert_rejected('B21 acceptance receipt: missing evidence reference')
+
+    def test_b21_reduced_decision_rejects_altered_scope_even_when_resealed(self):
+        self.prepare_b21_reduced_acceptance()
+        decision = json.loads((self.root/B21_REDUCED_DECISION_PATH).read_text())
+        decision['acceptedScope'] = 'All original B21 criteria are satisfied.'
+        decision_ref = self.write(B21_REDUCED_DECISION_PATH, decision)
+        self.node('B21')['acceptanceDecision'] = decision_ref
+        execution_plan = json.loads((self.root/'execution-plan.json').read_text())
+        execution_plan['acceptanceDecisions'][0]['decision'] = decision_ref
+        self.ledger['acceptanceDecisionRegistry'] = self.write('execution-plan.json', execution_plan)
+        self.assert_rejected('B21 reduced decision differs from the authorized scope')
+
+    def test_b21_reduced_decision_cannot_be_reused_for_another_card(self):
+        self.prepare_b21_reduced_acceptance()
+        decision_ref = self.node('B21')['acceptanceDecision']
+        self.node('B19')['acceptanceDecision'] = decision_ref
+        self.assert_rejected('reduced-scope acceptance decision is reserved for B21')
 
     def test_all_of_milestones_and_immutable_prerequisite_receipts(self):
         for name in ['B01', 'B02', 'M22-CORE']:

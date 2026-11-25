@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { createOwnedProcessScope } from '../owned-process-scope'
 import { parseProcStat } from '../linux-process-scope'
-import type { ProcessScopeDriver, ScopeObservation } from '../../types/contracts/process-scope'
+import type { CleanupResult, ProcessScopeDriver, ScopeObservation } from '../../types/contracts/process-scope'
 
-function fixture() {
+function fixture(clockDomainId = 'process-monotonic') {
   let observation: ScopeObservation = {
-    sampledAtMs: 0, clockDomainId: 'injected', leader: 'running', scopePresence: 'living',
+    sampledAtMs: 0, clockDomainId, leader: 'running', scopePresence: 'living',
     members: [], membershipComplete: true, identity: 'verified',
     streams: { stdin: 'closed', stdout: 'drained', stderr: 'drained' },
   }
@@ -22,10 +22,197 @@ function fixture() {
     onSignal: (callback: () => void) => { onSignal = callback } }
 }
 describe('owned process scope cleanup', () => {
+  test.each(['owner-cancel', 'output-limit'] as const)(
+    '%s credit respects the original finite bound', async reason => {
+      for (const [domainId, expiresAtMs, now, expected] of [
+        ['injected', 250, 250, true], ['injected', 250, 251, false],
+        ['other-domain', 250, 250, false], ['injected', Infinity, 250, false],
+        ['injected', NaN, 250, false],
+      ] as const) {
+        const f = fixture('injected')
+        f.update({ sampledAtMs: now, leader: 'exited-reaped', scopePresence: 'absent' })
+        const scope = createOwnedProcessScope({ scopeId: `${reason}-${domainId}-${expiresAtMs}-${now}`, tier: 'injected', driver: f.driver,
+          clock: { domainId: 'injected', nowMs: () => now },
+          originalDeadline: { kind: 'finite', limitId: 'limit', domainId, expiresAtMs },
+          termGraceMs: 0, killGraceMs: 0, observationMs: 0 })
+        const result = await scope.requestStop(reason)
+        expect(result.status).toBe('complete')
+        expect(result.selectedLimitSatisfied).toBe(expected)
+      }
+    },
+  )
+
+  test.each(['owner-cancel', 'output-limit'] as const)(
+    '%s credit requires an observation in the scope clock domain', async reason => {
+      for (const [domainId, sampledAtMs, expected] of [
+        ['injected', 100, true], ['other-domain', 0, false], ['injected', 101, false],
+      ] as const) {
+        const f = fixture()
+        f.update({ clockDomainId: domainId, sampledAtMs, leader: 'exited-reaped', scopePresence: 'absent' })
+        const scope = createOwnedProcessScope({ scopeId: `${reason}-${domainId}-${sampledAtMs}`, tier: 'injected', driver: f.driver,
+          clock: { domainId: 'injected', nowMs: () => 100 }, termGraceMs: 0, killGraceMs: 0, observationMs: 0 })
+        const result = await scope.requestStop(reason)
+        expect(result.status).toBe('complete')
+        expect(result.selectedLimitSatisfied).toBe(expected)
+      }
+    },
+  )
+
+  test('the original deadline is captured and immutable before and after publication', async () => {
+    const f = fixture('injected')
+    f.update({ sampledAtMs: 100, leader: 'exited-reaped', scopePresence: 'absent' })
+    const deadline = { kind: 'finite' as const, limitId: 'original', domainId: 'injected', expiresAtMs: 50 }
+    const scope = createOwnedProcessScope({ scopeId: 'deadline-snapshot', tier: 'injected', driver: f.driver,
+      clock: { domainId: 'injected', nowMs: () => 100 }, originalDeadline: deadline,
+      termGraceMs: 0, killGraceMs: 0, observationMs: 0 })
+    deadline.expiresAtMs = 1_000
+    deadline.limitId = 'changed'
+    const result = await scope.requestStop('deadline', true)
+    expect(result.status).toBe('complete')
+    expect(result.selectedLimitSatisfied).toBe(false)
+    expect(result.originalDeadline).toEqual({ kind: 'finite', limitId: 'original', domainId: 'injected', expiresAtMs: 50 })
+    expect(Object.isFrozen(result.originalDeadline)).toBe(true)
+    expect(Reflect.set(result.originalDeadline, 'expiresAtMs', 3_000)).toBe(false)
+    deadline.expiresAtMs = 2_000
+    expect(result.originalDeadline).toEqual({ kind: 'finite', limitId: 'original', domainId: 'injected', expiresAtMs: 50 })
+  })
+
+  test('a forced deadline during failed cleanup finalization schedules one retry', async () => {
+    const f = fixture('injected')
+    let releaseKill!: () => void
+    let cleanupCount = 0
+    let resolveRetry!: (result: CleanupResult) => void
+    const retryFinished = new Promise<CleanupResult>(resolve => { resolveRetry = resolve })
+    let timerId = 0
+    const timers = new Map<number, () => void>()
+    f.driver.signal = signal => {
+      f.signals.push(signal)
+      if (f.signals.length === 2) return new Promise(resolve => {
+        releaseKill = () => resolve({ signal, atMs: 0, targetTier: 'injected', result: 'delivered' })
+      })
+      if (f.signals.length === 3) f.update({ leader: 'exited-reaped', scopePresence: 'absent' })
+      return Promise.resolve({ signal, atMs: 0, targetTier: 'injected', result: 'delivered' })
+    }
+    const scope = createOwnedProcessScope({ scopeId: 'finalizing-deadline', tier: 'injected', driver: f.driver,
+      clock: { domainId: 'injected', nowMs: () => 0 }, termGraceMs: 0, killGraceMs: 0, observationMs: 0,
+      scheduler: { set(_delay, callback) { timers.set(++timerId, callback); return timerId },
+        clear(timer) { timers.delete(timer as number) } },
+      onCleanup(result) { if (++cleanupCount === 2) resolveRetry(result) } })
+    const first = scope.requestStop('normal-leader-exit')
+    expect(scope.requestStop('job-kill', true)).toBe(first)
+    for (let tick = 0; tick < 20; tick++) await Promise.resolve()
+    expect(f.signals).toEqual(['SIGTERM', 'SIGKILL'])
+    expect(scope.requestStop('deadline', true)).toBe(first)
+    expect(scope.requestStop('deadline', true)).toBe(first)
+    releaseKill()
+    const failed = await first
+    for (let tick = 0; tick < 30; tick++) await Promise.resolve()
+    expect(failed.status).toBe('failed')
+    expect(cleanupCount).toBe(2)
+    const retried = await retryFinished
+    expect(retried.status).toBe('complete')
+    expect(retried.trigger).toBe('deadline')
+    expect(retried.attemptId).not.toBe(failed.attemptId)
+    expect(retried.selectedLimitSatisfied).toBe(false)
+    expect(f.signals).toEqual(['SIGTERM', 'SIGKILL', 'SIGKILL'])
+    expect(timers.size).toBe(0)
+  })
+
+  test.each([true, false])('coalesced deadline retry does not repeat after completion=%s', async firstCompletes => {
+    const f = fixture('injected')
+    if (firstCompletes) f.update({ leader: 'exited-reaped', scopePresence: 'absent' })
+    let releaseKill!: () => void
+    const cleanups: CleanupResult[] = []
+    let timerId = 0
+    const timers = new Map<number, () => void>()
+    f.driver.signal = signal => {
+      f.signals.push(signal)
+      if (f.signals.length === 2) return new Promise(resolve => {
+        releaseKill = () => resolve({ signal, atMs: 0, targetTier: 'injected', result: 'delivered' })
+      })
+      return Promise.resolve({ signal, atMs: 0, targetTier: 'injected', result: 'delivered' })
+    }
+    const scope = createOwnedProcessScope({ scopeId: `coalesced-${firstCompletes}`, tier: 'injected', driver: f.driver,
+      clock: { domainId: 'injected', nowMs: () => 0 }, termGraceMs: 0, killGraceMs: 0, observationMs: 0,
+      scheduler: { set(_delay, callback) { timers.set(++timerId, callback); return timerId },
+        clear(timer) { timers.delete(timer as number) } }, onCleanup(result) { cleanups.push(result) } })
+    const first = scope.requestStop('normal-leader-exit')
+    expect(scope.requestStop('job-kill', true)).toBe(first)
+    for (let tick = 0; tick < 20; tick++) await Promise.resolve()
+    expect(scope.requestStop('deadline', true)).toBe(first)
+    expect(scope.requestStop('deadline', true)).toBe(first)
+    releaseKill()
+    await first
+    for (let tick = 0; tick < 40; tick++) await Promise.resolve()
+    expect(cleanups.map(result => result.status)).toEqual(firstCompletes ? ['complete'] : ['failed', 'failed'])
+    expect(f.signals).toEqual(firstCompletes ? ['SIGTERM', 'SIGKILL'] : ['SIGTERM', 'SIGKILL', 'SIGKILL'])
+    expect(cleanups.at(-1)?.selectedLimitSatisfied).toBe(firstCompletes)
+    expect(timers.size).toBe(0)
+  })
+
+  test('a deadline reentered from finalization marks the first failure and retries', async () => {
+    const f = fixture('injected')
+    const cleanups: CleanupResult[] = []
+    let scope!: ReturnType<typeof createOwnedProcessScope>
+    let requested = false
+    scope = createOwnedProcessScope({ scopeId: 'finalization-reentry', tier: 'injected', driver: f.driver,
+      clock: { domainId: 'injected', nowMs: () => 0 }, termGraceMs: 0, killGraceMs: 0, observationMs: 0,
+      output() {
+        if (!requested) { requested = true; void scope.requestStop('deadline', true) }
+        return { stdoutSeenBytes: 0, stderrSeenBytes: 0, retainedBytes: 0, droppedBytes: 0, complete: true }
+      }, onCleanup(result) { cleanups.push(result) } })
+    const first = await scope.requestStop('normal-leader-exit')
+    for (let tick = 0; tick < 40; tick++) await Promise.resolve()
+    expect(first.selectedLimitSatisfied).toBe(false)
+    expect(cleanups.map(result => result.status)).toEqual(['failed', 'failed'])
+    expect(cleanups[1]?.selectedLimitSatisfied).toBe(false)
+    expect(f.signals).toEqual(['SIGTERM', 'SIGKILL'])
+  })
+
+  test.each([
+    ['injected', 2_000, false],
+    ['other-domain', 250, false],
+    ['injected', 250, true],
+  ] as const)(
+    'deadline cleanup credit uses the original bound and domain (%s, %i)',
+    async (domainId, now, expected) => {
+      const f = fixture('injected')
+      f.update({ sampledAtMs: now, leader: 'exited-reaped', scopePresence: 'absent' })
+      const scope = createOwnedProcessScope({
+        scopeId: 'late-deadline', tier: 'injected', driver: f.driver,
+        clock: { domainId: 'injected', nowMs: () => now },
+        originalDeadline: { kind: 'finite', limitId: 'limit', domainId, expiresAtMs: 250 },
+      })
+      const result = await scope.requestStop('deadline', true)
+      expect(result.status).toBe('complete')
+      expect(result.selectedLimitSatisfied).toBe(expected)
+    },
+  )
+
+  test('a deadline retries previously failed cleanup with retained authority', async () => {
+    const f = fixture('injected')
+    let now = 0
+    const scope = createOwnedProcessScope({
+      scopeId: 'late-retry', tier: 'injected', driver: f.driver,
+      clock: { domainId: 'injected', nowMs: () => now },
+      originalDeadline: { kind: 'finite', limitId: 'limit', domainId: 'injected', expiresAtMs: 250 },
+      termGraceMs: 0, killGraceMs: 0, observationMs: 0,
+    })
+    const failed = await scope.requestStop('normal-leader-exit')
+    expect(failed.status).toBe('failed')
+    expect(failed.cleanupAuthorityRetained).toBe(true)
+    now = 250
+    f.update({ sampledAtMs: now, leader: 'exited-reaped', scopePresence: 'absent' })
+    const count = f.signals.length
+    const retried = await scope.requestStop('deadline', true)
+    expect(retried.status).toBe('complete')
+    expect(retried.attemptId).not.toBe(failed.attemptId)
+    expect(f.signals.slice(count)).toEqual(['SIGKILL'])
+  })
   test('long TERM grace wakes in bounded chunks without renewing its escalation point', async () => {
     let now = 0, timerId = 0
     const timers = new Map<number, { delay: number; callback: () => void }>()
-    const f = fixture(), grace = 2_147_483_647 + 25
+    const f = fixture('injected'), grace = 2_147_483_647 + 25
     f.onSignal(() => { if (f.signals.includes('SIGKILL')) f.update({ leader: 'exited-reaped', scopePresence: 'absent' }) })
     const scope = createOwnedProcessScope({ scopeId: 'long-grace', tier: 'injected', driver: f.driver,
       clock: { domainId: 'injected', nowMs: () => now }, scheduler: {

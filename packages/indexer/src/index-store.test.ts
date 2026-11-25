@@ -22,7 +22,7 @@ import {
   releaseOwnedLock,
   sanitizeIndexCacheDir,
   saveChunkSidecar,
-  saveIndex,
+  saveLegacyIndex as saveIndex,
   saveSemanticVectors,
   setWriteGitExclude,
 } from './index-store'
@@ -173,7 +173,7 @@ describe('index cache ownership', () => {
       const children = ['a', 'b'].map((name) => {
         const code = `
         import fs from 'node:fs';
-        import {saveIndex} from ${JSON.stringify(service)};
+        import {saveLegacyIndex as saveIndex} from ${JSON.stringify(service)};
         const originalOpen=fs.promises.open;
         fs.promises.open=async(...args)=>{
           const handle=await originalOpen(...args);

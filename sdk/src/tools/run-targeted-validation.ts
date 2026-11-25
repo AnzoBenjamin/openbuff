@@ -127,16 +127,18 @@ export async function runTargetedValidation(params: {
   // Both a genuine drift and a failed re-attestation reject the evidence with
   // status 'failed' / assurance 'none'; only the summary distinguishes them.
   const snapshotRejected = snapshotChanged || afterIdentityError !== undefined
-  // A diagnostic-delta preflight rejection (diagnostic_delta_rejected) is a
-  // hard validation failure even though that hook-result arm carries no
-  // exitCode/errorMessage/permissionDenied — it signals NEW error-severity
-  // diagnostics introduced by the validated files, so it must fail the gate.
+  // Diagnostic outcomes can carry no exitCode/errorMessage/permissionDenied.
+  // Only an explicitly passed diagnostic can contribute full assurance.
   const failed = results.some(
     (result) =>
       (typeof result.exitCode === 'number' && result.exitCode !== 0) ||
       typeof result.errorMessage === 'string' ||
       result.permissionDenied === true ||
-      result.validationStatus === 'diagnostic_delta_rejected',
+      (typeof result.validationStatus === 'string' &&
+        result.validationStatus.startsWith('diagnostic_delta_') &&
+        (result.validationStatus !== 'diagnostic_delta_passed' ||
+          (typeof result.diagnosticStatus === 'string' &&
+            result.diagnosticStatus !== 'passed'))),
   )
   const skipped =
     results.length === 0 ||

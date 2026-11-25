@@ -920,6 +920,8 @@ export const MemoryRetrievalRequestSchema = z
       .max(Number.MAX_SAFE_INTEGER)
       .optional(),
     workspaceSnapshotId: z.string().min(1).max(256).optional(),
+    /** Host-observed dependency digests; unrelated workspace changes do not invalidate facts. */
+    dependencyDigests: z.record(z.string().max(2_048), z.string().max(256).nullable()).refine(value => Object.keys(value).length <= 1_024).optional(),
     selectors: z.array(MemorySelectorSchema).max(32),
     artifactKinds: z.array(ArtifactClassificationSchema.shape.kind).max(16),
     includeHistorical: z.boolean(),

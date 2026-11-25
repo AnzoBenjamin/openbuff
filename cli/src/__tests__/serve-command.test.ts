@@ -78,6 +78,7 @@ describe('runAcpServeCommand', () => {
     expect((call.transport as { kind: string }).kind).toBe('stdio')
     expect(call.client).toBe(h.clientStub)
     expect(call.sessionData).toBe(h.sessionDataStub)
+    expect((call as { agentId?: string }).agentId).toBe('base2')
     // Human output goes to stderr; nothing to stdout.
     expect(h.stderrLines.length).toBeGreaterThan(0)
     expect(h.stderrLines.some((l) => l.includes('stdio'))).toBe(true)

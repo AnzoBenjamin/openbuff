@@ -12,13 +12,47 @@ export type {
 // can read the same journal-recorded moves hydration uses; without them,
 // moved-file evidence reconciles stale and prune deletes it.
 export { captureRunDeadline, collectWorkspaceMoves, run } from './run'
-export { createDirectHostExecution, createHostExecutionServices } from './host-execution'
-export type { ExecutionScope, HostExecutionOptions, RunHostServices } from './host-execution'
-export { verifyNativeInstallation, calibrateNativeClock } from './services/native-exec'
-export type { NativeArtifactIdentity, NativeToolIdentity, NativeClockMapping, NativeCalibrationSetup, VerifiedNativeInstallation } from './services/native-exec'
+export {
+  createDirectHostExecution,
+  createHostExecutionServices,
+} from './host-execution'
+export type {
+  ExecutionScope,
+  HostExecutionOptions,
+  RunHostServices,
+} from './host-execution'
+export { createConfiguredDirectHostExecution } from './services/direct-host-execution'
+export type { TerminalTimeoutPolicy, TerminalTimeoutResolution } from './services/terminal-timeout-policy'
+export type {
+  ConfiguredDirectHostExecution,
+  ConfiguredDirectHostExecutionOptions,
+  ConfiguredDirectHostExecutionResult,
+} from './services/direct-host-execution'
+export {
+  verifyNativeInstallation,
+  calibrateNativeClock,
+} from './services/native-exec'
+export type {
+  NativeArtifactIdentity,
+  NativeToolIdentity,
+  NativeClockMapping,
+  NativeCalibrationSetup,
+  VerifiedNativeInstallation,
+} from './services/native-exec'
 export type { NativeHostExecution } from './services/native-host-execution'
-export { captureAmbientHostInputs, loadHostConfigSnapshot, nodeConfigReadFs } from './host-config'
-export type { CapturedCredentialPort, DeepReadonly, HostConfigurationInputs, HostConfigSnapshot, ProviderHostContext, SnapshotResult } from './host-config'
+export {
+  captureAmbientHostInputs,
+  loadHostConfigSnapshot,
+  nodeConfigReadFs,
+} from './host-config'
+export type {
+  CapturedCredentialPort,
+  DeepReadonly,
+  HostConfigurationInputs,
+  HostConfigSnapshot,
+  ProviderHostContext,
+  SnapshotResult,
+} from './host-config'
 export { captureRootDeadline } from '@codebuff/common/util/execution-context'
 export type * from '@codebuff/common/types/contracts/execution-context'
 export type { CodebuffSpawn } from '@codebuff/common/types/spawn'
@@ -323,7 +357,10 @@ export type { FileTokenData, TokenCallerMap } from '@codebuff/code-map'
 
 export { runTerminalCommand } from './tools/run-terminal-command'
 export type { CapturedTerminalLaunchMetadata } from './tools/run-terminal-command'
-export type { CapturedHookConfiguration, FileChangeHook } from './tools/file-change-hooks'
+export type {
+  CapturedHookConfiguration,
+  FileChangeHook,
+} from './tools/file-change-hooks'
 export type { LlmHostDeps } from './impl/llm'
 export { evaluateTerminalCommandPolicy } from './tools/terminal-command-policy'
 export type {
@@ -413,3 +450,6 @@ export type {
 } from './services/harness-enforcement'
 export { createConfiguredEmbedder } from './impl/embeddings'
 export type { EmbedFn } from './impl/embeddings'
+
+export { RepositoryIntelligenceService, createRepositoryIntelligenceSource, createVirtualRepositoryIntelligenceSource } from './services/repository-intelligence'
+export type { RepositoryIntelligenceSource, RepositoryContextPacket, PrepareRepositoryContextRequest } from '@codebuff/common/types/contracts/repository-intelligence'

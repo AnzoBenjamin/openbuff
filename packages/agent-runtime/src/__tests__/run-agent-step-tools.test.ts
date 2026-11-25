@@ -16,8 +16,11 @@ import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 import {
   configureExternalReadRoots,
   getOwnedTempRoots,
+  isExternalReadPath,
+  isOwnedTempPath,
   resetExternalReadRootsForTesting,
 } from '@codebuff/common/util/project-path-containment'
+import { withFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
 
 import {
   getTodoSimilarity,
@@ -2639,7 +2642,11 @@ describe('runAgentStep - set_output tool', () => {
     // sit outside the OS temp roots too: the write exemption deliberately does
     // not consult isExternalReadPath, so a temp-rooted fixture would be allowed
     // by the temp write path instead of blocked for the external reason.
-    const externalRoot = makeOutsideRoot('external-read-backstop-write-')
+    // The runner may start in /tmp; anchor here so the temp exemption cannot
+    // accidentally authorize this external fixture, even in project mode.
+    const externalRoot = fs.mkdtempSync(
+      path.join(import.meta.dir, 'external-read-backstop-write-'),
+    )
     const externalWrite = path.join(externalRoot, 'notes.txt')
     fs.writeFileSync(externalWrite, 'notes\n')
     resetExternalReadRootsForTesting()
@@ -2660,24 +2667,26 @@ describe('runAgentStep - set_output tool', () => {
       return promptSuccess('mock-message-id')
     }
 
-    const sessionState = getInitialSessionState(mockFileContext)
-    const agentState = sessionState.mainAgentState
     const unscopedAgent: AgentTemplate = {
       ...testAgent,
       id: 'unscoped-agent',
       toolNames: ['write_file', 'end_turn'],
       filesystemScope: undefined,
     }
-
-    try {
-      await runAgentStep({
+    const run = () =>
+      runAgentStep({
         ...runAgentStepBaseParams,
         agentType: 'unscoped-agent',
         localAgentTemplates: { 'unscoped-agent': unscopedAgent },
         agentTemplate: unscopedAgent,
-        agentState,
+        agentState: getInitialSessionState(mockFileContext).mainAgentState,
         prompt: 'Write into the allowlisted external root',
       })
+
+    try {
+      expect(isOwnedTempPath(externalWrite)).toBe(false)
+      expect(isExternalReadPath(externalWrite)).toBe(true)
+      await withFilesystemSandbox({ mode: 'project', allowPaths: [] }, run)
 
       expect(chunks).toContainEqual(
         expect.objectContaining({
@@ -2693,6 +2702,20 @@ describe('runAgentStep - set_output tool', () => {
           toolName: 'write_file',
         }),
       )
+      expect(fs.readFileSync(externalWrite, 'utf8')).toBe('notes\n')
+
+      // An unrestricted host policy permits dispatch of the very same path.
+      chunks.length = 0
+      await withFilesystemSandbox({ mode: 'unrestricted', allowPaths: [] }, run)
+      expect(chunks).toContainEqual(
+        expect.objectContaining({ type: 'tool_call', toolName: 'write_file' }),
+      )
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining('filesystem write scope'),
+        }),
+      )
     } finally {
       resetExternalReadRootsForTesting()
       fs.rmSync(externalRoot, { recursive: true, force: true })
@@ -2705,7 +2728,11 @@ describe('runAgentStep - set_output tool', () => {
     // allowlisted root's prefix, which a naive startsWith check would admit, and
     // both sit outside the OS temp roots so the temp exception stays out of the
     // picture.
-    const externalRoot = makeOutsideRoot('external-read-backstop-sibling-')
+    // Do not let a /tmp runner cwd turn the prefix-confusable sibling into an
+    // allowed temp path. Neither fixture belongs to the mock project (/test).
+    const externalRoot = fs.mkdtempSync(
+      path.join(import.meta.dir, 'external-read-backstop-sibling-'),
+    )
     const siblingRoot = `${externalRoot}-evil`
     fs.mkdirSync(siblingRoot)
     const siblingRead = path.join(siblingRoot, 'notes.txt')
@@ -2726,24 +2753,26 @@ describe('runAgentStep - set_output tool', () => {
       return promptSuccess('mock-message-id')
     }
 
-    const sessionState = getInitialSessionState(mockFileContext)
-    const agentState = sessionState.mainAgentState
     const unscopedAgent: AgentTemplate = {
       ...testAgent,
       id: 'unscoped-agent',
       toolNames: ['read_files', 'end_turn'],
       filesystemScope: undefined,
     }
-
-    try {
-      await runAgentStep({
+    const run = () =>
+      runAgentStep({
         ...runAgentStepBaseParams,
         agentType: 'unscoped-agent',
         localAgentTemplates: { 'unscoped-agent': unscopedAgent },
         agentTemplate: unscopedAgent,
-        agentState,
+        agentState: getInitialSessionState(mockFileContext).mainAgentState,
         prompt: 'Read a non-allowlisted external sibling path',
       })
+
+    try {
+      expect(isOwnedTempPath(siblingRead)).toBe(false)
+      expect(isExternalReadPath(siblingRead)).toBe(false)
+      await withFilesystemSandbox({ mode: 'project', allowPaths: [] }, run)
 
       expect(chunks).toContainEqual(
         expect.objectContaining({
@@ -2757,6 +2786,19 @@ describe('runAgentStep - set_output tool', () => {
         expect.objectContaining({
           type: 'tool_call',
           toolName: 'read_files',
+        }),
+      )
+
+      // The unrestricted control is dispatch permission, not an allowlist grant.
+      chunks.length = 0
+      await withFilesystemSandbox({ mode: 'unrestricted', allowPaths: [] }, run)
+      expect(chunks).toContainEqual(
+        expect.objectContaining({ type: 'tool_call', toolName: 'read_files' }),
+      )
+      expect(chunks).not.toContainEqual(
+        expect.objectContaining({
+          type: 'error',
+          message: expect.stringContaining('filesystem read scope'),
         }),
       )
     } finally {

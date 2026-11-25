@@ -63,6 +63,8 @@ import { handleSpawnAgents } from './tool/spawn-agents'
 import { handleStrReplace } from './tool/str-replace'
 import { handleSuggestFollowups } from './tool/suggest-followups'
 import { handleTaskCompleted } from './tool/task-completed'
+import { handleToolLoad } from './tool/tool-load'
+import { handleToolSearch } from './tool/tool-search'
 import { handleThinkDeeply } from './tool/think-deeply'
 import { handleUpdatePlanStatus } from './tool/update-plan-status'
 import { handleUpdateSubgoal } from './tool/update-subgoal'
@@ -145,6 +147,8 @@ export const codebuffToolHandlers = {
   str_replace: handleStrReplace,
   suggest_followups: handleSuggestFollowups,
   task_completed: handleTaskCompleted,
+  tool_load: handleToolLoad,
+  tool_search: handleToolSearch,
   think_deeply: handleThinkDeeply,
   update_plan_status: handleUpdatePlanStatus,
   update_subgoal: handleUpdateSubgoal,

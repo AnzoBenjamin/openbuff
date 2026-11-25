@@ -65,7 +65,10 @@ import type {
   AbsoluteDeadline,
   ExecutionAdapterContext,
   LaunchObserver,
+  PreparedLaunch,
   Refusal,
+  Result,
+  TargetDescription,
 } from '@codebuff/common/types/contracts/execution-context'
 import type {
   CleanupResult,
@@ -185,6 +188,7 @@ export type SettleCrashReason =
 
 export type SpawnSettledSubagentParams = {
   execution?: ExecutionAdapterContext
+  prepareTarget?: (target: TargetDescription) => Result<PreparedLaunch>
   branchId?:
     | 'supervised.source.initial'
     | 'supervised.source.retry'
@@ -798,26 +802,27 @@ export async function spawnSettledSubagent(
     }
     if (params.execution) {
       const context = params.execution
-      const prepared = context.execution.prepareTarget({
-        target: {
-          executable: spawnRequest.cmd[0],
-          argv: spawnRequest.cmd.slice(1),
-          cwd: params.cwd ?? context.projectRoot,
-          projectRoot: context.projectRoot,
-          allowedPaths: context.allowedPaths,
-          mode: context.mode,
-          processType: 'SYNC',
-          profile: context.profile,
-          family: 'supervised-child',
-          branchId: params.branchId ?? 'supervised.source.initial',
-          environmentOverlay: spawnRequest.env,
-          adapterOptions: {
-            runtime: 'bun',
-            stdio: 'ignore,pipe,pipe',
-            detached: spawnRequest.detached,
-          },
+      const target: TargetDescription = {
+        executable: spawnRequest.cmd[0],
+        argv: spawnRequest.cmd.slice(1),
+        cwd: params.cwd ?? context.projectRoot,
+        projectRoot: context.projectRoot,
+        allowedPaths: context.allowedPaths,
+        mode: context.mode,
+        processType: 'SYNC',
+        profile: context.profile,
+        family: 'supervised-child',
+        branchId: params.branchId ?? 'supervised.source.initial',
+        environmentOverlay: spawnRequest.env,
+        adapterOptions: {
+          runtime: 'bun',
+          stdio: 'ignore,pipe,pipe',
+          detached: spawnRequest.detached,
         },
-      })
+      }
+      const prepared = params.prepareTarget
+        ? params.prepareTarget(target)
+        : context.execution.prepareTarget({ target })
       if (!prepared.ok)
         return crashResult('spawn_failed', null, { executionRefusal: prepared })
       const admitted = await prepared.value.admit()

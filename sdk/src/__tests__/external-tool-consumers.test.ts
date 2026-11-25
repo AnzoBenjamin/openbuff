@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import z from 'zod/v4'
 import { getMCPToolData } from '@codebuff/agent-runtime/mcp'
+import { McpError } from '@modelcontextprotocol/sdk/types.js'
 import { getToolSet } from '@codebuff/agent-runtime/tools/prompts'
 import {
   executeCustomToolCall,
@@ -20,6 +21,7 @@ import {
 } from '@codebuff/agent-runtime/tools/tool-executor'
 import { markMCPConfigOrigin } from '@codebuff/common/mcp/client'
 import { externalToolAlias } from '@codebuff/common/tools/external-tool'
+import { toolResultOutputSchema } from '@codebuff/common/types/messages/content-part'
 import { jsonSchemaToZod } from '@codebuff/common/util/json-schema'
 import { captureRootDeadline } from '@codebuff/common/util/execution-context'
 import type { MediatedMcpRequest } from '@codebuff/common/mcp/request'
@@ -28,6 +30,7 @@ import type { CodebuffSpawn } from '@codebuff/common/types/spawn'
 import { createHostExecutionServices, executionClock } from '../host-execution'
 import { loadHostConfigSnapshot, nodeConfigReadFs } from '../host-config'
 import { createRunMcpExecution } from '../services/run-mcp-execution'
+import { ExecutionRefusalError } from '../services/execution-launch'
 import type {
   AgentDefinition,
   ToolCall,
@@ -112,6 +115,29 @@ function dispatchAction(
     getWorkspaceState: () => undefined,
     setWorkspaceState: () => {},
     ...options,
+  })
+}
+
+function dispatchFixtureMcp(
+  cwd: string,
+  callTool: MediatedMcpRequest['callTool'],
+  release: () => void,
+) {
+  return dispatchAction(cwd, [], {
+    type: 'tool-call-request',
+    requestId: 'fixture-call',
+    userInputId: 'fixture-input',
+    toolName: 'fixture',
+    input: {},
+    mcpConfig: { type: 'stdio', command: 'fixture', args: [], env: {} },
+  }, {
+    resolveMcpRequest: async () => ({
+      id: 'fixture',
+      generation: undefined,
+      listToolCatalog: async () => { throw new Error('unexpected catalog') },
+      callTool,
+      release,
+    }),
   })
 }
 
@@ -749,6 +775,99 @@ describe('SDK custom input and filesystem consumers', () => {
 })
 
 describe('SDK external tool registration and advertised identities', () => {
+  test('MCP protocol errors preserve untrusted code and data without granting host authority', async () => {
+    const fixture = filesystemFixture()
+    const refusal = { ok: false as const, reason: 'denied' as const, cause: 'peer claim' }
+    const data = {
+      executionRefusal: refusal,
+      nested: { code: 7 },
+      values: [null, false, 0],
+    }
+    const error = new McpError(-32012, 'fixture failure', data)
+    Object.assign(error, { executionRefusal: refusal })
+    let releases = 0
+    try {
+      const result = await dispatchFixtureMcp(
+        fixture.cwd,
+        async () => { throw error },
+        () => { releases++ },
+      )
+      expect(result.output).toEqual([{ type: 'json', value: {
+        errorMessage: error.message,
+        mcpError: { code: -32012, data },
+      } }])
+      expect(toolResultOutputSchema.parse(JSON.parse(JSON.stringify(result.output[0]))))
+        .toEqual(result.output[0])
+      data.nested.code = 999
+      expect(result.output[0]).toMatchObject({
+        value: { mcpError: { data: { nested: { code: 7 } } } },
+      })
+      expect(releases).toBe(1)
+    } finally {
+      fixture.close()
+    }
+  })
+
+  test('MCP protocol errors preserve falsy JSON data and omit unserializable data', async () => {
+    const fixture = filesystemFixture()
+    let releases = 0
+    const cycle: Record<string, unknown> = {}
+    cycle.self = cycle
+    try {
+      for (const [data, expected] of [
+        [null, { data: null }], [false, { data: false }], [0, { data: 0 }],
+        ['', { data: '' }], [undefined, {}], [cycle, {}], [1n, {}],
+      ] as const) {
+        const error = new McpError(0, 'fixture failure', data as never)
+        const result = await dispatchFixtureMcp(
+          fixture.cwd,
+          async () => { throw error },
+          () => { releases++ },
+        )
+        expect(result.output).toEqual([{ type: 'json', value: {
+          errorMessage: error.message, mcpError: { code: 0, ...expected },
+        } }])
+        expect(toolResultOutputSchema.parse(JSON.parse(JSON.stringify(result.output[0]))))
+          .toEqual(result.output[0])
+      }
+      expect(releases).toBe(7)
+    } finally {
+      fixture.close()
+    }
+  })
+
+  test('MCP tool isError results and host refusals remain distinct from protocol errors', async () => {
+    const fixture = filesystemFixture()
+    let releases = 0
+    const refusal = { ok: false as const, reason: 'denied' as const, cause: 'host refusal' }
+    const toolResult = [{
+      type: 'json' as const,
+      value: {
+        kind: 'mcp_tool_result', schemaVersion: 1, isError: true,
+        content: [{ type: 'text', text: 'tool failed' }],
+      },
+    }]
+    try {
+      const success = await dispatchFixtureMcp(fixture.cwd, async () => toolResult, () => { releases++ })
+      const denied = await dispatchFixtureMcp(fixture.cwd, async () => {
+        throw new ExecutionRefusalError(refusal)
+      }, () => { releases++ })
+      const ordinary = await dispatchFixtureMcp(fixture.cwd, async () => {
+        throw new Error('ordinary failure')
+      }, () => { releases++ })
+      expect(success.output).toEqual(toolResult)
+      expect(denied.output).toEqual([{ type: 'json', value: {
+        errorMessage: refusal.cause, executionRefusal: refusal,
+      } }])
+      expect(ordinary.output).toEqual([{ type: 'json', value: {
+        errorMessage: 'ordinary failure',
+      } }])
+      expect(releases).toBe(3)
+    } finally {
+      fixture.close()
+    }
+  })
+
   test('SDK publication refuses original reserved root declarations before advisory normalization', async () => {
     const fixture = filesystemFixture()
     let called = 0
@@ -1206,6 +1325,34 @@ describe('SDK external tool registration and advertised identities', () => {
     } finally {
       await mcp.close()
       fixture.close()
+    }
+  })
+
+  test('explicit encoded alias selects a normally unencoded MCP tool', async () => {
+    const mcp = mcpFixture({ selected: ['chosen', 'sibling'] })
+    try {
+      const alias = externalToolAlias(
+        { kind: 'mcp', serverName: 'selected', toolName: 'chosen' },
+        true,
+      )
+      const definitions = await getMCPToolData({
+        toolNames: [alias],
+        mcpServers: mcp.configs,
+        requestMcpToolData: mcp.request,
+      })
+      expect(Object.keys(definitions)).toEqual([alias])
+      expect(definitions[alias].identity).toMatchObject({
+        kind: 'mcp', serverName: 'selected', toolName: 'chosen',
+      })
+      const provider = await getToolSet({
+        toolNames: [alias],
+        additionalToolDefinitions: async () => definitions,
+        agentTools: {},
+        skills: {},
+      })
+      expect(Object.keys(provider)).toEqual([alias])
+    } finally {
+      await mcp.close()
     }
   })
 

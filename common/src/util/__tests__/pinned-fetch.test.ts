@@ -38,13 +38,23 @@ describe('pinned fetch transports', () => {
     expect(await response.text()).toBe(`host=pinned-host.invalid:${port}`)
   })
 
-  it('node:http path dials the pinned IP through the lookup hook', async () => {
+  it('node:http path dials the pinned IP while retaining the original authority', async () => {
     const port = startEcho()
     const url = new URL(`http://pinned-host.invalid:${port}/path`)
     const response = await nodePinnedRequest(url, '127.0.0.1')
     expect(response.status).toBe(200)
     expect(response.headers.get('x-fixture')).toBe('yes')
     expect(await response.text()).toBe(`host=pinned-host.invalid:${port}`)
+  })
+
+  it('node path honors the pin even when the original URL already has an IP literal', async () => {
+    const port = startEcho()
+    const response = await nodePinnedRequest(
+      new URL(`http://127.0.0.2:${port}/path`),
+      '127.0.0.1',
+    )
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe(`host=127.0.0.2:${port}`)
   })
 
   it('node path is used for https when tls.serverName is unsupported', async () => {
@@ -59,6 +69,34 @@ describe('pinned fetch transports', () => {
         { supportsTlsServerName: false },
       ),
     ).rejects.toThrow(/ECONNREFUSED|refused|connect/i)
+  })
+
+  it('rejects non-literal or zone-qualified pin targets before invoking fetch', async () => {
+    for (const address of [
+      'rebind.attacker.example',
+      'not-an-ip',
+      '',
+      '2606:4700:4700::1111%eth0',
+    ]) {
+      let dialed = false
+      await expect(
+        fetchPinnedAddress(
+          new URL('http://docs.example.com/'),
+          address,
+          {},
+          {
+            fetchImpl: (async () => {
+              dialed = true
+              return new Response('unexpected')
+            }) as unknown as typeof fetch,
+          },
+        ),
+      ).rejects.toThrow(/IP literal|zone/i)
+      expect(dialed).toBe(false)
+      expect(() =>
+        buildPinnedRequest(new URL('http://docs.example.com/'), address),
+      ).toThrow(/IP literal|zone/i)
+    }
   })
 
   it('buildPinnedRequest keeps SNI, Host and manual redirects', () => {

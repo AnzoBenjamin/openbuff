@@ -962,6 +962,7 @@ export function printModeToSessionUpdates(
       return []
     }
     case 'job_update':
+    case 'usage':
     case 'provider_status':
     case 'phase':
     case 'context_compaction':

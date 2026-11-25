@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-11-14T22:06:48.634Z",
+  "fullIndexer": {
+    "command": "bun test --isolate packages/indexer/src",
+    "passed": 786,
+    "failed": 0,
+    "files": 29,
+    "log": "indexer-full-suite.log",
+    "checkpoint": "Full suite before the final independent-read pipeline; final affected lifecycle/manager/native suites rerun afterward."
+  },
+  "finalParity": {
+    "command": "bun test --isolate packages/indexer/src/durable-index-store.test.ts packages/indexer/src/repository-service-client.test.ts packages/indexer/src/index-manager.test.ts packages/indexer/src/index-manager-semantic.test.ts",
+    "passed": 59,
+    "failed": 0,
+    "log": "indexer-final-parity-suite.log"
+  },
+  "codeMap": {
+    "command": "bun run --cwd packages/code-map test",
+    "passed": 180,
+    "failed": 0,
+    "files": 13,
+    "log": "code-map-final-suite.log",
+    "prerequisite": "SDK packaged grammar assets built; GDScript test mock now restores its singleton."
+  },
+  "typechecks": {
+    "indexer": true,
+    "codeMap": true
+  },
+  "resolver": {
+    "passed": 21,
+    "failed": 0,
+    "log": "resolver-final-suite.log"
+  },
+  "numericParity": {
+    "values": 1006,
+    "backends": [
+      "bun-sqlite",
+      "node-directory",
+      "rust-sqlite"
+    ],
+    "matches": "Exact JavaScript numeric identity including fractional filesystem mtimes, subnormal and maximum finite values; requires Rust serde_json float_roundtrip."
+  },
+  "retrievalQuality": {
+    "passed": 3,
+    "recallAt3": 0.944444,
+    "meanReciprocalRank": 0.972222,
+    "ndcgAt3": 0.970309,
+    "noiseRateAt3": 0.666667,
+    "log": "retrieval-quality.log"
+  },
+  "readPipeline": {
+    "referenceTables": "11 independent immutable-generation tables queried concurrently; ancestor generations remain sequential.",
+    "objects": "At most 4 concurrent pages, each at most 256 keys; original page/frame and publication write limits remain unchanged."
+  },
+  "lifecycleCoverage": [
+    "legacy JSON preserved during migration",
+    "cached unverified discovery before attestation",
+    "zero-parse no-change reconciliation",
+    "known dirty equal-stat rehash",
+    "one-source graph/posting update",
+    "precise producer preservation and invalidation",
+    "atomic publication CAS",
+    "durable mutation checkpoint",
+    "worktree and copied-cache identity",
+    "generation pins and shared-object GC",
+    "portable reference checkpoint and physical cleanup",
+    "bounded reopenable backend handles",
+    "UTF-8 Unicode paging and exact prefixes",
+    "Bun/Node/native runtime restart"
+  ]
+}

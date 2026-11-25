@@ -10,9 +10,7 @@ import {
   type PlaybookStatus,
   type PlaybookTrigger,
 } from '../../../../../common/src/types/memory-playbook'
-import type {
-  PlaybookStoreContract,
-} from '../../../../../common/src/types/contracts/playbook-store'
+import type { PlaybookStoreContract } from '../../../../../common/src/types/contracts/playbook-store'
 
 import { BunSQLiteMemoryRepository } from '../bun-sqlite-memory-repository'
 
@@ -41,10 +39,9 @@ const seedTrigger: PlaybookTrigger = {
   spawnAgentType: 'git-committer',
   requireEvidence: [
     {
-      kind: 'toolSucceeded',
-      tool: 'run_terminal_command',
-      commandPattern: '*check:ci-local*',
-      withinMs: 14_400_000,
+      kind: 'validationSucceeded',
+      validationKinds: ['ci-local', 'package-checks'],
+      withinMs: 1_800_000,
     },
   ],
 }
@@ -56,10 +53,9 @@ const seed2Trigger: PlaybookTrigger = {
   terminalAction: 'git-push',
   requireEvidence: [
     {
-      kind: 'toolSucceeded',
-      tool: 'run_terminal_command',
-      commandPattern: '*check:ci-local*',
-      withinMs: 14_400_000,
+      kind: 'validationSucceeded',
+      validationKinds: ['ci-local', 'package-checks'],
+      withinMs: 1_800_000,
     },
   ],
 }
@@ -113,7 +109,8 @@ describe('memory playbooks (procedural memory)', () => {
     expect(seed1?.title).toBe('Run the repo CI check before committing')
     expect(seed1?.status).toBe('active')
     expect(seed1?.enforcement).toBe('warn')
-    expect(seed1?.instruction).toContain('check:ci-local')
+    expect(seed1?.instruction).toContain('successful host validation receipt')
+    expect(seed1?.instruction).toContain('another actor')
     expect(seed1?.counters).toEqual({
       fired: 0,
       blocked: 0,
@@ -124,7 +121,8 @@ describe('memory playbooks (procedural memory)', () => {
     expect(seed2?.title).toBe('Run the repo CI check before pushing directly')
     expect(seed2?.status).toBe('active')
     expect(seed2?.enforcement).toBe('warn')
-    expect(seed2?.instruction).toContain('check:ci-local')
+    expect(seed2?.instruction).toContain('successful host validation receipt')
+    expect(seed2?.instruction).toContain('any actor')
     expect(seed2?.counters).toEqual({
       fired: 0,
       blocked: 0,
@@ -184,6 +182,80 @@ describe('memory playbooks (procedural memory)', () => {
     )
     expect(added?.triggerSignature).toBe(SEED_2_SIGNATURE)
     expect(added?.title).toBe('Run the repo CI check before pushing directly')
+  })
+
+  test('keeps user-owned legacy rules independent of the two receipt seeds', async () => {
+    const repository = await open(temporaryRepository())
+    const legacyTrigger: PlaybookTrigger = {
+      ...seedTrigger,
+      requireEvidence: [
+        {
+          kind: 'toolSucceeded',
+          tool: 'run_terminal_command',
+          commandPattern: '*check:ci-local*',
+          withinMs: 14_400_000,
+        },
+      ],
+    }
+    const legacy = await createPlaybook(
+      repository,
+      'Operator legacy rule',
+      legacyTrigger,
+    )
+    await repository.ensureSeedPlaybooks(WORKSPACE_ID)
+    const listed = await repository.listPlaybooks(WORKSPACE_ID)
+    expect(listed).toHaveLength(3)
+    expect(
+      listed.find((rule) => rule.playbookId === legacy.playbookId),
+    ).toEqual(legacy)
+    expect(
+      listed.filter((rule) =>
+        [SEED_1_SIGNATURE, SEED_2_SIGNATURE].includes(rule.triggerSignature),
+      ),
+    ).toHaveLength(2)
+  })
+
+  test('upgrades a host-owned legacy seed while preserving operator state and text', async () => {
+    const repository = await open(temporaryRepository())
+    const legacy = await repository.upsertPlaybookByTriggerSignature({
+      workspaceId: WORKSPACE_ID,
+      title: 'Run the repo CI check before committing',
+      instruction: 'Operator-edited validation guidance.',
+      trigger: {
+        ...seedTrigger,
+        requireEvidence: [
+          {
+            kind: 'toolSucceeded',
+            tool: 'run_terminal_command',
+            commandPattern: '*check:ci-local*',
+            withinMs: 14_400_000,
+          },
+        ],
+      },
+      scope: seedScope,
+      status: 'verified',
+      enforcement: 'block',
+      provenance: {
+        origin: 'migration',
+        recordedBy: 'bun-sqlite-memory-v2',
+        sourceEventIds: [],
+        metadata: {},
+      },
+    })
+    await repository.recordPlaybookGateOutcome(legacy.playbookId, 'blocked')
+    await repository.ensureSeedPlaybooks(WORKSPACE_ID)
+    const listed = await repository.listPlaybooks(WORKSPACE_ID)
+    expect(listed).toHaveLength(2)
+    expect(
+      listed.find((rule) => rule.playbookId === legacy.playbookId),
+    ).toMatchObject({
+      trigger: seedTrigger,
+      triggerSignature: SEED_1_SIGNATURE,
+      instruction: legacy.instruction,
+      status: 'verified',
+      enforcement: 'block',
+      counters: { fired: 1, blocked: 1 },
+    })
   })
 
   test('upsert by trigger signature reuses the playbook id, updates the instruction, and preserves counters', async () => {

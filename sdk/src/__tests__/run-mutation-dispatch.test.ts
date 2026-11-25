@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 
 import * as mainPromptModule from '@codebuff/agent-runtime/main-prompt'
+import * as diagnosticDeltaModule from '../services/diagnostic-delta'
 import { createMockFs } from '@codebuff/common/testing/mocks/filesystem'
 import {
   captureTextDocument,
@@ -179,6 +180,7 @@ describe('[B36] diagnostic SDK/client projection', () => {
     ['shifted-error', 'default', 'passed', 'before_after'],
     ['shifted-error', 'StRiCt', 'new_errors', 'before_after'],
     ['failed-baseline', 'default', 'unavailable', 'before_after'],
+    ['thrown-baseline', 'default', 'unknown', 'before_after'],
     ['mismatched-files', 'default', 'unknown', 'before_after'],
     ['foreign-bytes', 'default', 'unknown', 'before_after'],
     ['failed-foreign-baseline', 'default', 'unknown', 'before_after'],
@@ -243,6 +245,12 @@ process.exit(hasError ? 101 : 0);
       if (name === 'shifted-error') {
         mkdirSync(path.join(workspace, 'src'))
         writeFileSync(path.join(workspace, 'src/lib.rs'), 'fn fixture() {}\n')
+      }
+      if (name === 'thrown-baseline') {
+        spyOn(diagnosticDeltaModule, 'captureDiagnosticObservation')
+          .mockImplementationOnce(async () => {
+            throw new Error('Baseline capture failed unexpectedly')
+          })
       }
       try {
         const outputs = await dispatchToolCalls({
@@ -341,8 +349,20 @@ process.exit(hasError ? 101 : 0);
             },
           })
         }
-        expect(launches).toBe(2)
-        expect(Number(readFileSync(counter, 'utf8'))).toBe(2)
+        if (name === 'thrown-baseline') {
+          expect(diagnostic.observations).toMatchObject({
+            before: {
+              coverage: {
+                status: 'unknown',
+                reasons: expect.arrayContaining(['baseline_capture_failed']),
+              },
+            },
+            after: { diagnostics: [], coverage: { status: 'complete' } },
+          })
+        }
+        const expectedLaunches = name === 'thrown-baseline' ? 1 : 2
+        expect(launches).toBe(expectedLaunches)
+        expect(Number(readFileSync(counter, 'utf8'))).toBe(expectedLaunches)
         console.log(
           JSON.stringify({
             b36: 'client-multi-call',

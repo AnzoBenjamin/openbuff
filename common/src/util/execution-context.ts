@@ -3,10 +3,10 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto'
 import type {
   AbsoluteDeadline, ActionExecutionPort, Admission, AuthorityBindingV2,
   BudgetHandle, Capability, CapturedExecutable, Clock, Correlation,
-  DeadlineFacts, DelegationHandle, DestinationHandle, ExactLaunchInput,
+  DeadlineFacts, DelegationHandle, DestinationHandle, ExactLaunchInput, ExecutionTargetBounds,
   HostAuthority, HostAuthorityInputs, LaunchEvent, LaunchFacts, LaunchObserver,
   LeaseHandle, LifetimeHandle, Limit, OwnerHandle, PolicyInput, PreparedLaunch,
-  ProfileFacts, ReceiverCapability, Refusal, RequestHandle, ResourceHandle,
+  ProfileFacts, ProfileRequest, ReceiverCapability, Refusal, RequestHandle, ResourceHandle,
   Result, RootDeadlineSeed, TargetClassification, TargetDescription, TargetPermit,
   TransferOffer, TransferPermit, UsePermit,
 } from '../types/contracts/execution-context'
@@ -40,6 +40,59 @@ const plain = (value: unknown): value is Record<string, unknown> =>
 const thenable = (value: unknown): boolean =>
   value !== null && (typeof value === 'object' || typeof value === 'function') &&
   typeof (value as { then?: unknown }).then === 'function'
+
+function profileTuple(profile: ProfileRequest): readonly unknown[] {
+  return [profile.policy, profile.preferredBackend, profile.required, profile.optional ?? [], profile.allowBackendFallback]
+}
+
+/** Data-only attenuation. Authority requires binding the result to a private host request. */
+export function readOnlyPlanExecutionProfile(parent: ProfileRequest): ProfileRequest {
+  const required = Object.freeze([...new Set([...parent.required,
+    'exact-env', 'filesystem-isolation', 'network-isolation', 'process-tree-containment'] as const)])
+  return Object.freeze({ policy: 'read-only', preferredBackend: 'native-exec', required,
+    ...(parent.optional ? { optional: Object.freeze(parent.optional.filter(capability => !required.includes(capability))) } : {}),
+    allowBackendFallback: false })
+}
+
+export function isReadOnlyPlanExecutionProfile(profile: ProfileRequest): boolean {
+  return profile.policy === 'read-only' && profile.preferredBackend === 'native-exec' && !profile.allowBackendFallback &&
+    (['exact-env', 'filesystem-isolation', 'network-isolation', 'process-tree-containment'] as const)
+      .every(capability => profile.required.includes(capability))
+}
+
+/** Compare against a privately registered ceiling, never an adapter's asserted profile. */
+export function executionTargetBoundsRefusal(
+  bounds: ExecutionTargetBounds | undefined,
+  target: ExecutionTargetBounds,
+): Refusal | undefined {
+  if (!bounds) return undefined
+  try {
+    if (target.projectRoot !== bounds.projectRoot || target.mode !== bounds.mode ||
+      !Array.isArray(target.allowedPaths) || target.allowedPaths.some(root => !bounds.allowedPaths.includes(root)) ||
+      JSON.stringify(profileTuple(target.profile)) !== JSON.stringify(profileTuple(bounds.profile)))
+      return refuse('invalid-context', 'Execution target exceeds its authenticated profile, path or mode bounds')
+  } catch {
+    return refuse('invalid-context', 'Execution target bounds are invalid')
+  }
+  return undefined
+}
+
+function validProfile(profile: ProfileRequest): boolean {
+  return plain(profile) && policies.has(profile.policy) && ['portable-ts', 'native-exec'].includes(profile.preferredBackend) &&
+    Object.keys(profile).every(key => ['policy', 'preferredBackend', 'required', 'optional', 'allowBackendFallback'].includes(key)) &&
+    Array.isArray(profile.required) && profile.required.every(value => capabilities.has(value)) &&
+    new Set(profile.required).size === profile.required.length &&
+    (profile.optional === undefined || (Array.isArray(profile.optional) &&
+      profile.optional.every(value => capabilities.has(value) && !profile.required.includes(value)) &&
+      new Set(profile.optional).size === profile.optional.length)) && typeof profile.allowBackendFallback === 'boolean'
+}
+
+function validBounds(bounds: ExecutionTargetBounds): boolean {
+  return plain(bounds) && nonempty(bounds.projectRoot) && !bounds.projectRoot.includes('\0') &&
+    Array.isArray(bounds.allowedPaths) && bounds.allowedPaths.every(root => nonempty(root) && !root.includes('\0')) &&
+    validProfile(bounds.profile) && ['assistant', 'user'].includes(bounds.mode) &&
+    Object.keys(bounds).every(key => ['projectRoot', 'allowedPaths', 'profile', 'mode'].includes(key))
+}
 
 /** The reviewed v2 order is independent of object insertion order. */
 export function executionBindingTuple(binding: AuthorityBindingV2): readonly unknown[] {
@@ -130,7 +183,8 @@ type Owner = { id: string; description: Parameters<HostAuthority['registerOwner'
   lifetime: Limiter; receiver: ReceiverCapability }
 type Budget = Limiter & { owner: Owner; correlation: Correlation; root: Budget;
   children: Map<string, Budget>; registrationKey?: string }
-type Request = { id: string; budget: Budget; controller: AbortController; maintenanceResource?: Resource }
+type Request = { id: string; budget: Budget; controller: AbortController; maintenanceResource?: Resource;
+  bounds?: ExecutionTargetBounds }
 type Destination = { id: string; snapshotId: string; origin: string;
   resolved: Parameters<HostAuthority['registerDestination']>[0]['resolved'] }
 type Delegation = { id: string; destination: Destination; snapshotId: string; origin: string;
@@ -348,15 +402,7 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
       !nonempty(target.cwd) || !nonempty(target.projectRoot) || !Array.isArray(target.allowedPaths) ||
       target.allowedPaths.some(p => !nonempty(p) || /\0/.test(p)) || /\0/.test(target.cwd + target.projectRoot) ||
       !['assistant', 'user'].includes(target.mode) || !['SYNC', 'BACKGROUND'].includes(target.processType) ||
-      !families.has(target.family) || !nonempty(target.branchId) || !plain(target.profile) ||
-      !policies.has(target.profile.policy) || !['portable-ts', 'native-exec'].includes(target.profile.preferredBackend) ||
-      Object.keys(target.profile).some(key => !['policy', 'preferredBackend', 'required', 'optional', 'allowBackendFallback'].includes(key)) ||
-      !Array.isArray(target.profile.required) || target.profile.required.some(value => !capabilities.has(value)) ||
-      new Set(target.profile.required).size !== target.profile.required.length ||
-      (target.profile.optional !== undefined && (!Array.isArray(target.profile.optional) ||
-        target.profile.optional.some(value => !capabilities.has(value) || target.profile.required.includes(value)) ||
-        new Set(target.profile.optional).size !== target.profile.optional.length)) ||
-      typeof target.profile.allowBackendFallback !== 'boolean' || !plain(target.adapterOptions) ||
+      !families.has(target.family) || !nonempty(target.branchId) || !validProfile(target.profile) || !plain(target.adapterOptions) ||
       !['node', 'bun', 'spawn-sync'].includes(String(target.adapterOptions.runtime))) return false
     if (target.shellCommandBytes !== undefined && (typeof target.shellCommandBytes !== 'string' || /\0/.test(target.shellCommandBytes))) return false
     if (Object.keys(target).some(key => !['executable', 'argv', 'shellCommandBytes', 'cwd', 'projectRoot', 'allowedPaths',
@@ -474,7 +520,7 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
     if (requestFailure) return requestFailure
     if (lease.released || lease.generation !== lease.resource.generation || lease.owner !== lease.resource.owner)
       return refuse('stale-authority', 'Request lease is released or stale')
-    return checkResource(lease.resource, sampledNow)
+    return executionTargetBoundsRefusal(lease.request.bounds, lease.resource.target) ?? checkResource(lease.resource, sampledNow)
   }
 
   function checkLaunchState(launch: Launch, sampledNow?: number): Refusal | undefined {
@@ -492,7 +538,8 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
 
   function checkBasisAndProfile(launch: Launch): Refusal | undefined {
     try {
-      if (!inputs.isCurrentBasis(launch.correlation)) return refuse('stale-authority', 'Action basis changed')
+      if (!inputs.isCurrentBasis(launch.correlation)) return refuse('stale-authority',
+        inputs.describeBasisMismatch?.(launch.correlation) ?? 'Action basis changed')
       const current = captureProfile(launch.resource.target)
       if (!current.ok) return current
       if (JSON.stringify(current.value.selected) !== JSON.stringify(launch.resource.profile.selected))
@@ -811,6 +858,10 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
         if (get(prepared, this) !== launch) throw new Error('Invalid prepared launch receiver')
         return facts(launch)
       },
+      clock() {
+        if (get(prepared, this) !== launch) throw new Error('Invalid prepared launch receiver')
+        return inputs.clock
+      },
       async admit() {
         if (get(prepared, this) !== launch) return refuse('stale-authority', 'Invalid prepared launch receiver')
         if (launch.stage !== 'planned') return refuse('already-consumed', 'Launch admission already requested')
@@ -906,11 +957,13 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
         const derived = get(budgets, child.value)!
         const requestHandle = authority.registerRequest({ budget: child.value, signal: request.controller.signal })
         if (!requestHandle.ok) return requestHandle
-        return ok(boundPort(get(requests, requestHandle.value)!, derived, owner))
+        const childRequest = get(requests, requestHandle.value)!
+        childRequest.bounds = request.bounds
+        return ok(boundPort(childRequest, derived, owner))
       },
       prepareTarget(p) {
         if (get(actionPorts, this)?.request !== request) return refuse('stale-authority', 'Invalid action port receiver')
-        const failure = checkRequest(request)
+        const failure = checkRequest(request) ?? executionTargetBoundsRefusal(request.bounds, p.target)
         if (failure) return failure
         const ownerHandle = handle<OwnerHandle, Owner>(owners, owner)
         const budgetHandle = handle<BudgetHandle, Budget>(budgets, budget)
@@ -938,7 +991,13 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
         return ok(Object.freeze({
           prepareLaunch: () => authority.prepareLaunch({ request: requestHandle, resource: resourceHandle, lease: lease.value, budget: budgetHandle }),
           admitUse: (operationDigest: string) => authority.admitResourceUse({ request: requestHandle, resource: resourceHandle, lease: lease.value, operationDigest }),
-          useNow: <T>(permit: UsePermit, use: () => T) => authority.useResourceNow(permit, use),
+          useNow: <T>(permit: UsePermit, use: () => T): Result<T> => {
+            const issued = get(uses, permit)
+            if (!issued || issued.request !== request || issued.resource !== get(resources, resourceHandle) ||
+              issued.lease !== get(leases, lease.value))
+              return refuse('stale-authority', 'Resource use permit belongs to another request or resource lease')
+            return authority.useResourceNow(permit, use)
+          },
           release: () => authority.releaseLease(lease.value),
         }))
       },
@@ -1032,7 +1091,14 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
       if (!request || !budget || !owner || request.budget !== budget || budget.owner !== owner)
         return refuse('stale-authority', 'Action context registration does not match')
       const failure = checkRequest(request)
-      return failure ?? ok(boundPort(request, budget, owner))
+      if (failure) return failure
+      if (p.bounds !== undefined) {
+        if (!validBounds(p.bounds) || (request.bounds &&
+          (executionTargetBoundsRefusal(request.bounds, p.bounds) || executionTargetBoundsRefusal(p.bounds, request.bounds))))
+          return refuse('invalid-context', 'Execution request cannot replace its authenticated target bounds')
+        request.bounds ??= copy(p.bounds)
+      }
+      return ok(boundPort(request, budget, owner))
     },
     actionRegistration(port) {
       const registration = get(actionPorts, port)
@@ -1045,6 +1111,7 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
         owner: handle<OwnerHandle, Owner>(owners, registration.owner),
         correlation: registration.budget.correlation,
         signal: registration.request.controller.signal,
+        ...(registration.request.bounds ? { bounds: registration.request.bounds } : {}),
       }))
     },
     deadline(value) {
@@ -1150,7 +1217,7 @@ export function createHostAuthority(inputs: HostAuthorityInputs): HostAuthority 
       const request = get(requests, p.request), resource = get(resources, p.resource), owner = get(owners, p.owner)
       if (!request || !resource || !owner || resource.owner !== owner || request.budget.owner !== owner)
         return refuse('stale-authority', 'Request and resource ownership do not match')
-      const failure = checkRequest(request) ?? checkResource(resource)
+      const failure = checkRequest(request) ?? executionTargetBoundsRefusal(request.bounds, resource.target) ?? checkResource(resource)
       if (failure) return failure
       const lease: Lease = { id: randomUUID(), request, resource, owner, generation: resource.generation, released: false }
       resource.leases.add(lease)

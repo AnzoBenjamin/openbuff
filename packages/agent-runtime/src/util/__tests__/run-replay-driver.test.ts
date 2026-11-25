@@ -262,6 +262,12 @@ describe('executeRunResumeReport (P2-T2 replay-driver slice)', () => {
         payload: { model: 'm' },
       })
       journal.append('child-5', {
+        eventType: 'llm_response',
+        stepNumber: 0,
+        correlation: 'c5-0',
+        payload: { messageId: 'c5-0-response' },
+      })
+      journal.append('child-5', {
         eventType: 'step_boundary',
         stepNumber: 1,
         correlation: 'c5-done',

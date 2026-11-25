@@ -164,7 +164,7 @@ const inputSchema = z
       .number()
       .optional()
       .describe(
-        `Wall-clock bound in seconds, including startup and approval waits. If omitted, SYNC commands get 120 s of execution time (approval waits excluded) and BACKGROUND jobs have no local timeout. Raise it for long builds or test suites. -1 means no local timeout where the host allows it; a host cap and any finite parent deadline still apply.`,
+        `Wall-clock bound in seconds, including startup and approval waits. Omitted or -1 adds no local timeout unless the host explicitly configures a default or cap. Cancellation and any finite parent/run deadline always apply.`,
       ),
     owner: z
       .object({
@@ -197,7 +197,7 @@ DO NOT do any of the following:
 
 Do:
 - If there's an opportunity to use "-y" or "--yes" flags, use them. stdin is closed (reads get EOF), so a command that prompts for confirmation fails or stalls without them. A SYNC result with idleOutputHint means the command went 30 s without output; it may be waiting on a terminal prompt.
-- SYNC commands time out after 120 s unless you pass timeout_seconds; set it higher for long builds or test suites. The timeout keeps the partial output, and so does a user cancel.
+- Terminal commands have no automatic local timeout. Select timeout_seconds when you need a bound; configured host caps and parent deadlines still apply. Timeouts and cancellation retain partial output.
 
 Notes:
 - If the user references a specific file, it could be either from their cwd or from the project root. You **must** determine which they are referring to (either infer or ask). Then, you must specify the path relative to the project root (or use the cwd parameter)

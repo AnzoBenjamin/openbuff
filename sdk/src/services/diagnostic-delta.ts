@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import path from 'node:path'
 
 import {
@@ -16,6 +17,7 @@ import {
   deriveExecutionContext,
   executionLimitSeconds,
   isExecutionRefusalError,
+  refusalForSignal,
 } from './execution-launch'
 
 import type { ExecutionAdapterContext, Refusal, Result } from '@codebuff/common/types/contracts/execution-context'
@@ -436,7 +438,8 @@ export async function captureDiagnosticObservation(
 ): Promise<DiagnosticCapture> {
   const { cwd, runCommand } = params
   const env = params.env ? { ...params.env } : undefined
-  const signal = params.executionContext?.signal ?? params.signal
+  const hostSignal = params.executionContext?.signal
+  const signal = params.signal ?? hostSignal
   const maxFiles = Math.max(
     1,
     Math.min(MAX_PREFLIGHT_FILES, params.maxFiles ?? MAX_PREFLIGHT_FILES),
@@ -448,11 +451,13 @@ export async function captureDiagnosticObservation(
   const phase = params.phase ?? 'current'
   const timeoutSeconds = params.timeoutSeconds ?? DEFAULT_DIAGNOSTIC_TIMEOUT_SECONDS
   const localLimit = executionLimitSeconds(timeoutSeconds)
+  // Budget keys are memoized; separate captures must not reuse a prior deadline.
+  const captureId = randomUUID()
   const contexts = commands.map((command): Result<ExecutionAdapterContext> | undefined => {
     if (!params.executionContext) return undefined
     if (!localLimit.ok) return localLimit
     const id = DIAGNOSTIC_COMMAND_INVOCATIONS[command]!.id
-    return deriveExecutionContext(params.executionContext, `diagnostic:${id}:${phase}:preflight`, localLimit.value)
+    return deriveExecutionContext(params.executionContext, `diagnostic:${id}:${phase}:preflight:${captureId}`, localLimit.value)
   })
   const captures = await mapWithConcurrency(
     commands.map((command, index) => ({ command, context: contexts[index] })),
@@ -462,14 +467,14 @@ export async function captureDiagnosticObservation(
       try {
         result = context && !context.ok
           ? { errorMessage: context.cause, executionRefusal: context }
-          : signal?.aborted
+          : signal?.aborted || hostSignal?.aborted
           ? { cancelled: true }
           : await runCommand({
               command,
               cwd,
               timeoutSeconds,
               env,
-              signal: context?.ok ? context.value.signal ?? signal : signal,
+              signal: params.signal ?? (context?.ok ? context.value.signal : signal),
               executionContext: context?.ok ? context.value : params.executionContext,
               phase,
             })
@@ -478,7 +483,7 @@ export async function captureDiagnosticObservation(
           errorMessage: error instanceof Error ? error.message : String(error),
           ...(isExecutionRefusalError(error) ? { executionRefusal: error.refusal } : {}),
           cancelled:
-            signal?.aborted ||
+            signal?.aborted || hostSignal?.aborted ||
             (error instanceof Error && error.name === 'AbortError'),
         }
       }
@@ -488,9 +493,15 @@ export async function captureDiagnosticObservation(
         stdout: result.stdout ?? '',
         stderr: result.stderr ?? '',
       })
+      const abortedSignal = signal?.aborted ? signal : hostSignal?.aborted ? hostSignal
+        : context?.ok && context.value.signal?.aborted ? context.value.signal : undefined
+      const interruption = result.executionRefusal?.reason === 'cancelled' || result.executionRefusal?.reason === 'deadline-exhausted'
+        ? result.executionRefusal : abortedSignal ? refusalForSignal(abortedSignal) : undefined
       let status: DiagnosticCommandObservation['status']
-      if (result.cancelled || signal?.aborted || result.executionRefusal?.reason === 'cancelled') status = 'cancelled'
-      else if (result.timedOut || result.executionRefusal?.reason === 'deadline-exhausted') status = 'timed_out'
+      if (interruption?.reason === 'cancelled') status = 'cancelled'
+      else if (interruption?.reason === 'deadline-exhausted') status = 'timed_out'
+      else if (result.cancelled) status = 'cancelled'
+      else if (result.timedOut) status = 'timed_out'
       else if (
         result.exitCode === 127 ||
         result.errorCode === 'ENOENT' ||
@@ -769,8 +780,8 @@ export async function preflightDiagnosticDelta(params: {
    */
   baseline?: DiagnosticCapture | LanguageDiagnostic[]
 }): Promise<DiagnosticDeltaPreflightResult> {
-  params = { ...params, files: [...params.files], env: params.env ? { ...params.env } : undefined,
-    signal: params.executionContext?.signal ?? params.signal }
+  const hostSignal = params.executionContext?.signal
+  params = { ...params, files: [...params.files], env: params.env ? { ...params.env } : undefined }
   const { files, cwd, runCommand, applyEdit, rollbackEdit, env, signal } =
     params
   const capture = (phase: DiagnosticPhase) =>
@@ -810,18 +821,23 @@ export async function preflightDiagnosticDelta(params: {
     before,
   }
   if (
-    signal?.aborted ||
+    signal?.aborted || hostSignal?.aborted ||
     before.commands.some((command) => command.status === 'cancelled')
   ) {
+    const abortedSignal = signal?.aborted ? signal : hostSignal?.aborted ? hostSignal : undefined
+    const executionRefusal = abortedSignal
+      ? refusalForSignal(abortedSignal)
+      : before.commands.find((command) => command.executionRefusal)?.executionRefusal
+    const diagnosticStatus = executionRefusal
+      ? executionRefusal.reason === 'cancelled' ? 'cancelled' : 'failed'
+      : before.commands.some((command) => command.status === 'cancelled') ? 'cancelled' : 'failed'
     return {
       rejected: true,
-      diagnosticStatus: 'cancelled',
+      diagnosticStatus,
       observations,
       newDiagnostics: [],
       fixIts: [],
-      ...(before.commands.find((command) => command.executionRefusal)?.executionRefusal
-        ? { executionRefusal: before.commands.find((command) => command.executionRefusal)!.executionRefusal }
-        : {}),
+      ...(executionRefusal ? { executionRefusal } : {}),
     }
   }
   // A throwing applyEdit used to leave the edit applied with no rollback and
@@ -856,6 +872,28 @@ export async function preflightDiagnosticDelta(params: {
       observations: { ...observations, reason: 'apply_edit_failed' },
       newDiagnostics: [],
       fixIts: [],
+    }
+  }
+  const abortedSignal = signal?.aborted ? signal : hostSignal?.aborted ? hostSignal : undefined
+  if (abortedSignal) {
+    if (rollbackEdit) {
+      try {
+        await rollbackEdit()
+      } catch (rollbackError) {
+        console.error(
+          '[diagnostic-delta] rollbackEdit threw after cancellation; the edit may be left applied',
+          rollbackError instanceof Error ? rollbackError : String(rollbackError),
+        )
+      }
+    }
+    const executionRefusal = refusalForSignal(abortedSignal)
+    return {
+      rejected: true,
+      diagnosticStatus: executionRefusal.reason === 'cancelled' ? 'cancelled' : 'failed',
+      observations,
+      newDiagnostics: [],
+      fixIts: [],
+      executionRefusal,
     }
   }
   // A no-op applyEdit cannot change diagnostics, so the second capture is

@@ -80,6 +80,8 @@ export const toolNames = [
   'str_replace',
   'suggest_followups',
   'task_completed',
+  'tool_load',
+  'tool_search',
   'think_deeply',
   'update_plan_status',
   'update_subgoal',

@@ -1,3 +1,4 @@
+import { Readable, PassThrough } from 'node:stream'
 import { describe, expect, test } from 'bun:test'
 
 import { runHeadlessCommand } from '../commands/run-command'
@@ -56,6 +57,72 @@ function makeHarness(options?: {
 }
 
 describe('runHeadlessCommand', () => {
+  describe('stdin prompt admission', () => {
+    test('delivers exact split UTF-8 input before opening the journal and client', async () => {
+      const bytes = Buffer.from('  explain café\nkeep indentation\n')
+      let completedInput = false
+      const stdin = Readable.from((async function* () {
+        yield bytes.subarray(0, 14)
+        yield bytes.subarray(14)
+        completedInput = true
+      })())
+      const h = makeHarness({ args: { prompt: '', readFromStdin: true }, deps: {
+        stdin, stdinIsTTY: false,
+        openRunJournal: () => { expect(completedInput).toBe(true); return undefined },
+      } })
+      expect(await runHeadlessCommand(h.args, h.deps)).toBe(0)
+      expect(h.runCalls[0].prompt).toBe(bytes.toString('utf8'))
+    })
+
+    test('does not consume piped bytes when an explicit prompt exists', async () => {
+      let read = false
+      const stdin = Readable.from((async function* () { read = true; yield 'unselected' })())
+      const h = makeHarness({ args: { prompt: 'explicit' }, deps: { stdin, stdinIsTTY: false, openRunJournal: () => undefined } })
+      expect(await runHeadlessCommand(h.args, h.deps)).toBe(0)
+      expect(h.runCalls[0].prompt).toBe('explicit')
+      expect(read).toBe(false)
+      stdin.destroy()
+    })
+
+    for (const [label, chunks, tty] of [
+      ['empty', [], false], ['whitespace', [' \n\t'], false],
+      ['invalid UTF-8', [Buffer.from([0xc3, 0x28])], false],
+      ['too large', [Buffer.alloc(1_000_001, 65)], false],
+      ['interactive', ['must not read'], true],
+    ] as const) {
+      test(`rejects ${label} stdin before opening state or dispatching`, async () => {
+        const h = makeHarness({ args: { prompt: '', readFromStdin: true }, deps: {
+          stdin: Readable.from(chunks), stdinIsTTY: tty,
+          openRunJournal: () => { throw new Error('journal must not open for rejected input') },
+        } })
+        let clients = 0
+        const client = h.deps.getClient!
+        h.deps.getClient = async () => { clients++; return client() }
+        expect(await runHeadlessCommand(h.args, h.deps)).toBe(1)
+        expect(clients).toBe(0)
+        expect(h.runCalls).toEqual([])
+        const error = JSON.parse(h.stdoutChunks.join('').trim())
+        expect(error.type).toBe('error')
+        expect(error.message).toMatch(/prompt|stdin|UTF-8|byte/i)
+        expect(h.stderrLines.join('')).not.toContain('journal must not open')
+      })
+    }
+
+    test.each(['timeout', 'caller'] as const)('interrupts stalled stdin through %s without a run', async (kind) => {
+      const input = new PassThrough()
+      const abort = new AbortController()
+      const h = makeHarness({ args: { prompt: '', readFromStdin: true, ...(kind === 'timeout' ? { timeout: 0.03 } : {}) }, deps: {
+        stdin: input, stdinIsTTY: false, signal: abort.signal, openRunJournal: () => undefined,
+      } })
+      const pending = runHeadlessCommand(h.args, h.deps)
+      if (kind === 'caller') abort.abort(new Error('input cancelled'))
+      expect(await pending).toBe(1)
+      expect(h.runCalls).toEqual([])
+      expect(input.destroyed).toBe(true)
+      expect(JSON.parse(h.stdoutChunks.join('').trim()).runOutcome.termination).toBe(kind === 'timeout' ? 'deadline_exhausted' : 'cancelled')
+    })
+  })
+
   test('resolved failed, exhausted and rejected outcomes fail without an error event', async () => {
     const results: RunState[] = [
       {
@@ -120,6 +187,44 @@ describe('runHeadlessCommand', () => {
     const h = makeHarness({ result, deps: { openRunJournal: () => undefined } })
     expect(await runHeadlessCommand(h.args, h.deps)).toBe(0)
     expect(result.actionOutcomes?.[0].outcome).toBe('failed')
+  })
+
+  test('short JSON events flush before a deferred run completes', async () => {
+    let finish!: () => void
+    let started!: () => void
+    const ready = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    const deferred = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const h = makeHarness({
+      deps: {
+        openRunJournal: () => undefined,
+        getClient: async () =>
+          ({
+            run: async (options: {
+              handleEvent: (event: PrintModeEvent) => void
+            }) => {
+              options.handleEvent({ type: 'text', text: 'first event' })
+              started()
+              await deferred
+              return { output: { type: 'lastMessage', value: [] } }
+            },
+          }) as unknown as OpenbuffClient,
+      },
+    })
+    const running = runHeadlessCommand(h.args, h.deps)
+    await ready
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      expect(h.stdoutChunks.join('')).toBe(
+        JSON.stringify({ type: 'text', text: 'first event' }) + '\n',
+      )
+    } finally {
+      finish()
+      expect(await running).toBe(0)
+    }
   })
 
   test('short human text flushes before a deferred run completes', async () => {
@@ -243,7 +348,7 @@ describe('runHeadlessCommand', () => {
     expect(h.stderrLines.some((l) => l.includes('boom'))).toBe(true)
   })
 
-  test('threads prompt and agentId into client.run (defaulting agent to base)', async () => {
+  test('threads prompt and agentId into client.run (defaulting to the current CLI root)', async () => {
     const h = makeHarness({ args: { prompt: 'fix it', agentId: 'reviewer' } })
     await runHeadlessCommand(h.args, h.deps)
     expect(h.runCalls[0].agent).toBe('reviewer')
@@ -252,7 +357,7 @@ describe('runHeadlessCommand', () => {
 
     const def = makeHarness({ args: { prompt: 'hi' } })
     await runHeadlessCommand(def.args, def.deps)
-    expect(def.runCalls[0].agent).toBe('base')
+    expect(def.runCalls[0].agent).toBe('base2')
   })
 
   describe('P2-T7 live run journal wiring', () => {

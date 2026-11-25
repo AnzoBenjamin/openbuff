@@ -72,9 +72,9 @@ describe('P1-T2 extVersion negotiation (§3.2/§3.3, GV-01/02/03)', () => {
     // §3.3 capability advertisement.
     expect(response.agentCapabilities?.loadSession).toBe(true)
     expect(response.agentCapabilities?.promptCapabilities).toEqual({
-      image: false,
+      image: true,
       audio: false,
-      embeddedContext: false,
+      embeddedContext: true,
     })
     expect(response.agentCapabilities?.mcpCapabilities).toEqual({
       http: true,

@@ -331,10 +331,18 @@ describe('R2 timer consumer captures', () => {
       const manual = createControlledExecutionClock()
       const processes = createExecutionProcessRecorder({ autoClose: false, closeOnKill: false })
       injected.push(processes)
-      const host = fixture({ ...manual, projectRoot: '/timer-fixture', spawn: processes.spawn,
+      let observeSignal!: () => void
+      const signalRequested = new Promise<void>(resolve => { observeSignal = resolve })
+      const spawn: CodebuffSpawn = (command, argv, options) => {
+        const child = processes.spawn(command, argv, options)
+        const kill = child.kill.bind(child)
+        child.kill = signal => { const delivered = kill(signal); observeSignal(); return delivered }
+        return child
+      }
+      const host = fixture({ ...manual, projectRoot: '/timer-fixture', spawn,
         actionLimit: { kind: 'finite', durationMs } })
       const [command, invocation] = Object.entries(DIAGNOSTIC_COMMAND_INVOCATIONS).find(([, value]) => value.id === 'ruff')!
-      const pending = createDiagnosticCommandRunner({ spawn: processes.spawn })({ command, cwd: '/timer-fixture',
+      const pending = createDiagnosticCommandRunner({ spawn })({ command, cwd: '/timer-fixture',
         timeoutSeconds: durationMs / 1_000, executionContext: host.context, phase: 'after' })
       let settled = false
       void pending.then(() => { settled = true }, () => { settled = true })
@@ -362,9 +370,11 @@ describe('R2 timer consumer captures', () => {
         expect(settled).toBe(false)
         expect(actual.signals).toEqual([])
         manual.advance(1)
-        expect(await pending).toMatchObject({ timedOut: true, executionRefusal: { reason: 'deadline-exhausted' } })
+        await signalRequested
         expect(actual.signals).toEqual(['SIGKILL'])
+        expect(settled).toBe(false)
         actual.finish(undefined, 'SIGKILL')
+        expect(await pending).toMatchObject({ timedOut: true, executionRefusal: { reason: 'deadline-exhausted' } })
       }
     })
   }

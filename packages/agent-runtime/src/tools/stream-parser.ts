@@ -4,7 +4,6 @@ import { buildArray } from '@codebuff/common/util/array'
 import { AbortError } from '@codebuff/common/util/error'
 import { assistantMessage, userMessage } from '@codebuff/common/util/messages'
 import { generateCompactId } from '@codebuff/common/util/string'
-import { advanceWorkspaceState } from '@codebuff/common/types/workspace-state'
 import { toToolCallStreamChunkPayload } from '@codebuff/common/types/contracts/llm'
 
 import { processStreamWithTools } from '../tool-stream-parser'
@@ -126,7 +125,6 @@ export async function processStream(
   // events, but are not evidence that an identical invalid call was made.
   const invalidCallSignatures: string[] = []
   const invalidCallToolNames = new Set<string>()
-  let unknownWorkspaceMutationMayHaveRun = false
   const errorMessages: Message[] = []
   // Per-path write barriers. Writes on DIFFERENT paths run concurrently;
   // writes on the SAME path serialize via the barrier slot for that path (plus
@@ -621,20 +619,6 @@ export async function processStream(
           : (effectiveToolName as string)
         const isReadOnlyTool =
           isNativeTool && READ_ONLY_TOOLS.has(resolvedToolName)
-        const resolvedMetadata = isNativeTool
-          ? toolMetadata[resolvedToolName as ToolName]
-          : undefined
-        if (
-          !transformed &&
-          (!isNativeTool ||
-            resolvedToolName === 'run_terminal_command' ||
-            resolvedToolName === 'run_file_change_hooks' ||
-            resolvedToolName === 'run_targeted_validation' ||
-            (resolvedMetadata?.scheduling === 'global' &&
-              resolvedMetadata.kind === 'other'))
-        ) {
-          unknownWorkspaceMutationMayHaveRun = true
-        }
 
         // Determine the target path for this write tool, so it can be assigned
         // a per-path barrier. Named-path writes (str_replace / write_file /
@@ -994,23 +978,6 @@ export async function processStream(
     }
     agentState.editRereadRequirementsByPath = {
       ...(fileProcessingState.editRereadRequirementsByPath ?? {}),
-    }
-    if (unknownWorkspaceMutationMayHaveRun) {
-      // Unknown/global tools may have modified any path outside the canonical
-      // mutation receipt channel. Revoke stale read authority and advance the
-      // workspace journal conservatively so later context cannot treat old
-      // reads/index evidence as belonging to the current workspace state.
-      agentState.readAuthorizationsByPath = {}
-      agentState.readAuthorizationHashesByPath = {}
-      agentState.rawReadAuthorizationHashesByPath = {}
-      agentState.confirmedPostEditAnchorsByPath = {}
-      agentState.workspaceState = advanceWorkspaceState(
-        agentState.workspaceState,
-        {
-          source: 'runtime:unscoped-tool',
-          actions: [{ action: 'unknown' }],
-        },
-      )
     }
 
     // This runs even when the stream throws (e.g., AbortError mid-iteration).

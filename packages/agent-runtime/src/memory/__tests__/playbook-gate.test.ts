@@ -1,4 +1,8 @@
-import { MemoryPlaybookSchema } from '@codebuff/common/types/memory-playbook'
+import {
+  MemoryPlaybookSchema,
+  computeValidationDependencyFingerprint,
+} from '@codebuff/common/types/memory-playbook'
+import { compileActivePlaybooksContext } from '../playbook-context'
 import { describe, expect, test } from 'bun:test'
 
 import {
@@ -16,7 +20,9 @@ import {
 import type {
   MemoryPlaybook,
   MemoryPlaybook as MemoryPlaybookType,
+  ValidationEvidenceContext,
 } from '@codebuff/common/types/memory-playbook'
+import type { PlaybookApplicabilityContext } from '@codebuff/common/util/playbook-applicability'
 import type { SessionEvidenceLog } from '../session-evidence-log'
 
 const NOW = 1_000_000_000
@@ -38,17 +44,17 @@ const makePlaybook = (overrides: {
   expiresAt?: number
   title?: string
   instruction?: string
+  scope?: MemoryPlaybookType['scope']
 }): MemoryPlaybook =>
   MemoryPlaybookSchema.parse({
     schemaVersion: 1,
     playbookId: 'pb-1',
     workspaceId: 'ws-1',
-    title:
-      overrides.title ?? 'Run local CI before spawning the git committer',
+    title: overrides.title ?? 'Run local CI before spawning the git committer',
     instruction:
       overrides.instruction ?? 'Run `npm run check:ci-local` and fix failures.',
     trigger: overrides.trigger,
-    scope: { repos: [] },
+    scope: overrides.scope ?? { repos: [] },
     status: overrides.status ?? 'active',
     enforcement: overrides.enforcement ?? 'warn',
     counters: {
@@ -84,9 +90,8 @@ const seededCommitterPlaybook = (params?: {
       spawnAgentType: 'git-committer',
       requireEvidence: [
         {
-          kind: 'toolSucceeded',
-          tool: 'run_terminal_command',
-          commandPattern: '*check:ci-local*',
+          kind: 'validationSucceeded',
+          validationKinds: ['ci-local', 'package-checks'],
           withinMs: params?.withinMs ?? WITHIN_MS,
         },
       ],
@@ -107,6 +112,34 @@ const logWithCiSuccess = (atMs: number): SessionEvidenceLog => {
     atMs,
   })
   return log
+}
+
+const validationContext = (completedAt: number): ValidationEvidenceContext => {
+  const dependencyHashes = {
+    'source:file.ts': 'hash-1',
+    'config:package.json': 'hash-2',
+  }
+  return {
+    workspaceId: 'ws-1',
+    rootRunId: 'root-1',
+    currentDependencyHashes: dependencyHashes,
+    receipts: [
+      {
+        receiptId: 'receipt-1',
+        workspaceId: 'ws-1',
+        rootRunId: 'root-1',
+        checkKind: 'ci-local',
+        command: 'bun run check:ci-local',
+        cwd: '/repo',
+        exitCode: 0,
+        completedAt,
+        producer: { runId: 'child-validator', agentId: 'basher' },
+        dependencyHashes,
+        dependencyFingerprint:
+          computeValidationDependencyFingerprint(dependencyHashes),
+      },
+    ],
+  }
 }
 
 describe('resolvePlaybookGateMode', () => {
@@ -208,9 +241,7 @@ describe('evaluatePlaybookGate', () => {
       evaluatePlaybookGate({
         toolName: 'spawn_agents',
         input: spawnCommitterInput,
-        playbooks: [
-          seededCommitterPlaybook({ enforcement: 'block' }),
-        ],
+        playbooks: [seededCommitterPlaybook({ enforcement: 'block' })],
         evidenceLog: emptyLog(),
         nowMs: NOW,
         env: { OPENBUFF_PLAYBOOK_GATE: 'off' },
@@ -235,7 +266,7 @@ describe('evaluatePlaybookGate', () => {
     expect(warned[0].message).toContain(playbook.title)
     expect(warned[0].message).toContain(playbook.instruction)
     expect(warned[0].message).toContain(
-      'a successful run_terminal_command matching *check:ci-local*',
+      'a host-verified validation receipt for ci-local or package-checks',
     )
 
     const blocked = evaluatePlaybookGate({
@@ -268,6 +299,7 @@ describe('evaluatePlaybookGate', () => {
       input: spawnCommitterInput,
       playbooks: [playbook],
       evidenceLog: logWithCiSuccess(NOW - 1_000),
+      validationEvidence: validationContext(NOW - 1_000),
       nowMs: NOW,
       env: BLOCK_ENV,
     })
@@ -289,6 +321,7 @@ describe('evaluatePlaybookGate', () => {
       input: spawnCommitterInput,
       playbooks: [seededCommitterPlaybook()],
       evidenceLog: logWithCiSuccess(NOW - WITHIN_MS - 1),
+      validationEvidence: validationContext(NOW - WITHIN_MS - 1),
       nowMs: NOW,
       env: DEFAULT_ENV,
     })
@@ -372,7 +405,10 @@ describe('evaluatePlaybookGate', () => {
         ],
       },
     })
-    const evaluate = (command: string) =>
+    const evaluate = (
+      command: string,
+      terminalActions: Array<'git-push' | 'git-commit' | 'git-stage'> = [],
+    ) =>
       evaluatePlaybookGate({
         toolName: 'run_terminal_command',
         input: { command },
@@ -380,10 +416,17 @@ describe('evaluatePlaybookGate', () => {
         evidenceLog: emptyLog(),
         nowMs: NOW,
         env: DEFAULT_ENV,
+        terminalActions,
       })
 
-    expect(evaluate('git push -q')).toHaveLength(1)
-    expect(evaluate('git -C repo push origin main')).toHaveLength(1)
+    expect(evaluate('git push -q', ['git-push'])).toHaveLength(1)
+    expect(
+      evaluate('git -C "repo with spaces" push origin main', ['git-push']),
+    ).toHaveLength(1)
+    expect(evaluate('git status && env git push', ['git-push'])).toHaveLength(1)
+    expect(
+      evaluate('git commit -m done && git push', ['git-commit', 'git-push']),
+    ).toHaveLength(1)
     expect(evaluate('ls -la')).toEqual([])
     expect(evaluate('echo git push')).toEqual([])
     expect(evaluate('npm run check:ci-local')).toEqual([])
@@ -403,6 +446,7 @@ describe('evaluatePlaybookGate', () => {
 
     expect(run({ ...base, status: 'retired' })).toEqual([])
     expect(run({ ...base, status: 'candidate' })).toEqual([])
+    expect(run({ ...base, status: 'verified' })).toHaveLength(1)
     expect(run({ ...base, expiresAt: NOW })).toEqual([])
     expect(run({ ...base, expiresAt: NOW - 1 })).toEqual([])
     expect(run({ ...base, expiresAt: NOW + 1 })).toHaveLength(1)
@@ -428,6 +472,7 @@ describe('evaluatePlaybookGate', () => {
       evidenceLog: emptyLog(),
       nowMs: NOW,
       env: DEFAULT_ENV,
+      terminalActions: ['git-commit'],
     })
     expect(warned).toHaveLength(1)
     expect(warned[0]?.outcome).toBe('warned')
@@ -439,6 +484,7 @@ describe('evaluatePlaybookGate', () => {
       evidenceLog: emptyLog(),
       nowMs: NOW,
       env: BLOCK_ENV,
+      terminalActions: ['git-commit'],
     })
     expect(blocked[0]?.outcome).toBe('blocked')
   })
@@ -480,6 +526,103 @@ describe('evaluatePlaybookGate', () => {
         env: BLOCK_ENV,
       }),
     ).toEqual([])
+  })
+
+  test('rendering and gating share repo, acting-role and path applicability', () => {
+    const procedure = {
+      ...seededCommitterPlaybook(),
+      scope: { repos: ['repo-A'], agentTypes: ['base2'], glob: ['cli/**'] },
+    }
+    const check = (
+      applicability: PlaybookApplicabilityContext,
+      applies: boolean,
+    ) => {
+      const text = compileActivePlaybooksContext([procedure], { applicability })
+      const verdicts = evaluatePlaybookGate({
+        toolName: 'spawn_agents',
+        input: spawnCommitterInput,
+        playbooks: [procedure],
+        evidenceLog: emptyLog(),
+        nowMs: NOW,
+        env: BLOCK_ENV,
+        applicability,
+      })
+      expect(text.length > 0).toBe(applies)
+      expect(verdicts.length > 0).toBe(applies)
+    }
+    check(
+      {
+        repoIds: ['repo-A'],
+        actorAgentType: 'base2',
+        affectedPaths: ['cli/file.ts'],
+      },
+      true,
+    )
+    check(
+      {
+        repoIds: ['repo-B'],
+        actorAgentType: 'base2',
+        affectedPaths: ['cli/file.ts'],
+      },
+      false,
+    )
+    check(
+      {
+        repoIds: ['repo-A'],
+        actorAgentType: 'editor',
+        affectedPaths: ['cli/file.ts'],
+      },
+      false,
+    )
+    // The trigger targets a committer, but the obligation belongs to base2.
+    check(
+      {
+        repoIds: ['repo-A'],
+        actorAgentType: 'git-committer',
+        affectedPaths: ['cli/file.ts'],
+      },
+      false,
+    )
+    check(
+      {
+        repoIds: ['repo-A'],
+        actorAgentType: 'base2',
+        affectedPaths: ['sdk/file.ts'],
+      },
+      false,
+    )
+    check({ repoIds: ['repo-A'], actorAgentType: 'base2' }, true)
+  })
+
+  test('an echo cannot satisfy validation and a valid child receipt can until dependencies change', () => {
+    const evidenceLog = emptyLog()
+    recordSessionEvidence(evidenceLog, {
+      toolName: 'run_terminal_command',
+      commandText: 'echo check:ci-local',
+      atMs: NOW - 1,
+    })
+    const evaluate = (validationEvidence?: ValidationEvidenceContext) =>
+      evaluatePlaybookGate({
+        toolName: 'spawn_agents',
+        input: spawnCommitterInput,
+        playbooks: [seededCommitterPlaybook({ enforcement: 'block' })],
+        evidenceLog,
+        nowMs: NOW,
+        env: BLOCK_ENV,
+        validationEvidence,
+      })
+    expect(evaluate()[0]?.outcome).toBe('blocked')
+    const valid = validationContext(NOW - 1)
+    expect(evaluate(valid)[0]?.outcome).toBe('allowed')
+    expect(
+      evaluate({
+        ...valid,
+        currentDependencyHashes: {
+          ...valid.currentDependencyHashes,
+          'source:file.ts': 'hash-changed',
+        },
+      })[0]?.outcome,
+    ).toBe('blocked')
   })
 })
 

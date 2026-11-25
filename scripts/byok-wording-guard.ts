@@ -1,7 +1,8 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, lstatSync } from 'node:fs'
 import { dirname, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { HISTORICAL_SOURCE_COPY_PREFIXES } from './lib/historical-source-copies'
+import { getGitDocumentationInventory } from './lib/documentation-inventory'
 
 export type WordingViolation = {
   path: string
@@ -95,7 +96,24 @@ function shouldSkipPath(projectPath: string): boolean {
   return SKIP_PATH_PREFIXES.some((prefix) => projectPath.startsWith(prefix))
 }
 
-function* markdownFiles(root: string, directory = root): Generator<string> {
+function* markdownFiles(root: string): Generator<string> {
+  const inventory = getGitDocumentationInventory(root)
+  if (inventory !== null) {
+    // Git owns repository scope, including force-added ignored Markdown. Keep
+    // exact historical/path exemptions, but do not blanket-skip scratch dirs.
+    for (const projectPath of inventory) {
+      if (shouldSkipPath(projectPath)) continue
+      const absolutePath = resolve(root, projectPath)
+      if (lstatSync(absolutePath, { throwIfNoEntry: false })?.isFile()) {
+        yield absolutePath
+      }
+    }
+    return
+  }
+  yield* walkMarkdownFiles(root)
+}
+
+function* walkMarkdownFiles(root: string, directory = root): Generator<string> {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const absolutePath = resolve(directory, entry.name)
     const projectPath = toProjectPath(root, absolutePath)
@@ -107,7 +125,7 @@ function* markdownFiles(root: string, directory = root): Generator<string> {
       ) {
         continue
       }
-      yield* markdownFiles(root, absolutePath)
+      yield* walkMarkdownFiles(root, absolutePath)
       continue
     }
 

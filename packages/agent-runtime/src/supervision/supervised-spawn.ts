@@ -112,7 +112,7 @@ import type {
   SettledSubagentResult,
   SupervisedRestartPolicy,
 } from '@codebuff/common/types/contracts/agent-runtime'
-import type { ExecutionAdapterContext } from '@codebuff/common/types/contracts/execution-context'
+import type { ExecutionAdapterContext, PreparedLaunch, Result, TargetDescription } from '@codebuff/common/types/contracts/execution-context'
 import type {
   SpawnSettledSubagentParams,
   SupervisedChildEnvSeed,
@@ -189,6 +189,11 @@ export type ParentBridgeHandlersSource =
  * byte (one spawn, no sleeps, no restart bookkeeping, no wrapper).
  */
 export interface SupervisedSpawnOptions {
+  /** Host-owned preparation for compiled self-exec; never serialized to the child. */
+  prepareSelfExecTarget?: (
+    context: ExecutionAdapterContext,
+    target: TargetDescription,
+  ) => Result<PreparedLaunch>
   /** Root composition resolves the actual action scope before any setup await. */
   executionForRequest?: (
     request: SupervisedSpawnRequest,
@@ -713,6 +718,9 @@ export function buildDefaultSpawnSupervised(
         ...(callOptions?.execution
           ? {
               execution: callOptions.execution,
+              ...(selfExec && options?.prepareSelfExecTarget ? {
+                prepareTarget: (target: TargetDescription) => options.prepareSelfExecTarget!(callOptions.execution!, target),
+              } : {}),
               branchId:
                 `supervised.${selfExec ? 'self-exec' : 'source'}.${retry ? 'retry' : 'initial'}` as const,
             }

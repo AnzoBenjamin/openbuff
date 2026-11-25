@@ -9,23 +9,26 @@ import type { CodebuffToolOutput } from '@codebuff/common/tools/list'
  * Agent-declared terminal profiles that bind host dispatch (N03).
  *
  * The agent runtime forwards each agent's declared `terminalPermissionProfile`
- * (`read-only` for every plan-mode lineage) as `permission_profile`. The host
- * execution context keeps its own profile (`full-access` when the sandbox is
- * `unrestricted`, otherwise `workspace-write`), which also selects the OS
- * sandbox, network and landlock settings. A declared profile listed here is an
- * extra lexical policy gate: the command must pass both the declared profile
- * and the host profile. The execution context itself is not narrowed, so
- * sandbox and network behaviour stay as the host configured them.
+ * (`read-only` for every plan-mode lineage) as `permission_profile`. Outside
+ * plan mode, the host execution context keeps its configured profile and a
+ * binding declaration adds only a lexical policy gate. It is not an OS
+ * read-only guarantee. Plan terminal actions instead receive a privately
+ * registered native-only read-only profile in sdk/src/run.ts, with required
+ * filesystem, network and process-tree isolation and no portable fallback.
+ * This helper retains the original host/task policy as an additional gate
+ * after that authenticated attenuation; it does not verify the sandbox.
  *
- * Only `read-only` and `workspace-write` bind. The task-specific profiles
- * (`git-commit`, `dependency-mutation`, `tmux-test`, `validation-diagnosis`,
- * `librarian-read-only`) keep the previous behaviour, where the host profile
- * alone decides: their policies assume SDK flows (owned-path staging,
- * private fixtures, repro directories) that their agents were not tuned
- * against, and enforcing them is a separate change. Agents that declare no
- * profile are forwarded as `full-access` and are unaffected.
+ * Only `read-only` and `workspace-write` declarations bind in non-plan runs.
+ * Task-specific declarations retain their previous behavior there. For plan
+ * actions, `enforceCapturedProfile` is used only with the root-captured
+ * original host policy, so narrowing cannot discard its lexical restrictions.
+ * Agents that declare no profile are forwarded as `full-access`; their
+ * execute-mode behavior is unchanged.
  */
-export const BINDING_TERMINAL_PROFILES = ['read-only', 'workspace-write'] as const
+export const BINDING_TERMINAL_PROFILES = [
+  'read-only',
+  'workspace-write',
+] as const
 export type BindingTerminalProfile = (typeof BINDING_TERMINAL_PROFILES)[number]
 
 export function isBindingTerminalProfile(
@@ -42,6 +45,8 @@ export function isBindingTerminalProfile(
 export function refuseByDeclaredTerminalProfile(params: {
   command: string
   declaredProfile: TerminalPermissionProfile | undefined
+  /** Root-captured original host policy; never selected from tool input. */
+  enforceCapturedProfile?: boolean
   hostProfile: string | undefined
   mode: 'assistant' | 'user'
   projectRoot: string
@@ -49,7 +54,12 @@ export function refuseByDeclaredTerminalProfile(params: {
   cwd?: string
 }): CodebuffToolOutput<'run_terminal_command'> | undefined {
   const { declaredProfile, hostProfile } = params
-  if (!isBindingTerminalProfile(declaredProfile)) return undefined
+  if (
+    !declaredProfile ||
+    (!isBindingTerminalProfile(declaredProfile) &&
+      !params.enforceCapturedProfile)
+  )
+    return undefined
   if (declaredProfile === hostProfile) return undefined
   const decision = evaluateTerminalCommandPolicy({
     command: params.command,

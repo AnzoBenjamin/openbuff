@@ -1,8 +1,10 @@
 import { AnalyticsEvent } from '@codebuff/common/constants/analytics-events'
+import { selectAgentStepBudget } from '@codebuff/common/util/agent-limits'
+import { captureRunOutputSchema } from '@codebuff/common/util/run-output-schema'
 import { supportsCacheControl } from '@codebuff/common/old-constants'
 import { TOOLS_WHICH_WONT_FORCE_NEXT_STEP } from '@codebuff/common/tools/constants'
 import { buildArray } from '@codebuff/common/util/array'
-import { MemoryTurnContextV2Schema } from '@codebuff/common/types/memory-v2'
+import { MemoryAuthorityModeSchema, MemoryTurnContextV2Schema } from '@codebuff/common/types/memory-v2'
 import { runStatusFromOutcome } from '@codebuff/common/types/run-outcome'
 import {
   AbortError,
@@ -20,9 +22,13 @@ import { CACHE_DEBUG_FULL_LOGGING } from './constants'
 
 import { getMCPToolData } from './mcp'
 import { getAgentStreamFromTemplate } from './prompt-agent-stream'
+import { createHash } from 'node:crypto'
 import path from 'node:path'
 
-import { getEffectiveAgentToolNames } from './util/agent-tool-names'
+import {
+  getEffectiveAgentToolNames,
+  prepareUnlockedToolTiersForTurn,
+} from './util/agent-tool-names'
 import {
   recordTokenObservation,
   setTokenCalibrationStorePath,
@@ -457,6 +463,7 @@ async function additionalToolDefinitions(
     mcpServers: agentTemplate.mcpServers,
     mcpAgentId: agentTemplate.id,
     mcpServerReferences: agentTemplate.mcpServerReferences,
+    planOnly: agentTemplate.programmaticConfig?.planOnly === true,
     reservedAliases: Object.keys(fileContext.customToolDefinitions ?? {}),
     writeTo: defs,
     writeCatalogTo: catalogs,
@@ -473,6 +480,9 @@ function canReuseParentTools(params: {
   if (!parentTools) {
     return false
   }
+  // An execute parent's schemas may contain external callbacks. Plan lineage
+  // must rebuild through the discovery gate, even if display names match.
+  if (agentTemplate.programmaticConfig?.planOnly === true) return false
   // MCP descriptors carry a child-specific host reference and catalog
   // generation. Equal display names cannot authorize reuse across owners.
   if (Object.keys(agentTemplate.mcpServers ?? {}).length) return false
@@ -761,6 +771,9 @@ export const runAgentStep = async (
   // callbacks would mutate the pre-spread object.
   let stepCacheInputTokens = 0
   let stepCacheTotalInputTokens = 0
+  let stepCacheRateTotalInputTokens = 0
+  let stepCacheUsageComplete = true
+  let cacheUsageCallbackCount = 0
 
   // Accumulate step cost into a local. We deliberately do NOT mutate
   // `agentState.creditsUsed`/`directCreditsUsed` here: `agentState` is a `let`
@@ -839,6 +852,20 @@ export const runAgentStep = async (
   // records it against the provider-reported actual.
   let preRequestInputTokenEstimate = 0
   const onCacheDebugUsageReceived = (usage: CacheDebugUsageData) => {
+    cacheUsageCallbackCount++
+    const hasValidCacheCounts =
+      usage.cacheUsageComplete === true &&
+      Number.isSafeInteger(usage.inputTokens) &&
+      usage.inputTokens >= 0 &&
+      Number.isSafeInteger(usage.cachedInputTokens) &&
+      usage.cachedInputTokens >= 0 &&
+      Number.isSafeInteger(usage.inputTokens + usage.cachedInputTokens)
+    if (hasValidCacheCounts) {
+      stepCacheRateTotalInputTokens +=
+        usage.inputTokens + usage.cachedInputTokens
+    } else {
+      stepCacheUsageComplete = false
+    }
     stepCacheInputTokens += usage.cachedInputTokens ?? 0
     stepCacheTotalInputTokens += usage.inputTokens ?? 0
     // P3-T10 calibration loop: provider-reported inputTokens vs the step's
@@ -930,6 +957,7 @@ export const runAgentStep = async (
       { system, messages: agentState.messageHistory },
       model,
     )
+    const usageCallbacksBeforeRequest = cacheUsageCallbackCount
     const result = await promptAiSdk({
       ...params,
       messages: agentState.messageHistory,
@@ -942,6 +970,9 @@ export const runAgentStep = async (
       onCacheDebugProviderRequestBuilt,
       onCacheDebugUsageReceived,
     })
+    if (cacheUsageCallbackCount === usageCallbacksBeforeRequest) {
+      stepCacheUsageComplete = false
+    }
 
     if (result.aborted) {
       return {
@@ -964,7 +995,9 @@ export const runAgentStep = async (
           directCreditsUsed: agentState.directCreditsUsed + stepCreditsUsed,
           cacheInputTokens: agentState.cacheInputTokens + stepCacheInputTokens,
           cacheTotalInputTokens:
-            agentState.cacheTotalInputTokens + stepCacheTotalInputTokens,
+            agentState.cacheTotalInputTokens + stepCacheRateTotalInputTokens,
+          cacheUsageComplete:
+            agentState.cacheUsageComplete === true && stepCacheUsageComplete,
         },
         fullResponse: '',
         shouldEndTurn: true,
@@ -1013,7 +1046,9 @@ export const runAgentStep = async (
       directCreditsUsed: agentState.directCreditsUsed + stepCreditsUsed,
       cacheInputTokens: agentState.cacheInputTokens + stepCacheInputTokens,
       cacheTotalInputTokens:
-        agentState.cacheTotalInputTokens + stepCacheTotalInputTokens,
+        agentState.cacheTotalInputTokens + stepCacheRateTotalInputTokens,
+      cacheUsageComplete:
+        agentState.cacheUsageComplete === true && stepCacheUsageComplete,
     }
     const candidateBudget = checkBudgetExceeded(
       candidateAgentState,
@@ -1079,6 +1114,8 @@ export const runAgentStep = async (
   }
 
   // Raw stream from AI SDK
+  const cacheControlToolBreakpoint =
+    agentTemplate.programmaticConfig?.cacheControlToolBreakpoint
   const stream = getAgentStreamFromTemplate({
     ...params,
     // Use the stable agent type for model routing. Spawned subagents have a
@@ -1094,6 +1131,10 @@ export const runAgentStep = async (
     // string here is informational only. Passing '' when model is undefined
     // (deferred to openbuff.json) is safe for the same reason.
     includeCacheControl: supportsCacheControl(agentTemplate.model ?? ''),
+    cacheControlToolBreakpoint:
+      typeof cacheControlToolBreakpoint === 'string'
+        ? cacheControlToolBreakpoint
+        : undefined,
     messages: messagesWithSystem({
       system,
       messages: agentState.messageHistory,
@@ -1106,6 +1147,7 @@ export const runAgentStep = async (
     onCostCalculated,
   })
 
+  const usageCallbacksBeforeRequest = cacheUsageCallbackCount
   const {
     fullResponse: fullResponseAfterStream,
     fullResponseChunks,
@@ -1127,6 +1169,9 @@ export const runAgentStep = async (
     stream,
     onCostCalculated,
   })
+  if (cacheUsageCallbackCount === usageCallbacksBeforeRequest) {
+    stepCacheUsageComplete = false
+  }
 
   toolResults.push(...newToolResults)
 
@@ -1371,7 +1416,9 @@ export const runAgentStep = async (
     // post-spread object so callers always see the full total.
     cacheInputTokens: agentState.cacheInputTokens + stepCacheInputTokens,
     cacheTotalInputTokens:
-      agentState.cacheTotalInputTokens + stepCacheTotalInputTokens,
+      agentState.cacheTotalInputTokens + stepCacheRateTotalInputTokens,
+    cacheUsageComplete:
+      agentState.cacheUsageComplete === true && stepCacheUsageComplete,
   }
 
   // P1-5: Enforce per-run budgets after accumulation. If either cap is
@@ -1489,6 +1536,8 @@ export async function loopAgentSteps(
     userId: string | undefined
     userInputId: string
     agentTemplate?: AgentTemplate
+    /** Host-selected root-only result contract, never inherited as child output authority. */
+    runOutputSchema?: Record<string, unknown>
     // P2-3: Mid-turn checkpoint. When provided, the loop invokes this callback
     // with a snapshot of the main agent's state after each step boundary,
     // time-throttled (default 30s) so a crashed/killed session can resume
@@ -1643,6 +1692,32 @@ export async function loopAgentSteps(
   if (!agentTemplate) {
     throw new Error(`Agent template not found for type: ${agentType}`)
   }
+  const runOutputContract =
+    params.runOutputSchema !== undefined && initialAgentState.ancestorRunIds.length === 0
+      ? captureRunOutputSchema(params.runOutputSchema)
+      : undefined
+  if (runOutputContract) {
+    agentTemplate = {
+      ...agentTemplate,
+      outputMode: 'structured_output',
+      outputSchema: runOutputContract.validator,
+      toolNames: [...new Set([...agentTemplate.toolNames, 'set_output'])],
+      programmaticToolNames: agentTemplate.programmaticToolNames?.filter(
+        name => name !== 'set_output',
+      ),
+    }
+    if (!resumeInterruptedTurn) {
+      initialAgentState.output = undefined
+      initialAgentState.lastSetOutputError = undefined
+    }
+  }
+  initialAgentState.stepsRemaining = selectAgentStepBudget(initialAgentState.stepsRemaining,
+    agentTemplate.maxSteps, initialAgentState.ancestorRunIds.length > 0)
+  prepareUnlockedToolTiersForTurn({
+    agentState: initialAgentState,
+    agentTemplate,
+    resumeInterruptedTurn,
+  })
   // Resolve the injectable clock once at the loop entry (mirrors runAgentStep)
   // so replay (P2-T2) can reproduce persisted-state timestamps deterministically.
   const clock = params.clock ?? realClock
@@ -2050,6 +2125,7 @@ export async function loopAgentSteps(
   // These outcomes belong to this run. Action history remains available after
   // recovery; a previous turn's terminal reason or oracle cannot settle it.
   initialAgentState.runOutcome = undefined
+  initialAgentState.executionRecovery = { staleRefusals: 0 }
   initialAgentState.taskAcceptance = { status: 'unknown' }
   // P2-T2b: a resume-pinned relaunch (see pinnedRunId on the params type)
   // skips startAgentRun entirely — reusing the ORIGINAL child runId — while
@@ -2065,6 +2141,102 @@ export async function loopAgentSteps(
     throw new Error('Failed to start agent run')
   }
   initialAgentState.runId = runId
+
+  // Prepare every actor independently after the host has registered its identity.
+  // Source selection is host metadata, not knowledge or execution/read authority.
+  const actor = {
+    runId,
+    rootRunId: initialAgentState.ancestorRunIds[0] ?? runId,
+    agentId: initialAgentState.agentId,
+  }
+  const resolvedMemoryAuthority = await params.resolveMemoryAuthority?.({ actor, userInputId })
+  const selectedMemoryAuthority = resolvedMemoryAuthority === undefined
+    ? undefined
+    : MemoryAuthorityModeSchema.parse(resolvedMemoryAuthority)
+  if (selectedMemoryAuthority !== undefined) {
+    // The SDK freshly prepares the root through its coordinator. Descendants
+    // never acquire content or source selection from inherited/restored fields.
+    const rootAuthority = initialAgentState.ancestorRunIds.length === 0 &&
+      initialAgentState.memoryAuthority?.userInputId === userInputId.slice(0, 128) &&
+      initialAgentState.memoryAuthority.requested === selectedMemoryAuthority
+      ? initialAgentState.memoryAuthority : undefined
+    const rootKnowledge = rootAuthority && selectedMemoryAuthority === 'sqlite-v2-opt-in'
+      ? MemoryTurnContextV2Schema.safeParse(initialAgentState.memoryV2Context) : undefined
+    initialAgentState.memoryV2Context = rootKnowledge?.success &&
+      rootKnowledge.data.userInputId === userInputId.slice(0, 128)
+      ? rootKnowledge.data : undefined
+    initialAgentState.memoryAuthority = {
+      ...rootAuthority,
+      schemaVersion: 1,
+      userInputId: userInputId.slice(0, 128),
+      requested: selectedMemoryAuthority,
+      active: selectedMemoryAuthority === 'sqlite-v2-opt-in' ? 'sqlite-v2-opt-in' : 'json-v1',
+      fallbackOccurred: false,
+      reason: rootAuthority?.reason ?? (selectedMemoryAuthority === 'json-v1'
+        ? 'json-v1-selected' : selectedMemoryAuthority === 'shadow-v2' ? 'shadow-v2-selected' : undefined),
+      v1CompatibilityShadowAvailable: initialAgentState.taskMemory !== undefined,
+      v1Import: rootAuthority?.v1Import ?? { status: 'not-required' },
+    }
+  }
+  // A restored packet cannot confer current knowledge or execution authority.
+  initialAgentState.repositoryContext = undefined
+  if (params.prepareRepositoryContext) {
+    try {
+      const packet = await params.prepareRepositoryContext({
+        actor,
+        agentType: agentTemplate.id,
+        userInputId,
+        query: prompt ?? '',
+      })
+      if (
+        packet &&
+        packet.schemaVersion === 1 &&
+        packet.userInputId === userInputId &&
+        packet.agentType === agentTemplate.id &&
+        Object.keys(actor).every(
+          (key) =>
+            actor[key as keyof typeof actor] ===
+            packet.actor[key as keyof typeof actor],
+        )
+      ) {
+        initialAgentState.repositoryContext = packet
+        if (!packet.reasons.includes('procedure-load-failed'))
+          initialAgentState.playbookContext = packet.playbooks
+        else if (packet.playbooks.length)
+          initialAgentState.playbookContext = packet.playbooks
+        initialAgentState.playbookApplicability = packet.applicability
+        const knowledge = MemoryTurnContextV2Schema.safeParse(packet.knowledge)
+        if (
+          (selectedMemoryAuthority === undefined || selectedMemoryAuthority === 'sqlite-v2-opt-in') &&
+          knowledge.success &&
+          knowledge.data.userInputId === userInputId.slice(0, 128)
+        ) {
+          initialAgentState.memoryV2Context = knowledge.data
+          if (selectedMemoryAuthority !== undefined) {
+            initialAgentState.memoryAuthority!.reason = undefined
+          } else initialAgentState.memoryAuthority = {
+            schemaVersion: 1,
+            userInputId: userInputId.slice(0, 128),
+            requested: 'sqlite-v2-opt-in',
+            active: 'sqlite-v2-opt-in',
+            fallbackOccurred: false,
+            v1CompatibilityShadowAvailable:
+              initialAgentState.taskMemory !== undefined,
+            v1Import: { status: 'not-required' },
+          }
+        }
+        logger.debug(
+          { actor, ...packet.metrics, freshness: packet.freshness },
+          'Repository context prepared before actor execution',
+        )
+      }
+    } catch (error) {
+      logger.warn(
+        { error, runId },
+        'Repository context unavailable; continuing with exact source tools',
+      )
+    }
+  }
 
   // P2-T2b: a BACKGROUND child journals its own job -> childRunId linkage under
   // the PARENT runId. The launch-time intent (spawn-agents.ts) could only
@@ -2121,9 +2293,8 @@ export async function loopAgentSteps(
   // Highest progress percent already reported for the CURRENT announced pass.
   // Declared alongside the pending flag because the two are settled together.
   let lastCompactionProgressPercent = 0
-  // Outcome of the runtime-driven pass for the CURRENT announced pass, so the
-  // settle reports a skipped or failed pass instead of a silent "nothing
-  // reclaimed" (memory-context-06). Reset with the pending flag.
+  // Outcome of either a runtime- or generator-driven inline pruner for the
+  // CURRENT announced pass, so skips and failures are not silent no-ops.
   let pendingCompactionOutcome: RuntimeSemanticCompactionOutcome | undefined
   const settleCompactionStatus = () => {
     if (!unsettledCompactionStart) return
@@ -2175,14 +2346,32 @@ export async function loopAgentSteps(
   let system = initialAgentState.systemPrompt ?? ''
 
   const finalizeRun = async () => {
+    if (
+      runOutputContract &&
+      (!currentAgentState.runOutcome || currentAgentState.runOutcome.termination === 'completed') &&
+      (currentAgentState.lastSetOutputError !== undefined ||
+        !runOutputContract.validator.safeParse(currentAgentState.output).success)
+    ) {
+      currentAgentState.runOutcome = {
+        termination: 'failed',
+        cause: {
+          code: 'output_schema_invalid',
+          message: 'The run ended without a confirmed structured output matching the selected output schema.',
+        },
+      }
+      currentAgentState.taskAcceptance = { status: 'unknown' }
+    }
     currentAgentState.runOutcome ??= { termination: 'completed' }
-    currentAgentState.runOutcome = params.resolveRunOutcome?.({
-      runId,
-      ancestorRunIds: currentAgentState.ancestorRunIds,
-      outcome: currentAgentState.runOutcome,
-    }) ?? currentAgentState.runOutcome
-    if (currentAgentState.runOutcome.termination === 'cancelled' ||
-        currentAgentState.runOutcome.termination === 'deadline_exhausted') {
+    currentAgentState.runOutcome =
+      params.resolveRunOutcome?.({
+        runId,
+        ancestorRunIds: currentAgentState.ancestorRunIds,
+        outcome: currentAgentState.runOutcome,
+      }) ?? currentAgentState.runOutcome
+    if (
+      currentAgentState.runOutcome.termination === 'cancelled' ||
+      currentAgentState.runOutcome.termination === 'deadline_exhausted'
+    ) {
       currentAgentState.taskAcceptance = { status: 'unknown' }
     }
     currentAgentState.taskAcceptance ??= { status: 'unknown' }
@@ -2234,23 +2423,23 @@ export async function loopAgentSteps(
   try {
     signal.throwIfAborted()
     // Custom/MCP tool definitions are cached per `unlockedToolTiers` snapshot.
-    // The prompt-facing callback (instructions/system prompts) must stay
-    // byte-stable across turns so the session-cached system prompt keeps
-    // provider prompt-cache hits, so it shares the cached entry for the
-    // current tier state. The per-step ToolSet build below bypasses the cache
-    // when tiers changed mid-turn so the model only ever sees the currently
-    // unlocked surface.
+    // Prompt rendering uses the turn-start tool schema snapshot; unchanged
+    // rendered prompts can still reuse provider cache prefixes. The per-step
+    // ToolSet build below bypasses the cache when tiers changed mid-turn so
+    // the model only ever sees the currently unlocked surface.
     let cachedAdditionalToolDefinitions:
       | { tiersKey: string; defs: CustomToolDefinitions }
       | undefined
     // Single cache-backed implementation shared by both consumers,
     // parameterized by which agent-state snapshot keys the tier cache: the
-    // prompt-facing callback keys on the initial state (byte-stable prompts
-    // across turns) while the per-step callback keys on the live state
-    // (tracks mid-turn tier unlocks). Sharing one factory keeps the two from
-    // drifting apart.
+    // prompt-facing callback keys on the initial state while the per-step
+    // callback keys on the live state (tracks mid-turn tier unlocks). Sharing
+    // one factory keeps the two from drifting apart.
     const createAdditionalToolDefinitionsWithCache = (
-      getAgentState: () => Pick<AgentState, 'unlockedToolTiers' | 'agentId' | 'ancestorRunIds'>,
+      getAgentState: () => Pick<
+        AgentState,
+        'unlockedToolTiers' | 'agentId' | 'ancestorRunIds'
+      >,
     ) => {
       return async () => {
         const agentState = getAgentState()
@@ -2265,7 +2454,11 @@ export async function loopAgentSteps(
               ...params,
               agentTemplate,
               agentState,
-              executionActor: { runId, rootRunId: agentState.ancestorRunIds[0] ?? runId, agentId: agentState.agentId },
+              executionActor: {
+                runId,
+                rootRunId: agentState.ancestorRunIds[0] ?? runId,
+                agentId: agentState.agentId,
+              },
             }),
           }
         }
@@ -2280,9 +2473,41 @@ export async function loopAgentSteps(
       canReuseParentTools({ agentTemplate, parentTools })
 
     // Initialize message history with user prompt and instructions on first iteration
+    // Keep the new user message out of persisted state until the existing
+    // commit point, but make it visible while rendering task-sensitive prompt
+    // placeholders. Interrupted turns already have their original prompt in
+    // messageHistory and must not synthesize a replacement.
+    const hasUserMessage =
+      !resumeInterruptedTurn &&
+      Boolean(
+        prompt ||
+        (spawnParams && Object.keys(spawnParams).length > 0) ||
+        (content && content.length > 0),
+      )
+    const currentUserMessage: Message | undefined = hasUserMessage
+      ? {
+          role: 'user',
+          content: buildUserMessageContent(prompt, spawnParams, content),
+          tags: ['USER_PROMPT'],
+          sentAt: clock.now(),
+          keepDuringTruncation: true,
+        }
+      : undefined
+    const promptFacingAgentState = currentUserMessage
+      ? {
+          ...initialAgentState,
+          messageHistory: [
+            ...initialAgentState.messageHistory,
+            currentUserMessage,
+          ],
+        }
+      : initialAgentState
+    const additionalSystemPrompt = getAdditionalSystemPrompt(prompt)
+
     const instructionsPrompt = await getAgentPrompt({
       ...params,
       agentTemplate,
+      agentState: promptFacingAgentState,
       promptType: { type: 'instructionsPrompt' },
       agentTemplates: localAgentTemplates,
       useParentTools,
@@ -2292,30 +2517,38 @@ export async function loopAgentSteps(
     // Build the initial message history with user prompt and instructions
     // Generate system prompt once, using parent's if inheritParentSystemPrompt is true
     // M1-T3: Per-turn context-budget ledger. It is created lazily, only inside
-    // the rebuild branch below, so turns reusing the cached/inherited system
-    // prompt do not allocate a ledger that would be discarded unused. When
-    // created, it is built before system-prompt assembly so the formatPrompt
-    // placeholder builders record the fileTree, systemInfo, and gitChanges
-    // blocks they inject into it.
+    // the system-prompt rebuild branch below, so inherited prompts and valid
+    // interrupted-turn cache hits do not allocate a ledger that would be
+    // discarded unused. When created, it is built before system-prompt
+    // assembly so formatPrompt placeholder builders record the blocks they
+    // inject into it.
     let contextBudgetLedger: ContextBudgetLedger | undefined
-    // True only on turns that (re)build the system prompt. Turns reusing the
-    // session-cached prompt must not re-record or overwrite the ledger: the
-    // blocks were measured on the turn that built the cache, and that ledger
-    // still describes the byte-identical cached prompt.
+    // True only when the rendered system prompt changes or no prior ledger
+    // exists. Ordinary turns re-render with current inputs, but an identical
+    // result still describes the existing ledger and should not replace it.
     let builtSystemPromptThisTurn = false
+    const systemPromptTemplateIdentity = createHash('sha256')
+      .update(
+        JSON.stringify([
+          agentType,
+          agentTemplate.id,
+          agentTemplate.systemPrompt,
+          agentTemplate.displayName || 'Unknown Agent',
+        ]),
+      )
+      .digest('hex')
     if (agentTemplate.inheritParentSystemPrompt && parentSystemPrompt) {
       system = parentSystemPrompt
+      initialAgentState.systemPromptTemplateIdentity = undefined
     } else if (
-      // Reuse the session-cached system prompt to keep the system prefix
-      // byte-stable across turns (enables provider prompt-cache hits). All
-      // placeholders (CURRENT_DATE, FILE_TREE_PROMPT, SYSTEM_INFO_PROMPT,
-      // GIT_CHANGES_PROMPT, KNOWLEDGE_FILES_CONTENTS, ROUTED_KNOWLEDGE_FILES,
-      // PATTERNS_INDEX) are session-stable or day-granularity, so rebuilding
-      // every turn only risks byte drift from disk re-reads / object key
-      // ordering without picking up meaningful changes. The cache is
-      // invalidated by mainPrompt clearing systemPrompt on agent-type change.
+      // An interrupted turn must keep the prompt it started with. Reuse only
+      // a saved prompt bound to this exact template; legacy/mismatched prompts
+      // are rebuilt from the restored history below.
+      resumeInterruptedTurn &&
       initialAgentState.systemPrompt &&
-      initialAgentState.agentType === agentType
+      initialAgentState.agentType === agentType &&
+      initialAgentState.systemPromptTemplateIdentity ===
+        systemPromptTemplateIdentity
     ) {
       system = initialAgentState.systemPrompt
     } else {
@@ -2330,12 +2563,16 @@ export async function loopAgentSteps(
       const systemPrompt = await getAgentPrompt({
         ...params,
         agentTemplate,
+        agentState: promptFacingAgentState,
         promptType: { type: 'systemPrompt' },
         agentTemplates: localAgentTemplates,
-        ledger: contextBudgetLedger,
         additionalToolDefinitions: additionalToolDefinitionsForPrompt,
+        ledger: contextBudgetLedger,
       })
       system = systemPrompt ?? ''
+      builtSystemPromptThisTurn =
+        system !== initialAgentState.systemPrompt ||
+        initialAgentState.contextBudgetLedger === undefined
     }
 
     // Build agent tools (agents as direct tool calls) for non-inherited tools
@@ -2397,7 +2634,11 @@ export async function loopAgentSteps(
                 ...params,
                 agentTemplate,
                 agentState: state,
-                executionActor: { runId, rootRunId: state.ancestorRunIds[0] ?? runId, agentId: state.agentId },
+                executionActor: {
+                  runId,
+                  rootRunId: state.ancestorRunIds[0] ?? runId,
+                  agentId: state.agentId,
+                },
               }),
             agentTools,
             skills: fileContext.skills ?? {},
@@ -2420,34 +2661,14 @@ export async function loopAgentSteps(
       ? [...initialAgentState.unlockedToolTiers]
       : initialAgentState.unlockedToolTiers
 
-    // P2-3: On resume from a checkpoint, the user prompt is already in
-    // messageHistory — do not re-add it. Duplicating it would double the prompt
-    // and break the resumed context.
-    const hasUserMessage =
-      !resumeInterruptedTurn &&
-      Boolean(
-        prompt ||
-        (spawnParams && Object.keys(spawnParams).length > 0) ||
-        (content && content.length > 0),
-      )
-
     const initialMessages = buildArray<Message>(
       ...initialAgentState.messageHistory,
 
-      hasUserMessage && [
-        {
-          // Actual user message!
-          role: 'user' as const,
-          content: buildUserMessageContent(prompt, spawnParams, content),
-          tags: ['USER_PROMPT'],
-          sentAt: clock.now(),
-
-          // James: Deprecate the below, only use tags, which are not prescriptive.
-          keepDuringTruncation: true,
-        },
-        getAdditionalSystemPrompt(prompt) !== undefined &&
+      currentUserMessage && [
+        currentUserMessage,
+        additionalSystemPrompt !== undefined &&
           userMessage(
-            withSystemInstructionTags(getAdditionalSystemPrompt(prompt)!),
+            withSystemInstructionTags(additionalSystemPrompt),
           ),
       ],
 
@@ -2487,6 +2708,10 @@ export async function loopAgentSteps(
     // an error is thrown before we return.
     initialAgentState.messageHistory = initialMessages
     initialAgentState.systemPrompt = system
+    if (!(agentTemplate.inheritParentSystemPrompt && parentSystemPrompt)) {
+      initialAgentState.systemPromptTemplateIdentity =
+        systemPromptTemplateIdentity
+    }
     if (builtSystemPromptThisTurn && contextBudgetLedger) {
       // Record tool-definition cost on system-prompt rebuild turns only — the
       // same turns that create/finalize the ledger. toolsForTokenCount is the
@@ -2740,22 +2965,25 @@ export async function loopAgentSteps(
         logger,
         additionalToolDefinitions: additionalToolDefinitionsWithCache,
       })
+      const hasCorrelatedV2Authority = (state: AgentState) =>
+        // Host source selection is immutable for this actor/run. Programmatic
+        // state is descriptive and cannot switch the selected source later.
+        selectedMemoryAuthority !== undefined
+          ? selectedMemoryAuthority === 'sqlite-v2-opt-in'
+          : state.memoryAuthority?.active === 'sqlite-v2-opt-in' &&
+            state.memoryAuthority.userInputId === userInputId.slice(0, 128)
       const getCorrelatedAuthoritativeV2 = (state: AgentState) => {
-        if (
-          state.memoryAuthority?.active !== 'sqlite-v2-opt-in' ||
-          state.memoryAuthority.userInputId !== userInputId
-        ) {
-          return undefined
-        }
+        if (!hasCorrelatedV2Authority(state)) return undefined
         const parsed = MemoryTurnContextV2Schema.safeParse(
           state.memoryV2Context,
         )
-        return parsed.success && parsed.data.userInputId === userInputId
+        return parsed.success &&
+          parsed.data.userInputId === userInputId.slice(0, 128)
           ? parsed.data
           : undefined
       }
       const buildCompiledTaskMemoryMessage = (state: AgentState) =>
-        state.taskMemory && !getCorrelatedAuthoritativeV2(state)
+        state.taskMemory && !hasCorrelatedV2Authority(state)
           ? userMessage({
               content: withSystemTags(
                 compileTaskMemoryContext({
@@ -2791,7 +3019,15 @@ export async function loopAgentSteps(
         // Validation can empty the set (restored-session garbage), so gate
         // on the COMPILED result, not the raw array — an empty band message
         // must never ship.
-        const text = compileActivePlaybooksContext(state.playbookContext ?? [])
+        const text = compileActivePlaybooksContext(
+          state.playbookContext ?? [],
+          {
+            applicability: {
+              ...state.playbookApplicability,
+              actorAgentType: agentTemplate.id,
+            },
+          },
+        )
         return text
           ? userMessage({
               content: withSystemTags(text),
@@ -2801,8 +3037,17 @@ export async function loopAgentSteps(
             })
           : false
       }
+      const buildCompiledRepositoryContextMessage = (state: AgentState) =>
+        state.repositoryContext?.userInputId === userInputId &&
+        userMessage({
+          content: withSystemTags(state.repositoryContext.briefing),
+          tags: ['REPOSITORY_CONTEXT'],
+          timeToLive: 'agentStep' as const,
+          keepDuringTruncation: true,
+        })
       let messagesWithStepPrompt = buildArray(
         ...currentAgentState.messageHistory,
+        buildCompiledRepositoryContextMessage(currentAgentState),
         buildCompiledTaskMemoryMessage(currentAgentState),
         buildCompiledMemoryV2Message(currentAgentState),
         buildCompiledPlaybooksMessage(currentAgentState),
@@ -2909,6 +3154,7 @@ export async function loopAgentSteps(
           // recomputed before the trigger decision reads it.
           messagesWithStepPrompt = buildArray(
             ...currentAgentState.messageHistory,
+            buildCompiledRepositoryContextMessage(currentAgentState),
             buildCompiledTaskMemoryMessage(currentAgentState),
             buildCompiledMemoryV2Message(currentAgentState),
             buildCompiledPlaybooksMessage(currentAgentState),
@@ -3061,6 +3307,9 @@ export async function loopAgentSteps(
           tools,
           template: agentTemplate,
           toolCallParams: currentParams,
+          onCompactionOutcome: (outcome) => {
+            if (unsettledCompactionStart) pendingCompactionOutcome = outcome
+          },
         })
         const {
           agentState: programmaticAgentState,
@@ -3225,6 +3474,7 @@ export async function loopAgentSteps(
       // history before applying the deterministic emergency brake.
       messagesWithStepPrompt = buildArray(
         ...currentAgentState.messageHistory,
+        buildCompiledRepositoryContextMessage(currentAgentState),
         buildCompiledTaskMemoryMessage(currentAgentState),
         buildCompiledMemoryV2Message(currentAgentState),
         buildCompiledPlaybooksMessage(currentAgentState),
@@ -3366,6 +3616,7 @@ export async function loopAgentSteps(
         invalidateHistoryAggregate()
         messagesWithStepPrompt = buildArray(
           ...pruningResult.messages,
+          buildCompiledRepositoryContextMessage(currentAgentState),
           buildCompiledTaskMemoryMessage(currentAgentState),
           buildCompiledMemoryV2Message(currentAgentState),
           buildCompiledPlaybooksMessage(currentAgentState),
@@ -3613,6 +3864,7 @@ export async function loopAgentSteps(
 
           agentState: currentAgentState,
           memoryContextMessages: buildArray(
+            buildCompiledRepositoryContextMessage(currentAgentState),
             buildCompiledTaskMemoryMessage(currentAgentState),
             buildCompiledMemoryV2Message(currentAgentState),
             buildCompiledPlaybooksMessage(currentAgentState),
@@ -3947,6 +4199,7 @@ export async function loopAgentSteps(
 
       Object.assign(initialAgentState, newAgentState)
       currentAgentState = initialAgentState
+      if (currentAgentState.runOutcome) break
       if (toolCallErrorSignature) {
         repeatedToolCallErrors =
           toolCallErrorSignature === lastToolCallErrorSignature
@@ -4023,7 +4276,8 @@ export async function loopAgentSteps(
     return {
       agentState: currentAgentState,
       output:
-        runOutcome && (runOutcome.termination === 'failed' ||
+        runOutcome &&
+        (runOutcome.termination === 'failed' ||
           runOutcome.termination === 'cancelled' ||
           runOutcome.termination === 'deadline_exhausted')
           ? {
@@ -4077,7 +4331,9 @@ export async function loopAgentSteps(
         agentState: currentAgentState,
         output: {
           type: 'error',
-          message: currentAgentState.runOutcome.cause?.message ?? 'Run cancelled by user',
+          message:
+            currentAgentState.runOutcome.cause?.message ??
+            'Run cancelled by user',
         },
       }
     }
@@ -4107,7 +4363,7 @@ export async function loopAgentSteps(
     const errorMessage = apiErrorDetails.message ?? fallbackMessage
     const statusCode = apiErrorDetails.statusCode
 
-    currentAgentState.runOutcome = {
+    currentAgentState.runOutcome ??= {
       termination: signal.aborted ? 'cancelled' : 'failed',
       cause: {
         code: signal.aborted ? 'user_cancelled' : 'agent_execution_error',

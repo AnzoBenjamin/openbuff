@@ -129,6 +129,12 @@ export type CacheDebugUsageData = {
   outputTokens: number
   cachedInputTokens: number
   totalTokens: number
+  /**
+   * True only when the provider explicitly reported valid input and cached
+   * input counts, including an explicit zero cache count. Missing means the
+   * cache-hit ratio cannot be trusted for this observation.
+   */
+  cacheUsageComplete?: boolean
 }
 
 /**
@@ -180,6 +186,8 @@ export type PromptAiSdkStreamFn = (
      */
     onRequestContextTrimmed?: (info: RequestContextTrimInfo) => void
     includeCacheControl?: boolean
+    /** Cache breakpoint after this tool when the template declares a stable prefix. */
+    cacheControlToolBreakpoint?: string
     cacheDebugCorrelation?: string
     agentProviderOptions?: OpenRouterProviderRoutingOptions
     /** List of agents that can be spawned - used to transform agent tool calls */

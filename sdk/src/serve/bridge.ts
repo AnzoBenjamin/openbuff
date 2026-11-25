@@ -1,3 +1,5 @@
+import { resolve } from 'node:path'
+
 import { RequestError } from '@agentclientprotocol/sdk'
 import { markAllMCPConfigOrigins } from '@codebuff/common/mcp/client'
 import { toolKind } from '@codebuff/common/protocol/acp-ext-v1'
@@ -8,6 +10,8 @@ import {
   defaultCapabilityMapV1,
 } from '../services/acp/ext-methods'
 import { OutboundHoldback } from './outbound'
+import { assembleAcpPrompt } from './prompt-content'
+import type { AssembledAcpPrompt } from './prompt-content'
 
 import type {
   AcpPromptHandler,
@@ -90,9 +94,9 @@ export type ServeBridgeOptions = {
    */
   onSessionUpdate?: (payload: unknown) => void | Promise<void>
   /**
-   * Absolute project root `tool_call` locations are resolved against. When
-   * omitted, location paths stay relative instead of being silently resolved
-   * against the process cwd.
+   * Host-selected containment root for user resource attachments and the anchor
+   * for absolute `tool_call` locations. Omitted leaves locations relative and
+   * refuses file resource links; a session cwd never supplies file authority.
    */
   projectRoot?: string
   /**
@@ -199,7 +203,8 @@ export function createServeBridge(options: ServeBridgeOptions): {
   const { client, sessionData } = options
   const agentId = options.agentId ?? 'base'
   const eventsMode = options.eventsMode ?? 'acp'
-  const projectRoot = options.projectRoot ?? ''
+  const projectRoot =
+    options.projectRoot === undefined ? '' : resolve(options.projectRoot)
   const credentialValues = options.credentialValues ?? []
   // NEW-3 (§12.8): per-(sessionId, messageId) streaming holdbacks. The two
   // single-sink instances keep flush routing trivial: message pieces route to
@@ -287,6 +292,23 @@ export function createServeBridge(options: ServeBridgeOptions): {
   }
 
   const promptHandler: AcpPromptHandler = async (input) => {
+    // Resolve untrusted attachments BEFORE any per-turn listener, timer, MCP
+    // ingest or capability update. A failed/cancelled capture must start no run.
+    let assembled: AssembledAcpPrompt
+    try {
+      assembled = await assembleAcpPrompt({
+        promptText: input.promptText,
+        promptContent: input.promptContent,
+        projectRoot: projectRoot || undefined,
+        cwd: input.cwd,
+        signal: input.signal,
+      })
+    } catch (error) {
+      if (input.signal.aborted) return { stopReason: 'cancelled' }
+      throw error
+    }
+    if (input.signal.aborted) return { stopReason: 'cancelled' }
+
     /**
      * §5/§4.2 production wiring: ONE bridge instance serves every ACP
      * connection, so the reverse-request seams are selected PER TURN — the
@@ -755,10 +777,13 @@ export function createServeBridge(options: ServeBridgeOptions): {
 
     let result: RunState
     try {
+      // The capability sink above can yield; cancel must still prevent SDK entry.
+      if (input.signal.aborted) return { stopReason: 'cancelled' }
       result = projectRunOutcomes(
         await client.run({
           agent: agentId,
-          prompt: input.promptText,
+          prompt: assembled.promptText,
+          ...(assembled.content ? { content: assembled.content } : {}),
           handleEvent,
           onFilesystemMutation: (event: FilesystemMutationEvent) =>
             sessionData.recordReceiptFromMutationEvent(input.sessionId, event),

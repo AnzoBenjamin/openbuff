@@ -41,6 +41,7 @@ export type ProjectTrustGatedKind =
   | 'fileChangeHooks'
   | 'autoFileChangeHooks'
   | 'approvalMode'
+  | 'terminalTimeoutPolicy'
   | 'sandbox'
   | 'semanticIndexing'
 

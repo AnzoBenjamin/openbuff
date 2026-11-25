@@ -28,8 +28,13 @@ export async function getMCPToolData(params: {
   signal?: AbortSignal
   logger?: Logger
   executionActor?: ExecutionActor
+  /** Plan lineage cannot run arbitrary callbacks or trust peer read-only hints. */
+  planOnly?: boolean
 }): Promise<CustomToolDefinitions> {
   params.signal?.throwIfAborted()
+  // Refuse before discovery: listing a stdio server can itself execute code.
+  // Do not clear the caller's registry; a later execute turn may still use it.
+  if (params.planOnly === true) return Object.create(null) as CustomToolDefinitions
   const { toolNames, mcpServers, requestMcpToolData, logger } = params
   const writeTo =
     params.writeTo ?? (Object.create(null) as CustomToolDefinitions)
@@ -110,12 +115,14 @@ export async function getMCPToolData(params: {
           generation: catalog.generation,
         }
         let alias = externalToolAlias(identity)
+        const encodedAlias = externalToolAlias(identity, true)
         if (
+          toolNames.includes(encodedAlias) ||
           params.reservedAliases?.includes(alias) ||
           (Object.hasOwn(writeTo, alias) &&
             writeTo[alias].identity?.kind !== 'mcp')
         )
-          alias = externalToolAlias(identity, true)
+          alias = encodedAlias
         if (
           (scopedNames.length || aliasSelection) &&
           !requested.includes(tool.name) &&

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import { getToolSet } from '@codebuff/agent-runtime/tools/prompts'
+import { getEffectiveAgentToolNames } from '@codebuff/agent-runtime/util/agent-tool-names'
 import { countTokensJson } from '@codebuff/agent-runtime/util/token-counter'
 
 import { createBase2 } from '../base2/base2'
@@ -37,7 +38,7 @@ describe('base2 provider-facing context budget', () => {
     async (_name, options, ceiling) => {
       const base2 = createBase2('default', options)
       const tools = await getToolSet({
-        toolNames: base2.toolNames ?? [],
+        toolNames: getEffectiveAgentToolNames(base2, { unlockedToolTiers: [] }),
         additionalToolDefinitions: async () => ({}),
         agentTools: {},
         skills: buildRepresentativeSkills(40),
@@ -52,7 +53,9 @@ describe('base2 provider-facing context budget', () => {
       })
 
       expect(base2.spawnableAgentToolMode).toBe('generic')
-      expect(Object.keys(tools)).toHaveLength(base2.toolNames?.length ?? 0)
+      expect(Object.keys(tools)).toHaveLength(
+        getEffectiveAgentToolNames(base2, { unlockedToolTiers: [] }).length,
+      )
       expect(countTokensJson(tokenShape)).toBeLessThan(ceiling)
     },
   )

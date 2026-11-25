@@ -139,7 +139,6 @@ import { taskMemoryV1Schema } from '@codebuff/common/types/task-memory'
 import { generateCompactId } from '@codebuff/common/util/string'
 import { readFileSync } from 'node:fs'
 import { withFilesystemSandbox } from '@codebuff/common/util/filesystem-sandbox'
-import { createHostReadPolicy } from '@codebuff/common/util/project-path-containment'
 
 import { createBridgeStderrLogger } from './bridge-protocol'
 import type { SessionEvidenceLog } from '../memory/session-evidence-log'
@@ -373,6 +372,11 @@ export function buildChildAgentState(request: SupervisedSpawnRequest) {
   state.agentId = request.child?.agentId ?? generateCompactId()
   const child =
     request.child ?? ({} as NonNullable<SupervisedSpawnRequest['child']>)
+  if (child.stepsRemaining !== undefined) {
+    if (!Number.isSafeInteger(child.stepsRemaining) || child.stepsRemaining < -1)
+      throw new Error('Supervised child has an invalid remaining inference-step budget')
+    state.stepsRemaining = child.stepsRemaining
+  }
   if (child.messageHistory !== undefined) {
     if (isRehydratableMessageHistory(child.messageHistory)) {
       state.messageHistory = child.messageHistory as typeof state.messageHistory
@@ -818,9 +822,10 @@ export async function abortAndAwaitChildLoop<T>(
 export function runSupervisedChildEntry(request: SupervisedSpawnRequest): Promise<AgentReceipt> {
   const sandbox = request.filesystemSandbox
   if (!sandbox) return runChildWithDeps(request)
-  const readPolicy = createHostReadPolicy(sandbox.projectRoot, sandbox.readableRoots, undefined, sandbox.policy)
-  return withFilesystemSandbox(sandbox.policy, () => runChildWithDeps(request),
-    { projectRoot: sandbox.projectRoot, readPolicyToken: readPolicy })
+  // Wire sandbox fields are advisory backstop data, never new host read
+  // authority. Bytes and tool availability are authorized by the parent-owned
+  // actor/action registry; no token or project root is reconstructed from JSON.
+  return withFilesystemSandbox(sandbox.policy, () => runChildWithDeps(request))
 }
 
 async function runChildWithDeps(
@@ -955,6 +960,7 @@ async function runChildWithDeps(
       apiKey:
         process.env.OPENBUFF_API_KEY ?? process.env.CODEBUFF_API_KEY ?? '',
       clientEnv: clientProcessEnv,
+      playbookGateMode: request.playbookGateMode,
       ciEnv: getCiEnv(),
       logger: childLogger,
       // The child's OWN live stream: text/reasoning deltas ride the bridged

@@ -26,6 +26,7 @@
  */
 import * as net from 'node:net'
 
+import { MemoryAuthorityModeSchema } from '@codebuff/common/types/memory-v2'
 import z from 'zod/v4'
 import { encodeReadCapabilityToken } from '@codebuff/common/util/content-hash'
 import { captureTextDocument } from '@codebuff/common/util/byte-text'
@@ -632,7 +633,14 @@ export function toBridgeJsonSchema(
  * boundary (documented per-method below).
  */
 export type BridgedChildDeps = {
+  resolveMemoryAuthority: NonNullable<import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['resolveMemoryAuthority']>
+  prepareRepositoryContext: NonNullable<import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['prepareRepositoryContext']>
+  classifyPlaybookTerminalActions: NonNullable<import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['classifyPlaybookTerminalActions']>
+  getPlaybookValidationEvidence: NonNullable<import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['getPlaybookValidationEvidence']>
+  synchronizeWorkspace: import('@codebuff/common/types/contracts/client').SynchronizeWorkspace
+  authorizeToolRead: import('@codebuff/common/types/contracts/client').AuthorizeToolRead
   onExecutionActionStart: import('@codebuff/common/types/contracts/client').OnExecutionActionStart
+  onNativeToolObservation: NonNullable<import('@codebuff/common/types/contracts/agent-runtime').AgentRuntimeDeps['onNativeToolObservation']>
   promptAiSdkStream: PromptAiSdkStreamFn
   promptAiSdk: PromptAiSdkFn
   promptAiSdkStructured: PromptAiSdkStructuredFn
@@ -1219,6 +1227,27 @@ export function buildBridgedChildDeps(
     },
     onExecutionActionStart: async (params) => {
       await client.call('onExecutionActionStart', callParams(params))
+    },
+    onNativeToolObservation: async (params) => {
+      await client.call('onNativeToolObservation', callParams(params))
+    },
+    resolveMemoryAuthority: async params => {
+      const mode = await client.call('resolveMemoryAuthority', callParams(params))
+      return mode == null ? undefined : MemoryAuthorityModeSchema.parse(mode)
+    },
+    prepareRepositoryContext: async params =>
+      (await client.call('prepareRepositoryContext', callParams(params)) as import('@codebuff/common/types/contracts/repository-intelligence').RepositoryContextPacket | null) ?? undefined,
+    classifyPlaybookTerminalActions: async command =>
+      await client.call('classifyPlaybookTerminalActions', { command }) as readonly ('git-commit' | 'git-push' | 'git-stage')[],
+    getPlaybookValidationEvidence: async actor =>
+      (await client.call('getPlaybookValidationEvidence', callParams(actor)) as import('@codebuff/common/types/memory-playbook').ValidationEvidenceContext | null) ?? undefined,
+    synchronizeWorkspace: async (actor) =>
+      (await client.call('synchronizeWorkspace', callParams(actor)) as import('@codebuff/common/types/workspace-state').WorkspaceStateV1 | null) ?? undefined,
+    authorizeToolRead: async params => {
+      const result = await client.call('authorizeToolRead', callParams(params)) as { allowed?: unknown; reason?: unknown } | null
+      if (result?.allowed === true) return { allowed: true }
+      if (result?.allowed === false && typeof result.reason === 'string') return { allowed: false, reason: result.reason }
+      return { allowed: false, reason: 'Strict project read dispatch availability is unavailable from the parent.' }
     },
     requestToolCall: (params) =>
       client.call('requestToolCall', callParams(params)) as ReturnType<

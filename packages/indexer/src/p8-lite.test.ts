@@ -8,15 +8,13 @@ import { IndexManager } from './index-manager'
 import {
   computeIndexSnapshotId,
   loadIndex,
-  saveIndex,
+  saveLegacyIndex as saveIndex,
   setWriteGitExclude,
 } from './index-store'
-import { compareRevisions } from './metadata-indexer'
+import { buildMetadataIndex, compareRevisions } from './metadata-indexer'
+import { saveIndexGeneration } from './durable-index-store'
 import { statProjectFiles } from './file-walker'
-import type {
-  IndexedFile,
-  MetadataIndex,
-} from './types'
+import type { IndexedFile, MetadataIndex } from './types'
 
 const roots: string[] = []
 
@@ -44,11 +42,7 @@ afterEach(() => {
 
 describe('P8.3 compareRevisions', () => {
   test('orders numeric revisions numerically across string/number forms', () => {
-    const cases: Array<[
-      string | number,
-      string | number,
-      number,
-    ]> = [
+    const cases: Array<[string | number, string | number, number]> = [
       [9, 10, -1],
       ['9', 10, -1],
       [9, '10', -1],
@@ -178,7 +172,11 @@ describe('P8.6 statProjectFiles symlink semantics', () => {
       return
     }
 
-    const files = await statProjectFiles(root, ['a.ts', 'link-out.ts', 'link-in.ts'])
+    const files = await statProjectFiles(root, [
+      'a.ts',
+      'link-out.ts',
+      'link-in.ts',
+    ])
     const paths = files.map((file) => file.relativePath).sort()
     expect(paths).toEqual(['a.ts'])
   })
@@ -188,10 +186,7 @@ describe('P8.6b git info exclude toggle', () => {
   test('skips the .git/info/exclude side effect when opted out', async () => {
     const root = makeProject()
     fs.mkdirSync(path.join(root, '.git', 'info'), { recursive: true })
-    fs.writeFileSync(
-      path.join(root, '.git', 'info', 'exclude'),
-      'custom\n',
-    )
+    fs.writeFileSync(path.join(root, '.git', 'info', 'exclude'), 'custom\n')
     setWriteGitExclude(false)
     await saveIndex(
       {
@@ -213,28 +208,13 @@ describe('P8.6b git info exclude toggle', () => {
 describe('P8.4 stale-delta revision monotonicity in IndexManager._build', () => {
   test('does not regress workspaceRevision when a stale complete delta is rejected', async () => {
     const root = makeProject()
+    fs.mkdirSync(path.join(root, 'src'))
+    fs.writeFileSync(path.join(root, 'src/a.ts'), 'export const a = 1\n')
     const seeded: MetadataIndex = {
-      version: '2',
-      projectRoot: root,
-      builtAt: 1,
-      fileCount: 1,
+      ...(await buildMetadataIndex(root)),
       workspaceRevision: 12,
-      files: {
-        'src/a.ts': {
-          path: 'src/a.ts',
-          mtime: 1,
-          size: 1,
-          hash: 'hash-a',
-          ext: '.ts',
-          symbols: [],
-          imports: [],
-          headings: [],
-          concepts: [],
-        },
-      },
-      graph: { nodes: {}, edges: [] },
     }
-    expect(await saveIndex(seeded, root)).toBe(true)
+    expect(await saveIndexGeneration(seeded, root)).toBe(true)
     const seededSnapshotId = computeIndexSnapshotId(seeded)
 
     const mgr = IndexManager.getInstance(root, {})

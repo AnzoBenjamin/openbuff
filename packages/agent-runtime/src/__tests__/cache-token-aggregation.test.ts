@@ -25,10 +25,22 @@ const mockFileContext = testFileContext
 function createStepAccumulator(initialState: AgentState) {
   let stepCacheInputTokens = 0
   let stepCacheTotalInputTokens = 0
+  let stepCacheUsageComplete = true
 
   const onCacheDebugUsageReceived = (usage: CacheDebugUsageData) => {
+    if (
+      usage.cacheUsageComplete === true &&
+      Number.isSafeInteger(usage.inputTokens) &&
+      usage.inputTokens >= 0 &&
+      Number.isSafeInteger(usage.cachedInputTokens) &&
+      usage.cachedInputTokens >= 0 &&
+      Number.isSafeInteger(usage.inputTokens + usage.cachedInputTokens)
+    ) {
+      stepCacheTotalInputTokens += usage.inputTokens + usage.cachedInputTokens
+    } else {
+      stepCacheUsageComplete = false
+    }
     stepCacheInputTokens += usage.cachedInputTokens ?? 0
-    stepCacheTotalInputTokens += usage.inputTokens ?? 0
   }
 
   const applyToState = (): AgentState => ({
@@ -36,6 +48,8 @@ function createStepAccumulator(initialState: AgentState) {
     cacheInputTokens: initialState.cacheInputTokens + stepCacheInputTokens,
     cacheTotalInputTokens:
       initialState.cacheTotalInputTokens + stepCacheTotalInputTokens,
+    cacheUsageComplete:
+      initialState.cacheUsageComplete === true && stepCacheUsageComplete,
   })
 
   return { onCacheDebugUsageReceived, applyToState }
@@ -48,6 +62,7 @@ describe('Cache Token Aggregation (P0-3)', () => {
 
       expect(agentState.cacheInputTokens).toBe(0)
       expect(agentState.cacheTotalInputTokens).toBe(0)
+      expect(agentState.cacheUsageComplete).toBe(true)
     })
 
     it('should initialize cache fields in getInitialSessionState', () => {
@@ -55,6 +70,7 @@ describe('Cache Token Aggregation (P0-3)', () => {
 
       expect(sessionState.mainAgentState.cacheInputTokens).toBe(0)
       expect(sessionState.mainAgentState.cacheTotalInputTokens).toBe(0)
+      expect(sessionState.mainAgentState.cacheUsageComplete).toBe(true)
     })
 
     it('should have cache fields as numbers', () => {
@@ -77,18 +93,20 @@ describe('Cache Token Aggregation (P0-3)', () => {
         cachedInputTokens: 800,
         outputTokens: 200,
         totalTokens: 1200,
+        cacheUsageComplete: true,
       })
       onCacheDebugUsageReceived({
         inputTokens: 500,
         cachedInputTokens: 300,
         outputTokens: 100,
         totalTokens: 600,
+        cacheUsageComplete: true,
       })
 
       const result = applyToState()
 
       expect(result.cacheInputTokens).toBe(1100) // 800 + 300
-      expect(result.cacheTotalInputTokens).toBe(1500) // 1000 + 500
+      expect(result.cacheTotalInputTokens).toBe(2600) // input plus cache reads
     })
 
     it('should handle zero cachedInputTokens (no cache hits this call)', () => {
@@ -96,14 +114,13 @@ describe('Cache Token Aggregation (P0-3)', () => {
       const { onCacheDebugUsageReceived, applyToState } =
         createStepAccumulator(initialState)
 
-      // cachedInputTokens: 0 simulates a call with no cache hits (e.g. first
-      // turn or cache miss). The ?? 0 in the accumulator also guards against
-      // runtime undefined from providers that don't populate this field.
+      // An explicitly reported zero is a complete cache-miss observation.
       onCacheDebugUsageReceived({
         inputTokens: 1000,
         cachedInputTokens: 0,
         outputTokens: 200,
         totalTokens: 1200,
+        cacheUsageComplete: true,
       })
 
       const result = applyToState()
@@ -122,6 +139,7 @@ describe('Cache Token Aggregation (P0-3)', () => {
         cachedInputTokens: 0,
         outputTokens: 200,
         totalTokens: 200,
+        cacheUsageComplete: true,
       })
 
       const result = applyToState()
@@ -139,6 +157,7 @@ describe('Cache Token Aggregation (P0-3)', () => {
         cachedInputTokens: 600,
         outputTokens: 100,
         totalTokens: 1100,
+        cacheUsageComplete: true,
       })
       agentState = step1.applyToState()
 
@@ -149,11 +168,12 @@ describe('Cache Token Aggregation (P0-3)', () => {
         cachedInputTokens: 700,
         outputTokens: 50,
         totalTokens: 850,
+        cacheUsageComplete: true,
       })
       agentState = step2.applyToState()
 
       expect(agentState.cacheInputTokens).toBe(1300) // 600 + 700
-      expect(agentState.cacheTotalInputTokens).toBe(1800) // 1000 + 800
+      expect(agentState.cacheTotalInputTokens).toBe(3100) // input plus cache reads
     })
 
     it('should apply accumulated tokens on post-spread agentState (not mutate pre-spread)', () => {
@@ -169,6 +189,7 @@ describe('Cache Token Aggregation (P0-3)', () => {
         cachedInputTokens: 400,
         outputTokens: 100,
         totalTokens: 600,
+        cacheUsageComplete: true,
       })
 
       const result = applyToState()
@@ -181,7 +202,7 @@ describe('Cache Token Aggregation (P0-3)', () => {
 
       // The returned (post-spread) state has the accumulated totals.
       expect(result.cacheInputTokens).toBe(400)
-      expect(result.cacheTotalInputTokens).toBe(500)
+      expect(result.cacheTotalInputTokens).toBe(900)
       expect(result).not.toBe(initialState)
     })
 

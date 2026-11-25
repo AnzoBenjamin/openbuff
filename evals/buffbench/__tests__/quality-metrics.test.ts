@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import { createBase2 } from '../../../agents/base2/base2'
+import { getEffectiveAgentToolNames } from '@codebuff/agent-runtime/util/agent-tool-names'
 import {
   aggregateQualityMetrics,
   computeRunQualityMetrics,
@@ -98,13 +99,16 @@ describe('computeRunQualityMetrics (N10)', () => {
 })
 
 describe('computeStaticPromptTokens (N10)', () => {
-  test('counts base2 prompts and every tool definition offline', async () => {
+  test('counts the base2 core-first prompt and tool definitions offline', async () => {
     const base2 = createBase2('default')
     const tokens = await computeStaticPromptTokens(base2)
-    expect(tokens.toolCount).toBe(base2.toolNames?.length ?? 0)
+    expect(tokens.toolCount).toBe(
+      getEffectiveAgentToolNames(base2, { unlockedToolTiers: [] }).length,
+    )
     expect(tokens.promptTokens).toBeGreaterThan(1000)
     expect(tokens.toolTokens).toBeGreaterThan(1000)
     expect(tokens.total).toBe(tokens.promptTokens + tokens.toolTokens)
+    expect(tokens.total).toBeLessThan(25_000)
   })
 
   test('a longer system prompt raises the count', async () => {

@@ -10,8 +10,10 @@
  *   any of them from plan-mode templates.
  *
  * Not listed, and handled elsewhere:
- * - `run_terminal_command`: allowed, but the runtime clamps plan lineage to the
- *   `read-only` terminal profile and the SDK enforces that profile.
+ * - `run_terminal_command`: the runtime clamps plan lineage to `read-only`;
+ *   the SDK requires an authenticated native-only request and verified OS
+ *   read-only enforcement. An unavailable sandbox refuses the command, never
+ *   falls back to lexical approval. Dedicated file/search tools remain usable.
  * - `kill_job`: allowed only for jobs the plan lineage started itself.
  * - `browser_logs`: its handler already allows only read-only actions in plan
  *   lineage.

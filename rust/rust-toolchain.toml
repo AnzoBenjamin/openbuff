@@ -9,4 +9,6 @@
 # Pin policy: bump deliberately, never implicitly. A bump is a reviewed change
 # that states the motivating MSRV/toolchain evidence in its commit message.
 [toolchain]
-channel = "1.87.0"
+# The repository intelligence service requires Rust 1.89's stable file locks.
+# This pin matches the toolchain used for the current native workspace checks.
+channel = "1.99.1"

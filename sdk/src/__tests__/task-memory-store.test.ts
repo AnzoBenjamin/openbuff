@@ -1170,9 +1170,9 @@ describe('recorded tool evidence round trip', () => {
       callId: 'roundtrip-ephemeral-1',
       output: [{ type: 'json', value: readResult }],
     })
-    expect(
-      memory!.evidence.some((item) => item.sessionScoped === true),
-    ).toBe(true)
+    expect(memory!.evidence.some((item) => item.sessionScoped === true)).toBe(
+      true,
+    )
 
     await saveMergedTaskMemory({ rootDir, runMemory: memory })
     const loaded = await loadPersistedTaskMemory({ rootDir })
@@ -1182,13 +1182,14 @@ describe('recorded tool evidence round trip', () => {
     expect(loaded!.evidence.some((item) => item.sessionScoped === true)).toBe(
       false,
     )
-    expect(
-      loaded!.evidence.some((item) => item.id.startsWith('read:')),
-    ).toBe(false)
+    expect(loaded!.evidence.some((item) => item.id.startsWith('read:'))).toBe(
+      false,
+    )
   })
 
   test('a real mutation afterHash reconciles fresh in the next session', async () => {
     const mutation = await changeFile({
+      callId: 'roundtrip-edit-1',
       parameters: {
         type: 'file',
         path: 'edited.ts',

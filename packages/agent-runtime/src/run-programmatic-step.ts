@@ -24,6 +24,8 @@ import {
 } from './util/context-pruning'
 import { remintConfirmedPostEditAnchors } from './util/read-authorization'
 import { isContextPrunerAgentId } from './util/context-pruner-identity'
+import { inlineCompactionOutcome } from './util/programmatic-compaction-outcome'
+import type { RuntimeSemanticCompactionOutcome } from './util/runtime-semantic-compaction'
 import { createWarnLatch } from './util/warn-latch'
 import { withSystemTags } from './util/messages'
 
@@ -229,6 +231,8 @@ export async function runProgrammaticStep(
     logger: Logger
     nResponses?: string[]
     onResponseChunk: (chunk: string | PrintModeEvent) => void
+    /** Internal telemetry for generator-driven inline pruner attempts. */
+    onCompactionOutcome?: (outcome: RuntimeSemanticCompactionOutcome) => void
     prompt: string | undefined
     repoId: string | undefined
     repoUrl: string | undefined
@@ -607,6 +611,11 @@ export async function runProgrammaticStep(
     // Execute tools synchronously as the generator yields them
     do {
       params.signal.throwIfAborted()
+      if (agentState.runOutcome) {
+        flushProgrammaticToolResultContext()
+        endTurn = true
+        break
+      }
       if (programmaticIterations++ >= MAX_PROGRAMMATIC_TOOL_CALLS) {
         throw new Error(
           `handleSteps for agent ${template.id} exceeded ${MAX_PROGRAMMATIC_TOOL_CALLS} iterations ` +
@@ -784,7 +793,7 @@ export async function runProgrammaticStep(
     // A terminal generator failure is not a normal generator return. Keep
     // any partial output and tool results, but carry the authoritative run
     // termination to the loop and receipt consumers.
-    agentState.runOutcome = {
+    agentState.runOutcome ??= {
       termination:
         params.signal.aborted || isAbortError(error) ? 'cancelled' : 'failed',
       cause: { code: 'programmatic_execution_error', message: errorMessage },
@@ -887,6 +896,7 @@ export const getPublicAgentState = (
     systemPrompt,
     toolDefinitions,
     contextTokenCount,
+    repositoryContext: agentState.repositoryContext ? structuredClone(agentState.repositoryContext) : undefined,
   }
 }
 
@@ -957,6 +967,7 @@ type ExecuteToolCallsArrayParams = Omit<
 > & {
   agentState: AgentState
   addProgrammaticToolResultContext?: (message: Message) => void
+  onCompactionOutcome?: (outcome: RuntimeSemanticCompactionOutcome) => void
   onResponseChunk: (chunk: string | PrintModeEvent) => void
   // P2-T2: real step index from runProgrammaticStep's params (both internal
   // call sites spread {...params}, so the parent value flows through).
@@ -970,6 +981,28 @@ type ExecuteToolCallsArrayParams = Omit<
  * @returns The tool result from the executed tool call.
  */
 async function executeSingleToolCall(
+  toolCallToExecute: ToolCallToExecute,
+  params: ExecuteToolCallsArrayParams,
+): Promise<ToolResultOutput[] | undefined> {
+  const prunerCall =
+    toolCallToExecute.toolName === 'spawn_agent_inline' &&
+    typeof toolCallToExecute.input.agent_type === 'string' &&
+    isContextPrunerAgentId(toolCallToExecute.input.agent_type)
+  if (!prunerCall) return executeSingleToolCallInner(toolCallToExecute, params)
+  try {
+    const output = await executeSingleToolCallInner(toolCallToExecute, params)
+    params.onCompactionOutcome?.(inlineCompactionOutcome(output))
+    return output
+  } catch (error) {
+    params.onCompactionOutcome?.({
+      outcome: 'failed',
+      reason: (error instanceof Error ? error.message : String(error)).slice(0, 400),
+    })
+    throw error
+  }
+}
+
+async function executeSingleToolCallInner(
   toolCallToExecute: ToolCallToExecute,
   params: ExecuteToolCallsArrayParams,
 ): Promise<ToolResultOutput[] | undefined> {

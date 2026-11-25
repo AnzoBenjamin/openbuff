@@ -1,3 +1,4 @@
+import { isReadOnlyPlanExecutionProfile } from '@codebuff/common/util/execution-context'
 import {
   captureNativeMountPolicy,
   dispatchNativeLaunch,
@@ -127,8 +128,9 @@ export function createNativeHostRegistry(
       return target.profile.allowBackendFallback
         ? { ok: true, value: target }
         : mounts
-    const network =
-      target.profile.policy === 'full-access'
+    const network = isReadOnlyPlanExecutionProfile(target.profile)
+      ? 'deny'
+      : target.profile.policy === 'full-access'
         ? 'inherit'
         : (selected.network ?? 'deny')
     const landlock =

@@ -8,7 +8,10 @@ import { createTextDocument } from '../utils/output-document'
 
 import { MultilineInput } from './multiline-input'
 import { SelectableList } from './selectable-list'
-import { listPlanSessionsAsync } from '../commands/plan-artifacts'
+import {
+  listPlanSessionsAsync,
+  planCatalogWarning,
+} from '../commands/plan-artifacts'
 import { useSearchableList } from '../hooks/use-searchable-list'
 import { useTerminalLayout } from '../hooks/use-terminal-layout'
 import { useTheme } from '../hooks/use-theme'
@@ -346,6 +349,11 @@ export const PlanSessionPickerScreen: React.FC<
         </box>
       </box>
 
+      {loadState === 'loaded' && planCatalogWarning(sessions) && (
+        <text fg={theme.muted} style={{ flexShrink: 0 }} wrapMode="word">
+          {planCatalogWarning(sessions)} · Ctrl+R retry
+        </text>
+      )}
       {selectedSession && (
         <text fg={theme.muted} style={{ flexShrink: 0 }} wrapMode="none">
           {sliceTextCells(

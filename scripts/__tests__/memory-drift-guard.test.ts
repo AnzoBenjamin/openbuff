@@ -10,7 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 
 import {
   runMemoryDriftGuard,
@@ -244,6 +244,102 @@ test('B19 exact historical inputs preserve their bytes without suppressing activ
   for (const path of excludedPaths) {
     expect(readFileSync(join(tmpRoot, path), 'utf8')).toBe(text)
   }
+})
+
+test('Git documentation scope excludes ignored artifacts but checks force-added and new Markdown', () => {
+  initGitRepo(tmpRoot)
+  const evidence = 'docs/execution/body-roadmap/evidence'
+  writeFileSync(join(tmpRoot, '.gitignore'), `/.tmp/\n/${evidence}/\n`)
+  const ignoredPaths = ['.tmp/ignored.md', `${evidence}/B99/ignored.mdx`]
+  const frozenPath = `${evidence}/B30/independent-review/source-snapshot/docs/architecture.md`
+  const stagedPaths = ['.tmp/force-added.md', `${evidence}/B99/force-added.mdx`]
+  const newPaths = [
+    'docs/new.md',
+    'docs/new.mdx',
+    'docs/.tmp/notes.md',
+    'docs/execution/body-roadmap/evidence-active/receipt.md',
+  ]
+  const activePaths = [...stagedPaths, ...newPaths]
+  for (const path of [...ignoredPaths, frozenPath, ...activePaths]) {
+    mkdirSync(dirname(join(tmpRoot, path)), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, path),
+      'See `sdk/src/missing.ts` and [missing](./missing.md).\nTODO: unresolved\n',
+    )
+  }
+  execFileSync('git', ['add', '-f', '--', frozenPath, ...stagedPaths], {
+    cwd: tmpRoot,
+  })
+
+  const snapshot = buildMarkdownSnapshot(tmpRoot)
+  expect(snapshot.files.sort()).toEqual(
+    activePaths.map((path) => join(tmpRoot, path)).sort(),
+  )
+  for (const supplied of [undefined, snapshot]) {
+    for (const check of [
+      checkPath,
+      checkCrossFile,
+      checkBrokenLink,
+      checkTodoFixme,
+    ]) {
+      expect(
+        check(tmpRoot, supplied).map((finding) => finding.path).sort(),
+      ).toEqual([...activePaths].sort())
+    }
+  }
+  const result = runMemoryDriftGuard(tmpRoot)
+  for (const name of ['path', 'cross-file', 'broken-link', 'todo-fixme']) {
+    expect(
+      result.checkers
+        .find((checker) => checker.name === name)!
+        .findings.map((finding) => finding.path)
+        .sort(),
+    ).toEqual([...activePaths].sort())
+  }
+})
+
+test('a fixture root inside a parent Git repository keeps the original walk and skips', () => {
+  initGitRepo(tmpRoot)
+  writeFileSync(join(tmpRoot, '.gitignore'), '/fixture/\n')
+  const root = join(tmpRoot, 'fixture')
+  const activePath =
+    'docs/execution/body-roadmap/evidence/B30/independent-review/source-snapshot-active/notes.md'
+  for (const path of [activePath, '.tmp/ignored-by-walker.md']) {
+    mkdirSync(dirname(join(root, path)), { recursive: true })
+    writeFileSync(join(root, path), 'See `sdk/src/missing.ts`.\n')
+  }
+
+  expect(checkPath(root).map((finding) => finding.path)).toEqual([activePath])
+})
+
+test('all Markdown checkers honor inventory scope, including canonical index inputs', () => {
+  initGitRepo(tmpRoot)
+  const paths = ['AGENTS.md', 'ROUTER.md', 'agents/patterns/INDEX.md']
+  writeFileSync(join(tmpRoot, '.gitignore'), paths.join('\n') + '\n')
+  for (const path of paths) {
+    mkdirSync(dirname(join(tmpRoot, path)), { recursive: true })
+    writeFileSync(
+      join(tmpRoot, path),
+      '| Missing | `sdk/src/missing.ts` | [missing](./missing.md) |\n',
+    )
+  }
+  writeFileSync(join(tmpRoot, 'deleted.md'), 'See `sdk/src/missing.ts`.\n')
+  execFileSync('git', ['add', '--', 'deleted.md'], { cwd: tmpRoot })
+  rmSync(join(tmpRoot, 'deleted.md'))
+
+  expect(checkIndexSync(tmpRoot)).toEqual([])
+  expect(checkToolConfigSync(tmpRoot)).toEqual([])
+  expect(runMemoryDriftGuard(tmpRoot).score).toBe(0)
+})
+
+test('selected-repository inventory errors fail visibly instead of returning a clean guard', () => {
+  initGitRepo(tmpRoot)
+  writeFileSync(join(tmpRoot, '.git', 'index'), 'broken index\n')
+
+  expect(() => buildMarkdownSnapshot(tmpRoot)).toThrow(
+    'documentation inventory',
+  )
+  expect(() => runMemoryDriftGuard(tmpRoot)).toThrow('documentation inventory')
 })
 
 /** Initialize a temp git repo with a deterministic identity for commits. */

@@ -446,7 +446,7 @@ export const setupStreamingContext = (params: {
   return { updater, hasReceivedContentRef, abortController }
 }
 
-export const handleRunCompletion = (params: {
+export const handleRunCompletion = async (params: {
   runState: RunState
   actualCredits: number | undefined
   agentMode: AgentMode
@@ -461,6 +461,8 @@ export const handleRunCompletion = (params: {
   resumeQueue?: () => void
   isProcessingQueueRef?: MutableRefObject<boolean>
   isQueuePausedRef?: MutableRefObject<boolean>
+  isCurrentRunOwner?: () => boolean
+  onSnapshotStarted?: (completion: Promise<void>) => void
 }) => {
   const {
     runState,
@@ -476,6 +478,8 @@ export const handleRunCompletion = (params: {
     resumeQueue,
     isProcessingQueueRef,
     isQueuePausedRef,
+    isCurrentRunOwner,
+    onSnapshotStarted,
   } = params
 
   const projected = projectRunOutcomes(
@@ -562,18 +566,13 @@ export const handleRunCompletion = (params: {
     },
   )
 
-  // P2-T4: Successful turn — fire-and-forget git-plumbing snapshot of the
-  // tracked tree on refs/openbuff/turns. Aborts and errors return above, so
-  // this fires exactly once per successful turn. createTurnSnapshot never
-  // rejects; the catch is belt-and-suspenders so a snapshot failure can
-  // never break the turn path. Turn END is not a race (finding a), so this
-  // stays fire-and-forget — but the structured outcome is no longer dropped
-  // silently (finding b): an 'error' outcome logs one latched warning so a
-  // broken snapshot pipeline is visible instead of /undo-turn later saying
-  // 'nothing-to-undo' with no explanation.
-  void createTurnSnapshot({ label: 'turn' })
+  // Keep the queue locked until the successful turn's capture settles:
+  // a queued turn can otherwise mutate the tracked tree before git add -u.
+  // Snapshot errors are logged and leave the turn outcome intact.
+  const snapshotCompletion = createTurnSnapshot({ label: 'turn' })
     .then((outcome) => logTurnSnapshotFailure(outcome, 'turn'))
     .catch(() => undefined)
+  onSnapshotStarted?.(snapshotCompletion)
 
   // The previous turn's terminal message write must settle BEFORE the queue
   // gate reopens (reliability finding
@@ -598,7 +597,12 @@ export const handleRunCompletion = (params: {
 
   const cacheStats = runState.sessionState?.mainAgentState
   const cacheHitRate =
-    cacheStats && cacheStats.cacheTotalInputTokens > 0
+    cacheStats?.cacheUsageComplete === true &&
+    Number.isSafeInteger(cacheStats.cacheInputTokens) &&
+    cacheStats.cacheInputTokens >= 0 &&
+    Number.isSafeInteger(cacheStats.cacheTotalInputTokens) &&
+    cacheStats.cacheTotalInputTokens > 0 &&
+    cacheStats.cacheInputTokens <= cacheStats.cacheTotalInputTokens
       ? cacheStats.cacheInputTokens / cacheStats.cacheTotalInputTokens
       : undefined
 
@@ -608,8 +612,11 @@ export const handleRunCompletion = (params: {
     ...(cacheHitRate !== undefined && { cacheHitRate }),
   })
 
-  // Queue gate reopens only after the timer stop and markComplete above
-  // have settled (see the comment at the start of this block).
+  // Stop the timer and settle UI writes immediately, then wait for capture
+  // before admitting another turn. Settled snapshot failures also release
+  // the queue. A replaced conversation must not release a newer send's gate.
+  await snapshotCompletion
+  if (isCurrentRunOwner && !isCurrentRunOwner()) return
   finalizeQueueState({
     setStreamStatus,
     setCanProcessQueue,

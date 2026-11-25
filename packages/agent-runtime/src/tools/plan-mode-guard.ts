@@ -135,9 +135,16 @@ export function checkPlanModeToolCall(params: {
   agentTemplate: Pick<AgentTemplate, 'programmaticConfig'>
   agentState: Pick<AgentState, 'ancestorRunIds' | 'runId' | 'agentId'>
   clientSessionId: string
+  /** External callbacks have no host-enforced read-only contract. */
+  externalTool?: boolean
 }): PlanModeRefusal | undefined {
   const { toolName, input, agentTemplate, agentState, clientSessionId } = params
   if (!isPlanLineage(agentTemplate)) return undefined
+  if (params.externalTool)
+    return refusal(
+      toolName,
+      'Custom and MCP tools have no host-enforced read-only contract; tool annotations are hints, not mutation authority.',
+    )
   if (isPlanModeRefusedTool(toolName)) {
     return refusal(toolName, 'This tool changes the workspace or git state.')
   }

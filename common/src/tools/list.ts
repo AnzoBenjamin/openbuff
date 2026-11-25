@@ -52,6 +52,8 @@ import { spawnAgentsParams } from './params/tool/spawn-agents'
 import { strReplaceParams } from './params/tool/str-replace'
 import { suggestFollowupsParams } from './params/tool/suggest-followups'
 import { taskCompletedParams } from './params/tool/task-completed'
+import { toolLoadParams } from './params/tool/tool-load'
+import { toolSearchParams } from './params/tool/tool-search'
 import { thinkDeeplyParams } from './params/tool/think-deeply'
 import { updatePlanStatusParams } from './params/tool/update-plan-status'
 import { updateSubgoalParams } from './params/tool/update-subgoal'
@@ -144,6 +146,8 @@ const canonicalToolParams = {
   str_replace: strReplaceParams,
   suggest_followups: suggestFollowupsParams,
   task_completed: taskCompletedParams,
+  tool_load: toolLoadParams,
+  tool_search: toolSearchParams,
   think_deeply: thinkDeeplyParams,
   update_plan_status: updatePlanStatusParams,
   update_subgoal: updateSubgoalParams,

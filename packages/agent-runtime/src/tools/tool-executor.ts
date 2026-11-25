@@ -4,6 +4,7 @@ import {
   isBrowserActionAllowed,
 } from '@codebuff/common/tools/browser-policy'
 import { toolParams } from '@codebuff/common/tools/list'
+import { executionRefusalSchema } from '@codebuff/common/tools/params/execution-refusal'
 import { decodeJsonObjectString } from '@codebuff/common/util/model-payload-recovery'
 import {
   detectTransportTruncation,
@@ -31,7 +32,8 @@ import {
 } from '@codebuff/common/tools/metadata'
 import { isAbortError } from '@codebuff/common/util/error'
 import { resolveProjectRootOrEmpty } from '@codebuff/common/util/file'
-import { jsonToolResult } from '@codebuff/common/util/messages'
+import { jsonToolResult, userMessage } from '@codebuff/common/util/messages'
+import { withSystemTags } from '../util/messages'
 import {
   decodeReadCapabilityToken,
   readCapabilityMatchesScope,
@@ -63,6 +65,7 @@ import { reportPlaybookGateOutcome } from '../memory/playbook-outcome-reporter'
 import {
   createSessionEvidenceLog,
   recordSessionEvidence,
+  recordSessionValidationEvidence,
 } from '../memory/session-evidence-log'
 import {
   correlateCompliedAfterBlock,
@@ -107,6 +110,7 @@ import {
   getAdvertisedExternalToolDefinitions,
 } from './prompts'
 
+import { applyHostWorkspaceState, findExecutionRefusal, recordExecutionRefusal } from '../util/execution-recovery'
 import type { AgentTemplate } from '../templates/types'
 import type { CodebuffToolHandlerFunction } from './handlers/handler-function-type'
 import type { FileProcessingState } from './handlers/tool/write-file'
@@ -121,9 +125,12 @@ import type {
 import type {
   AgentRuntimeDeps,
   AgentRuntimeScopedDeps,
+  NativeToolObservation,
 } from '@codebuff/common/types/contracts/agent-runtime'
 import type { Logger } from '@codebuff/common/types/contracts/logger'
-import type { MemoryPlaybook } from '@codebuff/common/types/memory-playbook'
+import type { MemoryPlaybook, ValidationEvidenceContext } from '@codebuff/common/types/memory-playbook'
+import type { PlaybookApplicabilityContext } from '@codebuff/common/util/playbook-applicability'
+import type { PlaybookTerminalAction } from '../memory/playbook-gate'
 import type { ToolMessage } from '@codebuff/common/types/messages/codebuff-message'
 import type { ToolResultOutput } from '@codebuff/common/types/messages/content-part'
 import type { ProviderMetadata } from '@codebuff/common/types/messages/provider-metadata'
@@ -652,8 +659,9 @@ function outputCarriesToolError(output: readonly unknown[]): boolean {
  * ledger (see ../memory/session-evidence-log.ts).
  *
  * Deliberately narrow: only `run_terminal_command` with a string `command` is
- * recorded, because that is the only evidence shape the Phase 1 gate can verify
- * (`toolSucceeded` + commandText substring). A result carrying an `errorMessage`
+ * recorded as legacy `toolSucceeded` evidence. This never manufactures a
+ * validation receipt: only the trusted host registry can attest validation.
+ * A result carrying an `errorMessage`
  * is a failure and records nothing, so a broken command can never satisfy a
  * playbook.
  *
@@ -2782,22 +2790,75 @@ export async function executeToolCall<T extends ToolName>(
   return trackToolAttempt(params, (tracked) => executeNativeToolCall(tracked))
 }
 
+/** Correlate final validated input without changing the original B02 basis. */
+export function nativeToolObservationInputHash(params: {
+  input: unknown
+  callId: string
+  logger: Logger
+}): string | undefined {
+  try {
+    const parsed = parseRawToolCall({
+      rawToolCall: { toolName: 'record_decision', toolCallId: params.callId, input: params.input },
+      logger: params.logger,
+    })
+    return 'error' in parsed ? undefined : hashActionInput('record_decision', parsed.input)
+  } catch { return undefined }
+}
+
+// Same scale as Memory V2's 2s finalization: metadata, never productive work.
+const NATIVE_TOOL_OBSERVATION_TIMEOUT_MS = 2_000
+async function observeCompletedNativeTool(
+  params: Pick<AgentRuntimeDeps, 'onNativeToolObservation' | 'logger'>,
+  observation: NativeToolObservation,
+): Promise<void> {
+  const observer = params.onNativeToolObservation
+  if (!observer) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => observer(observation)),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Native tool observation metadata budget expired')), NATIVE_TOOL_OBSERVATION_TIMEOUT_MS)
+        timer.unref?.()
+      }),
+    ])
+  } catch (error) {
+    // Promise.race observes late rejections too. Reporting cannot affect the tool.
+    try {
+      params.logger.warn({ error, toolName: observation.toolName, callId: observation.callId },
+        'Native tool observation is unconfirmed (non-fatal)')
+    } catch { /* An observational logger is not tool authority either. */ }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
 type ToolAttemptParams = {
   toolName: string
   input: unknown
   toolCallId?: string
+  userInputId: string
   agentState: AgentState
   runId: string
   signal: AbortSignal
   onResponseChunk: (chunk: string | PrintModeEvent) => void
   requestToolCall?: import('@codebuff/common/types/contracts/client').RequestToolCallFn
+  requestFiles?: import('@codebuff/common/types/contracts/client').RequestFilesFn
+  requestOptionalFile?: import('@codebuff/common/types/contracts/client').RequestOptionalFileFn
+  fileSystem?: import('@codebuff/common/types/filesystem').CodebuffFileSystem
+  getFileSystemForActor?: (actor: import('@codebuff/common/types/contracts/client').ExecutionActor) => import('@codebuff/common/types/filesystem').CodebuffFileSystem
+  authorizeToolRead?: import('@codebuff/common/types/contracts/client').AuthorizeToolRead
   onExecutionActionStart?: import('@codebuff/common/types/contracts/client').OnExecutionActionStart
   ancestorRunIds?: string[]
+  synchronizeWorkspace?: import('@codebuff/common/types/contracts/client').SynchronizeWorkspace
+  fileProcessingState?: FileProcessingState
 }
 
 // Subagents inherit client callbacks. Unwrap our own attempt decorator so a
 // parent attempt cannot overwrite the child's separately registered identity.
 const originalToolRequest = new WeakMap<NonNullable<ToolAttemptParams['requestToolCall']>, NonNullable<ToolAttemptParams['requestToolCall']>>()
+const originalFileRequest = new WeakMap<NonNullable<ToolAttemptParams['requestFiles']>, NonNullable<ToolAttemptParams['requestFiles']>>()
+const originalOptionalFileRequest = new WeakMap<NonNullable<ToolAttemptParams['requestOptionalFile']>, NonNullable<ToolAttemptParams['requestOptionalFile']>>()
 
 /** Keep failed attempts after recovery, including refusals before dispatch. */
 async function trackToolAttempt<P extends ToolAttemptParams>(
@@ -2807,6 +2868,16 @@ async function trackToolAttempt<P extends ToolAttemptParams>(
   const toolCallId = params.toolCallId ?? generateCompactId()
   const attemptId = generateCompactId()
   const capturedInput = cloneDeep(params.input)
+  const capturedUserInputId = params.userInputId
+  // Capture before setup/preflight awaits. A later concurrent workspace change
+  // must still refuse this exact attempt, rather than silently renewing it.
+  params.signal.throwIfAborted()
+  if (params.agentState.runOutcome && params.agentState.runOutcome.termination !== 'completed')
+    throw new Error(params.agentState.runOutcome.cause?.message ?? 'Execution has stopped')
+  const actor = Object.freeze({ runId: params.runId, rootRunId: params.ancestorRunIds?.[0] ?? params.runId, agentId: params.agentState.agentId })
+  if (params.synchronizeWorkspace) {
+    applyHostWorkspaceState(params.agentState, await params.synchronizeWorkspace(actor), params.fileProcessingState)
+  }
   const basis: ActionOutcome['basis'] = Object.freeze({
     inputHash: hashActionInput(params.toolName, capturedInput),
     ...(params.agentState.workspaceState
@@ -2815,8 +2886,7 @@ async function trackToolAttempt<P extends ToolAttemptParams>(
   })
   const workspaceSnapshotId = params.agentState.workspaceState?.snapshotId
   const executionIdentity = Object.freeze({
-    actionId: toolCallId, attemptId, runId: params.runId,
-    rootRunId: params.ancestorRunIds?.[0] ?? params.runId, agentId: params.agentState.agentId,
+    ...actor, actionId: toolCallId, attemptId,
     basis,
     ...(workspaceSnapshotId ? { workspaceSnapshotId } : {}),
     basisId: hashActionInput('openbuff.execution-b02-basis.v1', { basis, workspaceSnapshotId: workspaceSnapshotId ?? null }),
@@ -2853,18 +2923,51 @@ async function trackToolAttempt<P extends ToolAttemptParams>(
       effect: { status: 'unobserved', receiptIds: [], confirmedPaths: [] },
     })
   const originalRequest = params.requestToolCall && (originalToolRequest.get(params.requestToolCall) ?? params.requestToolCall)
-  const trackedRequest: ToolAttemptParams['requestToolCall'] = originalRequest ? request => originalRequest({
-    ...request, callId: request.callId ?? toolCallId, executionIdentity,
-    executionRequestHash: hashActionInput(request.toolName, request.input),
-  }) : undefined
+  const trackedRequest: ToolAttemptParams['requestToolCall'] = originalRequest ? async request => {
+    const result = await originalRequest({
+      ...request, callId: request.callId ?? toolCallId, executionIdentity,
+      executionRequestHash: hashActionInput(request.toolName, request.input),
+    })
+    applyHostWorkspaceState(params.agentState, result.workspaceState, params.fileProcessingState)
+    const refusal = findExecutionRefusal(result.output)
+    if (refusal) {
+      retain(classifyActionOutput(params.toolName, result.output))
+      let refreshed = false
+      if (refusal.reason === 'stale-authority' && params.synchronizeWorkspace) {
+        try {
+          const workspace = await params.synchronizeWorkspace(actor)
+          applyHostWorkspaceState(params.agentState, workspace, params.fileProcessingState)
+          refreshed = workspace !== undefined
+        } catch { /* A failed refresh consumes the recovery budget and stops the run. */ }
+      }
+      const feedback = recordExecutionRefusal(params.agentState, refusal, refreshed)
+      params.agentState.messageHistory = [...params.agentState.messageHistory,
+        userMessage({ content: withSystemTags(feedback), tags: ['EXECUTION_REFUSAL'] })]
+    }
+    return result
+  } : undefined
   if (trackedRequest && originalRequest) originalToolRequest.set(trackedRequest, originalRequest)
+  const originalFiles = params.requestFiles && (originalFileRequest.get(params.requestFiles) ?? params.requestFiles)
+  const trackedFiles: ToolAttemptParams['requestFiles'] = originalFiles ? request => originalFiles({
+    ...request, executionActor: actor, executionIdentity,
+  }) : undefined
+  if (trackedFiles && originalFiles) originalFileRequest.set(trackedFiles, originalFiles)
+  const originalOptional = params.requestOptionalFile && (originalOptionalFileRequest.get(params.requestOptionalFile) ?? params.requestOptionalFile)
+  const trackedOptional: ToolAttemptParams['requestOptionalFile'] = originalOptional ? request => originalOptional({
+    ...request, executionActor: actor, executionIdentity,
+  }) : undefined
+  if (trackedOptional && originalOptional) originalOptionalFileRequest.set(trackedOptional, originalOptional)
   const tracked = {
     ...params,
     toolCallId,
     input: capturedInput,
+    userInputId: capturedUserInputId,
     executionIdentity,
     executionHostOperation: undefined,
     ...(trackedRequest ? { requestToolCall: trackedRequest } : {}),
+    ...(trackedFiles ? { requestFiles: trackedFiles } : {}),
+    ...(trackedOptional ? { requestOptionalFile: trackedOptional } : {}),
+    ...(params.getFileSystemForActor ? { fileSystem: params.getFileSystemForActor(actor) } : {}),
     onResponseChunk: (chunk: string | PrintModeEvent) => {
       if (typeof chunk !== 'string') {
         if (chunk.type === 'tool_call' && chunk.toolCallId === toolCallId) {
@@ -2891,9 +2994,23 @@ async function trackToolAttempt<P extends ToolAttemptParams>(
       toolName: params.toolName, input: cloneDeep(capturedInput), signal: params.signal })
     if (started) await started
     params.signal.throwIfAborted()
-    await execute(tracked)
+    const readAccess = await params.authorizeToolRead?.({ identity: executionIdentity, toolName: params.toolName })
+    if (readAccess?.allowed === false) {
+      refusal = readAccess.reason
+      unavailable('refused', 'strict_project_reads_unavailable', readAccess.reason)
+      params.onResponseChunk({ type: 'error', message: readAccess.reason })
+    } else {
+      await execute(tracked)
+    }
     params.signal.throwIfAborted()
   } catch (error) {
+    const executionRefusal = executionRefusalSchema.safeParse(
+      error && typeof error === 'object' && 'refusal' in error ? error.refusal : undefined)
+    if (executionRefusal.success) {
+      retain({ outcome: 'refused', cause: { code: `execution_${executionRefusal.data.reason}`, message: executionRefusal.data.cause },
+        effect: { status: 'unobserved', receiptIds: [], confirmedPaths: [] } })
+      recordExecutionRefusal(params.agentState, executionRefusal.data)
+    }
     unavailable(
       params.signal.aborted || isAbortError(error) ? 'cancelled' : 'failed',
       params.signal.aborted || isAbortError(error)
@@ -3177,9 +3294,9 @@ async function executeNativeToolCall<T extends ToolName>(
       // the project, so these are always hard-blocked — except for the exempt
       // owned-temp / allowlisted-external cases above.
       const escapesProject =
-        hasFilesystemSandbox()
+        hasFilesystemSandbox(params.fileSystem?.hostReadPolicy)
           ? (filesystemAccess.access === 'read'
-            ? resolveProjectPathForRead(scopeProjectRoot, rawPath)
+            ? resolveProjectPathForRead(scopeProjectRoot, rawPath, params.fileSystem?.hostReadPolicy)
             : resolveProjectPath(scopeProjectRoot, rawPath)) === null
           : !containmentExempt &&
         (normalizedEscapesProject(normalized) ||
@@ -3357,12 +3474,66 @@ async function executeNativeToolCall<T extends ToolName>(
       toolName === 'run_terminal_command')
   ) {
     try {
-      // The gate reads exactly one key from an environment bag, so project the
-      // client env onto the plain string map it declares instead of widening the
-      // runtime deps contract.
+      // The host's captured mode follows the actor into supervised children.
+      // Legacy callers can still supply the gate's string environment key.
       const playbookGateEnv: Record<string, string | undefined> = {}
       for (const [key, value] of Object.entries(params.clientEnv)) {
         if (typeof value === 'string') playbookGateEnv[key] = value
+      }
+      if (params.playbookGateMode !== undefined) {
+        playbookGateEnv.OPENBUFF_PLAYBOOK_GATE = params.playbookGateMode
+      }
+      const evidenceLog = sessionEvidenceLogFor(agentState)
+      let validationEvidence: ValidationEvidenceContext | undefined
+      if (params.getPlaybookValidationEvidence) {
+        try {
+          validationEvidence = await params.getPlaybookValidationEvidence({
+            runId: params.runId,
+            rootRunId: params.ancestorRunIds?.[0] ?? params.runId,
+            agentId: agentState.agentId,
+          })
+          // Receipt ingestion is exclusively from the host callback. Neither
+          // input, model output nor native tool-result JSON can attest a check.
+          for (const receipt of validationEvidence?.receipts ?? []) {
+            if (
+              !evidenceLog.entries.some(
+                (entry) =>
+                  entry.kind === 'validationSucceeded' &&
+                  entry.receipt.receiptId === receipt.receiptId,
+              )
+            ) {
+              recordSessionValidationEvidence(evidenceLog, receipt)
+            }
+          }
+        } catch (error) {
+          // Unavailable validation evidence must remain unsatisfied even in
+          // block mode; do not let this reach the dispatch fail-open catch.
+          validationEvidence = undefined
+          logger.debug(
+            { error, toolName },
+            'Validation receipt lookup failed; required evidence remains unsatisfied',
+          )
+        }
+      }
+      let terminalActions: readonly PlaybookTerminalAction[] | undefined
+      if (
+        toolName === 'run_terminal_command' &&
+        typeof effectiveInput.command === 'string' &&
+        params.classifyPlaybookTerminalActions
+      ) {
+        try {
+          terminalActions = await params.classifyPlaybookTerminalActions(
+            effectiveInput.command,
+          )
+        } catch (error) {
+          // The action is unknown on classifier failure. Preserve potential
+          // obligations conservatively without parsing shell text ourselves.
+          terminalActions = ['git-commit', 'git-push', 'git-stage']
+          logger.debug(
+            { error, toolName },
+            'Terminal classification failed; retaining potentially applicable procedures',
+          )
+        }
       }
       // One clock read shared by the gate evaluation and the verdict history
       // below, so every recorded verdict is stamped with exactly the time the
@@ -3372,9 +3543,20 @@ async function executeNativeToolCall<T extends ToolName>(
         toolName,
         input: effectiveInput,
         playbooks: playbookContext,
-        evidenceLog: sessionEvidenceLogFor(agentState),
+        evidenceLog,
         nowMs: gateNowMs,
         env: playbookGateEnv,
+        applicability: {
+          ...(
+            agentState as AgentState & {
+              playbookApplicability?: PlaybookApplicabilityContext
+            }
+          ).playbookApplicability,
+          actorAgentType: agentTemplate.id,
+          nowMs: gateNowMs,
+        },
+        terminalActions,
+        validationEvidence,
       })
       const gateHistory = sessionGateHistoryFor(agentState)
       let playbookBlocked = false
@@ -3994,8 +4176,11 @@ async function executeNativeToolCall<T extends ToolName>(
   }
 
   let canonicalReceipt: unknown
-  const toolResultPromise = Promise.resolve().then(() =>
-    handler({
+  let handlerSucceeded = false
+  let clientDelegated = false
+  const toolResultPromise = Promise.resolve().then(() => {
+    params.signal.throwIfAborted()
+    return handler({
       ...params,
       toolCall: finalToolCall,
       previousToolCallFinished: abortablePreviousToolCallFinished,
@@ -4003,6 +4188,7 @@ async function executeNativeToolCall<T extends ToolName>(
       requestClientToolCall: (async (
         clientToolCall: ClientToolCall<T extends ClientToolName ? T : never>,
       ) => {
+        clientDelegated = true
         if (params.signal.aborted) {
           return []
         }
@@ -4057,8 +4243,11 @@ async function executeNativeToolCall<T extends ToolName>(
         })
         return jsonToolResult(reconciled.mutation) as CodebuffToolOutput<T>
       }) as any,
-    }),
-  )
+    })
+  }).then(result => {
+    handlerSucceeded = true
+    return result
+  })
 
   // NOTE (spawn-failure MIGRATION NOTE sync, RF-5): the underlying handler
   // error MUST be logged here via logger.warn. `buildSpawnAgentsHandlerFailureOutput`
@@ -4088,7 +4277,11 @@ async function executeNativeToolCall<T extends ToolName>(
   })
 
   return recoverableToolResultPromise.then(async ({ output, creditsUsed }) => {
-    params.signal.throwIfAborted()
+    const completedLocalRecord = toolName === 'record_decision' && handlerSucceeded && !clientDelegated
+    // A completed local record must be validated/retained before cancellation
+    // stops the run. Failed, recovered and delegated results keep the old guard.
+    if (!completedLocalRecord) params.signal.throwIfAborted()
+    let nativeOutputValid = false
     let validatedOutput = output
     if (toolName === 'read_files') {
       const parsed = toolParams.read_files.outputSchema.safeParse(output)
@@ -4171,6 +4364,7 @@ async function executeNativeToolCall<T extends ToolName>(
           params.fileProcessingState.confirmedPostEditAnchorsByPath,
       })
       validatedOutput = normalized.output
+      nativeOutputValid = normalized.valid
       if (!normalized.valid) {
         logger.error(
           {
@@ -4182,6 +4376,21 @@ async function executeNativeToolCall<T extends ToolName>(
           'Native tool output failed schema validation',
         )
       }
+    }
+    const completedSuccessfulRecord = completedLocalRecord && nativeOutputValid && !outputCarriesToolError(output) && !outputCarriesToolError(validatedOutput)
+    if (!completedSuccessfulRecord) params.signal.throwIfAborted()
+    if (completedSuccessfulRecord && params.onNativeToolObservation && params.executionIdentity) {
+      const identity = params.executionIdentity
+      await observeCompletedNativeTool(params, {
+        actor: Object.freeze({ runId: identity.runId, rootRunId: identity.rootRunId, agentId: identity.agentId }),
+        executionIdentity: identity,
+        toolName: 'record_decision',
+        callId: toolCall.toolCallId,
+        userInputId,
+        input: cloneDeep(finalToolCall.input) as NativeToolObservation['input'],
+        output: cloneDeep(validatedOutput) as NativeToolObservation['output'],
+        signal: params.signal,
+      })
     }
     const lifecycleTags = lifecycleTagsForToolResult(toolName)
     const toolResult: ToolMessage = {
@@ -4441,6 +4650,34 @@ async function executeExternalToolCall(
     previousToolCallFinished,
     params.signal,
   )
+  const planModeRefusal = checkPlanModeToolCall({
+    toolName,
+    input,
+    agentTemplate,
+    agentState,
+    clientSessionId: params.clientSessionId,
+    externalTool: true,
+  })
+  if (planModeRefusal) {
+    onResponseChunk({
+      type: 'error',
+      message: planModeRefusal.message,
+      userMessage: planModeRefusal.userMessage,
+      errorCode: planModeRefusal.errorCode,
+    } as PrintModeEvent & { errorCode: typeof planModeRefusal.errorCode })
+    if (fromHandleSteps) {
+      const result: ToolMessage = {
+        role: 'tool',
+        toolName,
+        toolCallId: toolCallId ?? generateCompactId(),
+        content: jsonToolResult({ errorCode: planModeRefusal.errorCode, errorMessage: planModeRefusal.message }),
+        sentAt: (params.clock ?? realClock).now(),
+      }
+      toolResults.push(result)
+      if (!excludeToolFromMessageHistory) toolResultsToAddToMessageHistory.push(result)
+    }
+    return abortablePreviousToolCallFinished
+  }
   // Same last-tool / emitted-flag enforcement as executeToolCall. Custom and
   // MCP tools are never terminal companions, so they must not run after
   // same-step suggest_followups (or after the emitted flag is already set).

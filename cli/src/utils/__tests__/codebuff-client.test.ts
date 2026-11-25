@@ -75,6 +75,69 @@ describe('memory V2 client ownership', () => {
     ).toBeUndefined()
   })
 
+  test('fills omitted run definitions from the current CLI registry without overriding explicit catalogs', async () => {
+    const first = [
+      { id: 'first', displayName: 'First', model: 'fixture', toolNames: [] },
+    ]
+    const second = [
+      { id: 'second', displayName: 'Second', model: 'fixture', toolNames: [] },
+    ]
+    let registry = first
+    const seen: Array<{ agentDefinitions?: unknown }> = []
+    const client = new ManagedOpenbuffClient(
+      { cwd: '/project' },
+      undefined,
+      async (options) => {
+        seen.push(options)
+        return { output: { type: 'lastMessage', value: [] } }
+      },
+      () => registry,
+    )
+    await client.run({ agent: 'first', prompt: 'one' })
+    registry = second
+    await client.run({ agent: 'second', prompt: 'two' })
+    await client.run({
+      agent: 'first',
+      prompt: 'explicit',
+      agentDefinitions: first,
+    })
+    await client.run({ agent: 'first', prompt: 'empty', agentDefinitions: [] })
+    expect(seen.map((options) => options.agentDefinitions)).toEqual([
+      first,
+      second,
+      first,
+      [],
+    ])
+  })
+
+  test('respects a client-level catalog before the registry fallback', async () => {
+    const definitions = [
+      {
+        id: 'client-agent',
+        displayName: 'Client agent',
+        model: 'fixture',
+        toolNames: [],
+      },
+    ]
+    let registryReads = 0
+    const seen: Array<{ agentDefinitions?: unknown }> = []
+    const client = new ManagedOpenbuffClient(
+      { cwd: '/project', agentDefinitions: definitions },
+      undefined,
+      async (options) => {
+        seen.push(options)
+        return { output: { type: 'lastMessage', value: [] } }
+      },
+      () => {
+        registryReads++
+        return []
+      },
+    )
+    await client.run({ agent: 'client-agent', prompt: 'fixture' })
+    expect(seen[0].agentDefinitions).toBe(definitions)
+    expect(registryReads).toBe(0)
+  })
+
   test('retire waits for concurrent runs and releases exactly once after success and failure', async () => {
     const first = deferred<never>()
     const second = deferred<never>()

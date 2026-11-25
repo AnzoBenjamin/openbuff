@@ -296,8 +296,17 @@ describe('run subcommand parsing', () => {
     expect(() => parse(['run', '--timeout', '0', 'x'])).toThrow(/--timeout/)
   })
 
-  test('errors when the prompt is empty', () => {
-    expect(() => parse(['run'])).toThrow()
+  test('selects stdin when no prompt or a lone dash is supplied', () => {
+    expect(parse(['run']).run).toMatchObject({ prompt: '', readFromStdin: true })
+    expect(parse(['run', '-']).run).toMatchObject({ prompt: '', readFromStdin: true })
+  })
+
+  test('accepts -p/--prompt and refuses ambiguous or empty explicit input', () => {
+    expect(parse(['run', '-p', 'flag prompt']).run).toEqual({ prompt: 'flag prompt', json: false })
+    expect(parse(['run', '--prompt', 'keep\n  indentation']).run?.prompt).toBe('keep\n  indentation')
+    expect(() => parse(['run', '-p', 'one', 'two'])).toThrow(/prompt/i)
+    expect(() => parse(['run', '-p', '  '])).toThrow(/prompt/i)
+    expect(() => parse(['run', '   '])).toThrow(/prompt/i)
   })
 
   test('keeps the run subcommand out of the top-level result', () => {

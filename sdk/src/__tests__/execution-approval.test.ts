@@ -8,6 +8,7 @@ import { captureRootDeadline, createHostAuthority, executionBindingTuple } from 
 import { classifyCapturedTargetForExecution, classifyHarnessArgv, classifyTerminalHarnessAction, HarnessApprovalService, isStoredExecutionAuthorityV2 } from '../services/harness-enforcement'
 import { LocalHarnessStore } from '../services/local-harness-store'
 import { createHostExecutionServices } from '../host-execution'
+import { SUPERVISED_SELF_EXEC_FLAG } from '@codebuff/agent-runtime/supervision/self-exec-flag'
 import { loadHostConfigSnapshot, nodeConfigReadFs } from '../host-config'
 import type { HostExecutionOptions } from '../host-execution'
 import type { HostAuthorityInputs, PolicyInput, Result, StoredExecutionAuthorityV2, TargetDescription } from '@codebuff/common/types/contracts/execution-context'
@@ -267,6 +268,47 @@ function hostFlow(options: Partial<Pick<HostExecutionOptions, 'requestApproval' 
 }
 
 describe('B19 host exact approval flow', () => {
+  test.each(['balanced', 'strict'] as const)('runtime self-exec avoids redundant %s approval while ordinary tools remain gated', async approvalMode => {
+    const approvals: string[] = []
+    const fixture = hostFlow({ approvalMode, requestApproval: async request => { approvals.push(request.action); return false } })
+    const context = value(fixture.host.directOperation()).executionContext
+    const target: TargetDescription = { executable: process.execPath,
+      argv: [SUPERVISED_SELF_EXEC_FLAG, path.join(fixture.root, 'openbuff-supervised-request.json')],
+      cwd: fixture.root, projectRoot: fixture.root, allowedPaths: [fixture.root], profile: context.profile,
+      mode: 'assistant', processType: 'SYNC', family: 'supervised-child', branchId: 'supervised.self-exec.initial',
+      adapterOptions: { runtime: 'bun', stdio: 'ignore,pipe,pipe' } }
+    const prepared = value(fixture.host.prepareSupervisedSelfExec(context, target))
+    expect((await prepared.admit()).ok).toBe(true)
+    expect(approvals).toEqual([])
+    const ordinary = value(context.execution.prepareTarget({ target: { ...target, executable: process.execPath,
+      argv: ['--eval', 'console.log("project command")'], family: 'sync-shell', branchId: 'terminal.sync' } }))
+    expect(await ordinary.admit()).toMatchObject({ ok: false })
+    expect(approvals).toEqual(['arbitrary-code'])
+  })
+
+  test('self-exec-shaped commands do not authorize themselves through ordinary target preparation', async () => {
+    const fixture = hostFlow({ approvalMode: 'balanced', requestApproval: async () => false })
+    const context = value(fixture.host.directOperation()).executionContext
+    const target: TargetDescription = { executable: '/fixture/openbuff', argv: [SUPERVISED_SELF_EXEC_FLAG, path.join(fixture.root, 'openbuff-supervised-request.json')],
+      cwd: fixture.root, projectRoot: fixture.root, allowedPaths: [fixture.root], profile: context.profile,
+      mode: 'assistant', processType: 'SYNC', family: 'supervised-child', branchId: 'supervised.self-exec.initial',
+      adapterOptions: { runtime: 'bun', stdio: 'ignore,pipe,pipe' } }
+    expect(await value(context.execution.prepareTarget({ target })).admit()).toMatchObject({ ok: false })
+    expect(fixture.host.prepareSupervisedSelfExec(context, target)).toMatchObject({ ok: false, reason: 'denied' })
+    for (const changed of [
+      { argv: ['--eval', 'console.log("changed invocation")'] },
+      { argv: [SUPERVISED_SELF_EXEC_FLAG, path.join(fixture.root, 'other-request.json')] },
+      { family: 'sync-shell' as const }, { branchId: 'terminal.sync' },
+      { projectRoot: '/other-project' }, { allowedPaths: ['/'] },
+      { profile: { ...context.profile, policy: 'workspace-write' as const } },
+      { shellCommandBytes: 'echo hidden-shell' },
+    ]) expect(fixture.host.prepareSupervisedSelfExec(context, { ...target, executable: process.execPath, ...changed }))
+      .toMatchObject({ ok: false, reason: 'denied' })
+    const foreign = hostFlow()
+    expect(fixture.host.prepareSupervisedSelfExec(value(foreign.host.directOperation()).executionContext, { ...target, executable: process.execPath }))
+      .toMatchObject({ ok: false, reason: 'stale-authority' })
+  })
+
   test('repeated run registration preserves action identity and its original deadline', () => {
     const fixture = hostFlow()
     const owner = { clientSessionId: 'memo-client', rootRunId: 'memo-run', parentRunId: 'memo-run', parentAgentId: 'memo-agent' }

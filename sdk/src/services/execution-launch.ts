@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { isExecutionDeadlineSignal } from '@codebuff/common/util/execution-context'
 import { createNodeProcessScope } from '@codebuff/common/util/node-process-scope'
 import { captureRegisteredNativeTarget, dispatchRegisteredNativeLaunch, inheritNativeExecutionPort, registerPreparedNativeLaunch } from './native-host-execution'
+import { inheritNodeScopeClock, nodeLaunchClock, registerNodeLaunchClock } from './node-scope-clock'
 
 import type { ChildProcess } from 'node:child_process'
 import type {
@@ -73,7 +74,10 @@ export function deriveExecutionContext(
   if (context.signal?.aborted) return refusalForSignal(context.signal)
   try {
     const derived = context.execution.derive({ memoKey, limit })
-    if (derived.ok) inheritNativeExecutionPort(context.execution, derived.value)
+    if (derived.ok) {
+      inheritNativeExecutionPort(context.execution, derived.value)
+      inheritNodeScopeClock(context.execution, derived.value)
+    }
     return derived.ok
       ? {
           ok: true,
@@ -133,7 +137,10 @@ export function prepareNodeLaunch(input: NodeTargetInput): Result<PreparedLaunch
   if (!target.ok) return target
   try {
     const prepared = input.executionContext!.execution.prepareTarget({ target: target.value })
-    if (prepared.ok) registerPreparedNativeLaunch(input.executionContext!.execution, target.value, prepared.value)
+    if (prepared.ok) {
+      registerPreparedNativeLaunch(input.executionContext!.execution, target.value, prepared.value)
+      registerNodeLaunchClock(input.executionContext!.execution, prepared.value)
+    }
     return prepared
   } catch {
     return executionRefusal('invalid-context', 'Execution launch facade is invalid')
@@ -296,10 +303,12 @@ export function dispatchNodeLaunch(
       try { child = createChild(input) }
       catch (error) { clearLifetime(); throw error }
       const nodeChild = child
+      const originalDeadline = launch.facts().deadlines.resourceLifetime
       scope = createNodeProcessScope(nodeChild, {
         detached: input.adapterOptions.detached === true,
         termGraceMs: termination.sigtermGraceMs ?? 200,
-        originalDeadline: launch.facts().deadlines.resourceLifetime,
+        originalDeadline,
+        clock: nodeLaunchClock(launch, originalDeadline),
         launchFacts: () => launch.facts(),
         output: termination.output,
         onStop() { observer.cleanupCommitted() },

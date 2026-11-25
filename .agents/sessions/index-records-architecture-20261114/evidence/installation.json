@@ -1,0 +1,37 @@
+{
+  "binary": "/home/ben/.local/share/openbuff-test/openbuff-branch",
+  "backup": "/home/ben/.local/share/openbuff-test/openbuff-branch.backup.wowhoh9a",
+  "sidecarSha256": "615e79020b8a730f20781cd25184275bd4fa846a20aa1877b7c578dc6da131a7",
+  "binarySha256": "52d7e3815446f0c51c0f0fa651061aaee6d57bc8d0f316d761797b994a96458b",
+  "installedFiles": [
+    "rg",
+    "tree-sitter.wasm",
+    "tree-sitter-manifest.json",
+    "tree-sitter-queries",
+    "openbuff-intelligence",
+    "repository-intelligence-manifest.json",
+    "tree-sitter-c-sharp.wasm",
+    "tree-sitter-c.wasm",
+    "tree-sitter-cpp.wasm",
+    "tree-sitter-gdscript.wasm",
+    "tree-sitter-go.wasm",
+    "tree-sitter-java.wasm",
+    "tree-sitter-javascript.wasm",
+    "tree-sitter-kotlin.wasm",
+    "tree-sitter-php.wasm",
+    "tree-sitter-python.wasm",
+    "tree-sitter-ruby.wasm",
+    "tree-sitter-rust.wasm",
+    "tree-sitter-swift.wasm",
+    "tree-sitter-tsx.wasm",
+    "tree-sitter-typescript.wasm",
+    "openbuff-branch"
+  ],
+  "verification": {
+    "help": "passed",
+    "repositoryIntelligence": "passed: rust-sqlite, one parsed fixture file",
+    "parserQueriesAndOpenTui": "passed",
+    "workspaceTypecheck": "passed; scoped SDK/indexer checks passed after later edits",
+    "liveMemoryMigrationTests": false
+  }
+}

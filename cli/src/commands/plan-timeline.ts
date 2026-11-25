@@ -18,6 +18,7 @@ import {
 } from '@codebuff/common/util/plan-artifacts'
 
 import { getProjectRoot } from '../project-files'
+import { SLASH_COMMANDS } from '../data/slash-commands'
 import { existsSync } from 'node:fs'
 
 import type { CommandDefinition, RouterParams } from './command-registry'
@@ -137,7 +138,10 @@ export function parsePlanTimelineArgs(
 export function registerPlanTimelineCommand(): CommandDefinition {
   return {
     name: 'plan-timeline',
-    aliases: ['tl'],
+    aliases: [
+      ...(SLASH_COMMANDS.find((command) => command.id === 'plan-timeline')
+        ?.aliases ?? []),
+    ],
     acceptsArgs: true,
     handler: (params: RouterParams, args: string) => {
       const parsed = parsePlanTimelineArgs(args)

@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "type": "body-b21-reduced-scope-acceptance",
+  "nodeId": "B21",
+  "decision": "accept-with-reduced-scope",
+  "authorizedBy": "user",
+  "authorizationDate": "2026-11-24",
+  "authorizationBasis": "Current issue instruction permits removing unfulfillable acceptance criteria.",
+  "scopeId": "b21-local-linux-behavior-2026-11-24",
+  "acceptedScope": "Linux local behavior demonstrated by Fixture A and packed CJS/ESM consumers; no broader acceptance is inferred.",
+  "completedChecks": [
+    "Fixture A local-current passed synchronous exit 7, background exit 7, and direct target signal 11 scenarios.",
+    "Packed local-current CJS and ESM consumers passed the same three scenarios with zero fetch calls and cleanup assertions.",
+    "Recorded locked offline Rust build, 30 workspace tests, four native smoke checks, six focused SDK suites totaling 174 tests, and SDK typecheck passed."
+  ],
+  "acceptedPrerequisites": ["B19", "B20"],
+  "waivedGates": [
+    "fresh source-bound native/build provenance",
+    "full approved SDK schedule",
+    "twelve historical prerequisite replacement receipts",
+    "independent composition approval"
+  ],
+  "notEstablished": [
+    "clean registry installation",
+    "hosted or non-Linux behavior",
+    "the complete original B21 guarantee set",
+    "independent source-bound native lifecycle approval"
+  ],
+  "independentReview": false,
+  "sourceBoundProvenance": false,
+  "historicalReceiptsReconstructed": false,
+  "report": {
+    "path": "docs/execution/body-roadmap/B21-LOCAL-VERIFICATION-20261124.md",
+    "sha256": "0d8697677b9f579dc79858fc4c69311690b0d4d289e8e62b12bfe74b284684a1"
+  }
+}

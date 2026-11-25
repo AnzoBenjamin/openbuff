@@ -5,17 +5,26 @@ import {
   writeFileSync,
   existsSync,
 } from 'node:fs'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { EventEmitter } from 'node:events'
 
 import { describe, expect, test } from 'bun:test'
+import Ajv from 'ajv'
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { McpError, type Tool } from '@modelcontextprotocol/sdk/types.js'
 
 import { createMcpServer, runMcp } from '../mcp/server'
+import {
+  createExecutionProcessRecorder,
+  createControlledExecutionClock,
+  createTerminalExecutionFixture,
+} from './fixtures/b19-terminal-execution'
+import { deriveExecutionContext } from '../services/execution-launch'
+import { createConfiguredDirectHostExecution } from '../services/direct-host-execution'
 import {
   ProjectIdSchema,
   QueryIdSchema,
@@ -132,6 +141,220 @@ function makeMemoryRepositoryStub(script?: {
 }
 
 describe('createMcpServer', () => {
+  test('trusted request factory binds actual MCP cancellation after search dispatch', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-request-cancel-'))
+    const recorder = createExecutionProcessRecorder({ autoClose: false })
+    const configured = await createConfiguredDirectHostExecution({
+      cwd: projectRoot,
+      projectRoot,
+      spawn: recorder.spawn,
+      profile: {
+        policy: 'full-access',
+        preferredBackend: 'portable-ts',
+        required: ['exact-env'],
+        allowBackendFallback: false,
+      },
+      hostConfiguration: {
+        environment: { PATH: '/usr/bin:/bin' },
+        platform: process.platform,
+        invocationCwd: projectRoot,
+        projectRoot,
+        home: { kind: 'none' },
+        globals: { kind: 'disabled' },
+        selection: { kind: 'none' },
+        trust: { ancestorConfig: false, projectReadableRoots: false },
+      },
+    })
+    if (!configured.ok) throw new Error(configured.cause)
+    const contexts: Array<
+      NonNullable<Parameters<typeof createMcpServer>[0]['executionContext']>
+    > = []
+    const { client, close } = await connectPair(
+      createMcpServer({
+        client: {},
+        sessionData: { projectRoot },
+        executionContextForRequest: (signal) => {
+          const operation = configured.value.hostServices.directOperation({
+            signal,
+          })
+          if (!operation.ok) return operation
+          contexts.push(operation.value.executionContext)
+          return { ok: true, value: operation.value.executionContext }
+        },
+      }),
+    )
+    const stop = new AbortController()
+    const pending = client.callTool(
+      { name: 'code_search', arguments: { pattern: 'hello' } },
+      undefined,
+      { signal: stop.signal },
+    )
+    const outcome = pending.then(
+      () => 'completed',
+      () => 'cancelled',
+    )
+    try {
+      const deadline = performance.now() + 1_000
+      while (!recorder.calls[0]?.child.stdout?.listenerCount('data')) {
+        if (performance.now() >= deadline)
+          throw new Error('Factory search did not attach its stdout consumer')
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      }
+      stop.abort(new Error('MCP peer cancelled its search request'))
+      expect(await outcome).toBe('cancelled')
+      while (!contexts[0]?.signal?.aborted) {
+        if (performance.now() >= deadline)
+          throw new Error(
+            'MCP cancellation did not reach trusted operation request',
+          )
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      }
+      expect(contexts[0].signal?.aborted).toBe(true)
+      while (!recorder.calls[0].closed && performance.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      expect(recorder.calls[0].closed).toBe(true)
+      expect(recorder.calls[0].signals).toContain('SIGTERM')
+    } finally {
+      await close()
+      await configured.value.close()
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('static execution context forwards actual MCP cancellation to search', async () => {
+    const projectRoot = mkdtempSync(
+      join(tmpdir(), 'mcp-static-request-cancel-'),
+    )
+    const recorder = createExecutionProcessRecorder({ autoClose: false })
+    const fixture = createTerminalExecutionFixture({
+      projectRoot,
+      spawn: recorder.spawn,
+    })
+    const { client, close } = await connectPair(
+      createMcpServer({
+        client: {},
+        sessionData: { projectRoot },
+        executionContext: fixture.context,
+      }),
+    )
+    const stop = new AbortController()
+    const pending = client.callTool(
+      { name: 'code_search', arguments: { pattern: 'hello' } },
+      undefined,
+      { signal: stop.signal },
+    )
+    const outcome = pending.then(
+      () => 'completed',
+      () => 'cancelled',
+    )
+    try {
+      const deadline = performance.now() + 1_000
+      while (!recorder.calls[0]?.child.stdout?.listenerCount('data')) {
+        if (performance.now() >= deadline)
+          throw new Error(
+            'Static-context search did not attach its stdout consumer',
+          )
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      }
+      stop.abort(new Error('MCP peer cancelled its static-context search'))
+      expect(await outcome).toBe('cancelled')
+      while (!recorder.calls[0]?.closed && performance.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      expect(recorder.calls[0]?.closed).toBe(true)
+      expect(recorder.calls[0]?.signals).toContain('SIGTERM')
+    } finally {
+      await close()
+      fixture.dispose()
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('distinct MCP queries get fresh local budgets while original finite root expiry still refuses', async () => {
+    for (const kind of ['static', 'factory'] as const) {
+      const clock = createControlledExecutionClock()
+      const recorder = createExecutionProcessRecorder({ autoClose: false })
+      const fixture = createTerminalExecutionFixture({
+        ...clock,
+        spawn: recorder.spawn,
+        rootLimit: { kind: 'finite', durationMs: 5_000 },
+      })
+      const requestSignals: Array<AbortSignal | undefined> = []
+      const { client, close } = await connectPair(
+        createMcpServer({
+          client: {},
+          sessionData: { projectRoot: fixture.context.projectRoot },
+          executionContext: kind === 'static' ? fixture.context : undefined,
+          ...(kind === 'factory'
+            ? {
+                executionContextForRequest: (signal?: AbortSignal) => {
+                  requestSignals.push(signal)
+                  return deriveExecutionContext(
+                    fixture.context,
+                    `trusted.fixture.request:${randomUUID()}`,
+                    { kind: 'unbounded' },
+                  )
+                },
+              }
+            : {}),
+        }),
+      )
+      let dispatched = 0
+      async function query(timeoutSeconds: number) {
+        const pending = client.callTool({
+          name: 'code_search',
+          arguments: {
+            pattern: 'hello',
+            timeoutSeconds,
+            executionContextForRequest: 'peer-factory',
+            executionContext: 'peer-context',
+            branchId: 'peer-branch',
+          },
+        })
+        const finish = setInterval(() => {
+          const call = recorder.calls[dispatched]
+          if (call?.child.stdout?.listenerCount('data')) {
+            dispatched++
+            call.finish(1)
+          }
+        }, 1)
+        try {
+          return await pending
+        } finally {
+          clearInterval(finish)
+        }
+      }
+      try {
+        expect((await query(1)).isError).toBeUndefined()
+        clock.advance(1_001)
+        expect((await query(1)).isError).toBeUndefined()
+        clock.advance(1_001)
+        expect((await query(2)).isError).toBeUndefined()
+        expect(recorder.calls).toHaveLength(3)
+        expect(
+          fixture.policyInputs.every(
+            (input) => input.facts.branchId === 'mcp.code-search',
+          ),
+        ).toBe(true)
+        clock.advance(3_000)
+        const exhausted = await query(2)
+        expect(exhausted.isError).toBe(true)
+        expect(exhausted.structuredContent).toMatchObject({
+          executionRefusal: { ok: false, reason: 'deadline-exhausted' },
+        })
+        expect(recorder.calls).toHaveLength(3)
+        if (kind === 'factory') {
+          expect(requestSignals).toHaveLength(4)
+          expect(
+            requestSignals.every((signal) => signal instanceof AbortSignal),
+          ).toBe(true)
+        }
+      } finally {
+        await close()
+        fixture.dispose()
+      }
+    }
+  })
+
   test('structured MCP results match bounded local projections and preserve read failures', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-structured-'))
     writeFileSync(join(projectRoot, 'hello.ts'), 'export const hi = 1\n')
@@ -254,7 +477,12 @@ describe('createMcpServer', () => {
   test('code_search distinguishes invalid patterns from no matches over MCP', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-search-errors-'))
     writeFileSync(join(projectRoot, 'example.ts'), 'const greeting = 1\n')
-    const server = createMcpServer({ client: {}, sessionData: { projectRoot } })
+    const fixture = createTerminalExecutionFixture({ projectRoot })
+    const server = createMcpServer({
+      client: {},
+      sessionData: { projectRoot },
+      executionContext: fixture.context,
+    })
     const { client, close } = await connectPair(server)
     try {
       const invalidPattern = await client.callTool({
@@ -275,6 +503,99 @@ describe('createMcpServer', () => {
       expect(JSON.stringify(noMatch.content)).toContain('0 matches')
     } finally {
       await close()
+      fixture.dispose()
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('code_search without captured authority preserves typed refusal despite peer authority fields', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-no-authority-'))
+    const { client, close } = await connectPair(
+      createMcpServer({ client: {}, sessionData: { projectRoot } }),
+    )
+    try {
+      const result = await client.callTool({
+        name: 'code_search',
+        arguments: {
+          pattern: 'hello',
+          executionContext: { execution: { grant: true } },
+          branchId: 'peer-authorized',
+        },
+      })
+      expect(result.isError).toBe(true)
+      expect(result.structuredContent).toMatchObject({
+        kind: 'code_search_result',
+        executionRefusal: { ok: false, reason: 'unavailable' },
+      })
+      expect(JSON.stringify(result.content)).not.toContain('No matches')
+    } finally {
+      await close()
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('code_search uses trusted MCP branch and captured options, then refuses revoked authority', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'mcp-authority-'))
+    const recorder = createExecutionProcessRecorder({ autoClose: false })
+    const fixture = createTerminalExecutionFixture({
+      projectRoot,
+      spawn: recorder.spawn,
+    })
+    const { client, close } = await connectPair(
+      createMcpServer({
+        client: {},
+        sessionData: { projectRoot },
+        executionContext: fixture.context,
+      }),
+    )
+    try {
+      const pending = client.callTool({
+        name: 'code_search',
+        arguments: {
+          pattern: 'hello',
+          branchId: 'peer-branch',
+          executionContext: { execution: 'peer' },
+        },
+      })
+      const listenerDeadline = performance.now() + 1_000
+      while (!recorder.calls[0]?.child.stdout?.listenerCount('data')) {
+        if (performance.now() >= listenerDeadline)
+          throw new Error('Owned MCP search did not attach its stdout consumer')
+        await new Promise((resolve) => setTimeout(resolve, 1))
+      }
+      recorder.calls[0].finish(1)
+      const result = await pending
+      expect(result.isError).toBeUndefined()
+      expect(result.structuredContent).toMatchObject({
+        processCleanup: { status: 'complete', selectedTier: 'injected' },
+      })
+      expect(recorder.calls).toHaveLength(1)
+      expect(recorder.calls[0]!.options.cwd).toBe(projectRoot)
+      expect(recorder.calls[0]!.options.env).toMatchObject({
+        PROJECT_VALUE: 'captured-value',
+      })
+      expect(recorder.calls[0]!.options.env).not.toHaveProperty(
+        'OPENAI_API_KEY',
+      )
+      expect(
+        fixture.policyInputs.every(
+          (input) => input.facts.branchId === 'mcp.code-search',
+        ),
+      ).toBe(true)
+      expect(fixture.policyInputs.length).toBeGreaterThan(0)
+      fixture.dispose()
+      const refused = await client.callTool({
+        name: 'code_search',
+        arguments: { pattern: 'hello' },
+      })
+      expect(refused.isError).toBe(true)
+      expect(refused.structuredContent).toMatchObject({
+        executionRefusal: { ok: false, reason: 'cancelled' },
+      })
+      expect(recorder.calls).toHaveLength(1)
+    } finally {
+      await close()
+      fixture.dispose()
       rmSync(projectRoot, { recursive: true, force: true })
     }
   })
@@ -317,6 +638,215 @@ describe('createMcpServer', () => {
       }
     } finally {
       rmSync(projectRoot, { recursive: true, force: true })
+    }
+  })
+
+  test.each([
+    ['minimal query', { query: 'hello' }, true],
+    ['missing query', {}, false],
+    ['empty query', { query: '' }, false],
+    ['non-string query', { query: 42 }, false],
+    ['maximum query length', { query: 'a'.repeat(4096) }, true],
+    ['excess query length', { query: 'a'.repeat(4097) }, false],
+    ['unicode query boundary', { query: '😀'.repeat(4096) }, true],
+    ['unicode query excess', { query: '😀'.repeat(4097) }, false],
+    ['minimum limit', { query: 'x', limit: 1 }, true],
+    ['fractional limit', { query: 'x', limit: 1.9 }, true],
+    ['oversized limit', { query: 'x', limit: 101 }, true],
+    ['too small limit', { query: 'x', limit: 0.9 }, false],
+    ['invalid limit', { query: 'x', limit: '2' }, false],
+    ['minimum timeout', { query: 'x', timeoutMs: 0 }, true],
+    ['fractional timeout', { query: 'x', timeoutMs: 1.9 }, true],
+    ['oversized timeout', { query: 'x', timeoutMs: 30001 }, true],
+    ['negative timeout', { query: 'x', timeoutMs: -0.1 }, false],
+    ['invalid timeout', { query: 'x', timeoutMs: null }, false],
+    ['unknown property', { query: 'x', unexpected: true }, true],
+    ['empty arrays', { query: 'x', fileTypes: [], pathPrefixes: [] }, true],
+    ['empty file type', { query: 'x', fileTypes: [''] }, false],
+    ['long file type', { query: 'x', fileTypes: ['a'.repeat(33)] }, false],
+    [
+      'unicode file type boundary',
+      { query: 'x', fileTypes: ['😀'.repeat(32)] },
+      true,
+    ],
+    [
+      'unicode file type excess',
+      { query: 'x', fileTypes: ['😀'.repeat(33)] },
+      false,
+    ],
+    [
+      'maximum file types',
+      { query: 'x', fileTypes: Array(32).fill('ts') },
+      true,
+    ],
+    [
+      'too many file types',
+      { query: 'x', fileTypes: Array(33).fill('ts') },
+      false,
+    ],
+    ['invalid file types', { query: 'x', fileTypes: ['ts', 2] }, false],
+    ['empty path prefix', { query: 'x', pathPrefixes: [''] }, false],
+    [
+      'long path prefix',
+      { query: 'x', pathPrefixes: ['x'.repeat(1025)] },
+      false,
+    ],
+    [
+      'unicode path prefix boundary',
+      { query: 'x', pathPrefixes: ['😀'.repeat(1024)] },
+      true,
+    ],
+    [
+      'unicode path prefix excess',
+      { query: 'x', pathPrefixes: ['😀'.repeat(1025)] },
+      false,
+    ],
+    [
+      'too many path prefixes',
+      { query: 'x', pathPrefixes: Array(33).fill('src') },
+      false,
+    ],
+    ['empty from', { query: 'x', from: '' }, false],
+    ['empty to', { query: 'x', to: '' }, false],
+    [
+      'unicode traversal boundary',
+      { query: 'x', from: '😀'.repeat(1024), to: '😀'.repeat(1024) },
+      true,
+    ],
+    [
+      'unicode traversal excess',
+      { query: 'x', from: '😀'.repeat(1025) },
+      false,
+    ],
+    ['long traversal node', { query: 'x', to: 'a'.repeat(1025) }, false],
+    [
+      'all graph options',
+      { query: 'x', mode: 'references', from: 'a', to: 'b' },
+      true,
+    ],
+    ['invalid mode', { query: 'x', mode: 'bogus' }, false],
+  ] as Array<[string, Record<string, unknown>, boolean]>)(
+    'query_index schema matches dispatch: %s',
+    async (_label, args, accepted) => {
+      const { stub, state } = makeIndexManagerStub()
+      const { client, close } = await connectPair(
+        createMcpServer({
+          client: {},
+          sessionData: { projectRoot: '/nonexistent-project', index: stub },
+        }),
+      )
+      try {
+        const { tools } = await client.listTools()
+        const schema = tools.find(
+          (tool: Tool) => tool.name === 'query_index',
+        )!.inputSchema
+        const validate = new Ajv().compile(schema)
+        const result = await client.callTool({
+          name: 'query_index',
+          arguments: args,
+        })
+        expect(result.isError === true).toBe(!accepted)
+        expect(state.queryCalls).toHaveLength(accepted ? 1 : 0)
+        expect(state.waitCalls).toHaveLength(accepted ? 1 : 0)
+        expect(validate(args)).toBe(accepted)
+      } finally {
+        await close()
+      }
+    },
+  )
+
+  test('query_index floors and caps options while discarding peer authority fields', async () => {
+    const { stub, state } = makeIndexManagerStub()
+    const { client, close } = await connectPair(
+      createMcpServer({
+        client: {},
+        sessionData: { projectRoot: '/nonexistent-project', index: stub },
+      }),
+    )
+    try {
+      const { tools } = await client.listTools()
+      const schema = tools.find(
+        (tool: Tool) => tool.name === 'query_index',
+      )!.inputSchema
+      const args = {
+        query: 'alpha',
+        limit: 101.9,
+        timeoutMs: 30001.9,
+        fileTypes: ['ts'],
+        pathPrefixes: ['src'],
+        mode: 'neighbors',
+        from: 'start',
+        to: 'end',
+        executionContext: { execution: { grant: true } },
+        executionContextForRequest: 'peer-factory',
+        branchId: 'peer-branch',
+      }
+      expect(new Ajv().compile(schema)(args)).toBe(true)
+      const result = await client.callTool({
+        name: 'query_index',
+        arguments: args,
+      })
+      expect(result.isError).toBeUndefined()
+      expect(state.waitCalls).toEqual([30000])
+      expect(state.queryCalls).toEqual([
+        {
+          query: 'alpha',
+          options: {
+            limit: 100,
+            fileTypes: ['ts'],
+            pathPrefixes: ['src'],
+            mode: 'neighbors',
+            from: 'start',
+            to: 'end',
+          },
+        },
+      ])
+      const fractional = await client.callTool({
+        name: 'query_index',
+        arguments: { query: 'beta', limit: 2.9, timeoutMs: 0.9 },
+      })
+      expect(fractional.isError).toBeUndefined()
+      expect(state.waitCalls).toEqual([30000, 0])
+      expect(state.queryCalls[1]).toEqual({
+        query: 'beta',
+        options: { limit: 2 },
+      })
+      const defaults = await client.callTool({
+        name: 'query_index',
+        arguments: { query: 'gamma' },
+      })
+      expect(defaults.isError).toBeUndefined()
+      expect(state.waitCalls).toEqual([30000, 0, 2000])
+      expect(state.queryCalls[2]).toEqual({ query: 'gamma', options: {} })
+    } finally {
+      await close()
+    }
+  })
+
+  test('query_index validates input before reporting a disabled index', async () => {
+    const { client, close } = await connectPair(
+      createMcpServer({
+        client: {},
+        sessionData: { projectRoot: '/nonexistent-project' },
+      }),
+    )
+    try {
+      const invalid = await client.callTool({
+        name: 'query_index',
+        arguments: { query: '' },
+      })
+      expect(invalid.isError).toBe(true)
+      const result = await client.callTool({
+        name: 'query_index',
+        arguments: { query: 'valid', limit: 2.5 },
+      })
+      expect(result.isError).toBeUndefined()
+      expect(result.structuredContent).toMatchObject({
+        kind: 'query_index_result',
+        ready: false,
+      })
+    } finally {
+      await close()
     }
   })
 
@@ -889,5 +1419,179 @@ describe('createMcpServer', () => {
     } finally {
       rmSync(projectRoot, { recursive: true, force: true })
     }
+  })
+})
+
+function lifecycleHarness(
+  options: { connectError?: Error; cleanupError?: Error } = {},
+) {
+  const input = new EventEmitter()
+  let serverCloses = 0
+  let ownerCloses = 0
+  let finishCleanup: () => void = () => {}
+  const cleanupBarrier = new Promise<void>((resolve) => {
+    finishCleanup = resolve
+  })
+  const server = {
+    onclose: undefined as (() => void) | undefined,
+    connect: async () => {
+      if (options.connectError) throw options.connectError
+    },
+    close: async () => {
+      serverCloses++
+      server.onclose?.()
+    },
+  }
+  const controller = new AbortController()
+  const start = () =>
+    runMcp(
+      {
+        client: {},
+        sessionData: { projectRoot: '/fixture' },
+        signal: controller.signal,
+        onClose: async () => {
+          ownerCloses++
+          await cleanupBarrier
+          if (options.cleanupError) throw options.cleanupError
+        },
+      },
+      { createServer: () => server, createTransport: () => ({}), input },
+    )
+  return {
+    input,
+    server,
+    controller,
+    start,
+    finishCleanup,
+    counts: () => ({ serverCloses, ownerCloses }),
+  }
+}
+
+describe('runMcp owned transport lifetime', () => {
+  test('real MCP transport peer closure joins the trusted owner callback', async () => {
+    const [clientTransport, serverTransport] =
+      InMemoryTransport.createLinkedPair()
+    const input = new EventEmitter()
+    const client = new Client({ name: 'owned-lifetime-peer', version: '1' })
+    let ownerCloses = 0
+    const [handle] = await Promise.all([
+      runMcp(
+        {
+          client: {},
+          sessionData: { projectRoot: '/fixture' },
+          onClose: async () => {
+            ownerCloses++
+          },
+        },
+        { createTransport: () => serverTransport, input },
+      ),
+      client.connect(clientTransport),
+    ])
+    await client.close()
+    await handle.close()
+    expect(ownerCloses).toBe(1)
+    expect(input.listenerCount('end')).toBe(0)
+  })
+
+  test('cancellation starts owner cleanup during pending connect and closes the eventual transport', async () => {
+    const h = lifecycleHarness()
+    let finishConnect: () => void = () => {}
+    const connecting = new Promise<void>((resolve) => {
+      finishConnect = resolve
+    })
+    h.server.connect = () => connecting
+    const starting = h.start()
+    await Promise.resolve()
+    h.controller.abort()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(h.counts().ownerCloses).toBe(1)
+    h.finishCleanup()
+    finishConnect()
+    const handle = await starting
+    await handle.close()
+    expect(h.counts()).toEqual({ serverCloses: 1, ownerCloses: 1 })
+  })
+
+  for (const ending of [
+    'end',
+    'close',
+    'server-close',
+    'abort',
+    'manual',
+  ] as const) {
+    test(`joins owner cleanup once on ${ending} and removes lifetime listeners`, async () => {
+      const h = lifecycleHarness()
+      const handle = await h.start()
+      expect(h.counts()).toEqual({ serverCloses: 0, ownerCloses: 0 })
+      if (ending === 'server-close') h.server.onclose?.()
+      else if (ending === 'abort') h.controller.abort()
+      else if (ending !== 'manual') h.input.emit(ending)
+      const first = handle.close()
+      expect(handle.close()).toBe(first)
+      let finished = false
+      void first.then(() => {
+        finished = true
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(finished).toBe(false)
+      h.finishCleanup()
+      await first
+      expect(h.counts()).toEqual({ serverCloses: 1, ownerCloses: 1 })
+      expect(h.input.listenerCount('end')).toBe(0)
+      expect(h.input.listenerCount('close')).toBe(0)
+      h.controller.abort()
+      h.input.emit('end')
+      expect(h.counts()).toEqual({ serverCloses: 1, ownerCloses: 1 })
+    })
+  }
+
+  test('failed connect still joins server and owner, retaining startup and cleanup errors', async () => {
+    const startup = new Error('connect fixture failed')
+    const cleanup = new Error('cleanup fixture failed')
+    const h = lifecycleHarness({ connectError: startup, cleanupError: cleanup })
+    h.finishCleanup()
+    let error: unknown
+    try {
+      await h.start()
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(AggregateError)
+    expect((error as AggregateError).errors[0]).toBe(startup)
+    expect((error as AggregateError).errors[1]).toBeInstanceOf(AggregateError)
+    expect(
+      ((error as AggregateError).errors[1] as AggregateError).errors,
+    ).toContain(cleanup)
+    expect(h.counts()).toEqual({ serverCloses: 1, ownerCloses: 1 })
+    expect(h.input.listenerCount('end')).toBe(0)
+  })
+
+  test('automatic EOF retains cleanup rejection for explicit close', async () => {
+    const cleanup = new Error('unknown process cleanup')
+    const h = lifecycleHarness({ cleanupError: cleanup })
+    const handle = await h.start()
+    h.finishCleanup()
+    h.input.emit('end')
+    let error: unknown
+    try {
+      await handle.close()
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(AggregateError)
+    expect((error as AggregateError).errors).toContain(cleanup)
+    await expect(handle.close()).rejects.toBe(error)
+    expect(h.counts()).toEqual({ serverCloses: 1, ownerCloses: 1 })
+  })
+
+  test('pre-aborted lifetime does not connect but joins cleanup', async () => {
+    const h = lifecycleHarness()
+    h.controller.abort()
+    h.finishCleanup()
+    const handle = await h.start()
+    await handle.close()
+    expect(h.counts()).toEqual({ serverCloses: 1, ownerCloses: 1 })
   })
 })

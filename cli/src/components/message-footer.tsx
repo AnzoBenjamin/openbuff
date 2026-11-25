@@ -173,7 +173,13 @@ export const MessageFooter: React.FC<MessageFooterProps> = ({
       node: <CostIndicator cost={credits} />,
     })
   }
-  if (isComplete && typeof cacheHitRate === 'number' && cacheHitRate > 0) {
+  if (
+    isComplete &&
+    typeof cacheHitRate === 'number' &&
+    Number.isFinite(cacheHitRate) &&
+    cacheHitRate >= 0 &&
+    cacheHitRate <= 1
+  ) {
     footerItems.push({
       key: 'cache',
       node: <CacheHitRateIndicator rate={cacheHitRate} />,

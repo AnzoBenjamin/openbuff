@@ -12,6 +12,7 @@ import {
 import type {
   AnyMessage,
   Client,
+  PromptRequest,
   RequestPermissionRequest,
   RequestPermissionResponse,
   SessionNotification,
@@ -90,9 +91,9 @@ describe('acp agent skeleton', () => {
     expect(response.agentCapabilities).toEqual({
       loadSession: true,
       promptCapabilities: {
-        image: false,
+        image: true,
         audio: false,
-        embeddedContext: false,
+        embeddedContext: true,
       },
       mcpCapabilities: { http: true, sse: true },
     })
@@ -165,6 +166,55 @@ describe('acp agent skeleton', () => {
       prompt: [{ type: 'audio', data: 'aGVsbG8=', mimeType: 'audio/wav' }],
     })
     expect(receivedText).toEqual(['hello world', ''])
+  })
+
+  test('prompt forwards image and embedded resource blocks to the handler', async () => {
+    let receivedText = ''
+    let receivedContent: PromptRequest['prompt'] | undefined
+    const promptHandler: AcpPromptHandler = async (input) => {
+      receivedText = input.promptText
+      receivedContent = Reflect.get(input, 'promptContent') as
+        | PromptRequest['prompt']
+        | undefined
+      return { stopReason: 'end_turn' }
+    }
+    const { connection } = makeRecordingConnection()
+    const agent = createAcpAgent({ promptHandler, connection })
+    const { sessionId } = await agent.newSession({
+      cwd: '/tmp/openbuff-prompt-content',
+      mcpServers: [],
+    })
+    const prompt = [
+      { type: 'text', text: 'Read this file:' },
+      { type: 'image', data: 'aGVsbG8=', mimeType: 'image/png' },
+      {
+        type: 'resource',
+        resource: {
+          uri: 'file:///tmp/README.md',
+          mimeType: 'text/markdown',
+          text: '# Attached file content',
+        },
+      },
+      {
+        type: 'resource_link',
+        uri: 'file:///tmp/README.md',
+        name: 'README.md',
+        mimeType: 'text/markdown',
+      },
+    ] satisfies PromptRequest['prompt']
+
+    await agent.prompt({ sessionId, prompt })
+
+    expect(receivedText).toBe('Read this file:')
+    expect(receivedContent).toEqual(prompt)
+    expect(receivedContent).toContainEqual(
+      expect.objectContaining({
+        type: 'resource',
+        resource: expect.objectContaining({
+          text: '# Attached file content',
+        }),
+      }),
+    )
   })
 
   test('prompt rejects with a JSON-RPC invalid-params error for an unknown session id', async () => {
@@ -271,9 +321,9 @@ describe('acp agent skeleton', () => {
     expect(initialized.agentCapabilities).toEqual({
       loadSession: true,
       promptCapabilities: {
-        image: false,
+        image: true,
         audio: false,
-        embeddedContext: false,
+        embeddedContext: true,
       },
       mcpCapabilities: { http: true, sse: true },
     })

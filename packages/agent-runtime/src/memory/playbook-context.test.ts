@@ -21,16 +21,16 @@ const makePlaybook = (overrides: {
   title?: string
   instruction?: string
   status?: MemoryPlaybook['status']
+  scope?: MemoryPlaybook['scope']
+  enforcement?: MemoryPlaybook['enforcement']
 }): MemoryPlaybook =>
   MemoryPlaybookSchema.parse({
     schemaVersion: 1,
     playbookId: overrides.playbookId ?? 'pb-1',
     workspaceId: 'ws-1',
-    title:
-      overrides.title ?? 'Run local CI before spawning the git committer',
+    title: overrides.title ?? 'Run local CI before spawning the git committer',
     instruction:
-      overrides.instruction ??
-      'Run `npm run check:ci-local` and fix failures.',
+      overrides.instruction ?? 'Run `npm run check:ci-local` and fix failures.',
     trigger: {
       tool: 'spawn_agents',
       spawnAgentType: 'git-committer',
@@ -43,9 +43,9 @@ const makePlaybook = (overrides: {
         },
       ],
     },
-    scope: { repos: [] },
+    scope: overrides.scope ?? { repos: [] },
     status: overrides.status ?? 'active',
-    enforcement: 'warn',
+    enforcement: overrides.enforcement ?? 'warn',
     counters: {
       fired: 0,
       blocked: 0,
@@ -67,14 +67,13 @@ const makePlaybook = (overrides: {
 describe('compileActivePlaybooksContext', () => {
   test('renders nothing for empty or wholly invalid input and never throws', () => {
     expect(compileActivePlaybooksContext([])).toBe('')
-    expect(
-      compileActivePlaybooksContext([null, 42, 'garbage', {}, []]),
-    ).toBe('')
-    // Only ACTIVE playbooks render; other schema-valid statuses drop.
+    expect(compileActivePlaybooksContext([null, 42, 'garbage', {}, []])).toBe(
+      '',
+    )
+    // Candidate and retired procedures are not enabled.
     expect(
       compileActivePlaybooksContext([
         makePlaybook({ status: 'retired' }),
-        makePlaybook({ status: 'verified' }),
         makePlaybook({ status: 'candidate' }),
       ]),
     ).toBe('')
@@ -106,7 +105,7 @@ describe('compileActivePlaybooksContext', () => {
     )
   })
 
-  test('caps the band at maxChars and clips every oversized entry visibly', () => {
+  test('caps the band while preserving complete conditions and omitting oversized prose whole', () => {
     const playbooks = Array.from(
       { length: ACTIVE_PLAYBOOKS_CONTEXT_MAX_PLAYBOOKS },
       (_, index) =>
@@ -120,18 +119,15 @@ describe('compileActivePlaybooksContext', () => {
     const text = compileActivePlaybooksContext(playbooks)
 
     expect(text.length).toBeLessThanOrEqual(ACTIVE_PLAYBOOKS_CONTEXT_MAX_CHARS)
-    // Equal-share presence: every selected playbook's title still renders.
-    for (
-      let index = 0;
-      index < ACTIVE_PLAYBOOKS_CONTEXT_MAX_PLAYBOOKS;
-      index++
-    ) {
-      expect(text).toContain(`cap-${index}`)
-    }
-    // Every entry exceeded its equal share, so every entry is visibly clipped.
-    expect(text.match(/\.\.\.\[truncated\]/g) ?? []).toHaveLength(
-      ACTIVE_PLAYBOOKS_CONTEXT_MAX_PLAYBOOKS,
-    )
+    const count = (text.match(/\(id=pb-/g) ?? []).length
+    expect(count).toBeGreaterThan(0)
+    expect(text.match(/Applies to:/g) ?? []).toHaveLength(count)
+    expect(text.match(/Required first:/g) ?? []).toHaveLength(count)
+    expect(text.match(/Enforcement:/g) ?? []).toHaveLength(count)
+    expect(text).toContain('within 1800000ms')
+    expect(text).not.toContain('xxx')
+    expect(text).not.toContain('...[truncated]')
+    expect(text).toContain('</active_playbooks>')
   })
 
   test('renders only the lowest triggerSignature values past the playbook cap', () => {
@@ -142,7 +138,7 @@ describe('compileActivePlaybooksContext', () => {
         title: `slot-${index + 1}`,
       }),
     )
-    const text = compileActivePlaybooksContext(playbooks)
+    const text = compileActivePlaybooksContext(playbooks, { maxChars: 10_000 })
 
     expect(text).toContain('[1/8]')
     expect(text).toContain('[8/8]')
@@ -175,16 +171,16 @@ describe('compileActivePlaybooksContext', () => {
     expect(compileActivePlaybooksContext([invalid])).toBe('')
   })
 
-  test('frames the band as trusted operator rules with pre-satisfy and self-run clauses', () => {
+  test('frames host validation as reusable evidence without claiming every rule was operator authored', () => {
     const text = compileActivePlaybooksContext([makePlaybook({})])
 
     expect(text).toContain('<active_playbooks>')
     expect(text).toContain('</active_playbooks>')
-    expect(text).toContain('trusted, operator-authored')
-    expect(text).toContain('FIRST with a real tool call')
-    expect(text).toContain('not visible to this gate')
-    // The trusted band is the opposite of the memory-v2 evidence banner.
-    expect(text).not.toContain('untrusted')
+    expect(text).toContain('host-verified receipts')
+    expect(text).toContain('reusable across agents')
+    expect(text).toContain('dependencies are unchanged')
+    expect(text).not.toContain('run it yourself')
+    expect(text).not.toContain('operator-authored')
   })
 
   test('describes triggers and required evidence in the gate verdict vocabulary', () => {
@@ -209,9 +205,61 @@ describe('compileActivePlaybooksContext', () => {
       maxChars: 120,
     })
     expect(tiny.length).toBeLessThanOrEqual(120)
+    expect(tiny).toBe('')
     expect(compileActivePlaybooksContext([], { maxChars: 0 })).toBe('')
     expect(
       compileActivePlaybooksContext([makePlaybook({})], { maxPlaybooks: 0 }),
     ).toBe('')
+  })
+
+  test('preserves full scope and prerequisites before a long instruction under budget', () => {
+    const procedure = makePlaybook({
+      instruction: 'Validate everything unless excluded. '.repeat(100),
+      scope: {
+        repos: ['repo-A'],
+        agentTypes: ['git-committer'],
+        glob: ['cli/**'],
+      },
+    })
+    const text = compileActivePlaybooksContext([procedure], { maxChars: 1_000 })
+    expect(text).toContain(
+      'Applies to: spawn_agents spawning agent git-committer',
+    )
+    expect(text).toContain('repos=["repo-A"]')
+    expect(text).toContain('actor=["git-committer"]')
+    expect(text).toContain('paths=["cli/**"]')
+    expect(text).toContain(
+      'Required first: a successful run_terminal_command matching *check:ci-local* within 1800000ms',
+    )
+    expect(text).toContain('Enforcement: warn')
+    expect(text).not.toContain('Validate everything unless')
+  })
+
+  test('keeps verified procedures effective and prioritizes enforcement before hash order', () => {
+    const verified = makePlaybook({
+      playbookId: 'verified',
+      title: 'Verified procedure',
+      status: 'verified',
+    })
+    expect(compileActivePlaybooksContext([verified])).toContain(
+      'Verified procedure',
+    )
+    const advisory = makePlaybook({
+      playbookId: 'advisory',
+      triggerSignature: 'a',
+      enforcement: 'inject-only',
+      title: 'Advisory',
+    })
+    const enforced = makePlaybook({
+      playbookId: 'enforced',
+      triggerSignature: 'z',
+      enforcement: 'block',
+      title: 'Enforced',
+    })
+    const text = compileActivePlaybooksContext([advisory, enforced], {
+      maxPlaybooks: 1,
+    })
+    expect(text).toContain('Enforced')
+    expect(text).not.toContain('Advisory')
   })
 })

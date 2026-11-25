@@ -111,6 +111,12 @@ For each agent step, Openbuff resolves the model in this priority order:
    `No model configured for agent '<id>'. Run /setup or set defaultModel
 (or agents['<id>']) in your openbuff.json.`
 
+For a run-scoped primary override, use `openbuff run --model <provider/model>`
+or SDK `client.run({ ..., model })`. It applies to the root and descendants in
+that run, preserves configured failover, and does not persist to a subsequent
+turn or alter these configuration files. The remote ACP backend currently
+refuses explicit overrides until model negotiation is supported.
+
 There is **no hardcoded per-agent fallback**. The `model:` field on agent
 templates is documentation of intent only — it is never read at runtime. This
 keeps `openbuff.json` / `routes.json` authoritative for BYOK routing.
@@ -202,8 +208,15 @@ Behavior, matched to the implementation in `sdk/src/impl/failover.ts` and
 - **Auth failures demote the route for the session:** after a `401`/`403`
   failover, later requests start on the backup instead of paying another
   round trip to the failed primary. The demoted route stays in the list as a
-  last resort. Restarting or running `/provider` clears the demotion. The
-  CLI keeps a warning line naming the status, the provider and its
+  last resort. Default route health is scoped to the captured configuration
+  and configured credential values, so unrelated SDK hosts sharing model IDs
+  do not demote each other. The process retains at most 64 recently used
+  scopes. Custom credential ports are separated by host object identity;
+  stored OAuth file metadata revisions invalidate health only on OAuth routes,
+  without loading dormant token values. Hosts rotating credentials in place
+  inside a custom port must clear health or inject their own registry.
+  Restarting or running `/provider` clears the demotion. The CLI
+  keeps a warning line naming the status, the provider and its
   `apiKeyEnv`.
 - **Retry-only carve-out:** `429` (rate limit) and `408` (timeout) are **not**
   failover-eligible — backoff is the proven response and failing over on 429
@@ -218,7 +231,12 @@ Behavior, matched to the implementation in `sdk/src/impl/failover.ts` and
   capped at eight seconds. A valid integer or HTTP-date `Retry-After` hint is
   honoured up to 120 seconds, and one request waits at most 180 seconds in
   total; malformed hints fall back to exponential waits. The wait is
-  cancelled with the run, so it never outlives the run deadline.
+  cancelled with the run, so it never outlives the run deadline. Streaming
+  retry status includes a live remaining-time countdown; ticks coalesce into
+  one muted CLI line, stop on cancellation/settlement, and do not add attempts
+  or renew the captured wait. Historical events without a countdown retain
+  their original static-delay display. Nonstreaming helpers and remote ACP
+  countdown arbitration are not newly covered by this status path.
   Content-policy refusals and aborts do not retry or fail over, even when
   wrapped around a retryable HTTP status. Context repair and OAuth recovery
   consume the same finite request attempt ledger. Nonstreaming requests use
@@ -429,10 +447,16 @@ field** for these systems yet — the behavior is code-default and always on.
   restore the pre-disclosure prompt assembly. When enabled, verbose advisory
   prompt sections are replaced by `read_files` pointers to
   `agents/guides/*.md`.
-- **`unlockedTiers`** is an SDK/agent option on `createBase2`, not a JSON
-  config key. It is the only control that narrows the model-visible tool
-  surface: every non-core tier is unlocked by default, and passing `[]` ships a
-  CORE-only surface (mode gates still apply). There is no env var for it.
+- **`progressiveToolDisclosure`** is an SDK/agent option on `createBase2`, not
+  a JSON config key. It defaults to `true`: base2 starts with its core tool
+  surface, then uses `tool_search`/`tool_load` to expose one mode-allowed tier
+  on the next step. Set it to `false` for the historical full static surface.
+  The mode-resolved `fullToolSurface` ceiling remains private to the runtime;
+  plan mode cannot load edit or execution tools. There is no env var.
+- **`unlockedTiers`** seeds tiers in the initial static surface for SDK/agent
+  embedders; it is not a JSON config key. With progressive disclosure enabled,
+  the default is `[]` (core only); with the explicit full-surface opt-out,
+  omitted tiers preserve the historical full surface. Mode gates always apply.
 - **`maxReviewerRepairRounds`** is an SDK/agent option on `createBase2` (also
   not a JSON config key). Default **unlimited** (progress-gated: no-progress
   fingerprint and incomplete-receipt exits). Optional positive integer cap,
@@ -477,8 +501,10 @@ field** for these systems yet — the behavior is code-default and always on.
 All reductions and gates are on by default, including progressive prompt
 disclosure; opt out of it with an explicit
 `progressivePromptDisclosure: false` option, since that flag has no env var.
-The full tool surface is likewise on by default; narrow it with
-`unlockedTiers`. Gate repair loops default to unlimited/progress-gated;
+The full tool surface is not on by default: base2 starts core-first and loads
+allowed tiers on demand. Set `progressiveToolDisclosure: false` to restore the
+historical full static surface, or use `unlockedTiers` to seed a static tier
+subset. Gate repair loops default to unlimited/progress-gated;
 optional env or createBase2 caps remain available.
 
 ## Merge semantics
@@ -589,6 +615,49 @@ config block; `"sandbox": { "mode": "unrestricted" }` explicitly disables it.
 Each run captures its policy, including its subagents, independently of other
 concurrent runs. Changes apply on the next run.
 
+## Terminal timeout policy
+
+Built-in terminal commands capture `terminalTimeoutPolicy` from configuration.
+SDK callers can also pass it to the client or a run; an explicit run/client
+policy replaces the configuration policy, including an explicit empty object.
+Policies are validated and frozen before asynchronous setup. Tool payloads
+cannot replace them.
+
+```json
+{
+  "terminalTimeoutPolicy": {
+    "defaultSyncSeconds": 120,
+    "maxSeconds": 900,
+    "allowUnbounded": false
+  }
+}
+```
+
+- `defaultSyncSeconds` explicitly opts omitted SYNC commands into an execution-time
+  bound. Without a selected policy, terminal commands have no automatic local timeout.
+  A selected default starts after admission, not while waiting for approval,
+  and is shortened by `maxSeconds` when present.
+- `maxSeconds` caps explicit finite and `-1` requests for SYNC/BACKGROUND
+  commands. It also bounds omitted BACKGROUND requests. These finite limits
+  are registered at the original action admission, so deriving a request or
+  transferring a job cannot restart or remove the cap.
+- `allowUnbounded: false` explicitly selects a bounded SYNC policy. Without a
+  selected default or maximum, omitted/`-1` SYNC commands then use a 120-second
+  execution-time fallback. BACKGROUND requires `maxSeconds` for a local cap.
+  Unconfigured terminal and manual `/bash` commands remain locally unbounded.
+
+Durations must be finite, positive and representable in whole milliseconds.
+Large accepted defaults use bounded timer chunks instead of overflowing Node's
+one-shot timer range. A finite parent/run deadline and user cancellation still
+apply. Partial output and owned-process cleanup observations are retained.
+Interactive `/bash` commands also honor the captured policy.
+
+Configuration fragments merge the individual fields. Until the project is
+trusted, both declarations and include requester chains can only tighten the
+user's policy: a repository cannot raise caps or replay an earlier, looser user
+fragment. Project-controlled requester files participate in the trust hash,
+including when reached through a user config include.
+
 ## Execution backend
 
 The SDK and ordinary local CLI runs can select an execution profile through
@@ -644,6 +713,38 @@ inherit networking and do not provide filesystem or process-tree isolation.
 Explicit SDK `executionProfile` or `nativeExecution` options replace the
 entire configuration decision; the SDK caller owns injected installations.
 
+### Plan-mode terminal enforcement
+
+Native provisioning remains **opt-in** through the trusted `execution` block
+or explicit SDK native installation/calibration injection. Openbuff does not
+build, download or install a sandbox just because a plan requests a command.
+Without verified native enforcement, plan-lineage terminal commands are
+refused with `plan_mode_read_only`; lexical approval and `allow-all` do not
+provide an alternative execution path.
+
+The host captures plan ancestry and binds each terminal action to a read-only,
+`native-exec` profile requiring exact environment, filesystem isolation,
+network isolation and process-tree containment. Required host/parent
+capabilities are retained, and portable fallback is disabled even when the
+broader execute profile permits it. Copies, derived/rebound requests,
+resource reuse and detached jobs cannot widen that registered authority.
+Every required mechanism must be observed as enforced before target entry.
+Terminal overrides are refused in plan mode because they have no verified
+native read-only execution contract.
+
+All mounted host paths, including project and runtime paths, are read-only;
+subprocesses inherit the restrictions. The sandbox's private `/tmp` remains
+writable and does not expose host temporary files. Host-owned journals, logs
+and explicitly permitted plan-artifact tools are separate from this command
+sandbox. File/search tools, provider calls and existing execute-mode behavior
+remain unchanged. Non-plan agent profile declarations retain their existing
+lexical ceilings, not a new OS read-only guarantee.
+
+The current native platform cell is Linux x64 GNU. Other platforms or
+unavailable kernel mechanisms refuse plan terminal execution. Unsupported
+native infrastructure families may require an explicitly configured host
+fallback; that fallback never relaxes the plan terminal requirements.
+
 ## Harness approval mode
 
 `approvalMode` controls when terminal effects pause for confirmation:
@@ -693,10 +794,12 @@ configuration; an explicit SDK `approvalMode` option overrides it.
 edits files. They power the "verification gate" — typechecks, linters, and
 tests that block the agent from ending its turn until they pass.
 
-When `autoFileChangeHooks` is unset or `true`, Openbuff also infers safe,
-non-mutating default hooks from common project manifests and merges them with
-configured `fileChangeHooks` using the concat-with-dedup rules above. Set
-`"autoFileChangeHooks": false` to run only explicitly configured hooks.
+Only when a trusted project explicitly sets `autoFileChangeHooks: true`,
+Openbuff infers validation hooks from common project manifests and merges them
+with configured `fileChangeHooks` using the concat-with-dedup rules above.
+When unset or `false`, only explicitly configured hooks run; inferred commands
+are disabled by default because project manifests may describe
+repository-controlled code.
 
 Inferred hooks currently include:
 
@@ -725,9 +828,14 @@ hook with a project-specific command, or disable inferred hooks with
   "name": "typecheck-sdk", // optional, used for display + dedup identity
   "command": "cd sdk && bun run typecheck", // shell command, run from repo root
   "filePattern": "sdk/src/**/*.ts", // optional glob; hook runs only when a changed file matches
-  "timeoutSeconds": 240, // optional; default 180, max 3600
+  "timeoutSeconds": 240, // optional; omitted/-1: no local cap, maximum finite value 3600
 }
 ```
+
+Omitting `timeoutSeconds` adds no local timeout. Use a positive value for an
+explicit local bound, or `-1` for explicitly unbounded work; the host's finite
+parent deadline and user cancellation still apply. Positive configured values
+are capped at 3,600 seconds.
 
 - A hook **without** `filePattern` runs on every file change.
 - A hook **with** `filePattern` runs only when at least one changed file

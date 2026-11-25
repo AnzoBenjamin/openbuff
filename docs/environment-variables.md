@@ -46,11 +46,12 @@ Document only environment variables that are implemented in code. During the for
 
 Context-budget and proactive-retrieval behaviors remain code-default (no new
 env vars). Progressive prompt disclosure has no env var at all:
-`progressivePromptDisclosure` is a `createBase2` option (not a JSON config
-key), defaults to `true` when omitted, and an explicit `true`/`false` on the
-option is the only way to change it. The tool surface likewise has no env var:
-narrow it with the `createBase2` `unlockedTiers` option. Only the
-gate repair budgets have optional env canaries:
+`progressivePromptDisclosure` and `progressiveToolDisclosure` are `createBase2`
+options (not JSON config keys); both default to `true` and have no env vars.
+`progressiveToolDisclosure: false` restores the full static tool surface.
+`unlockedTiers` seeds a static tier subset, while progressive mode starts at
+CORE and exposes further mode-allowed tiers through `tool_search`/`tool_load`.
+Only the gate repair budgets have optional env canaries:
 
 - `OPENBUFF_MAX_REVIEWER_REPAIR_ROUNDS` — optional positive integer string that
   caps the reviewer→repair→re-review loop (max `20`). Unset or invalid →
