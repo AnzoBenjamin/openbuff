@@ -184,7 +184,15 @@ describe('host validation receipt registry', () => {
   }, 30_000)
 
   test('recognizes declared pnpm check and concrete Bun test recipes without echo or shell-list substitutes', async () => {
-    const store = registry()
+    // Exercise recipe recognition against a captured installation that does
+    // not depend on pnpm being installed on the test runner.
+    const pnpmDirectory = path.join(outside, 'pnpm')
+    await mkdir(pnpmDirectory)
+    await writeFile(path.join(pnpmDirectory, 'package.json'), JSON.stringify({ name: 'pnpm' }))
+    await writeFile(path.join(pnpmDirectory, 'pnpm'), '#!/bin/sh\nexit 0\n', { mode: 0o755 })
+    const store = registry({
+      environment: { NODE_ENV: 'test', PATH: `${pnpmDirectory}${path.delimiter}${capturedPath}` },
+    })
     const pnpmToken = await begin(store, 'pnpm check')
     expect(pnpmToken).toBeDefined()
     expect(await store.complete(pnpmToken, { exitCode: 0 })).toMatchObject({

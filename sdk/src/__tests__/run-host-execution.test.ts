@@ -1373,7 +1373,15 @@ describe('host validation production and child gate reuse', () => {
         '../../../node_modules/typescript/bin/tsc',
       )
       fs.symlinkSync(tsc, path.join(f.root, 'node_modules', '.bin', 'tsc'))
-      f.environment.PATH = `${path.join(f.root, 'node_modules', '.bin')}:${path.dirname(process.execPath)}:/usr/bin:/bin`
+      const node = Bun.which('node')
+      if (!node) throw new Error('The validation fixture requires Node for tsc')
+      f.environment.PATH = [
+        path.join(f.root, 'node_modules', '.bin'),
+        path.dirname(process.execPath),
+        path.dirname(node),
+        '/usr/bin',
+        '/bin',
+      ].join(path.delimiter)
       fs.writeFileSync(
         path.join(f.root, 'package.json'),
         JSON.stringify({

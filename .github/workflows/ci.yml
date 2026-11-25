@@ -252,8 +252,8 @@ jobs:
           echo "NEXT_PUBLIC_INFISICAL_UP=true" >> $GITHUB_ENV
           echo "CODEBUFF_GITHUB_TOKEN=$CODEBUFF_GITHUB_TOKEN" >> $GITHUB_ENV
 
+      # The SDK memory-management suite also launches the CLI source entry.
       - name: Build SDK dist for CLI imports and code-map grammar coverage
-        # The SDK memory-management suite also launches the CLI source entry.
         if: matrix.package == 'cli' || matrix.package == 'sdk' || matrix.package == 'packages/code-map'
         run: cd sdk && bun run build
 

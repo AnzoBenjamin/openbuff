@@ -263,8 +263,8 @@ describe('CI bun toolchain alignment', () => {
 describe('CI sdk dist build gating', () => {
   test('sdk dist builds are limited to CLI imports and code-map grammar coverage', () => {
     // CLI tests import @openbuff/sdk through the ESM import condition, which
-    // resolves the dist bundle. Code-map unit tests need the packaged grammars;
-    // unrelated package jobs must skip the build.
+    // resolves the dist bundle. SDK tests also launch the CLI source entry;
+    // code-map unit tests need the packaged grammars.
     const lines = CI_WORKFLOW.split('\n')
     const buildIndexes = lines
       .map((line, index) =>
@@ -277,7 +277,7 @@ describe('CI sdk dist build gating', () => {
       {
         name: 'Build SDK dist for CLI imports and code-map grammar coverage',
         condition:
-          "matrix.package == 'cli' || matrix.package == 'packages/code-map'",
+          "matrix.package == 'cli' || matrix.package == 'sdk' || matrix.package == 'packages/code-map'",
       },
       {
         name: 'Build sdk dist (cli tests import @openbuff/sdk through the ESM import condition)',
@@ -298,6 +298,12 @@ describe('CI sdk dist build gating', () => {
         ),
       ).toBe(true)
     }
+  })
+
+  test('CLI and SDK unit tests prebuild the bundled CLI agents', () => {
+    expect(CI_WORKFLOW).toContain(
+      "      - name: Prebuild CLI agents\n        if: matrix.package == 'cli' || matrix.package == 'sdk'\n        run: cd cli && bun run prebuild:agents",
+    )
   })
 
   test('code-map tests select the packaged grammars through the job environment', () => {

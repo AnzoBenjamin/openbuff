@@ -29,6 +29,7 @@
 
 - Resource startup and restart use the registered target's captured mode and profile for admission, including run-owned MCP variants.
 - Diagnostic coverage treats a missing executable as unavailable. If a child has started, incomplete output drainage still prevents complete coverage.
+- Validation receipt fixtures capture the runner-selected Node executable for TypeScript checks. The pnpm recipe fixture supplies its own package installation so CI exercises recipe recognition with no global pnpm prerequisite.
 
 - Balanced approval permits routine Git reads and project scripts. Client-origin MCP startup retains separate process approval even when the interpreter is a known routine executable; trusted project/user startup registration and exact action binding stay authoritative.
 - Containment and sensitive-read fixtures select `sandbox.mode: "project"` explicitly. A host-profile control must choose a profile distinct from the captured default, and direct terminal fixtures inherit that captured profile.
